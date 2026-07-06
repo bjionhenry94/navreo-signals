@@ -465,12 +465,36 @@ def tam_map(p: dict) -> dict:
 
 
 
+# business-name field per table: normalised at ingest via the lilly-qa cleaner so every
+# company name stored (and later merged into email copy) is already hygienic.
+_NAME_FIELD_BY_TABLE = {"signal_leads": "company", "engagement_events": "engager_company_name"}
+
+
+def _normalise_company_fields(path: str, body):
+    """Clean the company-name field on rows written to signal_leads / engagement_events."""
+    table = path.split("?")[0].split("/")[0]
+    field = _NAME_FIELD_BY_TABLE.get(table)
+    if not field or body is None:
+        return body
+    try:
+        from name_hygiene import clean_company_name
+    except Exception:  # noqa: BLE001 — never let hygiene break a write
+        return body
+    rows = body if isinstance(body, list) else [body]
+    for row in rows:
+        if isinstance(row, dict) and row.get(field):
+            row[field] = clean_company_name(row[field])
+    return body
+
+
 def sb(method: str, path: str, body=None, prefer: str = ""):
     """Best-effort Supabase PostgREST call - an outage must never break the app."""
     url = KEYS.get("SUPABASE_URL")
     key = KEYS.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
         return None
+    if method in ("POST", "PATCH"):
+        body = _normalise_company_fields(path, body)
     try:
         return http_json(method, f"{url}/rest/v1/{path}",
                          {"apikey": key, "Authorization": f"Bearer {key}",

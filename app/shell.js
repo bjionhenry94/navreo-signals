@@ -76,6 +76,13 @@ function protoNote(msg = "Read-only prototype") {
   el._t = setTimeout(() => el.classList.remove("on"), 2600);
 }
 
+/* force-hide the toast now — call on step changes / modal open+close so a stale
+   validation message never lingers across the flow or after a dialog is dismissed */
+function hideNote() {
+  const el = document.querySelector(".proto-note");
+  if (el) { clearTimeout(el._t); el.classList.remove("on"); }
+}
+
 /* tiny dependency-free line chart */
 function lineChart(el, series, opts = {}) {
   const w = opts.width || el.clientWidth || 800, h = opts.height || 180;

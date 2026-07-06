@@ -163,7 +163,7 @@
       <button class="btn" onclick="srcBack()">Back</button>
       <div style="display:flex;gap:8px">
         <button class="btn" onclick="srcSaveForLater()">💾 Save for later</button>
-        <button class="btn" onclick="srcwiz.classList.remove('on')">Cancel</button>
+        <button class="btn" onclick="srcwiz.classList.remove('on');hideNote()">Cancel</button>
         <button class="btn primary" id="src-next" onclick="srcNext()">Next</button>
       </div>
     </div>
@@ -188,6 +188,20 @@
   </div>
 </div>
 
+<!-- Reusable styled confirm dialog (replaces native confirm() so it can't freeze the page) -->
+<div class="overlay" id="confirmdlg">
+  <div class="modal" style="width:440px">
+    <div class="modal-b" style="text-align:left;padding-top:24px">
+      <h2 id="confirm-title" style="text-align:left;margin:8px 0 6px">Are you sure?</h2>
+      <div class="lead" id="confirm-msg" style="text-align:left"></div>
+    </div>
+    <div class="modal-f" style="justify-content:flex-end">
+      <button class="btn" id="confirm-cancel">Cancel</button>
+      <button class="btn primary" id="confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <script src="shell.js"></script>
 <script>
 document.getElementById("rail").outerHTML = renderRail("campaigns");
@@ -204,7 +218,12 @@ const SOURCE_TYPES = [
 
 init();
 async function init() {
-  DB = await loadData("campaigns", "campaign_details", "signals", "notifications", "meta", "audit");
+  // Signals-tab data comes from /api/* (campaign-drafts, outreach-destinations, lead-counts),
+  // loaded lazily below. The old static data/*.json prototype files are no longer served on the
+  // Supabase-backed deploy — fetching them just produced 404 noise, so we start from an empty DB.
+  // Every legacy DB.* read (campaigns / campaign_details / signals / audit) is already guarded with
+  // `|| []` / optional chaining, so an empty object is behaviourally identical minus the 404s.
+  DB = {};
   route();
   window.addEventListener("hashchange", route);
 }
@@ -259,7 +278,7 @@ async function renderDraftCampaign(id) {
     <div class="pagehead" style="margin-top:8px;align-items:flex-start">
       <div style="flex:1;min-width:0">
         <div class="dethead">
-          <h1 style="font-size:24px" id="camp-title">${esc(dc.name)}</h1>
+          <h1 style="font-size:22px;line-height:1.3;font-weight:600" id="camp-title">${(() => { const p = String(dc.name).split(" · "); const head = esc(p.shift()); return head + (p.length ? ` <span style="font-weight:400;color:var(--ink-3);font-size:15px">· ${esc(p.join(" · "))}</span>` : ""); })()}</h1>
           <button class="btn sm" title="Rename this campaign" style="border:none;padding:4px 6px" onclick="renameCampaign('${id}')">✎</button>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -341,18 +360,29 @@ async function renderDraftCampaign(id) {
     if (kept) feed.push({ t: "", msg: `${kept} qualified by you` });
     feed.sort((a, b) => (b.t || "").localeCompare(a.t || ""));
     el.innerHTML = `<div style="display:flex;gap:14px;align-items:flex-start">
-      <div style="flex:1">
-        <div class="funnel" style="grid-template-columns:repeat(2,1fr)">
+      <div style="flex:1;min-width:0">
+        <div class="funnel" style="grid-template-columns:repeat(4,1fr)">
           ${[["People found", people.length, "people", ""], ["Approved by you", kept, "thumbsup", ""], ["Skipped", rej, "error", ""], ["Sent to outreach", pushed, "send", pushed ? `email ${slN} · LinkedIn ${hrN}` : ""]].map(([lab, v, ic, cv]) =>
-            `<div class="fstage"><div class="ictile">${ic8(ic)}</div><div class="lab">${lab}</div><div class="num-hero" style="font-size:28px;margin:6px 0 2px">${fmt(v)}</div><div class="conv">${cv || "&nbsp;"}</div></div>`).join("")}
+            `<div class="fstage"><div class="ictile">${ic8(ic)}</div><div class="lab">${lab}</div><div class="num-hero" style="font-size:26px;margin:6px 0 2px">${fmt(v)}</div><div class="conv">${cv || "&nbsp;"}</div></div>`).join("")}
         </div>
-        <div class="card panel"><div class="sub">This campaign pulls new people on a schedule from its sources. Qualify them in Leads; ✓ sends each person into your outreach - by email when we have their address, by LinkedIn otherwise.</div></div>
+        <div class="card panel" style="margin-bottom:0">
+          <h2 style="font-size:14px;margin-bottom:2px">Signal velocity</h2>
+          <div class="small muted" style="margin-bottom:8px">New people found per day, per source - and everything together.</div>
+          <div id="velchart"><div class="small muted" style="padding:16px 0">Loading…</div></div>
+        </div>
       </div>
       <div class="card panel" style="width:260px;flex-shrink:0;margin-bottom:0">
         <h2 style="font-size:14px">Activity</h2>
         ${feed.length ? feed.map((f) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(f.msg)}${f.t ? `<div class="muted">${esc(f.t.slice(5, 16).replace("T", " "))}</div>` : ""}</div>`).join("") : '<div class="small muted" style="padding:8px 0">Nothing yet - pulls and approvals show here</div>'}
       </div>
     </div>`;
+    (async () => {
+      let rows = [];
+      try { rows = await (await fetch(`/api/leads?campaign_id=${id}`, { cache: "no-store" })).json(); } catch {}
+      if (!Array.isArray(rows) || !rows.length) rows = people;
+      const holder = document.getElementById("velchart");
+      if (holder) holder.innerHTML = velocityChart(rows, srcs);
+    })();
   } else if (dtab === "leads") {
     el.innerHTML = '<div class="card panel"><h2>People</h2><div class="sub">Loading your leads…</div></div>';
     (async () => {
@@ -383,17 +413,18 @@ async function renderDraftCampaign(id) {
       if (tabBtn && rows.length) tabBtn.textContent = `Leads (${rows.length})`;
       el.innerHTML = `<div class="card panel">
       <h2>People</h2>
-      <div class="sub" style="margin:2px 0 8px">${rows.length ? "Newest first. Click ✓ Send to add someone to your outreach - people we have an email for go to your email campaign, everyone else goes to your LinkedIn list. ✕ skips them." : "No pulls yet - run one from Sources."}</div>
-      ${rows.length ? `<div style="display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap">${chip("all", "All")}${chip("email", "→ Email")}${chip("linkedin", "→ LinkedIn")}${chip("sent", "✓ Sent")}</div>` : ""}
-      ${(() => {
-        const n = rows.filter((x) => !x.verdict && !wasSent(x)).length;
-        if (n < 2) return "";
-        return `<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:10px">${window._confirmAll
-          ? `<span class="small" style="font-weight:600">Send all ${n} unreviewed people to your outreach?</span>
-             <button class="btn sm primary" onclick="window._confirmAll=false;sendAllLeads('${id}')">Yes, send all ${n}</button>
-             <button class="btn sm" onclick="window._confirmAll=false;renderDraftCampaign('${id}')">Cancel</button>`
-          : `<button class="btn sm" style="opacity:.75" data-sendall onclick="window._confirmAll=true;renderDraftCampaign('${id}')">Send all ${n} unreviewed…</button>`}</div>`;
-      })()}
+      ${rows.length ? `<div style="display:flex;gap:8px;margin:2px 0 12px;flex-wrap:wrap;align-items:center">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${chip("all", "All")}${chip("email", "→ Email")}${chip("linkedin", "→ LinkedIn")}${chip("sent", "✓ Sent")}</div>
+        ${(() => {
+          const n = rows.filter((x) => !x.verdict && !wasSent(x)).length;
+          if (n < 2) return "";
+          return `<div style="margin-left:auto;display:flex;align-items:center;gap:8px">${window._confirmAll
+            ? `<span class="small" style="font-weight:600">Send all ${n}?</span>
+               <button class="btn sm primary" onclick="window._confirmAll=false;sendAllLeads('${id}')">Yes, send all ${n}</button>
+               <button class="btn sm" onclick="window._confirmAll=false;renderDraftCampaign('${id}')">Cancel</button>`
+            : `<button class="btn sm" style="opacity:.75" data-sendall onclick="window._confirmAll=true;renderDraftCampaign('${id}')">Send all ${n} unreviewed…</button>`}</div>`;
+        })()}
+      </div>` : '<div class="sub" style="margin:2px 0 8px">No pulls yet - run one from Sources.</div>'}
       ${slice.map(leadRow).join("")}
       ${pages > 1 ? `<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:12px">
         <button class="btn sm" ${pg === 0 ? "disabled" : ""} onclick="window._leadsPage=${pg - 1};renderDraftCampaign('${id}')">← Prev</button>
@@ -606,12 +637,11 @@ function routeNote(pr) {
   if (Object.keys(pr.pushed || {}).length || pr.verdict === "reject") return "";
   const nm = window._destNames || {};
   if (!nm.smartlead && !nm.heyreach) return "";
-  const txt = pr.email
-    ? `📧 email${nm.smartlead ? ` “${esc(nm.smartlead)}”` : ""} - we have their address`
-    : pr.email_checked
-      ? `💼 LinkedIn${nm.heyreach ? ` “${esc(nm.heyreach)}”` : ""} - no email address exists for them`
-      : `email if we find their address, otherwise LinkedIn${nm.heyreach ? ` “${esc(nm.heyreach)}”` : ""}`;
-  return `<div class="small muted" style="margin-top:2px">→ ✓ sends them to: ${txt}</div>`;
+  const pill = (body) => `<span style="display:inline-flex;align-items:center;gap:6px;margin-top:5px;padding:3px 10px;border-radius:999px;background:var(--bg-sunken);font-size:11px;color:var(--ink-2)"><span style="color:var(--green);font-weight:600">✓ Send</span><span style="color:var(--ink-3)">→</span>${body}</span>`;
+  const to = (icon, name) => `${icon} <span style="font-weight:500;color:var(--ink)">${esc(name)}</span>`;
+  if (pr.email) return pill(to("📧", nm.smartlead || "your email campaign"));
+  if (pr.email_checked) return pill(to("💼", nm.heyreach || "your LinkedIn list"));
+  return pill(`${to("📧", nm.smartlead || "email")}<span style="color:var(--ink-3)">if found, else</span>${to("💼", nm.heyreach || "LinkedIn")}`);
 }
 
 function pushChips(pr) {
@@ -642,9 +672,40 @@ function pushToast(r, verdict) {
   if (!bad.length) protoNote(`Sent ✓ - now in your ${ok.join(" and ")}`);
   else protoNote(`${ok.length ? `In your ${ok.join(" and ")} ✓ · ` : ""}couldn't send to ${bad.join(" · ")}`);
 }
+/* Promise-based styled confirm — replaces window.confirm (which freezes the tab under automation
+   and is off-brand). Resolves true on Confirm, false on Cancel / overlay click / Escape. */
+function uiConfirm(msg, { title = "Are you sure?", confirmLabel = "Confirm", danger = true } = {}) {
+  return new Promise((resolve) => {
+    const dlg = document.getElementById("confirmdlg");
+    document.getElementById("confirm-title").textContent = title;
+    document.getElementById("confirm-msg").textContent = msg;
+    const ok = document.getElementById("confirm-ok");
+    const cancel = document.getElementById("confirm-cancel");
+    ok.textContent = confirmLabel;
+    ok.classList.toggle("danger", !!danger);
+    const close = (val) => {
+      dlg.classList.remove("on");
+      ok.onclick = cancel.onclick = dlg.onclick = null;
+      document.removeEventListener("keydown", onKey);
+      resolve(val);
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(false); if (e.key === "Enter") close(true); };
+    ok.onclick = () => close(true);
+    cancel.onclick = () => close(false);
+    dlg.onclick = (e) => { if (e.target === dlg) close(false); };
+    document.addEventListener("keydown", onKey);
+    dlg.classList.add("on");
+    requestAnimationFrame(() => ok.focus());
+  });
+}
+
 async function removeCampaign(id, ev) {
   ev.stopPropagation();
-  if (!confirm("Remove this draft campaign and its sources?")) return;
+  const dc = (DB.campaignDrafts || []).find((x) => x.id === id) || {};
+  if (!(await uiConfirm(
+    `Remove "${dc.name || "this campaign"}" and its sources? This can't be undone.`,
+    { title: "Remove campaign?", confirmLabel: "Remove" }
+  ))) return;
   await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, remove: true }) });
   DB.campaignDrafts = null;
   protoNote("Campaign removed");
@@ -654,6 +715,42 @@ function draftProspects(srcs) {
   const out = [];
   srcs.forEach((s) => (s.prospects || []).forEach((pr, i) => out.push({ ...pr, _sid: s.id, _idx: i })));
   return out;
+}
+
+/* Signal-velocity line chart: new people found per day, one line per source + a bold "All" line.
+   Buckets whatever lead rows we have by pulled_at date. Degrades to dots when there's only one day. */
+function velocityChart(rows, srcs) {
+  const days = {};  // "YYYY-MM-DD" -> { [sid]: count, __all: count }
+  (rows || []).forEach((r) => {
+    const d = String(r.pulled_at || "").slice(0, 10);
+    if (!d) return;
+    const sid = r._sid == null ? "unknown" : r._sid;
+    const bucket = (days[d] = days[d] || {});
+    bucket[sid] = (bucket[sid] || 0) + 1;
+    bucket.__all = (bucket.__all || 0) + 1;
+  });
+  const dates = Object.keys(days).sort();
+  if (!dates.length) return '<div class="small muted" style="padding:16px 0">No signals yet - the velocity graph builds as daily pulls come in.</div>';
+  const srcList = (srcs || []).filter((s) => days[dates[dates.length - 1]] && dates.some((d) => days[d][s.id]));
+  const palette = ["#E8590C", "#1971C2", "#2F9E44", "#9C36B5", "#F08C00", "#0C8599", "#C2255C"];
+  const series = [{ name: "All", color: "#111", width: 2.5, vals: dates.map((d) => days[d].__all || 0) }];
+  srcList.forEach((s, i) => series.push({ name: s.name, color: palette[i % palette.length], width: 1.5, vals: dates.map((d) => days[d][s.id] || 0) }));
+  const W = 640, H = 190, padL = 30, padR = 12, padT = 12, padB = 26;
+  const maxV = Math.max(1, ...dates.map((d) => days[d].__all || 0));
+  const x = (i) => dates.length === 1 ? (padL + (W - padL - padR) / 2) : padL + i * (W - padL - padR) / (dates.length - 1);
+  const y = (v) => padT + (1 - v / maxV) * (H - padT - padB);
+  const grid = [0, 0.5, 1].map((f) => { const v = maxV * f; const yy = y(v); return `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${padL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-3)">${Math.round(v)}</text>`; }).join("");
+  const drawLine = (s) => {
+    if (s.vals.length === 1) return `<circle cx="${x(0).toFixed(1)}" cy="${y(s.vals[0]).toFixed(1)}" r="4" fill="${s.color}"/>`;
+    const pts = s.vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    return `<polyline fill="none" stroke="${s.color}" stroke-width="${s.width}" points="${pts}" stroke-linejoin="round" stroke-linecap="round"/>`;
+  };
+  const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
+  const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(dates.length - 1)].join("");
+  const legend = series.map((s) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:0;border-top:${s.width >= 2 ? "3" : "2"}px solid ${s.color};display:inline-block"></span>${esc(String(s.name).length > 34 ? String(s.name).slice(0, 33) + "…" : s.name)}</span>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-width:${W}px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>
+    <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
+    ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps pulling.</div>' : ""}`;
 }
 async function sendAllLeads(campaignId) {
   const todo = (window._leadRows || draftProspects(window._drafts || []))
@@ -974,13 +1071,13 @@ async function renderDrafts(campaignId) {
         <div class="ictile">${ic8(meta[0])}</div>
         <div style="flex:1;min-width:200px;cursor:pointer" onclick="window._openSource=window._openSource==='${s.id}'?null:'${s.id}';renderDrafts('${campaignId}')">
           <div style="font-weight:500">${esc(s.name)}${off ? ' <span class="pill n">excluded</span>' : ""}</div>
-          <div class="small muted">${s.last_pull ? `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found · pulled ${esc(s.last_pull.slice(5, 16).replace("T", " "))}` : `≈${fmt(s.total)} people expected`}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
-          <div class="small" style="color:var(--orange-700)">Targets: ${esc((s.titles || []).slice(0, 2).join(", ") || "any leader")} · ${esc((({ ...(s.config || {}), ...(s.params || {}) }).countries || []).join(", ") || "anywhere")} - click to edit</div>
+          <div class="small muted">${s.last_pull ? `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found · pulled ${esc(s.last_pull.slice(5, 16).replace("T", " "))}` : (s.total ? `≈${fmt(s.total)} people expected` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
+          <div class="small" style="color:var(--orange-700)">Targets: ${esc((s.titles || []).slice(0, 2).join(", ") || "any leader")} · ${esc((({ ...(s.config || {}), ...(s.params || {}) }).countries || []).join(", ") || "anywhere")}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
           <button class="btn sm primary" onclick="pullProspects('${s.id}','${campaignId}')">${s.prospects ? "Find people again" : "Find people now"}</button>
-          <button class="btn sm" onclick="toggleSource('${s.id}', ${off}, '${campaignId}')">${off ? "Include" : "Exclude"}</button>
+          ${(s.mechanism || s.type) === "engagement" ? "" : `<button class="btn sm" title="Change who this source targets - job titles, company type, countries" onclick="window._editTargeting=window._editTargeting||{};window._editTargeting['${s.id}']=!window._editTargeting['${s.id}'];window._openSource='${s.id}';renderDrafts('${campaignId}')">✎ Edit targeting</button>`}
           <button class="btn sm" onclick="removeSource('${s.id}', '${campaignId}')">Remove</button>
         </div>
         ${openId || s.prospects ? srcDetail(s, campaignId) : ""}
@@ -1386,7 +1483,7 @@ async function loadClients() {
   try { wiz.clients = await (await fetch("/api/clients", { cache: "no-store" })).json(); }
   catch { wiz.clients = []; }
 }
-function closeWizard() { wizard.classList.remove("on"); }
+function closeWizard() { wizard.classList.remove("on"); hideNote(); }
 function wizBack() {
   if (wiz.step <= 1 || wiz.step >= 7) return;
   if (wiz.mode === "direct" && wiz.step === 6) { wiz.step = 4; drawWiz(); return; }
@@ -1586,6 +1683,7 @@ function guessMechanism(goal) {
 }
 
 function drawWiz() {
+  hideNote();  // clear any stale validation toast when the step re-renders
   document.getElementById("wdots").innerHTML = [1, 2, 3, 4, 5, 6].map((n) =>
     `<div class="wdot ${n === Math.min(wiz.step, 6) ? "on" : n < wiz.step ? "done" : ""}">${n < wiz.step ? "✓" : n}</div>`).join("");
   const body = document.getElementById("wiz-body");
@@ -1613,8 +1711,9 @@ function drawWiz() {
           <label>What they do</label><textarea id="nc-desc" rows="2">${esc(nc.description)}</textarea>
           <label>The offer / problems they solve for customers</label><textarea id="nc-offer" rows="2" placeholder="e.g. helps product brands capture Amazon demand on a performance basis">${esc(nc.offer)}</textarea>
         </div>
-        <div style="margin-top:14px"><button class="btn" onclick="wiz.newClient=null;drawWiz()">Back to clients</button>
-        <button class="btn primary" onclick="saveNewClient()">Save client &amp; continue</button></div>`;
+        <div style="position:sticky;bottom:0;background:#fff;display:flex;justify-content:flex-end;gap:8px;padding:14px 0 4px;margin-top:14px;border-top:1px solid var(--line)">
+          <button class="btn" onclick="wiz.newClient=null;drawWiz()">Back to clients</button>
+          <button class="btn primary" onclick="saveNewClient()">Save client &amp; continue</button></div>`;
       return;
     }
     const clients = wiz.clients || [];
@@ -2342,7 +2441,7 @@ function roleChipAdd(field) {
   if (!a.some((x) => x.toLowerCase() === v.toLowerCase())) a.push(v);
   sw[field] = a.join(", "); sw._touched = { ...(sw._touched || {}), [field]: true }; drawSrc();
 }
-function srcBack() { srcwiz.classList.remove("on"); }  // Back closes the wizard (user rule)
+function srcBack() { srcwiz.classList.remove("on"); hideNote(); }  // Back closes the wizard (user rule)
 function toggleIn(arr, v) { const i = arr.indexOf(v); i >= 0 ? arr.splice(i, 1) : arr.push(v); drawSrc(); }
 
 function chipRow(arr, options, field) {
@@ -2351,6 +2450,7 @@ function chipRow(arr, options, field) {
 }
 
 function drawSrc() {
+  hideNote();  // clear any stale validation toast when the source-wizard step re-renders
   [1, 2, 3].forEach((n) => {
     const el = document.getElementById("sd" + n);
     el.className = "wdot" + (n === sw.step ? " on" : n < sw.step ? " done" : "");
@@ -2464,6 +2564,18 @@ function drawSrc() {
     const r = sw.result;
     if (!r) { body.innerHTML = `<h2>Searching…</h2><div class="lead">Live data, one moment.</div><div class="empty" style="padding:40px 0">${ic8(m.icon, "xl")}</div>`; next.disabled = true; return; }
     if (!r.ok) { body.innerHTML = `<h2>No luck.</h2><div class="lead">${esc(r.message || "Search failed")}</div>`; next.disabled = true; return; }
+    const previewTotal = sw.type === "hiring" ? (r.total_prospects || 0) : (r.total_dms_estimate || r.total_companies || 0);
+    if (!previewTotal && !(r.sample || []).length) {  // zero matches: show a real empty state, not blank headers
+      body.innerHTML = `
+        <h2>No matches yet.</h2>
+        <div class="lead">${esc(r.cost) ? esc(r.cost) + " · " : ""}nobody fits these filters right now.</div>
+        <div class="empty" style="padding:26px 0;text-align:center">
+          <div style="font-size:24px;line-height:1">0</div>
+          <div class="small muted" style="margin:6px auto 0;max-width:420px">Try widening the countries, company sizes, or roles, then run the preview again. You can still save this as a draft and adjust it later.</div>
+        </div>`;
+      next.disabled = false;  // saving an empty draft is allowed — the daily run picks up matches as they appear
+      return;
+    }
     const heroes = sw.type === "hiring"
       ? [[r.total_prospects, "decision makers (estimated)", "≈"]]
       : r.total_dms_estimate
@@ -2644,8 +2756,12 @@ async function srcNext() {
     }) })).json();
     if (!r.ok) { protoNote(r.message || "Couldn't save the source"); return; }
     srcwiz.classList.remove("on");
+    hideNote();
+    DB.campaignDrafts = null;  // invalidate so the list/detail re-fetches with the new campaign + counts
     protoNote("Source saved as draft");
-    renderDrafts(sw.campaignId);
+    // land the user on the new campaign (matches "Save for later"); if already there, re-render it.
+    if (location.hash.slice(1) !== String(sw.campaignId)) location.hash = sw.campaignId;
+    else if (document.getElementById("draftlist")) renderDrafts(sw.campaignId); else renderDraftCampaign(sw.campaignId);
   }
 }
 

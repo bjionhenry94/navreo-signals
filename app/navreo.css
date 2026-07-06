@@ -4,7 +4,9 @@
 
 @font-face {
   font-family: "Acid Grotesk";
-  src: url("../design-system/fonts/AcidGrotesk-Normal.otf") format("opentype");
+  /* self-hosted under /app/fonts so it's served alongside the app (the /design-system path
+     is not reliably deployed on Render and was returning 503) */
+  src: url("fonts/AcidGrotesk-Normal.otf") format("opentype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -145,6 +147,8 @@ h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .btn:focus-visible { outline: none; box-shadow: var(--focus); }
 .btn.primary { background: var(--orange); border-color: var(--orange); color: var(--cream); }
 .btn.primary:hover { background: var(--orange-600); }
+.btn.danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+.btn.danger:hover { background: #a93226; border-color: #a93226; }
 .btn.sm { padding: 5px 12px; font-size: 11.5px; }
 .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
 
