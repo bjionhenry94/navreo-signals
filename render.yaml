@@ -11,8 +11,6 @@ envVarGroups:
         sync: false
       - key: AI_ARK_API_KEY
         sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: HEYREACH_API_KEY

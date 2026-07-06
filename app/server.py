@@ -900,22 +900,23 @@ Score each honestly for THIS client: fit (does the signal indicate need for the 
 Reply with ONLY a JSON array, no fences, no commentary:
 [{{"idea": "<short PLAIN name a non-marketer instantly understands, e.g. 'Brands hiring Amazon roles' not 'Marketplace Talent Expansion'>", "why": "<under 15 words: why this signal means they need the offer. Plain punctuation, never an em-dash>", "icebreaker": "<the opening line: 10-15 words TOTAL, one short signal mention using {{company}}-style merge tags, MUST end with: and so I thought I'd reach out.>", "mechanism": "<one of hiring|engagement>", "params": {{...}}, "fit": n, "novelty": n, "intent": n}}]"""
 
-    # ideation via the Anthropic API (ANTHROPIC_API_KEY from env) - no local
-    # `claude` CLI, so it runs on Render as-is. No key -> None -> the caller
-    # falls back to the default catalogue (degrades cleanly, never breaks).
+    # ideation via OpenAI (OPENAI_API_KEY from env, same key the app already
+    # uses) - no local `claude` CLI, so it runs on Render as-is. No key -> None
+    # -> the caller falls back to the default catalogue (never breaks).
     ideas = None
     fail_reason = ""
-    api_key = KEYS.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("IDEATION SKIPPED (no ANTHROPIC_API_KEY) - using catalogue fallback")
+    key = KEYS.get("OPENAI_API_KEY")
+    if not key:
+        print("IDEATION SKIPPED (no OPENAI_API_KEY) - using catalogue fallback")
         return None
     try:
-        resp = http_json("POST", "https://api.anthropic.com/v1/messages",
-                         {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-                         {"model": "claude-sonnet-4-6", "max_tokens": 4096,
-                          "messages": [{"role": "user", "content": prompt}]})
-        text = "".join(b.get("text", "") for b in (resp.get("content") or [])
-                       if b.get("type") == "text").strip()
+        r = http_json("POST", "https://api.openai.com/v1/chat/completions",
+                      {"Authorization": f"Bearer {key}"},
+                      {"model": "gpt-5-mini",
+                       "messages": [{"role": "user", "content": prompt}]})
+        if r.get("error"):
+            raise RuntimeError(str(r["error"].get("message", r["error"]))[:200])
+        text = (r["choices"][0]["message"]["content"] or "").strip()
         m = re.search(r"\[.*\]", text, re.S)
         ideas = json.loads(m.group(0) if m else text)
     except Exception as e:  # noqa: BLE001
