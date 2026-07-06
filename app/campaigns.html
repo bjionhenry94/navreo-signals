@@ -1072,7 +1072,6 @@ async function renderDrafts(campaignId) {
         <div style="flex:1;min-width:200px;cursor:pointer" onclick="window._openSource=window._openSource==='${s.id}'?null:'${s.id}';renderDrafts('${campaignId}')">
           <div style="font-weight:500">${esc(s.name)}${off ? ' <span class="pill n">excluded</span>' : ""}</div>
           <div class="small muted">${s.last_pull ? `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found · pulled ${esc(s.last_pull.slice(5, 16).replace("T", " "))}` : (s.total ? `≈${fmt(s.total)} people expected` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
-          <div class="small" style="color:var(--orange-700)">Targets: ${esc((s.titles || []).slice(0, 2).join(", ") || "any leader")} · ${esc((({ ...(s.config || {}), ...(s.params || {}) }).countries || []).join(", ") || "anywhere")}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
