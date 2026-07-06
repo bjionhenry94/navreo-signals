@@ -212,6 +212,63 @@ const main = document.getElementById("main");
 const wizard = document.getElementById("wizard");
 const qagate = document.getElementById("qagate");
 
+/* ══ perf: request cache + mutation-bust + skeletons  (campaigns-perf-loadspeed skill) ══
+   cachedGet() memoises a GET's parsed-JSON promise so the same endpoint isn't refetched
+   multiple times within one navigation (short TTL) or the session (long TTL for near-static
+   data). ANY non-GET fetch clears the cache so the next read is always fresh — one choke
+   point that keeps data correct without touching every mutation call-site. */
+const _nativeFetch = window.fetch.bind(window);
+const _getCache = new Map();   // url -> { p, t }
+const GET_TTL = 4000;          // dedupe repeated reads across a list->detail->list burst (any write busts it instantly)
+const SESSION_TTL = 600000;    // ~"once per session" for /api/clients, /api/outreach-destinations, /api/campaign-drafts
+function cachedGet(url, ttl = GET_TTL) {
+  const now = performance.now();
+  const hit = _getCache.get(url);
+  if (hit && (now - hit.t) < ttl) return hit.p;
+  const p = _nativeFetch(url).then((r) => r.json());
+  p.catch(() => { if ((_getCache.get(url) || {}).p === p) _getCache.delete(url); });  // never cache a failure
+  _getCache.set(url, { p, t: now });
+  return p;
+}
+function bustCache(sub) { for (const k of [..._getCache.keys()]) if (!sub || k.includes(sub)) _getCache.delete(k); }
+window.fetch = (input, init) => {
+  if ((((init && init.method) || "GET")).toUpperCase() !== "GET") bustCache();  // a write happened -> reads must refetch
+  return _nativeFetch(input, init);
+};
+
+/* Skeletons: paint the page frame with the RIGHT box sizes before data arrives, so real
+   content swaps in place instead of popping in and shoving the layout around. */
+(function injectSkelCss() {
+  const s = document.createElement("style");
+  s.textContent = ".skel{background:linear-gradient(90deg,var(--bg-sunken,#eef0f2) 25%,var(--line,#f6f7f8) 37%,var(--bg-sunken,#eef0f2) 63%);background-size:400% 100%;animation:skel 1.2s ease infinite;border-radius:6px;display:block}@keyframes skel{0%{background-position:100% 0}100%{background-position:-100% 0}}";
+  document.head.appendChild(s);
+})();
+function listSkeleton() {
+  const row = `<div class="srcrow" style="padding:14px 16px"><div class="ictile skel" style="width:34px;height:34px"></div><div style="flex:1"><div class="skel" style="width:42%;height:13px"></div><div class="skel" style="width:26%;height:10px;margin-top:7px"></div></div><div class="skel" style="width:74px;height:22px;border-radius:999px"></div></div>`;
+  return `
+    <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Signal campaigns.</h1></div></div>
+    <div class="card panel" style="margin-top:16px"><h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2><div class="small muted" style="margin-bottom:8px">People found and sent to outreach each day, across all your campaigns.</div><div class="skel" style="height:120px"></div></div>
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-top:16px">
+      <div style="flex:1;min-width:0"><div class="card">${row.repeat(3)}</div></div>
+      <div class="card panel" style="width:290px;flex-shrink:0"><h2 style="font-size:15px;margin-bottom:6px">Status</h2><div class="skel" style="height:236px"></div></div>
+    </div>`;
+}
+function detailSkeleton(dc) {
+  const title = dc ? esc(String(dc.name).split(" · ")[0]) : "&nbsp;";
+  return `
+    <button style="border:none;background:none;font-family:inherit;font-size:13px;color:var(--ink-3);cursor:pointer;padding:0" onclick="location.hash=''">&larr; Campaigns</button>
+    <div class="pagehead" style="margin-top:8px;align-items:flex-start"><div style="flex:1;min-width:0"><h1 style="font-size:22px;line-height:1.3;font-weight:600">${title}</h1><div class="skel" style="width:240px;height:24px;margin-top:10px;border-radius:999px"></div></div><div class="skel" style="width:260px;height:30px;border-radius:999px"></div></div>
+    <div class="tabs"><div class="skel" style="width:280px;height:28px"></div></div>
+    <div id="dtabbody"><div class="skel" style="height:280px;margin-top:14px"></div></div>`;
+}
+/* Lazy-load fade: when real content swaps in over a skeleton (or a "Loading…" placeholder),
+   ease it in instead of popping. Opacity-only + a 4px rise so it never shifts reserved layout,
+   and it restarts on every call (Web Animations API), so each navigation re-animates. */
+function hydrateFade(el) {
+  if (!el) return;
+  try { el.animate([{ opacity: 0.35, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }], { duration: 260, easing: "cubic-bezier(.2,.6,.2,1)" }); } catch (_) {}
+}
+
 const SOURCE_TYPES = [
   ["Hiring signal", "Companies hiring your buyer", "briefcase", "hiring"],
   ["Engagement signal", "Warm leads engaging with LinkedIn profiles", "linkedin", "engagement"],
@@ -243,14 +300,20 @@ function route() {
 
 let dtab = sessionStorage.getItem("cdtab") || "overview";
 async function renderDraftCampaign(id) {
-  if (!Array.isArray(DB.campaignDrafts)) {
-    try { DB.campaignDrafts = await (await fetch("/api/campaign-drafts", { cache: "no-store" })).json(); } catch { DB.campaignDrafts = []; }
-  }
+  // Paint the frame instantly (using the cached draft if we already have it), then hydrate
+  // in parallel — the four reads below don't depend on each other, so they fire together.
+  const cachedDc = Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts.find((x) => x.id === id) : null;
+  main.innerHTML = detailSkeleton(cachedDc);
+  const [drafts0, dests0, srcsAll0, counts0] = await Promise.all([
+    Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => []),
+    DB.dests ? DB.dests : cachedGet("/api/outreach-destinations", SESSION_TTL).catch(() => ({ smartlead: [], heyreach: [] })),
+    cachedGet("/api/sources").catch(() => []),
+    cachedGet("/api/lead-counts").catch(() => ({})),
+  ]);
+  DB.campaignDrafts = Array.isArray(drafts0) ? drafts0 : [];
+  DB.dests = dests0 || { smartlead: [], heyreach: [] };
   const dc = DB.campaignDrafts.find((x) => x.id === id);
   if (!dc) { location.hash = ""; return; }
-  if (!DB.dests) {
-    try { DB.dests = await (await fetch("/api/outreach-destinations", { cache: "no-store" })).json(); } catch { DB.dests = { smartlead: [], heyreach: [] }; }
-  }
   {
     const d0 = dc.destination || {};
     const sl0 = d0.smartlead_campaign_id || (d0.type === "smartlead" ? d0.campaign_id : "") || "";
@@ -260,15 +323,13 @@ async function renderDraftCampaign(id) {
       heyreach: hr0 ? ((DB.dests.heyreach || []).find((l) => String(l.id) === String(hr0)) || {}).name || d0.heyreach_list_name || "your LinkedIn list" : "",
     };
   }
-  let srcs = [];
-  try { srcs = (await (await fetch("/api/sources", { cache: "no-store" })).json()).filter((s) => String(s.campaign_id) === String(id)); } catch {}
+  const srcs = (Array.isArray(srcsAll0) ? srcsAll0 : []).filter((s) => String(s.campaign_id) === String(id));
   window._drafts = srcs;
   const people = draftProspects(srcs);
   // Authoritative lead count comes from the DB (signal_leads accumulates every pull);
   // the local `people` only holds the LAST pull, so use it just as an offline fallback
   // - otherwise the tab label disagrees with the Leads tab (which reads the same DB).
-  let dbLeadCount = null;
-  try { dbLeadCount = (await (await fetch("/api/lead-counts", { cache: "no-store" })).json() || {})[String(id)]?.leads ?? null; } catch {}
+  const dbLeadCount = (counts0 || {})[String(id)]?.leads ?? null;
   const leadCount = dbLeadCount != null ? dbLeadCount : people.length;
   const tabs = ["overview", "leads", "sources"];  // Preview ("copy") tab hidden for now
   const tabLabel = { overview: "Overview", leads: leadCount ? `Leads (${leadCount})` : "Leads", sources: "Sources", copy: "Preview" };
@@ -346,6 +407,7 @@ async function renderDraftCampaign(id) {
       `<button class="tab ${dtab === x ? "on" : ""}" onclick="dtab='${x}';sessionStorage.setItem('cdtab','${x}');document.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));this.classList.add('on');var tb=document.getElementById('dtabbody');if(tb)tb.innerHTML='<div class=\\'small muted\\' style=\\'padding:24px 4px\\'>Loading…</div>';renderDraftCampaign('${id}')">${tabLabel[x]}</button>`).join("")}
     </div>
     <div id="dtabbody"></div>`;
+  hydrateFade(main);  // ease the real detail view in over the skeleton
   const el = document.getElementById("dtabbody");
   if (dtab === "overview") {
     const kept = people.filter((x) => x.verdict === "keep").length;
@@ -382,7 +444,7 @@ async function renderDraftCampaign(id) {
       try { rows = await (await fetch(`/api/leads?campaign_id=${id}`, { cache: "no-store" })).json(); } catch {}
       if (!Array.isArray(rows) || !rows.length) rows = people;
       const holder = document.getElementById("velchart");
-      if (holder) holder.innerHTML = velocityChart(rows, srcs);
+      if (holder) { holder.innerHTML = velocityChart(rows, srcs); hydrateFade(holder); }
     })();
   } else if (dtab === "leads") {
     el.innerHTML = '<div class="card panel"><h2>People</h2><div class="sub">Loading your leads…</div></div>';
@@ -433,6 +495,7 @@ async function renderDraftCampaign(id) {
         <button class="btn sm" ${pg >= pages - 1 ? "disabled" : ""} onclick="window._leadsPage=${pg + 1};renderDraftCampaign('${id}')">Next →</button>
       </div>` : ""}
     </div>`;
+      hydrateFade(el);  // ease the leads list in once fetched
     })();
   } else if (dtab === "sources") {
     el.innerHTML = `<div id="draftlist"></div>
@@ -956,21 +1019,24 @@ const SIG_ICON = { hiring: "briefcase", news: "signal", linkedin: "linkedin", te
 
 /* ══ LIST ══ */
 async function renderList() {
-  if (!Array.isArray(DB.campaignDrafts)) {
-    try { DB.campaignDrafts = await (await fetch("/api/campaign-drafts", { cache: "no-store" })).json(); }
-    catch { DB.campaignDrafts = []; }
-  }
-  if (!window._clients) {
-    try { window._clients = await (await fetch("/api/clients", { cache: "no-store" })).json(); } catch { window._clients = []; }
-  }
+  // Paint the skeleton frame first so the list feels instant, then hydrate — all four reads
+  // fire in parallel instead of blocking one another (campaign-drafts + clients are cached
+  // for the session; sources + lead-counts are de-duped within the navigation).
+  main.innerHTML = listSkeleton();
   const activeClient = localStorage.getItem("navreo_client") || "";
+  const [drafts0, clients0, srcAll0, leadCounts0] = await Promise.all([
+    Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => []),
+    window._clients ? window._clients : cachedGet("/api/clients", SESSION_TTL).catch(() => []),
+    cachedGet("/api/sources").catch(() => []),
+    cachedGet("/api/lead-counts").catch(() => ({})),
+  ]);
+  DB.campaignDrafts = Array.isArray(drafts0) ? drafts0 : [];
+  window._clients = Array.isArray(clients0) ? clients0 : [];
+  const srcAll = Array.isArray(srcAll0) ? srcAll0 : [];
+  const leadCounts = leadCounts0 || {};
   const forClient = (DB.campaignDrafts || []).filter((d) => !activeClient || d.client_id === activeClient);
   const drafts = forClient.filter((d) => !d.deleted_at);
   const deleted = forClient.filter((d) => d.deleted_at);
-  let srcAll = [];
-  try { srcAll = await (await fetch("/api/sources", { cache: "no-store" })).json(); } catch {}
-  let leadCounts = {};
-  try { leadCounts = await (await fetch("/api/lead-counts", { cache: "no-store" })).json() || {}; } catch {}
   const totalFound = drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).leads || 0), 0);
   const totalSent = drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).sent || 0), 0);
   const running = drafts.filter((d) => !d.paused).length;
@@ -1050,6 +1116,7 @@ async function renderList() {
         <div id="st-warn"></div>
       </div>
     </div>`;
+  hydrateFade(main);  // ease the real list in over the skeleton
   (async () => {
     const per = await Promise.all(drafts.map((dc) =>
       fetch(`/api/leads?campaign_id=${dc.id}`, { cache: "no-store" }).then((r) => r.json()).catch(() => [])));
@@ -1072,7 +1139,7 @@ async function renderList() {
       { name: "Sent to outreach", color: "#2F9E44", width: 2, vals: dates.map((d) => sentByDate[d] || 0) },
     ];
     const set = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
-    const chartEl = document.getElementById("dash-chart"); if (chartEl) chartEl.innerHTML = activityChart(dates, series);
+    const chartEl = document.getElementById("dash-chart"); if (chartEl) { chartEl.innerHTML = activityChart(dates, series); hydrateFade(chartEl); }
     set("st-split", (sEmail + sLi) ? `${destLogo("smartlead")} ${sEmail} · ${destLogo("heyreach")} ${sLi}` : "0");
     set("st-foundsplit", `${destLogo("smartlead")} ${fmt(foundEmail)} have an email · ${destLogo("heyreach")} ${fmt(foundNoEmail)} no email`);
     set("st-waiting", fmt(waiting));
@@ -1727,8 +1794,8 @@ async function loadStrategyMap(force) {
   let existing = [];
   try {
     const [srcs, drafts] = await Promise.all([
-      (await fetch("/api/sources", { cache: "no-store" })).json(),
-      (DB.campaignDrafts && DB.campaignDrafts.length) ? DB.campaignDrafts : (await fetch("/api/campaign-drafts", { cache: "no-store" })).json(),
+      cachedGet("/api/sources").catch(() => []),
+      (DB.campaignDrafts && DB.campaignDrafts.length) ? DB.campaignDrafts : cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => []),
     ]);
     const mine = new Set((drafts || []).filter((d) => wiz.client && d.client_id === wiz.client.id).map((d) => String(d.id)));
     existing = (srcs || []).filter((s) => mine.has(String(s.campaign_id))).map((s) => `${s.mechanism || s.type}: ${s.name}`);

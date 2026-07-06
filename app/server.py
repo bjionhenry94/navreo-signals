@@ -3156,14 +3156,53 @@ class Handler(SimpleHTTPRequestHandler):
         if "/api/" in str(args[0] if args else ""):  # args[0] can be an HTTPStatus on send_error
             super().log_message(fmt, *args)
 
+    def _accepts_gzip(self):
+        return "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+
     def _json(self, obj, status=200):
+        import gzip
         body = json.dumps(obj).encode()
+        gz = self._accepts_gzip() and len(body) >= 512  # tiny payloads: framing overhead isn't worth it
+        if gz:
+            body = gzip.compress(body, 6)
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
+        if gz:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    # Static text assets (HTML/CSS/JS/SVG) are shipped uncompressed by the stdlib
+    # handler; gzip them here. Binary assets (fonts, images), 404s, ranges and
+    # conditional requests fall through to SimpleHTTPRequestHandler untouched.
+    _GZIP_EXT = {".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".map", ".txt"}
+
+    def _serve_static(self):
+        import os, gzip, mimetypes
+        fs_path = self.translate_path(self.path)
+        ext = os.path.splitext(fs_path)[1].lower()
+        if not self._accepts_gzip() or ext not in self._GZIP_EXT or os.path.isdir(fs_path):
+            return super().do_GET()
+        try:
+            with open(fs_path, "rb") as f:
+                body = f.read()
+        except OSError:
+            return super().do_GET()  # let the default path emit the 404
+        ctype = mimetypes.guess_type(fs_path)[0] or "application/octet-stream"
+        if ctype.startswith("text/") or ext in (".js", ".mjs", ".json", ".svg"):
+            ctype += "; charset=utf-8"
+        gz = gzip.compress(body, 6)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(gz)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(gz)
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -3194,7 +3233,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(read_json_list(CLIENTS))
         if path == "/api/outreach-destinations":
             return self._json(outreach_destinations({}))
-        return super().do_GET()
+        return self._serve_static()
 
     def do_POST(self):
         route = ROUTES.get(self.path.split("?")[0])
