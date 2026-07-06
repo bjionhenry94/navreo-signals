@@ -24,9 +24,11 @@ LOG = Path(__file__).parent / "data" / "daily_log.json"
 
 
 def main():
-    campaigns = {str(c.get("id")): c for c in server.read_json_list(server.CAMPAIGN_DRAFTS)}
+    campaigns = {str(c.get("id")): c for c in server.read_json_list(server.CAMPAIGN_DRAFTS)
+                 if not c.get("deleted_at")}  # soft-deleted campaigns never pull
     source_ids = [d["id"] for d in server.read_drafts()
-                  if d.get("active", True) and str(d.get("campaign_id")) in campaigns]
+                  if d.get("active", True) and not d.get("deleted_at")
+                  and str(d.get("campaign_id")) in campaigns]
     run = {"ts": datetime.now().isoformat(timespec="seconds"), "sources": []}
     print(f"daily run · {len(source_ids)} active sources")
 

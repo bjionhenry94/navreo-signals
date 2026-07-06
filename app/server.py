@@ -1481,7 +1481,7 @@ def update_source(p: dict) -> dict:
                     pr["verdict"] = p["verdict"]
                     status = "rejected" if p["verdict"] == "reject" else "qualified"
                     if p["verdict"] == "keep" and dest:
-                        push = push_prospect(pr, dest)  # real API push, idempotent
+                        push = push_prospect(pr, dest, client_id=d.get("client_id"))  # real API push, idempotent + suppression-checked
                         sent = [k for k, v in push["tools"].items() if v.get("ok")]
                         if sent:
                             status = "pushed"
@@ -1643,10 +1643,27 @@ def resolve_destination(src: dict) -> dict:
     return dest
 
 
-def push_prospect(pr: dict, dest: dict) -> dict:
+def is_suppressed(client_id, email, domain) -> bool:
+    """Client-level suppression + prior contact history via the DB RPC. Shared by
+    the hiring pull (email known early) and the push path (engagement's email is
+    only known at push). Fails CLOSED — an outage suppresses rather than sends,
+    so we never accidentally re-contact someone."""
+    if not client_id or not (email or domain):
+        return False
+    try:
+        rows = sb("POST", "rpc/check_exclusions",
+                  {"p_client": client_id, "p_emails": [email] if email else [],
+                   "p_domains": [domain] if domain else []})
+        return bool(rows)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def push_prospect(pr: dict, dest: dict, client_id=None) -> dict:
     """EXCLUSIVE routing by email (user rule 2026-07-05): if we find a verified
     email the person goes ONLY to Smartlead; if we don't, ONLY to HeyReach.
-    Never both. Idempotent via pr['pushed'] stamps; both APIs upsert anyway."""
+    Never both. Idempotent via pr['pushed'] stamps; both APIs upsert anyway.
+    Respects client suppression / prior-contact at push time (both mechanisms)."""
     done = pr.setdefault("pushed", {})
     tools: dict = {}
     sl = dest.get("smartlead_campaign_id")
@@ -1661,6 +1678,12 @@ def push_prospect(pr: dict, dest: dict) -> dict:
         email = find_email(pr)
     except Exception as e:  # noqa: BLE001 — credits/key failure is NOT "no email"
         email, email_error = None, str(e)[:150]
+
+    # suppression: don't burn a lead already contacted for this client (skip, don't fail)
+    if not email_error and is_suppressed(client_id, email, pr.get("domain")):
+        return {"ok": False, "suppressed": True,
+                "tools": {"suppressed": {"ok": False, "suppressed": True,
+                                         "message": "already contacted for this client - skipped"}}}
 
     if email_error:
         # can't know the route -> fail loudly, never mis-route to HeyReach
@@ -1710,7 +1733,7 @@ def auto_push_new_leads(src: dict) -> list:
     for pr in (src.get("prospects") or []):
         if pr.get("pushed") or pr.get("verdict") == "reject":
             continue
-        push = push_prospect(pr, dest)
+        push = push_prospect(pr, dest, client_id=src.get("client_id"))
         sent = [k for k, v in push["tools"].items() if v.get("ok")]
         if sent:
             pr["verdict"] = "keep"
@@ -2671,6 +2694,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         pats = [re.escape(n.lower()) for n in negatives]
         precision["job_title_pattern_not"] = pats
         precision["job_description_pattern_not"] = pats
+    filter_dropped = False
     jobs, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit, extra=precision, negatives=negatives)
     if not jobs and precision.get("company_description_pattern_or"):
         # the description REQUIRE gate starves niche roles to zero (most company
@@ -2681,6 +2705,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         if jobs:
             (src.setdefault("params", {})).pop("company_description_pattern_or", None)
             (src.get("config") or {}).pop("company_description_pattern_or", None)
+            filter_dropped = True  # tell the user their REQUIRE-word filter was auto-removed
     total_jobs = meta.get("total_results") or len(jobs)
     if not jobs:
         return {"ok": False, "message":
@@ -2714,16 +2739,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     now_iso = datetime.now(timezone.utc).isoformat()
 
     def lead_excluded(email, domain):
-        """Client-level suppression + prior contact history, via the DB RPC."""
-        if not client_id:
-            return False
-        try:
-            rows = sb("POST", "rpc/check_exclusions",
-                      {"p_client": client_id, "p_emails": [email] if email else [],
-                       "p_domains": [domain] if domain else []})
-            return bool(rows)
-        except Exception:  # noqa: BLE001 — an exclusion-check outage must not open the floodgates
-            return True
+        return is_suppressed(client_id, email, domain)  # shared helper (also used at push time)
 
     prospects, signals_n, scanned, dropped = [], 0, 0, {"no_email": 0, "excluded": 0}
     for j in fresh:
@@ -2826,6 +2842,8 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     return {"ok": True, "total": total_jobs, "signals": signals_n,
             "companies_scanned": len(uniq), "prospects": prospects, "db_synced": True,
             "dropped": dropped,
+            "notice": ("Removed your 'description must contain' filter to get results "
+                       "- it matched no live jobs. Targeting saved." if filter_dropped else None),
             "note": f"{signals_n} hiring companies, {len(prospects)} {dm_word}{tail}"
                     + (f" · {drop_note}" if drop_note else "")}
 
@@ -2911,23 +2929,28 @@ def pull_source(p: dict) -> dict:
 
 
 def update_campaign_draft(p: dict) -> dict:
+    from datetime import datetime
     drafts = read_json_list(CAMPAIGN_DRAFTS)
     cid = p.get("id")
     if p.get("remove"):
+        # SOFT delete: mark the campaign + its sources deleted and stop nothing
+        # external. Everything stays intact so restore is lossless. The hard,
+        # irreversible cascade (Trigify teardown + Supabase row deletion) only
+        # runs on an explicit purge from the Recently-deleted area.
+        now = datetime.now().isoformat(timespec="seconds")
         all_srcs = read_drafts()
-        doomed = [x for x in all_srcs if str(x.get("campaign_id")) == str(cid)]
-        for src in doomed:  # tear down each source's external + backend footprint
-            if (src.get("mechanism") or src.get("type")) == "engagement":
-                ent = ((src.get("config") or {}).get("engagement") or {}).get("trigify") or []
-                if ent:
-                    _trigify_deprovision(ent)  # best-effort: stop the LinkedIn monitors
-            sb_delete_source(src.get("id"))
-        # safety net: clear any Supabase rows keyed straight to the campaign
-        sb("DELETE", f"signal_sources?campaign_draft_id=eq.{cid}")
-        sb("DELETE", f"engagement_events?campaign_draft_id=eq.{cid}")
-        drafts = [d for d in drafts if d.get("id") != cid]
-        srcs = [x for x in all_srcs if str(x.get("campaign_id")) != str(cid)]
-        write_drafts(srcs)
+        touched = False
+        for src in all_srcs:
+            if str(src.get("campaign_id")) == str(cid):
+                src["deleted_at"] = now
+                touched = True
+        if touched:
+            write_drafts(all_srcs)
+        for d in drafts:
+            if d.get("id") == cid:
+                d["deleted_at"] = now
+        write_drafts(drafts, CAMPAIGN_DRAFTS)
+        return {"ok": True, "soft_deleted": True}
     else:
         for d in drafts:
             if d.get("id") != cid:
@@ -2942,6 +2965,48 @@ def update_campaign_draft(p: dict) -> dict:
                 d["name"] = str(p["name"]).strip()
     write_drafts(drafts, CAMPAIGN_DRAFTS)
     return {"ok": True}
+
+
+def restore_campaign_draft(p: dict) -> dict:
+    """Bring a soft-deleted campaign (and its sources) back to life. Lossless:
+    nothing external was ever torn down, so monitoring + leads are intact."""
+    cid = p.get("id")
+    drafts = read_json_list(CAMPAIGN_DRAFTS)
+    found = False
+    for d in drafts:
+        if d.get("id") == cid and d.get("deleted_at"):
+            d.pop("deleted_at", None)
+            found = True
+    if not found:
+        return {"ok": False, "message": "Nothing to restore for this campaign."}
+    write_drafts(drafts, CAMPAIGN_DRAFTS)
+    srcs = read_drafts()
+    for s in srcs:
+        if str(s.get("campaign_id")) == str(cid):
+            s.pop("deleted_at", None)
+    write_drafts(srcs)
+    return {"ok": True, "restored": True}
+
+
+def purge_campaign_draft(p: dict) -> dict:
+    """PERMANENT delete from the Recently-deleted area. This is the old hard
+    cascade: stop the Trigify monitors and delete the Supabase rows. Irreversible."""
+    cid = p.get("id")
+    drafts = read_json_list(CAMPAIGN_DRAFTS)
+    all_srcs = read_drafts()
+    doomed = [x for x in all_srcs if str(x.get("campaign_id")) == str(cid)]
+    for src in doomed:  # tear down each source's external + backend footprint
+        if (src.get("mechanism") or src.get("type")) == "engagement":
+            ent = ((src.get("config") or {}).get("engagement") or {}).get("trigify") or []
+            if ent:
+                _trigify_deprovision(ent)  # best-effort: stop the LinkedIn monitors
+        sb_delete_source(src.get("id"))
+    # safety net: clear any Supabase rows keyed straight to the campaign
+    sb("DELETE", f"signal_sources?campaign_draft_id=eq.{cid}")
+    sb("DELETE", f"engagement_events?campaign_draft_id=eq.{cid}")
+    write_drafts([x for x in all_srcs if str(x.get("campaign_id")) != str(cid)])
+    write_drafts([d for d in drafts if d.get("id") != cid], CAMPAIGN_DRAFTS)
+    return {"ok": True, "purged": True}
 
 
 def save_campaign_draft(p: dict) -> dict:
@@ -2988,6 +3053,8 @@ ROUTES = {
     "/api/qa-history": save_qa_run,
     "/api/campaign-drafts": save_campaign_draft,
     "/api/campaign-drafts/update": update_campaign_draft,
+    "/api/campaign-drafts/restore": restore_campaign_draft,
+    "/api/campaign-drafts/purge": purge_campaign_draft,
 }
 
 

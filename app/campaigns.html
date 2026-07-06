@@ -161,6 +161,7 @@
     <div class="modal-b" id="src-body"></div>
     <div class="modal-f">
       <button class="btn" onclick="srcBack()">Back</button>
+      <div class="small" id="sw-hint" style="flex:1;text-align:left;margin:0 12px;color:var(--orange-700)"></div>
       <div style="display:flex;gap:8px">
         <button class="btn" onclick="srcSaveForLater()">💾 Save for later</button>
         <button class="btn" onclick="srcwiz.classList.remove('on');hideNote()">Cancel</button>
@@ -449,15 +450,6 @@ async function renderDraftCampaign(id) {
   } else {
     renderCopyPreview(el, dc, srcs, people);
   }
-  if (false) {
-    const missing = people.filter((x) => !(x.icebreaker || "").trim());
-    el.innerHTML = `<div class="card panel">
-      <h2>Checks</h2>
-      <div class="qa-row">${missing.length ? '<span class="pill r">FAIL</span>' : '<span class="pill g">PASS</span>'}
-        <div><div class="t">Every lead has an opening line</div>
-        <div class="d">${missing.length ? `${missing.length} lead(s) missing one: ${missing.slice(0, 3).map((x) => esc(x.name)).join(", ")}${missing.length > 3 ? "…" : ""}` : `All ${people.length} leads have an opening line.`}</div></div>
-      </div></div>`;
-  }
 }
 
 async function openMoreLeads(campaignId, mech) {
@@ -673,9 +665,12 @@ function pushToast(r, verdict) {
   if (verdict !== "keep") return;
   const t = r && r.push && r.push.tools;
   if (!t || !Object.keys(t).length) { protoNote("Kept ✓ - now pick where people go (top of the page), then tick ✓ again to send"); return; }
+  if ((r.push && r.push.suppressed) || Object.values(t).some((v) => v && v.suppressed)) {
+    protoNote("Skipped - this person was already contacted for this client"); return;
+  }
   const lab = { smartlead: "email campaign", heyreach: "LinkedIn list" };
   const ok = Object.keys(t).filter((k) => t[k].ok).map((k) => lab[k]);
-  const bad = Object.keys(t).filter((k) => !t[k].ok).map((k) => `${lab[k]} (${t[k].message})`);
+  const bad = Object.keys(t).filter((k) => !t[k].ok).map((k) => `${lab[k] || k} (${t[k].message})`);
   if (!bad.length) protoNote(`Sent ✓ - now in your ${ok.join(" and ")}`);
   else protoNote(`${ok.length ? `In your ${ok.join(" and ")} ✓ · ` : ""}couldn't send to ${bad.join(" · ")}`);
 }
@@ -710,13 +705,36 @@ async function removeCampaign(id, ev) {
   ev.stopPropagation();
   const dc = (DB.campaignDrafts || []).find((x) => x.id === id) || {};
   if (!(await uiConfirm(
-    `Remove "${dc.name || "this campaign"}" and its sources? This can't be undone.`,
+    `Move "${dc.name || "this campaign"}" to Recently deleted? Its leads and monitoring are kept - you can restore it, or delete it permanently from there.`,
     { title: "Remove campaign?", confirmLabel: "Remove" }
   ))) return;
   await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, remove: true }) });
   DB.campaignDrafts = null;
-  protoNote("Campaign removed");
+  protoNote("Moved to Recently deleted - restore it any time from the list");
   location.hash = ""; renderList();
+}
+
+async function restoreCampaign(id, ev) {
+  ev.stopPropagation();
+  window._showDeleted = true;
+  const r = await (await fetch("/api/campaign-drafts/restore", { method: "POST", body: JSON.stringify({ id }) })).json();
+  DB.campaignDrafts = null;
+  protoNote(r && r.ok ? "Restored - back in your campaigns with all leads intact" : (r && r.message) || "Couldn't restore - refresh and try again");
+  renderList();
+}
+
+async function purgeCampaign(id, ev) {
+  ev.stopPropagation();
+  const dc = (DB.campaignDrafts || []).find((x) => x.id === id) || {};
+  if (!(await uiConfirm(
+    `Permanently delete "${dc.name || "this campaign"}"? This stops its LinkedIn monitoring and erases its leads from the database. This cannot be undone.`,
+    { title: "Delete permanently?", confirmLabel: "Delete permanently" }
+  ))) return;
+  window._showDeleted = true;
+  const r = await (await fetch("/api/campaign-drafts/purge", { method: "POST", body: JSON.stringify({ id }) })).json();
+  DB.campaignDrafts = null;
+  protoNote(r && r.ok ? "Deleted permanently" : "Couldn't delete - refresh and try again");
+  renderList();
 }
 function draftProspects(srcs) {
   const out = [];
@@ -759,6 +777,29 @@ function velocityChart(rows, srcs) {
     <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
     ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps pulling.</div>' : ""}`;
 }
+
+/* Cross-campaign activity chart for the list page: named daily lines (Found / Sent).
+   `dates` = sorted YYYY-MM-DD list, `series` = [{name, color, vals[]}] aligned to dates. */
+function activityChart(dates, series) {
+  if (!dates.length) return '<div class="small muted" style="padding:16px 0">No leads yet - this fills in as your daily run finds and sends people.</div>';
+  const W = 640, H = 190, padL = 30, padR = 12, padT = 12, padB = 26;
+  const maxV = Math.max(1, ...series.flatMap((s) => s.vals));
+  const x = (i) => dates.length === 1 ? (padL + (W - padL - padR) / 2) : padL + i * (W - padL - padR) / (dates.length - 1);
+  const y = (v) => padT + (1 - v / maxV) * (H - padT - padB);
+  const grid = [0, 0.5, 1].map((f) => { const v = maxV * f; const yy = y(v); return `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${padL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-3)">${Math.round(v)}</text>`; }).join("");
+  const drawLine = (s) => {
+    if (s.vals.length === 1) return `<circle cx="${x(0).toFixed(1)}" cy="${y(s.vals[0]).toFixed(1)}" r="4" fill="${s.color}"/>`;
+    const pts = s.vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    return `<polyline fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" points="${pts}" stroke-linejoin="round" stroke-linecap="round"/>`;
+  };
+  const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
+  const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(dates.length - 1)].join("");
+  const legend = series.map((s) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:0;border-top:${(s.width || 2) >= 2.5 ? "3" : "2"}px solid ${s.color};display:inline-block"></span>${esc(s.name)}</span>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>
+    <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
+    ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps going.</div>' : ""}`;
+}
+
 async function sendAllLeads(campaignId) {
   const todo = (window._leadRows || draftProspects(window._drafts || []))
     .filter((x) => !x.verdict && !(Object.keys(x.pushed || {}).length || x.pushed_to) && x._sid != null && (x._idx != null || x.linkedin));
@@ -890,7 +931,9 @@ async function renderList() {
     try { window._clients = await (await fetch("/api/clients", { cache: "no-store" })).json(); } catch { window._clients = []; }
   }
   const activeClient = localStorage.getItem("navreo_client") || "";
-  const drafts = (DB.campaignDrafts || []).filter((d) => !activeClient || d.client_id === activeClient);
+  const forClient = (DB.campaignDrafts || []).filter((d) => !activeClient || d.client_id === activeClient);
+  const drafts = forClient.filter((d) => !d.deleted_at);
+  const deleted = forClient.filter((d) => d.deleted_at);
   let srcAll = [];
   try { srcAll = await (await fetch("/api/sources", { cache: "no-store" })).json(); } catch {}
   let leadCounts = {};
@@ -930,7 +973,21 @@ async function renderList() {
           <button class="btn sm" onclick="removeCampaign('${dc.id}', event)">Remove</button>
         </div>`;
       }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`}
-    </div>`;
+    </div>
+    ${deleted.length ? `
+    <details class="card" style="margin-top:16px" ${window._showDeleted ? "open" : ""} ontoggle="window._showDeleted=this.open">
+      <summary style="cursor:pointer;padding:12px 16px;font-weight:500;color:var(--ink-2)">Recently deleted (${deleted.length})</summary>
+      ${deleted.map((dc) => `
+        <div class="srcrow" style="padding:14px 16px;opacity:.75">
+          <div class="ictile">${ic8("signal")}</div>
+          <div style="flex:1">
+            <div style="font-weight:500">${esc(dc.name)}</div>
+            <div class="small muted">Deleted ${esc(String(dc.deleted_at || "").slice(0, 16).replace("T", " "))} · restore keeps all leads & monitoring</div>
+          </div>
+          <button class="btn sm" onclick="restoreCampaign('${dc.id}', event)">Restore</button>
+          <button class="btn sm danger" onclick="purgeCampaign('${dc.id}', event)">Delete permanently</button>
+        </div>`).join("")}
+    </details>` : ""}`;
 }
 
 /* ══ DETAIL ══ */
@@ -1207,8 +1264,31 @@ async function saveDest(id, campaignId) {
   protoNote(v ? "Saved - every ✓ now goes straight there" : "Destination cleared");
   renderDrafts(campaignId);
 }
+// tags the pull actually fills, per mechanism — used to catch dangling {{merge}} tags
+function fillableTags(src) {
+  const base = ["company", "first_name", "firstName", "name", "Title", "title"];
+  const mech = (src.mechanism || src.type || "").toLowerCase();
+  if (mech === "engagement") {
+    const copyRef = ((src.config || {}).engagement || {}).copy_reference;
+    return copyRef ? base.concat(["Topic", "WhosePost"]) : base;  // only filled when "mention the post" is on
+  }
+  return base;
+}
 async function saveIce(id, campaignId) {
   const v = document.getElementById("ice-" + id).value;
+  const src = (window._drafts || []).find((x) => x.id === id) || {};
+  const allowed = new Set(fillableTags(src).map((t) => t.toLowerCase()));
+  const used = [...v.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]);
+  const dangling = [...new Set(used.filter((t) => !allowed.has(t.toLowerCase())))];
+  if (dangling.length) {
+    const eng = (src.mechanism || src.type) === "engagement";
+    const extra = eng && !((src.config || {}).engagement || {}).copy_reference && dangling.some((t) => /topic|whosepost/i.test(t))
+      ? ` (turn on "Mention the post in copy" to fill {{Topic}}/{{WhosePost}})` : "";
+    if (!(await uiConfirm(
+      `This icebreaker uses ${dangling.map((t) => "{{" + t + "}}").join(", ")}, which this source won't fill — those spots will come out blank${extra}. Save anyway?`,
+      { title: "Blank merge tag?", confirmLabel: "Save anyway" }
+    ))) return;
+  }
   await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, icebreaker: v }) });
   protoNote("Saved - applied to every prospect below and all future pulls");
   renderDrafts(campaignId);
@@ -1228,17 +1308,44 @@ async function pullProspects(id, campaignId, afterRetarget) {
   window._openSource = id;
   try {
     const r = await (await fetch("/api/sources/pull", { method: "POST", body: JSON.stringify({ id, after_retarget: !!afterRetarget }) })).json();
-    protoNote(r.ok ? (r.note || `${r.prospects.length} decision maker${r.prospects.length === 1 ? "" : "s"} found`) : (r.message || "Pull failed"));
-  } catch { protoNote("Pull failed - server running?"); }
+    const base = r.ok ? (r.note || `${r.prospects.length} decision maker${r.prospects.length === 1 ? "" : "s"} found`) : (r.message || "Pull failed");
+    protoNote(r.notice ? `${base} · ${r.notice}` : base);
+  } catch (e) { protoNote(`Couldn't reach the server (${e && e.message ? e.message : "connection failed"}) - is it running?`); }
   renderDrafts(campaignId);
+}
+// classify one push result into the receipt buckets
+function pushOutcome(r) {
+  const t = (r && r.push && r.push.tools) || {};
+  const vals = Object.values(t);
+  if (r && r.push && r.push.suppressed) return "suppressed";
+  if (vals.some((v) => v && v.suppressed)) return "suppressed";
+  if (vals.some((v) => v && v.ok && /already/i.test(v.message || ""))) return "duplicate";
+  if (vals.some((v) => v && v.ok)) return "pushed";
+  if (vals.length) return "failed";
+  return "noDest";  // kept, but no destination set yet
 }
 async function bulkVerdict(id, verdict, campaignId) {
   const drafts = await (await fetch("/api/sources", { cache: "no-store" })).json();
   const s = drafts.find((x) => x.id === id);
+  if (verdict === "keep") protoNote("Sending…");
+  const tally = { pushed: 0, duplicate: 0, suppressed: 0, failed: 0, noDest: 0 };
   for (let i = 0; i < (s?.prospects || []).length; i++) {
     if (verdict === "keep" || !s.prospects[i].verdict) {
-      await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, index: i, verdict }) });
+      let r = null;
+      try { r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, index: i, verdict }) })).json(); } catch {}
+      if (verdict === "keep") tally[pushOutcome(r)]++;
     }
+  }
+  if (verdict === "keep") {
+    const bits = [];
+    if (tally.pushed) bits.push(`${tally.pushed} sent`);
+    if (tally.duplicate) bits.push(`${tally.duplicate} already there`);
+    if (tally.suppressed) bits.push(`${tally.suppressed} skipped (already contacted)`);
+    if (tally.failed) bits.push(`${tally.failed} couldn't send`);
+    if (tally.noDest) bits.push(`${tally.noDest} kept - set a destination to send`);
+    protoNote(bits.length ? bits.join(" · ") : "Nothing to send");
+  } else {
+    protoNote("Rejected the rest");
   }
   renderDrafts(campaignId);
 }
@@ -2464,6 +2571,7 @@ function chipRow(arr, options, field) {
 
 function drawSrc() {
   hideNote();  // clear any stale validation toast when the source-wizard step re-renders
+  const _fh = document.getElementById("sw-hint"); if (_fh) _fh.textContent = "";
   [1, 2, 3].forEach((n) => {
     const el = document.getElementById("sd" + n);
     el.className = "wdot" + (n === sw.step ? " on" : n < sw.step ? " done" : "");
@@ -2558,9 +2666,15 @@ function drawSrc() {
     const destLine = dest.smartlead_campaign_id ? `Email campaign ${esc(String(dest.smartlead_campaign_name || dest.smartlead_campaign_id))}`
       : dest.heyreach_list_id || dest.heyreach_list_name ? `LinkedIn list ${esc(String(dest.heyreach_list_name || dest.heyreach_list_id))}`
       : `not set yet - use "Set up where leads go" on the campaign page`;
+    const lpd = sw.leads_per_day || 25;
     body.innerHTML = `
       <h2>Check the watch-list.</h2>
       <div class="lead">Once launched, these profiles are tracked daily and every engager is scored before it reaches you.</div>
+      <div style="display:flex;gap:36px;justify-content:center;margin:10px 0 16px">
+        <div><div class="num-hero">≈${fmt(lpd * 5)}</div><div class="small muted">leads/week (estimated)</div></div>
+        <div><div class="num-hero">≈${fmt(lpd * 22)}</div><div class="small muted">leads/month (estimated)</div></div>
+      </div>
+      <div class="small muted" style="max-width:520px;margin:-6px auto 14px">Capped at your ${lpd}/day limit — actual volume depends on how often the ${sw.eng_urls.length} monitored profile${sw.eng_urls.length === 1 ? "" : "s"} post and how many engagers pass scoring.</div>
       <div style="max-width:560px;margin:0 auto;text-align:left">
         <div class="sumrow"><span class="k">Monitoring</span><span>${sw.eng_urls.map((u) => esc(u.split("/").slice(-1)[0])).join(", ")} <span class="muted">(${sw.eng_urls.length})</span></span></div>
         <div class="sumrow"><span class="k">Posts that count</span><span>${sw.inc.map(esc).join(", ")}${sw.wild ? ` · plus: ${esc(sw.wild)}` : ""}</span></div>
@@ -2635,7 +2749,10 @@ function defaultName() {
 }
 
 function swWarn(msg) {
-  // validation the user can actually SEE: inline at the top of the form, not just a toast
+  // validation the user can actually SEE: inline, on EVERY step (footer hint is
+  // always present; the URL hint is used too when we're on the engagement step)
+  const foot = document.getElementById("sw-hint");
+  if (foot) { foot.textContent = "⚠ " + msg; }
   const h = document.getElementById("sw-url-hint");
   if (h) { h.textContent = "⚠ " + msg; h.style.color = "var(--orange-700)"; h.scrollIntoView({ block: "center" }); }
   protoNote(msg);
@@ -2710,10 +2827,10 @@ async function srcNext() {
     sw.leads_per_day = parseInt(document.getElementById("sw-lpd")?.value, 10) || sw.leads_per_day || 20;
     sw.keywords = document.getElementById("sw-keywords")?.value || sw.keywords;
     sw.icp = document.getElementById("sw-icp")?.value || sw.icp;
-    if (sw.type === "hiring" && !(sw.dm_titles || "").trim()) { protoNote("Who we email is required - add at least one decision-maker role"); return; }
+    if (sw.type === "hiring" && !(sw.dm_titles || "").trim()) { swWarn("Who we email is required - add at least one decision-maker role"); return; }
     if (sw.type === "hiring") roleFeedback({ kept_trigger: roleList("titles"), kept_dm: roleList("dm_titles") });  // what survived pruning = positive signal
-    if (sw.type === "companies" && !(sw.keywords || "").trim()) { protoNote("Describe the buyer type first"); return; }
-    if (sw.type === "lookalike" && !(sw.icp || "").trim()) { protoNote("Describe the companies first"); return; }
+    if (sw.type === "companies" && !(sw.keywords || "").trim()) { swWarn("Describe the buyer type first"); return; }
+    if (sw.type === "lookalike" && !(sw.icp || "").trim()) { swWarn("Describe the companies first"); return; }
     sw.step = 2; sw.result = null; drawSrc();
     const payload = sw.type === "hiring"
       ? { job_titles: (sw.titles || "").split(",").map((t) => t.trim()).filter(Boolean), countries: sw.geo.map((g) => CC[g] || g), min_emp: 11, max_emp: 500, days: 30,
@@ -2735,7 +2852,8 @@ async function srcNext() {
   } else {
     sw.name = document.getElementById("sw-name").value;
     const csvList = (s) => (s || "").split(",").map((t) => t.trim()).filter(Boolean);
-    if (sw.type === "hiring" && !csvList(sw.dm_titles).length) { protoNote("Who we email is required - go back and add decision-maker roles"); return; }
+    if (!(sw.name || "").trim()) { swWarn("Give the source a name so you can find it later"); return; }
+    if (sw.type === "hiring" && !csvList(sw.dm_titles).length) { swWarn("Who we email is required - go back and add decision-maker roles"); return; }
     if (!sw.editId && !(await ensureCampaign())) return;
     const engConfig = sw.type === "engagement" ? {
       engagement: {
