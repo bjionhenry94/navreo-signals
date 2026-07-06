@@ -218,23 +218,61 @@ const qagate = document.getElementById("qagate");
    data). ANY non-GET fetch clears the cache so the next read is always fresh — one choke
    point that keeps data correct without touching every mutation call-site. */
 const _nativeFetch = window.fetch.bind(window);
-const _getCache = new Map();   // url -> { p, t }
-const GET_TTL = 4000;          // dedupe repeated reads across a list->detail->list burst (any write busts it instantly)
+const _getCache = new Map();   // url -> { t, v, p }   (t=Date.now ms, v=last value, p=promise)
+const GET_TTL = 8000;          // in-memory dedupe window; past it we still show cache + revalidate (SWR)
 const SESSION_TTL = 600000;    // ~"once per session" for /api/clients, /api/outreach-destinations, /api/campaign-drafts
-function cachedGet(url, ttl = GET_TTL) {
-  const now = performance.now();
-  const hit = _getCache.get(url);
-  if (hit && (now - hit.t) < ttl) return hit.p;
-  const p = _nativeFetch(url).then((r) => r.json());
-  p.catch(() => { if ((_getCache.get(url) || {}).p === p) _getCache.delete(url); });  // never cache a failure
-  _getCache.set(url, { p, t: now });
-  return p;
+
+// Persist snapshots to sessionStorage so a full reload / revisit paints the last-known
+// data instantly instead of waiting on the network. Big payloads are skipped, quota errors swallowed.
+function _lsGet(url) { try { const s = sessionStorage.getItem("gc:" + url); return s ? JSON.parse(s) : null; } catch (_) { return null; } }
+function _lsSet(url, v) { try { const s = JSON.stringify(v); if (s.length < 2000000) sessionStorage.setItem("gc:" + url, s); } catch (_) {} }
+function _lsDel(sub) { try { for (let i = sessionStorage.length - 1; i >= 0; i--) { const k = sessionStorage.key(i); if (k && k.startsWith("gc:") && (!sub || k.includes(sub))) sessionStorage.removeItem(k); } } catch (_) {} }
+
+let _refreshQueued = false;
+function _emitRefreshed() {  // debounced: coalesce several background updates into one repaint
+  if (_refreshQueued) return; _refreshQueued = true;
+  setTimeout(() => { _refreshQueued = false; window.dispatchEvent(new CustomEvent("signals:refreshed")); }, 60);
 }
-function bustCache(sub) { for (const k of [..._getCache.keys()]) if (!sub || k.includes(sub)) _getCache.delete(k); }
+
+/* Stale-while-revalidate: return the last-known value INSTANTLY (memory or this session's
+   sessionStorage), then refetch in the background and repaint only if the data actually
+   changed. Any write (non-GET fetch) wipes memory + persisted cache, so reads taken right
+   after an action are always fresh — SWR staleness only ever shows when nothing was written. */
+function cachedGet(url, ttl = GET_TTL) {
+  const now = Date.now();
+  const mem = _getCache.get(url);
+  if (mem && mem.p && (now - mem.t) < ttl) return mem.p;           // fresh enough in memory
+  const fetchP = _nativeFetch(url).then((r) => r.json()).then((v) => {
+    _getCache.set(url, { t: Date.now(), v, p: Promise.resolve(v) });
+    _lsSet(url, v);
+    return v;
+  });
+  fetchP.catch(() => { const m = _getCache.get(url); if (m && m.p === fetchP) _getCache.delete(url); });
+  const persisted = _lsGet(url);
+  const stale = (mem && mem.v !== undefined) ? mem.v : (persisted === null ? undefined : persisted);
+  if (stale !== undefined && stale !== null) {                     // SWR: show cache now, revalidate behind
+    fetchP.then((v) => { if (JSON.stringify(v) !== JSON.stringify(stale)) _emitRefreshed(); }).catch(() => {});
+    _getCache.set(url, { t: now, v: stale, p: Promise.resolve(stale) });
+    return Promise.resolve(stale);
+  }
+  _getCache.set(url, { t: now, v: undefined, p: fetchP });         // cold: nothing cached, must wait
+  return fetchP;
+}
+function bustCache(sub) {
+  for (const k of [..._getCache.keys()]) if (!sub || k.includes(sub)) _getCache.delete(k);
+  _lsDel(sub);                                                     // a write invalidates persisted cache too
+}
 window.fetch = (input, init) => {
   if ((((init && init.method) || "GET")).toUpperCase() !== "GET") bustCache();  // a write happened -> reads must refetch
   return _nativeFetch(input, init);
 };
+// Seamless background repaint when SWR finds fresher data: re-render the current view with
+// NO skeleton and NO fade (window._swrRepaint) so only the numbers change, nothing flashes.
+window.addEventListener("signals:refreshed", () => {
+  window._swrRepaint = true;
+  try { Promise.resolve(route()).finally(() => { window._swrRepaint = false; }); }
+  catch (_) { window._swrRepaint = false; }
+});
 
 /* Skeletons: paint the page frame with the RIGHT box sizes before data arrives, so real
    content swaps in place instead of popping in and shoving the layout around. */
@@ -247,7 +285,7 @@ function listSkeleton() {
   const row = `<div class="srcrow" style="padding:14px 16px"><div class="ictile skel" style="width:34px;height:34px"></div><div style="flex:1"><div class="skel" style="width:42%;height:13px"></div><div class="skel" style="width:26%;height:10px;margin-top:7px"></div></div><div class="skel" style="width:74px;height:22px;border-radius:999px"></div></div>`;
   return `
     <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Signal campaigns.</h1></div></div>
-    <div class="card panel" style="margin-top:16px"><h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2><div class="small muted" style="margin-bottom:8px">People found and sent to outreach each day, across all your campaigns.</div><div class="skel" style="height:120px"></div></div>
+    <div class="card panel" style="margin-top:16px"><h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2><div class="small muted" style="margin-bottom:8px">People found and sent to outreach each day, across all your campaigns.</div><div class="skel" style="height:260px"></div></div>
     <div style="display:flex;gap:16px;align-items:flex-start;margin-top:16px">
       <div style="flex:1;min-width:0"><div class="card">${row.repeat(3)}</div></div>
       <div class="card panel" style="width:290px;flex-shrink:0"><h2 style="font-size:15px;margin-bottom:6px">Status</h2><div class="skel" style="height:236px"></div></div>
@@ -265,7 +303,7 @@ function detailSkeleton(dc) {
    ease it in instead of popping. Opacity-only + a 4px rise so it never shifts reserved layout,
    and it restarts on every call (Web Animations API), so each navigation re-animates. */
 function hydrateFade(el) {
-  if (!el) return;
+  if (!el || window._swrRepaint) return;  // background refresh updates in place — no fade
   try { el.animate([{ opacity: 0.35, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }], { duration: 260, easing: "cubic-bezier(.2,.6,.2,1)" }); } catch (_) {}
 }
 
@@ -289,13 +327,15 @@ async function init() {
 function route() {
   const note = document.querySelector(".proto-note");
   if (note) note.classList.remove("on");
-  window._editDest = false;  // destination editor never follows you across pages
-  window._confirmAll = false;
+  // a background (SWR) repaint must not clobber transient UI state or yank the scroll position
+  if (!window._swrRepaint) { window._editDest = false; window._confirmAll = false; }
   const id = location.hash.replace("#", "");
-  if (id.startsWith("cdraft-")) renderDraftCampaign(id);
-  else if (id && (DB.campaigns || []).some((c) => String(c.id) === id)) renderDetail(Number(id));
-  else renderList();
-  window.scrollTo(0, 0);
+  let r;
+  if (id.startsWith("cdraft-")) r = renderDraftCampaign(id);
+  else if (id && (DB.campaigns || []).some((c) => String(c.id) === id)) r = renderDetail(Number(id));
+  else r = renderList();
+  if (!window._swrRepaint) window.scrollTo(0, 0);
+  return r;
 }
 
 let dtab = sessionStorage.getItem("cdtab") || "overview";
@@ -303,10 +343,10 @@ async function renderDraftCampaign(id) {
   // Paint the frame instantly (using the cached draft if we already have it), then hydrate
   // in parallel — the four reads below don't depend on each other, so they fire together.
   const cachedDc = Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts.find((x) => x.id === id) : null;
-  main.innerHTML = detailSkeleton(cachedDc);
+  if (!window._swrRepaint) main.innerHTML = detailSkeleton(cachedDc);  // keep current view during a background refresh
   const [drafts0, dests0, srcsAll0, counts0] = await Promise.all([
-    Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => []),
-    DB.dests ? DB.dests : cachedGet("/api/outreach-destinations", SESSION_TTL).catch(() => ({ smartlead: [], heyreach: [] })),
+    cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => (Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : [])),
+    cachedGet("/api/outreach-destinations", SESSION_TTL).catch(() => (DB.dests || { smartlead: [], heyreach: [] })),
     cachedGet("/api/sources").catch(() => []),
     cachedGet("/api/lead-counts").catch(() => ({})),
   ]);
@@ -431,7 +471,7 @@ async function renderDraftCampaign(id) {
         <div class="card panel" style="margin-bottom:0">
           <h2 style="font-size:14px;margin-bottom:2px">Signal velocity</h2>
           <div class="small muted" style="margin-bottom:8px">New people found per day, per source - and everything together.</div>
-          <div id="velchart"><div class="small muted" style="padding:16px 0">Loading…</div></div>
+          <div id="velchart" style="min-height:210px"><div class="skel" style="height:180px"></div></div>
         </div>
       </div>
       <div class="card panel" style="width:260px;flex-shrink:0;margin-bottom:0">
@@ -1022,11 +1062,11 @@ async function renderList() {
   // Paint the skeleton frame first so the list feels instant, then hydrate — all four reads
   // fire in parallel instead of blocking one another (campaign-drafts + clients are cached
   // for the session; sources + lead-counts are de-duped within the navigation).
-  main.innerHTML = listSkeleton();
+  if (!window._swrRepaint) main.innerHTML = listSkeleton();  // keep current view during a background refresh
   const activeClient = localStorage.getItem("navreo_client") || "";
   const [drafts0, clients0, srcAll0, leadCounts0] = await Promise.all([
-    Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => []),
-    window._clients ? window._clients : cachedGet("/api/clients", SESSION_TTL).catch(() => []),
+    cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => (Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : [])),
+    cachedGet("/api/clients", SESSION_TTL).catch(() => (window._clients || [])),
     cachedGet("/api/sources").catch(() => []),
     cachedGet("/api/lead-counts").catch(() => ({})),
   ]);
@@ -1084,7 +1124,7 @@ async function renderList() {
     <div class="card panel" style="margin-top:16px">
       <h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2>
       <div class="small muted" style="margin-bottom:8px">People found and sent to outreach each day, across all your campaigns.</div>
-      <div id="dash-chart"><div class="small muted" style="padding:16px 0">Loading…</div></div>
+      <div id="dash-chart" style="min-height:260px"><div class="skel" style="height:210px"></div></div>
     </div>
     <div style="display:flex;gap:16px;align-items:flex-start;margin-top:16px">
       <div style="flex:1;min-width:0">
