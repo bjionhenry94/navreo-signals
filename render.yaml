@@ -42,7 +42,7 @@ services:
     name: navreo-signals-daily
     runtime: python
     plan: starter
-    schedule: "30 7 * * *"
+    schedule: "0 */3 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python app/run_daily.py
     envVars:
