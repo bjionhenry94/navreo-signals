@@ -633,24 +633,31 @@ function leadRowInner(merged, cid) {
           <button class="btn sm" title="Skip this person" onclick="setVerdict('${merged._sid}',${idxArg},'reject','${cid}','${lnArg}')">✕</button>`}`;
 }
 
+/* brand logo for a lead's destination: Smartlead (email) / HeyReach (LinkedIn) */
+function destLogo(kind) {
+  const src = kind === "smartlead" ? "icons/smartlead.png" : "icons/heyreach.png";
+  const alt = kind === "smartlead" ? "Smartlead" : "HeyReach";
+  return `<img src="${src}" alt="${alt}" title="${alt}" style="width:15px;height:15px;border-radius:4px;vertical-align:-3px;flex-shrink:0">`;
+}
+
 function routeNote(pr) {
   if (Object.keys(pr.pushed || {}).length || pr.verdict === "reject") return "";
   const nm = window._destNames || {};
   if (!nm.smartlead && !nm.heyreach) return "";
   const pill = (body) => `<span style="display:inline-flex;align-items:center;gap:6px;margin-top:5px;padding:3px 10px;border-radius:999px;background:var(--bg-sunken);font-size:11px;color:var(--ink-2)"><span style="color:var(--green);font-weight:600">✓ Send</span><span style="color:var(--ink-3)">→</span>${body}</span>`;
-  const to = (icon, name) => `${icon} <span style="font-weight:500;color:var(--ink)">${esc(name)}</span>`;
-  if (pr.email) return pill(to("📧", nm.smartlead || "your email campaign"));
-  if (pr.email_checked) return pill(to("💼", nm.heyreach || "your LinkedIn list"));
-  return pill(`${to("📧", nm.smartlead || "email")}<span style="color:var(--ink-3)">if found, else</span>${to("💼", nm.heyreach || "LinkedIn")}`);
+  const to = (kind, name) => `${destLogo(kind)} <span style="font-weight:500;color:var(--ink)">${esc(name)}</span>`;
+  if (pr.email) return pill(to("smartlead", nm.smartlead || "your email campaign"));
+  if (pr.email_checked) return pill(to("heyreach", nm.heyreach || "your LinkedIn list"));
+  return pill(`${to("smartlead", nm.smartlead || "email")}<span style="color:var(--ink-3)">if found, else</span>${to("heyreach", nm.heyreach || "LinkedIn")}`);
 }
 
 function pushChips(pr) {
   const keys = Object.keys(pr.pushed || {});
   const nm = window._destNames || {};
   const bits = [];
-  if (keys.some((k) => k.startsWith("smartlead")) || /smartlead/.test(pr.pushed_to || "")) bits.push(`email campaign${nm.smartlead ? ` “${esc(nm.smartlead)}”` : ""}`);
-  if (keys.some((k) => k.startsWith("heyreach")) || /heyreach/.test(pr.pushed_to || "")) bits.push(`LinkedIn list${nm.heyreach ? ` “${esc(nm.heyreach)}”` : ""}`);
-  let out = bits.length ? `<div class="small" style="color:var(--green);margin-top:2px">✓ sent - in your ${bits.join(" + ")}</div>` : "";
+  if (keys.some((k) => k.startsWith("smartlead")) || /smartlead/.test(pr.pushed_to || "")) bits.push(`${destLogo("smartlead")} email campaign${nm.smartlead ? ` “${esc(nm.smartlead)}”` : ""}`);
+  if (keys.some((k) => k.startsWith("heyreach")) || /heyreach/.test(pr.pushed_to || "")) bits.push(`${destLogo("heyreach")} LinkedIn list${nm.heyreach ? ` “${esc(nm.heyreach)}”` : ""}`);
+  let out = bits.length ? `<div class="small" style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;color:var(--green);margin-top:2px">✓ sent - in your ${bits.join(" + ")}</div>` : "";
   const flab = { smartlead: "email", heyreach: "LinkedIn" };
   const fb = Object.entries(pr.push_fail || {}).map(([k, m]) =>
     `${flab[k] || k} skipped - ${esc(m || "didn't go through")}`);
