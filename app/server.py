@@ -2170,16 +2170,158 @@ ENG_ICE_REF = "Saw your comment on {{WhosePost}}'s post about {{Topic}}, and so 
 ENG_ICE_PLAIN = "Your work at {{company}} caught my eye, and so I thought I'd reach out."
 
 
+# ── tool-driven engagement pull (replaces the unreliable Trigify workflow push) ──
+# The saved searches reliably collect POSTS; the workflows that were meant to
+# turn posts -> engagers -> Supabase almost never fire. So the tool pulls
+# engagers itself on the daily run: recent posts -> /post/comments -> enrich ->
+# stage into engagement_events (the same table + qualify path as before).
+
+ENG_BACKFILL_DAYS = 15
+ENG_COMMENTS_PER_POST = 30
+ENG_STAGE_PER_RUN = 40  # engagers enriched+staged per source per run (credit bound)
+
+
+def _activity_urn(post_url: str):
+    mm = re.search(r"activity:(\d+)", post_url or "")
+    return mm.group(1) if mm else None
+
+
+def _clean_company_domain(url):
+    if not url:
+        return None
+    d = str(url).lower().removeprefix("https://").removeprefix("http://").removeprefix("www.").split("/")[0]
+    return None if (not d or "linkedin.com" in d) else d
+
+
+def _trigify_recent_posts(search_id: str, days: int) -> list:
+    """Posts from a saved search within the last `days`, newest first."""
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    try:
+        r = _trigify_data(trigify_api("GET", f"/searches/{search_id}/results?limit=100"))
+    except Exception:  # noqa: BLE001
+        return []
+    items = r if isinstance(r, list) else (r.get("items") or r.get("results") or [])
+    out = []
+    for it in items:
+        cu = (it.get("content") or {}).get("url") or ""
+        urn = _activity_urn(cu)
+        if not urn:
+            continue
+        pub = it.get("published_at") or ""
+        try:
+            when = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+        except Exception:  # noqa: BLE001
+            when = None
+        if when and when < cutoff:
+            continue
+        out.append({"post_url": cu, "post_urn": urn, "published_at": pub,
+                    "post_author": (it.get("author") or {}).get("name") or "",
+                    "post_text": (it.get("content") or {}).get("text") or ""})
+    out.sort(key=lambda p: p["published_at"], reverse=True)
+    return out
+
+
+def _trigify_post_engagers(post_urn: str, limit: int) -> list:
+    """Commenters on one post (the engagers)."""
+    try:
+        r = _trigify_data(trigify_api("POST", "/post/comments", {"postUrn": post_urn, "limit": limit}))
+    except Exception:  # noqa: BLE001
+        return []
+    items = r if isinstance(r, list) else (r.get("comments") or r.get("items") or [])
+    out = []
+    for c in items:
+        a = c.get("author") or {}
+        li = a.get("linkedinUrl") or a.get("url") or ""
+        if not li or "/company/" in li:  # skip company (non-person) commenters
+            continue
+        out.append({"name": a.get("name") or "", "linkedin": li.rstrip("/"),
+                    "headline": a.get("title") or "", "comment_text": c.get("text") or "",
+                    "comment_permalink": c.get("permalink") or "",
+                    "engaged_at": c.get("createdAtString") or ""})
+    return out
+
+
+def _trigify_enrich(profile_url: str) -> dict:
+    try:
+        r = _trigify_data(trigify_api("POST", "/profile/enrich", {"profileUrl": profile_url}))
+        return (r.get("prospect") if isinstance(r, dict) else None) or (r if isinstance(r, dict) else {})
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def stage_trigify_engagers(src: dict, cfg: dict, days: int = ENG_BACKFILL_DAYS,
+                           per_post: int = ENG_COMMENTS_PER_POST,
+                           per_run: int = ENG_STAGE_PER_RUN) -> int:
+    """Pull recent-post engagers for a source and stage them as NEW
+    engagement_events (deduped by post+engager). Returns the count staged."""
+    eng = cfg.get("engagement") or {}
+    searches = [t.get("search_id") for t in (eng.get("trigify") or []) if t.get("search_id")]
+    if not searches:
+        return 0
+    seen = sb("GET", f"engagement_events?source_id=eq.{src['id']}&select=post_url,engager_linkedin_url") or []
+    done_posts = {r.get("post_url") for r in seen}
+    seen_pair = {(r.get("post_url"), r.get("engager_linkedin_url")) for r in seen}
+    staged, batch = 0, []
+    for sid in searches:
+        if staged >= per_run:
+            break
+        for post in _trigify_recent_posts(sid, days):
+            if staged >= per_run:
+                break
+            if post["post_url"] in done_posts:
+                continue
+            for e in _trigify_post_engagers(post["post_urn"], per_post):
+                if staged >= per_run:
+                    break
+                key = (post["post_url"], e["linkedin"])
+                if key in seen_pair:
+                    continue
+                seen_pair.add(key)
+                pr = _trigify_enrich(e["linkedin"])
+                batch.append({
+                    "source_id": src["id"], "campaign_draft_id": str(src.get("campaign_id") or ""),
+                    "client_id": src.get("client_id") or None,
+                    "post_url": post["post_url"], "post_author_name": post["post_author"],
+                    "post_text": post["post_text"], "engagement_type": "comment",
+                    "engaged_at": e["engaged_at"] or None, "comment_text": e["comment_text"],
+                    "comment_permalink": e["comment_permalink"],
+                    "engager_full_name": pr.get("full_name") or e["name"],
+                    "engager_first_name": pr.get("first_name"), "engager_last_name": pr.get("last_name"),
+                    "engager_linkedin_url": e["linkedin"], "engager_headline": e["headline"],
+                    "engager_job_title": pr.get("job_title") or e["headline"],
+                    "engager_company_name": pr.get("job_company_name"),
+                    "engager_company_domain": _clean_company_domain(pr.get("job_company_website")),
+                    "engager_company_industry": pr.get("industry"),
+                    "engager_country": pr.get("location_country"), "engager_location": pr.get("location_name"),
+                    "status": "NEW",
+                })
+                staged += 1
+            done_posts.add(post["post_url"])
+    if batch:
+        sb("POST", "engagement_events?on_conflict=source_id,engager_linkedin_url,post_url",
+           batch, prefer="resolution=ignore-duplicates,return=minimal")
+    return staged
+
+
 def pull_engagement_source(src: dict, drafts: list) -> dict:
-    """Engagement counterpart of pull_hiring_source: read NEW engagement_events
-    for this source, qualify each with gpt-5-mini, keep QUALIFIED as prospects
-    (engager IS the lead), write signals, leave BORDERLINE visible for manual
-    review, mark everything back on the staging table."""
+    """Engagement counterpart of pull_hiring_source: pull fresh engagers from
+    Trigify (recent posts -> commenters -> enrich), then read NEW
+    engagement_events for this source, qualify each with gpt-5-mini, keep
+    QUALIFIED as prospects (engager IS the lead), write signals, leave
+    BORDERLINE visible for manual review, mark everything back on staging."""
     from datetime import datetime
     cfg = {**(src.get("config") or {}), **(src.get("params") or {})}
     eng = cfg.get("engagement") or {}
     cap = int(eng.get("leads_per_day") or cfg.get("leads_per_day") or 25)
     copy_ref = eng.get("copy_reference", True)
+
+    # tool-driven pull: stage fresh engagers before qualifying (no reliance on
+    # the Trigify workflow trigger, which barely fires)
+    try:
+        stage_trigify_engagers(src, cfg)
+    except Exception as e:  # noqa: BLE001 — a staging hiccup must not block qualifying what's already NEW
+        print(f"[engagement] staging error for {src['id']}: {type(e).__name__}: {e}", file=sys.stderr)
 
     events = sb("GET", f"engagement_events?source_id=eq.{src['id']}&status=eq.NEW"
                        f"&order=received_at.asc&limit=200") or []
