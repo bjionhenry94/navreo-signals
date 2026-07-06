@@ -3009,6 +3009,88 @@ def purge_campaign_draft(p: dict) -> dict:
     return {"ok": True, "purged": True}
 
 
+def _copy_name(name: str) -> str:
+    """'Foo' -> 'Foo (copy)', 'Foo (copy)' -> 'Foo (copy 2)', etc."""
+    import re
+    name = str(name or "Untitled")
+    m = re.search(r" \(copy(?: (\d+))?\)$", name)
+    if m:
+        n = int(m.group(1) or 1) + 1
+        return re.sub(r" \(copy(?: \d+)?\)$", f" (copy {n})", name)
+    return name + " (copy)"
+
+
+def _clone_source_dict(src: dict, new_campaign_id: str | None = None) -> dict:
+    """Deep-copy a source keeping ALL targeting (config/params/titles/icebreaker/
+    destination) but stripping per-run lead state and any external bindings, so the
+    copy is a fresh, un-pulled source ready to find its own people."""
+    import copy
+    s = copy.deepcopy(src)
+    for k in ("id", "prospects", "last_pull", "total", "broadened", "deleted_at"):
+        s.pop(k, None)
+    if new_campaign_id is not None:
+        s["campaign_id"] = new_campaign_id
+    # engagement: drop the Trigify workflow ids - they belong to the original's
+    # monitors; the copy provisions its own when the user starts monitoring.
+    eng = (s.get("config") or {}).get("engagement")
+    if isinstance(eng, dict):
+        eng.pop("trigify", None)
+    return s
+
+
+def duplicate_source(p: dict) -> dict:
+    """Duplicate one draft source within the same campaign, keeping its targeting."""
+    import uuid
+    sid = p.get("id")
+    drafts = read_drafts()
+    orig = next((d for d in drafts if d.get("id") == sid), None)
+    if not orig:
+        return {"ok": False, "message": "Source not found - refresh and try again."}
+    s = _clone_source_dict(orig)
+    s["id"] = f"draft-{uuid.uuid4().hex[:8]}"
+    s["name"] = _copy_name(orig.get("name"))
+    drafts.append(s)
+    DRAFTS.parent.mkdir(parents=True, exist_ok=True)
+    write_drafts(drafts)
+    sb_sync_source(s)
+    return {"ok": True, "id": s["id"], "name": s["name"]}
+
+
+def duplicate_campaign_draft(p: dict) -> dict:
+    """Duplicate a whole campaign: the campaign draft plus every one of its live
+    sources (targeting retained), under fresh ids, so it launches identically."""
+    from datetime import datetime
+    import uuid, copy
+    cid = p.get("id")
+    drafts = read_json_list(CAMPAIGN_DRAFTS)
+    orig = next((d for d in drafts if d.get("id") == cid), None)
+    if not orig:
+        return {"ok": False, "message": "Campaign not found - refresh and try again."}
+    new = copy.deepcopy(orig)
+    new_id = f"cdraft-{uuid.uuid4().hex[:8]}"
+    new["id"] = new_id
+    new["name"] = _copy_name(orig.get("name"))
+    new["created_at"] = datetime.now().isoformat(timespec="seconds")
+    new.pop("deleted_at", None)
+    drafts.append(new)
+    CAMPAIGN_DRAFTS.parent.mkdir(parents=True, exist_ok=True)
+    write_drafts(drafts, CAMPAIGN_DRAFTS)
+    all_srcs = read_drafts()
+    originals = [s for s in all_srcs
+                 if str(s.get("campaign_id")) == str(cid) and not s.get("deleted_at")]
+    new_srcs = []
+    for src in originals:
+        s = _clone_source_dict(src, new_campaign_id=new_id)
+        s["id"] = f"draft-{uuid.uuid4().hex[:8]}"
+        new_srcs.append(s)
+    if new_srcs:
+        all_srcs.extend(new_srcs)
+        write_drafts(all_srcs)
+        for s in new_srcs:
+            sb_sync_source(s)
+    return {"ok": True, "id": new_id, "name": new["name"], "sources": len(new_srcs)}
+
+
 def save_campaign_draft(p: dict) -> dict:
     from datetime import datetime
     import uuid
@@ -3046,12 +3128,14 @@ ROUTES = {
     "/api/role-suggest": role_suggest,
     "/api/role-feedback": role_feedback,
     "/api/sources": save_draft,
+    "/api/sources/duplicate": duplicate_source,
     "/api/sources/update": update_source,
     "/api/sources/pull": pull_source,
     "/api/sources/provision-engagement": provision_engagement_source,
     "/api/trigify-webhook": trigify_webhook,
     "/api/qa-history": save_qa_run,
     "/api/campaign-drafts": save_campaign_draft,
+    "/api/campaign-drafts/duplicate": duplicate_campaign_draft,
     "/api/campaign-drafts/update": update_campaign_draft,
     "/api/campaign-drafts/restore": restore_campaign_draft,
     "/api/campaign-drafts/purge": purge_campaign_draft,

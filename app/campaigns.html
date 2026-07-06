@@ -714,6 +714,18 @@ async function removeCampaign(id, ev) {
   location.hash = ""; renderList();
 }
 
+async function duplicateCampaign(id, ev) {
+  if (ev) ev.stopPropagation();
+  protoNote("Duplicating campaign…");
+  let r;
+  try { r = await (await fetch("/api/campaign-drafts/duplicate", { method: "POST", body: JSON.stringify({ id }) })).json(); }
+  catch { r = { ok: false, message: "Couldn't reach the server - try again" }; }
+  if (!r.ok) { protoNote(r.message || "Couldn't duplicate the campaign"); return; }
+  DB.campaignDrafts = null;
+  protoNote(`Copied to "${r.name}" with ${r.sources} source${r.sources === 1 ? "" : "s"} - same targeting. Set where its leads go, then it's ready.`);
+  location.hash = r.id;  // open the new campaign
+}
+
 async function restoreCampaign(id, ev) {
   ev.stopPropagation();
   window._showDeleted = true;
@@ -962,6 +974,7 @@ async function renderList() {
             <div class="small muted">${nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"}${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No leads yet"} · ${esc((dc.created_at || "").slice(0, 10))}</div>
           </div>
           ${dc.paused ? '<span class="pill o">⏸ Paused</span>' : '<span class="pill g">● Running</span>'}
+          <button class="btn sm" title="Copy this campaign and all its targeting into a new one" onclick="duplicateCampaign('${dc.id}', event)">Duplicate</button>
           <button class="btn sm" onclick="removeCampaign('${dc.id}', event)">Remove</button>
         </div>`;
       }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`;
@@ -1213,6 +1226,7 @@ async function renderDrafts(campaignId) {
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
           <button class="btn sm primary" onclick="pullProspects('${s.id}','${campaignId}')">${s.prospects ? "Find people again" : "Find people now"}</button>
           ${(s.mechanism || s.type) === "engagement" ? "" : `<button class="btn sm" title="Open the setup wizard for this source, prefilled with its current targeting" onclick="editSourceTargeting('${s.id}','${campaignId}')">✎ Edit targeting</button>`}
+          <button class="btn sm" title="Make a copy of this source with the same targeting" onclick="duplicateSource('${s.id}', '${campaignId}')">Duplicate</button>
           <button class="btn sm" onclick="removeSource('${s.id}', '${campaignId}')">Remove</button>
         </div>
         ${openId || s.prospects ? srcDetail(s, campaignId) : ""}
@@ -1428,6 +1442,16 @@ async function verdictProspect(id, i, verdict, campaignId) {
   pushToast(r, verdict);
   renderDrafts(campaignId);
 }
+async function duplicateSource(id, campaignId) {
+  protoNote("Duplicating source…");
+  let r;
+  try { r = await (await fetch("/api/sources/duplicate", { method: "POST", body: JSON.stringify({ id }) })).json(); }
+  catch { r = { ok: false, message: "Couldn't reach the server - try again" }; }
+  protoNote(r.ok ? `Copied to "${r.name}" - same targeting. Hit "Find people now" when ready.` : (r.message || "Couldn't duplicate the source"));
+  if (r.ok) window._openSource = r.id;
+  renderDrafts(campaignId);
+}
+
 async function removeSource(id, campaignId) {
   const r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, remove: true }) })).json();
   if (r.ok === false) { protoNote(r.message || "Couldn't remove the source"); renderDrafts(campaignId); return; }
