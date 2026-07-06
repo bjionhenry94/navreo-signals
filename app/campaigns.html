@@ -795,7 +795,7 @@ function activityChart(dates, series) {
   const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
   const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(dates.length - 1)].join("");
   const legend = series.map((s) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:0;border-top:${(s.width || 2) >= 2.5 ? "3" : "2"}px solid ${s.color};display:inline-block"></span>${esc(s.name)}</span>`).join("");
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:210px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>
     <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
     ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps going.</div>' : ""}`;
 }
@@ -938,24 +938,16 @@ async function renderList() {
   try { srcAll = await (await fetch("/api/sources", { cache: "no-store" })).json(); } catch {}
   let leadCounts = {};
   try { leadCounts = await (await fetch("/api/lead-counts", { cache: "no-store" })).json() || {}; } catch {}
-  main.innerHTML = `
-    <div class="pagehead">
-      <div>
-        <div class="eyebrow">Campaigns</div>
-        <h1>Signal campaigns.</h1>
-      </div>
-      <div style="display:flex;gap:10px;align-items:center">
-        <select id="client-switch" style="border:1px solid var(--line-2);border-radius:999px;padding:8px 14px;font:500 13px var(--font-sans);color:var(--ink);background:transparent"
-          onchange="if(this.value==='__new'){this.value=localStorage.getItem('navreo_client')||'';addClientFromSwitcher();}else{localStorage.setItem('navreo_client', this.value);DB.campaignDrafts=null;renderList();}">
-          <option value="">All clients</option>
-          ${(window._clients || []).map((c) => `<option value="${c.id}" ${localStorage.getItem("navreo_client") === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
-          <option value="__new">+ Add new client</option>
-        </select>
-        <button class="btn primary" onclick="openWizard()">${ic8("idea")} New campaign</button>
-      </div>
-    </div>
-    <div class="card" style="margin-top:16px">
-      ${drafts.length ? drafts.map((dc) => {
+  const totalFound = drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).leads || 0), 0);
+  const totalSent = drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).sent || 0), 0);
+  const running = drafts.filter((d) => !d.paused).length;
+  const paused = drafts.filter((d) => d.paused).length;
+  const strow = (label, val, sub, id) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+        <span class="small" style="color:var(--ink-2)">${label}</span>
+        <span style="font-weight:600;font-size:15px;display:inline-flex;align-items:center;gap:5px"${id ? ` id="${id}"` : ""}>${val}</span>
+      </div>${sub ? `<div class="muted" style="font-size:10.5px;margin-top:1px">${sub}</div>` : ""}</div>`;
+  const listRows = drafts.length ? drafts.map((dc) => {
         const prs = srcAll.filter((s) => String(s.campaign_id) === String(dc.id)).flatMap((s) => s.prospects || []);
         const sentLocal = prs.filter((p) => Object.keys(p.pushed || {}).length || p.pushed_to).length;
         // the real Leads count (Supabase, all pulls) - local last-pull view only when the DB is unreachable
@@ -972,22 +964,102 @@ async function renderList() {
           ${dc.paused ? '<span class="pill o">⏸ Paused</span>' : '<span class="pill g">● Running</span>'}
           <button class="btn sm" onclick="removeCampaign('${dc.id}', event)">Remove</button>
         </div>`;
-      }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`}
+      }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`;
+  main.innerHTML = `
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow">Campaigns</div>
+        <h1>Signal campaigns.</h1>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <select id="client-switch" style="border:1px solid var(--line-2);border-radius:999px;padding:8px 14px;font:500 13px var(--font-sans);color:var(--ink);background:transparent"
+          onchange="if(this.value==='__new'){this.value=localStorage.getItem('navreo_client')||'';addClientFromSwitcher();}else{localStorage.setItem('navreo_client', this.value);DB.campaignDrafts=null;renderList();}">
+          <option value="">All clients</option>
+          ${(window._clients || []).map((c) => `<option value="${c.id}" ${localStorage.getItem("navreo_client") === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+          <option value="__new">+ Add new client</option>
+        </select>
+        <button class="btn primary" onclick="openWizard()">${ic8("idea")} New campaign</button>
+      </div>
     </div>
-    ${deleted.length ? `
-    <details class="card" style="margin-top:16px" ${window._showDeleted ? "open" : ""} ontoggle="window._showDeleted=this.open">
-      <summary style="cursor:pointer;padding:12px 16px;font-weight:500;color:var(--ink-2)">Recently deleted (${deleted.length})</summary>
-      ${deleted.map((dc) => `
-        <div class="srcrow" style="padding:14px 16px;opacity:.75">
-          <div class="ictile">${ic8("signal")}</div>
-          <div style="flex:1">
-            <div style="font-weight:500">${esc(dc.name)}</div>
-            <div class="small muted">Deleted ${esc(String(dc.deleted_at || "").slice(0, 16).replace("T", " "))} · restore keeps all leads & monitoring</div>
-          </div>
-          <button class="btn sm" onclick="restoreCampaign('${dc.id}', event)">Restore</button>
-          <button class="btn sm danger" onclick="purgeCampaign('${dc.id}', event)">Delete permanently</button>
-        </div>`).join("")}
-    </details>` : ""}`;
+    <div class="card panel" style="margin-top:16px">
+      <h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2>
+      <div class="small muted" style="margin-bottom:8px">People found and sent to outreach each day, across all your campaigns.</div>
+      <div id="dash-chart"><div class="small muted" style="padding:16px 0">Loading…</div></div>
+    </div>
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-top:16px">
+      <div style="flex:1;min-width:0">
+        <div class="card">${listRows}</div>
+        ${deleted.length ? `
+        <details class="card" style="margin-top:16px" ${window._showDeleted ? "open" : ""} ontoggle="window._showDeleted=this.open">
+          <summary style="cursor:pointer;padding:12px 16px;font-weight:500;color:var(--ink-2)">Recently deleted (${deleted.length})</summary>
+          ${deleted.map((dc) => `
+            <div class="srcrow" style="padding:14px 16px;opacity:.75">
+              <div class="ictile">${ic8("signal")}</div>
+              <div style="flex:1">
+                <div style="font-weight:500">${esc(dc.name)}</div>
+                <div class="small muted">Deleted ${esc(String(dc.deleted_at || "").slice(0, 16).replace("T", " "))} · restore keeps all leads & monitoring</div>
+              </div>
+              <button class="btn sm" onclick="restoreCampaign('${dc.id}', event)">Restore</button>
+              <button class="btn sm danger" onclick="purgeCampaign('${dc.id}', event)">Delete permanently</button>
+            </div>`).join("")}
+        </details>` : ""}
+      </div>
+      <div class="card panel" style="width:290px;flex-shrink:0;margin-top:0">
+        <h2 style="font-size:15px;margin-bottom:6px">Status</h2>
+        ${strow("People found", fmt(totalFound), '<span id="st-foundsplit">everyone your signals have surfaced</span>')}
+        ${strow("Sent to outreach", totalSent ? fmt(totalSent) : "0", "added to your email + LinkedIn outreach", "st-split")}
+        ${strow("Waiting in Leads", '<span id="st-waiting">…</span>', "found, waiting for your ✓ to send them")}
+        ${strow("Skipped", '<span id="st-skipped">…</span>', "you marked these not a fit")}
+        ${strow("Found today", '<span id="st-today">…</span>', "new people from today's run")}
+        ${strow("Campaigns", `${running} running · ${paused} paused`, "")}
+        ${strow("Last pull", '<span id="st-lastpull">…</span>', "when new people last came in")}
+        <div id="st-warn"></div>
+      </div>
+    </div>`;
+  (async () => {
+    const per = await Promise.all(drafts.map((dc) =>
+      fetch(`/api/leads?campaign_id=${dc.id}`, { cache: "no-store" }).then((r) => r.json()).catch(() => [])));
+    const today = new Date().toISOString().slice(0, 10);
+    const isSent = (r) => r.pushed_to || (r.pushed && Object.keys(r.pushed).length);
+    const toolOf = (r) => { const p = (r.pushed_to || "") + Object.keys(r.pushed || {}).join(","); return /heyreach/i.test(p) ? "heyreach" : /smartlead/i.test(p) ? "smartlead" : (r.email ? "smartlead" : "heyreach"); };
+    let sEmail = 0, sLi = 0, waiting = 0, skipped = 0, foundEmail = 0, foundNoEmail = 0, todayN = 0, lastPull = "";
+    const foundByDate = {}, sentByDate = {};
+    (per || []).forEach((rows) => (Array.isArray(rows) ? rows : []).forEach((r) => {
+      const d = String(r.pulled_at || "").slice(0, 10);
+      if (d) { foundByDate[d] = (foundByDate[d] || 0) + 1; if ((r.pulled_at || "") > lastPull) lastPull = r.pulled_at; if (d === today) todayN++; }
+      if (r.email) foundEmail++; else foundNoEmail++;
+      if (isSent(r)) { if (toolOf(r) === "heyreach") sLi++; else sEmail++; if (d) sentByDate[d] = (sentByDate[d] || 0) + 1; }
+      else if (r.verdict === "reject") skipped++;
+      else waiting++;
+    }));
+    const dates = [...new Set([...Object.keys(foundByDate), ...Object.keys(sentByDate)])].sort();
+    const series = [
+      { name: "Found", color: "#1971C2", width: 2.5, vals: dates.map((d) => foundByDate[d] || 0) },
+      { name: "Sent to outreach", color: "#2F9E44", width: 2, vals: dates.map((d) => sentByDate[d] || 0) },
+    ];
+    const set = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
+    const chartEl = document.getElementById("dash-chart"); if (chartEl) chartEl.innerHTML = activityChart(dates, series);
+    set("st-split", (sEmail + sLi) ? `${destLogo("smartlead")} ${sEmail} · ${destLogo("heyreach")} ${sLi}` : "0");
+    set("st-foundsplit", `${destLogo("smartlead")} ${fmt(foundEmail)} have an email · ${destLogo("heyreach")} ${fmt(foundNoEmail)} no email`);
+    set("st-waiting", fmt(waiting));
+    set("st-skipped", fmt(skipped));
+    set("st-today", fmt(todayN));
+    set("st-lastpull", lastPull ? esc(String(lastPull).slice(5, 16).replace("T", " ")) : "—");
+    const warns = [];
+    drafts.forEach((dc, i) => {
+      if (dc.paused) return;
+      const dst = dc.destination || {};
+      const hasDest = dst.smartlead_campaign_id || dst.heyreach_list_id || (dst.type && dst.campaign_id);
+      if (!hasDest) { warns.push(`⚠ <b>${esc(dc.name)}</b> has no destination set - nothing can be sent`); return; }
+      const rows = Array.isArray(per[i]) ? per[i] : [];
+      const newest = rows.reduce((m, r) => ((r.pulled_at || "") > m ? r.pulled_at : m), "");
+      const days = newest ? Math.floor((Date.now() - new Date(newest).getTime()) / 864e5) : 99;
+      if (days >= 4) warns.push(`⚠ <b>${esc(dc.name)}</b> running but nothing found in ${days} days`);
+    });
+    set("st-warn", `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">${warns.length
+      ? warns.map((w) => `<div class="small" style="color:var(--orange-700);margin-bottom:5px;line-height:1.35">${w}</div>`).join("")
+      : '<div class="small" style="color:var(--green)">✓ All running campaigns look healthy</div>'}</div>`);
+  })();
 }
 
 /* ══ DETAIL ══ */
