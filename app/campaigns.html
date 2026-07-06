@@ -560,19 +560,40 @@ function renameCampaign(id) {
 }
 
 async function toggleCampPaused(id, paused) {
-  await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, paused }) });
+  // Optimistic: flip + repaint immediately so the button responds the instant
+  // it's clicked, even when the server is slow to wake (Render cold-start) or
+  // the request fails. Persist in the background; roll back only on error.
   const dc = (DB.campaignDrafts || []).find((x) => x.id === id);
+  const prev = dc ? dc.paused : undefined;
   if (dc) dc.paused = paused;
   protoNote(paused ? "Paused - this campaign stops looking for new people until you resume it" : "Running - this campaign looks for new people every day");
   renderDraftCampaign(id);
+  try {
+    const r = await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, paused }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.message || ("HTTP " + r.status));
+  } catch (e) {
+    if (dc) dc.paused = prev;  // save failed - undo the optimistic flip
+    protoNote("Couldn't save - " + (e.message || "network error") + ". Nothing changed, try again.");
+    renderDraftCampaign(id);
+  }
 }
 
 async function toggleAutopilot(id, on) {
-  await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, autopilot: on }) });
-  protoNote(on ? "Autopilot on - the daily run pushes new leads automatically" : "Manual - new leads wait for your ✓");
   const dc = (DB.campaignDrafts || []).find((c) => c.id === id);
+  const prev = dc ? dc.autopilot : undefined;
   if (dc) dc.autopilot = on;
+  protoNote(on ? "Autopilot on - the daily run pushes new leads automatically" : "Manual - new leads wait for your ✓");
   renderDraftCampaign(id);
+  try {
+    const r = await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, autopilot: on }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.message || ("HTTP " + r.status));
+  } catch (e) {
+    if (dc) dc.autopilot = prev;
+    protoNote("Couldn't save - " + (e.message || "network error") + ". Nothing changed, try again.");
+    renderDraftCampaign(id);
+  }
 }
 
 function resolveDestName(pool, typed) {
