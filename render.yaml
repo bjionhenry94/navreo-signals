@@ -32,7 +32,7 @@ services:
     plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: python app/server.py
-    healthCheckPath: /api/lead-counts
+    healthCheckPath: /healthz
     envVars:
       - fromGroup: navreo-secrets
 

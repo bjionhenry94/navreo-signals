@@ -2850,6 +2850,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
+            return self._json({"ok": True})
         if path == "/api/sources":
             return self._json(read_drafts())
         if path == "/api/leads":
