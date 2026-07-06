@@ -465,25 +465,35 @@ def tam_map(p: dict) -> dict:
 
 
 
-# business-name field per table: normalised at ingest via the lilly-qa cleaner so every
-# company name stored (and later merged into email copy) is already hygienic.
+# business-name + person-name fields per table: normalised at ingest via the
+# name_hygiene cleaners so every name stored (and later merged into an icebreaker)
+# is already email-ready — no emoji, no role tails, no mis-cased/auto-link names.
 _NAME_FIELD_BY_TABLE = {"signal_leads": "company", "engagement_events": "engager_company_name"}
+_PERSON_FIELDS_BY_TABLE = {"signal_leads": ("full_name",),
+                           "engagement_events": ("engager_full_name", "post_author_name")}
 
 
 def _normalise_company_fields(path: str, body):
-    """Clean the company-name field on rows written to signal_leads / engagement_events."""
+    """Clean the company + person name fields on rows written to signal_leads /
+    engagement_events. Name kept for its single caller in sb()."""
     table = path.split("?")[0].split("/")[0]
-    field = _NAME_FIELD_BY_TABLE.get(table)
-    if not field or body is None:
+    cfield = _NAME_FIELD_BY_TABLE.get(table)
+    pfields = _PERSON_FIELDS_BY_TABLE.get(table, ())
+    if (not cfield and not pfields) or body is None:
         return body
     try:
-        from name_hygiene import clean_company_name
+        from name_hygiene import clean_company_name, clean_person_name
     except Exception:  # noqa: BLE001 — never let hygiene break a write
         return body
     rows = body if isinstance(body, list) else [body]
     for row in rows:
-        if isinstance(row, dict) and row.get(field):
-            row[field] = clean_company_name(row[field])
+        if not isinstance(row, dict):
+            continue
+        if cfield and row.get(cfield):
+            row[cfield] = clean_company_name(row[cfield])
+        for pf in pfields:
+            if row.get(pf):
+                row[pf] = clean_person_name(row[pf])
     return body
 
 
@@ -1323,11 +1333,9 @@ def read_drafts() -> list:
     return r if r is not None else _file_list(DRAFTS)
 
 
-def api_leads(campaign_id: str) -> list:
-    """Every pulled lead for a campaign, straight from Supabase signal_leads —
-    accumulates across pulls (the local file only holds the LAST pull).
-    Newest first; local prospect index attached so ✓/✕ still work."""
-    srcs = [d for d in read_drafts() if str(d.get("campaign_id")) == str(campaign_id)]
+def _leads_for_sources(srcs: list) -> list:
+    """Map signal_leads rows for a set of draft sources -> UI lead dicts. One
+    Supabase query for the whole set; local prospect index attached so ✓/✕ work."""
     if not srcs:
         return []
     ids = ",".join(str(d["id"]) for d in srcs)
@@ -1347,12 +1355,29 @@ def api_leads(campaign_id: str) -> list:
             "country": r.get("country"), "icebreaker": r.get("icebreaker"),
             "email": r.get("email"), "status": r.get("status"), "pushed_to": r.get("pushed_to"),
             "pulled_at": r.get("pulled_at"), "source_name": s.get("name") or r.get("source_id"),
+            "campaign_id": s.get("campaign_id"),
             "job_url": (local or (None, {}))[1].get("job_url"),
             "verdict": (local or (None, {}))[1].get("verdict")
                 or {"rejected": "reject", "pushed": "keep"}.get(r.get("status")),
             "_sid": r.get("source_id"), "_idx": local[0] if local else None,
         })
     return out
+
+
+def api_leads(campaign_id: str) -> list:
+    """Every pulled lead for a campaign, straight from Supabase signal_leads —
+    accumulates across pulls (the local file only holds the LAST pull). Newest first."""
+    return _leads_for_sources([d for d in read_drafts() if str(d.get("campaign_id")) == str(campaign_id)])
+
+
+def api_leads_batch(campaign_ids: str) -> list:
+    """Leads for MANY campaigns in one shot — the dashboard needs every campaign's
+    leads to draw the activity chart; a single read_drafts + one Supabase query
+    replaces the old N-calls-one-per-campaign waterfall."""
+    wanted = {c.strip() for c in (campaign_ids or "").split(",") if c.strip()}
+    if not wanted:
+        return []
+    return _leads_for_sources([d for d in read_drafts() if str(d.get("campaign_id")) in wanted])
 
 
 def api_lead_counts() -> dict:
@@ -2400,7 +2425,8 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
                   "comment_text": ev.get("comment_text"), "verdict": None,
                   "signal_reason": q["reason"]}
             if copy_ref:
-                pr["whose_post"] = ev.get("post_author_name") or ""
+                from name_hygiene import clean_person_name
+                pr["whose_post"] = clean_person_name(ev.get("post_author_name") or "")
                 pr["topic"] = q.get("topic") or ""
             template = (src.get("icebreaker") or "").strip() or (ENG_ICE_REF if copy_ref else ENG_ICE_PLAIN)
             ice = fill_icebreaker(template, pr)
@@ -2408,7 +2434,8 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
                 "{{Topic}}", pr.get("topic") or "")
             if not copy_ref and ("{{WhosePost}}" in template or "{{Topic}}" in template):
                 ice = fill_icebreaker(ENG_ICE_PLAIN, pr)  # post-referencing template but copy_ref OFF
-            pr["icebreaker"] = ice
+            from name_hygiene import email_safe
+            pr["icebreaker"] = email_safe(ice)  # emoji in WhosePost/Topic can't leak through
             prospects.append(pr)
             known.add(pr["linkedin"])
             kept_this_run.append(pr)
@@ -2464,12 +2491,14 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
 
 
 def fill_icebreaker(template: str, prospect: dict) -> str:
+    from name_hygiene import clean_company_name, clean_person_name, email_safe
     out = template or ""
-    reps = {"company": prospect.get("company") or "their company",
-            "first_name": (prospect.get("name") or "").split(" ")[0]}
+    company = clean_company_name(prospect.get("company") or "") or "their company"
+    first_name = clean_person_name(prospect.get("name") or "").split(" ")[0]
+    reps = {"company": company, "first_name": first_name}
     for k, v in reps.items():
         out = out.replace("{{" + k + "}}", v).replace("{" + k + "}", v)
-    return out
+    return email_safe(out)  # last line of defence: no special char can survive
 
 
 def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=None, negatives=None):
@@ -3214,6 +3243,10 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(api_leads((q.get("campaign_id") or [""])[0]))
+        if path == "/api/leads-batch":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(api_leads_batch((q.get("campaign_ids") or [""])[0]))
         if path == "/api/lead-counts":
             return self._json(api_lead_counts())
         if path == "/api/strategy-result":

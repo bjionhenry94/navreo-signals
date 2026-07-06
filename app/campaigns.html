@@ -1118,21 +1118,25 @@ async function renderList() {
     </div>`;
   hydrateFade(main);  // ease the real list in over the skeleton
   (async () => {
-    const per = await Promise.all(drafts.map((dc) =>
-      fetch(`/api/leads?campaign_id=${dc.id}`, { cache: "no-store" }).then((r) => r.json()).catch(() => [])));
+    // One batched call for every campaign's leads (was N calls, one per campaign).
+    let allRows = [];
+    if (drafts.length) {
+      try { allRows = await cachedGet(`/api/leads-batch?campaign_ids=${drafts.map((d) => d.id).join(",")}`); } catch {}
+    }
+    if (!Array.isArray(allRows)) allRows = [];
     const today = new Date().toISOString().slice(0, 10);
     const isSent = (r) => r.pushed_to || (r.pushed && Object.keys(r.pushed).length);
     const toolOf = (r) => { const p = (r.pushed_to || "") + Object.keys(r.pushed || {}).join(","); return /heyreach/i.test(p) ? "heyreach" : /smartlead/i.test(p) ? "smartlead" : (r.email ? "smartlead" : "heyreach"); };
     let sEmail = 0, sLi = 0, waiting = 0, skipped = 0, foundEmail = 0, foundNoEmail = 0, todayN = 0, lastPull = "";
     const foundByDate = {}, sentByDate = {};
-    (per || []).forEach((rows) => (Array.isArray(rows) ? rows : []).forEach((r) => {
+    allRows.forEach((r) => {
       const d = String(r.pulled_at || "").slice(0, 10);
       if (d) { foundByDate[d] = (foundByDate[d] || 0) + 1; if ((r.pulled_at || "") > lastPull) lastPull = r.pulled_at; if (d === today) todayN++; }
       if (r.email) foundEmail++; else foundNoEmail++;
       if (isSent(r)) { if (toolOf(r) === "heyreach") sLi++; else sEmail++; if (d) sentByDate[d] = (sentByDate[d] || 0) + 1; }
       else if (r.verdict === "reject") skipped++;
       else waiting++;
-    }));
+    });
     const dates = [...new Set([...Object.keys(foundByDate), ...Object.keys(sentByDate)])].sort();
     const series = [
       { name: "Found", color: "#1971C2", width: 2.5, vals: dates.map((d) => foundByDate[d] || 0) },
