@@ -1164,8 +1164,8 @@ function srcDetail(s, campaignId) {
         style="flex:1;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
       <button class="btn sm" onclick="saveIce('${s.id}','${campaignId}')">Save</button>
     </div>
-    ${isEng ? "" /* engagement targeting lives in ✎ Edit targeting - one editor, no drift */ : `
-    <div class="small" style="font-weight:500;margin:12px 0 4px">Targeting</div>
+    ${isEng || !(window._editTargeting && window._editTargeting[s.id]) ? "" : `
+    <div class="small" style="font-weight:500;margin:12px 0 4px">Edit targeting <span class="muted" style="font-weight:400">· who to reach, what kind of company, where</span></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <input id="tg-titles-${s.id}" value="${esc((s.titles || []).join(", "))}" placeholder="Job titles" title="Who to reach"
         style="flex:1;min-width:180px;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
@@ -1173,7 +1173,12 @@ function srcDetail(s, campaignId) {
         style="flex:1;min-width:180px;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
       <input id="tg-geo-${s.id}" value="${esc((cfg.countries || []).join(", "))}" placeholder="Countries" title="Where"
         style="flex:1;min-width:140px;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
-      <button class="btn sm" onclick="saveTargeting('${s.id}','${campaignId}')">Save &amp; re-pull</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+      <button class="btn sm primary" onclick="saveTargeting('${s.id}','${campaignId}','future')">Save for future pulls</button>
+      <button class="btn sm" onclick="saveTargeting('${s.id}','${campaignId}','previous')">Save &amp; re-pull now</button>
+      <button class="btn sm" style="opacity:.7" onclick="window._editTargeting['${s.id}']=false;renderDrafts('${campaignId}')">Cancel</button>
+      <span class="small muted">Future: the daily run uses it from now on. Re-pull now: also refreshes the people already found.</span>
     </div>`}
     ${isEng ? verdictSeg(s, campaignId, vview) : ""}
     ${(s.prospects && vview === "qualified") ? `
@@ -1218,14 +1223,20 @@ async function saveIce(id, campaignId) {
   protoNote("Saved - applied to every prospect below and all future pulls");
   renderDrafts(campaignId);
 }
-async function saveTargeting(id, campaignId) {
+async function saveTargeting(id, campaignId, scope) {
   const g = (x) => document.getElementById(x + "-" + id).value;
   const titles = g("tg-titles").split(",").map((x) => x.trim()).filter(Boolean);
   const keywords = g("tg-kw").trim();
   const countries = g("tg-geo").split(",").map((x) => x.trim()).filter(Boolean);
   await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, titles, params: { keywords, countries } }) });
-  protoNote("Targeting saved ✓ - pulling with the new settings…");
-  await pullProspects(id, campaignId, true);
+  if (window._editTargeting) window._editTargeting[id] = false;
+  if (scope === "previous") {
+    protoNote("Targeting saved ✓ - re-pulling with the new settings…");
+    await pullProspects(id, campaignId, true);
+    return;
+  }
+  protoNote("Targeting saved ✓ - the daily run will use it from now on.");
+  renderDrafts(campaignId);
 }
 async function pullProspects(id, campaignId, afterRetarget) {
   protoNote("Pulling live prospects…");
@@ -1251,10 +1262,6 @@ async function verdictProspect(id, i, verdict, campaignId) {
   let r = null;
   try { r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, index: i, verdict }) })).json(); } catch {}
   pushToast(r, verdict);
-  renderDrafts(campaignId);
-}
-async function toggleSource(id, makeActive, campaignId) {
-  await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, active: makeActive }) });
   renderDrafts(campaignId);
 }
 async function removeSource(id, campaignId) {
