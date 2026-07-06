@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.env
+*.env.*
+*.bak
+app/data/*.json
+app/data/.drafts.lock
+.DS_Store

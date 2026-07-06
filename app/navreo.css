@@ -1,0 +1,206 @@
+/* Navreo Campaign Management — shared shell + components
+   Navreo Design System, white-background variant (user override):
+   page is white; cream demotes to secondary surfaces. One orange per screen. */
+
+@font-face {
+  font-family: "Acid Grotesk";
+  src: url("../design-system/fonts/AcidGrotesk-Normal.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --orange: #FF4D00;
+  --orange-600: #DB4100;
+  --orange-700: #A83100;
+  --orange-100: #FFE4D6;
+  --ink: #14110E;
+  --ink-2: #3A332C;
+  --ink-3: #6B6055;
+  --brown-300: #C0B0A0;
+  --brown-400: #A89684;
+  --cream: #F9F0E7;
+  --cream-50: #FCF7F1;
+  --light-200: #E8D7C4;
+
+  --bg: #FFFFFF;               /* full white (user override) */
+  --bg-sunken: #F7F7F6;        /* neutral secondary surfaces */
+  --card: #FFFFFF;
+  --line: #ECECEA;
+  --line-2: #DDDDDA;
+
+  --green: #2E7D5B; --green-bg: #E2F1E9; --green-line: #C4E2D3;
+  --amber: #8F6600; --amber-bg: #F8EAC4; --amber-line: #EBD79E;
+  --red: #C2371F;   --red-bg: #F7DCD5;   --red-line: #EFC7BB;
+  --info: #5C4E40;  --info-bg: #F2E5D9;  --info-line: #E4D3BF;
+
+  --font-sans: "DM Sans", "Helvetica Neue", system-ui, sans-serif;
+  --font-display: "Acid Grotesk", "DM Sans", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --radius: 12px;
+  --focus: 0 0 0 3px rgba(255, 77, 0, 0.32);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.45;
+  letter-spacing: -0.015em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Shell ─────────────────────────────────────────────── */
+.app { display: flex; min-height: 100vh; }
+.rail {
+  width: 64px; flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 16px 0; gap: 6px;
+  position: sticky; top: 0; height: 100vh;
+  background: var(--bg);
+}
+.rail .logo {
+  width: 36px; height: 36px; border-radius: 10px;
+  background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 12px;
+  font-family: var(--font-display); color: var(--cream); font-size: 19px;
+  text-decoration: none;
+}
+.rail a.nav-i {
+  width: 40px; height: 40px; border-radius: 11px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--brown-400); text-decoration: none;
+}
+.rail a.nav-i:hover { background: var(--bg-sunken); color: var(--ink-2); }
+.rail a.nav-i.on { background: var(--orange-100); color: var(--orange-700); }
+.rail a.nav-i svg { width: 19px; height: 19px; }
+.rail .spacer { flex: 1; }
+.rail .avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--bg-sunken); color: var(--ink);
+  border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+}
+
+/* ── Icons8 Windows 10 icons (masked so they take any color) ── */
+.ic8 {
+  display: inline-block; width: 18px; height: 18px;
+  background-color: currentColor; flex-shrink: 0;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+  vertical-align: -3px;
+}
+.ic8.lg { width: 24px; height: 24px; }
+.ic8.xl { width: 32px; height: 32px; }
+.ictile {
+  width: 36px; height: 36px; border-radius: 10px;
+  background: var(--bg-sunken);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.ictile .ic8 { width: 18px; height: 18px; color: var(--ink-2); }
+
+.main { flex: 1; min-width: 0; padding: 28px 38px 80px; max-width: 1280px; }
+
+/* ── Type ──────────────────────────────────────────────── */
+h1 { font-family: var(--font-display); font-weight: 400; font-size: 28px; letter-spacing: -0.03em; }
+h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.eyebrow {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.sub { font-size: 13.5px; color: var(--ink-2); }
+.muted { color: var(--ink-3); }
+.small { font-size: 12px; }
+.mono { font-family: var(--font-mono); letter-spacing: 0; font-size: 12px; }
+.num-hero { font-family: var(--font-display); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: -0.02em; }
+
+/* ── Components ────────────────────────────────────────── */
+.pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
+.freshness { text-align: right; font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
+.freshness b { color: var(--ink-2); font-weight: 600; }
+
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.card.sunken { background: var(--bg-sunken); }
+
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 20px 0 24px; }
+.stat { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.stat .lab { font-size: 12px; color: var(--ink-3); font-weight: 500; margin-bottom: 8px; }
+.stat .hint { font-size: 11.5px; color: var(--brown-400); margin-top: 6px; }
+
+.btn {
+  border: 1px solid var(--line-2); background: transparent; color: var(--ink);
+  border-radius: 999px; padding: 8px 16px;
+  font: 500 13px var(--font-sans); letter-spacing: -0.005em;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+}
+.btn:hover { background: var(--bg-sunken); }
+.btn:focus-visible { outline: none; box-shadow: var(--focus); }
+.btn.primary { background: var(--orange); border-color: var(--orange); color: var(--cream); }
+.btn.primary:hover { background: var(--orange-600); }
+.btn.sm { padding: 5px 12px; font-size: 11.5px; }
+.btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+
+.pill {
+  font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.pill .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+.pill.g { background: var(--green-bg); color: #195C3F; }
+.pill.a { background: var(--amber-bg); color: #6B4A00; }
+.pill.r { background: var(--red-bg); color: #861E10; }
+.pill.n { background: #F2F2F0; color: var(--ink-2); }
+.pill.o { background: var(--orange-100); color: var(--orange-700); }
+
+.chip {
+  border: 1px solid var(--line-2); background: transparent; border-radius: 999px;
+  padding: 5px 13px; font: 500 12.5px var(--font-sans); color: var(--ink-2);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+}
+.chip:hover { background: var(--bg-sunken); }
+.chip.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+.chip .n { opacity: 0.55; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 18px 0; }
+.tab {
+  background: none; border: none; font: 500 13.5px var(--font-sans);
+  color: var(--ink-3); padding: 9px 14px; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--ink-2); }
+.tab.on { color: var(--orange-700); border-bottom-color: var(--orange); }
+
+table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th {
+  text-align: left; font-size: 11px; font-weight: 500; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-3);
+  padding: 9px 12px; border-bottom: 1px solid var(--line);
+}
+.tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tr.click { cursor: pointer; }
+.tbl tr.click:hover td { background: var(--bg-sunken); }
+
+.bar-track { height: 6px; border-radius: 999px; background: #F0F0EE; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 999px; background: var(--ink); }
+.bar-fill.g { background: var(--green); }
+.bar-fill.a { background: var(--amber); }
+.bar-fill.r { background: var(--red); }
+
+.empty { text-align: center; color: var(--brown-400); font-size: 13px; padding: 48px 0; }
+
+.proto-note {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px);
+  background: var(--ink); color: var(--cream); font-size: 12.5px; font-weight: 500;
+  padding: 10px 18px; border-radius: 999px; transition: transform 0.25s; z-index: 90;
+}
+.proto-note.on { transform: translateX(-50%) translateY(0); }
+
+::selection { background: var(--orange-100); }

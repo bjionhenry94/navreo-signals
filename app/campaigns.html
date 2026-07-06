@@ -1,0 +1,2672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campaigns · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 14px; }
+.toolbar .search {
+  border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 15px;
+  font: 400 13px var(--font-sans); width: 220px; background: transparent; color: var(--ink);
+}
+.toolbar .search:focus { outline: none; box-shadow: var(--focus); }
+.progress-cell { min-width: 110px; }
+.progress-cell .lab { font-size: 11px; color: var(--ink-3); margin-bottom: 4px; }
+.marker { position: relative; }
+.marker::after { content: ""; position: absolute; left: 75%; top: -2px; bottom: -2px; width: 1.5px; background: var(--line-2); }
+.srcic { display: inline-flex; gap: 4px; }
+.srcic .ictile { width: 26px; height: 26px; border-radius: 7px; }
+.srcic .ictile .ic8 { width: 13px; height: 13px; }
+
+/* detail */
+.dethead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.funnel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
+.fstage { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; position: relative; }
+.fstage .ictile { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; }
+.fstage .lab { font-size: 11.5px; color: var(--ink-3); font-weight: 500; }
+.fstage .conv { font-size: 11px; color: var(--brown-400); margin-top: 4px; }
+.panel { padding: 18px 20px; margin-bottom: 14px; }
+.step-card { border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
+.step-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--bg-sunken); border-bottom: 1px solid var(--line); font-size: 13px; }
+.step-head .n { width: 26px; height: 26px; border-radius: 999px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+.variant { padding: 13px 16px; border-bottom: 1px solid var(--line); }
+.variant:last-child { border-bottom: none; }
+.v-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12.5px; }
+.v-label { font-weight: 600; }
+.v-body { font-size: 12.5px; color: var(--ink-2); line-height: 1.65; background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; max-height: 150px; overflow: hidden; position: relative; cursor: pointer; }
+.v-body.open { max-height: none; }
+.v-body:not(.open)::after { content: "expand"; position: absolute; bottom: 0; left: 0; right: 0; padding: 18px 0 6px; text-align: center; font-size: 11px; color: var(--ink-3); background: linear-gradient(transparent, var(--bg-sunken) 65%); }
+.v-body .var { background: var(--orange-100); color: var(--orange-700); border-radius: 4px; padding: 0 4px; font-family: var(--font-mono); font-size: 11px; }
+.v-body .spin { background: #F0F0EE; color: var(--ink-2); border-radius: 4px; padding: 0 4px; font-family: var(--font-mono); font-size: 11px; }
+.qa-row { display: flex; align-items: flex-start; gap: 11px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.qa-row:last-child { border-bottom: none; }
+.qa-row .t { font-weight: 500; }
+.qa-row .d { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
+.fillrow { margin-bottom: 10px; font-size: 12.5px; }
+.fillrow .top { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.srcrow { display: flex; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.srcrow:last-child { border-bottom: none; }
+.filterchips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.fchip { font-size: 11px; padding: 2px 9px; border-radius: 999px; background: var(--bg-sunken); color: var(--ink-2); }
+.srctypes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.srctype { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 15px; cursor: pointer; display: flex; align-items: center; gap: 11px; }
+.srctype:hover { border-color: var(--line-2); background: var(--bg-sunken); }
+.srctype .t { font-weight: 500; font-size: 13px; }
+.srctype .d { font-size: 11.5px; color: var(--ink-3); margin-top: 1px; }
+
+/* wizard + QA gate overlays — Gojiberry-style: centered, minimal, chips */
+.overlay { position: fixed; inset: 0; background: rgba(20,17,14,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+.overlay.on { display: flex; }
+.modal { background: #fff; border-radius: 20px; width: 720px; max-width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.wdots { display: flex; gap: 8px; justify-content: center; padding-top: 26px; }
+.wdot { width: 26px; height: 26px; border-radius: 999px; background: var(--bg-sunken); color: var(--ink-3); font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.wdot.on { background: var(--ink); color: #fff; }
+.wdot.done { background: var(--green-bg); color: var(--green); }
+.modal-b { padding: 10px 40px 20px; overflow-y: auto; text-align: center; }
+.modal-b h2 { font-family: var(--font-display); font-weight: 400; font-size: 24px; letter-spacing: -0.02em; margin: 18px 0 6px; }
+.modal-b .lead { font-size: 13px; color: var(--ink-3); margin-bottom: 20px; }
+.modal-f { padding: 16px 26px 20px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.chips-center { display: flex; gap: 7px; flex-wrap: wrap; justify-content: center; margin: 8px 0 4px; }
+.wfield { text-align: left; max-width: 520px; margin: 0 auto; }
+.wfield label { display: block; font-size: 12px; font-weight: 500; color: var(--ink-2); margin: 12px 0 5px; }
+.wfield input, .wfield textarea {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 10px; padding: 9px 12px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent; resize: vertical;
+}
+.ideas { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; }
+.idea { border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 16px; cursor: pointer; }
+.idea:hover { background: var(--bg-sunken); }
+.idea.sel { border-color: var(--orange); box-shadow: 0 0 0 1px var(--orange); }
+.idea .top { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+.idea .t { font-weight: 600; font-size: 13.5px; }
+.idea .tam { font-family: var(--font-display); font-size: 26px; line-height: 1; }
+.idea .tamlab { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
+.idea .nums { display: flex; gap: 22px; margin-top: 4px; }
+/* strategy table (step 5) */
+.stratbl { text-align: left; font-size: 12.5px; }
+.stratbl td { vertical-align: middle; }
+.stratbl tr.sel td { background: var(--orange-100); }
+.stratbl tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
+
+/* Gojiberry-style people preview rows */
+.lead-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 8px; text-align: left; }
+.lead-row.rejected { opacity: 0.4; }
+.lead-row .ini { width: 36px; height: 36px; border-radius: 999px; background: var(--bg-sunken); color: var(--ink-2); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.lead-row .nm { font-weight: 600; font-size: 13.5px; }
+.lead-row .nm a { color: inherit; text-decoration: none; }
+.lead-row .nm a:hover { color: var(--orange-700); }
+.lead-row .tt { font-size: 12px; color: var(--ink-2); }
+.lead-row .cc { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+.addchip { position: relative; display: inline-flex; align-items: center; }
+.addchip input { border: 1px solid var(--line-2); border-radius: 999px; padding: 5px 38px 5px 12px; font: 400 12.5px var(--font-sans); width: 165px; background: transparent; color: var(--ink); }
+.addchip input:focus { outline: none; box-shadow: var(--focus); }
+.addchip .plus { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 0; border: none; border-radius: 999px; background: var(--ink); color: var(--paper, #fff); font-size: 17px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.addchip .plus:hover { opacity: .82; }
+.addchip .plus:disabled { opacity: .35; cursor: default; }
+.sumrow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; }
+.sumrow:last-child { border-bottom: none; }
+.sumrow .k { width: 110px; flex-shrink: 0; color: var(--ink-3); font-size: 11.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
+.srcpick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; }
+.srcpick .srctype.on { border-color: var(--orange); box-shadow: 0 0 0 1px var(--orange); }
+/* Gojiberry-style targeting page — chips match the wizard's standard .chip */
+.tsec { font: 600 11px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); margin: 16px 0 7px; text-align: left; }
+.tgrid { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; }
+.tchip { border: 1px solid var(--line-2); background: transparent; border-radius: 999px; padding: 5px 13px; font: 500 12.5px var(--font-sans); color: var(--ink-2); cursor: pointer; display: inline-flex; align-items: center; }
+.tchip:hover { background: var(--bg-sunken); }
+.tchip.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+.tchip.add { border-style: dashed; }
+.tchip.add:hover { background: transparent; border-color: var(--ink-2); }
+.tchip.add input { border: none; outline: none; font: inherit; width: 190px; background: transparent; color: var(--ink); }
+.ai-pill { display: inline-flex; align-items: center; gap: 6px; background: var(--orange-100); color: var(--orange-700); border-radius: 999px; padding: 5px 13px; font: 600 11.5px var(--font-sans); }
+.hpipe { display: flex; align-items: flex-start; justify-content: center; gap: 0; margin-top: 22px; flex-wrap: wrap; }
+.hstep { display: flex; flex-direction: column; align-items: center; width: 72px; }
+.hstep .ictile { width: 40px; height: 40px; border-radius: 12px; }
+.hstep .ictile .ic8 { width: 19px; height: 19px; }
+.hstep.gate .ictile { background: var(--orange-100); }
+.hstep.gate .ictile .ic8 { color: var(--orange-700); }
+.hstep .hl { font-size: 10.5px; font-weight: 500; margin-top: 7px; line-height: 1.25; }
+.harrow { color: var(--line-2); font-size: 14px; margin-top: 13px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main" id="main"></main>
+</div>
+
+<!-- New Campaign wizard (Gojiberry flow) -->
+<div class="overlay" id="wizard">
+  <div class="modal" style="width:760px">
+    <div class="wdots" id="wdots"></div>
+    <div class="modal-b" id="wiz-body"></div>
+    <div class="modal-f">
+      <button class="btn" id="wiz-back" onclick="wizBack()">Back</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeWizard()">Cancel</button>
+        <button class="btn primary" id="wiz-next" onclick="wizNext()">Next</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add-a-source wizard -->
+<div class="overlay" id="srcwiz">
+  <div class="modal">
+    <div class="wdots"><div class="wdot on" id="sd1">1</div><div class="wdot" id="sd2">2</div><div class="wdot" id="sd3">3</div></div>
+    <div class="modal-b" id="src-body"></div>
+    <div class="modal-f">
+      <button class="btn" onclick="srcBack()">Back</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="srcSaveForLater()">💾 Save for later</button>
+        <button class="btn" onclick="srcwiz.classList.remove('on')">Cancel</button>
+        <button class="btn primary" id="src-next" onclick="srcNext()">Next</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Launch gate -->
+<div class="overlay" id="qagate">
+  <div class="modal" style="width:620px">
+    <div class="modal-b" style="text-align:left;padding-top:24px">
+      <div class="eyebrow">Launch gate</div>
+      <h2 style="text-align:left;margin:8px 0 4px">Checks before anything goes live</h2>
+      <div id="qagate-body"></div>
+    </div>
+    <div class="modal-f">
+      <span class="small muted">A failed check blocks the launch</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="qagate.classList.remove('on')">Close</button>
+        <button class="btn primary" onclick="protoNote()">Launch</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("campaigns");
+
+let DB = {};
+const main = document.getElementById("main");
+const wizard = document.getElementById("wizard");
+const qagate = document.getElementById("qagate");
+
+const SOURCE_TYPES = [
+  ["Hiring signal", "Companies hiring your buyer", "briefcase", "hiring"],
+  ["Engagement signal", "Warm leads engaging with LinkedIn profiles", "linkedin", "engagement"],
+];
+
+init();
+async function init() {
+  DB = await loadData("campaigns", "campaign_details", "signals", "notifications", "meta", "audit");
+  route();
+  window.addEventListener("hashchange", route);
+}
+
+function route() {
+  const note = document.querySelector(".proto-note");
+  if (note) note.classList.remove("on");
+  window._editDest = false;  // destination editor never follows you across pages
+  window._confirmAll = false;
+  const id = location.hash.replace("#", "");
+  if (id.startsWith("cdraft-")) renderDraftCampaign(id);
+  else if (id && (DB.campaigns || []).some((c) => String(c.id) === id)) renderDetail(Number(id));
+  else renderList();
+  window.scrollTo(0, 0);
+}
+
+let dtab = sessionStorage.getItem("cdtab") || "overview";
+async function renderDraftCampaign(id) {
+  if (!Array.isArray(DB.campaignDrafts)) {
+    try { DB.campaignDrafts = await (await fetch("/api/campaign-drafts", { cache: "no-store" })).json(); } catch { DB.campaignDrafts = []; }
+  }
+  const dc = DB.campaignDrafts.find((x) => x.id === id);
+  if (!dc) { location.hash = ""; return; }
+  if (!DB.dests) {
+    try { DB.dests = await (await fetch("/api/outreach-destinations", { cache: "no-store" })).json(); } catch { DB.dests = { smartlead: [], heyreach: [] }; }
+  }
+  {
+    const d0 = dc.destination || {};
+    const sl0 = d0.smartlead_campaign_id || (d0.type === "smartlead" ? d0.campaign_id : "") || "";
+    const hr0 = d0.heyreach_list_id || "";
+    window._destNames = {
+      smartlead: sl0 ? ((DB.dests.smartlead || []).find((c) => String(c.id) === String(sl0)) || {}).name || "your email campaign" : "",
+      heyreach: hr0 ? ((DB.dests.heyreach || []).find((l) => String(l.id) === String(hr0)) || {}).name || d0.heyreach_list_name || "your LinkedIn list" : "",
+    };
+  }
+  let srcs = [];
+  try { srcs = (await (await fetch("/api/sources", { cache: "no-store" })).json()).filter((s) => String(s.campaign_id) === String(id)); } catch {}
+  window._drafts = srcs;
+  const people = draftProspects(srcs);
+  // Authoritative lead count comes from the DB (signal_leads accumulates every pull);
+  // the local `people` only holds the LAST pull, so use it just as an offline fallback
+  // - otherwise the tab label disagrees with the Leads tab (which reads the same DB).
+  let dbLeadCount = null;
+  try { dbLeadCount = (await (await fetch("/api/lead-counts", { cache: "no-store" })).json() || {})[String(id)]?.leads ?? null; } catch {}
+  const leadCount = dbLeadCount != null ? dbLeadCount : people.length;
+  const tabs = ["overview", "leads", "sources"];  // Preview ("copy") tab hidden for now
+  const tabLabel = { overview: "Overview", leads: leadCount ? `Leads (${leadCount})` : "Leads", sources: "Sources", copy: "Preview" };
+  if (!tabs.includes(dtab)) dtab = "overview";
+  if (!sessionStorage.getItem("cdtab") && dtab === "overview" && people.some((x) => !x.verdict)) dtab = "leads";  // land where the work is
+  main.innerHTML = `
+    <button style="border:none;background:none;font-family:inherit;font-size:13px;color:var(--ink-3);cursor:pointer;padding:0" onclick="location.hash=''">&larr; Campaigns</button>
+    <div class="pagehead" style="margin-top:8px;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div class="dethead">
+          <h1 style="font-size:24px" id="camp-title">${esc(dc.name)}</h1>
+          <button class="btn sm" title="Rename this campaign" style="border:none;padding:4px 6px" onclick="renameCampaign('${id}')">✎</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        ${(() => {
+          const dst = dc.destination || {};
+          const slSel = dst.smartlead_campaign_id || (dst.type === "smartlead" ? dst.campaign_id : "") || "";
+          const hrSel = dst.heyreach_list_id || "";
+          const slName = (((DB.dests || {}).smartlead || []).find((c) => String(c.id) === String(slSel)) || {}).name || "";
+          const hrName = (((DB.dests || {}).heyreach || []).find((l) => String(l.id) === String(hrSel)) || {}).name || dst.heyreach_list_name || "";
+          if ((slSel || hrSel) && !window._editDest) {
+            const parts = [slSel && `📧 has email → ${esc(String(slName).slice(0, 30))}`, hrSel && `💼 no email → ${esc(String(hrName).slice(0, 30))}`].filter(Boolean);
+            const missing = !slSel ? '<span class="small" style="color:var(--orange-700)">⚠ no email campaign set - people WITH an email cannot be sent</span>'
+              : !hrSel ? '<span class="small" style="color:var(--orange-700)">⚠ no LinkedIn list set - people WITHOUT an email cannot be sent</span>' : "";
+            return `<span class="pill g" style="font-size:12px;padding:6px 14px">Sends to: ${parts.join("&ensp;·&ensp;")}</span>
+          <button class="btn sm" onclick="window._editDest=true;renderDraftCampaign('${id}')">change</button> ${missing}`;
+          }
+          if (!slSel && !hrSel && !window._editDest) {
+            return `<button class="btn sm" style="background:var(--orange-100);border-color:var(--orange-700);color:var(--orange-700);font-weight:600"
+            onclick="window._editDest=true;renderDraftCampaign('${id}')">⚠ Set up where leads go</button>
+          <span class="small" style="color:var(--orange-700)">nothing can be sent until you pick a destination</span>`;
+          }
+          const st = "border:1px solid var(--line-2);border-radius:999px;padding:7px 14px;font:500 12.5px var(--font-sans);color:var(--ink);background:transparent;max-width:280px";
+          return `
+          <input id="dest-email" list="dl-email" value="${esc(slName)}" placeholder="Email campaign - type to search…" autocomplete="off"
+            style="${st}" onchange="saveCampDest('${id}')" title="People we find an email for go ONLY here. Type part of the campaign name; clear the box to switch email off.">
+          <datalist id="dl-email">${((DB.dests || {}).smartlead || []).map((c) => `<option value="${esc(String(c.name))}"></option>`).join("")}</datalist>
+          <input id="dest-li" list="dl-li" value="${esc(hrName)}" placeholder="LinkedIn list - type to search…" autocomplete="off"
+            style="${st}" onchange="saveCampDest('${id}')" title="People WITHOUT an email go ONLY here (LinkedIn outreach). Type part of the list name; clear the box to switch LinkedIn off.">
+          <datalist id="dl-li">${((DB.dests || {}).heyreach || []).map((l) => `<option value="${esc(String(l.name))}"></option>`).join("")}</datalist>
+          <button class="btn sm" onclick="saveCampDest('${id}', true)">done</button>`;
+        })()}
+        </div>
+      </div>
+      <div style="flex-shrink:0;text-align:right">
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          ${(() => {
+            const seg = (onLeft, leftLab, rightLab, leftClick, rightClick, leftTitle, rightTitle, active) => {
+              const hl = active || "background:var(--orange-100);color:var(--orange-700);font-weight:600";
+              return `
+            <span style="display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden">
+              <button class="btn sm" style="border:none;border-radius:0;${onLeft ? hl : "opacity:.65"}" title="${leftTitle}" onclick="${onLeft ? "" : leftClick}">${leftLab}</button>
+              <button class="btn sm" style="border:none;border-radius:0;${!onLeft ? hl : "opacity:.65"}" title="${rightTitle}" onclick="${!onLeft ? "" : rightClick}">${rightLab}</button>
+            </span>`;
+            };
+            return seg(!dc.paused, "● Running", "⏸ Paused",
+              `toggleCampPaused('${id}', false)`, `toggleCampPaused('${id}', true)`,
+              "Running: looks for new people every day. The highlighted side is the current setting.",
+              "Paused: stops looking for new people. The highlighted side is the current setting.",
+              dc.paused ? "background:var(--bg-sunken);color:var(--ink-3);font-weight:600" : "background:var(--green-bg);color:var(--green);font-weight:600")
+            + seg(!dc.autopilot, "✋ Manual review", "⚡ Autopilot",
+              `toggleAutopilot('${id}', false)`, `toggleAutopilot('${id}', true)`,
+              "Manual: new leads wait in Leads until you ✓ them. The highlighted side is the current setting.",
+              "Autopilot: the daily run sends every new lead into outreach automatically. The highlighted side is the current setting.");
+          })()}
+        </div>
+        <div class="small muted" style="margin-top:6px;max-width:360px">${dc.paused
+          ? "Paused - not looking for new people. Nothing pulls or sends until you resume."
+          : dc.autopilot
+            ? "Finds new people daily and sends them into outreach automatically."
+            : "Finds new people daily - they wait in Leads until you ✓ them."}</div>
+      </div>
+    </div>
+    <div class="tabs">${tabs.map((x) =>
+      `<button class="tab ${dtab === x ? "on" : ""}" onclick="dtab='${x}';sessionStorage.setItem('cdtab','${x}');document.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));this.classList.add('on');var tb=document.getElementById('dtabbody');if(tb)tb.innerHTML='<div class=\\'small muted\\' style=\\'padding:24px 4px\\'>Loading…</div>';renderDraftCampaign('${id}')">${tabLabel[x]}</button>`).join("")}
+    </div>
+    <div id="dtabbody"></div>`;
+  const el = document.getElementById("dtabbody");
+  if (dtab === "overview") {
+    const kept = people.filter((x) => x.verdict === "keep").length;
+    const rej = people.filter((x) => x.verdict === "reject").length;
+    const pushed = people.filter((x) => Object.keys(x.pushed || {}).length || x.pushed_to).length;
+    const slN = people.filter((x) => Object.keys(x.pushed || {}).some((k) => k.startsWith("smartlead"))).length;
+    const hrN = people.filter((x) => Object.keys(x.pushed || {}).some((k) => k.startsWith("heyreach"))).length;
+    const feed = [];
+    srcs.forEach((s) => {
+      if (s.last_pull) feed.push({ t: s.last_pull, msg: `${(s.prospects || []).length} new people found · ${s.name}` });
+    });
+    if (pushed) feed.push({ t: "", msg: `${slN} in your email campaign · ${hrN} in your LinkedIn list` });
+    if (kept) feed.push({ t: "", msg: `${kept} qualified by you` });
+    feed.sort((a, b) => (b.t || "").localeCompare(a.t || ""));
+    el.innerHTML = `<div style="display:flex;gap:14px;align-items:flex-start">
+      <div style="flex:1">
+        <div class="funnel" style="grid-template-columns:repeat(2,1fr)">
+          ${[["People found", people.length, "people", ""], ["Approved by you", kept, "thumbsup", ""], ["Skipped", rej, "error", ""], ["Sent to outreach", pushed, "send", pushed ? `email ${slN} · LinkedIn ${hrN}` : ""]].map(([lab, v, ic, cv]) =>
+            `<div class="fstage"><div class="ictile">${ic8(ic)}</div><div class="lab">${lab}</div><div class="num-hero" style="font-size:28px;margin:6px 0 2px">${fmt(v)}</div><div class="conv">${cv || "&nbsp;"}</div></div>`).join("")}
+        </div>
+        <div class="card panel"><div class="sub">This campaign pulls new people on a schedule from its sources. Qualify them in Leads; ✓ sends each person into your outreach - by email when we have their address, by LinkedIn otherwise.</div></div>
+      </div>
+      <div class="card panel" style="width:260px;flex-shrink:0;margin-bottom:0">
+        <h2 style="font-size:14px">Activity</h2>
+        ${feed.length ? feed.map((f) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(f.msg)}${f.t ? `<div class="muted">${esc(f.t.slice(5, 16).replace("T", " "))}</div>` : ""}</div>`).join("") : '<div class="small muted" style="padding:8px 0">Nothing yet - pulls and approvals show here</div>'}
+      </div>
+    </div>`;
+  } else if (dtab === "leads") {
+    el.innerHTML = '<div class="card panel"><h2>People</h2><div class="sub">Loading your leads…</div></div>';
+    (async () => {
+      let rows = [];
+      try { rows = await (await fetch(`/api/leads?campaign_id=${id}`, { cache: "no-store" })).json(); } catch {}
+      if (!Array.isArray(rows) || !rows.length) rows = people;  // DB empty/offline -> last-pull local view
+      rows = rows.map((pr) => {
+        const local = pr._sid != null ? ((srcs || []).find((s) => s.id === pr._sid)?.prospects || [])[pr._idx] : null;
+        return local ? { ...pr, ...local, _sid: pr._sid, _idx: pr._idx } : pr;
+      });
+      const wasSent = (p) => Object.keys(p.pushed || {}).length || p.pushed_to;
+      const F = window._leadFilter || "all";
+      const counts = {
+        all: rows.length,
+        email: rows.filter((p) => p.email && !wasSent(p)).length,
+        linkedin: rows.filter((p) => !p.email && !wasSent(p)).length,
+        sent: rows.filter(wasSent).length,
+      };
+      window._leadRows = rows;
+      const shown = rows.filter((p) => F === "all" ? true : F === "sent" ? wasSent(p) : F === "email" ? (p.email && !wasSent(p)) : (!p.email && !wasSent(p)));
+      const pages = Math.max(1, Math.ceil(shown.length / 10));
+      const pg = window._leadsPage = Math.max(0, Math.min(window._leadsPage || 0, pages - 1));
+      const slice = shown.slice(pg * 10, pg * 10 + 10);
+      const chip = (key, label) => `<button class="btn sm ${F === key ? "primary" : ""}" data-chip="${key}" data-lab="${label}" onclick="window._leadFilter='${key}';window._leadsPage=0;renderDraftCampaign('${id}')">${label} (${counts[key]})</button>`;
+      const leadRow = (merged) => `
+        <div class="srcrow" id="lr-${merged._sid}-${rowKey(merged)}" style="${merged.verdict === "reject" ? "opacity:.4" : ""}">${leadRowInner(merged, id)}</div>`;
+      const tabBtn = [...document.querySelectorAll(".tab")].find((b) => b.textContent.startsWith("Leads"));
+      if (tabBtn && rows.length) tabBtn.textContent = `Leads (${rows.length})`;
+      el.innerHTML = `<div class="card panel">
+      <h2>People</h2>
+      <div class="sub" style="margin:2px 0 8px">${rows.length ? "Newest first. Click ✓ Send to add someone to your outreach - people we have an email for go to your email campaign, everyone else goes to your LinkedIn list. ✕ skips them." : "No pulls yet - run one from Sources."}</div>
+      ${rows.length ? `<div style="display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap">${chip("all", "All")}${chip("email", "→ Email")}${chip("linkedin", "→ LinkedIn")}${chip("sent", "✓ Sent")}</div>` : ""}
+      ${(() => {
+        const n = rows.filter((x) => !x.verdict && !wasSent(x)).length;
+        if (n < 2) return "";
+        return `<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:10px">${window._confirmAll
+          ? `<span class="small" style="font-weight:600">Send all ${n} unreviewed people to your outreach?</span>
+             <button class="btn sm primary" onclick="window._confirmAll=false;sendAllLeads('${id}')">Yes, send all ${n}</button>
+             <button class="btn sm" onclick="window._confirmAll=false;renderDraftCampaign('${id}')">Cancel</button>`
+          : `<button class="btn sm" style="opacity:.75" data-sendall onclick="window._confirmAll=true;renderDraftCampaign('${id}')">Send all ${n} unreviewed…</button>`}</div>`;
+      })()}
+      ${slice.map(leadRow).join("")}
+      ${pages > 1 ? `<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:12px">
+        <button class="btn sm" ${pg === 0 ? "disabled" : ""} onclick="window._leadsPage=${pg - 1};renderDraftCampaign('${id}')">← Prev</button>
+        <span class="small muted">Page ${pg + 1} of ${pages} · ${shown.length} people</span>
+        <button class="btn sm" ${pg >= pages - 1 ? "disabled" : ""} onclick="window._leadsPage=${pg + 1};renderDraftCampaign('${id}')">Next →</button>
+      </div>` : ""}
+    </div>`;
+    })();
+  } else if (dtab === "sources") {
+    el.innerHTML = `<div id="draftlist"></div>
+      <div class="card panel"><h2>Add a source</h2>
+      <div class="srctypes">
+        ${SOURCE_TYPES.map(([tt, dsc, icon, wizk]) => `
+        <div class="srctype" onclick="${wizk ? `openSourceWizard('${wizk}', '${id}')` : "protoNote('Coming soon')"}">
+          <div class="ictile">${ic8(icon)}</div>
+          <div><div class="t">${tt}</div><div class="d">${dsc}</div></div>
+        </div>`).join("")}</div>
+      </div>`;
+    await renderDrafts(id);
+    const bare = srcs.length === 1 && !srcs[0].prospects;
+    if (bare) pullProspects(srcs[0].id, id);
+  } else {
+    renderCopyPreview(el, dc, srcs, people);
+  }
+  if (false) {
+    const missing = people.filter((x) => !(x.icebreaker || "").trim());
+    el.innerHTML = `<div class="card panel">
+      <h2>Checks</h2>
+      <div class="qa-row">${missing.length ? '<span class="pill r">FAIL</span>' : '<span class="pill g">PASS</span>'}
+        <div><div class="t">Every lead has an opening line</div>
+        <div class="d">${missing.length ? `${missing.length} lead(s) missing one: ${missing.slice(0, 3).map((x) => esc(x.name)).join(", ")}${missing.length > 3 ? "…" : ""}` : `All ${people.length} leads have an opening line.`}</div></div>
+      </div></div>`;
+  }
+}
+
+async function openMoreLeads(campaignId, mech) {
+  const dc = (DB.campaignDrafts || []).find((x) => x.id === campaignId) || {};
+  const box = document.getElementById("moreleads");
+  if (dc.goal) {
+    box.innerHTML = `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+      <div class="small" style="margin-bottom:8px"><span class="pill g">using your campaign goal</span> <span class="muted">"${esc(dc.goal)}"</span></div>
+      <div id="ml-out" class="small muted">Thinking through ideas that get you there - about a minute…</div>
+      <input id="ml-goal" type="hidden" value="${esc(dc.goal)}"></div>`;
+    box.scrollIntoView({ behavior: "smooth" });
+    runMoreLeads(campaignId, mech);
+    return;
+  }
+  box.innerHTML = `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+    <div class="small" style="font-weight:600;margin-bottom:6px">${mech === "hiring" ? "What should the hiring signal achieve?" : "What's the goal?"}</div>
+    <div style="display:flex;gap:8px">
+      <input id="ml-goal" style="flex:1;border:1px solid var(--line-2);border-radius:10px;padding:9px 12px;font:400 13px var(--font-sans);color:var(--ink);background:transparent"
+        placeholder="${mech === "hiring" ? "e.g. companies hiring sales enablement leads" : "e.g. more warm buyers for this offer"}">
+      <button class="btn primary sm" onclick="runMoreLeads('${campaignId}', '${mech}')">Suggest</button>
+    </div>
+    <div id="ml-out" class="small muted" style="margin-top:8px"></div>
+  </div>`;
+  box.scrollIntoView({ behavior: "smooth" });
+}
+async function runMoreLeads(campaignId, mech) {
+  const dc = (DB.campaignDrafts || []).find((x) => x.id === campaignId) || {};
+  const icp = dc.icp || {};
+  const goal = document.getElementById("ml-goal").value.trim();
+  if (!goal) { protoNote("Say the goal first"); return; }
+  document.getElementById("ml-out").innerHTML = "Thinking through ideas that get you there - usually 2-3 minutes…";
+  let existingSrcs = [];
+  try { existingSrcs = (await (await fetch("/api/sources", { cache: "no-store" })).json()).filter((s) => String(s.campaign_id) === String(campaignId)); } catch {}
+  const existing = existingSrcs.map((s) => `${s.mechanism || s.type}: ${s.name}`);
+  const payload = { titles: icp.titles || ["Founder", "CEO"], keywords: icp.keywords ? [icp.keywords] : [],
+    headcount: icp.sizes || ["11-20", "21-50", "51-100", "101-200"], countries: icp.geos || ["United States"],
+    goal, mode: mech ? "direct" : "ai", mechanism: mech || "", existing, force: true };
+  const r = await strategyCall(payload);
+  if (!r || r.ok === false) {
+    document.getElementById("ml-out").innerHTML = `${esc((r && r.message) || "Could not generate")} <button class="btn sm" onclick="runMoreLeads('${campaignId}','${mech}')">Try again</button>`;
+    return;
+  }
+  const stop = new Set(["the", "a", "an", "of", "for", "with", "and", "your", "their", "brands", "companies", "signal"]);
+  const words = (s) => new Set((s || "").toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2 && !stop.has(w)));
+  const isDupe = (x) => existingSrcs.some((e) => {
+    if ((e.mechanism || e.type) !== x.mechanism) return false;
+    const a = words(e.name), b = words(x.idea);
+    const shared = [...a].filter((w) => b.has(w)).length;
+    return shared >= 2 || (shared >= 1 && Math.min(a.size, b.size) <= 2);
+  });
+  const rows = (r.rows || []).filter((x) => (x.estimated || (x.dms && x.dms > 0)) && !isDupe(x));
+  const dropped = (r.rows || []).length - (r.rows || []).filter((x) => !isDupe(x)).length;
+  document.getElementById("ml-out").innerHTML = rows.length ? `<div class="small" style="color:var(--ink);font-weight:600;margin-bottom:4px">Pick one to add${dropped ? ` <span class="muted" style="font-weight:400">· ${dropped} idea${dropped > 1 ? "s" : ""} skipped - already running in this campaign</span>` : ""}:</div>` +
+    rows.map((x, i) => `<div class="srcrow click" style="cursor:pointer;padding:10px 0" onclick='addIdeaSource("${campaignId}", ${i})'>
+      <div class="ictile">${ic8((MECH_META[x.mechanism] || [])[0] || "signal")}</div>
+      <div style="flex:1"><b>${esc(x.idea)}</b><div class="small muted" style="font-style:italic">"${esc(x.icebreaker || "")}"</div></div>
+      <span class="small"><b>${x.estimated ? "live" : fmt(x.dms)}</b>${x.estimated ? "" : '<span class="muted"> /month</span>'}</span>
+    </div>`).join("") : (dropped ? `Everything it suggested is already running in this campaign (${dropped} skipped) - try a different goal wording.` : "No sized ideas came back - try different wording.");
+  window._mlRows = rows;
+}
+async function addIdeaSource(campaignId, i) {
+  const x = (window._mlRows || [])[i];
+  if (!x) return;
+  const dc = (DB.campaignDrafts || []).find((c) => c.id === campaignId) || {};
+  const icp = dc.icp || {};
+  let dmTitles = icp.titles || [];
+  if (!dmTitles.length && dc.client_id) {
+    try {
+      const cl = (await (await fetch("/api/clients")).json()).find((c) => c.id === dc.client_id);
+      dmTitles = ((cl || {}).icp || {}).titles || [];
+    } catch {}
+  }
+  if (!dmTitles.length) { protoNote("Set who we email first - add decision-maker roles in the campaign targeting"); return; }
+  await fetch("/api/sources", { method: "POST", body: JSON.stringify({
+    type: x.mechanism, mechanism: x.mechanism, name: x.idea, campaign_id: campaignId,
+    icebreaker: x.icebreaker || "", titles: dmTitles, params: x.params || {},
+    config: { keywords: icp.keywords || "", headcount: icp.sizes, countries: icp.geos } }) });
+  protoNote("Source added - it pulls on the next run");
+  renderDraftCampaign(campaignId);
+}
+function renameCampaign(id) {
+  const h = document.getElementById("camp-title");
+  if (!h || h.isContentEditable) return;
+  const orig = h.textContent;
+  try { h.contentEditable = "plaintext-only"; } catch { h.contentEditable = "true"; }
+  h.style.outline = "2px solid var(--orange-700)";
+  h.style.borderRadius = "6px";
+  h.focus();
+  document.getSelection().selectAllChildren(h);
+  const finish = async (save) => {
+    h.onblur = null;
+    h.onkeydown = null;
+    h.contentEditable = "false";
+    h.style.outline = "";
+    const name = h.textContent.trim().replace(/\s+/g, " ");
+    if (!save || !name || name === orig) { h.textContent = orig; return; }
+    await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, name }) });
+    h.textContent = name;
+    const dc = (DB.campaignDrafts || []).find((x) => x.id === id);
+    if (dc) dc.name = name;
+    protoNote("Renamed ✓");
+  };
+  h.onblur = () => finish(true);
+  h.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  };
+}
+
+async function toggleCampPaused(id, paused) {
+  await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, paused }) });
+  const dc = (DB.campaignDrafts || []).find((x) => x.id === id);
+  if (dc) dc.paused = paused;
+  protoNote(paused ? "Paused - this campaign stops looking for new people until you resume it" : "Running - this campaign looks for new people every day");
+  renderDraftCampaign(id);
+}
+
+async function toggleAutopilot(id, on) {
+  await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, autopilot: on }) });
+  protoNote(on ? "Autopilot on - the daily run pushes new leads automatically" : "Manual - new leads wait for your ✓");
+  const dc = (DB.campaignDrafts || []).find((c) => c.id === id);
+  if (dc) dc.autopilot = on;
+  renderDraftCampaign(id);
+}
+
+function resolveDestName(pool, typed) {
+  // typed text -> destination: exact name match first, else a UNIQUE substring match
+  const q = typed.trim().toLowerCase();
+  if (!q) return { hit: null };
+  const exact = pool.find((x) => String(x.name || "").toLowerCase() === q);
+  if (exact) return { hit: exact };
+  const subs = pool.filter((x) => String(x.name || "").toLowerCase().includes(q));
+  if (subs.length === 1) return { hit: subs[0] };
+  return { hit: null, ambiguous: subs.length > 1, none: subs.length === 0 };
+}
+
+async function saveCampDest(id, close) {
+  const slTyped = (document.getElementById("dest-email") || {}).value || "";
+  const hrTyped = (document.getElementById("dest-li") || {}).value || "";
+  const slR = resolveDestName((DB.dests || {}).smartlead || [], slTyped);
+  const hrR = resolveDestName((DB.dests || {}).heyreach || [], hrTyped);
+  if (slTyped.trim() && !slR.hit) { protoNote(slR.ambiguous ? `Several email campaigns match “${slTyped.trim()}” - keep typing` : `No email campaign called “${slTyped.trim()}” - pick one from the list`); return; }
+  if (hrTyped.trim() && !hrR.hit) { protoNote(hrR.ambiguous ? `Several LinkedIn lists match “${hrTyped.trim()}” - keep typing` : `No LinkedIn list called “${hrTyped.trim()}” - pick one from the list`); return; }
+  const dest = {};
+  if (slR.hit) dest.smartlead_campaign_id = String(slR.hit.id);
+  if (hrR.hit) { dest.heyreach_list_id = Number(hrR.hit.id); dest.heyreach_list_name = hrR.hit.name || ""; }
+  if (close) window._editDest = false;
+  await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, destination: dest }) });
+  DB.campaignDrafts = null;
+  protoNote(slR.hit || hrR.hit ? "Saved - routing updated" : "Destinations cleared");
+  renderDraftCampaign(id);
+}
+
+function rowKey(m) { return m._idx != null ? m._idx : (m.linkedin || "").replace(/[^a-z0-9]/gi, "").slice(-24); }
+
+function leadRowInner(merged, cid) {
+  const canAct = merged._sid != null && (merged._idx != null || merged.linkedin);
+  const idxArg = merged._idx != null ? merged._idx : "null";
+  const lnArg = esc(merged.linkedin || "");
+  const isSent = Object.keys(merged.pushed || {}).length || merged.pushed_to;
+  return `
+          <div style="width:34px;height:34px;border-radius:999px;background:var(--bg-sunken);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">${esc((merged.name || "?").split(" ").map((w) => w[0]).slice(0, 2).join(""))}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:500">${merged.linkedin ? `<a href="${esc(merged.linkedin)}" target="_blank" style="color:inherit;text-decoration:none">${esc(merged.name)}</a>` : esc(merged.name)} <span class="small muted">· ${esc(merged.title || "")} · ${esc(merged.company || "")}</span></div>
+            <div class="small" style="font-style:italic;color:var(--ink-2)">"${esc(merged.icebreaker || "")}"</div>
+            <div class="small">${merged.linkedin ? `<a href="${esc(merged.linkedin)}" target="_blank" style="color:var(--orange-700);text-decoration:none">LinkedIn Profile ↗</a>` : ""} ${merged.domain ? `&nbsp;<a href="https://${esc(merged.domain)}" target="_blank" style="color:var(--orange-700);text-decoration:none">Website ↗</a>` : ""} ${sigHref(merged) ? `&nbsp;<a href="${esc(sigHref(merged))}" target="_blank" title="${esc(sigTitle(merged))}" style="color:var(--orange-700);text-decoration:none">View signal ↗</a>` : ""} ${merged.pulled_at ? `<span class="muted">· pulled ${esc(String(merged.pulled_at).slice(5, 16).replace("T", " "))}</span>` : ""}</div>
+            ${pushChips(merged)}${routeNote(merged)}
+          </div>
+          ${!canAct ? ""
+            : isSent
+              ? `<button class="btn sm" title="Remove this person from your outreach again" onclick="this.textContent='Undoing…';this.disabled=true;setVerdict('${merged._sid}',${idxArg},'undo','${cid}','${lnArg}')">Undo</button>`
+              : `<button class="btn sm" title="Send this person to your outreach" onclick="this.textContent='Sending…';this.disabled=true;setVerdict('${merged._sid}',${idxArg},'keep','${cid}','${lnArg}')">✓ Send</button>
+          <button class="btn sm" title="Skip this person" onclick="setVerdict('${merged._sid}',${idxArg},'reject','${cid}','${lnArg}')">✕</button>`}`;
+}
+
+function routeNote(pr) {
+  if (Object.keys(pr.pushed || {}).length || pr.verdict === "reject") return "";
+  const nm = window._destNames || {};
+  if (!nm.smartlead && !nm.heyreach) return "";
+  const txt = pr.email
+    ? `📧 email${nm.smartlead ? ` “${esc(nm.smartlead)}”` : ""} - we have their address`
+    : pr.email_checked
+      ? `💼 LinkedIn${nm.heyreach ? ` “${esc(nm.heyreach)}”` : ""} - no email address exists for them`
+      : `email if we find their address, otherwise LinkedIn${nm.heyreach ? ` “${esc(nm.heyreach)}”` : ""}`;
+  return `<div class="small muted" style="margin-top:2px">→ ✓ sends them to: ${txt}</div>`;
+}
+
+function pushChips(pr) {
+  const keys = Object.keys(pr.pushed || {});
+  const nm = window._destNames || {};
+  const bits = [];
+  if (keys.some((k) => k.startsWith("smartlead")) || /smartlead/.test(pr.pushed_to || "")) bits.push(`email campaign${nm.smartlead ? ` “${esc(nm.smartlead)}”` : ""}`);
+  if (keys.some((k) => k.startsWith("heyreach")) || /heyreach/.test(pr.pushed_to || "")) bits.push(`LinkedIn list${nm.heyreach ? ` “${esc(nm.heyreach)}”` : ""}`);
+  let out = bits.length ? `<div class="small" style="color:var(--green);margin-top:2px">✓ sent - in your ${bits.join(" + ")}</div>` : "";
+  const flab = { smartlead: "email", heyreach: "LinkedIn" };
+  const fb = Object.entries(pr.push_fail || {}).map(([k, m]) =>
+    `${flab[k] || k} skipped - ${esc(m || "didn't go through")}`);
+  if (fb.length) out += `<div class="small" style="color:var(--orange-700);margin-top:2px">△ ${fb.join(" · ")}</div>`;
+  return out;
+}
+
+function pushToast(r, verdict) {
+  if (verdict === "undo") {
+    protoNote(r && r.push && r.push.ok ? "Undone - removed from your email campaign and LinkedIn list" : "Couldn't undo everything - check the row");
+    return;
+  }
+  if (verdict !== "keep") return;
+  const t = r && r.push && r.push.tools;
+  if (!t || !Object.keys(t).length) { protoNote("Kept ✓ - now pick where people go (top of the page), then tick ✓ again to send"); return; }
+  const lab = { smartlead: "email campaign", heyreach: "LinkedIn list" };
+  const ok = Object.keys(t).filter((k) => t[k].ok).map((k) => lab[k]);
+  const bad = Object.keys(t).filter((k) => !t[k].ok).map((k) => `${lab[k]} (${t[k].message})`);
+  if (!bad.length) protoNote(`Sent ✓ - now in your ${ok.join(" and ")}`);
+  else protoNote(`${ok.length ? `In your ${ok.join(" and ")} ✓ · ` : ""}couldn't send to ${bad.join(" · ")}`);
+}
+async function removeCampaign(id, ev) {
+  ev.stopPropagation();
+  if (!confirm("Remove this draft campaign and its sources?")) return;
+  await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, remove: true }) });
+  DB.campaignDrafts = null;
+  protoNote("Campaign removed");
+  location.hash = ""; renderList();
+}
+function draftProspects(srcs) {
+  const out = [];
+  srcs.forEach((s) => (s.prospects || []).forEach((pr, i) => out.push({ ...pr, _sid: s.id, _idx: i })));
+  return out;
+}
+async function sendAllLeads(campaignId) {
+  const todo = (window._leadRows || draftProspects(window._drafts || []))
+    .filter((x) => !x.verdict && !(Object.keys(x.pushed || {}).length || x.pushed_to) && x._sid != null && (x._idx != null || x.linkedin));
+  if (!todo.length) return;
+  let sent = 0, failed = 0;
+  for (let n = 0; n < todo.length; n++) {
+    protoNote(`Sending ${n + 1} of ${todo.length}…`);
+    const body = { id: todo[n]._sid, verdict: "keep" };
+    if (todo[n]._idx != null) body.index = todo[n]._idx;
+    if (todo[n].linkedin) body.linkedin = todo[n].linkedin;
+    try {
+      const r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify(body) })).json();
+      if (r.push && Object.values(r.push.tools || {}).some((v) => v.ok)) sent++; else failed++;
+    } catch { failed++; }
+  }
+  protoNote(`Done - ${sent} sent${failed ? `, ${failed} couldn't be sent (see rows)` : ""}`);
+  renderDraftCampaign(campaignId);
+}
+
+function applyVerdictLocal(sid, idx, verdict, r) {
+  const s = (window._drafts || []).find((x) => x.id === sid);
+  const pr = s && (s.prospects || [])[idx];
+  if (!pr) return null;
+  if (verdict === "undo") {
+    if (!r || !r.push || r.push.ok !== false) { delete pr.pushed; delete pr.pushed_to; delete pr.push_fail; pr.verdict = null; }
+    return pr;
+  }
+  pr.verdict = verdict;
+  const t = (r && r.push && r.push.tools) || {};
+  if (t.smartlead && t.smartlead.ok) { pr.pushed = { ...(pr.pushed || {}), smartlead: true }; if (!pr.email) pr.email = "(found)"; }
+  if (t.heyreach && t.heyreach.ok) { pr.pushed = { ...(pr.pushed || {}), heyreach: true }; if (!pr.email) pr.email_checked = true; }
+  const fails = {};
+  for (const k of Object.keys(t)) if (!t[k].ok) fails[k] = t[k].message;
+  if (Object.keys(fails).length) pr.push_fail = fails; else delete pr.push_fail;
+  return pr;
+}
+
+function refreshLeadChrome() {
+  const rows = window._leadRows || [];
+  if (!rows.length) return;
+  const wasSent = (p) => Object.keys(p.pushed || {}).length || p.pushed_to;
+  const counts = {
+    all: rows.length,
+    email: rows.filter((p) => p.email && !wasSent(p)).length,
+    linkedin: rows.filter((p) => !p.email && !wasSent(p)).length,
+    sent: rows.filter(wasSent).length,
+  };
+  document.querySelectorAll("[data-chip]").forEach((b) => { b.textContent = `${b.dataset.lab} (${counts[b.dataset.chip]})`; });
+  const sa = document.querySelector("[data-sendall]");
+  if (sa) {
+    const n = rows.filter((p) => !p.verdict && !wasSent(p)).length;
+    if (n < 2) sa.parentElement.style.display = "none";
+    else sa.textContent = `Send all ${n} unreviewed…`;
+  }
+}
+
+async function setVerdict(sid, idx, verdict, campaignId, linkedin) {
+  let r = null;
+  const body = { id: sid, verdict };
+  if (idx != null) body.index = idx;
+  if (linkedin) body.linkedin = linkedin;
+  try { r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify(body) })).json(); } catch {}
+  pushToast(r, verdict);
+  let pr = idx != null ? applyVerdictLocal(sid, idx, verdict, r) : null;
+  if (r && r.lead) pr = { ...(pr || {}), ...r.lead, verdict: r.undo ? null : (r.lead.verdict || verdict) };
+  const lr = (window._leadRows || []).find((p) => (linkedin && p.linkedin === linkedin) || (idx != null && p._sid === sid && p._idx === idx));
+  if (lr && pr) Object.assign(lr, pr, { pushed: pr.pushed || {}, pushed_to: pr.pushed_to || null });
+  const key = idx != null ? idx : (linkedin || "").replace(/[^a-z0-9]/gi, "").slice(-24);
+  const row = document.getElementById(`lr-${sid}-${key}`);
+  if (row && pr) {  // patch the one row in place - other rows keep their DOM nodes
+    row.style.opacity = pr.verdict === "reject" ? ".4" : "";
+    row.innerHTML = leadRowInner({ ...pr, _sid: sid, _idx: idx }, campaignId);
+    refreshLeadChrome();
+  } else {
+    renderDraftCampaign(campaignId);
+  }
+}
+
+let copyIdx = 0, copyStep = 1;
+function renderCopyPreview(el, dc, srcs, people) {
+  const kept = people.filter((x) => x.verdict !== "reject");
+  const pr = kept[copyIdx] || people[0] || { name: "Sample Prospect", company: "Acme Co", icebreaker: (srcs[0] || {}).icebreaker || "" };
+  const first = (pr.name || "there").split(" ")[0];
+  const V = (x) => `<span style="background:var(--orange-100);color:var(--orange-700);border-radius:4px;padding:0 3px">${esc(x)}</span>`;
+  const B = (x) => `<span style="background:#E7F0FA;color:#2C6DB5;border-radius:4px;padding:0 3px">${x}</span>`;
+  const ice = B(esc(pr.icebreaker || (srcs[0] || {}).icebreaker || "").split("{{company}}").join(V(pr.company || "their company")));
+  const body1 = `Hi ${V(first)},<br><br>${ice}<br><br>Most teams like ${V(pr.company || "yours")} have no one whose full-time job is outbound, so it gets squeezed in between everything else and never really runs.<br><br>If it fits, we can run it for you on a pay-per-lead basis.<br><br>Want me to send over a short breakdown?<br><br>${V("%signature%")}`;
+  const body2 = `Hi ${V(first)},<br><br>Floating this back up in case it got buried.<br><br>Happy to share a two-minute breakdown of what this would look like for ${V(pr.company || "your team")} - no call needed.<br><br>${V("%signature%")}`;
+  el.innerHTML = `
+    <div class="sub" style="margin-bottom:10px">Preview only - click a step on the left, a person on the right. Variables show in orange.</div>
+    <div style="display:flex;gap:14px;align-items:flex-start">
+      <div style="width:170px;flex-shrink:0">
+        <div class="card click" style="padding:12px;cursor:pointer;${copyStep === 1 ? "border-color:var(--orange);box-shadow:0 0 0 1px var(--orange)" : ""}" onclick="copyStep=1;renderDraftCampaign('${dc.id}')"><div class="small" style="font-weight:600">Email 1</div><div class="small muted">Variant A</div></div>
+        <div class="small muted" style="text-align:center;padding:6px">wait 3 days</div>
+        <div class="card click" style="padding:12px;cursor:pointer;${copyStep === 2 ? "border-color:var(--orange);box-shadow:0 0 0 1px var(--orange)" : ""}" onclick="copyStep=2;renderDraftCampaign('${dc.id}')"><div class="small" style="font-weight:600">Email 2</div><div class="small muted">follow-up · threads</div></div>
+      </div>
+      <div class="card panel" style="flex:1;margin-bottom:0">
+        <div class="small muted" style="border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px">Subject: ${copyStep === 1 ? `<b style="color:var(--ink)">Quick one ${V(first)}</b>` : '<i>blank - threads under Email 1</i>'}</div>
+        <div style="font-size:13.5px;line-height:1.7">${copyStep === 1 ? body1 : body2}</div>
+      </div>
+      <div style="width:210px;flex-shrink:0">
+        <div class="card" style="padding:10px">
+          <div class="small" style="font-weight:600;margin-bottom:6px">Viewing as</div>
+          ${kept.slice(0, 8).map((x, i) => `
+            <div class="small click" style="padding:6px 8px;border-radius:8px;cursor:pointer;${i === copyIdx ? "background:var(--orange-100);color:var(--orange-700);font-weight:600" : ""}"
+              onclick="copyIdx=${i};renderDraftCampaign('${dc.id}')">${esc(x.name)}<div class="muted" style="font-weight:400">${esc(x.company || "")}</div></div>`).join("") || '<div class="small muted">No kept prospects yet</div>'}
+          <div style="display:flex;gap:6px;margin-top:8px">
+            <button class="btn sm" onclick="copyIdx=Math.max(0,copyIdx-1);renderDraftCampaign('${dc.id}')">&larr;</button>
+            <button class="btn sm" onclick="copyIdx=Math.min(${Math.max(kept.length - 1, 0)},copyIdx+1);renderDraftCampaign('${dc.id}')">&rarr;</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function sourcesFor(campaignId) {
+  const all = [...(DB.signals?.theirstack_briefs || []), ...(DB.signals?.signal_routines || [])];
+  return all.filter((s) => String(s.smartlead_campaign_id || "") === String(campaignId));
+}
+const SIG_ICON = { hiring: "briefcase", news: "signal", linkedin: "linkedin", tech_adoption: "data", company_attribute: "search" };
+
+/* ══ LIST ══ */
+async function renderList() {
+  if (!Array.isArray(DB.campaignDrafts)) {
+    try { DB.campaignDrafts = await (await fetch("/api/campaign-drafts", { cache: "no-store" })).json(); }
+    catch { DB.campaignDrafts = []; }
+  }
+  if (!window._clients) {
+    try { window._clients = await (await fetch("/api/clients", { cache: "no-store" })).json(); } catch { window._clients = []; }
+  }
+  const activeClient = localStorage.getItem("navreo_client") || "";
+  const drafts = (DB.campaignDrafts || []).filter((d) => !activeClient || d.client_id === activeClient);
+  let srcAll = [];
+  try { srcAll = await (await fetch("/api/sources", { cache: "no-store" })).json(); } catch {}
+  let leadCounts = {};
+  try { leadCounts = await (await fetch("/api/lead-counts", { cache: "no-store" })).json() || {}; } catch {}
+  main.innerHTML = `
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow">Campaigns</div>
+        <h1>Signal campaigns.</h1>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <select id="client-switch" style="border:1px solid var(--line-2);border-radius:999px;padding:8px 14px;font:500 13px var(--font-sans);color:var(--ink);background:transparent"
+          onchange="if(this.value==='__new'){this.value=localStorage.getItem('navreo_client')||'';addClientFromSwitcher();}else{localStorage.setItem('navreo_client', this.value);DB.campaignDrafts=null;renderList();}">
+          <option value="">All clients</option>
+          ${(window._clients || []).map((c) => `<option value="${c.id}" ${localStorage.getItem("navreo_client") === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+          <option value="__new">+ Add new client</option>
+        </select>
+        <button class="btn primary" onclick="openWizard()">${ic8("idea")} New campaign</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      ${drafts.length ? drafts.map((dc) => {
+        const prs = srcAll.filter((s) => String(s.campaign_id) === String(dc.id)).flatMap((s) => s.prospects || []);
+        const sentLocal = prs.filter((p) => Object.keys(p.pushed || {}).length || p.pushed_to).length;
+        // the real Leads count (Supabase, all pulls) - local last-pull view only when the DB is unreachable
+        const lc = leadCounts[String(dc.id)];
+        const nLeads = lc ? lc.leads : prs.length;
+        const nSent = lc ? lc.sent : sentLocal;
+        return `
+        <div class="srcrow click" style="padding:14px 16px;cursor:pointer" onclick="location.hash='${dc.id}'">
+          <div class="ictile">${ic8("signal")}</div>
+          <div style="flex:1">
+            <div style="font-weight:500">${esc(dc.name)}</div>
+            <div class="small muted">${nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"}${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No leads yet"} · ${esc((dc.created_at || "").slice(0, 10))}</div>
+          </div>
+          ${dc.paused ? '<span class="pill o">⏸ Paused</span>' : '<span class="pill g">● Running</span>'}
+          <button class="btn sm" onclick="removeCampaign('${dc.id}', event)">Remove</button>
+        </div>`;
+      }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`}
+    </div>`;
+}
+
+/* ══ DETAIL ══ */
+let tab = "overview";
+function renderDetail(id) {
+  const c = (DB.campaigns || []).find((x) => x.id === id);
+  const d = DB.campaign_details?.[String(id)];
+  const a = c.analytics || {};
+
+  const tabs = ["overview", "leads", "sources", "copy", "qa"];
+  if (!tabs.includes(tab)) tab = "overview";
+
+  main.innerHTML = `
+    <button style="border:none;background:none;font-family:inherit;font-size:13px;color:var(--ink-3);cursor:pointer;padding:0" onclick="location.hash=''">&larr; Campaigns</button>
+    <div class="pagehead" style="margin-top:8px">
+      <div class="dethead">
+        <h1 style="font-size:24px">${esc(c.name)}</h1>
+        ${statusPill(c.status)}
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="protoNote()">${c.status === "ACTIVE" ? "Pause" : "Resume"}</button>
+        <button class="btn primary" onclick="openQAGate(${id})">${ic8("rocket")} Launch changes</button>
+      </div>
+    </div>
+    <div class="tabs">${tabs.map((t) =>
+      `<button class="tab ${tab === t ? "on" : ""}" onclick="tab='${t}';renderDetail(${id})">${t === "qa" ? "Checks" : t[0].toUpperCase() + t.slice(1)}</button>`).join("")}
+    </div>
+    <div id="tabbody"></div>`;
+
+  const el = document.getElementById("tabbody");
+  if (!d && tab !== "overview" && tab !== "sources") {
+    el.innerHTML = `<div class="card panel"><div class="empty">Not in the snapshot's detail set.<br><span class="small">Re-run the snapshot with a higher detail cap to include it.</span></div></div>`;
+    return;
+  }
+  ({ overview: tabOverview, leads: tabLeads, sources: tabSources, copy: tabCopy, qa: tabQA })[tab](el, c, d, a);
+}
+
+function tabOverview(el, c, d, a) {
+  const stages = [
+    ["Leads", a.total_leads, "people"], ["Contacted", a.sent, "send"],
+    ["Replied", a.replies, "reply"], ["Positive", a.positives, "thumbsup"],
+  ];
+  el.innerHTML = `
+    <div class="funnel">${stages.map(([lab, val, icon], i) => {
+      const prev = stages[i - 1]?.[1];
+      return `<div class="fstage"><div class="ictile">${ic8(icon)}</div><div class="lab">${lab}</div><div class="num-hero" style="font-size:28px;margin:6px 0 2px">${fmt(val)}</div>
+        <div class="conv">${i && prev ? pct(val, prev) : "&nbsp;"}</div></div>`;
+    }).join("")}</div>
+    <div class="card panel">
+      <h2>Last 30 days</h2>
+      <div id="dchart" style="margin-top:10px"></div>
+    </div>
+    ${d?.step_stats?.length ? `<div class="card panel">
+      <h2>Steps</h2>
+      <table class="tbl" style="margin-top:8px">
+        <tr><th>Step</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Bounces</th></tr>
+        ${d.step_stats.map((s) => `<tr>
+          <td style="font-weight:500">Email ${s.seq_number}</td><td>${fmt(s.sent)}</td>
+          <td>${fmt(s.replies)} <span class="small muted">(${pct(s.replies, s.sent)})</span></td>
+          <td style="font-weight:600">${fmt(s.positives)}</td><td>${fmt(s.bounces)}</td>
+        </tr>`).join("")}
+      </table></div>` : ""}`;
+  const daily = d?.daily || [];
+  if (daily.length) {
+    const label = (dt) => new Date(dt).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    lineChart(document.getElementById("dchart"), [
+      { color: "#14110E", points: daily.map((r) => ({ y: r.sent, label: label(r.date) })) },
+      { color: "#FF4D00", points: daily.map((r) => ({ y: r.replies * 20, label: label(r.date) })) },
+    ]);
+  } else document.getElementById("dchart").innerHTML = '<div class="empty">No daily data</div>';
+}
+
+function tabLeads(el, c, d) {
+  const campaignSources = sourcesFor(c.id);
+  const defaultSource = campaignSources.length === 1 ? campaignSources[0].signal_type + " signal" : "";
+  const link = (url, label) => {
+    if (!url) return '<span class="muted">–</span>';
+    const href = /^https?:/.test(url) ? url : "https://" + url;
+    return `<a href="${esc(href)}" target="_blank" style="color:var(--orange-700);text-decoration:none" onclick="event.stopPropagation()">${label}</a>`;
+  };
+  el.innerHTML = `
+    <div class="card panel">
+      <h2>Lead sample</h2>
+      <div class="sub" style="margin:2px 0 8px">First ${(d.leads_sample || []).length} of ${fmt(d.lead_sample_size)} sampled</div>
+      <table class="tbl">
+        <tr><th>Lead</th><th>Title</th><th>Company</th><th>Size</th><th>LinkedIn</th><th>Source</th><th>Status</th></tr>
+        ${(d.leads_sample || []).map((l) => `<tr>
+          <td style="font-weight:500;white-space:nowrap">${esc(l.first_name)} ${esc(l.last_name)}<div class="small muted">${esc(l.email)}</div></td>
+          <td style="max-width:170px">${esc(l.title) || '<span class="muted">–</span>'}</td>
+          <td style="max-width:180px">${esc(l.company)}<div class="small">${link(l.website, esc((l.website || "").replace(/^https?:\/\//, "").replace(/\/$/, "")))}</div></td>
+          <td>${esc(String(l.size || "")) || '<span class="muted">–</span>'}</td>
+          <td>${l.linkedin ? link(l.linkedin, ic8("linkedin")) : '<span class="muted">–</span>'}</td>
+          <td class="small">${esc(l.source || defaultSource) || '<span class="muted">–</span>'}</td>
+          <td>${esc(l.status || "–")}</td>
+        </tr>`).join("")}
+      </table>
+    </div>`;
+}
+
+function tabSources(el, c) {
+  const srcs = sourcesFor(c.id);
+  el.innerHTML = `
+    <div class="card panel">
+      <h2>Sources</h2>
+      <div class="sub" style="margin:2px 0 4px">One campaign, one copy, many sources.</div>
+      ${srcs.length ? srcs.map((s) => `
+        <div class="srcrow">
+          <div class="ictile">${ic8(SIG_ICON[s.signal_type] || "signal")}</div>
+          <div style="flex:1">
+            <div style="font-weight:500">${esc(s.name)}</div>
+            <div class="filterchips">${Object.entries(s.filter || {}).slice(0, 4).map(([k, v]) =>
+              `<span class="fchip">${esc(Array.isArray(v) ? v.slice(0, 3).join(", ") + (v.length > 3 ? "…" : "") : String(v))}</span>`).join("")}</div>
+          </div>
+          <span class="pill ${s.schedule_cron ? "g" : "n"}">${s.schedule_cron ? "daily" : "manual"}</span>
+        </div>`).join("") : `<div class="empty">No source connected yet</div>`}
+    </div>
+    <div class="card panel">
+      <h2>Add a source</h2>
+      <div class="srctypes">${SOURCE_TYPES.map(([t, dsc, icon, wiz]) => `
+        <div class="srctype" onclick="${wiz ? `openSourceWizard('${wiz}', ${c.id})` : "protoNote('Coming soon')"}">
+          <div class="ictile">${ic8(icon)}</div>
+          <div><div class="t">${t}</div><div class="d">${dsc}</div></div>
+        </div>`).join("")}
+      </div>
+    </div>
+    <div id="draftlist"></div>`;
+  renderDrafts(c.id);
+}
+
+async function renderDrafts(campaignId) {
+  let drafts = [];
+  try { drafts = await (await fetch("/api/sources", { cache: "no-store" })).json(); } catch {}
+  drafts = drafts.filter((s) => String(s.campaign_id) === String(campaignId));
+  const el = document.getElementById("draftlist");
+  if (!el) return;
+  if (!drafts.length) { el.innerHTML = '<div class="card panel"><div class="empty">No sources yet</div></div>'; return; }
+  window._drafts = drafts;
+  if (drafts.length === 1 && window._openSource === undefined) window._openSource = drafts[0].id;
+  el.innerHTML = `<h2 style="font-size:16px;margin:2px 0 10px 2px">Sources <span class="small muted" style="font-weight:400">· ${drafts.length}</span></h2>
+    ${drafts.map((s, di) => {
+      const meta = MECH_META[s.mechanism || s.type] || ["signal", s.type, ""];
+      const off = s.active === false;
+      const openId = window._openSource === s.id;
+      return `<div class="card panel" style="margin-bottom:12px"><div class="srcrow" style="${off ? "opacity:.45;" : ""}flex-wrap:wrap;border-bottom:none;padding-bottom:0">
+        <div class="ictile">${ic8(meta[0])}</div>
+        <div style="flex:1;min-width:200px;cursor:pointer" onclick="window._openSource=window._openSource==='${s.id}'?null:'${s.id}';renderDrafts('${campaignId}')">
+          <div style="font-weight:500">${esc(s.name)}${off ? ' <span class="pill n">excluded</span>' : ""}</div>
+          <div class="small muted">${s.last_pull ? `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found · pulled ${esc(s.last_pull.slice(5, 16).replace("T", " "))}` : `≈${fmt(s.total)} people expected`}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
+          <div class="small" style="color:var(--orange-700)">Targets: ${esc((s.titles || []).slice(0, 2).join(", ") || "any leader")} · ${esc((({ ...(s.config || {}), ...(s.params || {}) }).countries || []).join(", ") || "anywhere")} - click to edit</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
+          ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
+          <button class="btn sm primary" onclick="pullProspects('${s.id}','${campaignId}')">${s.prospects ? "Find people again" : "Find people now"}</button>
+          <button class="btn sm" onclick="toggleSource('${s.id}', ${off}, '${campaignId}')">${off ? "Include" : "Exclude"}</button>
+          <button class="btn sm" onclick="removeSource('${s.id}', '${campaignId}')">Remove</button>
+        </div>
+        ${openId || s.prospects ? srcDetail(s, campaignId) : ""}
+      </div></div>`;
+    }).join("")}`;
+  hydrateVerdictViews(drafts);  // async fill of not-qualified counts + rows
+}
+
+/* engagement sources: Trigify monitoring must be provisioned before anything flows */
+function engProvisionBtn(s, campaignId) {
+  const eng = (s.config || {}).engagement || {};
+  const live = (eng.trigify || []).filter((t) => t.workflow_id).length;
+  const want = (eng.linkedin_urls || []).length;
+  if (!want)  // created by the campaign wizard - the engagement questions haven't been asked yet
+    return `<button class="btn sm" style="border-color:var(--orange-700);color:var(--orange-700)" onclick="engFinishSetup('${s.id}','${campaignId}')">⚙ Finish setup</button>`;
+  const editBtn = `<button class="btn sm" title="Profiles being watched, topics, criteria, countries, sizes, pacing - the one place to edit this source" onclick="engFinishSetup('${s.id}','${campaignId}')">✎ Edit targeting</button>`;
+  if (live >= want) return `<span class="pill g" title="${Math.min(live, want)} Trigify workflow(s) watching daily">monitoring ${Math.min(live, want)}/${want}</span> ${editBtn}`;
+  return `<button class="btn sm" style="border-color:var(--orange-700);color:var(--orange-700)" onclick="provisionEngagement('${s.id}','${campaignId}',this)">▶ Start monitoring${live ? ` (${live}/${want})` : ""}</button> ${editBtn}`;
+}
+function engFinishSetup(id, campaignId) {
+  const s = (window._drafts || []).find((x) => x.id === id);
+  if (!s) { protoNote("Refresh the page and try again"); return; }
+  openSourceWizard("engagement", campaignId, s);
+}
+async function provisionEngagement(id, campaignId, btn) {
+  btn.textContent = "Setting up Trigify…"; btn.disabled = true;
+  let r;
+  try { r = await (await fetch("/api/sources/provision-engagement", { method: "POST", body: JSON.stringify({ id }) })).json(); }
+  catch { r = { ok: false, message: "Couldn't reach the engine - try again" }; }
+  protoNote(r.ok ? `Monitoring live - ${r.message}. Engagers land daily; hit "Find people now" to qualify them.`
+    : ((r.errors || [])[0]?.error || r.message || "Provisioning failed"));
+  renderDrafts(campaignId);
+}
+
+/* ── verdict view (engagement sources): qualified by default, rejections on demand ── */
+window._verdictView = window._verdictView || {};
+function setVerdictView(id, view, campaignId) {
+  window._verdictView[id] = view;
+  renderDrafts(campaignId);
+}
+async function hydrateVerdictViews(drafts) {
+  for (const s of drafts) {
+    if ((s.mechanism || s.type) !== "engagement") continue;
+    const countEl = document.getElementById(`uq-count-${s.id}`);
+    const listEl = document.getElementById(`uq-list-${s.id}`);
+    if (!countEl && !listEl) continue;
+    try {
+      const r = await (await fetch(`/api/engagement-verdicts?source_id=${s.id}&verdict=unqualified`, { cache: "no-store" })).json();
+      if (countEl) countEl.textContent = r.count;
+      if (listEl) listEl.innerHTML = r.rows.length ? r.rows.map((p) => `
+        <div class="lead-row" style="padding:8px 12px">
+          <div class="ini">${esc((p.name || "?").split(" ").map((w) => w[0]).slice(0, 2).join(""))}</div>
+          <div style="flex:1;min-width:0">
+            <div class="nm" style="font-size:13px">${esc(p.name)} <span class="tt">· ${esc(p.title || "role unknown")}${p.company ? " · " + esc(p.company) : ""}</span></div>
+            <div class="small muted">${p.country ? esc(p.country) + " · " : ""}engaged with ${esc(p.post_author || "a tracked profile")}'s post</div>
+          </div>
+          <span class="pill ${p.status === "needs review" ? "a" : "r"}" style="flex-shrink:0;max-width:300px;white-space:normal;text-align:right" title="${p.status === "needs review" ? "Ambiguous - your call" : "Filtered out automatically"}">${esc(p.reason)}</span>
+        </div>`).join("")
+        : '<div class="empty" style="padding:16px 0">Nobody rejected yet - rejections appear here with the reason.</div>';
+    } catch {
+      if (listEl) listEl.innerHTML = '<div class="empty" style="padding:16px 0">Could not load rejections - is the engine running?</div>';
+    }
+  }
+}
+function verdictSeg(s, campaignId, view) {
+  const qn = (s.prospects || []).length;
+  return `
+    <div style="display:flex;gap:6px;align-items:center;margin:14px 0 6px">
+      <button class="btn sm ${view === "qualified" ? "primary" : ""}" onclick="setVerdictView('${s.id}','qualified','${campaignId}')">✓ Qualified (${qn})</button>
+      <button class="btn sm ${view === "unqualified" ? "primary" : ""}" onclick="setVerdictView('${s.id}','unqualified','${campaignId}')">✕ Not qualified (<span id="uq-count-${s.id}">…</span>)</button>
+      ${view === "unqualified" ? '<span class="small muted">filtered out by your checks, with the reason</span>' : ""}
+    </div>
+    ${view === "unqualified" ? `<div id="uq-list-${s.id}"><div class="empty" style="padding:16px 0">Loading…</div></div>` : ""}`;
+}
+
+function srcDetail(s, campaignId) {
+  const cfg = { ...(s.config || {}), ...(s.params || {}) };
+  const isEng = (s.mechanism || s.type) === "engagement";
+  const vview = isEng ? (window._verdictView[s.id] || "qualified") : "qualified";
+  return `<div style="flex-basis:100%;margin-top:10px;border-top:1px solid var(--line);padding-top:12px">
+    <div class="small" style="font-weight:500;margin-bottom:4px">Icebreaker <span class="muted" style="font-weight:400">· the first sentence of the email · belongs to this source only</span></div>
+    <div style="display:flex;gap:8px">
+      <input id="ice-${s.id}" value="${esc(s.icebreaker || "")}" placeholder="e.g. Saw {{company}} is hiring, and so I thought I'd reach out."
+        style="flex:1;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
+      <button class="btn sm" onclick="saveIce('${s.id}','${campaignId}')">Save</button>
+    </div>
+    ${isEng ? "" /* engagement targeting lives in ✎ Edit targeting - one editor, no drift */ : `
+    <div class="small" style="font-weight:500;margin:12px 0 4px">Targeting</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="tg-titles-${s.id}" value="${esc((s.titles || []).join(", "))}" placeholder="Job titles" title="Who to reach"
+        style="flex:1;min-width:180px;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
+      <input id="tg-kw-${s.id}" value="${esc(typeof cfg.keywords === "string" ? cfg.keywords : (cfg.keywords || []).join(", "))}" placeholder="Company type - what they ARE, e.g. logistics company" title="What kind of companies"
+        style="flex:1;min-width:180px;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
+      <input id="tg-geo-${s.id}" value="${esc((cfg.countries || []).join(", "))}" placeholder="Countries" title="Where"
+        style="flex:1;min-width:140px;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
+      <button class="btn sm" onclick="saveTargeting('${s.id}','${campaignId}')">Save &amp; re-pull</button>
+    </div>`}
+    ${isEng ? verdictSeg(s, campaignId, vview) : ""}
+    ${(s.prospects && vview === "qualified") ? `
+    <div style="display:flex;align-items:center;gap:10px;margin:${isEng ? "4px" : "14px"} 0 6px;${isEng ? "justify-content:flex-end" : ""}">
+      ${isEng ? "" : `<span class="small" style="font-weight:500">People found · first ${(s.prospects || []).length} of ${fmt(s.total)} - saved to your database, the daily run works through the rest · ${s.prospects.filter((x) => x.verdict === "keep").length} kept · ${s.prospects.filter((x) => x.verdict === "reject").length} rejected</span>`}
+      <button class="btn sm" onclick="bulkVerdict('${s.id}','keep','${campaignId}')">Keep all</button>
+      <button class="btn sm" onclick="bulkVerdict('${s.id}','reject','${campaignId}')">Reject the rest</button>
+      ${s.prospects.length > 3 ? `<button class="btn sm" onclick="window._showAll=window._showAll||{};window._showAll['${s.id}']=!window._showAll['${s.id}'];renderDraftCampaign('${campaignId}')">${window._showAll?.[s.id] ? "Show fewer" : `Show more (${s.prospects.length - 3})`}</button>` : ""}
+    </div>
+    ${s.prospects.slice(0, window._showAll?.[s.id] ? 999 : 3).map((pr, i) => `
+      <div class="lead-row ${pr.verdict === "reject" ? "rejected" : ""}" style="padding:9px 12px">
+        <div class="ini">${esc((pr.name || "?").split(" ").map((w) => w[0]).slice(0, 2).join(""))}</div>
+        <div style="flex:1;min-width:0">
+          <div class="nm" style="font-size:13px">${pr.linkedin ? `<a href="${esc(pr.linkedin)}" target="_blank">${esc(pr.name)}</a>` : esc(pr.name)} <span class="tt">· ${esc(pr.title)} · ${esc(pr.company)}</span></div>
+          <div class="small" style="font-style:italic;color:var(--ink-2);margin-top:2px">"${esc(pr.icebreaker || "")}"</div>
+          ${pushChips(pr)}${routeNote(pr)}
+        </div>
+        <div style="display:flex;gap:5px;align-items:center">
+          ${pr.linkedin ? `<a class="btn sm" href="${esc(pr.linkedin)}" target="_blank" style="text-decoration:none">View LinkedIn</a>` : ""}
+          ${pr.domain ? `<a class="btn sm" href="https://${esc(pr.domain)}" target="_blank" style="text-decoration:none">Website</a>` : ""}
+          ${pr.post_url ? `<a class="btn sm" href="${esc(pr.post_url)}" target="_blank" title="The post they ${pr.engagement_type === "comment" ? "commented on" : "engaged with"}" style="text-decoration:none">View post</a>` : ""}
+          ${!pr.post_url && sigHref(pr) ? `<a class="btn sm" href="${esc(sigHref(pr))}" target="_blank" title="${esc(sigTitle(pr))}" style="text-decoration:none">View signal</a>` : ""}
+          ${Object.keys(pr.pushed || {}).length
+            ? `<button class="btn sm" title="Remove this person from your outreach again" onclick="this.textContent='Undoing…';this.disabled=true;verdictProspect('${s.id}',${i},'undo','${campaignId}')">Undo</button>`
+            : `<button class="btn sm" title="Send this person to your outreach" onclick="this.textContent='Sending…';this.disabled=true;verdictProspect('${s.id}',${i},'keep','${campaignId}')">✓ Send</button>
+          <button class="btn sm" title="Skip this person" onclick="verdictProspect('${s.id}',${i},'reject','${campaignId}')">✕</button>`}
+        </div>
+      </div>`).join("")}` : ""}
+  </div>`;
+}
+
+async function saveDest(id, campaignId) {
+  const v = document.getElementById("dest-" + id).value;
+  const dest = !v ? {} : v === "heyreach" ? { type: "heyreach", campaign_id: "list" } : { type: "smartlead", campaign_id: v };
+  await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, destination: dest }) });
+  protoNote(v ? "Saved - every ✓ now goes straight there" : "Destination cleared");
+  renderDrafts(campaignId);
+}
+async function saveIce(id, campaignId) {
+  const v = document.getElementById("ice-" + id).value;
+  await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, icebreaker: v }) });
+  protoNote("Saved - applied to every prospect below and all future pulls");
+  renderDrafts(campaignId);
+}
+async function saveTargeting(id, campaignId) {
+  const g = (x) => document.getElementById(x + "-" + id).value;
+  const titles = g("tg-titles").split(",").map((x) => x.trim()).filter(Boolean);
+  const keywords = g("tg-kw").trim();
+  const countries = g("tg-geo").split(",").map((x) => x.trim()).filter(Boolean);
+  await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, titles, params: { keywords, countries } }) });
+  protoNote("Targeting saved ✓ - pulling with the new settings…");
+  await pullProspects(id, campaignId, true);
+}
+async function pullProspects(id, campaignId, afterRetarget) {
+  protoNote("Pulling live prospects…");
+  window._openSource = id;
+  try {
+    const r = await (await fetch("/api/sources/pull", { method: "POST", body: JSON.stringify({ id, after_retarget: !!afterRetarget }) })).json();
+    protoNote(r.ok ? (r.note || `${r.prospects.length} decision maker${r.prospects.length === 1 ? "" : "s"} found`) : (r.message || "Pull failed"));
+  } catch { protoNote("Pull failed - server running?"); }
+  renderDrafts(campaignId);
+}
+async function bulkVerdict(id, verdict, campaignId) {
+  const drafts = await (await fetch("/api/sources", { cache: "no-store" })).json();
+  const s = drafts.find((x) => x.id === id);
+  for (let i = 0; i < (s?.prospects || []).length; i++) {
+    if (verdict === "keep" || !s.prospects[i].verdict) {
+      await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, index: i, verdict }) });
+    }
+  }
+  renderDrafts(campaignId);
+}
+async function verdictProspect(id, i, verdict, campaignId) {
+  if (verdict === "keep") protoNote("Sending…");
+  let r = null;
+  try { r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, index: i, verdict }) })).json(); } catch {}
+  pushToast(r, verdict);
+  renderDrafts(campaignId);
+}
+async function toggleSource(id, makeActive, campaignId) {
+  await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, active: makeActive }) });
+  renderDrafts(campaignId);
+}
+async function removeSource(id, campaignId) {
+  const r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, remove: true }) })).json();
+  if (r.ok === false) { protoNote(r.message || "Couldn't remove the source"); renderDrafts(campaignId); return; }
+  protoNote(r.trigify ? `Source removed · ${r.trigify}` : "Source removed");
+  renderDrafts(campaignId);
+}
+
+function highlightBody(html) {
+  let text = html
+    .replace(/<br\s*\/?>/gi, "\n").replace(/<\/div>/gi, "\n").replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").trim();
+  return esc(text)
+    .replace(/\{\{(\w+)\}\}/g, '<span class="var">{{$1}}</span>')
+    .replace(/\{([^{}|]+\|[^{}]+)\}/g, '<span class="spin">{$1}</span>')
+    .replace(/\n/g, "<br>");
+}
+
+function tabCopy(el, c, d) {
+  const vstats = {};
+  (d.variant_stats || []).forEach((v) => { if (v.variant_id) vstats[v.variant_id] = v; });
+  el.innerHTML = `
+    ${(d.sequences || []).map((s) => {
+      const step = (d.step_stats || []).find((x) => x.seq_number === s.seq_number) || {};
+      return `<div class="step-card">
+        <div class="step-head">
+          <span class="n">${s.seq_number}</span>
+          <b>Email ${s.seq_number}</b>
+          <span class="muted small">${s.seq_number > 1 ? `+${s.seq_delay_days}d` : "first touch"}</span>
+          <span style="margin-left:auto" class="small muted">${fmt(step.sent)} sent · ${fmt(step.positives)} positive</span>
+        </div>
+        ${s.variants.map((v) => {
+          const st = vstats[v.id] || {};
+          const dead = (st.sent || 0) >= 800 && (st.replies || 0) === 0;
+          return `<div class="variant">
+            <div class="v-top">
+              <span class="v-label">${esc(v.label)}</span>
+              ${s.seq_number === 1
+                ? `<span class="muted">${esc(v.subject) || "<i>no subject</i>"}</span>`
+                : (v.subject ? `<span class="pill a">subject breaks threading</span>` : "")}
+              ${st.sent ? `<span class="small muted">${fmt(st.sent)} sent · ${pct(st.replies, st.sent)} reply</span>` : ""}
+              ${dead ? '<span class="pill r">dead</span>' : ""}
+              <button class="btn sm" style="margin-left:auto" onclick="openQAGate(${c.id})">${ic8("edit")} Edit</button>
+            </div>
+            <div class="v-body" onclick="this.classList.toggle('open')">${highlightBody(v.body)}</div>
+          </div>`;
+        }).join("")}
+      </div>`;
+    }).join("")}`;
+}
+
+/* The standard checklist — every run records these categories */
+function computeChecks(c, d) {
+  const checks = [];
+  const fills = d.fill_rates || {};
+  const usedVars = new Set();
+  (d.sequences || []).forEach((s) => s.variants.forEach((v) =>
+    (v.body.match(/\{\{(\w+)\}\}/g) || []).forEach((m) => usedVars.add(m.slice(2, -2)))));
+  usedVars.delete("first_name"); usedVars.delete("company_name"); usedVars.delete("sl_date");
+
+  const fillLevels = [...usedVars].map((k) => fills[k] >= 95 ? "pass" : fills[k] >= 60 ? "warn" : "fail");
+  checks.push([
+    fillLevels.includes("fail") ? "fail" : fillLevels.includes("warn") ? "warn" : "pass",
+    "Personalisation filled",
+    usedVars.size ? `${[...usedVars].map((k) => `{{${k}}} ${fills[k] ?? 0}%`).join(" · ")} (target 95%)` : "No custom variables in copy",
+  ]);
+
+  let spintaxFail = 0, emdash = 0, subjectWarn = 0;
+  (d.sequences || []).forEach((s) => s.variants.forEach((v) => {
+    const plain = v.body.replace(/<[^>]+>/g, "").trim();
+    if (plain.startsWith("{") && !plain.startsWith("{{")) spintaxFail++;
+    if (/—/.test(v.body)) emdash++;
+    if (s.seq_number > 1 && v.subject) subjectWarn++;
+  }));
+  checks.push([spintaxFail ? "fail" : "pass", "Spintax placement",
+    spintaxFail ? `${spintaxFail} variant(s) open with spintax - body gets dropped` : "No variant opens with spintax"]);
+  checks.push([emdash ? "warn" : "pass", "No em-dashes",
+    emdash ? `${emdash} variant(s) contain an em-dash` : "Copy is clean"]);
+  checks.push([subjectWarn ? "warn" : "pass", "Follow-ups thread",
+    subjectWarn ? `${subjectWarn} follow-up variant(s) have a subject set` : "All follow-up subjects blank"]);
+
+  let distWarn = 0;
+  (d.sequences || []).forEach((s) => {
+    const dist = s.variants.map((v) => v.distribution_pct).filter((x) => x !== null && x !== undefined);
+    if (dist.length && dist.reduce((a, b) => a + b, 0) !== 100) distWarn++;
+  });
+  checks.push([distWarn ? "warn" : "pass", "Traffic split sums to 100%",
+    distWarn ? `${distWarn} step(s) off` : "All steps balanced"]);
+
+  const audit = DB.audit?.by_campaign?.[String(c.id)];
+  checks.push([audit ? "warn" : "pass", "Lead hygiene",
+    audit ? `${fmt(audit)} name/icebreaker fixes pending` : "No pending fixes"]);
+  return checks;
+}
+
+const QA_TICK = { pass: '<span style="color:var(--green);font-weight:700">✓</span>', warn: '<span style="color:var(--amber);font-weight:700">!</span>', fail: '<span style="color:var(--red);font-weight:700">✗</span>' };
+
+async function tabQA(el, c, d) {
+  const checks = computeChecks(c, d);
+  const icon = { pass: '<span class="pill g">PASS</span>', warn: '<span class="pill a">WARN</span>', fail: '<span class="pill r">FAIL</span>' };
+  const fails = checks.filter((x) => x[0] === "fail").length;
+  const fills = Object.entries(d.fill_rates || {}).filter(([, v]) => v !== undefined);
+
+  let history = [];
+  try {
+    history = (await (await fetch("/api/qa-history", { cache: "no-store" })).json())
+      .filter((h) => String(h.campaign_id) === String(c.id)).reverse();
+  } catch {}
+  const last = history[0];
+  const fmtTs = (ts) => new Date(ts).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+  el.innerHTML = `
+    <div class="card panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div>
+          <h2>Pre-launch checks</h2>
+          <div class="sub" style="margin-top:2px">${last ? `Last checked <b>${fmtTs(last.ts)}</b>` : "Not recorded yet"} · ${fails ? `<b style="color:var(--red)">${fails} blocking</b>` : "nothing blocking"}</div>
+        </div>
+        <button class="btn primary sm" onclick="recordQARun(${c.id})">${ic8("tasklist")} Run checks</button>
+      </div>
+      <div style="margin-top:10px">
+      ${checks.map(([lvl, t, dsc]) => `
+        <div class="qa-row">${icon[lvl]}<div><div class="t">${esc(t)}</div><div class="d">${esc(dsc)}</div></div></div>`).join("")}
+      </div>
+    </div>
+    <div class="card panel">
+      <h2>Personalisation fill</h2>
+      <div class="sub" style="margin:2px 0 12px">Sampled from ${fmt(d.lead_sample_size)} leads · target 95%</div>
+      ${fills.length ? fills.map(([k, v]) => `
+        <div class="fillrow">
+          <div class="top"><span class="mono">{{${esc(k)}}}</span><b>${v}%</b></div>
+          <div class="bar-track"><div class="bar-fill ${v >= 95 ? "g" : v >= 60 ? "a" : "r"}" style="width:${v}%"></div></div>
+        </div>`).join("") : '<div class="empty">No merge variables on sampled leads</div>'}
+    </div>
+    <div class="card panel">
+      <h2>Previous runs</h2>
+      ${history.length ? history.slice(0, 8).map((h) => `
+        <details style="border-bottom:1px solid var(--line);padding:9px 0">
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:12px;font-size:13px">
+            <b style="white-space:nowrap">${fmtTs(h.ts)}</b>
+            <span class="small muted" style="flex:1">${(h.checks || []).map((x) => QA_TICK[x.level]).join(" ")}</span>
+            <span class="pill ${h.fails ? "r" : h.warns ? "a" : "g"}">${h.fails ? h.fails + " fail" : h.warns ? h.warns + " warn" : "all clear"}</span>
+          </summary>
+          <div style="padding:8px 0 4px 4px">
+            ${(h.checks || []).map((x) => `<div class="small" style="padding:3px 0">${QA_TICK[x.level]} &nbsp;${esc(x.title)}</div>`).join("")}
+          </div>
+        </details>`).join("") : '<div class="empty">No recorded runs yet - hit Run checks</div>'}
+    </div>`;
+}
+
+async function recordQARun(id) {
+  const c = (DB.campaigns || []).find((x) => x.id === id);
+  const d = DB.campaign_details?.[String(id)];
+  if (!d) return;
+  const checks = computeChecks(c, d);
+  await fetch("/api/qa-history", { method: "POST", body: JSON.stringify({
+    campaign_id: id,
+    checks: checks.map(([level, title, detail]) => ({ level, title, detail })),
+    fails: checks.filter((x) => x[0] === "fail").length,
+    warns: checks.filter((x) => x[0] === "warn").length,
+  }) });
+  protoNote("Checks recorded");
+  renderDetail(id);
+}
+
+
+/* ══ CREATE A CAMPAIGN — the Gojiberry flow, anchored on a CLIENT ══
+   1 Client → 2 Who → 3 Companies → 4 Exclude → 5 Angle table (the
+   structured lilly-strategy shortlist, live-probed) → 6 Check →
+   preview real people → save draft.
+   Person-first vs company-first never comes up: both are always
+   collected and combined in one search. */
+let wiz = {};
+const TITLE_SUGGESTIONS = ["Founder", "CEO", "VP of Sales", "Head of Sales", "Head of Growth", "Managing Director", "Chief Revenue Officer"];
+const IND_SUGGESTIONS = ["Software Development", "IT Services and IT Consulting", "Business Consulting and Services", "Technology, Information and Internet", "Advertising Services"];
+const SIZE_BUCKETS = ["1-10", "11-20", "21-50", "51-100", "101-200", "201-500"];
+const GEO_OPTIONS = ["United States", "United Kingdom", "Canada", "Australia", "Germany", "Netherlands"];
+
+/* angle catalogue metadata for icons + icebreakers (rows come from the server) */
+const WIZ_SOURCES = [
+  ["companies", "Company filter", "Daily pull on this exact audience", "search", "Core",
+    "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
+  ["hiring", "Hiring signal", "Hiring the roles you sell to, now", "briefcase", "Signals",
+    "I noticed {{company}} is hiring a {{Title}}, and so I thought I'd reach out."],
+  ["lookalike", "Lookalikes", "Similar to your best clients", "people", "Core",
+    "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
+  ["engagement", "Engagement keywords", "People engaging with your topics", "linkedin", "Signals",
+    "Saw your post about {{Topic}}, and so I thought I'd reach out."],
+  ["csv", "My own list", "Bring a CSV", "download", "Core", null],
+];
+const SRC_META = Object.fromEntries(WIZ_SOURCES.map((s) => [s[0], s]));
+const MECH_META = {
+  company_filter: ["search", "Company filter", "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
+  hiring: ["briefcase", "Hiring signal", "I noticed {{company}} is hiring a {{Title}}, and so I thought I'd reach out."],
+  lookalike: ["people", "Lookalikes", "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
+  engagement: ["linkedin", "Engagement signal", "Saw your post about {{Topic}}, and so I thought I'd reach out."],
+  csv: ["download", "My own list", null],
+};
+
+function addClientFromSwitcher() {
+  openWizard();
+  loadClients().then(() => { startNewClient(); });
+}
+function openWizard() {
+  wiz = {
+    step: 1, client: null, newClient: null,
+    titles: ["Founder", "CEO", "VP of Sales", "Head of Sales"],
+    industries: [], keywords: "",
+    sizes: ["11-20", "21-50", "51-100", "101-200"],
+    geos: ["United States", "United Kingdom"],
+    excludes: [], domains: [], goal: "", avoid: "", mode: "ai", mechanism: "",
+    sources: [], strat: null, _stratLoading: false,
+    result: null, rejected: {},
+  };
+  wizard.classList.add("on");
+  loadClients().then(() => {
+    if (wiz.newClient) { drawWiz(); return; }
+    const ac = localStorage.getItem("navreo_client");
+    if (ac) { const c = (wiz.clients || []).find((x) => x.id === ac); if (c) { pickClient(ac); return; } }
+    drawWiz();
+  });
+  drawWiz();
+}
+async function loadClients() {
+  try { wiz.clients = await (await fetch("/api/clients", { cache: "no-store" })).json(); }
+  catch { wiz.clients = []; }
+}
+function closeWizard() { wizard.classList.remove("on"); }
+function wizBack() {
+  if (wiz.step <= 1 || wiz.step >= 7) return;
+  if (wiz.mode === "direct" && wiz.step === 6) { wiz.step = 4; drawWiz(); return; }
+  if (wiz.mode === "direct" && wiz.step === 5) { wiz.step = 2; drawWiz(); return; }
+  wiz.step--; drawWiz();
+}
+function wizToggle(field, v) {
+  const a = wiz[field]; const i = a.indexOf(v); i >= 0 ? a.splice(i, 1) : a.push(v);
+  if (field !== "sources") { wiz.strat = null; wiz._stratLoading = false; }
+  drawWiz();
+}
+function wizAdd(field, inputId) {
+  const el = document.getElementById(inputId);
+  const v = (el.value || "").trim();
+  if (v && !wiz[field].includes(v)) wiz[field].push(v);
+  if (field !== "sources") { wiz.strat = null; wiz._stratLoading = false; }
+  drawWiz();
+}
+
+async function loadStrategyMap(force) {
+  wiz._stratLoading = true;
+  if (force) { wiz.strat = null; drawWiz(); }
+  // gather this client's already-running signals so ideation never re-pitches a
+  // duplicate or close relative (user rule: goal-free suggestions must be fresh)
+  let existing = [];
+  try {
+    const [srcs, drafts] = await Promise.all([
+      (await fetch("/api/sources", { cache: "no-store" })).json(),
+      (DB.campaignDrafts && DB.campaignDrafts.length) ? DB.campaignDrafts : (await fetch("/api/campaign-drafts", { cache: "no-store" })).json(),
+    ]);
+    const mine = new Set((drafts || []).filter((d) => wiz.client && d.client_id === wiz.client.id).map((d) => String(d.id)));
+    existing = (srcs || []).filter((s) => mine.has(String(s.campaign_id))).map((s) => `${s.mechanism || s.type}: ${s.name}`);
+  } catch {}
+  const payload = {
+    titles: wiz.titles,
+    keywords: wiz.keywords.trim() ? [wiz.keywords.trim()] : [],
+    industries: wiz.keywords.trim() ? [] : wiz.industries,
+    headcount: wiz.sizes,
+    countries: wiz.geos,
+    client_name: wiz.client?.name || "",
+    client_description: wiz.client?.description || "",
+    client_offer: wiz.client?.offer || "",
+    goal: wiz.goal || "", mode: wiz.mode || "ai", mechanism: wiz.mechanism || "", steer: wiz.avoid || "",
+    existing,
+    skip_probe: wiz.mode === "direct",  // direct = build what I typed; no live sizing, no spend
+    force: !!force,
+  };
+  wiz.strat = await strategyCall(payload);
+  if (!wiz.strat.rows) wiz.strat.rows = [];
+  wiz._stratLoading = false;
+  if (wiz.step === 5) drawWiz();
+}
+
+async function wizAddGeo() {
+  const el = document.getElementById("add-geo");
+  const q = (el.value || "").trim();
+  if (!q) return;
+  const hint = document.getElementById("geo-hint");
+  hint.textContent = "Checking…";
+  try {
+    const r = await (await fetch("/api/suggest-location", { method: "POST", body: JSON.stringify({ q }) })).json();
+    const s = (r.suggestions || [])[0];
+    if (s && s.name) {
+      if (!wiz.geos.includes(s.name)) wiz.geos.push(s.name);
+      wiz.strat = null; wiz._stratLoading = false;
+      drawWiz();
+      const g2 = document.getElementById("geo-hint");
+      if (g2) g2.textContent = s.name.toLowerCase() === q.toLowerCase() ? "" : `Added "${s.name}"`;
+    } else {
+      hint.textContent = `No location matched "${q}" - try the full name`;
+    }
+  } catch { hint.textContent = "Could not validate - is the server running?"; }
+}
+
+function wchips(field, options) {
+  const all = [...new Set([...(options || []), ...wiz[field]])];
+  return all.map((o) => { const on = wiz[field].includes(o); return `<span class="chip ${on ? "on" : ""}" onclick="wizToggle('${field}','${esc(o).replace(/'/g, "\\'")}')">${on ? "✓ " : ""}${esc(o)}</span>`; }).join("");
+}
+
+/* ── Gojiberry-style targeting chips (wizard step 4) ── */
+/* the server self-heals (launchd KeepAlive) - one retry bridges a restart */
+async function fetchJsonRetry(url, body) {
+  for (let i = 0; i < 2; i++) {
+    try { return await (await fetch(url, { method: "POST", body: JSON.stringify(body) })).json(); }
+    catch { if (i === 0) await new Promise((r) => setTimeout(r, 2500)); }
+  }
+  return { ok: false, message: "Couldn't reach the engine - it restarts itself within seconds, hit Back and try again" };
+}
+
+/* strategy runs are async jobs server-side (2-4 min): start, then poll.
+   Cached briefs come back instantly with rows; fresh ones return a job id. */
+async function strategyCall(payload) {
+  const start = await fetchJsonRetry("/api/strategy-map", payload);
+  if (!start || !start.job) return start;  // cached rows, sync result, or error
+  for (let i = 0; i < 120; i++) {          // up to ~6 min
+    await new Promise((r) => setTimeout(r, 3000));
+    let res;
+    try { res = await (await fetch(`/api/strategy-result?job=${start.job}`, { cache: "no-store" })).json(); }
+    catch { continue; }  // transient network blip - keep polling
+    if (res && res.status !== "running") return res;
+  }
+  return { ok: false, rows: [], message: "The run is taking unusually long. Hit Try again." };
+}
+
+function kwList() { return (wiz.keywords || "").split(",").map((s) => s.trim()).filter(Boolean); }
+function kwRemove(k) {
+  wiz.keywords = kwList().filter((x) => x !== k).join(", ");
+  wiz.strat = null; wiz._stratLoading = false; drawWiz();
+}
+function tchips(field, options, labelFn) {
+  const all = [...new Set([...(options || []), ...wiz[field]])];
+  return all.map((o) => { const on = wiz[field].includes(o); return `<span class="tchip ${on ? "on" : ""}" onclick="wizToggle('${field}','${esc(o).replace(/'/g, "\\'")}')">${on ? "✓ " : ""}${esc(labelFn ? labelFn(o) : o)}</span>`; }).join("");
+}
+function tAddChip(field, placeholder, label) {
+  if (wiz._adding !== field)
+    return `<span class="tchip add" onclick="wiz._adding='${field}';drawWiz()">+ ${esc(label || "Add")}</span>`;
+  return `<span class="tchip add"><input id="tadd-input" placeholder="${esc(placeholder)}"
+    onkeydown="if(event.key==='Enter'){tAddCommit('${field}')}else if(event.key==='Escape'){wiz._adding=null;drawWiz()}"
+    onchange="if(wiz._adding==='${field}')tAddCommit('${field}')"
+    onblur="setTimeout(()=>{if(wiz._adding==='${field}'){tAddCommit('${field}')}},120)"><button class="btn sm" style="margin-left:4px;padding:2px 10px" onclick="tAddCommit('${field}')">Add</button></span>`;
+}
+async function tAddCommit(field) {
+  const el = document.getElementById("tadd-input");
+  const v = (el && el.value || "").trim();
+  wiz._adding = null;
+  if (!v) { drawWiz(); return; }
+  if (field === "geos") {
+    // live-validate free-typed locations, same as the old Add flow
+    try {
+      const r = await (await fetch("/api/suggest-location", { method: "POST", body: JSON.stringify({ q: v }) })).json();
+      const s = (r.suggestions || [])[0];
+      if (s && s.name) { if (!wiz.geos.includes(s.name)) wiz.geos.push(s.name); }
+      else { drawWiz(); const h = document.getElementById("geo-hint"); if (h) h.textContent = `No location matched "${v}" - try the full name`; return; }
+    } catch { drawWiz(); return; }
+  } else if (field === "keywords") {
+    const kws = kwList();
+    if (!kws.includes(v)) kws.push(v);
+    wiz.keywords = kws.join(", ");
+  } else if (!wiz[field].includes(v)) {
+    wiz[field].push(v);
+  }
+  wiz.strat = null; wiz._stratLoading = false;
+  drawWiz();
+}
+
+/* ── client step helpers ── */
+function pickClient(id) {
+  const c = (wiz.clients || []).find((x) => x.id === id);
+  if (!c) return;
+  wiz.client = c;
+  const icp = c.icp || {};
+  if (icp.titles?.length) wiz.titles = [...icp.titles];
+  if (icp.keywords) wiz.keywords = icp.keywords;
+  if (icp.industries?.length) wiz.industries = [...icp.industries];
+  if (icp.sizes?.length) wiz.sizes = [...icp.sizes];
+  if (icp.geos?.length) wiz.geos = [...icp.geos];
+  wiz.strat = null; wiz._stratLoading = false;
+  wiz.step = 2;
+  drawWiz();
+}
+function startNewClient() { wiz.newClient = { website: "", name: "", description: "", offer: "" }; drawWiz(); }
+async function analyseClientSite() {
+  const site = document.getElementById("nc-website").value.trim();
+  if (!site) { protoNote("Enter the website first"); return; }
+  wiz.newClient.website = site;
+  document.getElementById("nc-hint").textContent = "Reading the site…";
+  try {
+    const r = await (await fetch("/api/client-prefill", { method: "POST", body: JSON.stringify({ website: site }) })).json();
+    wiz.newClient.domain = r.domain || site;
+    wiz.newClient.name = r.name || "";
+    wiz.newClient.description = r.description || "";
+    wiz.newClient._analysed = true;
+    drawWiz();
+  } catch { document.getElementById("nc-hint").textContent = "Could not reach the site"; }
+}
+async function saveNewClient() {
+  const nc = wiz.newClient;
+  nc.name = document.getElementById("nc-name").value.trim();
+  nc.description = document.getElementById("nc-desc").value.trim();
+  nc.offer = document.getElementById("nc-offer").value.trim();
+  if (!nc.name) { protoNote("Name the client"); return; }
+  const r = await (await fetch("/api/clients", { method: "POST", body: JSON.stringify(nc) })).json();
+  await loadClients();
+  window._clients = null;
+  localStorage.setItem("navreo_client", r.id);
+  wiz.newClient = null;
+  pickClient(r.id);
+}
+
+const FRICTION_PILL = { "Easy": "g", "Med": "a", "Med (setup)": "a", "Hard": "r" };
+
+function guessMechanism(goal) {
+  const g = (goal || "").toLowerCase();
+  if (/hir|recruit|job post|vacan/.test(g)) return "hiring";
+  if (/engag|post|comment|linkedin content/.test(g)) return "engagement";
+  return "";
+}
+
+function drawWiz() {
+  document.getElementById("wdots").innerHTML = [1, 2, 3, 4, 5, 6].map((n) =>
+    `<div class="wdot ${n === Math.min(wiz.step, 6) ? "on" : n < wiz.step ? "done" : ""}">${n < wiz.step ? "✓" : n}</div>`).join("");
+  const body = document.getElementById("wiz-body");
+  const next = document.getElementById("wiz-next");
+  const back = document.getElementById("wiz-back");
+  back.style.visibility = (wiz.step === 1 || wiz.step === 7) ? "hidden" : "visible";
+  next.disabled = false;
+  next.style.visibility = (wiz.step === 1 || wiz.step === 2) ? "hidden" : "visible";  // step 2 acts on click (idea card / signal buttons)
+  next.innerHTML = { 2: "Next", 3: "Next", 4: "Next", 5: "Next", 6: "Preview my first leads (runs one live search)", 7: "Save draft campaign" }[wiz.step] || "Next";
+
+  if (wiz.step === 1) {
+    if (wiz.newClient) {
+      const nc = wiz.newClient;
+      body.innerHTML = `
+        <h2>Tell me about the client.</h2>
+        <div class="lead">Website first - the rest prefills. Adjust anything.</div>
+        <div class="wfield">
+          <label>Website</label>
+          <div style="display:flex;gap:8px">
+            <input id="nc-website" value="${esc(nc.website)}" placeholder="acme.com" style="flex:1">
+            <button class="btn" onclick="analyseClientSite()">Analyse</button>
+          </div>
+          <div class="small muted" id="nc-hint" style="margin-top:4px">${nc._analysed ? "Prefilled from the site - edit freely" : ""}</div>
+          <label>Client name</label><input id="nc-name" value="${esc(nc.name)}">
+          <label>What they do</label><textarea id="nc-desc" rows="2">${esc(nc.description)}</textarea>
+          <label>The offer / problems they solve for customers</label><textarea id="nc-offer" rows="2" placeholder="e.g. helps product brands capture Amazon demand on a performance basis">${esc(nc.offer)}</textarea>
+        </div>
+        <div style="margin-top:14px"><button class="btn" onclick="wiz.newClient=null;drawWiz()">Back to clients</button>
+        <button class="btn primary" onclick="saveNewClient()">Save client &amp; continue</button></div>`;
+      return;
+    }
+    const clients = wiz.clients || [];
+    body.innerHTML = `
+      <h2>Who are we selling for?</h2>
+      <div class="lead">Every campaign anchors on a client. Pick one or add one.</div>
+      <div class="srcpick">
+        ${clients.map((c) => `
+          <div class="srctype" onclick="pickClient('${c.id}')">
+            <div class="ictile">${ic8("home")}</div>
+            <div style="flex:1"><div class="t">${esc(c.name)}</div><div class="d">${esc(c.domain || c.website || "")}</div></div>
+          </div>`).join("")}
+        <div class="srctype" onclick="startNewClient()" style="border-style:dashed">
+          <div class="ictile">${ic8("idea")}</div>
+          <div><div class="t">New client</div><div class="d">From their website</div></div>
+        </div>
+      </div>`;
+  }
+
+  else if (wiz.step === 2) body.innerHTML = `
+    <h2>How do you want to start?</h2>
+    <div class="lead">${wiz.client ? esc(wiz.client.name) + " · " : ""}pick a ready-made idea, or set up a signal yourself. No goal needed.</div>
+    <div class="wfield" style="max-width:560px;margin:0 auto">
+      <label>Anything to avoid? <span class="muted" style="font-weight:400">· optional · people you've contacted are excluded automatically</span></label>
+      <input id="wiz-avoid" value="${esc(wiz.avoid || "")}" placeholder="e.g. no agencies, UK only">
+    </div>
+    <div class="srcpick" style="max-width:560px;margin:10px auto 0">
+      <div class="srctype" onclick="wizStartIdeas()">
+        <div class="ictile">${ic8("idea")}</div>
+        <div><div class="t">Suggest ideas for ${wiz.client ? esc(wiz.client.name) : "this client"}</div><div class="d">A few signal options, sized with live data - built from what we know about the client, skipping anything already running</div></div>
+      </div>
+      <div class="srctype" onclick="wiz.avoid=document.getElementById('wiz-avoid')?.value??wiz.avoid;directRoute('hiring')">
+        <div class="ictile">${ic8("briefcase")}</div>
+        <div><div class="t">Set up a Hiring signal</div><div class="d">Companies hiring your buyer - you pick the roles</div></div>
+      </div>
+      <div class="srctype" onclick="wiz.avoid=document.getElementById('wiz-avoid')?.value??wiz.avoid;directRoute('engagement')">
+        <div class="ictile">${ic8("linkedin")}</div>
+        <div><div class="t">Set up an Engagement signal</div><div class="d">Warm leads engaging with LinkedIn profiles you pick</div></div>
+      </div>
+    </div>`;
+
+  else if (wiz.step === 3) body.innerHTML = `
+    <h2>Who do we email at these companies?</h2>
+    <div class="lead">${wiz.client ? esc(wiz.client.name) + " · " : ""}the people who'll RECEIVE the outreach - not the roles in your signal. Similar titles match automatically.</div>
+    ${wiz.titles.length && wiz.client?.icp?.titles?.length ? `<div style="text-align:center;margin-bottom:8px"><span class="ai-pill">✨ Ticked from ${esc(wiz.client.name)}'s last campaign - untick anything that doesn't fit this one</span> <span class="tchip" onclick="wiz.titles=[];drawWiz()">Clear all</span></div>` : ""}
+    <div class="chips-center">${wchips("titles", TITLE_SUGGESTIONS)}
+      <span class="addchip"><input id="add-title" placeholder="Add a title" onkeydown="if(event.key==='Enter'){event.preventDefault();wizAdd('titles','add-title')}"><button class="plus" title="Add" onclick="wizAdd('titles','add-title')">+</button></span>
+    </div>
+    <div style="text-align:center;margin-top:10px"><button class="btn sm" onclick="wizGen('titles')" ${wiz._gen ? "disabled" : ""} title="Suggest more roles to email from this client's profile">${wiz._gen === "titles" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
+
+  else if (wiz.step === 4) {
+    const kws = kwList();
+    body.innerHTML = `
+    <div style="max-width:560px;margin:0 auto;text-align:left">
+      ${wiz.client ? `<span class="ai-pill">✨ Prefilled from ${esc(wiz.client.website || wiz.client.name)}</span>` : ""}
+    </div>
+    <h2>What kind of companies are you targeting?</h2>
+    <div class="lead">We pre-filled this from the client profile - adjust or add if needed.</div>
+    <div style="max-width:560px;margin:6px auto 0;text-align:left">
+      <div class="tsec">Industry</div>
+      <div class="tgrid">
+        <span class="tchip ${wiz.industries.length ? "" : "on"}" onclick="wiz.industries=[];wiz.strat=null;drawWiz()">All industries</span>
+        ${tchips("industries", IND_SUGGESTIONS)}
+        ${tAddChip("industries", "e.g. Logistics", "Add industry")}
+        <button class="btn sm" style="margin-left:4px" onclick="wizGen('industries')" ${wiz._gen ? "disabled" : ""}>${wiz._gen === "industries" ? "🪄 Thinking…" : "🪄 Suggest more"}</button>
+      </div>
+      <div class="tsec">Company type <span style="text-transform:none;letter-spacing:0;font-weight:400">· what they ARE, sharper than industry</span></div>
+      <div class="tgrid">
+        <span class="tchip ${kws.length ? "" : "on"}" onclick="wiz.keywords='';wiz.strat=null;drawWiz()">All company types</span>
+        ${kws.map((k) => `<span class="tchip on" title="Click to remove" onclick="kwRemove('${esc(k).replace(/'/g, "\\'")}')">${esc(k)}</span>`).join("")}
+        ${tAddChip("keywords", "e.g. software development agency", "Add company type")}
+        <button class="btn sm" style="margin-left:4px" onclick="wizGen('keywords')" ${wiz._gen ? "disabled" : ""}>${wiz._gen === "keywords" ? "🪄 Thinking…" : "🪄 Generate more"}</button>
+      </div>
+      <div class="tsec">Location</div>
+      <div class="tgrid">
+        <span class="tchip ${wiz.geos.length ? "" : "on"}" onclick="wiz.geos=[];wiz.strat=null;drawWiz()">All locations</span>
+        ${tchips("geos", GEO_OPTIONS)}
+        ${tAddChip("geos", "Anywhere, e.g. Jamaica", "Add location")}
+        <button class="btn sm" style="margin-left:4px" onclick="wizGen('geos')" ${wiz._gen ? "disabled" : ""}>${wiz._gen === "geos" ? "🪄 Thinking…" : "🪄 Generate more"}</button>
+      </div>
+      <div class="small muted" id="geo-hint" style="margin-top:6px"></div>
+      <div class="tsec">Company size</div>
+      <div class="tgrid">
+        <span class="tchip ${wiz.sizes.length ? "" : "on"}" onclick="wiz.sizes=[];wiz.strat=null;drawWiz()">All company sizes</span>
+        ${tchips("sizes", SIZE_BUCKETS, (b) => b + " employees")}
+      </div>
+      <div class="tsec">Always include these companies <span style="text-transform:none;letter-spacing:0;font-weight:400">· optional</span></div>
+      <div class="tgrid">
+        ${wiz.domains.map((d) => `<span class="tchip on" title="Click to remove" onclick="wizToggle('domains','${esc(d).replace(/'/g, "\\'")}')">${esc(d)}</span>`).join("")}
+        ${tAddChip("domains", "acme.com", "Add company")}
+      </div>
+    </div>`;
+    const ta = document.getElementById("tadd-input");
+    if (ta) ta.focus();
+  }
+
+  else if (wiz.step === 5) {
+    if (wiz.mode === "direct") {  // direct NEVER ideates: this step is only the signal picker
+      body.innerHTML = `
+        <h2>Which signal did you mean?</h2>
+        <div class="lead">You said: "${esc(wiz.goal)}". Pick one - we build exactly that.</div>
+        <div class="srcpick">${[["hiring", "Hiring", "Companies hiring certain roles right now", "briefcase"], ["engagement", "Engagement", "People engaging with your topics online", "linkedin"]].map(([k, nm, d2, ic]) => `
+          <div class="srctype" onclick="directRoute('${k}')">
+            <div class="ictile">${ic8(ic)}</div>
+            <div><div class="t">${nm}</div><div class="d">${d2}</div></div>
+          </div>`).join("")}
+        </div>`;
+      next.disabled = true;
+      return;
+    }
+    const strat = wiz.strat;
+    if (!strat) {
+      const stages = wiz.mode === "direct"
+        ? ["Reading your goal…", "Turning it into exact search settings…", "Nearly there - writing the opener…", "Still working - almost done…"]
+        : ["Reading the offer…", "Coming up with ideas for this client…", "Checking each idea against live data…", "Counting who you could actually reach…", "Still checking live data - big markets take a few minutes…", "Still working - almost every idea is sized by now…"];
+      body.innerHTML = `<h2>${wiz.mode === "direct" ? "Building exactly what you described." : "Finding the best ways in."}</h2>
+        <div class="lead">${wiz.mode === "direct" ? "Usually under a minute. Nothing runs and nothing is spent - this just writes the settings." : "Usually 2-3 minutes. Every idea gets checked against real data before you see it."}</div>
+        <div class="empty" style="padding:30px 0">${ic8("idea", "xl")}
+          <div class="bar-track" style="max-width:280px;margin:16px auto 8px"><div class="bar-fill" id="stage-bar" style="width:4%;transition:width 1s linear"></div></div>
+          <div id="stage-line" class="small muted">${stages[0]}</div></div>`;
+      next.disabled = true;
+      clearInterval(window._stageTimer);
+      let si = 0;
+      let tick = 0;
+      window._stageTimer = setInterval(() => {
+        const el2 = document.getElementById("stage-line");
+        const bar = document.getElementById("stage-bar");
+        if (!el2) { clearInterval(window._stageTimer); return; }
+        tick++;
+        // never fake completion: crawl to 60% in the first minute, then inch
+        // toward (but never reach) 95% for as long as the run actually takes
+        const pct = tick <= 60 ? 4 + tick * 0.95 : Math.min(62 + (tick - 60) * 0.18, 95);
+        if (bar) bar.style.width = pct + "%";
+        if (tick % 35 === 0 && si < stages.length - 1) { si++; el2.textContent = stages[si]; }
+      }, 1000);
+      if (!wiz._stratLoading) loadStrategyMap();
+      return;
+    }
+    clearInterval(window._stageTimer);
+    if (strat.ok === false) {
+      body.innerHTML = `<h2>That didn't finish.</h2>
+        <div class="lead">${esc(strat.message || "The idea engine didn't answer - it may have restarted mid-run.")}</div>
+        <div style="text-align:center;margin-top:14px"><button class="btn primary" onclick="loadStrategyMap(true);drawWiz()">Try again</button></div>`;
+      next.disabled = true;
+      return;
+    }
+    let rows = (strat.rows || []).filter((r) => r.estimated || (r.dms && r.dms >= 10));  // under 10 people = risks returning nothing
+    if (wiz._sortBySize) rows = [...rows].sort((a, b) => (b.dms || 0) - (a.dms || 0));
+    if (rows.length === 1 && !wiz.sources.length) wiz.sources = [rows[0].id];  // one idea = pre-picked, no dead "pick one" step
+    body.innerHTML = `
+      <h2>${wiz.client ? "Ways into " + esc(wiz.client.name) + "'s market." : "Ways into this market."}</h2>
+      <div class="lead">Fresh ideas for this offer, sized against live data. Pick what to kick off - you approve every person before anything sends.</div>
+      <div class="small" style="margin:-8px 0 12px"><span class="pill g">goal applied</span> <span class="muted">"${esc(wiz.goal)}"${wiz.mechanism ? ` · you meant the ${wiz.mechanism.replace("_", " ")} signal, so that is all we built` : ""}${wiz.avoid ? ` · avoiding: ${esc(wiz.avoid)}` : ""}</span></div>
+      <div style="display:flex;gap:8px;align-items:center;margin:0 0 14px;justify-content:center">
+        <input id="wiz-steer" value="${esc(wiz.goal || "")}" placeholder="Change the goal and redo"
+          style="flex:1;max-width:440px;border:1px solid var(--line-2);border-radius:999px;padding:7px 14px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
+        <button class="btn sm" onclick="wiz.goal=document.getElementById('wiz-steer').value;loadStrategyMap(true)">Redo with new goal</button>
+      </div>
+      <table class="tbl stratbl">
+        <tr><th></th><th>Signal</th><th style="text-align:right;cursor:pointer" title="Estimated decision makers a month of daily pulls reaches. Click to sort." onclick="wiz._sortBySize=!wiz._sortBySize;drawWiz()">Decision-makers / month ${wiz._sortBySize ? "↓" : ""}</th></tr>
+        ${rows.map((r, ri) => {
+          const meta = MECH_META[r.mechanism] || ["signal", r.mechanism, ""];
+          const ice = r.icebreaker || meta[2] || "";
+          const biggest = !r.estimated && r.dms === Math.max(...rows.filter((x) => !x.estimated).map((x) => x.dms || 0));
+          const on = wiz.sources.includes(r.id);
+          return `<tr class="click ${on ? "sel" : ""}" title="${esc(r.signal || "")}" onclick="wizToggle('sources','${r.id}')">
+            <td style="width:30px"><span class="ictile" style="width:26px;height:26px">${ic8(meta[0])}</span></td>
+            <td><div style="font-weight:600">${esc(r.idea)}${r.id === (strat.rows || [])[0]?.id ? ' <span class="pill g" title="Best balance of fit, timing and reach">recommended</span>' : ""}</div>
+              ${ice ? `<div class="small" style="color:var(--ink-2);font-style:italic;margin-top:2px">"${esc(ice)}"</div>` : ""}</td>
+            <td style="text-align:right">${r.estimated ? `<span class="muted small">${r.mechanism === "engagement" ? "tracked live" : "sized on first run"}</span>` : `${r.approx ? "≈ " : ""}<b>${fmt(r.dms)}</b>${r.approx ? ' <span class="muted small" title="An estimate - the daily pull counts the real people">estimated</span>' : ""}${biggest ? ' <span class="pill n" title="Biggest list, usually colder">largest</span>' : ""}`}</td>
+          </tr>`;
+        }).join("")}
+      </table>
+      <div class="small muted" style="margin-top:8px;text-align:center">Ideas with fewer than 10 reachable people are hidden automatically${(strat.too_small || 0) ? ` (${strat.too_small} hidden this run)` : ""}${(strat.too_broad || 0) ? ` · ${strat.too_broad} idea${strat.too_broad > 1 ? "s" : ""} excluded for being too broad (over 10,000 people/month)` : ""}.</div>`;
+  }
+
+  else if (wiz.step === 6) {
+    const engOnly = wiz.sources.length && wiz.sources.every((k) => ((wiz.strat?.rows || []).find((r) => r.id === k) || {}).mechanism === "engagement");
+    body.innerHTML = `
+      <h2>Check the plan.</h2>
+      <div class="lead">Save it for later, or preview the first leads now (that runs one live search).</div>
+      <div style="max-width:560px;margin:0 auto">
+        <div class="sumrow"><span class="k">Client</span><span>${esc(wiz.client?.name || "–")}</span></div>
+        ${engOnly ? `
+        <div class="sumrow"><span class="k">Whose LinkedIn</span><span>You add the profile links right after saving - that's the next screen.</span></div>` : `
+        <div class="sumrow"><span class="k">Who we email</span><span>${wiz.titles.map(esc).join(", ") || "–"}</span></div>
+        <div class="sumrow"><span class="k">Companies</span><span>${esc(wiz.keywords) || wiz.industries.map(esc).join(", ") || "–"}</span></div>
+        <div class="sumrow"><span class="k">Size</span><span>${wiz.sizes.join(", ")} employees</span></div>
+        <div class="sumrow"><span class="k">Locations</span><span>${wiz.geos.map(esc).join(", ")}</span></div>
+        <div class="sumrow"><span class="k">Named accounts</span><span>${wiz.domains.map(esc).join(", ") || "None"}</span></div>`}
+        <div class="sumrow"><span class="k">Excluded</span><span>${wiz.excludes.map(esc).join(", ") || "Previously contacted only"}</span></div>
+        <div class="sumrow"><span class="k">Openers</span><span style="flex:1">${wiz.sources.map((k) => {
+          const row = (wiz.strat?.rows || []).find((r) => r.id === k);
+          if (!row) return "";
+          return `<div style="margin-bottom:6px"><div class="small muted">${esc(row.idea)}</div>
+            <input id="ck-ice-${row.id}" value="${esc(row.icebreaker || (MECH_META[row.mechanism] || [])[2] || "")}"
+              style="width:100%;border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:italic 400 12px var(--font-sans);color:var(--ink-2);background:transparent"></div>`;
+        }).join("")}</span></div>
+        <div class="sumrow"><span class="k">Angles</span><span>${wiz.sources.map((k) => {
+                    const row = (wiz.strat?.rows || []).find((r) => r.id === k);
+          if (!row) return k;
+          return row.dms != null ? `${row.idea} (${row.approx ? "≈" : ""}${fmt(row.dms)} people)` : row.idea;
+        }).join(", ") || "–"}</span></div>
+      </div>
+      <div style="text-align:center;margin-top:18px">
+        <button class="btn primary" onclick="saveWizCampaign(null)">💾 Save campaign - run it later</button>
+        <div class="small muted" style="margin-top:6px">Nothing runs and nothing is spent until you pull leads.</div>
+      </div>`;
+  }
+
+  else if (wiz.step === 7) {
+    const r = wiz.result;
+    if (!r) { body.innerHTML = `<h2>Searching for leads matching the ICP…</h2><div class="lead">Matching real people against roles, companies and locations.</div><div class="empty" style="padding:36px 0">${ic8("search", "xl")}</div>`; next.disabled = true; return; }
+    if (!r.ok) {
+      const msg = /error_code|NO_RESULTS|\{/.test(r.message || "")
+        ? "No one matches these filters right now. Try fewer filters - more locations, more company sizes, or a broader company type."
+        : (r.message || "Try widening the audience");
+      body.innerHTML = `<h2>No one matched just now.</h2>
+      <div class="lead">${esc(msg)}</div>
+      <div style="text-align:center;margin-top:18px;display:flex;gap:10px;justify-content:center">
+        <button class="btn" onclick="wiz.step=4;wiz.result=null;drawWiz()">← Widen the targeting</button>
+        <button class="btn primary" onclick="saveWizCampaign(null)">💾 Save it anyway - the daily run keeps looking</button>
+      </div>
+      <div class="small muted" style="text-align:center;margin-top:6px">Nothing is lost either way - your whole setup is kept.</div>`;
+      next.disabled = true; return;
+    }
+    const kept = (r.sample || []).filter((_, i) => !wiz.rejected[i]).length;
+    body.innerHTML = `
+      <h2>Here are the first opportunities we identified.</h2>
+      <div class="lead"><b>${fmt(r.total_people)}</b> people match · the campaign works through all of them · ${esc(r.cost)}</div>
+      ${(r.sample || []).map((p, i) => `
+        <div class="lead-row ${wiz.rejected[i] ? "rejected" : ""}">
+          <div class="ini">${esc((p.name || "?").split(" ").map((w) => w[0]).slice(0, 2).join(""))}</div>
+          <div style="flex:1;min-width:0">
+            <div class="nm">${p.linkedin ? `<a href="${esc(p.linkedin)}" target="_blank">${esc(p.name)}</a>` : esc(p.name)} <span class="tt">· ${esc(p.title)}</span></div>
+            <div class="cc">
+              ${p.named_account ? '<span class="fchip" style="background:var(--orange-100);color:var(--orange-700)">named account</span>' : ""}
+              <span class="fchip">${esc(p.company)}</span>
+              ${p.industry ? `<span class="fchip">${esc(p.industry)}</span>` : ""}
+              ${p.size ? `<span class="fchip">${esc(String(p.size))} people</span>` : ""}
+              ${p.country ? `<span class="fchip">${esc(p.country)}</span>` : ""}
+              ${p.linkedin ? `<a class="fchip" href="${esc(p.linkedin)}" target="_blank" style="color:var(--orange-700);text-decoration:none">LinkedIn ↗</a>` : ""}
+              ${p.domain ? `<a class="fchip" href="https://${esc(p.domain)}" target="_blank" style="color:var(--orange-700);text-decoration:none">Website ↗</a>` : ""}
+              ${sigHref(p) ? `<a class="fchip" href="${esc(sigHref(p))}" target="_blank" title="${esc(sigTitle(p))}" style="color:var(--orange-700);text-decoration:none">View signal ↗</a>` : ""}
+            </div>
+          </div>
+          <button class="btn sm" onclick="wiz.rejected[${i}]=!wiz.rejected[${i}];drawWiz()">${wiz.rejected[i] ? "Undo" : "✕ Reject"}</button>
+        </div>`).join("")}
+      <div class="small muted" style="margin-top:8px">${kept} kept · rejects teach the qualifier what off-brief looks like</div>`;
+  }
+}
+
+const DIRECT_SRC_TYPE = { hiring: "hiring", engagement: "engagement", company_filter: "companies", lookalike: "lookalike" };
+const DIRECT_LABEL = { hiring: "Hiring signal", engagement: "Engagement signal",
+  company_filter: "Company filter", lookalike: "Lookalike companies" };
+
+function directRoute(mech) {
+  // defer campaign creation until the source wizard is completed (user rule):
+  // no campaign row is written on cancel/back-out. openSourceWizard runs against
+  // a "__pending__" campaign; ensureCampaign() creates it the moment we save.
+  wiz.mechanism = mech;
+  const pending = {
+    name: `${wiz.client?.name || "New"} · ${(wiz.goal || "").trim().slice(0, 48) || DIRECT_LABEL[mech]}`,
+    client_id: wiz.client?.id || null, goal: wiz.goal || "",
+    icp: { titles: wiz.titles, industries: wiz.industries, keywords: wiz.keywords, sizes: wiz.sizes, geos: wiz.geos },
+    paused: true,
+  };
+  const clientId = wiz.client?.id || null;
+  closeWizard();
+  openSourceWizard(DIRECT_SRC_TYPE[mech] || "companies", "__pending__");
+  sw._pendingCampaign = pending;
+  sw._clientId = clientId;
+  protoNote("Set up the signal - the campaign is created when you save it");
+}
+
+async function wizNext() {
+  if (wiz.step === 2) { wizStartIdeas(); return; }  // step 2 is click-driven; Next = start ideas
+  if (wiz.step === 3 && !wiz.titles.length) { protoNote("Pick at least one title"); return; }
+  if (wiz.step === 4 && wiz.mode !== "direct" && !wiz.strat && !wiz._stratLoading) loadStrategyMap();  // prefetch for AI mode only - direct re-runs once the mechanism is confirmed
+  if (wiz.step === 5 && !wiz.sources.length) { protoNote("Pick at least one angle"); return; }
+
+  if (wiz.step < 6) { wiz.step++; drawWiz(); return; }
+
+  if (wiz.step === 6) {
+    wiz.sources.forEach((k) => {
+      const row = (wiz.strat?.rows || []).find((r) => r.id === k);
+      const el = document.getElementById("ck-ice-" + k);
+      if (row && el) row.icebreaker = el.value;
+    });
+    wiz.step = 7; wiz.result = null; wiz.rejected = {}; drawWiz();
+    const payload = {
+      titles: wiz.titles,
+      keywords: wiz.keywords.trim() ? [wiz.keywords.trim()] : [],
+      industries: wiz.keywords.trim() ? [] : wiz.industries,
+      headcount: wiz.sizes,
+      countries: wiz.geos,
+      exclude_keywords: wiz.excludes,
+      domains: wiz.domains,
+    };
+    wiz.result = await fetchJsonRetry("/api/preview/people", payload);
+    drawWiz(); return;
+  }
+
+  await saveWizCampaign((wiz.result?.sample || []).filter((_, i) => !wiz.rejected[i]));
+}
+
+// kept === null means "save for later" from step 6: no preview search ran, nothing spent
+async function saveWizCampaign(kept) {
+  if (wiz._saving) return;
+  wiz._saving = true;
+  if (wiz.step === 6) {  // capture any opener edits made on the summary
+    wiz.sources.forEach((k) => {
+      const row = (wiz.strat?.rows || []).find((r) => r.id === k);
+      const el = document.getElementById("ck-ice-" + k);
+      if (row && el) row.icebreaker = el.value;
+    });
+  }
+  const chosen = wiz.sources.map((k) => (wiz.strat?.rows || []).find((r) => r.id === k)).filter(Boolean)
+    .map((r) => ({ mechanism: r.mechanism, idea: r.idea, params: r.params || {}, dms: r.dms ?? null, icebreaker: r.icebreaker || "" }));
+  const topAngle = chosen[0]?.idea || "Campaign";
+  const saveResp = await (await fetch("/api/campaign-drafts", { method: "POST", body: JSON.stringify({
+    name: `${wiz.client?.name || "New"} · ${topAngle} · ${(wiz.keywords || wiz.industries[0] || "audience").slice(0, 32)}`,
+    client_id: wiz.client?.id || null,
+    goal: wiz.goal || "",
+    icp: { titles: wiz.titles, industries: wiz.industries, keywords: wiz.keywords, sizes: wiz.sizes, geos: wiz.geos, excludes: wiz.excludes, domains: wiz.domains },
+    sources: chosen,
+    strategy: wiz.strat?.rows || null,
+    total_matched: wiz.result?.total_people || 0,
+    preview_kept: kept || [],
+    paused: kept === null,  // "run it later" means exactly that - saved paused, nothing moves until resumed
+  }) })).json();
+  const createdSources = [];
+  for (const src of chosen) {
+    const resp = await (await fetch("/api/sources", { method: "POST", body: JSON.stringify({
+      type: src.mechanism, mechanism: src.mechanism, name: src.idea,
+      campaign_id: saveResp.id, icebreaker: src.icebreaker || "",
+      titles: wiz.titles, params: src.params || {},
+      config: { keywords: wiz.keywords, industries: wiz.industries, headcount: wiz.sizes, countries: wiz.geos },
+      total: src.dms,
+    }) })).json();
+    createdSources.push({ mechanism: src.mechanism, idea: src.idea, id: resp.id });
+  }
+  if (wiz.client?.id) {
+    fetch("/api/clients", { method: "POST", body: JSON.stringify({ id: wiz.client.id,
+      icp: { titles: wiz.titles, keywords: wiz.keywords, industries: wiz.industries, sizes: wiz.sizes, geos: wiz.geos } }) }).catch(() => {});
+  }
+  closeWizard();
+  DB.campaignDrafts = null;
+  location.hash = saveResp.id;
+  // engagement sources need their own questions (profiles to monitor, topics,
+  // copy mode) - hand straight off to the engagement wizard in edit mode
+  const engSrc = createdSources.find((s) => s.mechanism === "engagement" && s.id);
+  if (engSrc) {
+    const engRow = chosen.find((s) => s.mechanism === "engagement") || {};
+    protoNote("Draft saved - now tell us whose LinkedIn to watch");
+    setTimeout(() => openSourceWizard("engagement", saveResp.id, {
+      id: engSrc.id, name: engSrc.idea, titles: wiz.titles,
+      config: { countries: [], headcount: wiz.sizes,
+        engagement: { include_topics: ((engRow.params || {}).keywords || []).slice(0, 6) } },  // topics from THIS campaign's goal, not generic seeds
+    }), 500);
+  } else {
+    protoNote(kept === null ? "Saved and paused - nothing runs or spends until you switch it to ● Running" : "Draft saved - here it is, pull prospects when ready");
+  }
+}
+
+/* ══ ADD-A-SOURCE WIZARD (live data) ══ */
+const srcwiz = document.getElementById("srcwiz");
+let sw = {};
+
+/* new-campaign wizard: go straight to sized ideas, no goal required */
+function wizStartIdeas() {
+  wiz.avoid = document.getElementById("wiz-avoid")?.value ?? wiz.avoid;
+  wiz.mode = "ai"; wiz.goal = "";
+  wiz.strat = null; wiz._stratLoading = false;
+  wiz.step = 3; drawWiz();
+}
+/* new-campaign wizard: generate/suggest more for a targeting field (client context, pre-creation) */
+async function wizGen(field) {
+  if (wiz._gen) return;
+  wiz._gen = field; drawWiz();
+  try {
+    const icp = { titles: wiz.titles, keywords: wiz.keywords, industries: wiz.industries, sizes: wiz.sizes, geos: wiz.geos };
+    let r;
+    if (field === "titles") {
+      r = await (await fetch("/api/role-suggest", { method: "POST", body: JSON.stringify({
+        client_id: wiz.client?.id || null, count: 8, icp, exclude_dm: wiz.titles, exclude_trigger: [] }) })).json();
+      if (r.ok !== false) for (const t of (r.dm_titles || [])) if (!wiz.titles.includes(t)) wiz.titles.push(t);
+    } else {
+      const kind = field === "keywords" ? "keywords" : field === "industries" ? "industries" : "locations";
+      r = await (await fetch("/api/role-suggest", { method: "POST", body: JSON.stringify({
+        client_id: wiz.client?.id || null, count: 8, kind, icp, exclude: field === "keywords" ? kwList() : wiz[field] }) })).json();
+      if (r.ok !== false) {
+        if (field === "keywords") { const cur = kwList(); for (const t of (r.suggestions || [])) if (!cur.includes(t)) cur.push(t); wiz.keywords = cur.join(", "); }
+        else for (const t of (r.suggestions || [])) if (!wiz[field].includes(t)) wiz[field].push(t);
+      }
+    }
+    if (r && r.ok === false) protoNote(r.message || "Couldn't generate right now");
+  } catch { protoNote("Couldn't generate right now - try again in a moment"); }
+  wiz._gen = null; wiz.strat = null; drawWiz();
+}
+
+/* source wizard: create the deferred (pending) campaign the moment we save a source */
+async function ensureCampaign() {
+  if (sw.campaignId !== "__pending__") return true;
+  const pc = sw._pendingCampaign || { name: "New campaign", paused: true };
+  const r = await (await fetch("/api/campaign-drafts", { method: "POST", body: JSON.stringify({ ...pc, sources: [] }) })).json();
+  if (!r || !r.ok) { protoNote((r && r.message) || "Couldn't create the campaign"); return false; }
+  sw.campaignId = r.id; DB.campaignDrafts = null;
+  return true;
+}
+/* footer "Save for later": persist the source as-is, no preview */
+async function srcSaveForLater() {
+  if (sw.type === "engagement") { engSavePartial(); return; }
+  sw.titles = document.getElementById("sw-titles")?.value || sw.titles;
+  sw.dm_titles = document.getElementById("sw-dm")?.value ?? sw.dm_titles;
+  sw.leads_per_day = parseInt(document.getElementById("sw-lpd")?.value, 10) || sw.leads_per_day || 20;
+  sw.keywords = document.getElementById("sw-keywords")?.value || sw.keywords;
+  sw.icp = document.getElementById("sw-icp")?.value || sw.icp;
+  if (!(await ensureCampaign())) return;
+  const csvList = (s) => (s || "").split(",").map((t) => t.trim()).filter(Boolean);
+  const r = await (await fetch("/api/sources", { method: "POST", body: JSON.stringify({
+    type: sw.type, name: sw.name || defaultName(), campaign_id: sw.campaignId,
+    titles: sw.type === "hiring" ? csvList(sw.dm_titles) : undefined,
+    config: { titles: sw.titles, job_titles: sw.type === "hiring" ? csvList(sw.titles) : undefined,
+      negative_keywords: sw.type === "hiring" ? csvList(sw.negatives) : undefined,
+      leads_per_day: sw.type === "hiring" ? (sw.leads_per_day || 20) : undefined,
+      keywords: sw.keywords, icp: sw.icp, tier: sw.tier, headcount: sw.hc, countries: sw.geo, days: 30, csv: sw.csv },
+  }) })).json();
+  if (r && r.ok === false) { protoNote(r.message || "Couldn't save"); return; }
+  srcwiz.classList.remove("on");
+  DB.campaignDrafts = null;
+  protoNote("Saved for later - nothing runs until you launch it");
+  if (location.hash.slice(1) !== String(sw.campaignId)) location.hash = sw.campaignId;
+  else if (document.getElementById("draftlist")) renderDrafts(sw.campaignId); else renderDraftCampaign(sw.campaignId);
+}
+/* Countries with Add + Generate more (source wizard) */
+function swGeoRow(seedOptions) {
+  const opts = [...new Set([...(seedOptions || []), ...sw.geo])];
+  return `<div class="chips-center" style="justify-content:flex-start;max-width:520px;margin:4px auto 0">
+    ${opts.map((o) => `<span class="chip ${sw.geo.includes(o) ? "on" : ""}" onclick="toggleIn(sw.geo,'${esc(o).replace(/'/g, "\\'")}')">${esc(o)}</span>`).join("")}
+    <span class="addchip"><input id="add-geo-sw" placeholder="Add a country"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();swGeoAdd()}"><button class="plus" title="Add" onclick="swGeoAdd()">+</button></span>
+    <button class="btn sm" onclick="swGeoGen()" ${sw._genbusy ? "disabled" : ""}>${sw._genbusy === "geo" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
+}
+function swGeoAdd() {
+  const el = document.getElementById("add-geo-sw");
+  const v = (el && el.value || "").trim();
+  if (v && !sw.geo.includes(v)) sw.geo.push(v);
+  drawSrc();
+}
+async function swGeoGen() {
+  if (sw._genbusy) return; sw._genbusy = "geo"; drawSrc();
+  try {
+    const r = await suggestFetch({ campaign_id: sw.campaignId, kind: "locations", count: 6, exclude: sw.geo });
+    if (r.ok === false) protoNote(r.message || "Couldn't generate");
+    else for (const c of (r.suggestions || [])) if (!sw.geo.includes(c)) sw.geo.push(c);
+  } catch { protoNote("Couldn't generate right now"); }
+  sw._genbusy = null; drawSrc();
+}
+/* generate more into an array field (source wizard) */
+async function swGenList(field, kind) {
+  if (sw._genbusy) return; sw._genbusy = field; drawSrc();
+  try {
+    const r = await suggestFetch({ campaign_id: sw.campaignId, kind, count: 8, exclude: sw[field] });
+    if (r.ok === false) protoNote(r.message || "Couldn't generate");
+    else { const have = new Set((sw[field] || []).map((x) => x.toLowerCase()));
+      for (const t of (r.suggestions || [])) if (!have.has(t.toLowerCase())) { sw[field].push(t); have.add(t.toLowerCase()); } }
+  } catch { protoNote("Couldn't generate right now"); }
+  sw._genbusy = null; drawSrc();
+}
+
+const SW_META = {
+  hiring: { title: "Who should they be hiring?", icon: "briefcase", label: "Hiring signal",
+            lead: "Companies actively hiring these roles. Preview is free." },
+  companies: { title: "Which companies?", icon: "search", label: "Company filter",
+            lead: "Describe the buyer type. We search the live company index." },
+  lookalike: { title: "Describe your ideal company.", icon: "people", label: "Lookalikes",
+            lead: "Plain English works best. We find companies that match it." },
+  csv: { title: "Upload your list.", icon: "download", label: "CSV upload",
+            lead: "Parsed locally. Nothing leaves your machine." },
+  engagement: { title: "Whose LinkedIn should we watch?", icon: "linkedin", label: "Engagement signal",
+            lead: "We track who likes and comments on their posts - every engager is a warm lead, qualified before it reaches you." },
+};
+const HC_BUCKETS = ["11-20", "21-50", "51-100", "101-200", "201-500"];
+const COUNTRIES = ["United States", "United Kingdom", "Canada", "Australia", "Germany", "Netherlands"];
+const CC = { "United States": "US", "United Kingdom": "GB", "Canada": "CA", "Australia": "AU", "Germany": "DE", "Netherlands": "NL" };
+/* engagement-signal wizard defaults */
+const ENG_COUNTRIES = ["United States", "United Kingdom", "Canada", "Australia", "Ireland", "New Zealand",
+  "Germany", "Netherlands", "Switzerland", "Sweden", "Norway", "Denmark", "Finland", "Singapore"];
+const ENG_AVOID_SEED = ["Anniversaries", "Personal stories", "Stories about struggles and triumphs",
+  "Life lessons", "Sad or unfortunate posts or news"];
+const ENG_INCLUDE_SEED = ["Tooling", "AI-for-sales", "GTM strategy", "GTM tutorials and giveaways"];
+const ENG_TITLE_SEED = "Founder, CEO, Head of Sales, VP Sales, CRO, Head of GTM, Head of Growth, Head of Marketing";
+
+function parseEngUrls(text) {
+  const lines = (text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const valid = [], bad = [];
+  for (const l of lines) {
+    const clean = l.replace(/\?.*$/, "").replace(/\/+$/, "");
+    if (/^https?:\/\/(www\.)?linkedin\.com\/(in|company)\/[^/]+$/i.test(clean)) {
+      if (!valid.includes(clean)) valid.push(clean);
+    } else bad.push(l);
+  }
+  return { valid, bad };
+}
+function swUrlHint() {
+  const el = document.getElementById("sw-url-hint");
+  if (!el) return;
+  const { valid, bad } = parseEngUrls(document.getElementById("sw-urls").value);
+  el.textContent = `${valid.length} profile${valid.length === 1 ? "" : "s"} to monitor` +
+    (bad.length ? ` · ${bad.length} line${bad.length === 1 ? "" : "s"} not a LinkedIn profile URL` : "");
+}
+function swAdd(field, inputId) {
+  const el = document.getElementById(inputId);
+  const v = (el && el.value || "").trim();
+  if (!v) return;
+  if (!sw[field].includes(v)) sw[field].push(v);
+  drawSrc();
+}
+function chipEditRow(field, placeholder) {
+  return `<div class="chips-center" style="justify-content:flex-start;max-width:520px;margin:4px auto 0">
+    ${sw[field].map((o) => `<span class="chip on" title="Click to remove" onclick="chipEditDel('${field}','${esc(o).replace(/'/g, "\\'")}')">${esc(o)}</span>`).join("")}
+    <span class="addchip"><input id="add-${field}" placeholder="${esc(placeholder)}"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();swAdd('${field}','add-${field}')}"><button class="plus" title="Add" onclick="swAdd('${field}','add-${field}')">+</button></span></div>`;
+}
+function chipEditDel(field, v) {
+  toggleIn(sw[field], v);
+  if (field === "inc" && !sw[field].includes(v)) {  // a removed counting-topic is a decline the suggester learns from
+    sw._declined = sw._declined || {}; (sw._declined.inc = sw._declined.inc || []).push(v);
+    roleFeedback({ declined_topics: [v] });
+  }
+}
+
+function openSourceWizard(type, campaignId, editSrc) {
+  sw = { type, campaignId, step: 1, hc: ["11-20", "21-50", "51-100", "101-200"], geo: ["United States", "United Kingdom"], tier: "T2", result: null, csv: null };
+  if (type === "engagement") {
+    Object.assign(sw, {
+      urls: "", inc: [...ENG_INCLUDE_SEED], avd: [...ENG_AVOID_SEED], wild: "", avoid_companies: [],
+      geo: [...ENG_COUNTRIES], dm_titles: ENG_TITLE_SEED, avoid_rules: "",
+      copy_ref: true, leads_per_day: 25,
+    });
+    if (editSrc) {  // finish-setup / edit an existing source (e.g. created by the campaign wizard)
+      const eng = (editSrc.config || {}).engagement || {};
+      const cfg = editSrc.config || {};
+      Object.assign(sw, {
+        editId: editSrc.id, name: editSrc.name,
+        urls: (eng.linkedin_urls || []).join("\n"),
+        inc: eng.include_topics?.length ? [...eng.include_topics] : sw.inc,
+        avd: eng.avoid_topics?.length ? [...eng.avoid_topics] : sw.avd,
+        wild: eng.wildcard || "",
+        avoid_companies: eng.avoid_companies?.length ? [...eng.avoid_companies] : [],
+        dm_titles: (eng.engager_titles || editSrc.titles || []).join(", ") || sw.dm_titles,
+        geo: cfg.countries?.length ? [...cfg.countries] : sw.geo,
+        hc: cfg.headcount?.length ? [...cfg.headcount] : sw.hc,
+        avoid_rules: eng.avoid_rules || "",
+        copy_ref: eng.copy_reference !== false,
+        leads_per_day: eng.leads_per_day || 25,
+      });
+    }
+  }
+  srcwiz.classList.add("on");
+  drawSrc();
+  if (type === "hiring") { sw.titles = sw.titles || "Head of Sales, VP Sales"; prefillHiringRoles(campaignId); }  // async, redraws when found
+  if (type === "companies" && !sw.keywords) prefillSuggest("keywords", "keywords");
+  if (type === "lookalike" && !sw.icp) prefillSuggest("icp", "icp_text");
+  if (type === "engagement" && !editSrc) prefillEngagement(campaignId);
+}
+
+/* seed the include-topic list from the client's offer - static seed stays as fallback */
+async function prefillEngagement(campaignId) {
+  try {
+    const [drafts, clients] = await Promise.all([
+      (DB.campaignDrafts && DB.campaignDrafts.length) ? DB.campaignDrafts : (await fetch("/api/campaign-drafts")).json(),
+      (await fetch("/api/clients")).json(),
+    ]);
+    const dc = (drafts || []).find((c) => String(c.id) === String(campaignId)) || {};
+    const cl = (clients || []).find((c) => c.id === dc.client_id) || {};
+    sw._client = cl;
+    const t = ((dc.icp || {}).titles || []).length ? dc.icp.titles : ((cl.icp || {}).titles || []);
+    if (t.length) sw.dm_titles = t.join(", ");
+    const kw = (dc.icp || {}).keywords || (cl.icp || {}).keywords || "";
+    if (typeof kw === "string" && kw.trim() && !sw.inc.includes(kw.trim())) sw.inc.push(kw.trim());
+    if (sw.step === 1) drawSrc();
+  } catch {}
+}
+
+async function prefillDmTitles(campaignId) {
+  try {
+    const [drafts, clients] = await Promise.all([
+      (DB.campaignDrafts && DB.campaignDrafts.length) ? DB.campaignDrafts : (await fetch("/api/campaign-drafts")).json(),
+      (await fetch("/api/clients")).json(),
+    ]);
+    const dc = (drafts || []).find((c) => String(c.id) === String(campaignId)) || {};
+    const cl = (clients || []).find((c) => c.id === dc.client_id) || {};
+    const t = ((dc.icp || {}).titles || []).length ? dc.icp.titles : ((cl.icp || {}).titles || []);
+    if (t.length && !sw.dm_titles) { sw.dm_titles = t.join(", "); if (sw.step === 1) drawSrc(); }
+  } catch {}
+}
+
+/* auto-suggest both role lists from the client's ICP - user edits always win */
+async function prefillHiringRoles(campaignId) {
+  sw._suggesting = true;
+  if (sw.step === 1 && sw.type === "hiring") drawSrc();
+  try {
+    const r = await suggestFetch({ campaign_id: campaignId });
+    if (sw.step === 1 && sw.type === "hiring" && r.ok !== false) {
+      sw._basedOn = r.based_on;
+      if (!(sw._touched || {}).titles && (r.trigger_roles || []).length) sw.titles = r.trigger_roles.join(", ");
+      if (!(sw._touched || {}).dm_titles && (r.dm_titles || []).length) sw.dm_titles = r.dm_titles.join(", ");
+    }
+  } catch {}
+  sw._suggesting = false;
+  if (sw.step === 1 && sw.type === "hiring") drawSrc();
+}
+
+/* removable role chips backed by the comma-string sw fields the rest of the wizard reads */
+function roleList(field) { return (sw[field] || "").split(",").map((t) => t.trim()).filter(Boolean); }
+function roleChipRow(field, placeholder) {
+  const full = roleList(field).length >= 40;
+  return `<div class="chips-center" style="justify-content:flex-start;max-width:520px;margin:4px 0 0">
+    ${roleList(field).map((o, i) => `<span class="chip on" title="Click to remove" onclick="roleChipDel('${field}',${i})">${esc(o)}</span>`).join("")}
+    <span class="addchip"><input id="add-${field}" placeholder="${esc(placeholder)}"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();roleChipAdd('${field}')}"><button class="plus" title="Add" onclick="roleChipAdd('${field}')">+</button></span>
+    <button class="btn sm" onclick="roleGenMore('${field}')" ${sw._genbusy || full ? "disabled" : ""}
+      title="${full ? "That's plenty - remove a few before adding more" : "Suggest 10 more - it learns from what you remove and keep"}">${sw._genbusy === field ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
+}
+
+/* POST /api/role-suggest with a hard timeout so a slow model can never lock
+   the wizard - always resolves or throws within ~35s */
+async function suggestFetch(body) {
+  if (sw._clientId && body && !body.client_id) body.client_id = sw._clientId;  // pre-creation wizard: no campaign yet
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 35000);
+  try {
+    const res = await fetch("/api/role-suggest", { method: "POST", body: JSON.stringify(body), signal: ctrl.signal });
+    return await res.json();
+  } finally { clearTimeout(t); }
+}
+
+/* append ~10 fresh suggestions to one field - current chips + everything this
+   client ever declined are the exclusion set, kept history steers the flavour */
+const FIELD_FB = { titles: "trigger", dm_titles: "dm", keywords: "keywords", inc: "topics", negatives: "exclusions" };
+async function roleGenMore(field) {
+  if (sw._genbusy) return;
+  sw._genbusy = field;
+  sw._touched = { ...(sw._touched || {}), [field]: true };  // a manual generate counts as a touch, so a late auto-fill can't clobber it
+  drawSrc();
+  try {
+    const d = sw._declined || {};
+    const isRoles = field === "titles" || field === "dm_titles";
+    const body = isRoles
+      ? { campaign_id: sw.campaignId, count: 10,
+          exclude_trigger: roleList("titles"), exclude_dm: roleList("dm_titles"),
+          declined_trigger: d.titles || [], declined_dm: d.dm_titles || [] }
+      : { campaign_id: sw.campaignId, count: 10, kind: FIELD_FB[field],
+          exclude: field === "inc" ? [...sw.inc, ...sw.avd] : roleList(field),
+          declined: d[field] || [] };
+    const r = await suggestFetch(body);
+    if (r.ok === false) protoNote(`Couldn't generate: ${r.message || "try again in a moment"}`);
+    else {
+      const cur = field === "inc" ? [...sw.inc] : roleList(field);
+      const have = new Set(cur.map((t) => t.toLowerCase()));
+      for (const t of (isRoles ? (field === "titles" ? r.trigger_roles : r.dm_titles) : r.suggestions) || []) {
+        if (!have.has(t.toLowerCase()) && cur.length < 40) { cur.push(t); have.add(t.toLowerCase()); }
+      }
+      if (field === "inc") sw.inc = cur; else sw[field] = cur.join(", ");
+    }
+  } catch (e) { protoNote(e.name === "AbortError" ? "That took too long - try again" : "Couldn't generate right now - try again in a moment"); }
+  sw._genbusy = null;
+  if (sw.step === 1) drawSrc();
+}
+
+/* fire-and-forget feedback so suggestions learn per client */
+function roleFeedback(body) {
+  try { fetch("/api/role-feedback", { method: "POST", body: JSON.stringify({ campaign_id: sw.campaignId, ...body }) }); } catch {}
+}
+
+/* auto-fill a non-hiring ideation field on wizard open - user edits always win */
+async function prefillSuggest(field, kind) {
+  sw._suggesting = true;
+  if (sw.step === 1) drawSrc();
+  try {
+    const r = await suggestFetch({ campaign_id: sw.campaignId, kind, count: kind === "icp_text" ? 1 : 6 });
+    if (r.ok !== false && sw.step === 1 && (r.suggestions || []).length) {
+      sw._basedOn = r.based_on;
+      if (field === "keywords" && !(sw._touched || {}).keywords) sw.keywords = r.suggestions.join(", ");
+      if (field === "icp" && !(sw.icp || "").trim()) sw.icp = r.suggestions[0];
+    }
+  } catch {}
+  sw._suggesting = false;
+  if (sw.step === 1) drawSrc();
+}
+
+/* lookalike: rewrite the ideal-company description - the one being replaced is a decline */
+async function icpRewrite() {
+  if (sw._genbusy) return;
+  const el = document.getElementById("sw-icp");
+  if (el) sw.icp = el.value;  // capture any manual edits first
+  const old = (sw.icp || "").trim();
+  sw._genbusy = "icp"; drawSrc();
+  try {
+    sw._declined = sw._declined || {};
+    if (old) { (sw._declined.icp = sw._declined.icp || []).push(old); roleFeedback({ declined_icp: [old] }); }
+    const r = await suggestFetch({ campaign_id: sw.campaignId, kind: "icp_text", count: 1,
+      exclude: old ? [old] : [], declined: sw._declined.icp || [] });
+    if (r.ok === false) protoNote(`Couldn't write one: ${r.message || "try again in a moment"}`);
+    else if ((r.suggestions || []).length) { sw.icp = r.suggestions[0]; sw._basedOn = r.based_on; }
+  } catch (e) { protoNote(e.name === "AbortError" ? "That took too long - try again" : "Couldn't write one right now - try again in a moment"); }
+  sw._genbusy = null;
+  if (sw.step === 1) drawSrc();
+}
+function roleChipDel(field, i) {
+  const a = roleList(field);
+  const gone = a.splice(i, 1)[0];
+  sw[field] = a.join(", "); sw._touched = { ...(sw._touched || {}), [field]: true };
+  sw._declined = sw._declined || {}; (sw._declined[field] = sw._declined[field] || []).push(gone);
+  roleFeedback({ ["declined_" + FIELD_FB[field]]: [gone] });
+  drawSrc();
+}
+function roleChipAdd(field) {
+  const el = document.getElementById("add-" + field);
+  const v = (el && el.value || "").trim();
+  if (!v) return;
+  const a = roleList(field);
+  if (!a.some((x) => x.toLowerCase() === v.toLowerCase())) a.push(v);
+  sw[field] = a.join(", "); sw._touched = { ...(sw._touched || {}), [field]: true }; drawSrc();
+}
+function srcBack() { srcwiz.classList.remove("on"); }  // Back closes the wizard (user rule)
+function toggleIn(arr, v) { const i = arr.indexOf(v); i >= 0 ? arr.splice(i, 1) : arr.push(v); drawSrc(); }
+
+function chipRow(arr, options, field) {
+  return `<div class="chips-center" style="justify-content:flex-start;max-width:520px;margin:4px auto 0">
+    ${options.map((o) => `<span class="chip ${arr.includes(o) ? "on" : ""}" onclick="toggleIn(sw.${field},'${o}')">${o}</span>`).join("")}</div>`;
+}
+
+function drawSrc() {
+  [1, 2, 3].forEach((n) => {
+    const el = document.getElementById("sd" + n);
+    el.className = "wdot" + (n === sw.step ? " on" : n < sw.step ? " done" : "");
+    el.textContent = n < sw.step ? "✓" : n;
+  });
+  const body = document.getElementById("src-body");
+  const next = document.getElementById("src-next");
+  const m = SW_META[sw.type];
+  next.disabled = false;
+  next.innerHTML = sw.step === 1 ? (sw.type === "csv" ? "Parse" : sw.type === "engagement" ? "Review" : "Find them") : sw.step === 2 ? "Looks right" : "Save source";
+
+  if (sw.step === 1) {
+    if (sw.type === "hiring") body.innerHTML = `
+      <h2>${m.title}</h2><div class="lead">${m.lead}</div>
+      <div class="wfield">
+        <label>Roles they're hiring for (the trigger)</label>
+        ${roleChipRow("titles", "add a role…")}
+        <label>Who we email at these companies <span style="color:var(--orange-700)">*</span></label>
+        ${roleChipRow("dm_titles", "add a role…")}
+        ${sw._suggesting ? '<div class="small muted" style="margin-top:6px">Suggesting roles from your client’s ICP…</div>'
+          : sw._basedOn ? `<div class="small muted" style="margin-top:6px">Suggested from ${sw._basedOn === "goal" ? "your campaign goal + client ICP" : "the campaign name - this campaign has no goal set"}. Click a role to remove it.</div>` : ""}
+        <label>Exclude posts containing <span class="muted" style="font-weight:400">(optional)</span></label>
+        ${roleChipRow("negatives", "e.g. intern, contract")}
+        <label>Max leads per day</label>
+        <input id="sw-lpd" type="number" min="1" max="100" value="${sw.leads_per_day || 20}" style="max-width:110px">
+        <label>Countries</label>${swGeoRow(COUNTRIES)}
+        <label>Company size</label>${chipRow(sw.hc, HC_BUCKETS, "hc")}
+      </div>`;
+    else if (sw.type === "companies") body.innerHTML = `
+      <h2>${m.title}</h2><div class="lead">${m.lead}</div>
+      <div class="wfield">
+        <label>Buyer type (what kind of company)</label>
+        ${roleChipRow("keywords", "add a buyer type…")}
+        ${sw._suggesting ? '<div class="small muted" style="margin-top:6px">Suggesting buyer types from your client’s ICP…</div>'
+          : sw._basedOn ? `<div class="small muted" style="margin-top:6px">Suggested from ${sw._basedOn === "goal" ? "your campaign goal + client ICP" : "the campaign name - this campaign has no goal set"}. Click one to remove it.</div>` : ""}
+        <label>Countries</label>${chipRow(sw.geo, COUNTRIES, "geo")}
+        <label>Company size</label>${chipRow(sw.hc, HC_BUCKETS, "hc")}
+      </div>`;
+    else if (sw.type === "lookalike") body.innerHTML = `
+      <h2>${m.title}</h2><div class="lead">${m.lead}</div>
+      <div class="wfield">
+        <label>Describe them</label><textarea id="sw-icp" rows="2" placeholder="e.g. B2B software development agency serving mid-market clients">${esc(sw.icp || "")}</textarea>
+        <div style="margin-top:6px"><button class="btn sm" onclick="icpRewrite()" ${sw._genbusy ? "disabled" : ""}
+          title="Writes a fresh description from your client's ICP - it won't repeat one you rewrote away">${sw._genbusy === "icp" ? "🪄 Thinking…" : sw.icp ? "🪄 Write it differently" : "🪄 Write it for me"}</button></div>
+        <label>How close a match</label>
+        <div class="chips-center" style="justify-content:flex-start;margin-top:4px">
+          ${[["T1", "Tight"], ["T2", "Balanced"], ["T3", "Wide"]].map(([t, l]) => `<span class="chip ${sw.tier === t ? "on" : ""}" onclick="sw.tier='${t}';drawSrc()">${l}</span>`).join("")}
+        </div>
+        <label>Countries</label>${chipRow(sw.geo, COUNTRIES, "geo")}
+        <label>Company size</label>${chipRow(sw.hc, HC_BUCKETS, "hc")}
+      </div>`;
+    else if (sw.type === "engagement") body.innerHTML = `
+      <h2>${m.title}</h2><div class="lead">${m.lead}</div>
+      <div class="wfield">
+        <label>LinkedIn profiles to monitor <span style="color:var(--orange-700)">*</span> <span class="muted" style="font-weight:400">· one per line · people or company pages</span></label>
+        <textarea id="sw-urls" rows="4" placeholder="https://www.linkedin.com/in/someone&#10;https://www.linkedin.com/company/somebrand" oninput="swUrlHint()">${esc(sw.urls || "")}</textarea>
+        <div class="small muted" id="sw-url-hint" style="margin-top:2px"></div>
+        <label>Post topics that count <span class="muted" style="font-weight:400">· a post must match one of these</span></label>
+        ${chipEditRow("inc", "e.g. GTM strategy")}
+        <div style="margin-top:6px"><button class="btn sm" onclick="roleGenMore('inc')" ${sw._genbusy || sw.inc.length >= 40 ? "disabled" : ""}
+          title="Suggest 10 more topics - it learns from what you remove and keep">${sw._genbusy === "inc" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>
+        <label>Post topics to skip <span class="muted" style="font-weight:400">· engagers on these posts are ignored, however good the person</span></label>
+        ${chipEditRow("avd", "e.g. event recaps")}
+        <label>Who counts as a warm lead <span style="color:var(--orange-700)">*</span></label>
+        ${roleChipRow("dm_titles", "add a role…")}
+        <label>Companies to avoid <span class="muted" style="font-weight:400">· engagers at these are ignored</span></label>
+        ${chipEditRow("avoid_companies", "e.g. recruiting agencies")}
+        <div style="margin-top:6px"><button class="btn sm" onclick="swGenList('avoid_companies','avoid_companies')" ${sw._genbusy ? "disabled" : ""}
+          title="Suggest company types to exclude">${sw._genbusy === "avoid_companies" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>
+        <label>Countries</label>${swGeoRow(ENG_COUNTRIES)}
+        <label>Company size</label>${chipRow(sw.hc, HC_BUCKETS, "hc")}
+        <label>Never include <span class="muted" style="font-weight:400">· optional, plain English</span></label>
+        <input id="sw-avrules" value="${esc(sw.avoid_rules || "")}" placeholder="e.g. no recruiters, no direct lead-gen agencies">
+        <label>Mention the post in copy?</label>
+        <div class="chips-center" style="justify-content:flex-start;margin-top:4px">
+          <span class="chip ${sw.copy_ref ? "on" : ""}" onclick="sw.copy_ref=true;drawSrc()">Yes - fill {{WhosePost}} and {{Topic}}</span>
+          <span class="chip ${sw.copy_ref ? "" : "on"}" onclick="sw.copy_ref=false;drawSrc()">No - role and company anchors only</span>
+        </div>
+        <div class="small muted" style="margin-top:4px">Heads up: referencing a competitor's post reveals you monitor their audience.</div>
+        <label>Max leads per day</label>
+        <input id="sw-lpd" type="number" min="1" max="100" value="${sw.leads_per_day || 25}" style="max-width:110px">
+      </div>`;
+    else body.innerHTML = `
+      <h2>${m.title}</h2><div class="lead">${m.lead}</div>
+      <div class="wfield" style="text-align:center;padding:20px 0">
+        <input type="file" id="sw-file" accept=".csv,.tsv" style="font-size:13px">
+      </div>`;
+    if (sw.type === "engagement") swUrlHint();
+  } else if (sw.step === 2 && sw.type === "engagement") {
+    const dc = (DB.campaignDrafts || []).find((c) => String(c.id) === String(sw.campaignId)) || {};
+    const dest = dc.destination || {};
+    const destLine = dest.smartlead_campaign_id ? `Email campaign ${esc(String(dest.smartlead_campaign_name || dest.smartlead_campaign_id))}`
+      : dest.heyreach_list_id || dest.heyreach_list_name ? `LinkedIn list ${esc(String(dest.heyreach_list_name || dest.heyreach_list_id))}`
+      : `not set yet - use "Set up where leads go" on the campaign page`;
+    body.innerHTML = `
+      <h2>Check the watch-list.</h2>
+      <div class="lead">Once launched, these profiles are tracked daily and every engager is scored before it reaches you.</div>
+      <div style="max-width:560px;margin:0 auto;text-align:left">
+        <div class="sumrow"><span class="k">Monitoring</span><span>${sw.eng_urls.map((u) => esc(u.split("/").slice(-1)[0])).join(", ")} <span class="muted">(${sw.eng_urls.length})</span></span></div>
+        <div class="sumrow"><span class="k">Posts that count</span><span>${sw.inc.map(esc).join(", ")}${sw.wild ? ` · plus: ${esc(sw.wild)}` : ""}</span></div>
+        <div class="sumrow"><span class="k">Posts to skip</span><span>${sw.avd.map(esc).join(", ") || "None"}</span></div>
+        <div class="sumrow"><span class="k">Warm lead =</span><span>${esc(sw.dm_titles)}</span></div>
+        <div class="sumrow"><span class="k">Where</span><span>${sw.geo.map(esc).join(", ")}</span></div>
+        <div class="sumrow"><span class="k">Company size</span><span>${sw.hc.join(", ")} employees</span></div>
+        <div class="sumrow"><span class="k">Never include</span><span>${esc(sw.avoid_rules) || "Previously contacted only"}</span></div>
+        <div class="sumrow"><span class="k">Copy mentions post</span><span>${sw.copy_ref ? "Yes - {{WhosePost}} + {{Topic}} filled per lead" : "No - role and company anchors"}</span></div>
+        <div class="sumrow"><span class="k">Daily cap</span><span>${sw.leads_per_day} leads/day</span></div>
+        <div class="sumrow"><span class="k">Leads go to</span><span>${destLine}</span></div>
+      </div>`;
+  } else if (sw.step === 2) {
+    const r = sw.result;
+    if (!r) { body.innerHTML = `<h2>Searching…</h2><div class="lead">Live data, one moment.</div><div class="empty" style="padding:40px 0">${ic8(m.icon, "xl")}</div>`; next.disabled = true; return; }
+    if (!r.ok) { body.innerHTML = `<h2>No luck.</h2><div class="lead">${esc(r.message || "Search failed")}</div>`; next.disabled = true; return; }
+    const heroes = sw.type === "hiring"
+      ? [[r.total_prospects, "decision makers (estimated)", "≈"]]
+      : r.total_dms_estimate
+        ? [[r.total_dms_estimate, "decision makers (estimated)", "≈"]]
+        : [[r.total_companies, "companies found"]];
+    const secondary = "";
+    const cols = sw.type === "hiring" ? ["Role", "Size", "Industry", "Where"] : ["Company", "Size", "Industry", "Where"];
+    const rows = (r.sample || []).map((s) => sw.type === "hiring"
+      ? [s.job_title, s.company_size, s.industry, s.country]
+      : [s.name, s.size, s.industry, s.country]);
+    body.innerHTML = `
+      <h2>Here's what's out there.</h2>
+      <div class="lead">${esc(r.cost)} · sample below, full list comes with the daily run</div>
+      <div style="display:flex;gap:36px;justify-content:center;margin:10px 0 16px">
+        ${heroes.filter(([v]) => v).map(([v, l, pre]) => `<div><div class="num-hero">${pre || ""}${fmt(v)}</div><div class="small muted">${l}</div></div>`).join("")}
+      </div>
+      ${secondary}
+      <table class="tbl" style="text-align:left;font-size:12.5px">
+        <tr>${cols.map((c2) => `<th>${c2}</th>`).join("")}</tr>
+        ${rows.slice(0, 8).map((cells) => `<tr>${cells.map((v) => `<td>${esc(String(v ?? ""))}</td>`).join("")}</tr>`).join("")}
+      </table>`;
+  } else {
+    body.innerHTML = `
+      <h2>Name it, save it.</h2>
+      <div class="lead">Saved as a draft on this campaign. Nothing runs until you launch it.</div>
+      <div class="wfield">
+        <label>Source name</label>
+        <input id="sw-name" value="${esc(sw.name || defaultName())}">
+      </div>`;
+  }
+}
+
+function defaultName() {
+  if (sw.type === "engagement") {
+    const first = (sw.eng_urls || [])[0] || "";
+    const slug = first.split("/").slice(-1)[0] || "profiles";
+    const extra = (sw.eng_urls || []).length - 1;
+    return `Engagers of ${slug}${extra > 0 ? ` +${extra}` : ""}`;
+  }
+  if (sw.type === "hiring") return `Hiring: ${(sw.titles || "sales roles").split(",")[0].trim()}`;
+  if (sw.type === "companies") return `Filter: ${sw.keywords || "companies"}`;
+  if (sw.type === "lookalike") return `Lookalikes: ${(sw.icp || "").slice(0, 40) || "ideal companies"}`;
+  return `CSV: ${sw.csv?.filename || "upload"}`;
+}
+
+function swWarn(msg) {
+  // validation the user can actually SEE: inline at the top of the form, not just a toast
+  const h = document.getElementById("sw-url-hint");
+  if (h) { h.textContent = "⚠ " + msg; h.style.color = "var(--orange-700)"; h.scrollIntoView({ block: "center" }); }
+  protoNote(msg);
+}
+
+async function engSavePartial() {
+  // save the watch-list half-finished: everything except (possibly) the URLs
+  sw.urls = document.getElementById("sw-urls")?.value ?? sw.urls;
+  sw.wild = (document.getElementById("sw-wild")?.value || sw.wild || "").trim();
+  sw.dm_titles = document.getElementById("sw-dm")?.value ?? sw.dm_titles;
+  sw.avoid_rules = (document.getElementById("sw-avrules")?.value || sw.avoid_rules || "").trim();
+  sw.leads_per_day = parseInt(document.getElementById("sw-lpd")?.value, 10) || sw.leads_per_day || 25;
+  const u = parseEngUrls(sw.urls);
+  if (u.bad.length) { swWarn(`${u.bad.length} line${u.bad.length === 1 ? " isn't" : "s aren't"} a LinkedIn profile URL - fix or remove before saving: ${u.bad[0].slice(0, 60)}`); return; }
+  sw.eng_urls = u.valid;
+  const csvList = (s) => (s || "").split(",").map((t) => t.trim()).filter(Boolean);
+  const engConfig = {
+    engagement: {
+      ...(((window._drafts || []).find((x) => x.id === sw.editId) || {}).config?.engagement || {}),
+      linkedin_urls: sw.eng_urls,
+      include_topics: sw.inc, avoid_topics: sw.avd, wildcard: sw.wild, avoid_companies: sw.avoid_companies || [],
+      engager_titles: csvList(sw.dm_titles), avoid_rules: sw.avoid_rules,
+      copy_reference: !!sw.copy_ref, leads_per_day: sw.leads_per_day,
+    },
+    countries: sw.geo, headcount: sw.hc, leads_per_day: sw.leads_per_day,
+  };
+  if (!sw.editId && !(await ensureCampaign())) return;
+  const r = sw.editId
+    ? await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id: sw.editId, name: sw.name || undefined, titles: csvList(sw.dm_titles), config: engConfig }) })).json()
+    : await (await fetch("/api/sources", { method: "POST", body: JSON.stringify({ type: "engagement", mechanism: "engagement", name: sw.name || "LinkedIn engagement watch-list", campaign_id: sw.campaignId, titles: csvList(sw.dm_titles), config: engConfig }) })).json();
+  if (r && r.ok === false) { protoNote(r.message || "Couldn't save"); return; }
+  srcwiz.classList.remove("on");
+  protoNote(sw.eng_urls.length
+    ? "Saved - press ▶ Start monitoring whenever you want it live"
+    : "Saved without profiles - add them any time with ✎ Edit profiles; nothing runs until then");
+  if (document.getElementById("draftlist")) renderDrafts(sw.campaignId); else renderDraftCampaign(sw.campaignId);
+}
+
+async function srcNext() {
+  if (sw.step === 1) {
+    if (sw.type === "csv") {
+      const f = document.getElementById("sw-file").files[0];
+      if (!f) { protoNote("Choose a file first"); return; }
+      const text = await f.text();
+      const sep = text.includes("\t") ? "\t" : ",";
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      const header = lines[0].split(sep).map((h) => h.replace(/^"|"$/g, "").trim());
+      const rows = lines.slice(1, 9).map((l) => l.split(sep).map((v) => v.replace(/^"|"$/g, "").trim()));
+      sw.csv = { filename: f.name, rows: lines.length - 1, header };
+      sw.result = { ok: true, cost: "parsed locally", total_companies: lines.length - 1,
+        sample: rows.map((cells) => ({ name: cells[0], size: "", industry: "", country: "" })) };
+      sw.step = 2; drawSrc(); return;
+    }
+    if (sw.type === "engagement") {
+      sw.urls = document.getElementById("sw-urls").value;
+      sw.wild = document.getElementById("sw-wild")?.value.trim() || sw.wild || "";
+      sw.avoid_rules = document.getElementById("sw-avrules").value.trim();
+      sw.leads_per_day = parseInt(document.getElementById("sw-lpd").value, 10) || 25;
+      const u = parseEngUrls(sw.urls);
+      if (!u.valid.length) { swWarn("Add at least one LinkedIn profile URL (linkedin.com/in/… or linkedin.com/company/…) - or use “💾 Save for later” in the footer and add them later"); return; }
+      if (u.bad.length) { swWarn(`${u.bad.length} line${u.bad.length === 1 ? " isn't" : "s aren't"} a LinkedIn profile URL - fix or remove: ${u.bad[0].slice(0, 60)}`); return; }
+      if (!sw.inc.length && !sw.wild.trim()) { swWarn("Keep at least one topic that counts - it's what posts are scored against"); return; }
+      if (!(sw.dm_titles || "").trim()) { swWarn("Who counts as a warm lead is required - add at least one role"); return; }
+      roleFeedback({ kept_dm: roleList("dm_titles"), kept_topics: sw.inc });  // what survived pruning = positive signal
+      sw.eng_urls = u.valid;
+      sw.result = { ok: true };
+      sw.step = 2; drawSrc(); return;
+    }
+    sw.titles = document.getElementById("sw-titles")?.value || sw.titles;
+    sw.dm_titles = document.getElementById("sw-dm")?.value ?? sw.dm_titles;
+    sw.negatives = document.getElementById("sw-neg")?.value ?? sw.negatives;
+    sw.leads_per_day = parseInt(document.getElementById("sw-lpd")?.value, 10) || sw.leads_per_day || 20;
+    sw.keywords = document.getElementById("sw-keywords")?.value || sw.keywords;
+    sw.icp = document.getElementById("sw-icp")?.value || sw.icp;
+    if (sw.type === "hiring" && !(sw.dm_titles || "").trim()) { protoNote("Who we email is required - add at least one decision-maker role"); return; }
+    if (sw.type === "hiring") roleFeedback({ kept_trigger: roleList("titles"), kept_dm: roleList("dm_titles") });  // what survived pruning = positive signal
+    if (sw.type === "companies" && !(sw.keywords || "").trim()) { protoNote("Describe the buyer type first"); return; }
+    if (sw.type === "lookalike" && !(sw.icp || "").trim()) { protoNote("Describe the companies first"); return; }
+    sw.step = 2; sw.result = null; drawSrc();
+    const payload = sw.type === "hiring"
+      ? { job_titles: (sw.titles || "").split(",").map((t) => t.trim()).filter(Boolean), countries: sw.geo.map((g) => CC[g] || g), min_emp: 11, max_emp: 500, days: 30,
+          dm_count: (sw.dm_titles || "").split(",").map((t) => t.trim()).filter(Boolean).length,
+          dm_titles: (sw.dm_titles || "").split(",").map((t) => t.trim()).filter(Boolean),
+          country_names: sw.geo }
+      : sw.type === "companies"
+        ? { keywords: roleList("keywords"), headcount: sw.hc, countries: sw.geo }
+        : { icp_text: sw.icp, tier: sw.tier, headcount: sw.hc, countries: sw.geo };
+    if (sw.type === "companies") roleFeedback({ kept_keywords: roleList("keywords") });
+    if (sw.type === "lookalike" && (sw.icp || "").trim()) roleFeedback({ kept_icp: [sw.icp.trim()] });
+    try {
+      const r = await fetch(`/api/preview/${sw.type}`, { method: "POST", body: JSON.stringify(payload) });
+      sw.result = await r.json();
+    } catch (e) { sw.result = await fetchJsonRetry(`/api/preview/${sw.type}`, payload); }
+    drawSrc();
+  } else if (sw.step === 2) {
+    sw.step = 3; drawSrc();
+  } else {
+    sw.name = document.getElementById("sw-name").value;
+    const csvList = (s) => (s || "").split(",").map((t) => t.trim()).filter(Boolean);
+    if (sw.type === "hiring" && !csvList(sw.dm_titles).length) { protoNote("Who we email is required - go back and add decision-maker roles"); return; }
+    if (!sw.editId && !(await ensureCampaign())) return;
+    const engConfig = sw.type === "engagement" ? {
+      engagement: {
+        ...(((window._drafts || []).find((x) => x.id === sw.editId) || {}).config?.engagement || {}),  // keep trigify ids on edit
+        linkedin_urls: sw.eng_urls,
+        include_topics: sw.inc, avoid_topics: sw.avd, wildcard: sw.wild, avoid_companies: sw.avoid_companies || [],
+        engager_titles: csvList(sw.dm_titles), avoid_rules: sw.avoid_rules,
+        copy_reference: !!sw.copy_ref, leads_per_day: sw.leads_per_day || 25,
+      },
+      countries: sw.geo, headcount: sw.hc, leads_per_day: sw.leads_per_day || 25,
+    } : null;
+    if (sw.editId) {  // finish-setup: update the existing source instead of creating a twin
+      const r2 = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({
+        id: sw.editId, name: sw.name, titles: csvList(sw.dm_titles), config: engConfig,
+      }) })).json();
+      if (r2.ok === false) { protoNote(r2.message || "Couldn't save the source"); return; }
+      srcwiz.classList.remove("on");
+      protoNote('Saved - removed profiles stop being watched automatically; if you added new ones, hit "▶ Start monitoring" to watch them');
+      renderDrafts(sw.campaignId);
+      return;
+    }
+    const r = await (await fetch("/api/sources", { method: "POST", body: JSON.stringify({
+      type: sw.type, name: sw.name, campaign_id: sw.campaignId,
+      total: sw.result?.total_prospects || sw.result?.total_companies || null,
+      titles: (sw.type === "hiring" || sw.type === "engagement") ? csvList(sw.dm_titles) : undefined,
+      config: sw.type === "engagement" ? engConfig
+        : { titles: sw.titles, job_titles: sw.type === "hiring" ? csvList(sw.titles) : undefined,
+        negative_keywords: sw.type === "hiring" ? csvList(sw.negatives) : undefined,
+        leads_per_day: sw.type === "hiring" ? (sw.leads_per_day || 20) : undefined,
+        keywords: sw.keywords, icp: sw.icp, tier: sw.tier, headcount: sw.hc, countries: sw.geo, days: 30, csv: sw.csv },
+    }) })).json();
+    if (!r.ok) { protoNote(r.message || "Couldn't save the source"); return; }
+    srcwiz.classList.remove("on");
+    protoNote("Source saved as draft");
+    renderDrafts(sw.campaignId);
+  }
+}
+
+/* Launch gate — opening it counts as a recorded check run */
+function openQAGate(id) {
+  const c = (DB.campaigns || []).find((x) => x.id === id);
+  const d = DB.campaign_details?.[String(id)];
+  qagate.classList.add("on");
+  const body = document.getElementById("qagate-body");
+  if (!d) { body.innerHTML = '<div class="empty">Not in the snapshot detail set</div>'; return; }
+  const checks = computeChecks(c, d);
+  const icon = { pass: '<span class="pill g">PASS</span>', warn: '<span class="pill a">WARN</span>', fail: '<span class="pill r">FAIL</span>' };
+  body.innerHTML = checks.map(([lvl, t, dsc]) => `
+    <div class="qa-row">${icon[lvl]}<div><div class="t">${esc(t)}</div><div class="d">${esc(dsc)}</div></div></div>`).join("");
+  fetch("/api/qa-history", { method: "POST", body: JSON.stringify({
+    campaign_id: id,
+    checks: checks.map(([level, title, detail]) => ({ level, title, detail })),
+    fails: checks.filter((x) => x[0] === "fail").length,
+    warns: checks.filter((x) => x[0] === "warn").length,
+  }) }).catch(() => {});
+}
+</script>
+</body>
+</html>

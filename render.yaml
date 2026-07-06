@@ -1,0 +1,51 @@
+envVarGroups:
+  - name: navreo-secrets
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: THEIRSTACK_API_KEY
+        sync: false
+      - key: PROSPEO_API_KEY
+        sync: false
+      - key: AI_ARK_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: HEYREACH_API_KEY
+        sync: false
+      - key: TRIGIFY_API_KEY
+        sync: false
+      - key: SMARTLEAD_API_KEY
+        sync: false
+      - key: BETTERCONTACT_API_KEY
+        sync: false
+      - key: MILLIONVERIFIER_API_KEY
+        sync: false
+
+services:
+  # The web app + /api. Render injects $PORT; server.py binds 0.0.0.0.
+  - type: web
+    name: navreo-signals
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/server.py
+    healthCheckPath: /api/lead-counts
+    envVars:
+      - fromGroup: navreo-secrets
+
+  # The daily pull, formerly launchd. UTC schedule — 07:30 UTC ≈ the old
+  # morning run. Adjust the cron to your preferred send-prep time.
+  - type: cron
+    name: navreo-signals-daily
+    runtime: python
+    plan: starter
+    schedule: "30 7 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/run_daily.py
+    envVars:
+      - fromGroup: navreo-secrets

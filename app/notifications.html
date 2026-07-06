@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notifications · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+.note {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  margin-bottom: 12px; position: relative; overflow: hidden;
+}
+.note::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.note.high::before { background: var(--red); }
+.note.medium::before { background: var(--amber); }
+.note.low::before { background: var(--brown-300); }
+.note.done { opacity: 0.5; }
+.note-main { display: flex; gap: 14px; padding: 16px 18px; align-items: flex-start; }
+.note .t { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.note .d { font-size: 13px; color: var(--ink-2); margin-top: 5px; max-width: 720px; line-height: 1.55; }
+.note .meta { display: flex; gap: 14px; margin-top: 9px; font-size: 11.5px; color: var(--ink-3); flex-wrap: wrap; }
+.note .meta .rule { font-family: var(--font-mono); font-size: 10.5px; color: var(--orange-700); }
+.note .nums { display: flex; gap: 18px; margin-top: 10px; }
+.note .nums .nv { font-family: var(--font-display); font-size: 22px; line-height: 1; }
+.note .nums .nl { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
+.decide { display: flex; gap: 7px; flex-shrink: 0; }
+.counts { display: flex; gap: 8px; margin: 18px 0 16px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow">Notifications</div>
+        <h1>What we'd change.</h1>
+      </div>
+      <div id="fresh"></div>
+    </div>
+    <div class="counts" id="counts"></div>
+    <div id="list"></div>
+  </main>
+</div>
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("notifications");
+
+let notes = [], filter = "all";
+init();
+async function init() {
+  const { notifications, meta } = await loadData("notifications", "meta");
+  notes = (notifications || []).map((n, i) => ({ ...n, _id: i, _state: null }));
+  document.getElementById("fresh").innerHTML = freshnessBlock(meta);
+  draw();
+}
+
+function draw() {
+  const counts = { all: notes.length, high: 0, medium: 0, low: 0 };
+  notes.forEach((n) => counts[n.priority]++);
+  document.getElementById("counts").innerHTML = ["all", "high", "medium", "low"]
+    .filter((k) => counts[k])
+    .map((k) => `<button class="chip ${filter === k ? "on" : ""}" onclick="filter='${k}';draw()">${k === "all" ? "All" : k} <span class="n">${counts[k]}</span></button>`)
+    .join("");
+
+  const CAT = {
+    "dead-variant": ["Copy test", "edit"],
+    "kill-threshold": ["Offer", "target"],
+    "reply-rate": ["Deliverability", "mail"],
+    "email-1 75%": ["Add leads", "people"],
+    "field hygiene": ["List hygiene", "tasklist"],
+  };
+  const catFor = (rule) => Object.entries(CAT).find(([k]) => (rule || "").includes(k))?.[1] || ["Review", "idea"];
+  const plain = (s) => (s || "").replace(/\s*\((lilly|the lead audit)[^)]*\)/gi, "").replace(/lilly-\S+/gi, "").trim();
+
+  const shown = notes.filter((n) => filter === "all" || n.priority === filter);
+  document.getElementById("list").innerHTML = shown.length ? shown.map((n) => {
+    const [cat, icon] = catFor(n.rule);
+    return `
+    <div class="note ${n.priority} ${n._state ? "done" : ""}">
+      <div class="note-main">
+        <div class="ictile">${ic8(icon)}</div>
+        <div style="flex:1">
+          <div class="t">${esc(n.title)}
+            <span class="pill ${n.priority === "high" ? "r" : n.priority === "medium" ? "a" : "n"}">${cat}</span>
+            ${n._state ? `<span class="pill n">${n._state}</span>` : ""}
+          </div>
+          <div class="d">${esc(plain(n.detail))}</div>
+          <div class="nums">${Object.entries(n.numbers || {}).map(([k, v]) =>
+            `<div><div class="nv">${fmt(v)}</div><div class="nl">${esc(k)}</div></div>`).join("")}
+          </div>
+          <div class="meta">
+            <a style="color:var(--orange-700);cursor:pointer;text-decoration:none" href="campaigns.html#${n.campaign_id}">${esc(n.campaign)}</a>
+          </div>
+        </div>
+        <div class="decide">
+          <button class="btn sm" onclick="decide(${n._id},'dismissed')">Dismiss</button>
+          <button class="btn sm primary" onclick="decide(${n._id},'approved')">Approve</button>
+        </div>
+      </div>
+    </div>`;
+  }).join("") : '<div class="empty">Nothing at this priority</div>';
+}
+
+function decide(id, state) {
+  const n = notes.find((x) => x._id === id);
+  n._state = state;
+  protoNote("Read-only prototype");
+  draw();
+}
+</script>
+</body>
+</html>

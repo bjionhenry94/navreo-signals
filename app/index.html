@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+.grid2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; margin-top: 14px; }
+.panel { padding: 18px 20px; }
+.panel h2 { margin-bottom: 2px; }
+.panel .sub { margin-bottom: 14px; }
+.legend { display: flex; gap: 16px; font-size: 11.5px; color: var(--ink-3); margin-bottom: 10px; }
+.legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.sigrow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.sigrow:last-child { border-bottom: none; }
+.sigrow .ic { width: 28px; height: 28px; border-radius: 8px; background: var(--bg-sunken); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sigrow .ic .ic8 { width: 14px; height: 14px; color: var(--ink-2); }
+.stat { position: relative; }
+.stat .ictile { position: absolute; top: 14px; right: 14px; width: 32px; height: 32px; }
+.stat .ictile .ic8 { width: 16px; height: 16px; }
+.sigrow .t { font-weight: 500; }
+.sigrow .d { font-size: 11.5px; color: var(--ink-3); }
+.attn { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.attn:last-child { border-bottom: none; }
+.attn .t { font-weight: 500; }
+.attn .d { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
+.toplist td .bar-track { margin-top: 5px; width: 120px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow">Command centre</div>
+        <h1>Welcome back, Bjion.</h1>
+      </div>
+      <div id="fresh"></div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card panel">
+      <h2>Activity</h2>
+      <div class="legend" style="margin-top:6px">
+        <span><span class="sw" style="background:var(--ink)"></span>Sent</span>
+        <span><span class="sw" style="background:var(--orange)"></span>Replies (×20)</span>
+      </div>
+      <div id="chart"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card panel">
+        <h2>Needs attention</h2>
+        <div id="attention" style="margin-top:8px"></div>
+      </div>
+      <div class="card panel">
+        <h2>Active signals</h2>
+        <div id="signals" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card panel" style="margin-top:14px">
+      <h2>Top campaigns</h2>
+      <table class="tbl toplist" id="toplist" style="margin-top:8px"></table>
+    </div>
+  </main>
+</div>
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("dashboard");
+
+(async () => {
+  const { campaigns, campaign_details, signals, notifications, meta } =
+    await loadData("campaigns", "campaign_details", "signals", "notifications", "meta");
+
+  document.getElementById("fresh").innerHTML = freshnessBlock(meta);
+
+  const active = (campaigns || []).filter((c) => c.status === "ACTIVE");
+  const sum = (arr, f) => arr.reduce((a, c) => a + (f(c) || 0), 0);
+  const sent = sum(active, (c) => c.analytics.sent);
+  const replies = sum(active, (c) => c.analytics.replies);
+  const positives = sum(active, (c) => c.analytics.positives);
+
+  const replyRate = sent ? (100 * replies / sent) : 0;
+  const stats = [
+    ["Active campaigns", fmt(active.length), `of ${fmt((campaigns || []).length)} total`, "campaigns"],
+    ["Emails sent", fmt(sent), "lifetime", "send"],
+    ["Reply rate", replyRate.toFixed(2) + "%", replyRate >= 1 ? "above 1% benchmark" : "below 1% benchmark", "reply"],
+    ["Positive replies", fmt(positives), positives ? `1 per ${fmt(Math.round(sent / positives))} emails` : "-", "thumbsup"],
+  ];
+  document.getElementById("stats").innerHTML = stats.map(([lab, val, hint, icon]) =>
+    `<div class="stat"><div class="ictile">${ic8(icon)}</div><div class="lab">${lab}</div><div class="num-hero">${val}</div><div class="hint">${hint}</div></div>`
+  ).join("");
+
+  /* chart: aggregate daily across detailed campaigns */
+  const byDate = {};
+  Object.values(campaign_details || {}).forEach((d) => (d.daily || []).forEach((r) => {
+    if (!r.date) return;
+    byDate[r.date] = byDate[r.date] || { sent: 0, replies: 0 };
+    byDate[r.date].sent += r.sent;
+    byDate[r.date].replies += r.replies;
+  }));
+  const dates = Object.keys(byDate).sort();
+  if (dates.length) {
+    const label = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    lineChart(document.getElementById("chart"), [
+      { color: "#14110E", points: dates.map((d) => ({ y: byDate[d].sent, label: label(d) })) },
+      { color: "#FF4D00", points: dates.map((d) => ({ y: byDate[d].replies * 20, label: label(d) })) },
+    ]);
+  } else {
+    document.getElementById("chart").innerHTML = '<div class="empty">No daily data in snapshot</div>';
+  }
+
+  /* needs attention */
+  const notes = (notifications || []).slice(0, 4);
+  document.getElementById("attention").innerHTML = notes.length ? notes.map((n) => `
+    <div class="attn">
+      <span class="pill ${n.priority === "high" ? "r" : n.priority === "medium" ? "a" : "n"}">${n.priority}</span>
+      <div><div class="t">${esc(n.title)}</div><div class="d">${esc(n.campaign)}</div></div>
+    </div>`).join("") : '<div class="empty">Nothing flagged</div>';
+
+  /* signals strip */
+  const sigs = [...(signals?.theirstack_briefs || []), ...(signals?.signal_routines || [])];
+  const sigIcon = { hiring: "briefcase", news: "signal", linkedin: "linkedin", tech_adoption: "data", company_attribute: "search" };
+  document.getElementById("signals").innerHTML = sigs.length ? sigs.map((s) => `
+    <div class="sigrow">
+      <div class="ic">${ic8(sigIcon[s.signal_type] || "signal")}</div>
+      <div style="flex:1">
+        <div class="t">${esc(s.name)}</div>
+        <div class="d">${esc(s.client || "")}</div>
+      </div>
+      <span class="pill ${s.schedule_cron ? "g" : "n"}">${s.schedule_cron ? "daily" : "setup"}</span>
+    </div>`).join("") : '<div class="empty">No signals configured</div>';
+
+  /* top campaigns table */
+  const top = [...active].sort((a, b) => (b.analytics.positives || 0) - (a.analytics.positives || 0)).slice(0, 6);
+  const maxPos = Math.max(1, ...top.map((c) => c.analytics.positives || 0));
+  document.getElementById("toplist").innerHTML =
+    `<tr><th>Campaign</th><th>Sent</th><th>Replies</th><th>Positives</th><th></th></tr>` +
+    top.map((c) => `
+      <tr class="click" onclick="location.href='campaigns.html#${c.id}'">
+        <td style="font-weight:500">${esc(c.name)}</td>
+        <td>${fmt(c.analytics.sent)}</td>
+        <td>${fmt(c.analytics.replies)} <span class="muted small">(${pct(c.analytics.replies, c.analytics.sent)})</span></td>
+        <td style="font-weight:600">${fmt(c.analytics.positives)}</td>
+        <td><div class="bar-track"><div class="bar-fill" style="width:${100 * (c.analytics.positives || 0) / maxPos}%"></div></div></td>
+      </tr>`).join("");
+})();
+</script>
+</body>
+</html>
