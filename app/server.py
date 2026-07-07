@@ -3189,7 +3189,23 @@ def cron_pull_all():
             entry["error"] = str(e)[:200]
             out["errors"] += 1
         out["sources"].append(entry)
+    try:  # durable, queryable record of every scheduled run (best-effort)
+        sb("POST", "signal_cron_runs", {"summary": out})
+    except Exception:  # noqa: BLE001
+        pass
     return out
+
+
+_CRON_LOCK = threading.Lock()  # one batch pull at a time; overlapping ticks no-op
+
+
+def _cron_pull_bg():
+    if not _CRON_LOCK.acquire(blocking=False):
+        return  # a prior tick is still running — skip this one
+    try:
+        cron_pull_all()
+    finally:
+        _CRON_LOCK.release()
 
 
 # ── HTTP plumbing ────────────────────────────────────────────────────────
@@ -3334,10 +3350,13 @@ class Handler(SimpleHTTPRequestHandler):
             got = self.headers.get("x-navreo-token")
             if not want or got != want:
                 return self._json({"ok": False, "message": "unauthorized"}, 401)
-            try:
-                return self._json(cron_pull_all())
-            except Exception as e:  # noqa: BLE001
-                return self._json({"ok": False, "message": str(e)[:300]}, 200)
+            # Fire-and-forget: the full pull over all sources runs far longer than
+            # any HTTP/pg_net timeout, so kick it to a background thread and return
+            # immediately. Each run's summary lands in signal_cron_runs (Supabase).
+            if _CRON_LOCK.locked():
+                return self._json({"ok": True, "started": False, "busy": True}, 200)
+            threading.Thread(target=_cron_pull_bg, daemon=True).start()
+            return self._json({"ok": True, "started": True}, 202)
         route = ROUTES.get(path)
         if not route:
             return self._json({"ok": False, "message": "unknown endpoint"}, 404)
