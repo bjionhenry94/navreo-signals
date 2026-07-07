@@ -3125,6 +3125,7 @@ async function srcNext() {
           dm_count: (sw.dm_titles || "").split(",").map((t) => t.trim()).filter(Boolean).length,
           dm_titles: (sw.dm_titles || "").split(",").map((t) => t.trim()).filter(Boolean),
           industries: sw.industries || [],
+          source_id: sw.editId,  // editing an existing source → size the preview from its own kept-lead history
           country_names: sw.geo }
       : sw.type === "companies"
         ? { keywords: roleList("keywords"), headcount: sw.hc, countries: sw.geo }

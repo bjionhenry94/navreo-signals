@@ -325,7 +325,7 @@ def preview_hiring(p: dict) -> dict:
     # Multiplier = the AI-ARK-derived DMs-per-company rate for this profile
     # (cached; ≈1 person's credits on first sight), falling back to the
     # dm_count cap only when no profile is supplied.
-    total_prospects = round(total_companies * DMS_PER_COMPANY) if (total_companies and (p.get("dm_titles") or dm_count)) else None
+    total_prospects = round(total_companies * dms_per_company(p.get("source_id"))) if (total_companies and (p.get("dm_titles") or dm_count)) else None
     return {
         "ok": True, "cost": "free preview",
         "total_jobs": meta.get("total_results") or len(jobs),
@@ -1228,9 +1228,10 @@ def strategy_map(p: dict) -> dict:
                 if v2:
                     prm.pop("company_description_pattern_or", None)
                     val = v2
-            # preview estimate (user rule 2026-07-05): companies x 1.6, always
-            # labelled as an estimate in the UI; the pull counts real people
-            return {"dms": round(val * DMS_PER_COMPANY), "companies": val, "approx": True} if isinstance(val, int) else None
+            # preview estimate: companies x the self-calibrating kept-DMs rate (fleet
+            # blend at ideation time — no source exists yet), always labelled an
+            # estimate in the UI; the pull counts real people
+            return {"dms": round(val * dms_per_company()), "companies": val, "approx": True} if isinstance(val, int) else None
         return None
 
     def probe(idea):
@@ -2726,7 +2727,63 @@ def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=N
 # AI-ARK bills PER PERSON RETURNED: every call caps `size` deliberately, and
 # counts use the size:1 -> totalElements pattern (≈1 person per count).
 
-DMS_PER_COMPANY = 1.6  # preview estimate: decision makers per signal company (user-set 2026-07-05)
+# Preview sizing: decision-makers KEPT per hiring company. No longer a flat guess —
+# dms_per_company() derives it from real kept-lead history (verified-email leads ÷
+# companies actually signalled), because a flat 1.6 overstated the reachable count
+# (the AI-ARK candidates it implies get thinned by Prospeo's verified-email keep-gate
+# and suppression; real blended rate ≈1.3, and swings 0.7–3.1 by profile). The constant
+# below is only the conservative fallback for a brand-new profile with no history yet.
+DMS_PER_COMPANY = 1.2      # no-history default (was a flat 1.6; measured blend ≈1.3)
+_DMS_MIN_COMPANIES = 12    # trust a derived rate only past this much history
+_DMS_BAND = (0.5, 3.0)     # clamp so one lopsided profile can't distort a preview
+_dms_cache: dict = {}      # {source_id | "*": (rate, expires_epoch)} — 10-min memo
+
+
+def _sb_count(path: str) -> int | None:
+    """Exact row count via PostgREST select=count. None on any Supabase hiccup."""
+    r = sb("GET", f"{path}&select=count")
+    if isinstance(r, list) and r and isinstance(r[0], dict) and r[0].get("count") is not None:
+        return int(r[0]["count"])
+    return None
+
+
+def _dms_rate_from_history(source_id: str | None) -> float | None:
+    """Empirical kept-DMs-per-company = verified-email leads ÷ companies signalled,
+    scoped to one hiring source or (source_id=None) blended across the whole fleet.
+    None when there isn't enough history to trust yet."""
+    if source_id:
+        comps = _sb_count(f"signals?source=eq.theirstack&detail->>source_id=eq.{source_id}")
+        leads = _sb_count(f"signal_leads?source_id=eq.{source_id}")
+    else:
+        ids = [d["id"] for d in read_drafts()
+               if (d.get("mechanism") or d.get("type")) == "hiring" and not d.get("deleted_at")]
+        if not ids:
+            return None
+        inlist = ",".join(ids)
+        comps = _sb_count(f"signals?source=eq.theirstack&detail->>source_id=in.({inlist})")
+        leads = _sb_count(f"signal_leads?source_id=in.({inlist})")
+    if not comps or comps < _DMS_MIN_COMPANIES or leads is None:
+        return None
+    return leads / comps
+
+
+def dms_per_company(source_id: str | None = None) -> float:
+    """Decision-makers kept per hiring company, for preview sizing. Self-calibrating:
+    prefers THIS source's real history, falls back to the fleet-wide blend, then to a
+    conservative constant for a brand-new profile. Cached 10 min; clamped to a sane band."""
+    import time
+    key = source_id or "*"
+    hit = _dms_cache.get(key)
+    if hit and hit[1] > time.time():
+        return hit[0]
+    rate = _dms_rate_from_history(source_id) if source_id else None
+    if rate is None:
+        rate = _dms_rate_from_history(None)   # fleet-wide blend
+    if rate is None:
+        rate = DMS_PER_COMPANY                # no history anywhere yet
+    rate = max(_DMS_BAND[0], min(_DMS_BAND[1], rate))
+    _dms_cache[key] = (rate, time.time() + 600)
+    return rate
 
 AIARK_BASE = "https://api.ai-ark.com/api/developer-portal"
 
