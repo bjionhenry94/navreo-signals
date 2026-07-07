@@ -260,6 +260,15 @@ def preview_hiring(p: dict) -> dict:
         "limit": 10,
         "include_total_results": True,
     }
+    # industry filter (user-facing, hiring wizard) — TheirStack's industry_or/not
+    # take exact LinkedIn industry names; keeping them here makes the free preview
+    # count reflect exactly what the paid pull will return.
+    inc = [str(i).strip() for i in (p.get("industries") or []) if str(i).strip()]
+    exc = [str(i).strip() for i in (p.get("industries_not") or []) if str(i).strip()]
+    if inc:
+        body["industry_or"] = inc
+    if exc:
+        body["industry_not"] = exc
     # precision layer (description patterns / industry excludes) — passing it
     # here keeps the preview count honest about what a real pull will return
     body.update(p.get("extra") or {})
@@ -668,6 +677,18 @@ GENERIC_KINDS = {
                    "task": ("Suggest broad industry or sector labels the client's target companies belong "
                             "to - short nouns or 2-3 word phrases like 'Logistics', 'Fintech', "
                             "'Healthcare'. Name what the company IS, never who it serves.")},
+    # hiring-signal industry filter feeds TheirStack's `industry_or`, which only
+    # matches EXACT LinkedIn standardized industry names - loose labels silently
+    # match nothing, so this kind demands the canonical taxonomy spelling.
+    "linkedin_industries": {"family": "industries", "schema": "industries", "single": False,
+                   "task": ("Suggest industries the client's target companies belong to, using ONLY exact "
+                            "LinkedIn standardized industry names (the taxonomy LinkedIn shows on company "
+                            "pages). Use the canonical spelling verbatim, e.g. 'Software Development', "
+                            "'IT Services and IT Consulting', 'Hospitals and Health Care', "
+                            "'Transportation, Logistics, Supply Chain and Storage', 'Financial Services', "
+                            "'Construction', 'Motor Vehicle Manufacturing'. Never invent a label or use a "
+                            "colloquial one like 'Fintech', 'Logistics' or 'Healthcare' - always the full "
+                            "LinkedIn name. Name what the company IS, never who it serves.")},
     "locations": {"family": "locations", "schema": "locations", "single": False,
                   "task": ("Suggest countries or major regions where the client's ideal customers cluster "
                            "- proper country or region names like 'United States', 'Germany', 'Canada'. "
@@ -2483,6 +2504,8 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     # abandons the run mid-batch, everything done so far is already committed
     # (no all-or-nothing waste). String-gated rows resolve instantly, no tokens.
     _ex = ThreadPoolExecutor(max_workers=40)
+    _dbex = ThreadPoolExecutor(max_workers=24)  # status/signal writes run concurrently too — Render->Supabase latency was the real wall
+    _db_futs = []
     _futs = {_ex.submit(qualify_engager, ev, cfg): ev for ev in events}
     for _fut in as_completed(_futs):
         ev = _futs[_fut]
@@ -2519,19 +2542,26 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
             prospects.append(pr)
             known.add(pr["linkedin"])
             kept_this_run.append(pr)
-            sb("POST", "signals", {
+            _db_futs.append(_dbex.submit(sb, "POST", "signals", {
                 "signal_type": "engagement", "source": "trigify",
                 "company_domain": None,  # engager IS the lead; company row may not exist
                 "detected_at": ev.get("engaged_at") or ev.get("received_at"),
                 "detail": {"post_url": ev.get("post_url"), "post_author": ev.get("post_author_name"),
                            "topic": q.get("topic"), "engager": ev.get("engager_linkedin_url"),
                            "source_id": src["id"]},
-            }, prefer="resolution=ignore-duplicates,return=minimal")
-        sb("PATCH", f"engagement_events?id=eq.{ev['id']}",
-           {"status": status, "qualification": {k: q[k] for k in
-            ("verdict", "post_verdict", "person_verdict", "reason", "topic", "method")}})
+            }, "resolution=ignore-duplicates,return=minimal"))
+        _db_futs.append(_dbex.submit(
+            sb, "PATCH", f"engagement_events?id=eq.{ev['id']}",
+            {"status": status, "qualification": {k: q[k] for k in
+             ("verdict", "post_verdict", "person_verdict", "reason", "topic", "method")}}))
 
+    for _f in _db_futs:  # let every status/signal write land before finishing the source
+        try:
+            _f.result()
+        except Exception:  # noqa: BLE001
+            pass
     _ex.shutdown(wait=False)
+    _dbex.shutdown(wait=False)
     src["prospects"] = prospects
     src["total"] = len(prospects)
     src["signals_found"] = counts["qualified"]
