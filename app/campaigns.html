@@ -418,7 +418,6 @@ async function renderDraftCampaign(id) {
           <button class="btn sm" title="Rename this campaign" style="border:none;padding:4px 6px" onclick="renameCampaign('${id}')">✎</button>
         </div>
         <div class="destbar" style="margin-top:10px">${destBar(dc, id)}</div>
-        <div class="small muted" style="margin-top:5px">People we find an email for go to the <b style="font-weight:600">Email</b> campaign (Smartlead) · everyone else goes to the <b style="font-weight:600">LinkedIn</b> list (HeyReach). Click a button above to choose.</div>
       </div>
       <div style="flex-shrink:0;text-align:right">
         <div style="display:flex;gap:10px;justify-content:flex-end">
@@ -741,12 +740,7 @@ function destBar(dc, id) {
       <span class="dc-cx" aria-hidden="true">▾</span>
     </button>`;
   };
-  const warn = (!sl || !hr)
-    ? `<span class="small" style="color:var(--orange-700)">${!sl && !hr ? "Pick where leads go — nothing sends until you do"
-        : !sl ? "No Email campaign set yet (Smartlead) — people with an email can’t be sent"
-              : "No LinkedIn list set yet (HeyReach) — people without an email can’t be sent"}</span>`
-    : "";
-  return `<span class="small muted" style="flex-shrink:0">Sends to</span>${chip("smartlead", sl, slName)}${chip("heyreach", hr, hrName)}${warn}`;
+  return `<span class="small muted" style="flex-shrink:0">Sends to</span>${chip("smartlead", sl, slName)}${chip("heyreach", hr, hrName)}`;
 }
 
 /* live re-pull so a campaign / list created since page-load shows up in the picker */
