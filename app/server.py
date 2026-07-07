@@ -2420,24 +2420,39 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
         print(f"[engagement] staging error for {src['id']}: {type(e).__name__}: {e}", file=sys.stderr)
 
     events = sb("GET", f"engagement_events?source_id=eq.{src['id']}&status=eq.NEW"
-                       f"&order=received_at.asc&limit=200") or []
+                       f"&order=received_at.asc&limit=1500") or []
     if not isinstance(events, list) or not events:
         return {"ok": False, "message": "No new engagers staged yet - Trigify pushes land daily once monitoring is live.",
                 "total": 0, "signals": 0}
 
+    # qualify_engager is the throughput bottleneck (one gpt-5-mini call each,
+    # ~1-2s). The calls are independent, so run them concurrently, then apply the
+    # verdicts serially below (keeps the daily-cap ordering + list mutation
+    # single-threaded). String-gated rows cost zero tokens. A per-event failure
+    # (quota/key) leaves that row NEW to retry next pull; it no longer aborts the run.
+    from concurrent.futures import ThreadPoolExecutor
+    def _q(ev):
+        try:
+            return ev["id"], qualify_engager(ev, cfg), None
+        except Exception as e:  # noqa: BLE001
+            return ev["id"], None, e
+    verdicts = {}
+    with ThreadPoolExecutor(max_workers=10) as _ex:
+        for eid, q, err in _ex.map(_q, events):
+            verdicts[eid] = (q, err)
+
     prospects = list(src.get("prospects") or [])
     known = {x.get("linkedin") for x in prospects}
-    counts = {"qualified": 0, "borderline": 0, "off_brief": 0, "capped": 0}
+    counts = {"qualified": 0, "borderline": 0, "off_brief": 0, "capped": 0, "errored": 0}
     kept_this_run = []
     for ev in events:
         if counts["qualified"] >= cap:
             counts["capped"] += 1
             continue
-        try:
-            q = qualify_engager(ev, cfg)
-        except Exception as e:  # noqa: BLE001 — quota/key failure: leave NEW, next run retries
-            return {"ok": False, "message": f"Qualifier failed mid-run: {str(e)[:150]}. "
-                    f"Processed so far kept; unprocessed rows stay NEW and retry next pull."}
+        q, err = verdicts.get(ev["id"], (None, None))
+        if err or not q:  # leave NEW, retry next pull — one bad row must not stop the batch
+            counts["errored"] += 1
+            continue
         status = {"QUALIFIED": "QUALIFIED", "BORDERLINE": "BORDERLINE", "OFF_BRIEF": "OFF_BRIEF"}[q["verdict"]]
         counts[q["verdict"].lower() if q["verdict"] != "OFF_BRIEF" else "off_brief"] += 1
         if q["verdict"] == "QUALIFIED" and ev.get("engager_linkedin_url") not in known:
@@ -3181,8 +3196,8 @@ def cron_pull_all():
     corrupt shared state or block the next source."""
     from datetime import datetime
     import time as _time
-    BUDGET_S = 420   # whole-run wall-clock ceiling
-    SOURCE_S = 150   # per-source hard timeout — abandon + defer beyond this
+    BUDGET_S = 700   # whole-run wall-clock ceiling
+    SOURCE_S = 300   # per-source hard timeout (engagement parallel-qualifies a big backlog)
     t0 = _time.monotonic()
 
     def _timed(fn):
