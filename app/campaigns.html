@@ -756,6 +756,36 @@ function destLogo(kind) {
   return `<img src="${src}" alt="${alt}" title="${alt}" style="width:15px;height:15px;border-radius:4px;vertical-align:-3px;flex-shrink:0">`;
 }
 
+/* Every outreach destination a campaign's leads route to — the campaign-level
+   destination plus any per-source overrides — resolved to human names. Mirrors
+   the server's resolve_destination (campaign default + source fallback). */
+function campaignDests(dc, srcs, pool) {
+  pool = pool || DB.dests || { smartlead: [], heyreach: [] };
+  const slName = (id) => (((pool.smartlead || []).find((c) => String(c.id) === String(id)) || {}).name) || `email campaign #${id}`;
+  const hrName = (id, fb) => (((pool.heyreach || []).find((l) => String(l.id) === String(id)) || {}).name) || fb || `LinkedIn list #${id}`;
+  const sl = new Map(), hr = new Map();
+  [dc.destination || {}, ...(srcs || []).map((s) => s.destination || {})].forEach((d) => {
+    const slId = d.smartlead_campaign_id || (d.type === "smartlead" ? d.campaign_id : "");
+    if (slId) sl.set(String(slId), slName(slId));
+    if (d.heyreach_list_id) hr.set(String(d.heyreach_list_id), hrName(d.heyreach_list_id, d.heyreach_list_name));
+    else if (d.heyreach_list_name) hr.set("n:" + d.heyreach_list_name, d.heyreach_list_name);
+  });
+  return { smartlead: [...sl.values()], heyreach: [...hr.values()] };
+}
+
+/* "Sending to" logo badges under a campaign card — shows which real Smartlead
+   campaign(s) / HeyReach list(s) this signal's leads flow into, with each
+   platform's logo. Warns in-line when no destination is wired yet. */
+function destBadges(dc, srcs) {
+  const d = campaignDests(dc, srcs);
+  const chip = (kind, name) => `<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;background:var(--bg-sunken);font-size:11px;max-width:220px">${destLogo(kind)}<span style="color:var(--ink);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</span></span>`;
+  const chips = d.smartlead.map((n) => chip("smartlead", n)).concat(d.heyreach.map((n) => chip("heyreach", n)));
+  const body = chips.length
+    ? `<span class="small muted" style="flex-shrink:0">Sending to</span>${chips.join("")}`
+    : `<span class="small" style="color:var(--orange-700)">⚠ No destination set — nothing can be sent</span>`;
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">${body}</div>`;
+}
+
 function routeNote(pr) {
   if (Object.keys(pr.pushed || {}).length || pr.verdict === "reject") return "";
   const nm = window._destNames || {};
@@ -1064,14 +1094,16 @@ async function renderList() {
   // for the session; sources + lead-counts are de-duped within the navigation).
   if (!window._swrRepaint) main.innerHTML = listSkeleton();  // keep current view during a background refresh
   const activeClient = localStorage.getItem("navreo_client") || "";
-  const [drafts0, clients0, srcAll0, leadCounts0] = await Promise.all([
+  const [drafts0, clients0, srcAll0, leadCounts0, dests0] = await Promise.all([
     cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => (Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : [])),
     cachedGet("/api/clients", SESSION_TTL).catch(() => (window._clients || [])),
     cachedGet("/api/sources").catch(() => []),
     cachedGet("/api/lead-counts").catch(() => ({})),
+    cachedGet("/api/outreach-destinations", SESSION_TTL).catch(() => (DB.dests || { smartlead: [], heyreach: [] })),
   ]);
   DB.campaignDrafts = Array.isArray(drafts0) ? drafts0 : [];
   window._clients = Array.isArray(clients0) ? clients0 : [];
+  DB.dests = dests0 || { smartlead: [], heyreach: [] };
   const srcAll = Array.isArray(srcAll0) ? srcAll0 : [];
   const leadCounts = leadCounts0 || {};
   const forClient = (DB.campaignDrafts || []).filter((d) => !activeClient || d.client_id === activeClient);
@@ -1087,7 +1119,8 @@ async function renderList() {
         <span style="font-weight:600;font-size:15px;display:inline-flex;align-items:center;gap:5px"${id ? ` id="${id}"` : ""}>${val}</span>
       </div>${sub ? `<div class="muted" style="font-size:10.5px;margin-top:1px">${sub}</div>` : ""}</div>`;
   const listRows = drafts.length ? drafts.map((dc) => {
-        const prs = srcAll.filter((s) => String(s.campaign_id) === String(dc.id)).flatMap((s) => s.prospects || []);
+        const srcs = srcAll.filter((s) => String(s.campaign_id) === String(dc.id));
+        const prs = srcs.flatMap((s) => s.prospects || []);
         const sentLocal = prs.filter((p) => Object.keys(p.pushed || {}).length || p.pushed_to).length;
         // the real Leads count (Supabase, all pulls) - local last-pull view only when the DB is unreachable
         const lc = leadCounts[String(dc.id)];
@@ -1096,9 +1129,10 @@ async function renderList() {
         return `
         <div class="srcrow click" style="padding:14px 16px;cursor:pointer" onclick="location.hash='${dc.id}'">
           <div class="ictile">${ic8("signal")}</div>
-          <div style="flex:1">
+          <div style="flex:1;min-width:0">
             <div style="font-weight:500">${esc(dc.name)}</div>
             <div class="small muted">${nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"}${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No leads yet"} · ${esc((dc.created_at || "").slice(0, 10))}</div>
+            ${destBadges(dc, srcs)}
           </div>
           ${dc.paused ? '<span class="pill o">⏸ Paused</span>' : '<span class="pill g">● Running</span>'}
           <button class="btn sm" title="Copy this campaign and all its targeting into a new one" onclick="duplicateCampaign('${dc.id}', event)">Duplicate</button>
