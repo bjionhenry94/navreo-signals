@@ -1581,7 +1581,7 @@ def api_lead_counts() -> dict:
 def save_draft(p: dict) -> dict:
     if (p.get("type") or p.get("mechanism")) == "hiring" and not [t for t in (p.get("titles") or []) if str(t).strip()]:
         return {"ok": False, "message": "A hiring source needs decision-maker roles (who we email at these companies)."}
-    drafts = read_drafts()
+    drafts = read_drafts(strict=True)
     # ids must NEVER be reused: Supabase rows (signals, signal_leads) are keyed
     # by source_id and outlive removed drafts — len()+1 recycled ids and
     # cross-contaminated old leads into new sources
@@ -1597,7 +1597,7 @@ def save_draft(p: dict) -> dict:
 def update_source(p: dict) -> dict:
     """Edit a draft source: include/exclude, remove, icebreaker, targeting
     (params/titles), name, or prospect verdicts (local file only)."""
-    drafts = read_drafts()
+    drafts = read_drafts(strict=True)
     sid = p.get("id")
     push = None
     trigify_note = None
@@ -1615,6 +1615,7 @@ def update_source(p: dict) -> dict:
                             f"({errs[0]['error']}). Source kept - try Remove again."}
                 trigify_note = f"{len(removed)} Trigify workflow(s) stopped"
         sb_delete_source(sid)  # remove the source, its leads and events from Supabase too
+        sb_delete_doc("sources", sid)  # explicit: the doc-table row goes even if it was the last source
         drafts = [d for d in drafts if d.get("id") != sid]
     else:
         for d in drafts:
@@ -2913,9 +2914,10 @@ _GENERIC_ROLE = {
 }
 # genuine top-of-company markers (multilingual — the pull spans US/UK/NL/CA/AU/DE/PL)
 _TOP_EXEC = re.compile(
-    r"\b(ceo|chief executive|founder|co-?founder|president|managing director|"
-    r"gesch[aä]ftsf[uü]hrer|gr[uü]nder|prezes|directeur g[eé]n[eé]ral|"
-    r"inhaber|eigenaar|proprietor|amministratore|owner)\b", re.I)
+    r"\b(ceo|chief executive|founder|co-?founder|(?<!vice[ -])president|"
+    r"managing director|gesch[aä]ftsf[uü]hrer|gr[uü]nder|prezes|"
+    r"directeur g[eé]n[eé]ral|inhaber|eigenaar|proprietor|amministratore|owner)\b",
+    re.I)
 
 
 # Seniority FLOOR — decision-makers are Director-and-above by default. These
@@ -3343,7 +3345,7 @@ def pull_source(p: dict) -> dict:
 
 def update_campaign_draft(p: dict) -> dict:
     from datetime import datetime
-    drafts = read_json_list(CAMPAIGN_DRAFTS)
+    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
     cid = p.get("id")
     if p.get("remove"):
         # SOFT delete: mark the campaign + its sources deleted and stop nothing
@@ -3351,7 +3353,7 @@ def update_campaign_draft(p: dict) -> dict:
         # irreversible cascade (Trigify teardown + Supabase row deletion) only
         # runs on an explicit purge from the Recently-deleted area.
         now = datetime.now().isoformat(timespec="seconds")
-        all_srcs = read_drafts()
+        all_srcs = read_drafts(strict=True)
         touched = False
         for src in all_srcs:
             if str(src.get("campaign_id")) == str(cid):
@@ -3384,7 +3386,7 @@ def restore_campaign_draft(p: dict) -> dict:
     """Bring a soft-deleted campaign (and its sources) back to life. Lossless:
     nothing external was ever torn down, so monitoring + leads are intact."""
     cid = p.get("id")
-    drafts = read_json_list(CAMPAIGN_DRAFTS)
+    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
     found = False
     for d in drafts:
         if d.get("id") == cid and d.get("deleted_at"):
@@ -3393,7 +3395,7 @@ def restore_campaign_draft(p: dict) -> dict:
     if not found:
         return {"ok": False, "message": "Nothing to restore for this campaign."}
     write_drafts(drafts, CAMPAIGN_DRAFTS)
-    srcs = read_drafts()
+    srcs = read_drafts(strict=True)
     for s in srcs:
         if str(s.get("campaign_id")) == str(cid):
             s.pop("deleted_at", None)
@@ -3405,8 +3407,8 @@ def purge_campaign_draft(p: dict) -> dict:
     """PERMANENT delete from the Recently-deleted area. This is the old hard
     cascade: stop the Trigify monitors and delete the Supabase rows. Irreversible."""
     cid = p.get("id")
-    drafts = read_json_list(CAMPAIGN_DRAFTS)
-    all_srcs = read_drafts()
+    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
+    all_srcs = read_drafts(strict=True)
     doomed = [x for x in all_srcs if str(x.get("campaign_id")) == str(cid)]
     for src in doomed:  # tear down each source's external + backend footprint
         if (src.get("mechanism") or src.get("type")) == "engagement":
@@ -3414,9 +3416,11 @@ def purge_campaign_draft(p: dict) -> dict:
             if ent:
                 _trigify_deprovision(ent)  # best-effort: stop the LinkedIn monitors
         sb_delete_source(src.get("id"))
+        sb_delete_doc("sources", src.get("id"))  # explicit: drop the doc-table row too
     # safety net: clear any Supabase rows keyed straight to the campaign
     sb("DELETE", f"signal_sources?campaign_draft_id=eq.{cid}")
     sb("DELETE", f"engagement_events?campaign_draft_id=eq.{cid}")
+    sb_delete_doc("campaign_drafts", cid)  # explicit: purge the campaign even if it was the last one
     write_drafts([x for x in all_srcs if str(x.get("campaign_id")) != str(cid)])
     write_drafts([d for d in drafts if d.get("id") != cid], CAMPAIGN_DRAFTS)
     return {"ok": True, "purged": True}
@@ -3455,7 +3459,7 @@ def duplicate_source(p: dict) -> dict:
     """Duplicate one draft source within the same campaign, keeping its targeting."""
     import uuid
     sid = p.get("id")
-    drafts = read_drafts()
+    drafts = read_drafts(strict=True)
     orig = next((d for d in drafts if d.get("id") == sid), None)
     if not orig:
         return {"ok": False, "message": "Source not found - refresh and try again."}
@@ -3475,7 +3479,7 @@ def duplicate_campaign_draft(p: dict) -> dict:
     from datetime import datetime
     import uuid, copy
     cid = p.get("id")
-    drafts = read_json_list(CAMPAIGN_DRAFTS)
+    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
     orig = next((d for d in drafts if d.get("id") == cid), None)
     if not orig:
         return {"ok": False, "message": "Campaign not found - refresh and try again."}
@@ -3488,7 +3492,7 @@ def duplicate_campaign_draft(p: dict) -> dict:
     drafts.append(new)
     CAMPAIGN_DRAFTS.parent.mkdir(parents=True, exist_ok=True)
     write_drafts(drafts, CAMPAIGN_DRAFTS)
-    all_srcs = read_drafts()
+    all_srcs = read_drafts(strict=True)
     originals = [s for s in all_srcs
                  if str(s.get("campaign_id")) == str(cid) and not s.get("deleted_at")]
     new_srcs = []
@@ -3507,7 +3511,7 @@ def duplicate_campaign_draft(p: dict) -> dict:
 def save_campaign_draft(p: dict) -> dict:
     from datetime import datetime
     import uuid
-    drafts = read_json_list(CAMPAIGN_DRAFTS)
+    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
     p["id"] = f"cdraft-{uuid.uuid4().hex[:8]}"  # never reuse ids (same lesson as sources)
     p["created_at"] = datetime.now().isoformat(timespec="seconds")
     drafts.append(p)
