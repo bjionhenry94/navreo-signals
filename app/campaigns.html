@@ -1190,6 +1190,9 @@ async function renderList() {
     set("st-skipped", fmt(skipped));
     set("st-today", fmt(todayN));
     set("st-lastpull", lastPull ? esc(String(lastPull).slice(5, 16).replace("T", " ")) : "—");
+    // leads grouped per campaign (the batched leads-fetch replaced the old
+    // per-campaign `per` array but this staleness check still referenced it)
+    const per = drafts.map((dc) => allRows.filter((r) => String(r.campaign_id) === String(dc.id)));
     const warns = [];
     drafts.forEach((dc, i) => {
       if (dc.paused) return;
