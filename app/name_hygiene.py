@@ -209,6 +209,10 @@ _TITLE_MINOR = {"of", "and", "the", "for", "to", "in", "at", "a", "an", "or",
                 "on", "with", "de", "du", "van", "per", "as", "by"}
 _TITLE_PAREN = re.compile(r"\s*\([^)]*\)")            # "(Annual Contract)", "(Remote)", "(m/f/d)"
 _TITLE_TAIL = re.compile(r"\s*[,;|].*$|\s+[–—-]\s+.*$")  # drop qualifier tail after , ; | or spaced dash
+# DACH job boards append "<workload%> <location>" with no delimiter, e.g.
+# "Senior Growth Marketing Manager 100% Zürich West" — cut at the percentage token
+# (and everything after it, which is the location).
+_TITLE_PCT = re.compile(r"\s+\d{1,3}\s*[-–—]?\s*\d{0,3}\s*%.*$")
 
 
 def clean_job_title(title: Optional[str], fallback: bool = True) -> Optional[str]:
@@ -223,6 +227,7 @@ def clean_job_title(title: Optional[str], fallback: bool = True) -> Optional[str
     original when cleaning would empty it."""
     raw = title or ""
     s = _TITLE_PAREN.sub("", raw)   # cut before email_safe so a "|" tail is still detectable
+    s = _TITLE_PCT.sub("", s)       # "... 100% Zürich West" -> "..."
     s = _TITLE_TAIL.sub("", s)
     s = email_safe(s) or ""
     s = s.strip(" ,/|-·–—")
