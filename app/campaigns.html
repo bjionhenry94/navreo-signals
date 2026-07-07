@@ -1471,6 +1471,18 @@ function verdictSeg(s, campaignId, view) {
     ${view === "unqualified" ? `<div id="uq-list-${s.id}"><div class="empty" style="padding:16px 0">Loading…</div></div>` : ""}`;
 }
 
+// the default engagement icebreaker templates (mirror ENG_ICE_REF/PLAIN in server.py) —
+// shown pre-filled in the input when a source has no custom icebreaker yet, so the
+// user edits the line that's actually being sent instead of a blank box.
+const ENG_ICE_REF = "Saw your comment on {{WhosePost}}'s post about {{Topic}}, and so I thought I'd reach out.";
+const ENG_ICE_PLAIN = "Your work at {{company}} caught my eye, and so I thought I'd reach out.";
+function effectiveIcebreaker(s) {
+  if (s.icebreaker) return s.icebreaker;
+  if ((s.mechanism || s.type) === "engagement")
+    return ((s.config || {}).engagement || {}).copy_reference !== false ? ENG_ICE_REF : ENG_ICE_PLAIN;
+  return "";  // hiring/company sources have no default template; the placeholder guides instead
+}
+
 function srcDetail(s, campaignId) {
   const cfg = { ...(s.config || {}), ...(s.params || {}) };
   const isEng = (s.mechanism || s.type) === "engagement";
@@ -1478,7 +1490,7 @@ function srcDetail(s, campaignId) {
   return `<div style="flex-basis:100%;margin-top:10px;border-top:1px solid var(--line);padding-top:12px">
     <div class="small" style="font-weight:500;margin-bottom:4px">Icebreaker <span class="muted" style="font-weight:400">· the first sentence of the email · belongs to this source only</span></div>
     <div style="display:flex;gap:8px">
-      <input id="ice-${s.id}" value="${esc(s.icebreaker || "")}" placeholder="e.g. Saw {{company}} is hiring, and so I thought I'd reach out."
+      <input id="ice-${s.id}" value="${esc(effectiveIcebreaker(s))}" placeholder="e.g. Saw {{company}} is hiring, and so I thought I'd reach out."
         style="flex:1;border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent">
       <button class="btn sm" onclick="saveIce('${s.id}','${campaignId}')">Save</button>
     </div>
