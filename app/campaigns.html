@@ -819,7 +819,7 @@ function routeNote(pr) {
   const wrap = (body) => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><span class="small muted" style="flex-shrink:0">Sending to</span>${body}</div>`;
   if (pr.email) return wrap(chip("smartlead", nm.smartlead || "your email campaign"));
   if (pr.email_checked) return wrap(chip("heyreach", nm.heyreach || "your LinkedIn list"));
-  return wrap(`${chip("smartlead", nm.smartlead || "email")}<span class="small muted" style="flex-shrink:0">if found, else</span>${chip("heyreach", nm.heyreach || "LinkedIn")}`);
+  return wrap(`${chip("smartlead", nm.smartlead || "email")}${chip("heyreach", nm.heyreach || "LinkedIn")}`);
 }
 
 function pushChips(pr) {
