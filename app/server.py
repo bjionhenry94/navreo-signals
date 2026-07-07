@@ -55,20 +55,40 @@ def drafts_lock():
 # Supabase. These helpers are the ONLY code that touches that state; the
 # legacy JSON files remain as a read-only fallback if Supabase is unreachable.
 
-def _pg_docs(table: str, only_doc: bool = False) -> list | None:
-    """All doc payloads from a jsonb-doc table. None signals a Supabase outage
-    so the caller can fall back to the frozen JSON file."""
+class SupabaseUnavailable(RuntimeError):
+    """An authoritative read failed on a WRITE path. Raising (instead of quietly
+    returning a stale/empty snapshot) aborts the mutation, so a momentary
+    Supabase outage can never be turned into a whole-table replace that deletes
+    every row. Surfaced to the UI by do_POST as a plain 'try again' message."""
+
+
+def _pg_docs(table: str, only_doc: bool = False, strict: bool = False) -> list | None:
+    """All doc payloads from a jsonb-doc table. A non-list means Supabase was
+    unreachable: read-only callers get None (and fall back to the frozen JSON
+    file); write callers pass strict=True and get a SupabaseUnavailable raise so
+    they abort rather than persist an empty snapshot."""
     q = f"{table}?select=doc" + ("&doc=not.is.null" if only_doc else "")
     rows = sb("GET", q)
     if not isinstance(rows, list):
+        if strict:
+            raise SupabaseUnavailable(
+                "Couldn't reach the database - nothing was changed. Please try again.")
         return None
     return [r["doc"] for r in rows if isinstance(r, dict) and r.get("doc") is not None]
 
 
 def _pg_replace(table: str, docs: list, only_doc: bool = False):
-    """Mirror the old whole-file replace: upsert every doc in the list, then
-    delete rows whose id is no longer present (scoped to doc-bearing rows for
-    `clients`, so legacy non-doc rows survive)."""
+    """Persist a doc list to a jsonb-doc table. Upserts every doc, then deletes
+    ONLY the rows the live table still has that the caller's list no longer
+    contains — reconciled against a FRESH read of the current ids, never against
+    the caller's list in isolation.
+
+    Fail-safe by construction: if the caller's list is empty, or the fresh read
+    can't confirm the live state, NOTHING is deleted (upserts still stand). That
+    closes the data-loss bug where a transient Supabase read failure made the
+    caller's list empty and the old blanket `DELETE id=not.is.null` wiped the
+    whole table (a whole campaign vanished on returning to the homepage).
+    Genuine 'delete the last row' cases use explicit sb_delete_doc()."""
     rows, ids = [], []
     for d in docs:
         if not d.get("id"):
@@ -81,13 +101,17 @@ def _pg_replace(table: str, docs: list, only_doc: bool = False):
     if rows:
         sb("POST", f"{table}?on_conflict=id", rows,
            prefer="resolution=merge-duplicates,return=minimal")
+    if not ids:
+        return  # an empty list is never how these tables are legitimately cleared
     scope = "&doc=not.is.null" if only_doc else ""
-    if ids:
-        sb("DELETE", f"{table}?id=not.in.({','.join(ids)}){scope}")
-    elif only_doc:
-        sb("DELETE", f"{table}?doc=not.is.null")
-    else:
-        sb("DELETE", f"{table}?id=not.is.null")
+    current = sb("GET", f"{table}?select=id{scope}")
+    if not isinstance(current, list):
+        return  # can't confirm the live state -> upserts stand, delete nothing
+    keep = set(ids)
+    stale = [str(r["id"]) for r in current
+             if isinstance(r, dict) and r.get("id") is not None and str(r["id"]) not in keep]
+    if stale:
+        sb("DELETE", f"{table}?id=in.({','.join(stale)})")
 
 
 def write_drafts(data, path: Path | None = None):
@@ -602,6 +626,15 @@ def sb(method: str, path: str, body=None, prefer: str = ""):
                           "Prefer": prefer or "return=minimal"}, body)
     except Exception:  # noqa: BLE001
         return None
+
+
+def sb_delete_doc(table: str, doc_id):
+    """Delete ONE row from a jsonb-doc table by id — the explicit counterpart to
+    the omit-from-list delete that _pg_replace no longer performs when the list
+    is empty. Best-effort; a Supabase outage must not block the local delete."""
+    if not doc_id:
+        return
+    sb("DELETE", f"{table}?id=eq.{doc_id}")
 
 
 def sb_delete_source(sid: str):
@@ -1432,20 +1465,22 @@ def _file_list(path: Path) -> list:
     return []
 
 
-def read_json_list(path: Path) -> list:
+def read_json_list(path: Path, strict: bool = False) -> list:
     """Operational lists come from Postgres; the JSON file is only a fallback
-    when Supabase is unreachable."""
+    when Supabase is unreachable. WRITE paths pass strict=True so a failed read
+    raises (aborting the mutation) instead of silently returning an empty/stale
+    list that a whole-table replace would turn into a mass delete."""
     if path == CAMPAIGN_DRAFTS:
-        r = _pg_docs("campaign_drafts")
+        r = _pg_docs("campaign_drafts", strict=strict)
         return r if r is not None else _file_list(path)
     if path == CLIENTS:
-        r = _pg_docs("clients", only_doc=True)
+        r = _pg_docs("clients", only_doc=True, strict=strict)
         return r if r is not None else _file_list(path)
     return _file_list(path)
 
 
-def read_drafts() -> list:
-    r = _pg_docs("sources")
+def read_drafts(strict: bool = False) -> list:
+    r = _pg_docs("sources", strict=strict)
     return r if r is not None else _file_list(DRAFTS)
 
 
@@ -2827,9 +2862,13 @@ def aiark_dms_by_domain(domain, dm_titles, cap) -> list:
     (cost warning: broad seniority alone bills for off-function heads)."""
     body = {"page": 0, "size": max(1, min(int(cap or 2), 5)),
             "account": {"domain": {"any": {"include": [canon_domain(domain)]}}},
-            "contact": {"experience": {"current": {"title": {"any": {"include": {"mode": "SMART", "content": list(dm_titles or [])}}}}}}}
+            # decision-makers are Director-and-above by DEFAULT: the seniority
+            # floor is ANDed with the title net so a junior sharing title words
+            # (an SDR under "Head of Sales") never comes back.
+            "contact": {"seniority": {"any": {"include": AIARK_LEADER_SENIORITY}},
+                        "experience": {"current": {"title": {"any": {"include": {"mode": "SMART", "content": list(dm_titles or [])}}}}}}}
     if not dm_titles:  # tight leadership net, never unbounded
-        body["contact"] = {"seniority": {"any": {"include": ["founder", "owner", "c_suite", "head", "vp", "director"]}}}
+        body["contact"] = {"seniority": {"any": {"include": AIARK_LEADER_SENIORITY}}}
     r = aiark(body)
     rows = (r.get("content") or []) if isinstance(r, dict) else []
     out = []
@@ -2865,8 +2904,32 @@ _TOP_EXEC = re.compile(
     r"inhaber|eigenaar|proprietor|amministratore|owner)\b", re.I)
 
 
+# Seniority FLOOR — decision-makers are Director-and-above by default. These
+# enums are ANDed into every DM query so the provider only returns leaders, and
+# _is_director_plus() is the local backstop. Below the floor: manager, lead,
+# specialist, coordinator, associate, IC "executive"/"representative".
+AIARK_LEADER_SENIORITY = ["founder", "owner", "c_suite", "partner", "vp", "head", "director"]
+PROSPEO_LEADER_SENIORITY = ["Founder/Owner", "C-Suite", "Partner", "Vice President", "Head", "Director"]
+
+
 def _sig_words(s) -> set:
     return set(re.findall(r"[a-z]+", str(s).lower())) - _TITLE_STOP
+
+
+# unambiguous Director-and-above rank words. Deliberately NO bare "owner"/
+# "partner" (they'd pass "Product Owner"/"Partner Manager"); bare-owner is
+# handled correctly by _is_top_exec, which rejects a function-qualified owner.
+_DIRECTOR_RANK = re.compile(
+    r"\b(head|vp|svp|evp|avp|vice president|director|chief|c[oetifms]o|"
+    r"president|managing director)\b", re.I)
+
+
+def _is_director_plus(title) -> bool:
+    """Local seniority floor: Director-and-above. True for a leader rank
+    (director/VP/head/chief/president/MD) or a genuine multilingual top-exec
+    (Geschäftsführer, Prezes, bare Owner). Mid-level 'Manager'/'Lead'/IC
+    'Executive'/'Product Owner'/'Partner Manager' fall through to False."""
+    return _is_top_exec(title) or bool(_DIRECTOR_RANK.search(str(title or "")))
 
 
 def _is_top_exec(title) -> bool:
@@ -2912,6 +2975,7 @@ def dm_find_by_domain(domain, dm_titles, max_dms):
     the same company in one call."""
     try:
         people = aiark_dms_by_domain(domain, dm_titles, max_dms)
+        people = [p for p in people if _is_director_plus(p.get("title"))]
         if people:
             return people[:max_dms]
     except Exception as e:  # noqa: BLE001 — fall through to Prospeo, but SAY SO
@@ -2919,7 +2983,10 @@ def dm_find_by_domain(domain, dm_titles, max_dms):
         # AI-ARK call "failed" and Prospeo quietly did 100% of the work.
         print(f"[aiark] {domain} fell back to Prospeo: {type(e).__name__}: {e}",
               file=sys.stderr)
-    return _prospeo_dms_by_domain(domain, dm_titles, max_dms)
+    # local Director-and-above backstop (default), even if a provider's own
+    # seniority classification lets a mid-level title slip through
+    return [p for p in _prospeo_dms_by_domain(domain, dm_titles, max_dms)
+            if _is_director_plus(p.get("title"))]
 
 
 def _prospeo_dms_by_domain(domain, dm_titles, max_dms):
@@ -2930,14 +2997,15 @@ def _prospeo_dms_by_domain(domain, dm_titles, max_dms):
     if dm_titles:
         d = _search_person({
             "person_job_title": {"include": dm_titles, "include_partial_match": True},
+            # Director-and-above floor ANDed with the title net (default)
+            "person_seniority": {"include": PROSPEO_LEADER_SENIORITY},
             "company": {"websites": {"include": [domain]}},
         })
         if not d.get("error"):
             people = _person_rows(d, max_dms)
     if not people:
         d = _search_person({
-            "person_seniority": {"include": ["Founder/Owner", "C-Suite", "Partner",
-                                             "Vice President", "Head", "Director"]},
+            "person_seniority": {"include": PROSPEO_LEADER_SENIORITY},
             "company": {"websites": {"include": [domain]}},
         })
         if not d.get("error"):
