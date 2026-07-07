@@ -2015,6 +2015,56 @@ def auto_push_new_leads(src: dict) -> list:
                    {"status": "pushed", "pushed_to": pr["pushed_to"]})
         out.append({"name": pr.get("name"), "company": pr.get("company"), "email": pr.get("email"),
                     "ok": bool(sent), "tools": {k: v.get("message") for k, v in push["tools"].items()}})
+    # the local `prospects` list only holds the LAST pull, so leads pulled on
+    # earlier ticks (or before autopilot was switched on) strand in signal_leads
+    # as status='new' and never push. Drain that backlog straight from Supabase.
+    seen = set()
+    for pr in (src.get("prospects") or []):
+        if pr.get("linkedin"):
+            seen.add(pr["linkedin"])
+        if pr.get("email"):
+            seen.add(str(pr["email"]).lower())
+    out += _drain_backlog_leads(src, dest, seen)
+    return out
+
+
+def _drain_backlog_leads(src: dict, dest: dict, seen: set, cap: int = 100) -> list:
+    """Autopilot completeness sweep. signal_leads is the authoritative accumulator
+    (it keeps every lead ever pulled; the local prospects list is only the newest
+    batch). Any status='new' row here that isn't in the current pull is a stranded
+    lead — push it through the same exclusive router and stamp it 'pushed' as we
+    go, so progress persists even if the run is later abandoned mid-sweep. Bounded
+    per call (the rest drains on the next tick); a suppressed lead is marked
+    'rejected' so it leaves the pool instead of being re-attempted every tick."""
+    if not (dest.get("smartlead_campaign_id") or dest.get("heyreach_list_id") or dest.get("heyreach_list_name")):
+        return []
+    try:
+        rows = sb("GET", f"signal_leads?source_id=eq.{src['id']}&status=eq.new&limit={cap}")
+    except Exception:  # noqa: BLE001 — a read blip must not kill the pull
+        return []
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for r in rows:
+        lu = r.get("linkedin_url") or ""
+        em = str(r.get("email") or "").lower()
+        if (lu and lu in seen) or (em and em in seen):
+            continue  # already handled from this pull's local prospects
+        pr = {"name": r.get("full_name"), "email": r.get("email"), "company": r.get("company"),
+              "title": r.get("title"), "domain": r.get("domain"),
+              "linkedin": lu if lu.startswith("http") else "", "icebreaker": r.get("icebreaker")}
+        push = push_prospect(pr, dest, client_id=src.get("client_id"))
+        sent = [k for k, v in push["tools"].items() if v.get("ok")]
+        if sent:
+            pushed_to = "+".join(
+                f"smartlead:{dest.get('smartlead_campaign_id')}" if k == "smartlead"
+                else f"heyreach:{dest.get('heyreach_list_id') or dest.get('heyreach_list_name')}" for k in sent)
+            sb("PATCH", f"signal_leads?id=eq.{r['id']}", {"status": "pushed", "pushed_to": pushed_to})
+        elif push.get("suppressed"):
+            sb("PATCH", f"signal_leads?id=eq.{r['id']}", {"status": "rejected"})
+        out.append({"name": pr.get("name"), "company": pr.get("company"), "email": pr.get("email"),
+                    "ok": bool(sent), "backlog": True,
+                    "tools": {k: v.get("message") for k, v in push["tools"].items()}})
     return out
 
 
@@ -3635,7 +3685,9 @@ def cron_pull_all():
     corrupt shared state or block the next source."""
     from datetime import datetime
     import time as _time
-    BUDGET_S = 700   # whole-run wall-clock ceiling
+    BUDGET_S = 1500  # whole-run wall-clock ceiling (bg thread, guarded by _CRON_LOCK;
+                     # pg_cron fires every 3h so a longer run is safe and lets every
+                     # source complete in one tick instead of perpetually deferring the tail)
     SOURCE_S = 300   # per-source hard timeout (engagement parallel-qualifies a big backlog)
     t0 = _time.monotonic()
 
@@ -3656,9 +3708,14 @@ def cron_pull_all():
 
     campaigns = {str(c.get("id")): c for c in read_json_list(CAMPAIGN_DRAFTS)
                  if not c.get("deleted_at")}
-    source_ids = [d["id"] for d in read_drafts()
-                  if d.get("active", True) and not d.get("deleted_at")
-                  and str(d.get("campaign_id")) in campaigns]
+    _active = [d for d in read_drafts()
+               if d.get("active", True) and not d.get("deleted_at")
+               and str(d.get("campaign_id")) in campaigns]
+    # fairness: least-recently-pulled first (never-pulled = "" sorts first), so a
+    # source deferred or timed-out last tick jumps to the front of the next tick
+    # instead of being perpetually starved at the tail of a fixed order.
+    _active.sort(key=lambda d: d.get("last_pull") or "")
+    source_ids = [d["id"] for d in _active]
     out = {"ok": True, "ran_at": datetime.now().isoformat(timespec="seconds"),
            "sources": [], "signals": 0, "leads": 0, "errors": 0, "deferred": 0}
     for sid in source_ids:
