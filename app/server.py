@@ -3190,39 +3190,43 @@ def cron_pull_all():
             continue
         entry = {"id": sid}
         _s0 = _time.monotonic()
-        r, err, timed_out = _timed(lambda: pull_source({"id": sid}))
-        if timed_out:
-            entry["error"] = f"timed out after {SOURCE_S}s (abandoned)"
-            out["errors"] += 1
-        elif err:
-            entry["error"] = str(err)[:200]
-            out["errors"] += 1
-        else:
-            r = r or {}
-            entry["ok"] = bool(r.get("ok"))
-            entry["note"] = r.get("note") or r.get("message") or ""
-            entry["signals"] = r.get("signals") or 0
-            entry["leads"] = len(r.get("prospects") or [])
-            out["signals"] += entry["signals"]
-            out["leads"] += entry["leads"]
-            drafts = read_drafts()  # pull_source rewrote it; re-read for the push
-            src = next((d for d in drafts if d.get("id") == sid), None)
-            camp = campaigns.get(str((src or {}).get("campaign_id"))) or {}
-            entry["campaign"] = camp.get("name")
-            if src and camp.get("autopilot"):
-                _pr, _pe, _pt = _timed(lambda: auto_push_new_leads(src))
-                pushed = _pr or []
-                entry["autopushed"] = len([p for p in pushed if p.get("ok")])
-                entry["push_failed"] = len([p for p in pushed if not p.get("ok")])
-                if not _pt:  # persist pushed-state to the local file the Leads tab reads
-                    try:
-                        write_drafts(drafts)
-                    except Exception:  # noqa: BLE001
-                        pass
-                if _pt or _pe:
-                    entry["push_note"] = "push timed out" if _pt else str(_pe)[:120]
+        try:  # nothing per-source may escape — the run must always reach the summary insert
+            r, err, timed_out = _timed(lambda: pull_source({"id": sid}))
+            if timed_out:
+                entry["error"] = f"timed out after {SOURCE_S}s (abandoned)"
+                out["errors"] += 1
+            elif err:
+                entry["error"] = str(err)[:200]
+                out["errors"] += 1
             else:
-                entry["autopilot"] = False
+                r = r or {}
+                entry["ok"] = bool(r.get("ok"))
+                entry["note"] = r.get("note") or r.get("message") or ""
+                entry["signals"] = r.get("signals") or 0
+                entry["leads"] = len(r.get("prospects") or [])
+                out["signals"] += entry["signals"]
+                out["leads"] += entry["leads"]
+                drafts = read_drafts()  # pull_source rewrote it; re-read for the push
+                src = next((d for d in drafts if d.get("id") == sid), None)
+                camp = campaigns.get(str((src or {}).get("campaign_id"))) or {}
+                entry["campaign"] = camp.get("name")
+                if src and camp.get("autopilot"):
+                    _pr, _pe, _pt = _timed(lambda: auto_push_new_leads(src))
+                    pushed = _pr or []
+                    entry["autopushed"] = len([p for p in pushed if p.get("ok")])
+                    entry["push_failed"] = len([p for p in pushed if not p.get("ok")])
+                    if not _pt:  # persist pushed-state to the file the Leads tab reads
+                        try:
+                            write_drafts(drafts)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if _pt or _pe:
+                        entry["push_note"] = "push timed out" if _pt else str(_pe)[:120]
+                else:
+                    entry["autopilot"] = False
+        except Exception as e:  # noqa: BLE001
+            entry["error"] = str(e)[:200]
+            out["errors"] += 1
         entry["secs"] = round(_time.monotonic() - _s0, 1)
         out["sources"].append(entry)
     out["total_secs"] = round(_time.monotonic() - t0, 1)
