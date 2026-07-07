@@ -59,6 +59,40 @@
 .srctype .t { font-weight: 500; font-size: 13px; }
 .srctype .d { font-size: 11.5px; color: var(--ink-3); margin-top: 1px; }
 
+/* destination picker — click a platform chip to search & choose its campaign/list */
+.destbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.destchip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px 7px 12px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--card, #fff); cursor: pointer; font: 500 12.5px var(--font-sans); color: var(--ink); max-width: 300px; transition: border-color .12s, background .12s, box-shadow .12s; }
+.destchip:hover { background: var(--bg-sunken); border-color: var(--ink-3); }
+.destchip.open { border-color: var(--orange); box-shadow: var(--focus); }
+/* unset = still an obvious solid button (not a faded/dashed placeholder), just tagged "Choose…" */
+.destchip.unset { background: var(--bg-sunken); color: var(--ink); }
+.destchip.unset .dc-name { color: var(--ink-3); }
+.destchip img { width: 17px; height: 17px; border-radius: 5px; flex-shrink: 0; }
+.destchip .dc-ch { font-size: 10.5px; font-weight: 700; letter-spacing: .02em; padding: 1px 6px; border-radius: 6px; flex-shrink: 0; }
+/* colour-code the channel so the two sides read pre-attentively: Email = brand orange, LinkedIn = LinkedIn blue */
+.destchip .dc-ch.email { color: var(--orange-700); background: var(--orange-100); }
+.destchip .dc-ch.li { color: #285E8C; background: #E4EEF6; }
+.destchip .dc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.destchip .dc-cx { color: var(--ink-3); font-size: 11px; flex-shrink: 0; transition: transform .12s; }
+.destchip.open .dc-cx { transform: rotate(180deg); }
+
+.destpop { position: fixed; z-index: 200; width: 304px; max-width: calc(100vw - 24px); background: #fff; border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 14px 38px rgba(20,17,14,.18); overflow: hidden; display: flex; flex-direction: column; animation: destpop-in .11s ease-out; }
+@keyframes destpop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.destpop-h { display: flex; align-items: center; gap: 8px; padding: 11px 13px 9px; }
+.destpop-h img { width: 18px; height: 18px; border-radius: 5px; }
+.destpop-h .t { font-weight: 600; font-size: 12.5px; }
+.destpop-h .cv { font-size: 11px; color: var(--ink-3); }
+.destpop-search { border: none; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 10px 13px; font: 400 13px var(--font-sans); color: var(--ink); background: transparent; }
+.destpop-search:focus { outline: none; background: var(--bg-sunken); }
+.destpop-list { max-height: 264px; overflow-y: auto; padding: 5px; }
+.destopt { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 9px; cursor: pointer; font-size: 13px; color: var(--ink); line-height: 1.35; }
+.destopt:hover, .destopt.hi { background: var(--bg-sunken); }
+.destopt.sel { color: var(--orange-700); font-weight: 600; }
+.destopt .tick { margin-left: auto; color: var(--orange-700); flex-shrink: 0; }
+.destopt .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.destopt.clear { color: var(--ink-3); margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0 0 9px 9px; }
+.destpop-empty { padding: 18px 12px; text-align: center; color: var(--ink-3); font-size: 12.5px; }
+
 /* wizard + QA gate overlays — Gojiberry-style: centered, minimal, chips */
 .overlay { position: fixed; inset: 0; background: rgba(20,17,14,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
 .overlay.on { display: flex; }
@@ -383,36 +417,8 @@ async function renderDraftCampaign(id) {
           <h1 style="font-size:22px;line-height:1.3;font-weight:600" id="camp-title">${(() => { const p = String(dc.name).split(" · "); const head = esc(p.shift()); return head + (p.length ? ` <span style="font-weight:400;color:var(--ink-3);font-size:15px">· ${esc(p.join(" · "))}</span>` : ""); })()}</h1>
           <button class="btn sm" title="Rename this campaign" style="border:none;padding:4px 6px" onclick="renameCampaign('${id}')">✎</button>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-        ${(() => {
-          const dst = dc.destination || {};
-          const slSel = dst.smartlead_campaign_id || (dst.type === "smartlead" ? dst.campaign_id : "") || "";
-          const hrSel = dst.heyreach_list_id || "";
-          const slName = (((DB.dests || {}).smartlead || []).find((c) => String(c.id) === String(slSel)) || {}).name || "";
-          const hrName = (((DB.dests || {}).heyreach || []).find((l) => String(l.id) === String(hrSel)) || {}).name || dst.heyreach_list_name || "";
-          if ((slSel || hrSel) && !window._editDest) {
-            const parts = [slSel && `📧 has email → ${esc(String(slName).slice(0, 30))}`, hrSel && `💼 no email → ${esc(String(hrName).slice(0, 30))}`].filter(Boolean);
-            const missing = !slSel ? '<span class="small" style="color:var(--orange-700)">⚠ no email campaign set - people WITH an email cannot be sent</span>'
-              : !hrSel ? '<span class="small" style="color:var(--orange-700)">⚠ no LinkedIn list set - people WITHOUT an email cannot be sent</span>' : "";
-            return `<span class="pill g" style="font-size:12px;padding:6px 14px">Sends to: ${parts.join("&ensp;·&ensp;")}</span>
-          <button class="btn sm" onclick="openDestEditor('${id}')">change</button> ${missing}`;
-          }
-          if (!slSel && !hrSel && !window._editDest) {
-            return `<button class="btn sm" style="background:var(--orange-100);border-color:var(--orange-700);color:var(--orange-700);font-weight:600"
-            onclick="openDestEditor('${id}')">⚠ Set up where leads go</button>
-          <span class="small" style="color:var(--orange-700)">nothing can be sent until you pick a destination</span>`;
-          }
-          const st = "border:1px solid var(--line-2);border-radius:999px;padding:7px 14px;font:500 12.5px var(--font-sans);color:var(--ink);background:transparent;max-width:280px";
-          return `
-          <input id="dest-email" list="dl-email" value="${esc(slName)}" placeholder="Email campaign - type to search…" autocomplete="off"
-            style="${st}" onchange="saveCampDest('${id}')" title="People we find an email for go ONLY here. Type part of the campaign name; clear the box to switch email off.">
-          <datalist id="dl-email">${((DB.dests || {}).smartlead || []).map((c) => `<option value="${esc(String(c.name))}"></option>`).join("")}</datalist>
-          <input id="dest-li" list="dl-li" value="${esc(hrName)}" placeholder="LinkedIn list - type to search…" autocomplete="off"
-            style="${st}" onchange="saveCampDest('${id}')" title="People WITHOUT an email go ONLY here (LinkedIn outreach). Type part of the list name; clear the box to switch LinkedIn off.">
-          <datalist id="dl-li">${((DB.dests || {}).heyreach || []).map((l) => `<option value="${esc(String(l.name))}"></option>`).join("")}</datalist>
-          <button class="btn sm" onclick="saveCampDest('${id}', true)">done</button>`;
-        })()}
-        </div>
+        <div class="destbar" style="margin-top:10px">${destBar(dc, id)}</div>
+        <div class="small muted" style="margin-top:5px">People we find an email for go to the <b style="font-weight:600">Email</b> campaign (Smartlead) · everyone else goes to the <b style="font-weight:600">LinkedIn</b> list (HeyReach). Click a button above to choose.</div>
       </div>
       <div style="flex-shrink:0;text-align:right">
         <div style="display:flex;gap:10px;justify-content:flex-end">
@@ -699,57 +705,208 @@ async function toggleAutopilot(id, on) {
   }
 }
 
-function resolveDestName(pool, typed) {
-  // typed text -> destination: exact name match first, else a UNIQUE substring match
-  const q = typed.trim().toLowerCase();
-  if (!q) return { hit: null };
-  const exact = pool.find((x) => String(x.name || "").toLowerCase() === q);
-  if (exact) return { hit: exact };
-  const subs = pool.filter((x) => String(x.name || "").toLowerCase().includes(q));
-  if (subs.length === 1) return { hit: subs[0] };
-  return { hit: null, ambiguous: subs.length > 1, none: subs.length === 0 };
+/* ── Destination picker ───────────────────────────────────────────────
+   Two clickable brand chips: Smartlead (people we found an email for) and
+   HeyReach (everyone else). Each chip shows its current pick; clicking it
+   opens a searchable popover of that platform's real campaigns / lists.
+   Pick one and it saves. Replaces the old pair of type-to-match text boxes:
+   the choice is always visible and you never have to type an exact name. */
+
+/* current selection ids off a draft's destination (normalising legacy shapes) */
+function _destSel(dc) {
+  const d = (dc && dc.destination) || {};
+  const sl = d.smartlead_campaign_id || (d.type === "smartlead" ? d.campaign_id : "") || "";
+  const hr = d.heyreach_list_id || "";
+  return { sl: sl ? String(sl) : "", hr: hr ? String(hr) : "" };
 }
 
-/* Opening the destination editor is exactly the moment the picker lists must be
-   fresh: a HeyReach list or Smartlead campaign created since page-load isn't in the
-   cached copy. So we force a live re-pull (?refresh=1 also busts the server's HeyReach
-   cache) at open time, then patch just the <datalist> options in place — no full
-   re-render, so in-progress typing and focus are never clobbered. */
-function refreshDestDatalists() {
-  const sl = document.getElementById("dl-email");
-  const hr = document.getElementById("dl-li");
-  if (sl) sl.innerHTML = ((DB.dests || {}).smartlead || []).map((c) => `<option value="${esc(String(c.name))}"></option>`).join("");
-  if (hr) hr.innerHTML = ((DB.dests || {}).heyreach || []).map((l) => `<option value="${esc(String(l.name))}"></option>`).join("");
+function destBar(dc, id) {
+  window._destCid = id;
+  const { sl, hr } = _destSel(dc);
+  const slName = (((DB.dests || {}).smartlead || []).find((c) => String(c.id) === sl) || {}).name || "";
+  const hrName = (((DB.dests || {}).heyreach || []).find((l) => String(l.id) === hr) || {}).name || (dc.destination || {}).heyreach_list_name || "";
+  const chip = (kind, selId, name) => {
+    const set = !!selId;
+    const logo = kind === "smartlead" ? "icons/smartlead.png" : "icons/heyreach.png";
+    const brand = kind === "smartlead" ? "Smartlead" : "HeyReach";
+    const channel = kind === "smartlead" ? "Email" : "LinkedIn";   // plain-word channel, legible without knowing the logos
+    const kindWord = kind === "smartlead" ? "email campaign" : "LinkedIn list";
+    const label = set ? esc(name || brand) : "Choose…";
+    const tip = set ? `${channel} leads go to the ${brand} ${kindWord} “${esc(name)}”. Click to change or clear.`
+                    : `Pick the ${brand} ${kindWord} that ${channel.toLowerCase()} leads go into.`;
+    return `<button class="destchip ${set ? "on" : "unset"}" data-kind="${kind}" title="${tip}" onclick="openDestPop('${kind}', event)">
+      <img src="${logo}" alt="${brand}" onerror="this.style.display='none'">
+      <span class="dc-ch ${kind === "smartlead" ? "email" : "li"}">${channel}</span>
+      <span class="dc-name">${label}</span>
+      <span class="dc-cx" aria-hidden="true">▾</span>
+    </button>`;
+  };
+  const warn = (!sl || !hr)
+    ? `<span class="small" style="color:var(--orange-700)">${!sl && !hr ? "Pick where leads go — nothing sends until you do"
+        : !sl ? "No Email campaign set yet (Smartlead) — people with an email can’t be sent"
+              : "No LinkedIn list set yet (HeyReach) — people without an email can’t be sent"}</span>`
+    : "";
+  return `<span class="small muted" style="flex-shrink:0">Sends to</span>${chip("smartlead", sl, slName)}${chip("heyreach", hr, hrName)}${warn}`;
 }
-async function openDestEditor(id) {
-  window._editDest = true;
-  renderDraftCampaign(id);                                   // open instantly with the lists we already have
+
+/* live re-pull so a campaign / list created since page-load shows up in the picker */
+async function _refreshDests() {
   try {
     const fresh = await _nativeFetch("/api/outreach-destinations?refresh=1").then((r) => r.json());
-    if (fresh && (fresh.smartlead || fresh.heyreach)) {      // only replace on a good pull
+    if (fresh && (fresh.smartlead || fresh.heyreach)) {
       _getCache.set("/api/outreach-destinations", { t: Date.now(), v: fresh, p: Promise.resolve(fresh) });
       _lsSet("/api/outreach-destinations", fresh);
       DB.dests = fresh;
-      if (window._editDest) refreshDestDatalists();          // drop any just-created list/campaign into the pickers
+      return true;
     }
   } catch (_) {}
+  return false;
 }
 
-async function saveCampDest(id, close) {
-  const slTyped = (document.getElementById("dest-email") || {}).value || "";
-  const hrTyped = (document.getElementById("dest-li") || {}).value || "";
-  const slR = resolveDestName((DB.dests || {}).smartlead || [], slTyped);
-  const hrR = resolveDestName((DB.dests || {}).heyreach || [], hrTyped);
-  if (slTyped.trim() && !slR.hit) { protoNote(slR.ambiguous ? `Several email campaigns match “${slTyped.trim()}” - keep typing` : `No email campaign called “${slTyped.trim()}” - pick one from the list`); return; }
-  if (hrTyped.trim() && !hrR.hit) { protoNote(hrR.ambiguous ? `Several LinkedIn lists match “${hrTyped.trim()}” - keep typing` : `No LinkedIn list called “${hrTyped.trim()}” - pick one from the list`); return; }
-  const dest = {};
-  if (slR.hit) dest.smartlead_campaign_id = String(slR.hit.id);
-  if (hrR.hit) { dest.heyreach_list_id = Number(hrR.hit.id); dest.heyreach_list_name = hrR.hit.name || ""; }
-  if (close) window._editDest = false;
-  await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, destination: dest }) });
-  DB.campaignDrafts = null;
-  protoNote(slR.hit || hrR.hit ? "Saved - routing updated" : "Destinations cleared");
-  renderDraftCampaign(id);
+function closeDestPop() {
+  const p = document.getElementById("destpop");
+  if (p) p.remove();
+  document.querySelectorAll(".destchip.open").forEach((c) => c.classList.remove("open"));
+  window._destPop = null;
+  document.removeEventListener("keydown", _destKeydown, true);
+  document.removeEventListener("click", _destOutside, true);
+}
+
+function _destOutside(e) {
+  if (!e.target.closest("#destpop") && !e.target.closest(".destchip")) closeDestPop();
+}
+
+function openDestPop(kind, ev) {
+  ev && ev.stopPropagation();
+  if (window._destPop === kind) { closeDestPop(); return; }   // second click on the same chip closes it
+  closeDestPop();
+  window._destPop = kind;
+  window._destQ = "";
+  window._destHi = -1;
+  const anchor = (ev && ev.currentTarget) || document.querySelector(`.destchip[data-kind="${kind}"]`);
+  if (anchor) anchor.classList.add("open");
+  _paintDestPop(anchor);
+  document.addEventListener("keydown", _destKeydown, true);
+  setTimeout(() => document.addEventListener("click", _destOutside, true), 0);
+  // freshen the underlying lists in the background, then repaint if still open
+  _refreshDests().then((ok) => { if (ok && window._destPop === kind) _paintDestPop(); });
+}
+
+function _paintDestPop(anchor) {
+  const kind = window._destPop;
+  if (!kind) return;
+  anchor = anchor || document.querySelector(".destchip.open") || document.querySelector(`.destchip[data-kind="${kind}"]`);
+  const dc = (DB.campaignDrafts || []).find((x) => x.id === window._destCid) || {};
+  const sel = _destSel(dc);
+  const selId = kind === "smartlead" ? sel.sl : sel.hr;
+  const pool = ((DB.dests || {})[kind] || []);
+  const brand = kind === "smartlead" ? "Smartlead" : "HeyReach";
+  const kindWord = kind === "smartlead" ? "email campaign" : "LinkedIn list";
+  const cv = kind === "smartlead" ? "People we found an email for" : "People without an email (LinkedIn)";
+  const logo = kind === "smartlead" ? "icons/smartlead.png" : "icons/heyreach.png";
+  const q = (window._destQ || "").trim().toLowerCase();
+  const opts = pool.filter((o) => !q || String(o.name || "").toLowerCase().includes(q));
+  window._destOpts = opts;
+  // while filtering, keep the top match highlighted so Enter always picks it (deterministic)
+  if (q && (window._destHi == null || window._destHi < 0 || window._destHi >= opts.length)) window._destHi = opts.length ? 0 : -1;
+  if (window._destHi >= opts.length) window._destHi = opts.length - 1;
+
+  const rows = opts.map((o, i) => {
+    const isSel = String(o.id) === String(selId);
+    return `<div class="destopt ${isSel ? "sel" : ""} ${i === window._destHi ? "hi" : ""}" data-i="${i}"
+      onmouseenter="window._destHi=${i}" onclick="pickDest('${kind}','${esc(String(o.id))}')">
+      <span class="nm">${esc(String(o.name || ("#" + o.id)))}</span>${isSel ? '<span class="tick">✓</span>' : ""}
+    </div>`;
+  }).join("");
+  const body = opts.length ? rows
+    : `<div class="destpop-empty">${pool.length ? `Nothing matches “${esc(window._destQ)}”` : `No ${brand} ${kindWord}s found`}</div>`;
+  const clear = selId ? `<div class="destopt clear" title="Unset this destination — the campaign keeps running, these people just won’t be sent until you pick again" onclick="pickDest('${kind}','')">✕ Clear this destination</div>` : "";
+
+  let pop = document.getElementById("destpop");
+  if (!pop) { pop = document.createElement("div"); pop.id = "destpop"; pop.className = "destpop"; pop.onclick = (e) => e.stopPropagation(); document.body.appendChild(pop); }
+  pop.innerHTML = `
+    <div class="destpop-h"><img src="${logo}" alt="${brand}" onerror="this.style.display='none'"><div><div class="t">${brand} ${kindWord}</div><div class="cv">${cv}</div></div></div>
+    <input class="destpop-search" id="destpop-search" placeholder="Search ${pool.length} ${kindWord}${pool.length === 1 ? "" : "s"}…" value="${esc(window._destQ || "")}"
+      oninput="window._destQ=this.value;window._destHi=this.value.trim()?0:-1;_paintDestPop()" autocomplete="off">
+    <div class="destpop-list" id="destpop-list">${body}${clear}</div>`;
+  _positionDestPop(anchor, pop);
+  const s = document.getElementById("destpop-search");
+  if (s && document.activeElement !== s) { s.focus(); const v = s.value; try { s.setSelectionRange(v.length, v.length); } catch (_) {} }
+}
+
+function _positionDestPop(anchor, pop) {
+  const r = anchor ? anchor.getBoundingClientRect() : { left: 20, right: 320, bottom: 80, top: 60 };
+  const pw = pop.offsetWidth || 304;
+  let left = Math.max(12, Math.min(r.left, window.innerWidth - pw - 12));
+  pop.style.left = left + "px";
+  const ph = pop.offsetHeight || 300;
+  if (r.bottom + 6 + ph > window.innerHeight - 8 && r.top - 6 - ph > 8) pop.style.top = (r.top - 6 - ph) + "px";
+  else pop.style.top = (r.bottom + 6) + "px";
+}
+
+function _destKeydown(e) {
+  if (!window._destPop) return;
+  const opts = window._destOpts || [];
+  if (e.key === "Escape") { e.preventDefault(); closeDestPop(); return; }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!opts.length) return;
+    window._destHi = e.key === "ArrowDown"
+      ? Math.min(opts.length - 1, (window._destHi < 0 ? -1 : window._destHi) + 1)
+      : Math.max(0, (window._destHi < 0 ? 1 : window._destHi) - 1);
+    _paintDestPop();
+    const hi = document.querySelector(".destopt.hi"); if (hi) hi.scrollIntoView({ block: "nearest" });
+  }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const o = opts[window._destHi] || (opts.length === 1 ? opts[0] : null);
+    if (o) pickDest(window._destPop, String(o.id));
+  }
+}
+
+async function pickDest(kind, valId) {
+  const id = window._destCid;
+  const dc = (DB.campaignDrafts || []).find((x) => x.id === id);
+  if (!dc) { closeDestPop(); return; }
+  const dest = { ...(dc.destination || {}) };
+  delete dest.type; delete dest.campaign_id;                 // drop legacy shape
+  if (kind === "smartlead") {
+    if (valId) dest.smartlead_campaign_id = String(valId); else delete dest.smartlead_campaign_id;
+  } else {
+    if (valId) {
+      const l = ((DB.dests || {}).heyreach || []).find((x) => String(x.id) === String(valId)) || {};
+      dest.heyreach_list_id = Number(valId);
+      dest.heyreach_list_name = l.name || "";
+    } else { delete dest.heyreach_list_id; delete dest.heyreach_list_name; }
+  }
+  const name = valId ? (((DB.dests || {})[kind] || []).find((x) => String(x.id) === String(valId)) || {}).name || "" : "";
+  const prevDest = dc.destination;                            // keep the pre-save value so we can roll back on failure
+  closeDestPop();
+  // optimistic repaint: update the in-memory draft + the chip bar so the pick shows at once
+  dc.destination = dest;
+  window._destNames = window._destNames || {};
+  window._destNames[kind] = name;
+  const repaintBar = () => { const b = document.querySelector(".destbar"); if (b) b.innerHTML = destBar(dc, id); };
+  repaintBar();
+  const who = kind === "smartlead" ? "emailed people" : "LinkedIn people";
+  try {
+    const r = await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, destination: dest }) });
+    if (!r.ok) throw new Error("save failed");
+    DB.campaignDrafts = null;                                 // next navigation re-reads from the server
+    protoNote(valId ? `Saved — ${who} now go to “${name}”` : `Cleared — ${who} won’t be sent`);
+    // quiet in-place re-render so per-lead "Sending to" hints + overview pick up the change
+    // (_swrRepaint keeps the current view painted — no skeleton flash, no scroll jump)
+    if (window._destCid === id) {
+      window._swrRepaint = true;
+      try { await renderDraftCampaign(id); } finally { window._swrRepaint = false; }
+    }
+  } catch (e) {
+    // save failed — roll the chip back to what it actually is, so the UI never claims an unsaved state
+    dc.destination = prevDest;
+    window._destNames[kind] = prevDest ? ((((DB.dests || {})[kind] || []).find((x) => String(x.id) === String(kind === "smartlead" ? _destSel(dc).sl : _destSel(dc).hr)) || {}).name || "") : "";
+    repaintBar();
+    protoNote("Couldn’t save — nothing changed. Check your connection and try again");
+  }
 }
 
 function rowKey(m) { return m._idx != null ? m._idx : (m.linkedin || "").replace(/[^a-z0-9]/gi, "").slice(-24); }
