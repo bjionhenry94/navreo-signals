@@ -148,12 +148,47 @@ def http_json(method: str, url: str, headers: dict, body: dict | None = None):
 # ── shared normalisers (country codes, domains, headcount) ───────────────
 
 COUNTRY_CODE = {
-    "United States": "US", "USA": "US", "United Kingdom": "GB", "UK": "GB",
-    "Canada": "CA", "Australia": "AU", "Ireland": "IE", "New Zealand": "NZ",
-    "Germany": "DE", "Netherlands": "NL", "Switzerland": "CH", "Sweden": "SE",
-    "Norway": "NO", "Denmark": "DK", "Finland": "FI", "Singapore": "SG",
-    "France": "FR", "Spain": "ES", "Italy": "IT", "Jamaica": "JM", "Nigeria": "NG",
+    # NB: an unmapped country name used to be passed straight through to
+    # TheirStack as a bogus "code" (COUNTRY_CODE.get(c, c)), which rejects the
+    # WHOLE multi-country search and silently returns zero jobs. Keep this list
+    # broad, and route every lookup through country_codes() which DROPS anything
+    # it can't map rather than poisoning the query. Aliases welcome.
+    "United States": "US", "USA": "US", "US": "US", "United States of America": "US",
+    "United Kingdom": "GB", "UK": "GB", "Great Britain": "GB", "England": "GB",
+    "Canada": "CA", "Australia": "AU", "New Zealand": "NZ", "Ireland": "IE",
+    "Germany": "DE", "Netherlands": "NL", "The Netherlands": "NL", "Holland": "NL",
+    "Switzerland": "CH", "Austria": "AT", "Belgium": "BE", "Luxembourg": "LU",
+    "France": "FR", "Spain": "ES", "Italy": "IT", "Portugal": "PT",
+    "Sweden": "SE", "Norway": "NO", "Denmark": "DK", "Finland": "FI", "Iceland": "IS",
+    "Poland": "PL", "Czechia": "CZ", "Czech Republic": "CZ", "Slovakia": "SK",
+    "Hungary": "HU", "Romania": "RO", "Bulgaria": "BG", "Greece": "GR",
+    "Estonia": "EE", "Latvia": "LV", "Lithuania": "LT", "Croatia": "HR", "Slovenia": "SI",
+    "Singapore": "SG", "Hong Kong": "HK", "Japan": "JP", "India": "IN",
+    "United Arab Emirates": "AE", "UAE": "AE", "Saudi Arabia": "SA", "Israel": "IL",
+    "South Africa": "ZA", "Mexico": "MX", "Brazil": "BR", "Argentina": "AR",
+    "Jamaica": "JM", "Nigeria": "NG",
 }
+# case-insensitive lookup (source data arrives in mixed case)
+_COUNTRY_CODE_LC = {k.lower(): v for k, v in COUNTRY_CODE.items()}
+
+
+def country_codes(names) -> tuple[list[str], list[str]]:
+    """Free-text country names -> ISO-3166 alpha-2 codes for TheirStack.
+    Case-insensitive + alias-aware. Returns (codes, dropped): names we cannot
+    map are DROPPED, never passed through as a bogus code (one bad name zeroes
+    out the entire multi-country job search). Callers surface `dropped`."""
+    codes: list[str] = []
+    dropped: list[str] = []
+    for n in (names or []):
+        key = str(n).strip()
+        if not key:
+            continue
+        code = COUNTRY_CODE.get(key) or _COUNTRY_CODE_LC.get(key.lower())
+        if code and code not in codes:
+            codes.append(code)
+        elif not code and key not in dropped:
+            dropped.append(key)
+    return codes, dropped
 
 
 TITLE_VARIANTS = {
@@ -200,10 +235,24 @@ def emp_range(buckets) -> tuple[int, int]:
 
 def preview_hiring(p: dict) -> dict:
     """TheirStack blurred search — free, returns real counts + blurred sample."""
+    # countries arrive either as free-text names (client wizard) or already-mapped
+    # ISO codes (internal probe callers). Normalise BOTH here so no caller can pass
+    # a bogus code that silently zeroes the search (the launch bug, client side).
+    codes = []
+    for c in (p.get("countries") or []):
+        s = str(c).strip()
+        if not s:
+            continue
+        mapped, _ = country_codes([s])
+        if mapped:
+            codes += mapped
+        elif len(s) == 2 and s.isalpha():
+            codes.append(s.upper())  # already an ISO alpha-2 code
+    codes = list(dict.fromkeys(codes)) or ["US"]
     body = {
         "posted_at_max_age_days": int(p.get("days") or 14),
         "job_title_or": p.get("job_titles") or [],
-        "job_country_code_or": p.get("countries") or ["US"],
+        "job_country_code_or": codes,
         "min_employee_count": int(p.get("min_emp") or 11),
         "max_employee_count": int(p.get("max_emp") or 500),
         "company_type": "direct_employer",
@@ -438,10 +487,7 @@ def tam_map(p: dict) -> dict:
         return r.get("total_companies") if r.get("ok") else None
 
     def probe_hiring():
-        cc = {"United States": "US", "United Kingdom": "GB", "Canada": "CA",
-              "Australia": "AU", "Germany": "DE", "Netherlands": "NL", "Jamaica": "JM",
-              "New Zealand": "NZ", "Singapore": "SG", "Nigeria": "NG"}
-        codes = [cc.get(c) for c in (p.get("countries") or []) if cc.get(c)] or ["US"]
+        codes = country_codes(p.get("countries") or [])[0] or ["US"]
         try:
             r = preview_hiring({"job_titles": p.get("titles") or [], "countries": codes,
                                 "min_emp": 11, "max_emp": 500, "days": 14})
@@ -1062,9 +1108,6 @@ def strategy_map(p: dict) -> dict:
                                                  "Director", "Vice President"]}
         return f
 
-    cc = {"United States": "US", "United Kingdom": "GB", "Canada": "CA",
-          "Australia": "AU", "Germany": "DE", "Netherlands": "NL"}
-
     # hiring pulls enrich up to this many decision makers per hiring company
     MAX_DMS_PER_CO = 2
     # volume floor IN DECISION MAKERS: below this we widen the time/threshold
@@ -1080,7 +1123,7 @@ def strategy_map(p: dict) -> dict:
 
     def probe_once(mech, prm):
         if mech == "hiring":
-            codes = [cc.get(c) for c in (p.get("countries") or []) if cc.get(c)] or ["US"]
+            codes = country_codes(p.get("countries") or [])[0] or ["US"]
             lo, hi = emp_range(p.get("headcount"))
             # probe with the SAME precision layer + headcount the pull will use,
             # so the number shown in the ideas table is the number that arrives
@@ -2430,27 +2473,25 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     # verdicts serially below (keeps the daily-cap ordering + list mutation
     # single-threaded). String-gated rows cost zero tokens. A per-event failure
     # (quota/key) leaves that row NEW to retry next pull; it no longer aborts the run.
-    from concurrent.futures import ThreadPoolExecutor
-    def _q(ev):
-        try:
-            return ev["id"], qualify_engager(ev, cfg), None
-        except Exception as e:  # noqa: BLE001
-            return ev["id"], None, e
-    verdicts = {}
-    with ThreadPoolExecutor(max_workers=10) as _ex:
-        for eid, q, err in _ex.map(_q, events):
-            verdicts[eid] = (q, err)
-
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     prospects = list(src.get("prospects") or [])
     known = {x.get("linkedin") for x in prospects}
     counts = {"qualified": 0, "borderline": 0, "off_brief": 0, "capped": 0, "errored": 0}
     kept_this_run = []
-    for ev in events:
+    # Qualify (one gpt-5-mini call each, ~3s) runs 40-wide; each verdict is
+    # APPLIED the instant its future resolves, so if the per-source watchdog
+    # abandons the run mid-batch, everything done so far is already committed
+    # (no all-or-nothing waste). String-gated rows resolve instantly, no tokens.
+    _ex = ThreadPoolExecutor(max_workers=40)
+    _futs = {_ex.submit(qualify_engager, ev, cfg): ev for ev in events}
+    for _fut in as_completed(_futs):
+        ev = _futs[_fut]
         if counts["qualified"] >= cap:
             counts["capped"] += 1
             continue
-        q, err = verdicts.get(ev["id"], (None, None))
-        if err or not q:  # leave NEW, retry next pull — one bad row must not stop the batch
+        try:
+            q = _fut.result()
+        except Exception:  # noqa: BLE001 — quota/key/timeout: leave NEW, retry next pull
             counts["errored"] += 1
             continue
         status = {"QUALIFIED": "QUALIFIED", "BORDERLINE": "BORDERLINE", "OFF_BRIEF": "OFF_BRIEF"}[q["verdict"]]
@@ -2490,6 +2531,7 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
            {"status": status, "qualification": {k: q[k] for k in
             ("verdict", "post_verdict", "person_verdict", "reason", "topic", "method")}})
 
+    _ex.shutdown(wait=False)
     src["prospects"] = prospects
     src["total"] = len(prospects)
     src["signals_found"] = counts["qualified"]
@@ -2560,6 +2602,13 @@ def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=N
     data = http_json("POST", "https://api.theirstack.com/v1/jobs/search",
                      {"Authorization": f"Bearer {KEYS['THEIRSTACK_API_KEY']}"}, body)
     meta = data.get("metadata") or {}
+    # a genuine zero-result carries "data": [] + a metadata block. An error body
+    # (validation / auth / rate-limit) carries neither — don't read it as "0 jobs".
+    if "data" not in data:
+        detail = data.get("detail") or data.get("error") or data.get("message") or data
+        if isinstance(detail, list):  # FastAPI-style [{"loc":..,"msg":..}]
+            detail = "; ".join(str(d.get("msg") or d) for d in detail)
+        meta = {**meta, "_error": str(detail)[:300]}
     jobs = []
     KILL = ("staffing", "talent", "recruit", "consultants")  # empty descriptions dodge pattern_not
     negs = [str(n).strip().lower() for n in (negatives or []) if str(n).strip()]
@@ -2741,7 +2790,8 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     # decision-maker roles to enrich (AI path stores them at top-level `titles`)
     dm_titles = expand_titles((src.get("params") or {}).get("dm_titles")
                               or [x.strip() for x in (src.get("titles") or []) if str(x).strip()])
-    codes = [COUNTRY_CODE.get(c, c) for c in (cfg.get("countries") or [])] or ["US"]
+    codes, unmapped_countries = country_codes(cfg.get("countries") or [])
+    codes = codes or ["US"]
     min_emp, max_emp = emp_range(cfg.get("headcount"))
     days = min(int(cfg.get("days") or 30), 30)  # freshness: never act on posts older than 30d
     # ONE user-facing pace knob; internals derive from it
@@ -2775,9 +2825,20 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
             (src.get("config") or {}).pop("company_description_pattern_or", None)
             filter_dropped = True  # tell the user their REQUIRE-word filter was auto-removed
     total_jobs = meta.get("total_results") or len(jobs)
-    if not jobs:
+    if not jobs and meta.get("_error"):
+        # a real provider error (bad filter/auth/rate-limit) — never report it as
+        # the benign "no jobs today", or a broken signal looks like an idle one.
         return {"ok": False, "message":
-                "No live job posts match this signal today. That's normal for a hiring signal. It keeps checking daily and adds companies as they start hiring. Your campaign audience is unchanged."}
+                f"The hiring search couldn't run: {meta['_error']}. "
+                "Your targeting is saved — fix the flagged issue and try again."}
+    if not jobs:
+        note = ("No live job posts match this signal today. That's normal for a hiring signal. "
+                "It keeps checking daily and adds companies as they start hiring. "
+                "Your campaign audience is unchanged.")
+        if unmapped_countries:
+            note += (" (Skipped unrecognised countries: "
+                     f"{', '.join(unmapped_countries)}.)")
+        return {"ok": False, "message": note}
 
     # freshness in code too: a post dated older than 30 days never acts
     from datetime import timedelta
@@ -2852,11 +2913,14 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 dropped["excluded"] += 1
                 continue
             person["email"] = email
-            person["hiring_for"] = j["job_title"]
+            from name_hygiene import clean_job_title, email_safe
+            role = clean_job_title(j["job_title"]) or ""  # email-ready: no emoji/pipe, tidy casing
+            person["hiring_for"] = role
             person["job_url"] = j["job_url"]
-            person["role"] = j["job_title"]
+            person["role"] = role
             ice = fill_icebreaker(template, person)
-            person["icebreaker"] = ice.replace("{{role}}", j["job_title"]).replace("{role}", j["job_title"])
+            # re-run email_safe AFTER the role merge so a raw title can't leak a special char
+            person["icebreaker"] = email_safe(ice.replace("{{role}}", role).replace("{role}", role))
             person["verdict"] = None
             prospects.append(person)
     left_over = len(fresh) - scanned
@@ -2907,11 +2971,16 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 "total": total_jobs, "signals": signals_n, "dropped": dropped}
     tail = f" ({left_over} more companies queued for the next run)" if left_over else ""
     dm_word = "decision-maker" if len(prospects) == 1 else "decision-makers"
+    notices = []
+    if filter_dropped:
+        notices.append("Removed your 'description must contain' filter to get results "
+                       "- it matched no live jobs. Targeting saved.")
+    if unmapped_countries:
+        notices.append("Skipped unrecognised countries: " + ", ".join(unmapped_countries) + ".")
     return {"ok": True, "total": total_jobs, "signals": signals_n,
             "companies_scanned": len(uniq), "prospects": prospects, "db_synced": True,
             "dropped": dropped,
-            "notice": ("Removed your 'description must contain' filter to get results "
-                       "- it matched no live jobs. Targeting saved." if filter_dropped else None),
+            "notice": " ".join(notices) or None,
             "note": f"{signals_n} hiring companies, {len(prospects)} {dm_word}{tail}"
                     + (f" · {drop_note}" if drop_note else "")}
 
