@@ -2789,7 +2789,11 @@ function roleChipAdd(field) {
   if (!a.some((x) => x.toLowerCase() === v.toLowerCase())) a.push(v);
   sw[field] = a.join(", "); sw._touched = { ...(sw._touched || {}), [field]: true }; drawSrc();
 }
-function srcBack() { srcwiz.classList.remove("on"); hideNote(); }  // Back closes the wizard (user rule)
+function srcBack() {  // step back through the wizard (targeting ⇆ preview ⇆ name); only close from the first step
+  hideNote();
+  if (sw && sw.step > 1) { sw.step -= 1; drawSrc(); return; }
+  srcwiz.classList.remove("on");
+}
 function toggleIn(arr, v) { const i = arr.indexOf(v); i >= 0 ? arr.splice(i, 1) : arr.push(v); drawSrc(); }
 
 function chipRow(arr, options, field) {
