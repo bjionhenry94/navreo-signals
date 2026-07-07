@@ -2385,18 +2385,28 @@ def engagement_verdicts(source_id: str, verdict: str) -> dict:
         return {"count": 0, "rows": []}
     from urllib.parse import quote
     statuses = "QUALIFIED,PUSHED" if verdict == "qualified" else "OFF_BRIEF,BORDERLINE"
-    rows = sb("GET", f"engagement_events?source_id=eq.{quote(source_id, safe='')}"
-                     f"&status=in.({statuses})&order=received_at.desc&limit=200"
-                     "&select=engager_full_name,engager_job_title,engager_company_name,"
-                     "engager_country,post_author_name,status,qualification,received_at") or []
-    if not isinstance(rows, list):
-        rows = []
+    # Fetch ALL matching engagers (paginated) and de-dup by person, so the count
+    # is the true de-duped total of not-qualified prospects, not a 200-row sample.
+    sel = ("&select=engager_full_name,engager_job_title,engager_company_name,"
+           "engager_country,engager_linkedin_url,post_author_name,status,qualification,received_at")
+    base = (f"engagement_events?source_id=eq.{quote(source_id, safe='')}"
+            f"&status=in.({statuses})&order=received_at.desc{sel}")
+    rows, offset = [], 0
+    while True:
+        page = sb("GET", base + f"&limit=1000&offset={offset}")
+        if not isinstance(page, list) or not page:
+            break
+        rows += page
+        if len(page) < 1000 or offset >= 20000:  # exhausted, or safety valve above real volume
+            break
+        offset += 1000
     label = {"OFF_BRIEF": "rejected", "BORDERLINE": "needs review",
              "QUALIFIED": "qualified", "PUSHED": "sent"}
     out, seen = [], set()
     for r in rows:
-        who = (r.get("engager_full_name"), r.get("engager_company_name"))
-        if who in seen:  # same engager on multiple posts - newest row wins
+        # de-dup by the person (same engager across posts / re-pulls); newest row wins
+        who = r.get("engager_linkedin_url") or ("nc", r.get("engager_full_name"), r.get("engager_company_name"))
+        if who in seen:
             continue
         seen.add(who)
         q = r.get("qualification") or {}
