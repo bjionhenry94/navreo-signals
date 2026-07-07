@@ -197,7 +197,7 @@ TITLE_VARIANTS = {
     "vp of sales": ["VP of Sales", "VP Sales", "SVP Sales", "Vice President of Sales", "Head of Sales", "Sales Director"],
     "head of sales": ["Head of Sales", "Sales Director", "Director of Sales", "VP of Sales", "Chief Revenue Officer"],
     "head of e-commerce": ["Head of E-commerce", "Head of Ecommerce", "E-commerce Director", "Director of E-commerce", "Ecommerce Manager", "VP of E-commerce", "Head of Digital"],
-    "head of growth": ["Head of Growth", "Growth Lead", "VP of Growth", "Director of Growth", "Head of Marketing"],
+    "head of growth": ["Head of Growth", "VP of Growth", "Director of Growth"],
     "managing director": ["Managing Director", "MD", "General Manager", "CEO"],
     "chief revenue officer": ["Chief Revenue Officer", "CRO", "VP of Revenue", "Head of Revenue"],
 }
@@ -2841,25 +2841,66 @@ def aiark_dms_by_domain(domain, dm_titles, cap) -> list:
     return out
 
 
-_SENIORITY_WORDS = re.compile(r"head|vp|vice president|director|chief|c[oetifms]o\b|president|founder|owner|partner|managing|manager|lead", re.I)
-_TITLE_STOP = {"of", "the", "and", "&", "for", "senior", "sr", "jr", "group", "global"}
+# a LEADER rank word — mid-level "manager"/"lead" deliberately excluded so a
+# functional brief ("Sales Director") never passes an Account Manager / Team Lead.
+_SENIORITY_WORDS = re.compile(
+    r"\b(head|vp|svp|evp|avp|vice president|director|chief|c[oetifms]o|president|"
+    r"founder|owner|partner|managing)\b", re.I)
+_TITLE_STOP = {"of", "the", "and", "&", "for", "senior", "sr", "jr", "a", "to", "at", "on"}
+# role/seniority words that are NOT a business function. Two titles that share
+# ONLY these are not the same job ("Sales Director" vs "Marketing Director",
+# "General Manager" vs "Customer Success Manager"), so they're stripped before
+# the function-overlap test and the match must rest on a real function word.
+_GENERIC_ROLE = {
+    "director", "manager", "head", "vp", "svp", "evp", "avp", "vice", "president",
+    "officer", "chief", "lead", "leader", "owner", "co", "cofounder", "founder",
+    "partner", "general", "executive", "exec", "md", "gm", "board", "member",
+    "managing", "global", "regional", "national", "interim", "deputy", "assistant",
+    "group", "team", "staff", "principal",
+}
+# genuine top-of-company markers (multilingual — the pull spans US/UK/NL/CA/AU/DE/PL)
+_TOP_EXEC = re.compile(
+    r"\b(ceo|chief executive|founder|co-?founder|president|managing director|"
+    r"gesch[aä]ftsf[uü]hrer|gr[uü]nder|prezes|directeur g[eé]n[eé]ral|"
+    r"inhaber|eigenaar|proprietor|amministratore|owner)\b", re.I)
+
+
+def _sig_words(s) -> set:
+    return set(re.findall(r"[a-z]+", str(s).lower())) - _TITLE_STOP
+
+
+def _is_top_exec(title) -> bool:
+    """Top-of-company only: a named C-suite/founder/president/MD (any language),
+    or a BARE owner ('Owner', 'Co-Owner') — but NOT a functional 'X Owner'
+    ('Product Owner', 'Process Owner', 'Account Owner' are individual contributors)."""
+    if not _TOP_EXEC.search(str(title)):
+        return False
+    toks = _sig_words(title)
+    if toks & {"owner", "proprietor", "eigenaar", "inhaber"} and not _TOP_EXEC.search(
+            re.sub(r"\b(owner|proprietor|eigenaar|inhaber)\b", "", str(title), flags=re.I)):
+        # the only exec marker is a bare-owner word — reject if it's qualified by
+        # a function ('Product Owner' -> {product} remains after dropping role words)
+        return not (toks - _GENERIC_ROLE)
+    return True
 
 
 def _title_on_brief(title, dm_titles) -> bool:
-    """SMART title matching is fuzzy (AND-of-words, any order) and can pass an
-    SDR for 'Head of Sales' (live-caught 2026-07-05). Local gate: the person's
-    title must share the dm_title's significant words AND, when the brief asks
-    for a leader, carry a seniority word itself."""
+    """Local precision gate. Provider title search is fuzzy (AND-of-words, any
+    order) and the seniority-net fallback returns any exec, so this decides on
+    the brief: a FUNCTIONAL brief ('Sales Director') needs the person to share
+    the function AND hold a leader rank; a TOP-EXEC brief ('CEO','Founder')
+    matches only genuine top-of-company people, never any senior colleague who
+    happens to share a role word ('Managing Director' != 'Marketing Director')."""
     if not dm_titles or not title:
-        return True  # seniority-net mode already filtered server-side
-    pt = set(re.findall(r"[a-z]+", str(title).lower())) - _TITLE_STOP
+        return True  # seniority-net mode already scoped server-side
+    t_func = _sig_words(title) - _GENERIC_ROLE
+    senior = bool(_SENIORITY_WORDS.search(str(title)))
     for dm in dm_titles:
-        dt = set(re.findall(r"[a-z]+", str(dm).lower())) - _TITLE_STOP
-        if not dt:
-            continue
-        overlap = len(dt & pt) / len(dt)
-        senior_ok = (not _SENIORITY_WORDS.search(str(dm))) or bool(_SENIORITY_WORDS.search(str(title)))
-        if overlap >= 0.5 and senior_ok:
+        d_func = _sig_words(dm) - _GENERIC_ROLE
+        if d_func:  # functional brief — share the function, hold a leader rank
+            if senior and len(d_func & t_func) / len(d_func) >= 0.6:
+                return True
+        elif _is_top_exec(title):  # pure top-of-company brief
             return True
     return False
 
@@ -2900,7 +2941,12 @@ def _prospeo_dms_by_domain(domain, dm_titles, max_dms):
             "company": {"websites": {"include": [domain]}},
         })
         if not d.get("error"):
-            people = _person_rows(d, max_dms)
+            net = _person_rows(d, max_dms * 3)  # scan wider, then gate to the brief
+            # the seniority net returns ANY exec at the company. With a stated DM
+            # brief that would backfill off-function leaders (a CIO / Head of
+            # Product / HR VP for a 'Sales Leaders' signal), so keep only titles
+            # that actually match the brief. No brief => any leader is fine.
+            people = [p for p in net if _title_on_brief(p.get("title"), dm_titles)] if dm_titles else net
     for x in people:
         x["provider"] = "prospeo"
     return people[:max_dms]
@@ -2934,7 +2980,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     days = min(int(cfg.get("days") or 30), 30)  # freshness: never act on posts older than 30d
     # ONE user-facing pace knob; internals derive from it
     leads_per_day = max(1, int(cfg.get("leads_per_day") or 20))
-    limit = min(leads_per_day * 4, 100)  # scan headroom for dedupe + no-DM companies
+    limit = min(leads_per_day * 6, 100)  # scan headroom for dedupe + no-DM + off-brief-skipped companies
     max_dms = 5                          # fixed: at most 5 decision makers per company
 
     # client for exclusion checks, resolved via the campaign draft
