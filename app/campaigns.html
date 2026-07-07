@@ -395,11 +395,11 @@ async function renderDraftCampaign(id) {
             const missing = !slSel ? '<span class="small" style="color:var(--orange-700)">⚠ no email campaign set - people WITH an email cannot be sent</span>'
               : !hrSel ? '<span class="small" style="color:var(--orange-700)">⚠ no LinkedIn list set - people WITHOUT an email cannot be sent</span>' : "";
             return `<span class="pill g" style="font-size:12px;padding:6px 14px">Sends to: ${parts.join("&ensp;·&ensp;")}</span>
-          <button class="btn sm" onclick="window._editDest=true;renderDraftCampaign('${id}')">change</button> ${missing}`;
+          <button class="btn sm" onclick="openDestEditor('${id}')">change</button> ${missing}`;
           }
           if (!slSel && !hrSel && !window._editDest) {
             return `<button class="btn sm" style="background:var(--orange-100);border-color:var(--orange-700);color:var(--orange-700);font-weight:600"
-            onclick="window._editDest=true;renderDraftCampaign('${id}')">⚠ Set up where leads go</button>
+            onclick="openDestEditor('${id}')">⚠ Set up where leads go</button>
           <span class="small" style="color:var(--orange-700)">nothing can be sent until you pick a destination</span>`;
           }
           const st = "border:1px solid var(--line-2);border-radius:999px;padding:7px 14px;font:500 12.5px var(--font-sans);color:var(--ink);background:transparent;max-width:280px";
@@ -708,6 +708,31 @@ function resolveDestName(pool, typed) {
   const subs = pool.filter((x) => String(x.name || "").toLowerCase().includes(q));
   if (subs.length === 1) return { hit: subs[0] };
   return { hit: null, ambiguous: subs.length > 1, none: subs.length === 0 };
+}
+
+/* Opening the destination editor is exactly the moment the picker lists must be
+   fresh: a HeyReach list or Smartlead campaign created since page-load isn't in the
+   cached copy. So we force a live re-pull (?refresh=1 also busts the server's HeyReach
+   cache) at open time, then patch just the <datalist> options in place — no full
+   re-render, so in-progress typing and focus are never clobbered. */
+function refreshDestDatalists() {
+  const sl = document.getElementById("dl-email");
+  const hr = document.getElementById("dl-li");
+  if (sl) sl.innerHTML = ((DB.dests || {}).smartlead || []).map((c) => `<option value="${esc(String(c.name))}"></option>`).join("");
+  if (hr) hr.innerHTML = ((DB.dests || {}).heyreach || []).map((l) => `<option value="${esc(String(l.name))}"></option>`).join("");
+}
+async function openDestEditor(id) {
+  window._editDest = true;
+  renderDraftCampaign(id);                                   // open instantly with the lists we already have
+  try {
+    const fresh = await _nativeFetch("/api/outreach-destinations?refresh=1").then((r) => r.json());
+    if (fresh && (fresh.smartlead || fresh.heyreach)) {      // only replace on a good pull
+      _getCache.set("/api/outreach-destinations", { t: Date.now(), v: fresh, p: Promise.resolve(fresh) });
+      _lsSet("/api/outreach-destinations", fresh);
+      DB.dests = fresh;
+      if (window._editDest) refreshDestDatalists();          // drop any just-created list/campaign into the pickers
+    }
+  } catch (_) {}
 }
 
 async function saveCampDest(id, close) {

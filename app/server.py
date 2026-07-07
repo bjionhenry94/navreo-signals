@@ -1767,7 +1767,12 @@ def heyreach_lists(refresh: bool = False) -> list:
 
 
 def outreach_destinations(p: dict) -> dict:
-    """Live pickers for the two outreach tools (header dropdowns)."""
+    """Live pickers for the two outreach tools (header dropdowns).
+
+    p['refresh'] forces a live re-pull of HeyReach lists (busting the module cache
+    above) so a list or campaign created moments ago shows up the instant the picker
+    is opened. Smartlead campaigns are always fetched live, so they need no flag."""
+    refresh = bool(p.get("refresh"))
     out: dict = {"smartlead": [], "heyreach": []}
     try:
         camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
@@ -1777,7 +1782,7 @@ def outreach_destinations(p: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         out["smartlead_error"] = str(e)[:150]
     try:
-        out["heyreach"] = heyreach_lists()
+        out["heyreach"] = heyreach_lists(refresh=refresh)
     except Exception as e:  # noqa: BLE001
         out["heyreach_error"] = str(e)[:150]
     return out
@@ -3793,7 +3798,10 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/clients":
             return self._json(read_json_list(CLIENTS))
         if path == "/api/outreach-destinations":
-            return self._json(outreach_destinations({}))
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
+            return self._json(outreach_destinations({"refresh": refresh}))
         return self._serve_static()
 
     def do_POST(self):
