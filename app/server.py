@@ -3142,6 +3142,56 @@ def save_qa_run(p: dict) -> dict:
     return {"ok": True, "ts": p["ts"]}
 
 
+def cron_pull_all():
+    """Pull every active source on every non-deleted signal campaign, then
+    autopilot-push new leads (email -> Smartlead, else HeyReach). This is the
+    exact `run_daily.py` pipeline, factored out so an external scheduler
+    (pg_cron -> pg_net -> POST /api/cron/pull-all) can fire it every ~3h with
+    no laptop awake. Idempotent — safe to re-run. Returns a summary dict.
+
+    Manages its own per-source `drafts_lock()` (like run_daily), so the caller
+    MUST NOT already hold the lock — do_POST dispatches this route outside the
+    global lock (the lock does not nest)."""
+    from datetime import datetime
+    campaigns = {str(c.get("id")): c for c in read_json_list(CAMPAIGN_DRAFTS)
+                 if not c.get("deleted_at")}
+    source_ids = [d["id"] for d in read_drafts()
+                  if d.get("active", True) and not d.get("deleted_at")
+                  and str(d.get("campaign_id")) in campaigns]
+    out = {"ok": True, "ran_at": datetime.now().isoformat(timespec="seconds"),
+           "sources": [], "signals": 0, "leads": 0, "errors": 0}
+    for sid in source_ids:
+        entry = {"id": sid}
+        try:
+            with drafts_lock():
+                r = pull_source({"id": sid})
+            entry["ok"] = bool(r.get("ok"))
+            entry["note"] = r.get("note") or r.get("message") or ""
+            entry["signals"] = r.get("signals") or 0
+            entry["leads"] = len(r.get("prospects") or [])
+            out["signals"] += entry["signals"]
+            out["leads"] += entry["leads"]
+            drafts = read_drafts()
+            src = next((d for d in drafts if d.get("id") == sid), None)
+            camp = campaigns.get(str((src or {}).get("campaign_id"))) or {}
+            entry["campaign"] = camp.get("name")
+            if src and camp.get("autopilot"):
+                with drafts_lock():
+                    drafts = read_drafts()
+                    src = next((d for d in drafts if d.get("id") == sid), src)
+                    pushed = auto_push_new_leads(src)
+                    write_drafts(drafts)
+                entry["autopushed"] = len([p for p in pushed if p["ok"]])
+                entry["push_failed"] = len([p for p in pushed if not p["ok"]])
+            else:
+                entry["autopilot"] = False
+        except Exception as e:  # noqa: BLE001 — one bad source must not kill the batch
+            entry["error"] = str(e)[:200]
+            out["errors"] += 1
+        out["sources"].append(entry)
+    return out
+
+
 # ── HTTP plumbing ────────────────────────────────────────────────────────
 
 ROUTES = {
@@ -3269,7 +3319,26 @@ class Handler(SimpleHTTPRequestHandler):
         return self._serve_static()
 
     def do_POST(self):
-        route = ROUTES.get(self.path.split("?")[0])
+        path = self.path.split("?")[0]
+        if path == "/api/cron/pull-all":
+            # External-scheduler batch pull. Token-guarded (header, not body) and
+            # run OUTSIDE the global drafts_lock — cron_pull_all takes its own
+            # per-source locks and the lock does not nest.
+            want = os.environ.get("SIGNAL_PULL_TOKEN") or KEYS.get("SIGNAL_PULL_TOKEN")
+            if not want:
+                # No dedicated token set on this host: derive a stable one from a
+                # secret already in the env (avoids a manual Render dashboard step).
+                import hashlib
+                srk = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+                want = hashlib.sha256((srk + ":signal-pull-v1").encode()).hexdigest()[:40] if srk else None
+            got = self.headers.get("x-navreo-token")
+            if not want or got != want:
+                return self._json({"ok": False, "message": "unauthorized"}, 401)
+            try:
+                return self._json(cron_pull_all())
+            except Exception as e:  # noqa: BLE001
+                return self._json({"ok": False, "message": str(e)[:300]}, 200)
+        route = ROUTES.get(path)
         if not route:
             return self._json({"ok": False, "message": "unknown endpoint"}, 404)
         try:
