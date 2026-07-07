@@ -2629,6 +2629,16 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
             prospects.append(pr)
             known.add(pr["linkedin"])
             kept_this_run.append(pr)
+            # Write the LEAD row immediately (per engager), not in one end-of-run
+            # batch — an abandoned/killed run must still persist the leads it
+            # qualified. on_conflict makes the (dropped) end batch idempotent.
+            _db_futs.append(_dbex.submit(
+                sb, "POST", "signal_leads?on_conflict=source_id,linkedin_url",
+                [{"source_id": src["id"], "full_name": pr.get("name"), "title": pr.get("title"),
+                  "company": pr.get("company"), "domain": pr.get("domain"),
+                  "linkedin_url": pr.get("linkedin"), "country": pr.get("country"),
+                  "icebreaker": pr.get("icebreaker"), "email": pr.get("email"), "status": "new"}],
+                "resolution=merge-duplicates,return=minimal"))
             _db_futs.append(_dbex.submit(sb, "POST", "signals", {
                 "signal_type": "engagement", "source": "trigify",
                 "company_domain": None,  # engager IS the lead; company row may not exist
@@ -2657,14 +2667,8 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     write_drafts(drafts)
     sb_sync_source(src)
 
-    rows = [{"source_id": src["id"], "full_name": x.get("name"), "title": x.get("title"),
-             "company": x.get("company"), "domain": x.get("domain"),
-             "linkedin_url": x.get("linkedin"), "country": x.get("country"),
-             "icebreaker": x.get("icebreaker"), "email": x.get("email"), "status": "new"}
-            for x in kept_this_run]
-    if rows:
-        sb("POST", "signal_leads?on_conflict=source_id,linkedin_url", rows,
-           prefer="resolution=merge-duplicates,return=minimal")
+    # signal_leads are now written per-engager inside the loop above (survives an
+    # abandoned run), so no end-of-run batch is needed here.
     sb("PATCH", f"signal_sources?id=eq.{src['id']}", {"last_pull_at": src["last_pull"]})
 
     # autopilot campaigns push immediately; manual campaigns leave ✓ to the user
