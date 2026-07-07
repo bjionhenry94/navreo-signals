@@ -3149,46 +3149,83 @@ def cron_pull_all():
     (pg_cron -> pg_net -> POST /api/cron/pull-all) can fire it every ~3h with
     no laptop awake. Idempotent — safe to re-run. Returns a summary dict.
 
-    Manages its own per-source `drafts_lock()` (like run_daily), so the caller
-    MUST NOT already hold the lock — do_POST dispatches this route outside the
-    global lock (the lock does not nest)."""
+    Bounded + non-wedging: each source is pulled in a watchdog thread with a
+    hard timeout, and the whole run has a wall-clock ceiling, so one slow-drip
+    provider call can never stall the 3-hourly tick. No `drafts_lock()` on this
+    path — pulled leads/signals are upserted per-row in Supabase (authoritative;
+    the Leads tab + verification read from there), so an abandoned worker can't
+    corrupt shared state or block the next source."""
     from datetime import datetime
+    import time as _time
+    BUDGET_S = 420   # whole-run wall-clock ceiling
+    SOURCE_S = 150   # per-source hard timeout — abandon + defer beyond this
+    t0 = _time.monotonic()
+
+    def _timed(fn):
+        """Run fn() in a daemon thread; return (result, error, timed_out)."""
+        box = {}
+        def _w():
+            try:
+                box["r"] = fn()
+            except Exception as e:  # noqa: BLE001
+                box["e"] = e
+        th = threading.Thread(target=_w, daemon=True)
+        th.start()
+        th.join(SOURCE_S)
+        if th.is_alive():
+            return None, None, True
+        return box.get("r"), box.get("e"), False
+
     campaigns = {str(c.get("id")): c for c in read_json_list(CAMPAIGN_DRAFTS)
                  if not c.get("deleted_at")}
     source_ids = [d["id"] for d in read_drafts()
                   if d.get("active", True) and not d.get("deleted_at")
                   and str(d.get("campaign_id")) in campaigns]
     out = {"ok": True, "ran_at": datetime.now().isoformat(timespec="seconds"),
-           "sources": [], "signals": 0, "leads": 0, "errors": 0}
+           "sources": [], "signals": 0, "leads": 0, "errors": 0, "deferred": 0}
     for sid in source_ids:
+        if _time.monotonic() - t0 > BUDGET_S:  # out of budget — leave the rest for the next tick
+            out["sources"].append({"id": sid, "deferred": "budget"})
+            out["deferred"] += 1
+            continue
         entry = {"id": sid}
-        try:
-            with drafts_lock():
-                r = pull_source({"id": sid})
+        _s0 = _time.monotonic()
+        r, err, timed_out = _timed(lambda: pull_source({"id": sid}))
+        if timed_out:
+            entry["error"] = f"timed out after {SOURCE_S}s (abandoned)"
+            out["errors"] += 1
+        elif err:
+            entry["error"] = str(err)[:200]
+            out["errors"] += 1
+        else:
+            r = r or {}
             entry["ok"] = bool(r.get("ok"))
             entry["note"] = r.get("note") or r.get("message") or ""
             entry["signals"] = r.get("signals") or 0
             entry["leads"] = len(r.get("prospects") or [])
             out["signals"] += entry["signals"]
             out["leads"] += entry["leads"]
-            drafts = read_drafts()
+            drafts = read_drafts()  # pull_source rewrote it; re-read for the push
             src = next((d for d in drafts if d.get("id") == sid), None)
             camp = campaigns.get(str((src or {}).get("campaign_id"))) or {}
             entry["campaign"] = camp.get("name")
             if src and camp.get("autopilot"):
-                with drafts_lock():
-                    drafts = read_drafts()
-                    src = next((d for d in drafts if d.get("id") == sid), src)
-                    pushed = auto_push_new_leads(src)
-                    write_drafts(drafts)
-                entry["autopushed"] = len([p for p in pushed if p["ok"]])
-                entry["push_failed"] = len([p for p in pushed if not p["ok"]])
+                _pr, _pe, _pt = _timed(lambda: auto_push_new_leads(src))
+                pushed = _pr or []
+                entry["autopushed"] = len([p for p in pushed if p.get("ok")])
+                entry["push_failed"] = len([p for p in pushed if not p.get("ok")])
+                if not _pt:  # persist pushed-state to the local file the Leads tab reads
+                    try:
+                        write_drafts(drafts)
+                    except Exception:  # noqa: BLE001
+                        pass
+                if _pt or _pe:
+                    entry["push_note"] = "push timed out" if _pt else str(_pe)[:120]
             else:
                 entry["autopilot"] = False
-        except Exception as e:  # noqa: BLE001 — one bad source must not kill the batch
-            entry["error"] = str(e)[:200]
-            out["errors"] += 1
+        entry["secs"] = round(_time.monotonic() - _s0, 1)
         out["sources"].append(entry)
+    out["total_secs"] = round(_time.monotonic() - t0, 1)
     try:  # durable, queryable record of every scheduled run (best-effort)
         sb("POST", "signal_cron_runs", {"summary": out})
     except Exception:  # noqa: BLE001
