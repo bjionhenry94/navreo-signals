@@ -12,6 +12,7 @@ title-case ALL-CAPS shouting >4 chars; preserve short acronyms, lowercase-start 
 (iCrossing, eBay), ampersands, apostrophes, hyphens. Junk / URLs are left untouched.
 """
 import re
+import unicodedata
 from typing import Optional
 
 JUNK_COMPANIES = {
@@ -85,6 +86,109 @@ def clean_company_name(company: Optional[str], fallback: bool = True) -> Optiona
         s = new
     if s.isupper() and len(s) > 4:  # ALL-CAPS shouting -> Title Case (keep short acronyms)
         s = " ".join(w.capitalize() for w in s.split())
+    s = _fix_acronyms(s)  # "Buldrr Ai" -> "Buldrr AI"
+    s = email_safe(s)  # strip trademark/pipe/emoji so a merged {{company}} is email-ready
     if len(s) < 2:
         return company if fallback else None
     return s
+
+
+# ── Acronym casing ──────────────────────────────────────────────────────────
+# Conservative canonical-casing map for tokens that read wrong when title-cased
+# (e.g. an enrichment source gives "Buldrr Ai"). Keyed by UPPERCASE token; only
+# words that case-insensitively match a key are rewritten, so ordinary words are
+# never touched. Deliberately excludes ambiguous English words (It, Us, Me, As …).
+_ACRONYMS = {
+    "AI": "AI", "API": "API", "IOT": "IoT", "AR": "AR", "VR": "VR", "ML": "ML",
+    "SAAS": "SaaS", "PAAS": "PaaS", "IAAS": "IaaS", "B2B": "B2B", "B2C": "B2C",
+    "D2C": "D2C", "B2B2C": "B2B2C", "CRM": "CRM", "ERP": "ERP", "SEO": "SEO",
+    "SEM": "SEM", "PPC": "PPC", "ROI": "ROI", "BI": "BI", "3PL": "3PL",
+    "SMB": "SMB", "DTC": "DTC", "NFT": "NFT", "IIOT": "IIoT",
+}
+
+
+def _fix_acronyms(s: str) -> str:
+    if not s:
+        return s
+    return " ".join(_ACRONYMS.get(w.upper(), w) for w in s.split())
+
+
+# ── Email-safe sanitising + person-name cleaning ─────────────────────────────
+# "Special character" = any codepoint outside {letters (incl. accented Latin),
+# digits, whitespace, ordinary punctuation, and the '+' math sign}. In practice
+# that removes emoji / pictographs / dingbats / symbols (categories So, Sk, Sc),
+# private-use + control + format codepoints (Co, Cc, Cf — incl. zero-width
+# joiner), unassigned (Cn), and math symbols other than '+' (Sm). Braces { } are
+# punctuation (Ps/Pe) so {{merge_tags}} pass through untouched.
+_REMOVE_CATS = {"So", "Sk", "Sc", "Cc", "Cf", "Co", "Cn"}
+_ALLOWED_SM = {"+"}
+
+
+def _is_special(ch: str) -> bool:
+    if ch.isspace():
+        return False
+    cat = unicodedata.category(ch)
+    if cat in _REMOVE_CATS:
+        return True
+    if cat == "Sm" and ch not in _ALLOWED_SM:
+        return True
+    return False
+
+
+def is_email_safe(text: Optional[str]) -> bool:
+    """True iff `text` contains no special character (the verifier's predicate)."""
+    return not any(_is_special(c) for c in (text or ""))
+
+
+def _strip_special(text: str) -> str:
+    return "".join("" if _is_special(c) else c for c in text)
+
+
+def email_safe(text: Optional[str]) -> Optional[str]:
+    """Belt-and-suspenders sanitiser for a rendered string: drop every special
+    character, collapse the whitespace it leaves behind, and heal spaces stranded
+    before attaching punctuation (so 'Ana 🍩's' -> "Ana's")."""
+    if not text:
+        return text
+    s = _strip_special(text)
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"\s+([',.!?:;)’])", r"\1", s)  # no space before attaching punct
+    s = re.sub(r"([(])\s+", r"\1", s)               # no space after opening paren
+    return s.strip()
+
+
+# Role / title tails a person sometimes appends to their own name on LinkedIn
+# ("Mike Weiss ceo", "Jane Doe | Head of Growth"). Stripped from the tail only.
+_ROLE_TAIL = re.compile(
+    r"[\s,/|·–—-]+("
+    r"ceo|cto|cfo|coo|cmo|cro|cpo|cio|ciso|"
+    r"co[\-\s]?founders?|founders?|co[\-\s]?owners?|owners?|"
+    r"presidents?|vice\s+presidents?|vps?|svps?|evps?|avps?|"
+    r"managing\s+directors?|mds?|directors?|"
+    r"partners?|principals?|consultants?|advisors?|"
+    r"heads?\s+of\s+[\w&/\s]+|"
+    r"chiefs?(\s+[\w]+)*\s+officers?"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def clean_person_name(name: Optional[str], fallback: bool = True) -> Optional[str]:
+    """Return an email-ready person name: strip emoji / special chars, drop any
+    trailing role tail, collapse whitespace, and fix ALL-CAPS / all-lowercase
+    casing while preserving genuine intra-word caps (McCarthy, O'Brien).
+    Returns the original when cleaning would empty it (fallback=True)."""
+    s = _strip_special(name or "")
+    s = re.sub(r"\s+", " ", s).strip(" ,/|-·–—")
+    for _ in range(3):  # peel repeated tails: "Jane Doe Founder CEO"
+        new = _ROLE_TAIL.sub("", s).strip(" ,/|-·–—")
+        if new == s or not new:
+            break
+        s = new
+    if s and (s.isupper() or s.islower()):  # SHOUTING or lowercase -> Title Case
+        s = " ".join(w.capitalize() for w in s.split())
+    if s and s[0].islower():  # leading lowercase (often an emoji was glued on) -> capitalise
+        s = s[0].upper() + s[1:]
+    if not s.strip():
+        return name if fallback else None
+    return s.strip()
