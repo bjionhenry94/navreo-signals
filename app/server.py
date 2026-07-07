@@ -2791,9 +2791,10 @@ def fill_icebreaker(template: str, prospect: dict) -> str:
     whose = str(prospect.get("whose_post") or "").strip()
     topic = str(prospect.get("topic") or "").strip()
     if whose:
-        reps["WhosePost"] = whose
+        reps["WhosePost"] = whose  # proper noun - keep its own case
     if topic:
-        reps["Topic"] = topic
+        from name_hygiene import fit_merge_case  # case Topic to fit its slot
+        reps["Topic"] = fit_merge_case(topic, template, "Topic")
     for k, v in reps.items():
         out = out.replace("{{" + k + "}}", v).replace("{" + k + "}", v)
     return email_safe(out)  # last line of defence: no special char can survive

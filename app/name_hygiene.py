@@ -244,3 +244,30 @@ def clean_job_title(title: Optional[str], fallback: bool = True) -> Optional[str
             out.append(_fix_acronyms(w))
     s = " ".join(out)
     return s.strip() or (title if fallback else None)
+
+
+def fit_merge_case(value: Optional[str], template: str, token: str) -> Optional[str]:
+    """Case a merge `value` so it reads grammatically in its {{token}} slot.
+
+    Looks at where {{token}} sits in `template`: at a sentence start (string
+    start or right after . ! ?) the first letter is capitalised; mid-sentence a
+    plain Title-cased first word is demoted ('Sales quota attainment' -> 'sales
+    quota attainment') while acronyms ('AI', 'LATAM', 'GTM') and internally-
+    capped names ('RevOps', 'LinkedIn') are left untouched. Only run this on
+    common-phrase tokens like Topic - NOT on proper-noun tokens (a name or
+    company), which should always keep their own case."""
+    if not value:
+        return value
+    m = re.search(r"\{\{?\s*" + re.escape(token) + r"\s*\}?\}", template or "")
+    at_start = True
+    if m:
+        pre = (template[:m.start()]).rstrip(" \"'“‘(")
+        at_start = pre == "" or pre[-1] in ".!?"
+    if at_start:
+        return value[0].upper() + value[1:]
+    first = value.split(" ", 1)[0]
+    # keep acronyms (all caps) and internally-capped words; demote a plain
+    # Title-cased common word so it sits mid-sentence
+    if len(first) > 1 and (first.isupper() or not first[1:].islower()):
+        return value
+    return value[0].lower() + value[1:]
