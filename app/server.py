@@ -2783,6 +2783,17 @@ def fill_icebreaker(template: str, prospect: dict) -> str:
     role = str(prospect.get("role") or prospect.get("hiring_for") or "").strip()
     reps = {"company": company, "first_name": first_name,
             "job_title": role, "jobtitle": role, "role": role}
+    # engagement openers reference the post the lead commented on - fill
+    # {{WhosePost}}/{{Topic}} here too (not only in the pull) so a hand-edited
+    # opener renders them on Save. Only when present, so a prospect without the
+    # data keeps the raw token rather than emitting "post about ." - the pull's
+    # copy_reference-off path still swaps in the plain template.
+    whose = str(prospect.get("whose_post") or "").strip()
+    topic = str(prospect.get("topic") or "").strip()
+    if whose:
+        reps["WhosePost"] = whose
+    if topic:
+        reps["Topic"] = topic
     for k, v in reps.items():
         out = out.replace("{{" + k + "}}", v).replace("{" + k + "}", v)
     return email_safe(out)  # last line of defence: no special char can survive
