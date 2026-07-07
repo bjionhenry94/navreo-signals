@@ -120,7 +120,10 @@ def _fix_acronyms(s: str) -> str:
 # private-use + control + format codepoints (Co, Cc, Cf — incl. zero-width
 # joiner), unassigned (Cn), and math symbols other than '+' (Sm). Braces { } are
 # punctuation (Ps/Pe) so {{merge_tags}} pass through untouched.
-_REMOVE_CATS = {"So", "Sk", "Sc", "Cc", "Cf", "Co", "Cn"}
+# Mn/Me = combining + enclosing marks: after NFC composition, any that remain are
+# orphaned emoji cruft (variation selectors, keycap/skin-tone joiners), never a
+# base letter's accent (those compose into a single Latin codepoint under NFC).
+_REMOVE_CATS = {"So", "Sk", "Sc", "Cc", "Cf", "Co", "Cn", "Mn", "Me"}
 _ALLOWED_SM = {"+"}
 
 
@@ -137,10 +140,11 @@ def _is_special(ch: str) -> bool:
 
 def is_email_safe(text: Optional[str]) -> bool:
     """True iff `text` contains no special character (the verifier's predicate)."""
-    return not any(_is_special(c) for c in (text or ""))
+    return not any(_is_special(c) for c in unicodedata.normalize("NFC", text or ""))
 
 
 def _strip_special(text: str) -> str:
+    text = unicodedata.normalize("NFC", text)  # compose accents so é stays a letter
     return "".join("" if _is_special(c) else c for c in text)
 
 
@@ -192,3 +196,40 @@ def clean_person_name(name: Optional[str], fallback: bool = True) -> Optional[st
     if not s.strip():
         return name if fallback else None
     return s.strip()
+
+
+# Small words kept lowercase when title-casing an ALL-CAPS / all-lowercase title.
+_TITLE_MINOR = {"of", "and", "the", "for", "to", "in", "at", "a", "an", "or",
+                "on", "with", "de", "du", "van", "per", "as", "by"}
+_TITLE_PAREN = re.compile(r"\s*\([^)]*\)")            # "(Annual Contract)", "(Remote)", "(m/f/d)"
+_TITLE_TAIL = re.compile(r"\s*[,;|].*$|\s+[–—-]\s+.*$")  # drop qualifier tail after , ; | or spaced dash
+
+
+def clean_job_title(title: Optional[str], fallback: bool = True) -> Optional[str]:
+    """Return an email-ready job title (the role a company is hiring for, merged
+    into an icebreaker). Beyond email-safety this trims recruiter-board cruft so
+    the role reads naturally in a sentence: drops parentheticals ('Retail Sales
+    Consultant (Annual Contract)' -> 'Retail Sales Consultant') and any qualifier
+    tail after a comma/semicolon/pipe/spaced-dash ('Skills Consultant, Direct
+    Sales' -> 'Skills Consultant'); strips emoji/special chars; title-cases a
+    SHOUTING or all-lowercase title while keeping small connectors lowercase
+    ('Head of Sales'); preserves mixed-case titles and acronyms. Returns the
+    original when cleaning would empty it."""
+    raw = title or ""
+    s = _TITLE_PAREN.sub("", raw)   # cut before email_safe so a "|" tail is still detectable
+    s = _TITLE_TAIL.sub("", s)
+    s = email_safe(s) or ""
+    s = s.strip(" ,/|-·–—")
+    if not s.strip():
+        return title if fallback else None
+    out = []
+    for i, w in enumerate(s.split()):
+        lw = w.lower()
+        if i and lw in _TITLE_MINOR:       # small connector word -> lowercase
+            out.append(lw)
+        elif w.islower() or (w.isupper() and len(w) > 3):  # lower / SHOUTING -> Title
+            out.append(_fix_acronyms(w.capitalize()))
+        else:                              # mixed-case, or short acronym (AE, VP) -> keep
+            out.append(_fix_acronyms(w))
+    s = " ".join(out)
+    return s.strip() or (title if fallback else None)
