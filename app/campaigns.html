@@ -815,11 +815,11 @@ function routeNote(pr) {
   if (Object.keys(pr.pushed || {}).length || pr.verdict === "reject") return "";
   const nm = window._destNames || {};
   if (!nm.smartlead && !nm.heyreach) return "";
-  const pill = (body) => `<span style="display:inline-flex;align-items:center;gap:6px;margin-top:5px;padding:3px 10px;border-radius:999px;background:var(--bg-sunken);font-size:11px;color:var(--ink-2)"><span style="color:var(--green);font-weight:600">✓ Send</span><span style="color:var(--ink-3)">→</span>${body}</span>`;
-  const to = (kind, name) => `${destLogo(kind)} <span style="font-weight:500;color:var(--ink)">${esc(name)}</span>`;
-  if (pr.email) return pill(to("smartlead", nm.smartlead || "your email campaign"));
-  if (pr.email_checked) return pill(to("heyreach", nm.heyreach || "your LinkedIn list"));
-  return pill(`${to("smartlead", nm.smartlead || "email")}<span style="color:var(--ink-3)">if found, else</span>${to("heyreach", nm.heyreach || "LinkedIn")}`);
+  const chip = (kind, name) => `<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;background:var(--bg-sunken);font-size:11px;max-width:220px">${destLogo(kind)}<span style="color:var(--ink);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</span></span>`;
+  const wrap = (body) => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><span class="small muted" style="flex-shrink:0">Sending to</span>${body}</div>`;
+  if (pr.email) return wrap(chip("smartlead", nm.smartlead || "your email campaign"));
+  if (pr.email_checked) return wrap(chip("heyreach", nm.heyreach || "your LinkedIn list"));
+  return wrap(`${chip("smartlead", nm.smartlead || "email")}<span class="small muted" style="flex-shrink:0">if found, else</span>${chip("heyreach", nm.heyreach || "LinkedIn")}`);
 }
 
 function pushChips(pr) {
