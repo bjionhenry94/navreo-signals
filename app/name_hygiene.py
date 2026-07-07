@@ -84,8 +84,8 @@ def clean_company_name(company: Optional[str], fallback: bool = True) -> Optiona
     new = TLD_RE.sub("", s).strip()  # navreo.ai -> navreo
     if len(new) >= 2:
         s = new
-    if s.isupper() and len(s) > 4:  # ALL-CAPS shouting -> Title Case (keep short acronyms)
-        s = " ".join(w.capitalize() for w in s.split())
+    if s.isupper() and len(s) > 4:  # ALL-CAPS shouting -> Title Case, but keep acronyms/codes
+        s = " ".join(_recase_caps_token(w) for w in s.split())
     s = _fix_acronyms(s)  # "Buldrr Ai" -> "Buldrr AI"
     s = email_safe(s)  # strip trademark/pipe/emoji so a merged {{company}} is email-ready
     if len(s) < 2:
@@ -111,6 +111,19 @@ def _fix_acronyms(s: str) -> str:
     if not s:
         return s
     return " ".join(_ACRONYMS.get(w.upper(), w) for w in s.split())
+
+
+def _recase_caps_token(w: str) -> str:
+    """Title-case one word of an ALL-CAPS company name WITHOUT mangling acronyms
+    or codes: keep short tokens (<=3 chars: UK, USA, CPB, GIS) and any token with
+    a digit/dot/slash (3-GIS, A.C.T., B2B) as-is; only real words get title-cased
+    ('CALIMA' -> 'Calima', 'ICONIC' -> 'Iconic')."""
+    core = w.strip(".,")
+    if len(core) <= 3:
+        return w
+    if any(c.isdigit() for c in w) or "." in w or "/" in w:
+        return w
+    return w.capitalize()
 
 
 # ── Email-safe sanitising + person-name cleaning ─────────────────────────────

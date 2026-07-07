@@ -3190,9 +3190,11 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         scanned += 1
         domain = j["domain"]
         detected = (j["date_posted"] + "T00:00:00Z") if j.get("date_posted") else now_iso
+        from name_hygiene import clean_company_name
+        jc = clean_company_name(j["company"]) if j.get("company") else j.get("company")  # email-ready everywhere
         # company row FIRST — signals.company_domain has an FK to companies(domain)
         sb("POST", "companies?on_conflict=domain", {
-            "domain": domain, "name": j["company"] or None,
+            "domain": domain, "name": jc or None,
             "industry": j["industry"] or None,
             "employee_count": j["employee_count"],
             "employee_range": j["employee_range"] or None,
@@ -3204,7 +3206,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
             "signal_type": "hiring", "source": "theirstack", "company_domain": domain,
             "detected_at": detected,
             "detail": {"job_title": j["job_title"], "job_url": j["job_url"],
-                       "company": j["company"], "source_id": src["id"]},
+                       "company": jc, "source_id": src["id"]},
         }, prefer="resolution=ignore-duplicates,return=minimal")
         signals_n += 1
 
@@ -3212,7 +3214,9 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         for person in dm_find_by_domain(domain, dm_titles, min(max_dms, leads_per_day - len(prospects))):
             if len(prospects) >= leads_per_day:
                 break
-            person["company"] = person.get("company") or j["company"]
+            # clean the DISPLAY company too (signal_leads is cleaned at write, but the
+            # prospect card + signal record showed the raw name) — email-ready everywhere
+            person["company"] = clean_company_name(person.get("company")) or jc
             person["domain"] = person.get("domain") or domain
             # verified email is the keep-gate (Prospeo enrich-person)
             try:
