@@ -3344,6 +3344,9 @@ class Handler(SimpleHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
             return self._json({"ok": True})
+        if path == "/api/cron/last-run":  # observability: latest scheduled batch-pull summary
+            rows = sb("GET", "signal_cron_runs?order=id.desc&limit=1")
+            return self._json((rows or [{}])[0])
         if path == "/api/sources":
             return self._json(read_drafts())
         if path == "/api/leads":
