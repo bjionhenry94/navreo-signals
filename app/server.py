@@ -1380,6 +1380,30 @@ def api_leads_batch(campaign_ids: str) -> list:
     return _leads_for_sources([d for d in read_drafts() if str(d.get("campaign_id")) in wanted])
 
 
+def sources_for_ui(drafts: list) -> list:
+    """Draft sources with `total` overlaid to the ACCUMULATED signal_leads count
+    per source (what the Leads tab reads), not just the last pull's local prospect
+    list. Without this the Sources tab header shows only the newest batch (e.g. 9)
+    while the Leads tab shows every lead ever pulled (e.g. 84) — so the per-source
+    counts never sum to the Leads total. Only pulled sources are overlaid; an
+    un-pulled source keeps its pre-pull estimate. One query for the whole set."""
+    ids = [str(d["id"]) for d in drafts if d.get("id") and d.get("last_pull")]
+    if not ids:
+        return drafts
+    rows = sb("GET", f"signal_leads?select=source_id&source_id=in.({','.join(ids)})")
+    if not isinstance(rows, list):
+        return drafts
+    counts: dict = {}
+    for r in rows:
+        sid = str(r.get("source_id"))
+        counts[sid] = counts.get(sid, 0) + 1
+    for d in drafts:
+        sid = str(d.get("id"))
+        if d.get("last_pull"):  # pulled -> show accumulated total (0 if none saved yet)
+            d["total"] = counts.get(sid, 0)
+    return drafts
+
+
 def api_lead_counts() -> dict:
     """Per-campaign lead counts from the same signal_leads rows the Leads tab
     reads, so the campaign card and the tab always agree. One query for all
@@ -3348,7 +3372,7 @@ class Handler(SimpleHTTPRequestHandler):
             rows = sb("GET", "signal_cron_runs?order=id.desc&limit=1")
             return self._json((rows or [{}])[0])
         if path == "/api/sources":
-            return self._json(read_drafts())
+            return self._json(sources_for_ui(read_drafts()))
         if path == "/api/leads":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
