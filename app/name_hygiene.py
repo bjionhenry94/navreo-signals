@@ -59,6 +59,10 @@ EMAIL_AUTOLINK_TLDS = (
     "is", "cz", "ru", "ws", "cc",
 )
 TLD_RE = re.compile(r"\.(" + "|".join(EMAIL_AUTOLINK_TLDS) + r")\b\s*$", re.IGNORECASE)
+# A trailing tagline/descriptor joined to the brand by an em/en-dash, pipe, colon,
+# or spaced hyphen — "Punch!—The Smart B2B Sales Agency" -> "Punch!". Leaves real
+# hyphenated names (Coca-Cola, Mercedes-Benz) untouched (bare hyphen, no spaces).
+COMPANY_TAIL_RE = re.compile(r"\s*[—–|:]\s*\S.*$|\s+-\s+\S.*$")
 
 
 def clean_company_name(company: Optional[str], fallback: bool = True) -> Optional[str]:
@@ -70,6 +74,7 @@ def clean_company_name(company: Optional[str], fallback: bool = True) -> Optiona
         return company if fallback else None
     if URL_RE.search(s):  # full URL — flag, don't auto-clean
         return company if fallback else None
+    s = COMPANY_TAIL_RE.sub("", s).strip()  # drop " — tagline" / " | descriptor" / " : subtitle"
     m = PARENTHETICAL_ACRONYM.search(s)  # "UK Power Engineers (UKPE)" -> "UKPE"
     if m:
         return m.group(1)
