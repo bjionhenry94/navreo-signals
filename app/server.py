@@ -721,6 +721,27 @@ SUGGEST_SCHEMA = {
     "required": ["suggestions"],
 }
 
+# Shared call for the "Generate more" buttons - one minimal-effort JSON-schema
+# completion. gpt-5-mini stays the model: a 5-judge bake-off showed nano drifts
+# off-theme on tighter fields (region-clustered locations scored 2.8/5 vs mini's
+# 4.6/5) for no real latency gain (~0.7s, within noise), so the effectiveness
+# bar wins. The speed lever is the seed-from-selection prompt below, not the id.
+SUGGEST_MODEL = "gpt-5-mini"
+
+
+def _suggest_llm(key: str, system: str, user: str, schema_name: str, schema: dict) -> dict:
+    r = http_json(
+        "POST", "https://api.openai.com/v1/chat/completions",
+        {"Authorization": f"Bearer {key}"},
+        {"model": SUGGEST_MODEL, "reasoning_effort": "minimal",
+         "messages": [{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+         "response_format": {"type": "json_schema", "json_schema": {
+             "name": schema_name, "strict": True, "schema": schema}}})
+    if r.get("error"):
+        raise RuntimeError(f"OpenAI: {r['error'].get('message', r['error'])[:200]}")
+    return json.loads(r["choices"][0]["message"]["content"])
+
 ROLE_FEEDBACK = APP_DIR / "data" / "role_feedback.json"
 # one feedback "family" per ideate-able field across all wizards; each has a
 # declined_ / kept_ pair that the suggester reads back per client
@@ -840,12 +861,24 @@ def _suggest_generic(p, camp, cl, icp, basis, fb, spec, key):
     want = 1 if spec["single"] else min(int(p.get("count") or 6), 12)
     declined = (fb.get(f"declined_{fam}") or []) + (p.get("declined") or [])
     have = [t for t in (p.get("exclude") or []) if (t or "").strip()]
+    # `already_have` IS the user's current selection. When it's non-empty, the
+    # button should widen that selection with close neighbours; when empty, fall
+    # back to suggesting fresh from the client/ICP.
+    similar = bool(have) and not spec["single"]
     system = (
         f"You help a B2B outbound operator set up a prospecting campaign. {spec['task']}\n"
-        "The user has rejected everything in `declined` before: never suggest those or close "
-        "variants, and steer away from their flavour. `kept` is what this user chooses to keep: "
-        "lean that direction. Never repeat anything in `already_have`. Return exactly `count` "
-        "unless the space is genuinely exhausted."
+        + ("The items in `already_have` are what the user has ALREADY SELECTED. Generate MORE "
+           "suggestions that stay STRICTLY within the same theme, sub-type and pattern as those - "
+           "their closest neighbours and variants, matching their specificity and (for places) "
+           "their geographic region or cluster. Do NOT broaden into generic or adjacent-but-"
+           "different items, and do NOT fall back to your usual defaults. Prefer returning FEWER, "
+           "tighter matches over padding to `count` with loose ones. Never repeat anything in "
+           "`already_have`.\n" if similar else
+           "Never repeat anything in `already_have`.\n")
+        + "The user has rejected everything in `declined` before: never suggest those or close "
+          "variants, and steer away from their flavour. `kept` is what this user chose to keep "
+          "before: lean that direction. Return exactly `count` unless the space is genuinely "
+          "exhausted."
     )
     user = json.dumps({
         "client": {"name": cl.get("name"), "description": cl.get("description"), "offer": cl.get("offer")},
@@ -856,15 +889,7 @@ def _suggest_generic(p, camp, cl, icp, basis, fb, spec, key):
         "declined": declined[-40:], "kept": (fb.get(f"kept_{fam}") or [])[-40:],
         "count": want,
     })
-    r = http_json("POST", "https://api.openai.com/v1/chat/completions",
-                  {"Authorization": f"Bearer {key}"},
-                  {"model": "gpt-5-mini", "reasoning_effort": "minimal",
-                   "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                   "response_format": {"type": "json_schema", "json_schema": {
-                       "name": spec["schema"], "strict": True, "schema": SUGGEST_SCHEMA}}})
-    if r.get("error"):
-        raise RuntimeError(f"OpenAI: {r['error'].get('message', r['error'])[:200]}")
-    out = json.loads(r["choices"][0]["message"]["content"])
+    out = _suggest_llm(key, system, user, spec["schema"], SUGGEST_SCHEMA)
     return {"ok": True, "based_on": basis,
             "suggestions": _dedup_fresh(out.get("suggestions", []), have + declined, want)}
 
@@ -917,6 +942,12 @@ def role_suggest(p: dict) -> dict:
     decl_dm = (fb.get("declined_dm") or []) + (p.get("declined_dm") or [])
     have_trig = [t for t in (p.get("exclude_trigger") or []) + decl_trig if (t or "").strip()]
     have_dm = [t for t in (p.get("exclude_dm") or []) + decl_dm if (t or "").strip()]
+    # the raw selections (what's in the field right now, minus declined) - seed
+    # "generate similar" off these; when both are empty the button falls back to
+    # suggesting fresh from the client/ICP.
+    sel_trig = [t for t in (p.get("exclude_trigger") or []) if (t or "").strip()]
+    sel_dm = [t for t in (p.get("exclude_dm") or []) if (t or "").strip()]
+    similar = bool(sel_trig or sel_dm)
     system = (
         "You suggest job titles for a B2B hiring-signal campaign. The signal: when a company "
         "posts certain job openings, it is a good moment for the client to reach out.\n"
@@ -926,11 +957,18 @@ def role_suggest(p: dict) -> dict:
         "no abbreviations - one concrete title per entry.\n"
         "2. dm_titles - the people at that company the client should EMAIL about the offer: "
         "senior, budget-holding titles, matched to the company sizes given.\n"
-        "The user has rejected everything in the declined lists before: never suggest those "
-        "or close variants, and steer away from their flavour. The kept lists are what this "
-        "user chooses to keep: suggest more in that direction. Never repeat anything in the "
-        "already_have lists. Return exactly `count` per list unless the space is genuinely "
-        "exhausted."
+        + ("The already_have lists are what the user has ALREADY SELECTED. For each list, "
+           "generate MORE titles that stay STRICTLY within the same theme, seniority band and "
+           "function as the ones already there - their closest neighbours and variants, matching "
+           "their specificity. Do NOT drift to generic senior titles (e.g. a bare 'Chief Marketing "
+           "Officer' or 'Director of Marketing') unless they clearly fit the seed's niche. Prefer "
+           "returning FEWER, tighter matches over padding to `count`. Never repeat anything in the "
+           "already_have lists.\n" if similar else
+           "Never repeat anything in the already_have lists.\n")
+        + "The user has rejected everything in the declined lists before: never suggest those "
+          "or close variants, and steer away from their flavour. The kept lists are what this "
+          "user chooses to keep: suggest more in that direction. Return exactly `count` per list "
+          "unless the space is genuinely exhausted."
     )
     user = json.dumps({
         "client": {"name": cl.get("name"), "description": cl.get("description"), "offer": cl.get("offer")},
@@ -944,15 +982,7 @@ def role_suggest(p: dict) -> dict:
         "kept_dm": (fb.get("kept_dm") or [])[-40:],
         "seed_dm_titles": icp.get("titles") or [], "count": count,
     })
-    r = http_json("POST", "https://api.openai.com/v1/chat/completions",
-                  {"Authorization": f"Bearer {key}"},
-                  {"model": "gpt-5-mini", "reasoning_effort": "minimal",
-                   "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                   "response_format": {"type": "json_schema", "json_schema": {
-                       "name": "role_suggestions", "strict": True, "schema": ROLE_SUGGEST_SCHEMA}}})
-    if r.get("error"):
-        raise RuntimeError(f"OpenAI: {r['error'].get('message', r['error'])[:200]}")
-    out = json.loads(r["choices"][0]["message"]["content"])
+    out = _suggest_llm(key, system, user, "role_suggestions", ROLE_SUGGEST_SCHEMA)
 
     def fresh(items, have):
         seen = {h.strip().lower() for h in have}
