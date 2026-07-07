@@ -1069,6 +1069,29 @@ ALWAYS, both cases:
 }
 DEFAULT_PRECISION_STYLE = "hybrid"  # bake-off winner 2026-07-05: only style with every scenario >=70% on-brief, at the highest volume (app/prompt_test.py)
 
+# Every hiring opener MUST carry two merge variables: {{company}} and {{job_title}}
+# (the role the company is actually hiring for, filled per prospect at pull time).
+# The AI used to bake the role in as literal text ("...hiring a Demand Gen manager..."),
+# so every prospect got the SAME role regardless of what their company was hiring for.
+# This default and the guard below make the variables non-negotiable platform-wide.
+HIRING_ICE_DEFAULT = "Saw {{company}} is hiring for {{job_title}}, and so I thought I'd reach out."
+# tokens (any brace/casing) we treat as the "hiring role" merge variable
+_ROLE_TOKEN_RE = re.compile(r"\{\{?\s*(job_title|jobtitle|role|title)\s*\}?\}", re.I)
+_COMPANY_TOKEN_RE = re.compile(r"\{\{?\s*company\s*\}?\}", re.I)
+
+
+def ensure_hiring_vars(icebreaker: str) -> str:
+    """Guarantee a hiring opener keeps {{company}} + a job-title variable.
+    If either is missing (e.g. the AI baked a literal role, or a user edited them
+    out), fall back to the canonical default so no prospect gets a hardcoded role.
+    Text around the variables is preserved whenever both are present."""
+    ice = (icebreaker or "").strip()
+    if not ice:
+        return HIRING_ICE_DEFAULT
+    if _COMPANY_TOKEN_RE.search(ice) and _ROLE_TOKEN_RE.search(ice):
+        return ice
+    return HIRING_ICE_DEFAULT
+
 
 def _run_claude_ideation(p: dict) -> list | None:
     """Stage 1: lilly-strategy's ideation, headless. Returns idea dicts or
@@ -1113,7 +1136,7 @@ Generate ideas for THIS client specifically. Every idea = a reason-to-reach-out 
 Score each honestly for THIS client: fit (does the signal indicate need for the offer, 1-5), novelty (vs what every agency sends, 1-5), intent (how timely/warm the moment is, 1-5).
 
 Reply with ONLY a JSON array, no fences, no commentary:
-[{{"idea": "<short PLAIN name a non-marketer instantly understands, e.g. 'Brands hiring Amazon roles' not 'Marketplace Talent Expansion'>", "why": "<under 15 words: why this signal means they need the offer. Plain punctuation, never an em-dash>", "icebreaker": "<the opening line: 10-15 words TOTAL, one short signal mention using {{company}}-style merge tags, MUST end with: and so I thought I'd reach out.>", "mechanism": "<one of hiring|engagement>", "params": {{...}}, "fit": n, "novelty": n, "intent": n}}]"""
+[{{"idea": "<short PLAIN name a non-marketer instantly understands, e.g. 'Brands hiring Amazon roles' not 'Marketplace Talent Expansion'>", "why": "<under 15 words: why this signal means they need the offer. Plain punctuation, never an em-dash>", "icebreaker": "<the opening line: 10-15 words TOTAL, one short signal mention using {{company}}-style merge tags, MUST end with: and so I thought I'd reach out. For a hiring idea, ALWAYS refer to the role with the merge tag {{{{job_title}}}} (it is filled per company at send time) - NEVER write a literal role name like 'a Demand Gen manager', since the role differs per company. e.g. 'Saw {{{{company}}}} is hiring for {{{{job_title}}}}, and so I thought I'd reach out.'>", "mechanism": "<one of hiring|engagement>", "params": {{...}}, "fit": n, "novelty": n, "intent": n}}]"""
 
     # ideation via OpenAI (OPENAI_API_KEY from env, same key the app already
     # uses) - no local `claude` CLI, so it runs on Render as-is. No key -> None
@@ -1148,6 +1171,10 @@ Reply with ONLY a JSON array, no fences, no commentary:
                 continue
             if i["mechanism"] == "hiring" and not (i.get("params") or {}).get("job_titles"):
                 continue  # a hiring idea without trigger roles matches EVERY job
+            if i["mechanism"] == "hiring":
+                # the AI sometimes bakes a literal role ("...hiring a Demand Gen manager...");
+                # force the two merge variables so the role is filled per company at send time
+                i["icebreaker"] = ensure_hiring_vars(i.get("icebreaker"))
             good.append(i)
         return good or None
     except Exception:  # noqa: BLE001 — any failure -> fallback catalogue
@@ -1159,7 +1186,7 @@ def _default_ideas(p: dict) -> list:
     (static audiences are out of scope and fail the monthly-volume rule anyway)."""
     return [
         {"idea": "Hiring the roles you sell to", "why": "Live job posts signal the need", "mechanism": "hiring",
-         "icebreaker": "I noticed {{company}} is hiring right now, and so I thought I'd reach out.",
+         "icebreaker": HIRING_ICE_DEFAULT,
          "params": {"job_titles": p.get("titles") or [], "days": 30}, "fit": 5, "novelty": 4, "intent": 5},
     ]
 
@@ -1611,6 +1638,8 @@ def api_lead_counts() -> dict:
 def save_draft(p: dict) -> dict:
     if (p.get("type") or p.get("mechanism")) == "hiring" and not [t for t in (p.get("titles") or []) if str(t).strip()]:
         return {"ok": False, "message": "A hiring source needs decision-maker roles (who we email at these companies)."}
+    if (p.get("type") or p.get("mechanism")) == "hiring":
+        p["icebreaker"] = ensure_hiring_vars(p.get("icebreaker"))  # {{company}} + {{job_title}} always survive
     drafts = read_drafts(strict=True)
     # ids must NEVER be reused: Supabase rows (signals, signal_leads) are keyed
     # by source_id and outlive removed drafts — len()+1 recycled ids and
@@ -1655,6 +1684,11 @@ def update_source(p: dict) -> dict:
                 d["active"] = bool(p["active"])
             if p.get("refresh_total") is not None:
                 d["total"] = p["refresh_total"]
+            if "icebreaker" in p and (d.get("mechanism") or d.get("type")) == "hiring":
+                # a hiring opener must always keep {{company}} + {{job_title}};
+                # if the edit dropped one, restore the canonical default rather than
+                # ship a hardcoded role to every prospect
+                p["icebreaker"] = ensure_hiring_vars(p["icebreaker"])
             for k in ("icebreaker", "name", "titles"):
                 if k in p:
                     d[k] = p[k]
@@ -2743,7 +2777,12 @@ def fill_icebreaker(template: str, prospect: dict) -> str:
     out = template or ""
     company = clean_company_name(prospect.get("company") or "") or "their company"
     first_name = clean_person_name(prospect.get("name") or "").split(" ")[0]
-    reps = {"company": company, "first_name": first_name}
+    # the hiring role the company is advertising - filled per prospect so every
+    # email names that company's real role, not a baked-in one (aliases cover
+    # whichever token the AI / a hand-edited opener used)
+    role = str(prospect.get("role") or prospect.get("hiring_for") or "").strip()
+    reps = {"company": company, "first_name": first_name,
+            "job_title": role, "jobtitle": role, "role": role}
     for k, v in reps.items():
         out = out.replace("{{" + k + "}}", v).replace("{" + k + "}", v)
     return email_safe(out)  # last line of defence: no special char can survive
@@ -3177,7 +3216,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     already = {r.get("company_domain") for r in existing if isinstance(r, dict)}
     fresh = [j for j in uniq if j["domain"] not in already]
 
-    template = src.get("icebreaker") or "Saw {{company}} is hiring for {{role}}, and so I thought I'd reach out."
+    template = ensure_hiring_vars(src.get("icebreaker"))  # guarantee {{company}} + {{job_title}}
     now_iso = datetime.now(timezone.utc).isoformat()
 
     def lead_excluded(email, domain):

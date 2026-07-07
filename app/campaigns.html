@@ -1503,11 +1503,16 @@ function verdictSeg(s, campaignId, view) {
 // user edits the line that's actually being sent instead of a blank box.
 const ENG_ICE_REF = "Saw your comment on {{WhosePost}}'s post about {{Topic}}, and so I thought I'd reach out.";
 const ENG_ICE_PLAIN = "Your work at {{company}} caught my eye, and so I thought I'd reach out.";
+// hiring openers ALWAYS carry {{company}} + {{job_title}} (the role that company is
+// hiring for, filled per prospect at send time) - mirror of HIRING_ICE_DEFAULT in server.py
+const HIRING_ICE_DEFAULT = "Saw {{company}} is hiring for {{job_title}}, and so I thought I'd reach out.";
 function effectiveIcebreaker(s) {
   if (s.icebreaker) return s.icebreaker;
-  if ((s.mechanism || s.type) === "engagement")
+  const mech = s.mechanism || s.type;
+  if (mech === "engagement")
     return ((s.config || {}).engagement || {}).copy_reference !== false ? ENG_ICE_REF : ENG_ICE_PLAIN;
-  return "";  // hiring/company sources have no default template; the placeholder guides instead
+  if (mech === "hiring") return HIRING_ICE_DEFAULT;  // pre-fill so the variables are visible + protected
+  return "";  // company sources have no default template; the placeholder guides instead
 }
 
 function srcDetail(s, campaignId) {
@@ -1566,11 +1571,27 @@ function fillableTags(src) {
     const copyRef = ((src.config || {}).engagement || {}).copy_reference;
     return copyRef ? base.concat(["Topic", "WhosePost"]) : base;  // only filled when "mention the post" is on
   }
+  if (mech === "hiring") return base.concat(["job_title", "jobTitle", "role"]);  // the role the company is hiring for
   return base;
 }
 async function saveIce(id, campaignId) {
   const v = document.getElementById("ice-" + id).value;
   const src = (window._drafts || []).find((x) => x.id === id) || {};
+  // hiring openers must always keep the two variables that personalise them per
+  // company - {{company}} and {{job_title}} (the role that company is hiring for).
+  // Drop one and every prospect gets the same hardcoded role, so block the save.
+  if ((src.mechanism || src.type) === "hiring") {
+    const missing = [];
+    if (!/\{\{\s*company\s*\}\}/i.test(v)) missing.push("{{company}}");
+    if (!/\{\{\s*(job_title|jobtitle|role|title)\s*\}\}/i.test(v)) missing.push("{{job_title}}");
+    if (missing.length) {
+      await uiConfirm(
+        `A hiring opener has to keep ${missing.join(" and ")} so each email names the real company and the exact role they're hiring for. Put ${missing.length > 1 ? "them" : "it"} back - you can write any words around the variables.`,
+        { title: "Keep the variables", confirmLabel: "Got it", danger: false }
+      );
+      return;
+    }
+  }
   const allowed = new Set(fillableTags(src).map((t) => t.toLowerCase()));
   const used = [...v.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]);
   const dangling = [...new Set(used.filter((t) => !allowed.has(t.toLowerCase())))];
@@ -1869,7 +1890,7 @@ const WIZ_SOURCES = [
   ["companies", "Company filter", "Daily pull on this exact audience", "search", "Core",
     "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
   ["hiring", "Hiring signal", "Hiring the roles you sell to, now", "briefcase", "Signals",
-    "I noticed {{company}} is hiring a {{Title}}, and so I thought I'd reach out."],
+    "Saw {{company}} is hiring for {{job_title}}, and so I thought I'd reach out."],
   ["lookalike", "Lookalikes", "Similar to your best clients", "people", "Core",
     "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
   ["engagement", "Engagement keywords", "People engaging with your topics", "linkedin", "Signals",
@@ -1879,7 +1900,7 @@ const WIZ_SOURCES = [
 const SRC_META = Object.fromEntries(WIZ_SOURCES.map((s) => [s[0], s]));
 const MECH_META = {
   company_filter: ["search", "Company filter", "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
-  hiring: ["briefcase", "Hiring signal", "I noticed {{company}} is hiring a {{Title}}, and so I thought I'd reach out."],
+  hiring: ["briefcase", "Hiring signal", "Saw {{company}} is hiring for {{job_title}}, and so I thought I'd reach out."],
   lookalike: ["people", "Lookalikes", "Apologies if this isn't relevant, I wasn't sure who the best person at {{company}} was for this."],
   engagement: ["linkedin", "Engagement signal", "Saw your post about {{Topic}}, and so I thought I'd reach out."],
   csv: ["download", "My own list", null],
