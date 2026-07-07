@@ -870,11 +870,13 @@ async function removeCampaign(id, ev) {
 
 async function duplicateCampaign(id, ev) {
   if (ev) ev.stopPropagation();
-  protoNote("Duplicating campaign…");
+  const restore = busyBtn(ev && ev.currentTarget, "Duplicating…");
+  if (restore === null) return;
+  protoNote("Duplicating campaign…", { sticky: true });
   let r;
   try { r = await (await fetch("/api/campaign-drafts/duplicate", { method: "POST", body: JSON.stringify({ id }) })).json(); }
   catch { r = { ok: false, message: "Couldn't reach the server - try again" }; }
-  if (!r.ok) { protoNote(r.message || "Couldn't duplicate the campaign"); return; }
+  if (!r.ok) { restore(); protoNote(r.message || "Couldn't duplicate the campaign"); return; }
   DB.campaignDrafts = null;
   protoNote(`Copied to "${r.name}" with ${r.sources} source${r.sources === 1 ? "" : "s"} - same targeting. Set where its leads go, then it's ready.`);
   location.hash = r.id;  // open the new campaign
@@ -1393,10 +1395,10 @@ async function renderDrafts(campaignId) {
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
-          <button class="btn sm primary" onclick="pullProspects('${s.id}','${campaignId}')">${s.prospects ? "Find people again" : "Find people now"}</button>
+          <button class="btn sm primary" onclick="pullProspects('${s.id}','${campaignId}',this)">${s.prospects ? "Find people again" : "Find people now"}</button>
           ${(s.mechanism || s.type) === "engagement" ? "" : `<button class="btn sm" title="Open the setup wizard for this source, prefilled with its current targeting" onclick="editSourceTargeting('${s.id}','${campaignId}')">✎ Edit targeting</button>`}
-          <button class="btn sm" title="Make a copy of this source with the same targeting" onclick="duplicateSource('${s.id}', '${campaignId}')">Duplicate</button>
-          <button class="btn sm" onclick="removeSource('${s.id}', '${campaignId}')">Remove</button>
+          <button class="btn sm" title="Make a copy of this source with the same targeting" onclick="duplicateSource('${s.id}', '${campaignId}', this)">Duplicate</button>
+          <button class="btn sm" onclick="removeSource('${s.id}', '${campaignId}', this)">Remove</button>
         </div>
         ${openId || s.prospects ? srcDetail(s, campaignId) : ""}
       </div></div>`;
@@ -1570,14 +1572,18 @@ function editSourceTargeting(id, campaignId) {
   const wizType = t === "hiring" ? "hiring" : t === "lookalike" ? "lookalike" : "companies";
   openSourceWizard(wizType, campaignId, s);
 }
-async function pullProspects(id, campaignId, afterRetarget) {
-  protoNote("Pulling live prospects…");
+async function pullProspects(id, campaignId, btn, afterRetarget) {
+  const restore = busyBtn(btn, "Finding people…");
+  if (restore === null) return;  // a pull for this source is already running — ignore the extra click
+  // sticky so the message stays up for the whole call (a live pull can run 10–30s, well past the toast's auto-hide)
+  protoNote("Finding people… this can take up to a minute", { sticky: true });
   window._openSource = id;
   try {
     const r = await (await fetch("/api/sources/pull", { method: "POST", body: JSON.stringify({ id, after_retarget: !!afterRetarget }) })).json();
     const base = r.ok ? (r.note || `${r.prospects.length} decision maker${r.prospects.length === 1 ? "" : "s"} found`) : (r.message || "Pull failed");
     protoNote(r.notice ? `${base} · ${r.notice}` : base);
   } catch (e) { protoNote(`Couldn't reach the server (${e && e.message ? e.message : "connection failed"}) - is it running?`); }
+  finally { restore(); }
   renderDrafts(campaignId);
 }
 // classify one push result into the receipt buckets
@@ -1623,19 +1629,24 @@ async function verdictProspect(id, i, verdict, campaignId) {
   pushToast(r, verdict);
   renderDrafts(campaignId);
 }
-async function duplicateSource(id, campaignId) {
-  protoNote("Duplicating source…");
+async function duplicateSource(id, campaignId, btn) {
+  const restore = busyBtn(btn, "Duplicating…");
+  if (restore === null) return;
+  protoNote("Duplicating source…", { sticky: true });
   let r;
   try { r = await (await fetch("/api/sources/duplicate", { method: "POST", body: JSON.stringify({ id }) })).json(); }
   catch { r = { ok: false, message: "Couldn't reach the server - try again" }; }
   protoNote(r.ok ? `Copied to "${r.name}" - same targeting. Hit "Find people now" when ready.` : (r.message || "Couldn't duplicate the source"));
   if (r.ok) window._openSource = r.id;
+  restore();
   renderDrafts(campaignId);
 }
 
-async function removeSource(id, campaignId) {
+async function removeSource(id, campaignId, btn) {
+  const restore = busyBtn(btn, "Removing…");
+  if (restore === null) return;
   const r = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify({ id, remove: true }) })).json();
-  if (r.ok === false) { protoNote(r.message || "Couldn't remove the source"); renderDrafts(campaignId); return; }
+  if (r.ok === false) { restore(); protoNote(r.message || "Couldn't remove the source"); renderDrafts(campaignId); return; }
   protoNote(r.trigify ? `Source removed · ${r.trigify}` : "Source removed");
   renderDrafts(campaignId);
 }
@@ -2156,7 +2167,7 @@ function drawWiz() {
     <div class="chips-center">${wchips("titles", TITLE_SUGGESTIONS)}
       <span class="addchip"><input id="add-title" placeholder="Add a title" onkeydown="if(event.key==='Enter'){event.preventDefault();wizAdd('titles','add-title')}"><button class="plus" title="Add" onclick="wizAdd('titles','add-title')">+</button></span>
     </div>
-    <div style="text-align:center;margin-top:10px"><button class="btn sm" onclick="wizGen('titles')" ${wiz._gen ? "disabled" : ""} title="Suggest more roles to email from this client's profile">${wiz._gen === "titles" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
+    <div style="text-align:center;margin-top:10px"><button class="btn sm" onclick="wizGen('titles')" ${wiz._gen ? "disabled" : ""} title="${wiz.titles.length ? "Suggests more roles like the ones you've picked" : "Suggests roles to email from this client's profile"}">${wiz._gen === "titles" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
 
   else if (wiz.step === 4) {
     const kws = kwList();
@@ -2172,21 +2183,21 @@ function drawWiz() {
         <span class="tchip ${wiz.industries.length ? "" : "on"}" onclick="wiz.industries=[];wiz.strat=null;drawWiz()">All industries</span>
         ${tchips("industries", IND_SUGGESTIONS)}
         ${tAddChip("industries", "e.g. Logistics", "Add industry")}
-        <button class="btn sm" style="margin-left:4px" onclick="wizGen('industries')" ${wiz._gen ? "disabled" : ""}>${wiz._gen === "industries" ? "🪄 Thinking…" : "🪄 Suggest more"}</button>
+        <button class="btn sm" style="margin-left:4px" onclick="wizGen('industries')" ${wiz._gen ? "disabled" : ""} title="${wiz.industries.length ? "Suggests more industries like the ones you've picked" : "Suggests industries from this client's profile"}">${wiz._gen === "industries" ? "🪄 Thinking…" : "🪄 Suggest more"}</button>
       </div>
       <div class="tsec">Company type <span style="text-transform:none;letter-spacing:0;font-weight:400">· what they ARE, sharper than industry</span></div>
       <div class="tgrid">
         <span class="tchip ${kws.length ? "" : "on"}" onclick="wiz.keywords='';wiz.strat=null;drawWiz()">All company types</span>
         ${kws.map((k) => `<span class="tchip on" title="Click to remove" onclick="kwRemove('${esc(k).replace(/'/g, "\\'")}')">${esc(k)}</span>`).join("")}
         ${tAddChip("keywords", "e.g. software development agency", "Add company type")}
-        <button class="btn sm" style="margin-left:4px" onclick="wizGen('keywords')" ${wiz._gen ? "disabled" : ""}>${wiz._gen === "keywords" ? "🪄 Thinking…" : "🪄 Generate more"}</button>
+        <button class="btn sm" style="margin-left:4px" onclick="wizGen('keywords')" ${wiz._gen ? "disabled" : ""} title="${kws.length ? "Suggests more company types like the ones you've picked" : "Suggests company types from this client's profile"}">${wiz._gen === "keywords" ? "🪄 Thinking…" : "🪄 Generate more"}</button>
       </div>
       <div class="tsec">Location</div>
       <div class="tgrid">
         <span class="tchip ${wiz.geos.length ? "" : "on"}" onclick="wiz.geos=[];wiz.strat=null;drawWiz()">All locations</span>
         ${tchips("geos", GEO_OPTIONS)}
         ${tAddChip("geos", "Anywhere, e.g. Jamaica", "Add location")}
-        <button class="btn sm" style="margin-left:4px" onclick="wizGen('geos')" ${wiz._gen ? "disabled" : ""}>${wiz._gen === "geos" ? "🪄 Thinking…" : "🪄 Generate more"}</button>
+        <button class="btn sm" style="margin-left:4px" onclick="wizGen('geos')" ${wiz._gen ? "disabled" : ""} title="${wiz.geos.length ? "Suggests more locations like the ones you've picked" : "Suggests locations from this client's profile"}">${wiz._gen === "geos" ? "🪄 Thinking…" : "🪄 Generate more"}</button>
       </div>
       <div class="small muted" id="geo-hint" style="margin-top:6px"></div>
       <div class="tsec">Company size</div>
@@ -2551,7 +2562,7 @@ function swGeoRow(seedOptions) {
     ${opts.map((o) => `<span class="chip ${sw.geo.includes(o) ? "on" : ""}" onclick="toggleIn(sw.geo,'${esc(o).replace(/'/g, "\\'")}')">${esc(o)}</span>`).join("")}
     <span class="addchip"><input id="add-geo-sw" placeholder="Add a country"
       onkeydown="if(event.key==='Enter'){event.preventDefault();swGeoAdd()}"><button class="plus" title="Add" onclick="swGeoAdd()">+</button></span>
-    <button class="btn sm" onclick="swGeoGen()" ${sw._genbusy ? "disabled" : ""}>${sw._genbusy === "geo" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
+    <button class="btn sm" onclick="swGeoGen()" ${sw._genbusy ? "disabled" : ""} title="${sw.geo.length ? "Suggests more locations like the ones you've picked" : "Suggests locations for this client"}">${sw._genbusy === "geo" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
 }
 function swGeoAdd() {
   const el = document.getElementById("add-geo-sw");
@@ -2785,7 +2796,7 @@ function roleChipRow(field, placeholder) {
     <span class="addchip"><input id="add-${field}" placeholder="${esc(placeholder)}"
       onkeydown="if(event.key==='Enter'){event.preventDefault();roleChipAdd('${field}')}"><button class="plus" title="Add" onclick="roleChipAdd('${field}')">+</button></span>
     <button class="btn sm" onclick="roleGenMore('${field}')" ${sw._genbusy || full ? "disabled" : ""}
-      title="${full ? "That's plenty - remove a few before adding more" : "Suggest 10 more - it learns from what you remove and keep"}">${sw._genbusy === field ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
+      title="${full ? "That's plenty - remove a few before adding more" : (roleList(field).length ? "Suggests 10 more like the ones you've picked" : "Suggests 10 to get you started - then it matches what you keep")}">${sw._genbusy === field ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>`;
 }
 
 /* POST /api/role-suggest with a hard timeout so a slow model can never lock
@@ -2964,7 +2975,7 @@ function drawSrc() {
         <label>Post topics that count <span class="muted" style="font-weight:400">· a post must match one of these</span></label>
         ${chipEditRow("inc", "e.g. GTM strategy")}
         <div style="margin-top:6px"><button class="btn sm" onclick="roleGenMore('inc')" ${sw._genbusy || sw.inc.length >= 40 ? "disabled" : ""}
-          title="Suggest 10 more topics - it learns from what you remove and keep">${sw._genbusy === "inc" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>
+          title="${sw.inc.length ? "Suggests 10 more topics like the ones you've picked" : "Suggests 10 topics to get you started - then it matches what you keep"}">${sw._genbusy === "inc" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>
         <label>Post topics to skip <span class="muted" style="font-weight:400">· engagers on these posts are ignored, however good the person</span></label>
         ${chipEditRow("avd", "e.g. event recaps")}
         <label>Who counts as a warm lead <span style="color:var(--orange-700)">*</span></label>
@@ -2972,7 +2983,7 @@ function drawSrc() {
         <label>Companies to avoid <span class="muted" style="font-weight:400">· engagers at these are ignored</span></label>
         ${chipEditRow("avoid_companies", "e.g. recruiting agencies")}
         <div style="margin-top:6px"><button class="btn sm" onclick="swGenList('avoid_companies','avoid_companies')" ${sw._genbusy ? "disabled" : ""}
-          title="Suggest company types to exclude">${sw._genbusy === "avoid_companies" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>
+          title="${sw.avoid_companies.length ? "Suggests more company types like the ones you've picked" : "Suggests company types to exclude"}">${sw._genbusy === "avoid_companies" ? "🪄 Thinking…" : "🪄 Generate more"}</button></div>
         <label>Countries</label>${swGeoRow(ENG_COUNTRIES)}
         <label>Company size</label>${chipRow(sw.hc, HC_BUCKETS, "hc")}
         <label>Never include <span class="muted" style="font-weight:400">· optional, plain English</span></label>
@@ -3218,7 +3229,12 @@ async function srcNext() {
           : sw.type === "companies"
             ? { id: sw.editId, name: sw.name, params: { keywords: sw.keywords, countries: sw.geo, headcount: sw.hc } }
             : { id: sw.editId, name: sw.name, params: { icp: sw.icp, tier: sw.tier, countries: sw.geo, headcount: sw.hc } };
-      const r2 = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify(body) })).json();
+      const restore2 = busyBtn(document.getElementById("src-next"), "Saving…");
+      if (restore2 === null) return;  // save already in flight — swallow the double-click
+      let r2;
+      try { r2 = await (await fetch("/api/sources/update", { method: "POST", body: JSON.stringify(body) })).json(); }
+      catch { r2 = { ok: false, message: "Couldn't reach the server - try again" }; }
+      restore2();
       if (r2.ok === false) { protoNote(r2.message || "Couldn't save the source"); return; }
       srcwiz.classList.remove("on");
       protoNote(sw.type === "engagement"
@@ -3227,7 +3243,10 @@ async function srcNext() {
       renderDrafts(sw.campaignId);
       return;
     }
-    const r = await (await fetch("/api/sources", { method: "POST", body: JSON.stringify({
+    const restore = busyBtn(document.getElementById("src-next"), "Saving…");
+    if (restore === null) return;  // save already in flight — swallow the double-click
+    let r;
+    try { r = await (await fetch("/api/sources", { method: "POST", body: JSON.stringify({
       type: sw.type, name: sw.name, campaign_id: sw.campaignId,
       total: sw.result?.total_prospects || sw.result?.total_companies || null,
       titles: (sw.type === "hiring" || sw.type === "engagement") ? csvList(sw.dm_titles) : undefined,
@@ -3237,7 +3256,9 @@ async function srcNext() {
         leads_per_day: sw.type === "hiring" ? (sw.leads_per_day || 20) : undefined,
         industry_or: sw.type === "hiring" && (sw.industries || []).length ? sw.industries : undefined,
         keywords: sw.keywords, icp: sw.icp, tier: sw.tier, headcount: sw.hc, countries: sw.geo, days: 30, csv: sw.csv },
-    }) })).json();
+    }) })).json(); }
+    catch { r = { ok: false, message: "Couldn't reach the server - try again" }; }
+    restore();
     if (!r.ok) { protoNote(r.message || "Couldn't save the source"); return; }
     srcwiz.classList.remove("on");
     hideNote();

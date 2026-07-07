@@ -62,8 +62,10 @@ function freshnessBlock(meta) {
   return `<div class="freshness">Snapshot <b>${dt.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</b> · read-only</div>`;
 }
 
-/* read-only note for inert actions */
-function protoNote(msg = "Read-only prototype") {
+/* toast note. Pass {sticky:true} for an in-flight message that stays up until the
+   next protoNote replaces it (a plain result toast auto-hides after ~2.6s) — this
+   keeps a "Finding people…" message visible for the whole of a long server call. */
+function protoNote(msg = "Read-only prototype", opts = {}) {
   let el = document.querySelector(".proto-note");
   if (!el) {
     el = document.createElement("div");
@@ -73,7 +75,30 @@ function protoNote(msg = "Read-only prototype") {
   el.textContent = msg;
   requestAnimationFrame(() => el.classList.add("on"));
   clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.remove("on"), 2600);
+  if (!opts.sticky) el._t = setTimeout(() => el.classList.remove("on"), opts.ms || 2600);
+}
+
+/* Put a button into a working state: inline spinner + label, disabled so it can't
+   be double-clicked while the action runs. Returns a restore() that puts the button
+   back exactly how it was (safe to call even after a re-render has replaced it).
+   Returns null if the button is ALREADY busy — callers use that to bail out of a
+   duplicate submit, which is the whole point: no more "did my click work?" re-clicks. */
+function busyBtn(btn, label = "Working…") {
+  if (!btn) return () => {};                 // caller had no element (e.g. auto-triggered) — no-op
+  if (btn.dataset.busy === "1") return null; // second click while the first is in flight — ignore it
+  const html = btn.innerHTML, wasDisabled = btn.disabled;
+  btn.dataset.busy = "1";
+  btn.classList.add("busy");
+  btn.setAttribute("aria-busy", "true");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="btnspin"></span>${esc(label)}`;
+  return () => {
+    delete btn.dataset.busy;
+    btn.classList.remove("busy");
+    btn.removeAttribute("aria-busy");
+    btn.disabled = wasDisabled;
+    btn.innerHTML = html;
+  };
 }
 
 /* force-hide the toast now — call on step changes / modal open+close so a stale
