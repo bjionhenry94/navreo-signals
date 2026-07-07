@@ -231,6 +231,38 @@ def emp_range(buckets) -> tuple[int, int]:
     return (min(lo) if lo else 11, max(hi) if hi else 500)
 
 
+# ── TheirStack industry taxonomy ─────────────────────────────────────────
+# TheirStack's industry_or/industry_not take EXACT LinkedIn standardized
+# industry names and SILENTLY IGNORE anything unrecognized (an unknown name
+# returns the full unfiltered universe, so the user thinks they filtered but
+# got everything — a silent-no-op footgun). This list was built empirically by
+# testing each candidate against the live API and keeping only names that
+# actually narrow the result set (verified 2026-07-07). Every industry the
+# wizard offers, the suggester emits, or a stored config carries is validated
+# against this set before it reaches the API — unrecognized names are dropped
+# and surfaced, never silently passed through.
+THEIRSTACK_INDUSTRIES = ["Accounting", "Advertising Services", "Airlines and Aviation", "Apparel Manufacturing", "Appliances, Electrical, and Electronics Manufacturing", "Architecture and Planning", "Armed Forces", "Automation Machinery Manufacturing", "Aviation and Aerospace Component Manufacturing", "Banking", "Beverage Manufacturing", "Biotechnology Research", "Book and Periodical Publishing", "Broadcast Media Production and Distribution", "Building Construction", "Business Consulting and Services", "Chemical Manufacturing", "Civic and Social Organizations", "Civil Engineering", "Computer Games", "Computer Hardware Manufacturing", "Computer and Network Security", "Construction", "Consumer Goods", "Consumer Services", "Cosmetics", "Dairy Product Manufacturing", "Data Infrastructure and Analytics", "Defense and Space Manufacturing", "Design Services", "E-Learning Providers", "Education Administration Programs", "Electric Power Generation", "Entertainment Providers", "Environmental Services", "Events Services", "Facilities Services", "Farming", "Financial Data Services", "Financial Services", "Fisheries", "Food and Beverage Manufacturing", "Food and Beverage Services", "Freight and Package Transportation", "Furniture and Home Furnishings Manufacturing", "Government Administration", "Graphic Design", "Higher Education", "Hospitality", "Hospitals and Health Care", "Hotels and Motels", "Human Resources Services", "IT Services and IT Consulting", "Industrial Machinery Manufacturing", "Information Services", "Insurance", "International Affairs", "Internet Publishing", "Investment Management", "Law Practice", "Legal Services", "Machinery Manufacturing", "Management Consulting", "Manufacturing", "Maritime Transportation", "Marketing Services", "Medical Equipment Manufacturing", "Medical Practices", "Mental Health Care", "Mining", "Mobile Gaming Apps", "Motor Vehicle Manufacturing", "Motor Vehicle Parts Manufacturing", "Movies, Videos, and Sound", "Musicians", "Newspaper Publishing", "Non-profit Organizations", "Oil and Gas", "Packaging and Containers Manufacturing", "Paper and Forest Product Manufacturing", "Personal Care Product Manufacturing", "Pharmaceutical Manufacturing", "Photography", "Plastics Manufacturing", "Political Organizations", "Primary and Secondary Education", "Printing Services", "Public Policy Offices", "Public Relations and Communications Services", "Ranching", "Real Estate", "Religious Institutions", "Renewable Energy Semiconductor Manufacturing", "Research Services", "Restaurants", "Retail", "Retail Apparel and Fashion", "Retail Groceries", "Retail Luxury Goods and Jewelry", "Retail Motor Vehicles", "Security and Investigations", "Semiconductor Manufacturing", "Software Development", "Solar Electric Power Generation", "Spectator Sports", "Sports and Recreation Instruction", "Staffing and Recruiting", "Technology, Information and Internet", "Telecommunications", "Textile Manufacturing", "Think Tanks", "Tobacco Manufacturing", "Translation and Localization", "Transportation, Logistics, Supply Chain and Storage", "Travel Arrangements", "Truck Transportation", "Utilities", "Venture Capital and Private Equity", "Veterinary Services", "Warehousing and Storage", "Wellness and Fitness Services", "Wholesale", "Wineries", "Wireless Services", "Writing and Editing"]
+_INDUSTRY_CANON = {i.lower(): i for i in THEIRSTACK_INDUSTRIES}
+
+
+def validate_industries(names) -> tuple:
+    """Split industry names into (recognized_canonical, unrecognized).
+    Case-insensitive match to the canonical TheirStack spelling; only recognized
+    names are safe to send (unknown ones silently no-op at the API)."""
+    ok, bad = [], []
+    for n in (names or []):
+        s = str(n).strip()
+        if not s:
+            continue
+        canon = _INDUSTRY_CANON.get(s.lower())
+        if canon:
+            if canon not in ok:
+                ok.append(canon)
+        elif s not in bad:
+            bad.append(s)
+    return ok, bad
+
+
 # ── provider previews (search-only) ──────────────────────────────────────
 
 def preview_hiring(p: dict) -> dict:
@@ -260,15 +292,17 @@ def preview_hiring(p: dict) -> dict:
         "limit": 10,
         "include_total_results": True,
     }
-    # industry filter (user-facing, hiring wizard) — TheirStack's industry_or/not
-    # take exact LinkedIn industry names; keeping them here makes the free preview
-    # count reflect exactly what the paid pull will return.
-    inc = [str(i).strip() for i in (p.get("industries") or []) if str(i).strip()]
-    exc = [str(i).strip() for i in (p.get("industries_not") or []) if str(i).strip()]
+    # industry filter (user-facing, hiring wizard) — validate against the exact
+    # TheirStack taxonomy so an unrecognized name can never silently no-op. Only
+    # recognized names hit the API; the rest come back as ignored_industries so
+    # the UI can warn instead of quietly returning the whole unfiltered universe.
+    inc, bad_inc = validate_industries(p.get("industries"))
+    exc, bad_exc = validate_industries(p.get("industries_not"))
     if inc:
         body["industry_or"] = inc
     if exc:
         body["industry_not"] = exc
+    ignored_industries = bad_inc + bad_exc
     # precision layer (description patterns / industry excludes) — passing it
     # here keeps the preview count honest about what a real pull will return
     body.update(p.get("extra") or {})
@@ -298,6 +332,8 @@ def preview_hiring(p: dict) -> dict:
         "total_companies": total_companies,
         "total_prospects": total_prospects,   # estimate: companies x DMS_PER_COMPANY
         "sample": jobs,
+        "applied_industries": inc,             # what actually filtered
+        "ignored_industries": ignored_industries,  # names TheirStack doesn't recognise
     }
 
 
@@ -824,6 +860,21 @@ def role_suggest(p: dict) -> dict:
     fb = _role_feedback_for(cid or "")
 
     kind = p.get("kind")
+    if kind == "linkedin_industries":
+        # the model can drift to deprecated LinkedIn names ("Computer Software")
+        # that silently no-op at TheirStack — keep only canonical taxonomy names,
+        # then top up from the reference list so the button always returns some.
+        res = _suggest_generic(p, camp, cl, icp, basis, fb, GENERIC_KINDS[kind], key)
+        good, _ = validate_industries(res.get("suggestions") or [])
+        have = {s.lower() for s in (p.get("exclude") or [])} | {g.lower() for g in good}
+        for ind in THEIRSTACK_INDUSTRIES:
+            if len(good) >= (p.get("count") or 6):
+                break
+            if ind.lower() not in have:
+                good.append(ind)
+                have.add(ind.lower())
+        res["suggestions"] = good
+        return res
     if kind in GENERIC_KINDS:
         return _suggest_generic(p, camp, cl, icp, basis, fb, GENERIC_KINDS[kind], key)
     # declined = never show again; merged from the persisted per-client history
@@ -2837,6 +2888,16 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
 
     precision = {k: cfg[k] for k in ("company_description_pattern_or", "company_description_pattern_not",
                                      "industry_or", "industry_not") if cfg.get(k)}
+    # normalise/drop industry names TheirStack doesn't recognise — an unknown
+    # value silently no-ops (returns everything), so keeping only canonical names
+    # guarantees the stored filter (manual OR AI-generated) actually applies.
+    for k in ("industry_or", "industry_not"):
+        if precision.get(k):
+            good, _bad = validate_industries(precision[k])
+            if good:
+                precision[k] = good
+            else:
+                precision.pop(k, None)
     negatives = [str(n).strip() for n in (cfg.get("negative_keywords") or []) if str(n).strip()]
     if negatives:
         pats = [re.escape(n.lower()) for n in negatives]

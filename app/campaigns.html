@@ -1758,6 +1758,24 @@ async function recordQARun(id) {
 let wiz = {};
 const TITLE_SUGGESTIONS = ["Founder", "CEO", "VP of Sales", "Head of Sales", "Head of Growth", "Managing Director", "Chief Revenue Officer"];
 const IND_SUGGESTIONS = ["Software Development", "IT Services and IT Consulting", "Business Consulting and Services", "Technology, Information and Internet", "Advertising Services"];
+/* Country name -> ISO code for the TheirStack hiring preview/pull (that API
+   wants codes; other providers take the names in sw.geo). Kept in sync with the
+   hiring-pull-crash fix on the deploy repo. */
+const CC = { "United States": "US", "United Kingdom": "GB", "Canada": "CA", "Australia": "AU", "Germany": "DE", "Netherlands": "NL" };
+/* Exact LinkedIn standardized industry names — the hiring-signal filter feeds
+   TheirStack's industry_or, which only matches these verbatim (loose labels
+   silently match nothing). Every entry here is a confirmed-live taxonomy value. */
+const HIRE_INDUSTRIES = ["Software Development", "IT Services and IT Consulting", "Technology, Information and Internet",
+  "Financial Services", "Banking", "Insurance", "Hospitals and Health Care", "Construction", "Real Estate",
+  "Manufacturing", "Retail", "Advertising Services", "Marketing Services", "Business Consulting and Services",
+  "Staffing and Recruiting", "Transportation, Logistics, Supply Chain and Storage", "Accounting", "Legal Services",
+  "Pharmaceutical Manufacturing", "Food and Beverage Services", "Telecommunications", "Motor Vehicle Manufacturing",
+  "Wholesale", "Education Administration Programs", "Hospitality", "Wellness and Fitness Services", "Consumer Services"];
+/* Full canonical set TheirStack accepts (verified live 2026-07-07). Typed
+   industries are validated against this — an unrecognized name would silently
+   match every company, so we normalise to canonical spelling or reject. */
+const THEIRSTACK_INDUSTRIES = ["Accounting", "Advertising Services", "Airlines and Aviation", "Apparel Manufacturing", "Appliances, Electrical, and Electronics Manufacturing", "Architecture and Planning", "Armed Forces", "Automation Machinery Manufacturing", "Aviation and Aerospace Component Manufacturing", "Banking", "Beverage Manufacturing", "Biotechnology Research", "Book and Periodical Publishing", "Broadcast Media Production and Distribution", "Building Construction", "Business Consulting and Services", "Chemical Manufacturing", "Civic and Social Organizations", "Civil Engineering", "Computer Games", "Computer Hardware Manufacturing", "Computer and Network Security", "Construction", "Consumer Goods", "Consumer Services", "Cosmetics", "Dairy Product Manufacturing", "Data Infrastructure and Analytics", "Defense and Space Manufacturing", "Design Services", "E-Learning Providers", "Education Administration Programs", "Electric Power Generation", "Entertainment Providers", "Environmental Services", "Events Services", "Facilities Services", "Farming", "Financial Data Services", "Financial Services", "Fisheries", "Food and Beverage Manufacturing", "Food and Beverage Services", "Freight and Package Transportation", "Furniture and Home Furnishings Manufacturing", "Government Administration", "Graphic Design", "Higher Education", "Hospitality", "Hospitals and Health Care", "Hotels and Motels", "Human Resources Services", "IT Services and IT Consulting", "Industrial Machinery Manufacturing", "Information Services", "Insurance", "International Affairs", "Internet Publishing", "Investment Management", "Law Practice", "Legal Services", "Machinery Manufacturing", "Management Consulting", "Manufacturing", "Maritime Transportation", "Marketing Services", "Medical Equipment Manufacturing", "Medical Practices", "Mental Health Care", "Mining", "Mobile Gaming Apps", "Motor Vehicle Manufacturing", "Motor Vehicle Parts Manufacturing", "Movies, Videos, and Sound", "Musicians", "Newspaper Publishing", "Non-profit Organizations", "Oil and Gas", "Packaging and Containers Manufacturing", "Paper and Forest Product Manufacturing", "Personal Care Product Manufacturing", "Pharmaceutical Manufacturing", "Photography", "Plastics Manufacturing", "Political Organizations", "Primary and Secondary Education", "Printing Services", "Public Policy Offices", "Public Relations and Communications Services", "Ranching", "Real Estate", "Religious Institutions", "Renewable Energy Semiconductor Manufacturing", "Research Services", "Restaurants", "Retail", "Retail Apparel and Fashion", "Retail Groceries", "Retail Luxury Goods and Jewelry", "Retail Motor Vehicles", "Security and Investigations", "Semiconductor Manufacturing", "Software Development", "Solar Electric Power Generation", "Spectator Sports", "Sports and Recreation Instruction", "Staffing and Recruiting", "Technology, Information and Internet", "Telecommunications", "Textile Manufacturing", "Think Tanks", "Tobacco Manufacturing", "Translation and Localization", "Transportation, Logistics, Supply Chain and Storage", "Travel Arrangements", "Truck Transportation", "Utilities", "Venture Capital and Private Equity", "Veterinary Services", "Warehousing and Storage", "Wellness and Fitness Services", "Wholesale", "Wineries", "Wireless Services", "Writing and Editing"];
+const _INDUSTRY_CANON = Object.fromEntries(THEIRSTACK_INDUSTRIES.map((i) => [i.toLowerCase(), i]));
 const SIZE_BUCKETS = ["1-10", "11-20", "21-50", "51-100", "101-200", "201-500"];
 const GEO_OPTIONS = ["United States", "United Kingdom", "Canada", "Australia", "Germany", "Netherlands"];
 
@@ -2467,6 +2485,7 @@ async function srcSaveForLater() {
     config: { titles: sw.titles, job_titles: sw.type === "hiring" ? csvList(sw.titles) : undefined,
       negative_keywords: sw.type === "hiring" ? csvList(sw.negatives) : undefined,
       leads_per_day: sw.type === "hiring" ? (sw.leads_per_day || 20) : undefined,
+      industry_or: sw.type === "hiring" && (sw.industries || []).length ? sw.industries : undefined,
       keywords: sw.keywords, icp: sw.icp, tier: sw.tier, headcount: sw.hc, countries: sw.geo, days: 30, csv: sw.csv },
   }) })).json();
   if (r && r.ok === false) { protoNote(r.message || "Couldn't save"); return; }
@@ -2526,7 +2545,6 @@ const SW_META = {
 };
 const HC_BUCKETS = ["11-20", "21-50", "51-100", "101-200", "201-500"];
 const COUNTRIES = ["United States", "United Kingdom", "Canada", "Australia", "Germany", "Netherlands"];
-const CC = { "United States": "US", "United Kingdom": "GB", "Canada": "CA", "Australia": "AU", "Germany": "DE", "Netherlands": "NL" };
 /* engagement-signal wizard defaults */
 const ENG_COUNTRIES = ["United States", "United Kingdom", "Canada", "Australia", "Ireland", "New Zealand",
   "Germany", "Netherlands", "Switzerland", "Sweden", "Norway", "Denmark", "Finland", "Singapore"];
@@ -2555,9 +2573,19 @@ function swUrlHint() {
 }
 function swAdd(field, inputId) {
   const el = document.getElementById(inputId);
-  const v = (el && el.value || "").trim();
+  let v = (el && el.value || "").trim();
   if (!v) return;
+  if (field === "industries") {  // must be an exact LinkedIn industry or it silently matches everything
+    const canon = _INDUSTRY_CANON[v.toLowerCase()];
+    if (!canon) {
+      const near = THEIRSTACK_INDUSTRIES.filter((i) => i.toLowerCase().includes(v.toLowerCase())).slice(0, 3);
+      swWarn(`"${v}" isn't a LinkedIn industry TheirStack recognises${near.length ? ` — did you mean ${near.join(", ")}?` : " — pick one from the suggestions"}`);
+      return;
+    }
+    v = canon;
+  }
   if (!sw[field].includes(v)) sw[field].push(v);
+  if (el) el.value = "";
   drawSrc();
 }
 function chipEditRow(field, placeholder) {
@@ -2573,9 +2601,30 @@ function chipEditDel(field, v) {
     roleFeedback({ declined_topics: [v] });
   }
 }
+/* add a value to an array-backed wizard field without duplicating (used by
+   the one-click industry suggestion chips) */
+function swPush(field, val) {
+  sw[field] = sw[field] || [];
+  if (!sw[field].includes(val)) sw[field].push(val);
+  drawSrc();
+}
+/* Hiring-signal industry filter: exact LinkedIn taxonomy names only. Selected
+   chips (removable) + quick-add suggestions + an AI "suggest more". Empty =
+   every industry (no filter). */
+function hireIndustryField() {
+  const sel = new Set(sw.industries || []);
+  const quick = HIRE_INDUSTRIES.filter((i) => !sel.has(i)).slice(0, 10);
+  return `
+    <label>Industry <span class="muted" style="font-weight:400">· optional · leave empty to target every industry</span></label>
+    ${chipEditRow("industries", "e.g. Construction")}
+    ${quick.length ? `<div class="chips-center" style="justify-content:flex-start;max-width:520px;margin:6px auto 0">
+      ${quick.map((i) => `<span class="chip" title="Click to add" onclick="swPush('industries','${esc(i).replace(/'/g, "\\'")}')">+ ${esc(i)}</span>`).join("")}</div>` : ""}
+    <div style="margin-top:6px"><button class="btn sm" onclick="swGenList('industries','linkedin_industries')" ${sw._genbusy ? "disabled" : ""}
+      title="Suggest more industries from your client's ICP - exact LinkedIn names">${sw._genbusy === "industries" ? "🪄 Thinking…" : "🪄 Suggest industries"}</button></div>`;
+}
 
 function openSourceWizard(type, campaignId, editSrc) {
-  sw = { type, campaignId, step: 1, hc: ["11-20", "21-50", "51-100", "101-200"], geo: ["United States", "United Kingdom"], tier: "T2", result: null, csv: null };
+  sw = { type, campaignId, step: 1, hc: ["11-20", "21-50", "51-100", "101-200"], geo: ["United States", "United Kingdom"], tier: "T2", result: null, csv: null, industries: [] };
   if (type === "engagement") {
     Object.assign(sw, {
       urls: "", inc: [...ENG_INCLUDE_SEED], avd: [...ENG_AVOID_SEED], wild: "", avoid_companies: [],
@@ -2613,6 +2662,7 @@ function openSourceWizard(type, campaignId, editSrc) {
       sw.titles = jt.map((x) => String(x).trim()).filter(Boolean).join(", ");
       sw.dm_titles = (cfg.dm_titles?.length ? cfg.dm_titles : (editSrc.titles || [])).join(", ");
       sw.negatives = (cfg.negative_keywords || []).join(", ");
+      sw.industries = Array.isArray(cfg.industry_or) ? [...cfg.industry_or] : [];  // prefill the industry filter (AI-idea path or a prior edit)
       sw.leads_per_day = cfg.leads_per_day || 20;
       sw._touched = { titles: true, dm_titles: true };
     } else if (type === "companies") {
@@ -2828,9 +2878,10 @@ function drawSrc() {
         <label>Exclude posts containing <span class="muted" style="font-weight:400">(optional)</span></label>
         ${roleChipRow("negatives", "e.g. intern, contract")}
         <label>Max leads per day</label>
-        <input id="sw-lpd" type="number" min="1" max="100" value="${sw.leads_per_day || 20}" style="max-width:110px">
+        <input id="sw-lpd" type="number" min="1" max="100" value="${sw.leads_per_day || 20}" style="max-width:110px" oninput="sw.leads_per_day=parseInt(this.value,10)||sw.leads_per_day">
         <label>Countries</label>${swGeoRow(COUNTRIES)}
         <label>Company size</label>${chipRow(sw.hc, HC_BUCKETS, "hc")}
+        ${hireIndustryField()}
       </div>`;
     else if (sw.type === "companies") body.innerHTML = `
       <h2>${m.title}</h2><div class="lead">${m.lead}</div>
@@ -2884,7 +2935,7 @@ function drawSrc() {
         </div>
         <div class="small muted" style="margin-top:4px">Heads up: referencing a competitor's post reveals you monitor their audience.</div>
         <label>Max leads per day</label>
-        <input id="sw-lpd" type="number" min="1" max="100" value="${sw.leads_per_day || 25}" style="max-width:110px">
+        <input id="sw-lpd" type="number" min="1" max="100" value="${sw.leads_per_day || 25}" style="max-width:110px" oninput="sw.leads_per_day=parseInt(this.value,10)||sw.leads_per_day">
       </div>`;
     else body.innerHTML = `
       <h2>${m.title}</h2><div class="lead">${m.lead}</div>
@@ -2945,9 +2996,14 @@ function drawSrc() {
     const rows = (r.sample || []).map((s) => sw.type === "hiring"
       ? [s.job_title, s.company_size, s.industry, s.country]
       : [s.name, s.size, s.industry, s.country]);
+    const applied = r.applied_industries || (sw.type === "hiring" ? sw.industries : []) || [];
+    const ignored = r.ignored_industries || [];
+    const indNote = (sw.type === "hiring" && (applied.length || ignored.length))
+      ? `<div class="small muted" style="margin:-4px auto 8px;max-width:520px">${applied.length ? `Filtered to ${applied.map(esc).join(", ")}` : "No industry filter applied"}${ignored.length ? ` · <span style="color:var(--orange-700)">ignored (not a LinkedIn industry): ${ignored.map(esc).join(", ")}</span>` : ""}</div>` : "";
     body.innerHTML = `
       <h2>Here's what's out there.</h2>
       <div class="lead">${esc(r.cost)} · sample below, full list comes with the daily run</div>
+      ${indNote}
       <div style="display:flex;gap:36px;justify-content:center;margin:10px 0 16px">
         ${heroes.filter(([v]) => v).map(([v, l, pre]) => `<div><div class="num-hero">${pre || ""}${fmt(v)}</div><div class="small muted">${l}</div></div>`).join("")}
       </div>
@@ -3068,6 +3124,7 @@ async function srcNext() {
       ? { job_titles: (sw.titles || "").split(",").map((t) => t.trim()).filter(Boolean), countries: sw.geo.map((g) => CC[g] || g), min_emp: 11, max_emp: 500, days: 30,
           dm_count: (sw.dm_titles || "").split(",").map((t) => t.trim()).filter(Boolean).length,
           dm_titles: (sw.dm_titles || "").split(",").map((t) => t.trim()).filter(Boolean),
+          industries: sw.industries || [],
           country_names: sw.geo }
       : sw.type === "companies"
         ? { keywords: roleList("keywords"), headcount: sw.hc, countries: sw.geo }
@@ -3106,6 +3163,7 @@ async function srcNext() {
           ? { id: sw.editId, name: sw.name, titles: csvList(sw.dm_titles), params: {
               job_titles: csvList(sw.titles), dm_titles: csvList(sw.dm_titles),
               negative_keywords: csvList(sw.negatives), leads_per_day: sw.leads_per_day || 20,
+              industry_or: sw.industries || [],  // always write it: [] here overrides any AI-set config.industry_or, so clearing the filter takes effect
               countries: sw.geo, headcount: sw.hc, days: 30 } }
           : sw.type === "companies"
             ? { id: sw.editId, name: sw.name, params: { keywords: sw.keywords, countries: sw.geo, headcount: sw.hc } }
@@ -3127,6 +3185,7 @@ async function srcNext() {
         : { titles: sw.titles, job_titles: sw.type === "hiring" ? csvList(sw.titles) : undefined,
         negative_keywords: sw.type === "hiring" ? csvList(sw.negatives) : undefined,
         leads_per_day: sw.type === "hiring" ? (sw.leads_per_day || 20) : undefined,
+        industry_or: sw.type === "hiring" && (sw.industries || []).length ? sw.industries : undefined,
         keywords: sw.keywords, icp: sw.icp, tier: sw.tier, headcount: sw.hc, countries: sw.geo, days: 30, csv: sw.csv },
     }) })).json();
     if (!r.ok) { protoNote(r.message || "Couldn't save the source"); return; }
