@@ -3237,6 +3237,11 @@ ENG_ICE_PLAIN = "Your work at {{company}} caught my eye, and so I thought I'd re
 ENG_BACKFILL_DAYS = 15
 ENG_COMMENTS_PER_POST = 30
 ENG_STAGE_PER_RUN = 40  # engagers enriched+staged per source per run (credit bound)
+# Trigify calls are network-bound (~2.5s each) and independent, so they run
+# concurrently. Kept modest: these are someone else's rate limits, not ours.
+ENG_LIST_WORKERS = 10     # saved-search listings (was 47 x 2.8s = 131s serially)
+ENG_FETCH_WORKERS = 8     # /post/comments
+ENG_ENRICH_WORKERS = 8    # /profile/enrich (also the credit-bound step)
 
 
 def _activity_urn(post_url: str):
@@ -3308,58 +3313,117 @@ def _trigify_enrich(profile_url: str) -> dict:
         return {}
 
 
+def _swept_posts(eng: dict) -> set:
+    """Post URLs this source has already fetched comments for.
+
+    A post that yielded no NEW engagers (all commenters already staged, or only
+    company commenters, or no comments at all) writes no engagement_events row —
+    so deriving "already processed" from engagement_events alone made us re-fetch
+    its comments on every tick, forever. Measured 2026-07-08: 100-130 of ~202
+    in-window posts were being re-swept every 3h on the two sources that timed
+    out. The swept set is what makes a pull's cost proportional to what's NEW.
+
+    Keyed off the resolved `engagement` dict (which `cfg` aliases by reference,
+    whether it came from config or params) so we never read one copy and write
+    another — writing a bare `config.engagement` when the real block lives under
+    `params.engagement` would leave the source with zero saved searches."""
+    return set((eng or {}).get("swept_posts") or [])
+
+
+def _remember_swept(eng: dict, swept: set, window: set):
+    """Record the swept set on the live engagement dict, pruned to the current
+    backfill window so it can't grow without bound (posts older than
+    ENG_BACKFILL_DAYS are never revisited). Caller persists the source."""
+    eng["swept_posts"] = sorted(swept & window) if window else sorted(swept)
+
+
 def stage_trigify_engagers(src: dict, cfg: dict, days: int = ENG_BACKFILL_DAYS,
                            per_post: int = ENG_COMMENTS_PER_POST,
                            per_run: int = ENG_STAGE_PER_RUN) -> int:
     """Pull recent-post engagers for a source and stage them as NEW
-    engagement_events (deduped by post+engager). Returns the count staged."""
+    engagement_events (deduped by post+engager). Returns the count staged.
+
+    Three independent Trigify round-trips per layer (list searches -> fetch each
+    post's comments -> enrich each engager), all network-bound and all
+    independent, so each layer runs concurrently. Serially this was 131s of
+    listing before the first comment fetch, which is what blew the 300s
+    per-source watchdog on every tick."""
+    from concurrent.futures import ThreadPoolExecutor
+    # cfg is {**config, **params}, so cfg["engagement"] IS the source's own dict —
+    # mutating it here is what lets the caller persist swept_posts with write_source.
     eng = cfg.get("engagement") or {}
     searches = [t.get("search_id") for t in (eng.get("trigify") or []) if t.get("search_id")]
     if not searches:
         return 0
-    seen = sb("GET", f"engagement_events?source_id=eq.{src['id']}&select=post_url,engager_linkedin_url") or []
-    done_posts = {r.get("post_url") for r in seen}
+    seen = sb("GET", f"engagement_events?source_id=eq.{src['id']}"
+                     "&select=post_url,engager_linkedin_url&limit=20000") or []
+    if not isinstance(seen, list):
+        return 0  # a failed read would look like "nothing staged yet" and re-stage everything
     seen_pair = {(r.get("post_url"), r.get("engager_linkedin_url")) for r in seen}
-    staged, batch = 0, []
-    for sid in searches:
-        if staged >= per_run:
+    # legacy sources have no swept list yet: any post that produced an event was
+    # certainly swept, so seed from there and let this run record the rest.
+    swept = _swept_posts(eng) | {r.get("post_url") for r in seen if r.get("post_url")}
+
+    # ── layer 1: list every saved search's recent posts, concurrently ──────────
+    with ThreadPoolExecutor(max_workers=ENG_LIST_WORKERS) as ex:
+        listings = list(ex.map(lambda s: _trigify_recent_posts(s, days), searches))
+    window: dict = {}  # post_url -> post; a post can surface in more than one search
+    for lst in listings:
+        for p in lst:
+            window.setdefault(p["post_url"], p)
+    todo = sorted((p for p in window.values() if p["post_url"] not in swept),
+                  key=lambda p: p["published_at"], reverse=True)  # newest first
+
+    # ── layer 2: fetch comments, concurrently, stopping once we have enough ────
+    # Only posts we actually fetch get marked swept — a run cut short by the cap
+    # must leave the rest to the next tick, not silently skip them forever.
+    engagers: list = []  # (post, engager)
+    for i in range(0, len(todo), ENG_FETCH_WORKERS):
+        if len(engagers) >= per_run:
             break
-        for post in _trigify_recent_posts(sid, days):
-            if staged >= per_run:
-                break
-            if post["post_url"] in done_posts:
-                continue
-            for e in _trigify_post_engagers(post["post_urn"], per_post):
-                if staged >= per_run:
-                    break
+        chunk = todo[i:i + ENG_FETCH_WORKERS]
+        with ThreadPoolExecutor(max_workers=ENG_FETCH_WORKERS) as ex:
+            results = list(ex.map(lambda p: _trigify_post_engagers(p["post_urn"], per_post), chunk))
+        for post, found in zip(chunk, results):
+            swept.add(post["post_url"])
+            for e in found:
                 key = (post["post_url"], e["linkedin"])
                 if key in seen_pair:
                     continue
                 seen_pair.add(key)
-                pr = _trigify_enrich(e["linkedin"])
-                batch.append({
-                    "source_id": src["id"], "campaign_draft_id": str(src.get("campaign_id") or ""),
-                    "client_id": src.get("client_id") or None,
-                    "post_url": post["post_url"], "post_author_name": post["post_author"],
-                    "post_text": post["post_text"], "engagement_type": "comment",
-                    "engaged_at": e["engaged_at"] or None, "comment_text": e["comment_text"],
-                    "comment_permalink": e["comment_permalink"],
-                    "engager_full_name": pr.get("full_name") or e["name"],
-                    "engager_first_name": pr.get("first_name"), "engager_last_name": pr.get("last_name"),
-                    "engager_linkedin_url": e["linkedin"], "engager_headline": e["headline"],
-                    "engager_job_title": pr.get("job_title") or e["headline"],
-                    "engager_company_name": pr.get("job_company_name"),
-                    "engager_company_domain": _clean_company_domain(pr.get("job_company_website")),
-                    "engager_company_industry": pr.get("industry"),
-                    "engager_country": pr.get("location_country"), "engager_location": pr.get("location_name"),
-                    "status": "NEW",
-                })
-                staged += 1
-            done_posts.add(post["post_url"])
+                engagers.append((post, e))
+    engagers = engagers[:per_run]  # the enrich cap is the credit bound
+
+    # ── layer 3: enrich, concurrently, one call per PERSON (not per comment) ───
+    urls = list({e["linkedin"] for _p, e in engagers})
+    with ThreadPoolExecutor(max_workers=ENG_ENRICH_WORKERS) as ex:
+        profiles = dict(zip(urls, ex.map(_trigify_enrich, urls)))
+
+    batch = []
+    for post, e in engagers:
+        pr = profiles.get(e["linkedin"]) or {}
+        batch.append({
+            "source_id": src["id"], "campaign_draft_id": str(src.get("campaign_id") or ""),
+            "client_id": src.get("client_id") or None,
+            "post_url": post["post_url"], "post_author_name": post["post_author"],
+            "post_text": post["post_text"], "engagement_type": "comment",
+            "engaged_at": e["engaged_at"] or None, "comment_text": e["comment_text"],
+            "comment_permalink": e["comment_permalink"],
+            "engager_full_name": pr.get("full_name") or e["name"],
+            "engager_first_name": pr.get("first_name"), "engager_last_name": pr.get("last_name"),
+            "engager_linkedin_url": e["linkedin"], "engager_headline": e["headline"],
+            "engager_job_title": pr.get("job_title") or e["headline"],
+            "engager_company_name": pr.get("job_company_name"),
+            "engager_company_domain": _clean_company_domain(pr.get("job_company_website")),
+            "engager_company_industry": pr.get("industry"),
+            "engager_country": pr.get("location_country"), "engager_location": pr.get("location_name"),
+            "status": "NEW",
+        })
     if batch:
         sb("POST", "engagement_events?on_conflict=source_id,engager_linkedin_url,post_url",
            batch, prefer="resolution=ignore-duplicates,return=minimal")
-    return staged
+    _remember_swept(eng, swept, set(window))
+    return len(batch)
 
 
 def pull_engagement_source(src: dict, drafts: list) -> dict:
@@ -3387,7 +3451,13 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     # tool-driven pull: stage fresh engagers before qualifying (no reliance on
     # the Trigify workflow trigger, which barely fires)
     try:
-        stage_trigify_engagers(src, cfg)
+        _staged = stage_trigify_engagers(src, cfg)
+        # Persist the swept-post set NOW, not at the end of the run: qualifying can
+        # still be abandoned by the watchdog, and losing the set would make the next
+        # tick re-fetch every post's comments again — the exact loop being fixed.
+        write_source(src)
+        print(f"[engagement] {src['id']}: staged {_staged} new engager(s), "
+              f"{len(_swept_posts(eng))} post(s) swept", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — a staging hiccup must not block qualifying what's already NEW
         print(f"[engagement] staging error for {src['id']}: {type(e).__name__}: {e}", file=sys.stderr)
 
