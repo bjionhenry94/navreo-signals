@@ -277,6 +277,26 @@ function _emitRefreshed() {  // debounced: coalesce several background updates i
    sessionStorage), then refetch in the background and repaint only if the data actually
    changed. Any write (non-GET fetch) wipes memory + persisted cache, so reads taken right
    after an action are always fresh — SWR staleness only ever shows when nothing was written. */
+/* Fallback: fetchJsonWithRetry normally ships with the client-switcher shell.js,
+   which deploys separately — define the same helper here when that build hasn't
+   landed yet, so this page never depends on shell.js's deploy timing. */
+if (typeof fetchJsonWithRetry === "undefined") {
+  window.fetchJsonWithRetry = async function (url, opts = {}, fallback = null) {
+    const attempt = async () => {
+      const r = await fetch(url, opts);
+      if (!r.ok) { const err = new Error(`HTTP ${r.status}`); err.status = r.status; throw err; }
+      return await r.json();
+    };
+    try {
+      return await attempt();
+    } catch (e1) {
+      const retryable = !e1 || !e1.status || e1.status >= 500;  // network throw or 5xx
+      if (!retryable) return fallback;
+      await new Promise((res) => setTimeout(res, 800));
+      try { return await attempt(); } catch (e2) { console.warn("fetchJsonWithRetry failed", url, e2); return fallback; }
+    }
+  };
+}
 function cachedGet(url, ttl = GET_TTL) {
   const now = Date.now();
   const mem = _getCache.get(url);
