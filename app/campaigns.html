@@ -1850,7 +1850,10 @@ async function hydrateVerdictViews(drafts) {
   }
 }
 function verdictSeg(s, campaignId, view) {
-  const qn = (s.prospects || []).length;
+  // `total` is the accumulated signal_leads count (sources_for_ui overlays it onto every
+  // pulled source) - the same number the header and the Leads tab show. The prospects
+  // array is only a mirror of it, so never let this pill disagree with them.
+  const qn = s.last_pull && s.total != null ? Number(s.total) : (s.prospects || []).length;
   return `
     <div style="display:flex;gap:6px;align-items:center;margin:14px 0 6px">
       <button class="btn sm ${view === "qualified" ? "primary" : ""}" title="Showing the ${qn} people from the last pull, not the running total - the daily run keeps finding more" onclick="setVerdictView('${s.id}','qualified','${campaignId}')">✓ Qualified (${qn})</button>

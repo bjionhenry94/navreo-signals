@@ -206,14 +206,14 @@ def run_pull(fake, pages, dm_hit_rate=2):
     company yields one decision-maker, mirroring the ~55% no-DM reality."""
     saved = {k: getattr(server, k) for k in
              ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
-              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "write_drafts", "write_source", "sb_sync_source", "read_json_list", "theirstack_credits_today",
               "_theirstack_meter")}
     server.sb = fake
     server.http_json = Recorder(pages)
     server.theirstack_credits_today = lambda: 0
     server._theirstack_meter = lambda *a, **k: None
     server.is_suppressed = lambda *a, **k: False
-    server.write_drafts = lambda *a, **k: None
+    server.write_drafts = server.write_source = lambda *a, **k: None
     server.sb_sync_source = lambda *a, **k: None
     server.read_json_list = lambda *a, **k: []
     seen = {"n": 0}
@@ -336,7 +336,7 @@ def test_scanned_domain_is_excluded_forever():
                          "detail": {"source_id": "src-test"}, "enriched_at": "done"})
     saved = {k: getattr(server, k) for k in
              ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
-              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "write_drafts", "write_source", "sb_sync_source", "read_json_list", "theirstack_credits_today",
               "_theirstack_meter")}
     server.sb = fake
     # TheirStack returns google.com anyway (as if the exclusion were ignored)
@@ -345,7 +345,7 @@ def test_scanned_domain_is_excluded_forever():
     server.theirstack_credits_today = lambda: 0
     server._theirstack_meter = lambda *a, **k: None
     server.is_suppressed = lambda *a, **k: False
-    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.write_drafts = server.write_source = server.sb_sync_source = lambda *a, **k: None
     server.read_json_list = lambda *a, **k: []
     server.dm_find_by_domain = lambda *a, **k: []
     server.find_email = lambda p: None
@@ -393,14 +393,14 @@ def test_exclusions_applied_at_the_search():
                          "detail": {"source_id": "src-test"}, "enriched_at": "done"})
     saved = {k: getattr(server, k) for k in
              ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
-              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "write_drafts", "write_source", "sb_sync_source", "read_json_list", "theirstack_credits_today",
               "_theirstack_meter")}
     server.sb = fake
     server.http_json = Recorder([[job(1, "2026-07-07T10:00:00Z")]])
     server.theirstack_credits_today = lambda: 0
     server._theirstack_meter = lambda *a, **k: None
     server.is_suppressed = lambda *a, **k: False
-    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.write_drafts = server.write_source = server.sb_sync_source = lambda *a, **k: None
     server.read_json_list = lambda *a, **k: []
     server.dm_find_by_domain = lambda *a, **k: []
     server.find_email = lambda p: None
@@ -456,14 +456,14 @@ def test_lead_upsert_never_resets_pushed_status():
     fake = FakeSB(leads_today=0)
     saved = {k: getattr(server, k) for k in
              ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
-              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "write_drafts", "write_source", "sb_sync_source", "read_json_list", "theirstack_credits_today",
               "_theirstack_meter")}
     server.sb = fake
     server.http_json = Recorder(pages)
     server.theirstack_credits_today = lambda: 0
     server._theirstack_meter = lambda *a, **k: None
     server.is_suppressed = lambda *a, **k: False
-    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.write_drafts = server.write_source = server.sb_sync_source = lambda *a, **k: None
     server.read_json_list = lambda *a, **k: []
     n = {"i": 0}
     server.dm_find_by_domain = lambda d, tt, m: ([] if m <= 0 else
@@ -493,14 +493,14 @@ def test_swallowed_signal_still_enriches():
     fake = FakeSB(leads_today=0, swallow_all=True)
     saved = {k: getattr(server, k) for k in
              ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
-              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "write_drafts", "write_source", "sb_sync_source", "read_json_list", "theirstack_credits_today",
               "_theirstack_meter")}
     server.sb = fake
     server.http_json = Recorder(pages)
     server.theirstack_credits_today = lambda: 0
     server._theirstack_meter = lambda *a, **k: None
     server.is_suppressed = lambda *a, **k: False
-    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.write_drafts = server.write_source = server.sb_sync_source = lambda *a, **k: None
     server.read_json_list = lambda *a, **k: []
     n = {"i": 0}
 
@@ -542,14 +542,14 @@ def test_discovery_floor_is_yesterday():
             src["last_discovered_ids"] = list(bids)
         saved = {k: getattr(server, k) for k in
                  ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
-                  "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+                  "write_drafts", "write_source", "sb_sync_source", "read_json_list", "theirstack_credits_today",
                   "_theirstack_meter")}
         server.sb = fake
         server.http_json = Recorder([[]])          # zero jobs: we only want the request body
         server.theirstack_credits_today = lambda: 0
         server._theirstack_meter = lambda *a, **k: None
         server.is_suppressed = lambda *a, **k: False
-        server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+        server.write_drafts = server.write_source = server.sb_sync_source = lambda *a, **k: None
         server.read_json_list = lambda *a, **k: []
         server.dm_find_by_domain = lambda *a, **k: []
         server.find_email = lambda p: None

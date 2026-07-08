@@ -48,7 +48,7 @@ def main():
                     drafts = server.read_drafts()  # re-read under the lock
                     src = next((d for d in drafts if d.get("id") == sid), src)
                     pushed = server.auto_push_new_leads(src)
-                    server.write_drafts(drafts)
+                    server.write_source(src)  # only this source's push stamps changed
                 entry["autopushed"] = [p for p in pushed if p["ok"]]
                 entry["push_failed"] = [p for p in pushed if not p["ok"]]
             else:

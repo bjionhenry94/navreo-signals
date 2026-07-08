@@ -115,11 +115,66 @@ def _pg_replace(table: str, docs: list, only_doc: bool = False):
         sb("DELETE", f"{table}?id=in.({','.join(stale)})")
 
 
+def thread_abandoned() -> bool:
+    """True when the daily-run watchdog has already given up on THIS thread.
+
+    `_timed()` abandons a source at SOURCE_S but cannot kill the daemon thread —
+    it keeps running, and minutes later reaches its persist step holding a
+    `drafts` snapshot read before every source that has since completed. Writing
+    that snapshot rolls those sources back (2026-07-08: an abandoned engagement
+    thread reverted a sibling source's `prospects` from 145 to 112, and its
+    `last_pull` from 18:13 back to 15:05). A write that loses a race it does not
+    know it is in must not happen at all, so abandoned threads persist nothing.
+
+    signal_leads writes are deliberately NOT gated: they are per-row upserts on a
+    natural key, they cannot clobber a sibling, and persisting them is the whole
+    point of writing leads inside the qualify loop."""
+    ev = getattr(threading.current_thread(), "_navreo_abandoned", None)
+    return bool(ev is not None and ev.is_set())
+
+
+def write_source(src: dict):
+    """Persist ONE source doc. The single-row counterpart to write_drafts().
+
+    Every pull mutates exactly one source but used to persist the whole list via
+    `_pg_replace("sources", …)`, which upserts EVERY doc the caller is holding —
+    so two overlapping pulls silently overwrote each other's `prospects`. Writing
+    only the row we changed makes concurrent pulls of different sources
+    commutative, which is the property the daily run actually needs."""
+    if not src or not src.get("id"):
+        return
+    if thread_abandoned():
+        print(f"[persist] abandoned thread - not writing source {src['id']}", file=sys.stderr)
+        return
+    sb("POST", "sources?on_conflict=id", [{"id": src["id"], "doc": src}],
+       prefer="resolution=merge-duplicates,return=minimal")
+
+
+def write_sources(srcs: list):
+    """Persist SEVERAL source docs by id — a campaign-level edit touching each of
+    its sources. Still row-scoped: sources this call never looked at are untouched,
+    which a whole-list `_pg_replace` could not promise."""
+    rows = [{"id": s["id"], "doc": s} for s in srcs if s and s.get("id")]
+    if not rows:
+        return
+    if thread_abandoned():
+        print(f"[persist] abandoned thread - not writing {len(rows)} source(s)", file=sys.stderr)
+        return
+    sb("POST", "sources?on_conflict=id", rows,
+       prefer="resolution=merge-duplicates,return=minimal")
+
+
 def write_drafts(data, path: Path | None = None):
     """Persist a full source/campaign list to Postgres (routed by which legacy
-    path constant the caller passed). Unknown paths fall back to a file."""
+    path constant the caller passed). Unknown paths fall back to a file.
+
+    Whole-list write: only for add/remove/reorder, where the list itself is the
+    thing that changed. To persist edits to ONE source use write_source()."""
     p = path or DRAFTS
     if p == DRAFTS:
+        if thread_abandoned():  # see thread_abandoned(): a stale snapshot must never land
+            print("[persist] abandoned thread - not writing the sources list", file=sys.stderr)
+            return
         _pg_replace("sources", data)
     elif p == CAMPAIGN_DRAFTS:
         _pg_replace("campaign_drafts", data)
@@ -2179,7 +2234,7 @@ def save_draft(p: dict) -> dict:
     p["id"] = f"draft-{uuid.uuid4().hex[:8]}"
     drafts.append(p)
     DRAFTS.parent.mkdir(parents=True, exist_ok=True)
-    write_drafts(drafts)
+    write_source(p)  # an append only adds a row — never rewrite the siblings
     sb_sync_source(p)
     return {"ok": True, "id": p["id"]}
 
@@ -2191,6 +2246,7 @@ def update_source(p: dict) -> dict:
     sid = p.get("id")
     push = None
     trigify_note = None
+    edited = None  # the one source this call changed — persisted alone, see write_source()
     if p.get("remove"):
         gone = next((d for d in drafts if d.get("id") == sid), None)
         if gone and (gone.get("mechanism") or gone.get("type")) == "engagement":
@@ -2199,18 +2255,20 @@ def update_source(p: dict) -> dict:
                 left, removed, errs = _trigify_deprovision(ent)
                 if errs:  # keep the source so the user can retry the teardown
                     ((gone.get("config") or {}).get("engagement") or {})["trigify"] = left
-                    write_drafts(drafts)
+                    write_source(gone)
                     return {"ok": False, "message":
                             f"Removed {len(removed)} Trigify workflow(s) but {len(errs)} failed "
                             f"({errs[0]['error']}). Source kept - try Remove again."}
                 trigify_note = f"{len(removed)} Trigify workflow(s) stopped"
         sb_delete_source(sid)  # remove the source, its leads and events from Supabase too
         sb_delete_doc("sources", sid)  # explicit: the doc-table row goes even if it was the last source
-        drafts = [d for d in drafts if d.get("id") != sid]
+        # sb_delete_doc already dropped the row — re-writing the surviving list here
+        # would upsert every sibling from a snapshot that may now be stale.
     else:
         for d in drafts:
             if d.get("id") != sid:
                 continue
+            edited = d
             if "active" in p:
                 d["active"] = bool(p["active"])
             if p.get("refresh_total") is not None:
@@ -2271,7 +2329,7 @@ def update_source(p: dict) -> dict:
                                 sb("PATCH", f"engagement_events?source_id=eq.{sid}"
                                             f"&engager_linkedin_url=eq.{quote(pr['linkedin'], safe='')}",
                                    {"status": "QUALIFIED"})
-                        write_drafts(drafts)
+                        write_source(d)
                         return {"ok": True, "push": push, "undo": True,
                                 "lead": {**pr, "verdict": None, "pushed_to": None, "pushed": pr.get("pushed") or {}}}
                     pr["verdict"] = p["verdict"]
@@ -2294,11 +2352,12 @@ def update_source(p: dict) -> dict:
                             sb("PATCH", f"engagement_events?source_id=eq.{sid}"
                                         f"&engager_linkedin_url=eq.{quote(pr['linkedin'], safe='')}",
                                {"status": "PUSHED"})
-                    write_drafts(drafts)
+                    write_source(d)
                     return {"ok": True, "push": push, "lead": pr}
             if any(k in p for k in ("icebreaker", "params", "titles", "name", "active", "destination", "config")):
                 sb_sync_source(d)
-    write_drafts(drafts)
+    if edited is not None:
+        write_source(edited)
     return {"ok": True, "push": push, **({"trigify": trigify_note} if trigify_note else {})}
 
 
@@ -2598,6 +2657,56 @@ def auto_push_new_leads(src: dict) -> list:
             seen.add(str(pr["email"]).lower())
     out += _drain_backlog_leads(src, dest, seen)
     return out
+
+
+def reconcile_prospects(src: dict) -> int:
+    """Re-seed a source's `prospects` array from signal_leads, the authoritative
+    accumulator. Returns how many leads were missing.
+
+    For engagement sources `prospects` is meant to be cumulative (each pull
+    appends), so any lead in signal_leads that isn't in the array is a lead the
+    UI has silently lost — the array is a doc-wide read-modify-write, and any
+    write that lands on a stale snapshot rolls it back. signal_leads can't be
+    rolled back that way: it's one upsert per lead on (source_id, linkedin_url).
+
+    Making the pull start from a reconciled array means a gap heals on the next
+    tick instead of persisting forever. Idempotent: matched on linkedin_url."""
+    if not src.get("id"):
+        return 0
+    rows = sb("GET", f"signal_leads?source_id=eq.{src['id']}"
+                     "&select=full_name,title,company,domain,linkedin_url,country,"
+                     "icebreaker,email,status,pushed_to&order=pulled_at.asc")
+    if not isinstance(rows, list):
+        return 0  # read blip — never truncate the array on a failed read
+    prospects = src.get("prospects") if isinstance(src.get("prospects"), list) else []
+    known = {x.get("linkedin") for x in prospects if x.get("linkedin")}
+    added = 0
+    for r in rows:
+        lu = r.get("linkedin_url") or ""
+        if not lu or lu.startswith("unknown:") or lu in known:
+            continue
+        pr = {"name": r.get("full_name") or "", "title": r.get("title") or "",
+              "company": r.get("company") or "", "domain": r.get("domain") or "",
+              "linkedin": lu, "country": r.get("country"), "email": r.get("email"),
+              "icebreaker": r.get("icebreaker") or "",
+              "verdict": {"pushed": "keep", "rejected": "reject"}.get(r.get("status")),
+              "recovered": True}  # no post_url/topic: the event detail didn't survive
+        if r.get("pushed_to"):
+            pr["pushed_to"] = r["pushed_to"]
+            # rebuild the per-tool stamps push_prospect() keys its idempotency on,
+            # so a recovered lead is never re-pushed and renders "sent", not "Send"
+            pr["pushed"] = {k: True for k in str(r["pushed_to"]).split("+") if k}
+        elif r.get("status") == "pushed":
+            # already contacted, but we can't say through which tool. Stamp it anyway:
+            # auto_push_new_leads() skips any prospect carrying `pushed`, and a missing
+            # chip is far cheaper than re-contacting someone.
+            pr["pushed"] = {"unknown": True}
+        prospects.append(pr)
+        known.add(lu)
+        added += 1
+    if added:
+        src["prospects"] = prospects
+    return added
 
 
 def _drain_backlog_leads(src: dict, dest: dict, seen: set, cap: int = 100) -> list:
@@ -2990,7 +3099,7 @@ def provision_engagement_source(p: dict) -> dict:
             results.append(entry)
         except Exception as e:  # noqa: BLE001 — provision the rest, surface the failures
             errors.append({"profile_url": url, "error": str(e)[:200]})
-    write_drafts(drafts)
+    write_source(src)  # only `src` changed — never rewrite the sibling sources
     sb_sync_source(src)
     return {"ok": not errors, "provisioned": results, "already": sorted(done),
             "errors": errors,
@@ -3265,6 +3374,16 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     cap = int(eng.get("leads_per_day") or cfg.get("leads_per_day") or 25)
     copy_ref = eng.get("copy_reference", True)
 
+    # Heal first, before any early return: a source with nothing new to stage still
+    # needs its prospects array reconciled against signal_leads, or a gap opened by
+    # a clobbered write survives every quiet tick. See reconcile_prospects().
+    _recovered = reconcile_prospects(src)
+    if _recovered:
+        print(f"[engagement] {src['id']}: recovered {_recovered} lead(s) missing from prospects",
+              file=sys.stderr)
+        src["total"] = len(src.get("prospects") or [])
+        write_source(src)
+
     # tool-driven pull: stage fresh engagers before qualifying (no reliance on
     # the Trigify workflow trigger, which barely fires)
     try:
@@ -3284,6 +3403,8 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     # single-threaded). String-gated rows cost zero tokens. A per-event failure
     # (quota/key) leaves that row NEW to retry next pull; it no longer aborts the run.
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    # already reconciled against signal_leads at the top of this function, so
+    # `known` covers every lead ever pulled — not just the ones that survived
     prospects = list(src.get("prospects") or [])
     known = {x.get("linkedin") for x in prospects}
     counts = {"qualified": 0, "borderline": 0, "off_brief": 0, "capped": 0, "errored": 0}
@@ -3369,7 +3490,7 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     src["signals_found"] = counts["qualified"]
     src["mechanism"] = "engagement"
     src["last_pull"] = datetime.now().isoformat(timespec="seconds")
-    write_drafts(drafts)
+    write_source(src)
     sb_sync_source(src)
 
     # signal_leads are now written per-engager inside the loop above (survives an
@@ -3381,7 +3502,7 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
                  if str(c.get("id")) == str(src.get("campaign_id"))), {})
     pushed = auto_push_new_leads(src) if camp.get("autopilot") else []
     if pushed:
-        write_drafts(drafts)
+        write_source(src)
         for ev_pr in (src.get("prospects") or []):
             if ev_pr.get("pushed_to") and ev_pr.get("linkedin"):
                 from urllib.parse import quote
@@ -4389,7 +4510,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     src["left_for_next_run"] = left_over
     src["mechanism"] = "hiring"
     src["last_pull"] = datetime.now().isoformat(timespec="seconds")
-    write_drafts(drafts)
+    write_source(src)
     sb_sync_source(src)
 
     # NB: no "status" key. This is an UPSERT on (source_id, linkedin_url), and
@@ -4509,7 +4630,7 @@ def pull_source(p: dict) -> dict:
     src["total"] = total
     src["last_pull"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
     src["broadened"] = False
-    write_drafts(drafts)
+    write_source(src)
     sb_sync_source(src)
     # no "status": merge-duplicates would reset an already-pushed lead to new, and the
     # next autopilot tick would re-contact them. See pull_hiring_source for the full note.
@@ -4535,13 +4656,12 @@ def update_campaign_draft(p: dict) -> dict:
         # runs on an explicit purge from the Recently-deleted area.
         now = datetime.now().isoformat(timespec="seconds")
         all_srcs = read_drafts(strict=True)
-        touched = False
+        touched = []
         for src in all_srcs:
             if str(src.get("campaign_id")) == str(cid):
                 src["deleted_at"] = now
-                touched = True
-        if touched:
-            write_drafts(all_srcs)
+                touched.append(src)
+        write_sources(touched)  # only this campaign's sources — siblings untouched
         for d in drafts:
             if d.get("id") == cid:
                 d["deleted_at"] = now
@@ -4577,10 +4697,12 @@ def restore_campaign_draft(p: dict) -> dict:
         return {"ok": False, "message": "Nothing to restore for this campaign."}
     write_drafts(drafts, CAMPAIGN_DRAFTS)
     srcs = read_drafts(strict=True)
+    revived = []
     for s in srcs:
         if str(s.get("campaign_id")) == str(cid):
             s.pop("deleted_at", None)
-    write_drafts(srcs)
+            revived.append(s)
+    write_sources(revived)
     return {"ok": True, "restored": True}
 
 
@@ -4602,7 +4724,8 @@ def purge_campaign_draft(p: dict) -> dict:
     sb("DELETE", f"signal_sources?campaign_draft_id=eq.{cid}")
     sb("DELETE", f"engagement_events?campaign_draft_id=eq.{cid}")
     sb_delete_doc("campaign_drafts", cid)  # explicit: purge the campaign even if it was the last one
-    write_drafts([x for x in all_srcs if str(x.get("campaign_id")) != str(cid)])
+    # each doomed source's row is already gone (sb_delete_doc above); re-writing the
+    # survivors here would upsert every one of them from a possibly-stale snapshot
     write_drafts([d for d in drafts if d.get("id") != cid], CAMPAIGN_DRAFTS)
     return {"ok": True, "purged": True}
 
@@ -4649,7 +4772,7 @@ def duplicate_source(p: dict) -> dict:
     s["name"] = _copy_name(orig.get("name"))
     drafts.append(s)
     DRAFTS.parent.mkdir(parents=True, exist_ok=True)
-    write_drafts(drafts)
+    write_source(s)  # an append only adds a row — never rewrite the siblings
     sb_sync_source(s)
     return {"ok": True, "id": s["id"], "name": s["name"]}
 
@@ -4683,7 +4806,7 @@ def duplicate_campaign_draft(p: dict) -> dict:
         new_srcs.append(s)
     if new_srcs:
         all_srcs.extend(new_srcs)
-        write_drafts(all_srcs)
+        write_sources(new_srcs)  # only the clones are new — leave the originals alone
         for s in new_srcs:
             sb_sync_source(s)
     return {"ok": True, "id": new_id, "name": new["name"], "sources": len(new_srcs)}
@@ -4733,17 +4856,25 @@ def cron_pull_all():
     t0 = _time.monotonic()
 
     def _timed(fn):
-        """Run fn() in a daemon thread; return (result, error, timed_out)."""
+        """Run fn() in a daemon thread; return (result, error, timed_out).
+
+        On timeout the thread is abandoned but NOT killed (Python can't), so we
+        flag it: write_source()/write_drafts() check thread_abandoned() and
+        refuse to persist. Without that flag the zombie thread finishes minutes
+        later and writes a snapshot older than the sources that ran after it."""
         box = {}
+        abandoned = threading.Event()
         def _w():
             try:
                 box["r"] = fn()
             except Exception as e:  # noqa: BLE001
                 box["e"] = e
         th = threading.Thread(target=_w, daemon=True)
+        th._navreo_abandoned = abandoned  # read via thread_abandoned() inside fn
         th.start()
         th.join(SOURCE_S)
         if th.is_alive():
+            abandoned.set()
             return None, None, True
         return box.get("r"), box.get("e"), False
 
@@ -4791,9 +4922,9 @@ def cron_pull_all():
                     pushed = _pr or []
                     entry["autopushed"] = len([p for p in pushed if p.get("ok")])
                     entry["push_failed"] = len([p for p in pushed if not p.get("ok")])
-                    if not _pt:  # persist pushed-state to the file the Leads tab reads
+                    if not _pt:  # persist pushed-state to the row the Leads tab reads
                         try:
-                            write_drafts(drafts)
+                            write_source(src)
                         except Exception:  # noqa: BLE001
                             pass
                     if _pt or _pe:

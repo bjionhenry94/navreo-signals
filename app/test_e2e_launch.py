@@ -26,8 +26,10 @@ def check(name, cond):
 
 # ── in-memory state: nothing touches live Supabase or local JSON ──────────
 DRAFTS, CAMPS = [], []
-server.read_drafts = lambda: DRAFTS
-server.read_json_list = lambda p: CAMPS if p == server.CAMPAIGN_DRAFTS else []
+# `strict=` is what the write paths pass (abort rather than persist an empty
+# snapshot); the stub must accept it or every create/delete dies as a silent TypeError
+server.read_drafts = lambda strict=False: DRAFTS
+server.read_json_list = lambda p, strict=False: CAMPS if p == server.CAMPAIGN_DRAFTS else []
 def _write(data, path=None):
     global DRAFTS, CAMPS
     if path == server.CAMPAIGN_DRAFTS:
@@ -35,9 +37,29 @@ def _write(data, path=None):
     else:
         DRAFTS[:] = data
 server.write_drafts = _write
+
+def _write_source(src):
+    """In-memory stand-in for the row-scoped persist the pull paths now use.
+    Upsert by id — the whole point is that siblings are never rewritten."""
+    if not src or not src.get("id"):
+        return
+    for i, d in enumerate(DRAFTS):
+        if d.get("id") == src["id"]:
+            DRAFTS[i] = src
+            return
+    DRAFTS.append(src)
+server.write_source = _write_source
+server.write_sources = lambda srcs: [_write_source(s) for s in (srcs or [])]
 server.sb = lambda *a, **k: []            # no-op backend sync / RPC (not suppressed)
 server.sb_sync_source = lambda s: None
 server.sb_delete_source = lambda sid: None
+def _delete_doc(table, doc_id):
+    """Removal is now row-scoped too: the doc row goes, the list is never rewritten."""
+    if table == "sources":
+        DRAFTS[:] = [d for d in DRAFTS if d.get("id") != doc_id]
+    elif table == "campaign_drafts":
+        CAMPS[:] = [c for c in CAMPS if c.get("id") != doc_id]
+server.sb_delete_doc = _delete_doc
 server._trigify_deprovision = lambda ent: ([], ent, [])
 
 # outbound providers stubbed at the boundary
