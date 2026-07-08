@@ -2764,10 +2764,13 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
             # qualified. on_conflict makes the (dropped) end batch idempotent.
             _db_futs.append(_dbex.submit(
                 sb, "POST", "signal_leads?on_conflict=source_id,linkedin_url",
+                # no "status": merge-duplicates would reset an already-pushed lead to
+                # new and the next autopilot tick would re-contact them. Insert default
+                # is 'new'; on update, only the pusher may change status/pushed_to.
                 [{"source_id": src["id"], "full_name": pr.get("name"), "title": pr.get("title"),
                   "company": pr.get("company"), "domain": pr.get("domain"),
                   "linkedin_url": pr.get("linkedin"), "country": pr.get("country"),
-                  "icebreaker": pr.get("icebreaker"), "email": pr.get("email"), "status": "new"}],
+                  "icebreaker": pr.get("icebreaker"), "email": pr.get("email")}],
                 "resolution=merge-duplicates,return=minimal"))
             _db_futs.append(_dbex.submit(sb, "POST", "signals", {
                 "signal_type": "engagement", "source": "trigify",
@@ -3514,7 +3517,12 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 return  # stopped on a budget, not on an empty backlog
 
     def _record(page):
-        """Every company on a paid page becomes a signal, budget or no budget."""
+        """Every company on a paid page becomes a signal, budget or no budget.
+
+        The signal row IS the backlog marker, so an insert that gets silently swallowed
+        means a company we paid TheirStack for that nobody will ever enrich. Count real
+        inserts (return=representation), never assume — `signals_dedupe` once collided
+        across sources and quietly ate 33 of 35 companies on a single page."""
         nonlocal signals_n
         from name_hygiene import clean_company_name
         page = [j for j in page if not j.get("date_posted") or j["date_posted"] >= min_posted]
@@ -3546,13 +3554,20 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 "country": j["country"] or None,
             }, prefer="resolution=merge-duplicates,return=minimal")
             # enriched_at stays NULL: this is the backlog marker
-            sb("POST", "signals", {
+            r = sb("POST", "signals", {
                 "signal_type": "hiring", "source": "theirstack", "company_domain": j["domain"],
                 "detected_at": detected,
                 "detail": {"job_title": j["job_title"], "job_url": j["job_url"],
                            "company": jc, "source_id": src["id"]},
-            }, prefer="resolution=ignore-duplicates,return=minimal")
-            signals_n += 1
+            }, prefer="resolution=ignore-duplicates,return=representation")
+            if isinstance(r, list) and r:
+                signals_n += 1
+            else:
+                # bought, but no backlog row exists -> it would never be enriched.
+                # Enrich it inline, right now, rather than lose what we paid for.
+                dropped["unbanked"] = dropped.get("unbanked", 0) + 1
+                if len(prospects) < enrich_budget and companies_tried < company_budget:
+                    _enrich(j["domain"], jc, j["job_title"], j["job_url"])
         return len(fresh)
 
     # Cursor, floored at the start of YESTERDAY (UTC). A daily pull acts only on
@@ -3693,11 +3708,17 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     write_drafts(drafts)
     sb_sync_source(src)
 
+    # NB: no "status" key. This is an UPSERT on (source_id, linkedin_url), and
+    # merge-duplicates writes every column provided — so sending status:"new" reset
+    # already-PUSHED leads back to new, and the next autopilot tick re-contacted them.
+    # (2026-07-08: 52 leads flipped this way in one afternoon.) Omitting the column
+    # lets the 'new' default apply on INSERT while leaving pushed/rejected untouched
+    # on UPDATE. Same reasoning for pushed_to: only the pusher may write it.
     rows = [{"source_id": src["id"], "full_name": x.get("name"), "title": x.get("title"),
              "company": x.get("company"), "domain": x.get("domain"),
              "linkedin_url": x.get("linkedin") or f"unknown:{x.get('name')}",
              "country": x.get("country"), "icebreaker": x.get("icebreaker"),
-             "email": x.get("email"), "status": "new"}
+             "email": x.get("email")}
             for x in prospects]
     if rows:
         sb("POST", "signal_leads?on_conflict=source_id,linkedin_url", rows,
@@ -3806,10 +3827,12 @@ def pull_source(p: dict) -> dict:
     src["broadened"] = False
     write_drafts(drafts)
     sb_sync_source(src)
+    # no "status": merge-duplicates would reset an already-pushed lead to new, and the
+    # next autopilot tick would re-contact them. See pull_hiring_source for the full note.
     rows = [{"source_id": src["id"], "full_name": x.get("name"), "title": x.get("title"),
              "company": x.get("company"), "domain": x.get("domain"),
              "linkedin_url": x.get("linkedin") or f"unknown:{x.get('name')}",
-             "country": x.get("country"), "icebreaker": x.get("icebreaker"), "status": "new"}
+             "country": x.get("country"), "icebreaker": x.get("icebreaker")}
             for x in prospects]
     sb("POST", "signal_leads?on_conflict=source_id,linkedin_url", rows,
        prefer="resolution=merge-duplicates,return=minimal")

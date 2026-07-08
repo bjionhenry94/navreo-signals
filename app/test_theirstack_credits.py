@@ -142,7 +142,8 @@ def test_daily_cap_blocks():
 class FakeSB:
     """Just enough PostgREST to run pull_hiring_source offline."""
 
-    def __init__(self, leads_today=0):
+    def __init__(self, leads_today=0, swallow_all=False):
+        self.swallow_all = swallow_all   # simulate signals_dedupe eating every insert
         self.signals = []          # {id, company_domain, detail, enriched_at}
         self.leads = []
         self.leads_today = leads_today
@@ -160,12 +161,14 @@ class FakeSB:
         if method == "GET" and t == "signals":               # the 90-day re-touch skip
             return [{"company_domain": s["company_domain"]} for s in self.signals]
         if method == "POST" and t == "signals":
-            if any(s["company_domain"] == body["company_domain"] for s in self.signals):
-                return []                                     # ignore-duplicates
-            self.signals.append({"id": self._next, "company_domain": body["company_domain"],
-                                 "detail": body["detail"], "enriched_at": None})
+            if self.swallow_all or any(s["company_domain"] == body["company_domain"]
+                                       for s in self.signals):
+                return []                       # ignore-duplicates -> no row returned
+            row = {"id": self._next, "company_domain": body["company_domain"],
+                   "detail": body["detail"], "enriched_at": None}
+            self.signals.append(row)
             self._next += 1
-            return []
+            return [row]                        # return=representation -> the inserted row
         if method == "PATCH" and t == "signals":
             ids = {int(x) for x in path.split("in.(")[1].rstrip(")").split(",") if x}
             for s in self.signals:
@@ -174,6 +177,8 @@ class FakeSB:
             return []
         if method == "POST" and t == "signal_leads":
             self.leads += body if isinstance(body, list) else [body]
+            return []
+        if method == "PATCH" and t == "signal_leads":
             return []
         return []                                             # companies / sources / signal_sources
 
@@ -279,6 +284,84 @@ def test_daily_leads_split_evenly():
               server._daily_lead_share(mixed[0], mixed) == 80, server._daily_lead_share(mixed[0], mixed))
     finally:
         server.SIGNAL_DAILY_LEADS = orig
+
+
+def test_lead_upsert_never_resets_pushed_status():
+    """signal_leads is upserted on (source_id, linkedin_url) with merge-duplicates, so
+    every column in the body is written on a re-find. Sending status:"new" therefore
+    reset already-PUSHED leads back to new, and the next autopilot tick re-contacted
+    them. 52 real leads were flipped this way on 2026-07-08 before it was caught."""
+    pages = [[job(i, "2026-07-07T10:00:00Z", f"co-{i}.com") for i in range(5)]]
+    fake = FakeSB(leads_today=0)
+    saved = {k: getattr(server, k) for k in
+             ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
+              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "_theirstack_meter")}
+    server.sb = fake
+    server.http_json = Recorder(pages)
+    server.theirstack_credits_today = lambda: 0
+    server._theirstack_meter = lambda *a, **k: None
+    server.is_suppressed = lambda *a, **k: False
+    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.read_json_list = lambda *a, **k: []
+    n = {"i": 0}
+    server.dm_find_by_domain = lambda d, tt, m: ([] if m <= 0 else
+        [{"name": f"P{n.__setitem__('i', n['i'] + 1) or n['i']}", "title": "VP Sales",
+          "company": "Acme", "domain": d, "linkedin": f"https://li/{n['i']}"}])
+    server.find_email = lambda p: f"{p['name'].lower()}@{p['domain']}"
+    try:
+        src = build_source(10)
+        server.pull_hiring_source(src, [src])
+        check("the pull writes some leads", len(fake.leads) > 0, len(fake.leads))
+        check("no lead row carries a 'status' key (merge would clobber pushed)",
+              all("status" not in r for r in fake.leads),
+              [r for r in fake.leads if "status" in r][:1])
+        check("nor 'pushed_to' — only the pusher may write it",
+              all("pushed_to" not in r for r in fake.leads))
+    finally:
+        for k, v in saved.items():
+            setattr(server, k, v)
+
+
+def test_swallowed_signal_still_enriches():
+    """signals_dedupe once collided across sources and silently ate 33 of 35 companies
+    on a paid page: the row IS the backlog marker, so no row meant nobody ever enriched
+    a company we had paid TheirStack for. The index is widened, but the pull must not
+    depend on that -- an insert that returns no row is enriched inline instead."""
+    pages = [[job(i, "2026-07-07T10:00:00Z", f"co-{i}.com") for i in range(20)]]
+    fake = FakeSB(leads_today=0, swallow_all=True)
+    saved = {k: getattr(server, k) for k in
+             ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
+              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "_theirstack_meter")}
+    server.sb = fake
+    server.http_json = Recorder(pages)
+    server.theirstack_credits_today = lambda: 0
+    server._theirstack_meter = lambda *a, **k: None
+    server.is_suppressed = lambda *a, **k: False
+    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.read_json_list = lambda *a, **k: []
+    n = {"i": 0}
+
+    def dm(domain, dm_titles, max_dms):
+        n["i"] += 1
+        return [] if max_dms <= 0 else [{"name": f"P{n['i']}", "title": "VP Sales",
+                                         "company": "Acme", "domain": domain,
+                                         "linkedin": f"https://li/{n['i']}"}]
+
+    server.dm_find_by_domain = dm
+    server.find_email = lambda p: f"{p['name'].lower()}@{p['domain']}"
+    try:
+        src = build_source(10)
+        res = server.pull_hiring_source(src, [src])
+        check("every signal insert was swallowed", len(fake.signals) == 0, len(fake.signals))
+        check("paid companies are still enriched inline",
+              len(res.get("prospects") or []) == 10, len(res.get("prospects") or []))
+        check("and the loss is reported, not hidden",
+              (res.get("dropped") or {}).get("unbanked", 0) > 0, res.get("dropped"))
+    finally:
+        for k, v in saved.items():
+            setattr(server, k, v)
 
 
 def test_discovery_floor_is_yesterday():
@@ -408,7 +491,7 @@ def test_backlog_drained_before_buying():
 if __name__ == "__main__":
     print("TheirStack credit-cursor + daily-budget regression lock\n")
     for t in (test_cursor_round_trip, test_filtered_page_still_advances_cursor, test_daily_cap_blocks,
-              test_daily_leads_split_evenly, test_discovery_floor_is_yesterday, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
+              test_daily_leads_split_evenly, test_lead_upsert_never_resets_pushed_status, test_swallowed_signal_still_enriches, test_discovery_floor_is_yesterday, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
               test_backlog_drained_before_buying):
         print(t.__name__)
         t()
