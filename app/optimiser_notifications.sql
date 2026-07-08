@@ -52,7 +52,12 @@ CREATE TABLE IF NOT EXISTS optimiser_notifications (
   sent_pos_ratio numeric,
   completion_pct numeric,
   reply_rate numeric,
-  status text not null default 'new' check (status in ('new','acknowledged','actioned','dismissed')),
+  -- 'resolved' (v3, 2026-07-08): auto-set by build_notifications.py's
+  -- retirement pass when a 'new' finding's key is no longer emitted by the
+  -- latest run (never applied to acknowledged/actioned/dismissed rows, which
+  -- are CSM-owned state). Flipped back to 'new' if the same key reappears in
+  -- a later run.
+  status text not null default 'new' check (status in ('new','acknowledged','actioned','dismissed','resolved')),
   created_at timestamptz not null default now(),
   actioned_at timestamptz,
   unique(campaign_id, finding_type, title)
@@ -82,3 +87,27 @@ ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_actio
 ALTER TABLE optimiser_notifications DROP CONSTRAINT IF EXISTS optimiser_notifications_section_check;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_section_check
   CHECK (section is null or section between 0 and 7);
+
+-- v3 (2026-07-08): widen the status check constraint to add 'resolved' (see
+-- the retirement-pass note on the `status` column above). ALTER TABLE can't
+-- modify a CHECK in place, so find whichever constraint is actually on
+-- `status` (by definition text, not by an assumed name - a hand-run SQL
+-- editor session could have named it differently than the DDL above) and
+-- drop + re-add it. Wrapped in a DO block so the DROP is a no-op if no such
+-- constraint exists; safe to re-run.
+DO $$
+DECLARE
+  con_name text;
+BEGIN
+  SELECT con.conname INTO con_name
+  FROM pg_constraint con
+  JOIN pg_class rel ON rel.oid = con.conrelid
+  WHERE rel.relname = 'optimiser_notifications'
+    AND con.contype = 'c'
+    AND pg_get_constraintdef(con.oid) LIKE '%status%';
+  IF con_name IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE optimiser_notifications DROP CONSTRAINT %I', con_name);
+  END IF;
+END $$;
+ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_status_check
+  CHECK (status in ('new','acknowledged','actioned','dismissed','resolved'));

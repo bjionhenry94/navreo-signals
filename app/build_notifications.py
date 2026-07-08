@@ -409,6 +409,34 @@ ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_secti
   CHECK (section is null or section between 0 and 7);
 """
 
+# v3 (2026-07-08): retirement pass. `status` gains 'resolved' - a finding the
+# latest run no longer emits (and that a CSM never touched, i.e. still 'new')
+# is auto-retired rather than lingering forever. ALTER TABLE can't modify a
+# CHECK constraint in place, so this drops whichever check constraint is on
+# `status` (found via pg_constraint, not assumed by name - the DDL below names
+# it explicitly but a hand-run SQL editor session could have named it
+# differently) and re-adds it with the widened value list. Wrapped in a DO
+# block so dropping is a no-op when no such constraint exists, making the
+# whole thing safe to run on every start.
+STATUS_MIGRATION_SQL = """
+DO $$
+DECLARE
+  con_name text;
+BEGIN
+  SELECT con.conname INTO con_name
+  FROM pg_constraint con
+  JOIN pg_class rel ON rel.oid = con.conrelid
+  WHERE rel.relname = 'optimiser_notifications'
+    AND con.contype = 'c'
+    AND pg_get_constraintdef(con.oid) LIKE '%status%';
+  IF con_name IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE optimiser_notifications DROP CONSTRAINT %I', con_name);
+  END IF;
+END $$;
+ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_status_check
+  CHECK (status in ('new','acknowledged','actioned','dismissed','resolved'));
+"""
+
 
 def table_exists() -> bool:
     rows = sb("GET", f"{TABLE}?limit=1")
@@ -425,10 +453,22 @@ def ensure_table() -> bool:
                   "then re-run this script.")
             return False
         print(f"Table `{TABLE}` created successfully.")
+        # SQL_FILE's CREATE TABLE already has the widened status check, but run
+        # the v3 migration too as a belt-and-braces safety net (idempotent).
+        run_mgmt_sql(STATUS_MIGRATION_SQL, "status v3 migration (post-create safety net)")
         return True  # fresh v2 table, no migration needed
     print(f"Table `{TABLE}` exists - applying idempotent v2 column migration...")
-    if run_mgmt_sql(MIGRATION_SQL, "v2 migration"):
+    v2_ok = run_mgmt_sql(MIGRATION_SQL, "v2 migration")
+    if v2_ok:
         print("  v2 migration applied (ADD COLUMN IF NOT EXISTS + finding_type check).")
+    status_ok = run_mgmt_sql(STATUS_MIGRATION_SQL, "status v3 migration (widen to include 'resolved')")
+    if status_ok:
+        print("  status check constraint widened to allow 'resolved'.")
+    else:
+        print(f"  ! status constraint migration failed - the retirement pass's PATCH to "
+              f"status=resolved will fail against the DB (23514 check violation) until the "
+              f"DO block in {SQL_FILE} is run by hand.")
+    if v2_ok:
         return True
     # Verify the columns are already there (migration may have run before)
     probe = sb("GET", f"{TABLE}?select=section,block_number,action_type,api_safe,"
@@ -1092,6 +1132,85 @@ def upsert_findings(rows: list[dict]) -> int:
     return total
 
 
+# -- retirement pass ----------------------------------------------------------
+# The report regenerates fresh every run, but the upsert only ever adds/updates
+# rows for keys this run still emits - a finding that stops firing (campaign
+# paused, variant fixed, completion moved on, etc.) has no representation in
+# `all_rows` at all, so without this pass its row would just sit at whatever
+# status it last had forever. This pass diffs the emitted-key set against the
+# table's actual state and does exactly two things, neither of which ever
+# touches a CSM-owned status (acknowledged/actioned/dismissed):
+#   1. a 'new' row whose key is NOT emitted this run -> 'resolved'
+#   2. a 'resolved' row whose key IS emitted this run (it came back) -> 'new'
+# `status` is deliberately never part of the general upsert body (see
+# upsert_findings' docstring) - both transitions here are separate, explicit
+# PATCHes so they can never clobber acknowledged/actioned/dismissed state.
+
+PATCH_CHUNK = 100  # ids per `id=in.(...)` PATCH - stays well under any URL length limit
+
+
+def fetch_all_notification_keys() -> list[dict]:
+    """GET id,campaign_id,finding_type,title,status for every row currently in
+    the table, paginated. Returns [] (with a warning) if the table can't be
+    read, so the retirement pass safely no-ops rather than mass-resolving
+    everything on a transient fetch failure."""
+    rows_all: list[dict] = []
+    offset, page_size = 0, 1000
+    while True:
+        page = sb("GET", f"{TABLE}?select=id,campaign_id,finding_type,title,status"
+                          f"&order=id&limit={page_size}&offset={offset}")
+        if not isinstance(page, list):
+            print("  ! could not fetch existing notification rows for the retirement pass "
+                  "- skipping retirement this run (no rows will be resolved or revived).")
+            return []
+        rows_all.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return rows_all
+
+
+def bulk_patch_status(ids: list[str], new_status: str) -> int:
+    """PATCH status for a list of row ids via chunked PostgREST id=in.(...)
+    filters. Body carries ONLY {"status": new_status} - never touches any
+    other column, so created_at/actioned_at/etc are left exactly as they are."""
+    if not ids:
+        return 0
+    total = 0
+    for i in range(0, len(ids), PATCH_CHUNK):
+        chunk = ids[i:i + PATCH_CHUNK]
+        id_list = ",".join(str(x) for x in chunk)
+        result = sb("PATCH", f"{TABLE}?id=in.({id_list})", {"status": new_status},
+                    prefer="return=minimal")
+        failed = result is None or (isinstance(result, dict) and result.get("_error"))
+        if failed:
+            print(f"  ! retirement PATCH to status={new_status} failed for chunk "
+                  f"{i // PATCH_CHUNK + 1} ({len(chunk)} ids) - see error above")
+        else:
+            total += len(chunk)
+    return total
+
+
+def run_retirement_pass(emitted_keys: set) -> tuple[int, int, list[dict]]:
+    """Diff the table's actual state against this run's emitted keys. Returns
+    (resolved_count, revived_count, resolved_rows) - resolved_rows is the list
+    of {id, campaign_id, finding_type, title} that got flipped to 'resolved',
+    for the caller to report by id/title."""
+    existing = fetch_all_notification_keys()
+    if not existing:
+        return 0, 0, []
+
+    def key_of(row: dict) -> tuple:
+        return (row.get("campaign_id"), row.get("finding_type"), row.get("title"))
+
+    stale_rows = [r for r in existing if r.get("status") == "new" and key_of(r) not in emitted_keys]
+    reappeared_rows = [r for r in existing if r.get("status") == "resolved" and key_of(r) in emitted_keys]
+
+    resolved_n = bulk_patch_status([r["id"] for r in stale_rows], "resolved")
+    revived_n = bulk_patch_status([r["id"] for r in reappeared_rows], "new")
+    return resolved_n, revived_n, stale_rows
+
+
 # -- main ---------------------------------------------------------------------
 
 def main() -> None:
@@ -1159,6 +1278,16 @@ def main() -> None:
 
     upserted = upsert_findings(all_rows)
     print(f"\nUpserted {upserted} rows into `{TABLE}` (run date {date.today().isoformat()}).")
+
+    emitted_keys = {(r["campaign_id"], r["finding_type"], r["title"]) for r in all_rows}
+    resolved_n, revived_n, resolved_rows = run_retirement_pass(emitted_keys)
+    print(f"\nRetirement pass: {resolved_n} row(s) resolved (no longer emitted this run), "
+          f"{revived_n} row(s) revived new -> resolved rows that reappeared.")
+    for r in resolved_rows[:50]:
+        print(f"  resolved: id={r['id']} campaign_id={r['campaign_id']} "
+              f"finding_type={r['finding_type']} title={r['title']!r}")
+    if len(resolved_rows) > 50:
+        print(f"  ... and {len(resolved_rows) - 50} more")
 
     if _UNMATCHED_CLIENTS:
         print("\nclient_id unmatched (free-text `client` value -> finding rows this run, "

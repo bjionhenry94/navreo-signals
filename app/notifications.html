@@ -146,6 +146,7 @@
           <option value="acknowledged">Acknowledged</option>
           <option value="actioned">Actioned</option>
           <option value="dismissed">Dismissed</option>
+          <option value="resolved">Resolved</option>
         </select>
         <select class="sel" id="priorityFilter">
           <option value="all">All priorities</option>
@@ -200,8 +201,15 @@ document.getElementById("rail").outerHTML = renderRail("notifications");
    typed PAUSE confirmation). No full re-render after any action — only the
    touched DOM node is patched in place. */
 
-const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Actioned", dismissed: "Dismissed" };
-const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n" };
+const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Actioned", dismissed: "Dismissed", resolved: "Resolved" };
+const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n", resolved: "n" };
+const STATUS_TOOLTIP = { resolved: "No longer flagged by the latest optimiser run" };
+/* A row is "retired" (visually dimmed, excluded from open counts wherever
+   dismissed is) if it's either explicitly dismissed by a CSM or auto-resolved
+   because the latest optimiser run no longer emits it. Manual status changes
+   still work on a resolved row (see actionBtn below) - only the styling and
+   grouping match dismissed. */
+function isRetiredStatus(s) { return s === "dismissed" || s === "resolved"; }
 const PRIORITY_PILL_CLASS = { High: "r", Medium: "a", Low: "n" };
 
 let all = [];                 // every row from the last successful fetch
@@ -336,7 +344,8 @@ function priorityPill(p) {
   return `<span class="pill ${cls}">${esc(p || "No priority")}</span>`;
 }
 function statusPillN(s) {
-  return `<span class="pill ${STATUS_PILL_CLASS[s] || "n"}"><span class="dot"></span>${esc(STATUS_LABEL[s] || s || "Unknown")}</span>`;
+  const tip = STATUS_TOOLTIP[s];
+  return `<span class="pill ${STATUS_PILL_CLASS[s] || "n"}"${tip ? ` title="${esc(tip)}"` : ""}><span class="dot"></span>${esc(STATUS_LABEL[s] || s || "Unknown")}</span>`;
 }
 
 /* ══ Section renderers — table shapes and headings match SKILL.md's
@@ -350,7 +359,7 @@ function section1(rows) {
     return (b.sent_pos_ratio || 0) - (a.sent_pos_ratio || 0);
   });
   const body = sorted.map((n, i) => `
-    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
       <td>${i + 1}</td>
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${fmt(n.sent)}</td>
@@ -365,7 +374,7 @@ function section1(rows) {
 function section2(rows) {
   const sorted = [...rows].sort((a, b) => (a.sent_pos_ratio ?? 0) - (b.sent_pos_ratio ?? 0));
   const body = sorted.map((n, i) => `
-    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
       <td>${i + 1}</td>
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${fmt(n.sent)}</td>
@@ -383,7 +392,7 @@ function section3(rows) {
   const body = sorted.map((n) => {
     const leads = parseLeads(n.detail);
     return `
-    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${fmt(n.sent)}</td>
       ${anyLeads ? `<td>${leads ? fmt(Number(leads.replace(/,/g, ""))) : "–"}</td>` : ""}
@@ -433,7 +442,7 @@ function section4(rows, ctxMap) {
       const trs = variantRows.map((n) => {
         const p = parseVariantTitle(n.title);
         const angle = parseAngle(n.detail);
-        return `<tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+        return `<tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
           <td>Email ${esc(p.email || "?")}</td>
           <td>${esc(p.variant || "–")}</td>
           <td>${fmt(n.sent)}</td>
@@ -454,7 +463,7 @@ function section4(rows, ctxMap) {
 function section5(rows) {
   const sorted = [...rows].sort((a, b) => (a.reply_rate ?? 0) - (b.reply_rate ?? 0));
   const body = sorted.map((n) => `
-    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${fmt(n.sent)}</td>
       <td>${Number.isFinite(n.replied) ? fmt(n.replied) : "–"}</td>
@@ -473,7 +482,7 @@ function section6(rows) {
     const bugType = parseBugType(n.detail);
     const angle = parseAngle(n.detail);
     const notes = `Email ${esc(p.email || "?")} Var ${esc(p.variant || "–")}${angle ? `: ${esc(angle)}` : ""}`;
-    return `<tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+    return `<tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${esc(bugType)}</td>
       <td>${notes}</td>
@@ -488,7 +497,7 @@ function section6(rows) {
 function actionBlockHTML(n) {
   const bullets = parseActionBullets(n.detail);
   const cls = ["action-block"];
-  if (n.status === "dismissed") cls.push("dismissed");
+  if (isRetiredStatus(n.status)) cls.push("dismissed");
   const showPause = !!n.api_safe;
   const showCopy = !!n.claude_prompt;
   return `<div class="${cls.join(" ")}" id="ab-${esc(String(n.id))}" data-id="${esc(String(n.id))}">
