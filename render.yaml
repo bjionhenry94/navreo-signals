@@ -47,3 +47,14 @@ services:
     startCommand: python app/run_daily.py
     envVars:
       - fromGroup: navreo-secrets
+
+  # Daily Smartlead mailbox -> Supabase snapshot (mailboxes + mailbox_stats_daily).
+  - type: cron
+    name: navreo-mailbox-sync
+    runtime: python
+    plan: starter
+    schedule: "30 4 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/sync_mailboxes.py
+    envVars:
+      - fromGroup: navreo-secrets
