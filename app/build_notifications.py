@@ -321,6 +321,30 @@ def to_int(val) -> int:
 
 TAG_RE = re.compile(r"<[^>]+>")
 DASH_RE = re.compile(r"[—–‒―]")  # em/en/figure/horizontal-bar dashes
+SPINTAX_RE = re.compile(r"\{([^{}|]*)(?:\|[^{}]*)*\}")
+
+
+def _spintax_first_alt(m: "re.Match") -> str:
+    """Pick the first non-empty alternative from a {a|b|c} group (handles
+    {|x|y} where the first alternative is blank)."""
+    for alt in m.group(0)[1:-1].split("|"):
+        if alt.strip():
+            return alt
+    return ""
+
+
+def resolve_spintax(s: str) -> str:
+    """Resolve {a|b|c} spintax groups to their first (non-empty) alternative,
+    applied iteratively so nested groups resolve inside-out. Never leaves raw
+    alternation syntax in plain-English output."""
+    for _ in range(10):
+        if "{" not in s or "}" not in s:
+            break
+        new_s = SPINTAX_RE.sub(_spintax_first_alt, s)
+        if new_s == s:
+            break
+        s = new_s
+    return s
 
 
 def clean_text(s) -> str:
@@ -330,6 +354,7 @@ def clean_text(s) -> str:
         return ""
     s = html_mod.unescape(TAG_RE.sub(" ", str(s)))
     s = DASH_RE.sub("-", s)
+    s = resolve_spintax(s)
     return re.sub(r"\s+", " ", s).strip()
 
 
