@@ -2906,6 +2906,19 @@ def _theirstack_meter(source_id, credits: int) -> None:
         pass
 
 
+def _parse_iso(s) -> "object | None":
+    """TheirStack stamps `discovered_at` as '2026-07-08T05:51:32.664000' — sometimes
+    with a trailing Z, sometimes without. Parse to an aware UTC datetime, or None."""
+    from datetime import datetime, timezone
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def _discovered_watermark(raw: list) -> tuple[str | None, list]:
     """Newest `discovered_at` in a RAW (unfiltered) response, plus the ids sitting
     exactly on it. Computed before client-side filtering on purpose: a page whose
@@ -3321,10 +3334,11 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     """The TheirStack hiring pipeline, server-side and idempotent. Two budgets,
     deliberately separate, because they bill against different providers:
 
-      BUY (TheirStack, 1 credit per job) — page the matching window via an ascending
-      discovered_at cursor until this source's share of today's leads is in, or the
-      window is dry. Record every new company as a signal. Resumes next tick where
-      it stopped, re-buying nothing.
+      BUY (TheirStack, 1 credit per job) — page via an ascending discovered_at cursor,
+      floored at the start of yesterday, until this source's share of today's leads is
+      in or the day's discoveries are exhausted. A pull acts only on jobs discovered
+      the day before: older posts are stale signal and are never bought. Records every
+      new company as a signal. Resumes next tick where it stopped, re-buying nothing.
 
       ENRICH (AI-ARK + Prospeo, billed per person) — drain the unenriched signal
       backlog to empty before buying another page. A company is marked enriched
@@ -3541,12 +3555,24 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
             signals_n += 1
         return len(fresh)
 
-    # Cursor. No cursor yet = first pull: start at the beginning of the freshness
-    # window and walk forward, so page one is the OLDEST in-window post rather
-    # than an arbitrary slice of the newest.
-    cursor = src.get("last_discovered_at") or \
-        (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    bids = [i for i in (src.get("last_discovered_ids") or []) if isinstance(i, int)]
+    # Cursor, floored at the start of YESTERDAY (UTC). A daily pull acts only on
+    # jobs TheirStack discovered the day before; anything older is stale signal and
+    # is never bought, however many credits are left. The floor also bounds a brand
+    # new source (no cursor) and a source that has been paused for a week: neither
+    # can walk backwards into a 30-day window and spend a fortune on old posts.
+    #
+    # The stored cursor wins whenever it is NEWER than the floor -- that is the
+    # normal case within a day, and it is what stops the 3-hourly ticks re-buying
+    # each other's jobs. The boundary ids only make sense against the stored cursor.
+    floor_dt = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    stored_dt = _parse_iso(src.get("last_discovered_at"))
+    if stored_dt and stored_dt >= floor_dt:
+        cursor = src["last_discovered_at"]
+        bids = [i for i in (src.get("last_discovered_ids") or []) if isinstance(i, int)]
+    else:
+        cursor = floor_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        bids = []   # a fresh floor has no boundary to exclude
 
     while True:
         _drain_backlog()                       # paid inventory first, always
@@ -3684,7 +3710,8 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 f"Scanned {signals_n} hiring companies but kept no leads"
                 + (f" - {drop_note}" if drop_note else " - no decision-maker contacts surfaced yet")
                 + ". The signals are saved; it retries daily.",
-                "total": total_jobs, "signals": signals_n, "dropped": dropped}
+                "total": total_jobs, "signals": signals_n, "jobs_bought": bought,
+                "companies_scanned": companies_tried, "dropped": dropped}
     tail = f" ({left_over} companies already bought and queued for the next run)" if left_over else ""
     dm_word = "decision-maker" if len(prospects) == 1 else "decision-makers"
     notices = []

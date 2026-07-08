@@ -281,6 +281,63 @@ def test_daily_leads_split_evenly():
         server.SIGNAL_DAILY_LEADS = orig
 
 
+def test_discovery_floor_is_yesterday():
+    """A daily pull acts only on jobs discovered the day before. The stored cursor
+    wins while it is fresher than that floor (so 3-hourly ticks don't re-buy each
+    other); a stale or absent cursor is clamped UP to the floor, never walked back
+    into a 30-day window."""
+    from datetime import datetime, timezone, timedelta
+    floor = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+
+    def cursor_sent(stored, bids=(1, 2)):
+        fake = FakeSB(leads_today=0)
+        src = build_source()
+        if stored:
+            src["last_discovered_at"] = stored
+            src["last_discovered_ids"] = list(bids)
+        saved = {k: getattr(server, k) for k in
+                 ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
+                  "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+                  "_theirstack_meter")}
+        server.sb = fake
+        server.http_json = Recorder([[]])          # zero jobs: we only want the request body
+        server.theirstack_credits_today = lambda: 0
+        server._theirstack_meter = lambda *a, **k: None
+        server.is_suppressed = lambda *a, **k: False
+        server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+        server.read_json_list = lambda *a, **k: []
+        server.dm_find_by_domain = lambda *a, **k: []
+        server.find_email = lambda p: None
+        try:
+            server.pull_hiring_source(src, [src])
+            return server.http_json.bodies[0]
+        finally:
+            for k, v in saved.items():
+                setattr(server, k, v)
+
+    fresh = (floor + timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%SZ")   # today
+    b = cursor_sent(fresh)
+    check("a cursor newer than the floor is kept", b["discovered_at_gte"] == fresh, b["discovered_at_gte"])
+    check("...and its boundary ids come with it", b.get("job_id_not") == [1, 2])
+
+    stale = (floor - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ")     # paused a week
+    b = cursor_sent(stale)
+    check("a stale cursor is clamped up to yesterday, not walked back",
+          b["discovered_at_gte"] == floor.strftime("%Y-%m-%dT%H:%M:%SZ"), b["discovered_at_gte"])
+    check("...and its boundary ids are dropped (no boundary at a fresh floor)",
+          "job_id_not" not in b)
+
+    b = cursor_sent(None)
+    check("a brand-new source starts at the floor, never 30 days back",
+          b["discovered_at_gte"] == floor.strftime("%Y-%m-%dT%H:%M:%SZ"), b["discovered_at_gte"])
+
+    check("_parse_iso handles TheirStack's Z-less microsecond stamps",
+          server._parse_iso("2026-07-08T05:51:32.664000") is not None
+          and server._parse_iso("2026-07-08T05:51:32.664000Z") is not None
+          and server._parse_iso("") is None and server._parse_iso("junk") is None)
+
+
 def test_preview_stays_free():
     """The preview must remain a blurred sample: 0 credits, no cursor, no pagination.
     Only the live pull is allowed to purchase."""
@@ -351,7 +408,7 @@ def test_backlog_drained_before_buying():
 if __name__ == "__main__":
     print("TheirStack credit-cursor + daily-budget regression lock\n")
     for t in (test_cursor_round_trip, test_filtered_page_still_advances_cursor, test_daily_cap_blocks,
-              test_daily_leads_split_evenly, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
+              test_daily_leads_split_evenly, test_discovery_floor_is_yesterday, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
               test_backlog_drained_before_buying):
         print(t.__name__)
         t()
