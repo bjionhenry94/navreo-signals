@@ -24,27 +24,51 @@
 .note .nums { display: flex; gap: 18px; margin-top: 10px; }
 .note .nums .nv { font-family: var(--font-display); font-size: 20px; line-height: 1; }
 .note .nums .nl { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
-.decide { display: flex; gap: 7px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 200px; }
-.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 16px; flex-wrap: wrap; }
+.decide { display: flex; gap: 7px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 220px; }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 4px; flex-wrap: wrap; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.bar-actions { display: flex; align-items: center; gap: 10px; }
 .sel { border: 1px solid var(--line-2); background: var(--card); border-radius: 10px; padding: 7px 11px; font-size: 12.5px; color: var(--ink-2); font-family: inherit; cursor: pointer; }
-.group-h { display: flex; align-items: center; gap: 9px; margin: 22px 2px 10px; }
-.group-h:first-child { margin-top: 4px; }
+/* Rank explainer (fix C): a short, always-muted line right under the
+   filter bar that says WHY the list is ordered the way it is, so testers
+   stop reading tier position as "objectively worse" without qualification. */
+.rank-explainer { font-size: 12px; color: var(--ink-3); line-height: 1.55; margin: 0 2px 18px; max-width: 900px; }
+.rank-explainer .jg { border-bottom: 1px dotted var(--ink-3); cursor: help; }
+.note .d .jg { border-bottom: 1px dotted var(--ink-3); cursor: help; }
+
+/* Collapsible campaign groups (fix A). Each group is a bordered card whose
+   header row is always visible (the "compact one-row summary") and whose
+   body (the full finding cards) is shown/hidden via a plain class toggle —
+   never re-rendered — so an in-flight or just-patched card's DOM state is
+   never disturbed by expanding/collapsing a sibling or ancestor group. */
+.group-wrap { border: 1px solid var(--line); border-radius: var(--radius); margin: 0 0 14px; overflow: hidden; background: var(--card); }
+.group-h {
+  display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+  cursor: pointer; user-select: none;
+}
+.group-h:hover { background: var(--bg-sunken); }
+.group-h:focus-visible { outline: none; box-shadow: var(--focus); }
+.group-h .chev { width: 15px; height: 15px; color: var(--ink-3); flex-shrink: 0; transition: transform 0.15s ease; }
+.group-h.expanded .chev { transform: rotate(180deg); }
 .group-h .gdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.group-h .lab { font-size: 13.5px; font-weight: 600; }
+.group-h .lab { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
 .group-h .lab a { color: inherit; text-decoration: none; }
 .group-h .lab a:hover { text-decoration: underline; }
-.group-h .desc { font-size: 12px; color: var(--ink-3); }
-.group-h .gcount { margin-left: auto; font-size: 11.5px; color: var(--brown-400); }
-.state-msg { text-align: center; color: var(--brown-400); font-size: 13px; padding: 60px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.state-msg .spin { width: 18px; height: 18px; border-width: 2.5px; }
-/* Tier section header: sits above every group in a priority tier so the
-   tier boundary (and why the cards above it outrank the cards below it)
-   is unmistakable at a glance. Sticky-ish so it stays legible while
-   scrolling through a long tier. */
+.group-h .desc { font-size: 12px; color: var(--ink-3); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-h .gcount { font-size: 11.5px; color: var(--brown-400); white-space: nowrap; }
+.group-h .gratio { font-size: 11px; color: var(--ink-3); white-space: nowrap; border-bottom: 1px dotted var(--ink-3); cursor: help; }
+.group-h .bulk { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.group-h .bulk-progress { font-size: 11px; color: var(--ink-3); white-space: nowrap; min-width: 46px; }
+.group-body { padding: 2px 14px 14px; }
+.group-body.hidden { display: none; }
+/* Per-card action buttons and bulk-action buttons are the primary tap
+   targets on this page (fix E.3) — 26px measured too small; ~38px min. */
+.decide .btn, .bulk-btn, #ackAllVisibleBtn { min-height: 38px; padding: 8px 16px; box-sizing: border-box; }
+
+.group-h { margin: 0; }
 .tier-h {
-  display: flex; align-items: baseline; gap: 9px;
-  margin: 30px 0 4px; padding: 9px 2px 9px;
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  margin: 26px 0 10px; padding: 9px 2px 9px;
   border-bottom: 2px solid var(--line-2);
   position: sticky; top: 0; background: var(--bg); z-index: 5;
 }
@@ -52,21 +76,40 @@
 .tier-h .tdot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .tier-h .tlab { font-family: var(--font-display); font-size: 16px; font-weight: 400; letter-spacing: -0.01em; }
 .tier-h .tcount { font-size: 12px; color: var(--ink-3); }
-/* Back-to-top floating button (fix 3): hidden until the page has been
-   scrolled down some, then a fixed, low-risk affordance back to the
-   summary/filters at the top of a very long findings list. */
-.back-to-top {
+.tier-toggles { margin-left: auto; display: flex; gap: 4px; }
+.tier-toggle {
+  border: none; background: none; color: var(--ink-3);
+  font: 500 11.5px var(--font-sans); cursor: pointer; padding: 5px 7px;
+  text-decoration: underline; text-underline-offset: 2px; border-radius: 6px;
+}
+.tier-toggle:hover { color: var(--ink); background: var(--bg-sunken); }
+.state-msg { text-align: center; color: var(--brown-400); font-size: 13px; padding: 60px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.state-msg .spin { width: 18px; height: 18px; border-width: 2.5px; }
+/* Back-to-top floating button (fix D.2): id-scoped (not just class-scoped)
+   so nothing else on the page can out-specificity these rules. Root cause
+   of the "computed opacity stuck at 0" report: the old rule animated
+   opacity/transform over 0.18s, and on a backgrounded/unfocused tab (or any
+   throttled-frame context) the browser can pause a running transition
+   mid-flight — elapsed transition time never advances, so the interpolated
+   opacity never leaves its start value even though the .show class (and
+   its pointer-events/visibility) are already applied. Verified live: with
+   the tab backgrounded, computed opacity read back 0 indefinitely despite
+   .show being present. Fix: drop the timed transition entirely for
+   opacity/visibility/transform so showing/hiding is an instant, one-frame
+   style flip — nothing to get stuck mid-interpolation, ever. */
+#backToTop.back-to-top {
   position: fixed; right: 26px; bottom: 26px; z-index: 80;
   width: 42px; height: 42px; border-radius: 50%;
   border: 1px solid var(--line-2); background: var(--ink); color: var(--cream);
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; box-shadow: 0 4px 14px rgba(20, 17, 14, 0.22);
-  opacity: 0; transform: translateY(10px); pointer-events: none;
-  transition: opacity 0.18s, transform 0.18s;
+  opacity: 0; visibility: hidden; pointer-events: none;
 }
-.back-to-top.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
-.back-to-top:hover { background: var(--orange); }
-.back-to-top svg { width: 18px; height: 18px; }
+#backToTop.back-to-top.show {
+  opacity: 1; visibility: visible; pointer-events: auto;
+}
+#backToTop.back-to-top:hover { background: var(--orange); }
+#backToTop.back-to-top svg { width: 18px; height: 18px; }
 </style>
 </head>
 <body>
@@ -95,11 +138,21 @@
           <option value="Medium">Medium</option>
           <option value="Low">Low</option>
         </select>
-        <select class="sel" id="clientFilter">
-          <option value="all">All clients</option>
-        </select>
+        <!-- Page-local client filter removed — the shared rail client switcher
+             (shell.js, .rail-client select) is now the single source of truth for client
+             scoping; see matchesActiveClient()/passesFilters() below. -->
       </div>
-      <button class="btn sm" id="refreshBtn">Refresh</button>
+      <div class="bar-actions">
+        <button class="btn sm" id="ackAllVisibleBtn" type="button" disabled>Acknowledge all visible (0)</button>
+        <button class="btn sm" id="refreshBtn" type="button">Refresh</button>
+      </div>
+    </div>
+    <div class="rank-explainer">
+      Sorted by <b>priority tier</b> (how urgently a human decision is needed —
+      <span class="jg" title="A hard performance floor: cross it and the finding is flagged to stop or change, not just watched.">kill-thresholds</span>
+      and failing <span class="jg" title="A recommendation on which A/B email variant to keep sending vs. cut.">variant calls</span> rank High),
+      then worst <span class="jg" title="Total emails sent divided by positive replies — lower is better.">sent-per-positive</span> ratio within each tier.
+      A Medium campaign can have a worse raw ratio than a High one.
     </div>
     <div id="list"></div>
   </main>
@@ -124,7 +177,15 @@ const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismisse
 
 let all = [];                 // every row from the last successful fetch
 let loadState = "loading";    // "loading" | "ok" | "error"
-let filters = { status: "all", priority: "all", client: "all" };
+let filters = { status: "all", priority: "all" };
+let clientsList = [];  // dedupeClients(await fetchClientsForSwitcher()) — for resolveClientId() name-matching
+
+/* Per-campaign expand/collapse state (fix A). Keyed the same way as
+   groupAndSort()'s group key. Populated lazily with a smart default the
+   FIRST time a given campaign is seen (High tier -> expanded, everything
+   else -> collapsed); after that, only explicit user clicks change it, so
+   re-renders from a filter change or refresh never fight a manual toggle. */
+const groupExpandState = new Map();
 
 async function loadNotifications() {
   loadState = "loading";
@@ -139,18 +200,18 @@ async function loadNotifications() {
     loadState = "error";
     console.warn("notifications fetch failed", e);
   }
-  populateClientFilter();
   draw();
 }
 
-function populateClientFilter() {
-  const sel = document.getElementById("clientFilter");
-  const prev = sel.value || "all";
-  const clients = [...new Set(all.map((n) => n.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  sel.innerHTML = '<option value="all">All clients</option>' +
-    clients.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  sel.value = prev === "all" || clients.includes(prev) ? prev : "all";
-  filters.client = sel.value;
+/* d.client here is a free-text label (a genuine client name — Navreo, Amplifyy, Arnic —
+   or "Olivia Duncan"/"Unknown", which this prototype never distinguished from a real
+   client). resolveClientId() (shell.js) only matches genuine client names; anything else
+   resolves to null and is treated as "unassigned": always visible under "All clients",
+   hidden once a specific client is selected. */
+function matchesActiveClient(n) {
+  const active = getActiveClient();
+  if (!active) return true;
+  return resolveClientId(n, clientsList) === active;
 }
 
 function priorityRank(p) { return PRIORITY_RANK[p] ?? 3; }
@@ -159,20 +220,33 @@ function priorityClass(p) { return p === "High" ? "pr-high" : p === "Medium" ? "
 function passesFilters(n) {
   if (filters.status !== "all" && n.status !== filters.status) return false;
   if (filters.priority !== "all" && n.priority !== filters.priority) return false;
-  if (filters.client !== "all" && n.client !== filters.client) return false;
+  if (!matchesActiveClient(n)) return false;
   return true;
 }
 
-/* Group by campaign, then rank each group by the HIGHEST-priority OPEN
-   (non-dismissed) finding it holds: High-priority groups first, then
-   Medium, Low, and finally groups whose only open findings are unranked
-   (None) or where everything has been dismissed ("all clear"). Within a
-   group, findings sort High -> Medium -> Low -> None.
+function campaignKeyOf(n) { return String(n.campaign_id ?? n.campaign_name ?? "unknown"); }
+
+/* Group by campaign, then rank each group by the HIGHEST-priority finding
+   among the findings CURRENTLY VISIBLE for that group (i.e. the same set
+   the active filters already produced — `items` here is always
+   `all.filter(passesFilters)`, never the unfiltered full set).
+
+   Fix D.1: earlier this recomputed an "open" (non-dismissed) subset and
+   ranked off THAT, which quietly disagreed with the filter whenever a
+   group's only visible findings had all been dismissed (e.g. status filter
+   = "all", priority filter = "High": every visible item in that group IS
+   High, but if all of them happened to be dismissed, "open" filtered them
+   all out and the group fell back to the "No priority" tier — even though
+   every card on screen for that group had a High pill). Ranking directly
+   off the visible set makes "the group's tier" and "the priority pill on
+   every card you can see in it" impossible to disagree, and it makes tier
+   header counts sum to the same total as the top summary by construction:
+   both are counting campaigns within the identical `items` set.
 
    Within a tier, groups are NOT left in arbitrary order: the campaign with
    the worst sent_pos_ratio ("sent per positive" — higher = worse) among the
    findings that put it in this tier sorts first, then the one with more
-   open High-priority findings, then alphabetically, then — as a final,
+   High-priority findings, then alphabetically, then — as a final,
    ALWAYS-decisive tiebreaker — by campaign id/key ascending. That last step
    is what makes the sort fully deterministic: every comparison above can
    legitimately tie (same ratio, same High count, even the same display
@@ -185,18 +259,21 @@ function passesFilters(n) {
 function groupAndSort(items) {
   const groups = new Map();
   items.forEach((n) => {
-    const key = String(n.campaign_id ?? n.campaign_name ?? "unknown");
+    const key = campaignKeyOf(n);
     if (!groups.has(key)) {
-      groups.set(key, { key, campaignId: n.campaign_id, campaign_name: n.campaign_name, client: n.client, items: [] });
+      // Label unresolved free-text clients (e.g. "Olivia Duncan", "Unknown") as
+      // "Unassigned (<name>)" so they're never mistaken for a real client match —
+      // matchesActiveClient() still keeps them visible under "All clients".
+      const label = resolveClientId(n, clientsList) ? n.client : (n.client ? `Unassigned (${n.client})` : "Unassigned");
+      groups.set(key, { key, campaignId: n.campaign_id, campaign_name: n.campaign_name, client: label, items: [] });
     }
     groups.get(key).items.push(n);
   });
   const list = [...groups.values()];
   list.forEach((g) => {
-    const open = g.items.filter((n) => n.status !== "dismissed");
-    const openRanks = open.map((n) => priorityRank(n.priority)).filter((r) => r < 3);
-    g.rank = openRanks.length ? Math.min(...openRanks) : 3;
-    const tierItems = open.filter((n) => priorityRank(n.priority) === g.rank);
+    const ranks = g.items.map((n) => priorityRank(n.priority));
+    g.rank = ranks.length ? Math.min(...ranks) : 3;
+    const tierItems = g.items.filter((n) => priorityRank(n.priority) === g.rank);
     // Number.isFinite (not `typeof x === "number"`) so a genuinely missing
     // ratio AND a 0-sent/0-positive ratio that computed to NaN are both
     // excluded from the pool — typeof NaN is "number", so the old check let
@@ -205,9 +282,9 @@ function groupAndSort(items) {
     // group with no finite ratio anywhere falls back to -Infinity, which
     // always sorts LAST within its tier: "no data" never outranks a real,
     // measured bad ratio.
-    const ratioPool = (tierItems.length ? tierItems : open).filter((n) => Number.isFinite(n.sent_pos_ratio));
+    const ratioPool = (tierItems.length ? tierItems : g.items).filter((n) => Number.isFinite(n.sent_pos_ratio));
     g.worstRatio = ratioPool.length ? Math.max(...ratioPool.map((n) => n.sent_pos_ratio)) : -Infinity;
-    g.highCount = open.filter((n) => n.priority === "High").length;
+    g.highCount = g.items.filter((n) => n.priority === "High").length;
     g.items = [...g.items].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
   });
   list.sort((a, b) =>
@@ -233,12 +310,28 @@ function groupDotColor(rank) {
   return rank === 0 ? "var(--red)" : rank === 1 ? "var(--amber)" : rank === 2 ? "var(--brown-300)" : "var(--line-2)";
 }
 
+const PRIORITY_TOOLTIP = {
+  High: "High priority — needs a human decision now (kill-threshold crossed, a failing variant call, or a similarly urgent signal).",
+  Medium: "Medium priority — worth a look soon; not urgent.",
+  Low: "Low priority — informational, low urgency.",
+};
 function priorityPill(p) {
   const cls = p === "High" ? "r" : p === "Medium" ? "a" : "n";
-  return `<span class="pill ${cls}">${esc(p || "No priority")}</span>`;
+  const title = PRIORITY_TOOLTIP[p] || "No computed priority for this finding.";
+  return `<span class="pill ${cls}" title="${esc(title)}">${esc(p || "No priority")}</span>`;
 }
 function statusPillN(s) {
   return `<span class="pill ${STATUS_PILL_CLASS[s] || "n"}"><span class="dot"></span>${esc(STATUS_LABEL[s] || s || "Unknown")}</span>`;
+}
+
+/* Cheap jargon tooltips (fix C): after escaping user/API text, wrap the two
+   recurring jargon terms in a dotted-underline span with a plain-English
+   explanation on hover. Runs on already-escaped HTML, so it only ever
+   matches literal words — never touches markup. */
+function annotateJargon(escapedHtml) {
+  return escapedHtml
+    .replace(/\b(kill-threshold(?:s)?)\b/gi, '<span class="jg" title="A hard performance floor — cross it and the finding is flagged to stop or change, not just watched.">$1</span>')
+    .replace(/\b(variant call(?:s)?)\b/gi, '<span class="jg" title="A recommendation on which A/B email variant to keep sending vs. cut.">$1</span>');
 }
 
 function statLine(n) {
@@ -253,7 +346,7 @@ function statLine(n) {
     // (NaN from 0 sent / 0 positive, or an occasional Infinity) has no
     // sensible "sent per positive" to show, so it's dropped rather than
     // rendered as the literal string "NaN"/"Infinity".
-    parts.push([fmt(n.sent_pos_ratio), "sent per positive"]);
+    parts.push([fmt(n.sent_pos_ratio), `<span class="jg" title="Total emails sent divided by positive replies — lower is better.">sent per positive</span>`]);
   }
   if (!parts.length) return "";
   return `<div class="nums">${parts.map(([v, l]) => `<div><div class="nv">${v}</div><div class="nl">${l}</div></div>`).join("")}</div>`;
@@ -277,7 +370,7 @@ function actionBtn(n, target, label, doneLabel) {
   const cls = ["btn", "sm"];
   if (isNextStep && !disabled) cls.push("primary");
   const text = isDone ? doneLabel : label;
-  return `<button class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""}>${esc(text)}</button>`;
+  return `<button type="button" class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""}>${esc(text)}</button>`;
 }
 
 function cardHTML(n, gkey) {
@@ -289,12 +382,12 @@ function cardHTML(n, gkey) {
       <div class="ictile">${ic8("bell")}</div>
       <div style="flex:1;min-width:0">
         <div class="t">
-          ${esc(n.title || "Untitled finding")}
+          ${annotateJargon(esc(n.title || "Untitled finding"))}
           ${priorityPill(n.priority)}
           ${statusPillN(n.status)}
         </div>
-        ${n.detail ? `<div class="d">${esc(n.detail)}</div>` : ""}
-        ${n.suggested_action ? `<div class="d"><b>Suggested:</b> ${esc(n.suggested_action)}</div>` : ""}
+        ${n.detail ? `<div class="d">${annotateJargon(esc(n.detail))}</div>` : ""}
+        ${n.suggested_action ? `<div class="d"><b>Suggested:</b> ${annotateJargon(esc(n.suggested_action))}</div>` : ""}
         ${statLine(n)}
       </div>
       <div class="decide">
@@ -308,7 +401,7 @@ function cardHTML(n, gkey) {
 
 function updateSummary() {
   const el = document.getElementById("summary");
-  if (loadState !== "ok") { el.innerHTML = ""; return; }
+  if (loadState !== "ok") { el.innerHTML = ""; updateGlobalBulkButton(); return; }
   // Campaign count reflects the CURRENTLY VISIBLE (filtered) set, same as the
   // findings count next to it — a narrowed filter should never leave a stale
   // "103 campaigns" sitting next to "Showing 12 of 197 findings".
@@ -316,6 +409,22 @@ function updateSummary() {
   const campaignCount = new Set(shown.map((n) => n.campaign_id ?? n.campaign_name)).size;
   el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${all.length}</b> findings</div>` +
     `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
+  updateGlobalBulkButton();
+}
+
+/* Fix B (global control): keep the "Acknowledge all visible" button's count
+   and enabled state in lockstep with the current filtered view — called
+   from updateSummary(), which itself runs on every load, filter change, and
+   in-place card patch. */
+function updateGlobalBulkButton() {
+  const btn = document.getElementById("ackAllVisibleBtn");
+  if (!btn) return;
+  if (loadState !== "ok") { btn.disabled = true; btn.textContent = "Acknowledge all visible (0)"; return; }
+  if (btn.dataset.busy === "1") return; // mid-bulk-run — leave its progress text alone
+  const shown = all.filter(passesFilters);
+  const n = shown.filter((x) => x.status === "new").length;
+  btn.textContent = `Acknowledge all visible (${n})`;
+  btn.disabled = n === 0;
 }
 
 function draw() {
@@ -338,21 +447,29 @@ function draw() {
   root.innerHTML = renderGroupsWithTierHeaders(groups);
 }
 
-/* Fix 1: visible tier boundaries. groupAndSort() already orders campaigns
+/* Fix A + fix 1 (tier boundaries): groupAndSort() orders campaigns
    High -> Medium -> Low -> No-priority tier, and within each tier by
-   worst-first severity — but nothing on the page said so, so testers
-   couldn't tell "worst in its tier" from "worst overall". Walk the already-
-   sorted groups and drop in a tier header (with a live campaign count)
+   worst-first severity. Walk the already-sorted groups and drop in a tier
+   header (with a live campaign count + Expand all/Collapse all toggles)
    every time the tier changes. A tier with zero surviving campaigns after
-   filtering simply never appears in `groups`, so it's skipped automatically
-   — no separate "is this tier empty" check needed. When a filter narrows
-   the view to a single tier (e.g. priority=High), this naturally renders
-   just that one header, which is the "fine to show just one" case. */
+   filtering simply never appears in `groups`, so it's skipped automatically.
+
+   Each campaign renders as a `.group-wrap` with a compact, always-visible
+   `.group-h` summary row (name, client, worst-priority dot, finding count,
+   worst sent-per-positive ratio, per-group bulk buttons, chevron) and a
+   `.group-body` holding the full finding cards, shown/hidden by a class
+   toggle — never a re-render — so toggling a group never disturbs another
+   card's freshly-patched DOM state (in-flight or otherwise). Default
+   expand/collapse state is decided once per campaign (High tier starts
+   expanded, everything else starts collapsed) and then persists across
+   redraws via `groupExpandState`. */
 function renderGroupsWithTierHeaders(groups) {
   let lastRank = null;
   const counts = new Map();
   groups.forEach((g) => counts.set(g.rank, (counts.get(g.rank) || 0) + 1));
   return groups.map((g) => {
+    if (!groupExpandState.has(g.key)) groupExpandState.set(g.key, g.rank === 0);
+    const expanded = !!groupExpandState.get(g.key);
     let header = "";
     if (g.rank !== lastRank) {
       lastRank = g.rank;
@@ -362,34 +479,183 @@ function renderGroupsWithTierHeaders(groups) {
         <span class="tdot" style="background:${groupDotColor(g.rank)}"></span>
         <span class="tlab">${esc(TIER_LABEL[g.rank] || "Other")}</span>
         <span class="tcount">${n} campaign${n === 1 ? "" : "s"}</span>
+        <span class="tier-toggles">
+          <button type="button" class="tier-toggle" data-rank="${g.rank}" data-action="expand">Expand all</button>
+          <button type="button" class="tier-toggle" data-rank="${g.rank}" data-action="collapse">Collapse all</button>
+        </span>
       </div>`;
     }
+    const hasOpenNew = g.items.some((n2) => n2.status === "new");
+    const ratioHTML = g.worstRatio > -Infinity
+      ? `<span class="gratio" title="Worst sent-per-positive ratio among this campaign's findings in its tier — higher is worse.">${fmt(g.worstRatio)} sent/pos</span>`
+      : "";
     return `${header}
-    <div class="group-h" data-gkey="${esc(g.key)}">
-      <span class="gdot" style="background:${groupDotColor(g.rank)}"></span>
-      <span class="lab">${g.campaignId ? `<a href="campaigns.html#${esc(String(g.campaignId))}">${esc(g.campaign_name || "Unknown campaign")}</a>` : esc(g.campaign_name || "Unknown campaign")}</span>
-      <span class="desc">${esc(g.client || "")}</span>
-      <span class="gcount">${g.items.length} finding${g.items.length === 1 ? "" : "s"}</span>
-    </div>
-    ${g.items.map((n) => cardHTML(n, g.key)).join("")}`;
+    <div class="group-wrap">
+      <div class="group-h${expanded ? " expanded" : ""}" data-gkey="${esc(g.key)}" data-rank="${g.rank}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        <span class="gdot" style="background:${groupDotColor(g.rank)}" title="${esc(TIER_LABEL[g.rank] || "")}"></span>
+        <span class="lab">${g.campaignId ? `<a href="campaigns.html#${esc(String(g.campaignId))}">${esc(g.campaign_name || "Unknown campaign")}</a>` : esc(g.campaign_name || "Unknown campaign")}</span>
+        <span class="desc">${esc(g.client || "")}</span>
+        <span class="gcount">${g.items.length} finding${g.items.length === 1 ? "" : "s"}</span>
+        ${ratioHTML}
+        <span class="bulk">
+          <button type="button" class="btn sm bulk-btn" data-gkey="${esc(g.key)}" data-bulk="acknowledged" ${hasOpenNew ? "" : "disabled"}>Acknowledge all</button>
+          <button type="button" class="btn sm bulk-btn" data-gkey="${esc(g.key)}" data-bulk="dismissed" ${hasOpenNew ? "" : "disabled"}>Dismiss all</button>
+          <span class="bulk-progress" data-gkey="${esc(g.key)}"></span>
+        </span>
+      </div>
+      <div class="group-body${expanded ? "" : " hidden"}" data-gkey="${esc(g.key)}">
+        ${g.items.map((n2) => cardHTML(n2, g.key)).join("")}
+      </div>
+    </div>`;
   }).join("");
 }
 
 document.getElementById("statusFilter").onchange = (e) => { filters.status = e.target.value; draw(); };
 document.getElementById("priorityFilter").onchange = (e) => { filters.priority = e.target.value; draw(); };
-document.getElementById("clientFilter").onchange = (e) => { filters.client = e.target.value; draw(); };
 document.getElementById("refreshBtn").onclick = loadNotifications;
 
+/* --- expand/collapse (fix A) --- direct DOM class toggles, never a draw(),
+   so nothing already patched in place is ever re-rendered by this. */
+function setGroupExpanded(gkey, expanded) {
+  groupExpandState.set(gkey, expanded);
+  const header = document.querySelector(`.group-h[data-gkey="${CSS.escape(gkey)}"]`);
+  const body = document.querySelector(`.group-body[data-gkey="${CSS.escape(gkey)}"]`);
+  if (header) { header.classList.toggle("expanded", expanded); header.setAttribute("aria-expanded", expanded ? "true" : "false"); }
+  if (body) body.classList.toggle("hidden", !expanded);
+}
+function toggleGroup(gkey) { setGroupExpanded(gkey, !groupExpandState.get(gkey)); }
+
+/* --- bulk PATCH runner shared by per-group and global bulk actions (fix B).
+   Sequential (the API is per-id only), patches each card in place as its
+   PATCH lands (reusing the same single-card patch path used by individual
+   actions), disables that card's own buttons while its PATCH is in flight,
+   and keeps going on an individual failure rather than aborting the batch —
+   the caller reports how many failed via a toast. */
+async function bulkPatch(ids, targetStatus, onProgress) {
+  let failed = 0;
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (onProgress) onProgress(i, ids.length);
+    const card = document.getElementById(`ncard-${CSS.escape(String(id))}`);
+    const cardBtns = card ? [...card.querySelectorAll("button[data-target]")] : [];
+    cardBtns.forEach((b) => { b.disabled = true; });
+    try {
+      const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: targetStatus }),
+      });
+      const updated = await res.json();
+      if (!res.ok || (updated && updated.ok === false)) {
+        throw new Error((updated && updated.message) || `HTTP ${res.status}`);
+      }
+      const idx = all.findIndex((n) => String(n.id) === String(id));
+      if (idx >= 0) all[idx] = { ...all[idx], ...updated };
+      applyCardPatch(idx >= 0 ? all[idx] : { ...updated, id });
+    } catch (err) {
+      failed++;
+      cardBtns.forEach((b) => { b.disabled = false; });
+      console.warn("bulk PATCH failed", id, err);
+    }
+  }
+  if (onProgress) onProgress(ids.length, ids.length);
+  return failed;
+}
+
+function refreshGroupBulkAvailability(gkey) {
+  const hasOpenNew = all.some((n) => campaignKeyOf(n) === gkey && n.status === "new" && passesFilters(n));
+  document.querySelectorAll(`.bulk-btn[data-gkey="${CSS.escape(gkey)}"]`).forEach((b) => { b.disabled = !hasOpenNew; });
+}
+
+async function handleGroupBulk(bulkBtn) {
+  const gkey = bulkBtn.dataset.gkey;
+  const targetStatus = bulkBtn.dataset.bulk;
+  const ids = all.filter((n) => campaignKeyOf(n) === gkey && n.status === "new" && passesFilters(n)).map((n) => n.id);
+  if (!ids.length) return;
+  const wrap = bulkBtn.closest(".bulk");
+  const buttons = wrap ? [...wrap.querySelectorAll(".bulk-btn")] : [bulkBtn];
+  const progressEl = wrap ? wrap.querySelector(".bulk-progress") : null;
+  buttons.forEach((b) => { b.disabled = true; });
+  const failed = await bulkPatch(ids, targetStatus, (done, total) => {
+    if (progressEl) progressEl.textContent = done < total ? `${done}/${total}…` : "";
+  });
+  refreshGroupBulkAvailability(gkey);
+  if (failed) protoNote(`${failed} of ${ids.length} action${ids.length === 1 ? "" : "s"} failed — retry those individually`);
+  else protoNote(`Updated ${ids.length} finding${ids.length === 1 ? "" : "s"}`);
+}
+
+document.getElementById("ackAllVisibleBtn").onclick = async (e) => {
+  e.preventDefault();
+  const btn = e.currentTarget;
+  const shown = all.filter(passesFilters);
+  const ids = shown.filter((n) => n.status === "new").map((n) => n.id);
+  if (!ids.length) return;
+  const ok = confirm(`Acknowledge all ${ids.length} currently visible finding${ids.length === 1 ? "" : "s"} with status "New"?\n\nThis only changes status — nothing is deleted.`);
+  if (!ok) return;
+  const originalText = btn.textContent;
+  btn.dataset.busy = "1";
+  btn.disabled = true;
+  const failed = await bulkPatch(ids, "acknowledged", (done, total) => {
+    btn.textContent = done < total ? `Acknowledging ${done}/${total}…` : originalText;
+  });
+  delete btn.dataset.busy;
+  updateGlobalBulkButton();
+  if (failed) protoNote(`${failed} of ${ids.length} action${ids.length === 1 ? "" : "s"} failed — retry those individually`);
+  else protoNote(`Acknowledged ${ids.length} finding${ids.length === 1 ? "" : "s"}`);
+};
+
+/* Single delegated listener for everything inside #list: bulk buttons,
+   tier-level Expand all/Collapse all, the group header row itself
+   (toggle), the campaign-name link (let it navigate), and per-card action
+   buttons. Every branch that isn't a plain navigation stops propagation so
+   a bulk button or a per-card action button can never also trigger the
+   header row's expand/collapse or bubble into a navigation (fix E.1). */
 document.getElementById("list").addEventListener("click", async (e) => {
+  const bulkBtn = e.target.closest(".bulk-btn");
+  if (bulkBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (bulkBtn.disabled) return;
+    await handleGroupBulk(bulkBtn);
+    return;
+  }
+
+  const tierToggle = e.target.closest(".tier-toggle");
+  if (tierToggle) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rank = tierToggle.dataset.rank;
+    const expand = tierToggle.dataset.action === "expand";
+    document.querySelectorAll(`.group-h[data-rank="${rank}"]`).forEach((hdr) => setGroupExpanded(hdr.dataset.gkey, expand));
+    return;
+  }
+
+  const headerRow = e.target.closest(".group-h");
+  if (headerRow) {
+    if (e.target.closest("a")) return; // campaign-name link — let it navigate, don't also toggle
+    toggleGroup(headerRow.dataset.gkey);
+    return;
+  }
+
   const btn = e.target.closest("[data-target]");
   if (!btn || btn.disabled) return;
+  e.preventDefault();
+  e.stopPropagation();
   // The id always comes from the button's own data-nid, read fresh at click
   // time from the exact element the user clicked — never an array index
   // into `all` (which can point at a different row after any re-render).
   const id = btn.dataset.nid;
   const target = btn.dataset.target;
+  const card = btn.closest(".note");
+  // Fix E.2: disable every action button on THIS card (not just the one
+  // clicked) while its PATCH is in flight, so a rapid-fire second click on
+  // a sibling button on the same card can't silently fire no PATCH or race
+  // the first one. Restored on failure; a success replaces the whole card
+  // with fresh, correctly-computed button states anyway.
+  const siblingBtns = card ? [...card.querySelectorAll("button[data-target]")].filter((b) => b !== btn) : [];
   const restore = busyBtn(btn, "Working…");
   if (!restore) return; // already in flight for this button
+  siblingBtns.forEach((b) => { b.dataset.wasDisabled = b.disabled ? "1" : "0"; b.disabled = true; });
   try {
     const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -413,8 +679,19 @@ document.getElementById("list").addEventListener("click", async (e) => {
     applyCardPatch(idx >= 0 ? all[idx] : { ...updated, id });
   } catch (err) {
     restore();
-    protoNote("Couldn't update — " + (err.message || "network error") + ". Nothing changed, try again.");
+    siblingBtns.forEach((b) => { b.disabled = b.dataset.wasDisabled === "1"; delete b.dataset.wasDisabled; });
+    protoNote("Action failed — retry. " + (err.message || "network error"));
   }
+});
+
+// Keyboard support for the clickable group header row (Enter/Space toggles,
+// matching its role="button" semantics).
+document.getElementById("list").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const headerRow = e.target.closest(".group-h");
+  if (!headerRow) return;
+  e.preventDefault();
+  toggleGroup(headerRow.dataset.gkey);
 });
 
 function applyCardPatch(n) {
@@ -433,6 +710,7 @@ function applyCardPatch(n) {
   const tmp = document.createElement("div");
   tmp.innerHTML = cardHTML(n, gkey).trim();
   el.replaceWith(tmp.firstElementChild);
+  if (gkey) refreshGroupBulkAvailability(gkey);
 }
 
 function updateGroupCountAfterRemoval(gkey) {
@@ -441,33 +719,43 @@ function updateGroupCountAfterRemoval(gkey) {
     const remaining = document.querySelectorAll(`.note[data-gkey="${CSS.escape(gkey)}"]`).length;
     const header = document.querySelector(`.group-h[data-gkey="${CSS.escape(gkey)}"]`);
     if (header) {
-      if (remaining === 0) header.remove();
+      if (remaining === 0) header.closest(".group-wrap")?.remove();
       else {
         const countEl = header.querySelector(".gcount");
         if (countEl) countEl.textContent = `${remaining} finding${remaining === 1 ? "" : "s"}`;
       }
     }
+    refreshGroupBulkAvailability(gkey);
   }
   if (!root.querySelector(".note")) {
     root.innerHTML = `<div class="empty">No notifications match these filters.</div>`;
   }
 }
 
-/* Fix 3: back-to-top. All 197 findings can render as one very long flat
-   page with no wayfinding, so surface a small floating button once the
-   reader has scrolled down a bit, and smooth-scroll back to the top (the
-   summary + filters) on click. The page itself scrolls (no inner
-   overflow container on .main), so this is a plain window scroll. */
+/* Fix D.2: back-to-top. All 197 findings used to render as one very long
+   flat page with no wayfinding; with fix A collapsing most groups by
+   default the page is far shorter, but on a still-long High tier (or with
+   filters relaxed) the button remains useful. Smooth-scroll was replaced
+   with an instant jump — reliability over animation, since testers hit the
+   smooth-scroll stalling partway and never reaching the top. */
 const backToTop = document.getElementById("backToTop");
 const BACK_TO_TOP_THRESHOLD = 480;
 function updateBackToTop() {
   backToTop.classList.toggle("show", window.scrollY > BACK_TO_TOP_THRESHOLD);
 }
 window.addEventListener("scroll", updateBackToTop, { passive: true });
-backToTop.onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
+backToTop.onclick = () => window.scrollTo(0, 0);
 updateBackToTop();
 
 loadNotifications();
+/* Populate the free-text -> client-id resolver list once names are available, then
+   re-scope; also re-scope whenever the shared rail switcher changes (this page or
+   another) — the nav links/icons here stay as-is. */
+(async () => {
+  clientsList = dedupeClients(await fetchClientsForSwitcher());
+  draw(); // re-scope now that names are available for resolveClientId()'s free-text match
+})();
+window.addEventListener("navreo:client-changed", () => draw());
 </script>
 </body>
 </html>
