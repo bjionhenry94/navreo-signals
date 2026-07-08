@@ -106,7 +106,11 @@ def test_filtered_page_still_advances_cursor():
 
 # ── 4: the daily cap is a hard stop, and says so ─────────────────────────
 def test_daily_cap_blocks():
-    stub_meter_and_cap(spent_today=server.THEIRSTACK_DAILY_CAP)
+    """The credit cap is an OPT-IN emergency brake (default 0 = off). Spend is
+    normally governed by SIGNAL_DAILY_LEADS, not by a credit ceiling."""
+    orig_cap = server.THEIRSTACK_DAILY_CAP
+    server.THEIRSTACK_DAILY_CAP = 500          # arm it
+    stub_meter_and_cap(spent_today=500)
     called = []
     orig = server.http_json
     try:
@@ -122,8 +126,16 @@ def test_daily_cap_blocks():
         called.clear()
         server.theirstack_jobs(["AE"], ["US"], 11, 500, 30, limit=100)
         check("unknown spend does not block the pull", len(called) == 1)
+
+        # disarmed (0) -> the ledger is never even consulted
+        server.THEIRSTACK_DAILY_CAP = 0
+        server.theirstack_credits_today = lambda: (_ for _ in ()).throw(AssertionError("consulted"))
+        called.clear()
+        server.theirstack_jobs(["AE"], ["US"], 11, 500, 30, limit=100)
+        check("cap off by default: spend governed by leads, not credits", len(called) == 1)
     finally:
         server.http_json = orig
+        server.THEIRSTACK_DAILY_CAP = orig_cap
 
 
 # ── 5-7: pull_hiring_source pages until the DAILY lead budget is filled ──
@@ -166,12 +178,14 @@ class FakeSB:
         return []                                             # companies / sources / signal_sources
 
 
-def build_source(leads_per_day):
+def build_source(leads_per_day=None):
+    params = {"job_titles": ["Account Executive"], "countries": ["United States"],
+              "headcount": "11-200", "days": 30}
+    if leads_per_day:
+        params["leads_per_day"] = leads_per_day
     return {"id": "src-test", "campaign_id": "camp-1", "mechanism": "hiring",
             "icebreaker": "Saw {{company}} hiring a {{job_title}}.",
-            "titles": ["VP Sales"],
-            "config": {"job_titles": ["Account Executive"], "countries": ["United States"],
-                       "headcount": "11-200", "days": 30, "leads_per_day": leads_per_day}}
+            "titles": ["VP Sales"], "config": params}
 
 
 def run_pull(fake, pages, dm_hit_rate=2):
@@ -224,6 +238,47 @@ def test_pages_until_budget_filled():
     check("un-enriched remainder is kept as backlog, not discarded", unenriched > 0, unenriched)
     check("reported backlog matches", src["left_for_next_run"] == unenriched)
     check("cursor persisted for the next tick", bool(src.get("last_discovered_at")))
+
+
+def test_daily_leads_split_evenly():
+    """SIGNAL_DAILY_LEADS is a fleet TOTAL, divided evenly across active hiring
+    sources. Adding a source narrows everyone's share instead of multiplying the
+    bill, and a source's own leads_per_day can only ask for LESS than its share."""
+    orig = server.SIGNAL_DAILY_LEADS
+    server.SIGNAL_DAILY_LEADS = 160
+    try:
+        def src(i, lpd=None, **kw):
+            s = {"id": f"s{i}", "mechanism": "hiring", "config": {}}
+            if lpd:
+                s["config"]["leads_per_day"] = lpd
+            s.update(kw)
+            return s
+
+        four = [src(i) for i in range(4)]
+        check("160 across 4 active sources -> 40 each",
+              server._daily_lead_share(four[0], four) == 40, server._daily_lead_share(four[0], four))
+
+        five = [src(i) for i in range(5)]
+        check("adding a 5th source narrows the share, not the bill",
+              server._daily_lead_share(five[0], five) == 32, server._daily_lead_share(five[0], five))
+
+        one = [src(0)]
+        check("a lone source takes the whole budget", server._daily_lead_share(one[0], one) == 160)
+
+        # a stale/oversized per-source number must not be able to exceed the share
+        greedy = [src(0, lpd=300)] + [src(i) for i in range(1, 4)]
+        check("per-source leads_per_day cannot exceed its even share",
+              server._daily_lead_share(greedy[0], greedy) == 40, server._daily_lead_share(greedy[0], greedy))
+
+        modest = [src(0, lpd=5)] + [src(i) for i in range(1, 4)]
+        check("but a source may ask for less", server._daily_lead_share(modest[0], modest) == 5)
+
+        # deleted / inactive sources don't dilute the split
+        mixed = [src(0), src(1), src(2, deleted_at="2026-07-07"), src(3, active=False)]
+        check("deleted and inactive sources are excluded from the split",
+              server._daily_lead_share(mixed[0], mixed) == 80, server._daily_lead_share(mixed[0], mixed))
+    finally:
+        server.SIGNAL_DAILY_LEADS = orig
 
 
 def test_preview_stays_free():
@@ -296,7 +351,7 @@ def test_backlog_drained_before_buying():
 if __name__ == "__main__":
     print("TheirStack credit-cursor + daily-budget regression lock\n")
     for t in (test_cursor_round_trip, test_filtered_page_still_advances_cursor, test_daily_cap_blocks,
-              test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
+              test_daily_leads_split_evenly, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
               test_backlog_drained_before_buying):
         print(t.__name__)
         t()

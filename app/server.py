@@ -2859,14 +2859,25 @@ def fill_icebreaker(template: str, prospect: dict) -> str:
 # companies on 2026-07-07. Two defences, belt and braces:
 #   1. cursor: `discovered_at_gte` + `job_id_not`, so a tick only pays for jobs
 #      TheirStack discovered since the last successful pull of THIS source.
-#   2. meter + cap: every call's cost is written to provider_usage, and calls
-#      stop once the day's ceiling is hit, so a future regression is bounded
-#      and visible instead of silent.
-THEIRSTACK_DAILY_CAP = int(os.environ.get("THEIRSTACK_DAILY_CAP", "166"))
+#   2. meter: every call's cost is written to provider_usage, so spend is visible
+#      per source per day instead of silent.
+#
+# There is deliberately NO daily credit ceiling by default. Spend is governed by
+# the LEAD budget (SIGNAL_DAILY_LEADS, split across active sources): a pull stops
+# paging the moment its share of today's leads is in, so credits track leads. A
+# credit ceiling on top of that would only ever truncate a source mid-window for
+# reasons the operator never asked for. Set THEIRSTACK_DAILY_CAP > 0 to arm it as
+# an emergency brake — e.g. while debugging a suspected runaway.
+THEIRSTACK_DAILY_CAP = int(os.environ.get("THEIRSTACK_DAILY_CAP", "0"))  # 0 = off
 # Ceiling on jobs ONE pull may buy. The real governor is the source's leads_per_day
 # (we stop paging the moment the day's leads are in); this is the runaway backstop
 # for a source whose window is huge and whose companies rarely yield a DM.
 THEIRSTACK_JOBS_PER_PULL = int(os.environ.get("THEIRSTACK_JOBS_PER_PULL", "1000"))
+# THE governor. Total new leads per DAY across every active hiring source, split
+# evenly between them. Self-adjusting: add a 5th source and each gets a fifth.
+# A source may override with its own `leads_per_day`; unset means "take an even
+# share". Credits follow leads at roughly 2.35 credits per lead.
+SIGNAL_DAILY_LEADS = int(os.environ.get("SIGNAL_DAILY_LEADS", "160"))
 # Companies enriched per lead, worst case. AI-ARK/Prospeo bill per person; measured
 # yield is ~45% of companies producing a verified-email DM, so ~2 companies per lead.
 COMPANIES_PER_LEAD_HEADROOM = int(os.environ.get("SIGNAL_COMPANIES_PER_LEAD", "4"))
@@ -2918,7 +2929,7 @@ def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=N
     `discovered_at_gte` cursor via `extra` (see pull_hiring_source) so a repeat
     tick pays only for genuinely new posts. Every call is metered, and the day's
     spend is capped by THEIRSTACK_DAILY_CAP unless `cap=False`."""
-    if cap:
+    if cap and THEIRSTACK_DAILY_CAP > 0:   # 0 = brake not armed; leads govern spend
         spent = theirstack_credits_today()
         if spent is not None and spent >= THEIRSTACK_DAILY_CAP:
             return [], {"_error": f"TheirStack daily credit cap reached "
@@ -3251,6 +3262,28 @@ def _prospeo_dms_by_domain(domain, dm_titles, max_dms):
     return people[:max_dms]
 
 
+def _daily_lead_share(src: dict, drafts: list) -> int:
+    """This source's slice of the fleet-wide daily lead budget.
+
+    SIGNAL_DAILY_LEADS is a TOTAL across every active hiring source, divided evenly,
+    so adding a source narrows everyone's share rather than multiplying the bill.
+
+    A source's own `leads_per_day` can only ask for LESS than its share, never more.
+    The even split is the ceiling: it is the thing the operator actually set, and it
+    is enforced in code rather than in the source docs because the running app
+    rewrites those docs from its own copy (an out-of-band edit does not survive)."""
+    active = [d for d in drafts
+              if (d.get("mechanism") or d.get("type")) == "hiring"
+              and d.get("active", True) and not d.get("deleted_at")]
+    share = max(1, SIGNAL_DAILY_LEADS // max(1, len(active) or 1))
+    cfg = {**(src.get("config") or {}), **(src.get("params") or {})}
+    try:
+        want = int(cfg.get("leads_per_day") or 0)
+    except (TypeError, ValueError):
+        want = 0
+    return max(1, min(share, want)) if want > 0 else share
+
+
 def _leads_today(source_id: str) -> int:
     """signal_leads this source has already produced since 00:00 UTC. `leads_per_day`
     is a DAILY budget, but the pull runs 8x a day (pg_cron `0 */3 * * *`), so a
@@ -3288,13 +3321,17 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     """The TheirStack hiring pipeline, server-side and idempotent. Two budgets,
     deliberately separate, because they bill against different providers:
 
-      BUY (TheirStack, 1 credit per job) — paginate the whole matching window via
-      an ascending discovered_at cursor. Record every new company as a signal.
-      Bounded by THEIRSTACK_DAILY_CAP; resumes next tick where it stopped.
+      BUY (TheirStack, 1 credit per job) — page the matching window via an ascending
+      discovered_at cursor until this source's share of today's leads is in, or the
+      window is dry. Record every new company as a signal. Resumes next tick where
+      it stopped, re-buying nothing.
 
       ENRICH (AI-ARK + Prospeo, billed per person) — drain the unenriched signal
-      backlog at leads_per_day, oldest budget first. A company is marked enriched
+      backlog to empty before buying another page. A company is marked enriched
       whether or not it produced a lead.
+
+    The single governor is SIGNAL_DAILY_LEADS, split evenly across active hiring
+    sources: buying stops when the leads are in, so credits track leads.
 
     Previously these were one loop: it bought exactly one 100-job page and enriched
     from it, so a source matching 3,000 posts saw 100 and the rest were never bought.
@@ -3321,7 +3358,8 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     min_emp, max_emp = emp_range(cfg.get("headcount"))
     days = min(int(cfg.get("days") or 30), 30)  # freshness: never act on posts older than 30d
     # ONE user-facing pace knob; internals derive from it
-    leads_per_day = max(1, int(cfg.get("leads_per_day") or 20))
+    # This source's share of the fleet-wide daily lead budget (or its own override)
+    leads_per_day = _daily_lead_share(src, drafts)
     max_dms = 5                          # fixed: at most 5 decision makers per company
 
     # ENRICH budget: what's LEFT of today's leads, not a fresh allowance per tick.
@@ -3335,12 +3373,14 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 f"Today's budget for this signal is full ({done_today}/{leads_per_day} leads). "
                 "It resumes at midnight UTC. Raise 'leads per day' on the source to pull more."}
 
-    # BUY budget: this pull's job ceiling, floored by whatever the day's credit cap
-    # still allows. `None` spend = Supabase unreadable; never hard-block on that.
-    spent_today = theirstack_credits_today()
+    # BUY budget: a runaway backstop on ONE pull, not a spend ceiling. The lead
+    # budget above is what actually governs how many jobs get bought. Only floored
+    # by the emergency credit brake when it has been armed (THEIRSTACK_DAILY_CAP>0).
     job_budget = THEIRSTACK_JOBS_PER_PULL
-    if spent_today is not None:
-        job_budget = min(job_budget, max(0, THEIRSTACK_DAILY_CAP - spent_today))
+    if THEIRSTACK_DAILY_CAP > 0:
+        spent_today = theirstack_credits_today()
+        if spent_today is not None:      # None = Supabase unreadable; never hard-block
+            job_budget = min(job_budget, max(0, THEIRSTACK_DAILY_CAP - spent_today))
 
     # Enrichment ceiling. AI-ARK and Prospeo bill per person, and ~55% of hiring
     # companies yield no verified-email DM at all, so a lead costs roughly 2
