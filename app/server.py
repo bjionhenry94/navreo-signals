@@ -2862,7 +2862,14 @@ def fill_icebreaker(template: str, prospect: dict) -> str:
 #   2. meter + cap: every call's cost is written to provider_usage, and calls
 #      stop once the day's ceiling is hit, so a future regression is bounded
 #      and visible instead of silent.
-THEIRSTACK_DAILY_CAP = int(os.environ.get("THEIRSTACK_DAILY_CAP", "2000"))
+THEIRSTACK_DAILY_CAP = int(os.environ.get("THEIRSTACK_DAILY_CAP", "166"))
+# Ceiling on jobs ONE pull may buy. The real governor is the source's leads_per_day
+# (we stop paging the moment the day's leads are in); this is the runaway backstop
+# for a source whose window is huge and whose companies rarely yield a DM.
+THEIRSTACK_JOBS_PER_PULL = int(os.environ.get("THEIRSTACK_JOBS_PER_PULL", "1000"))
+# Companies enriched per lead, worst case. AI-ARK/Prospeo bill per person; measured
+# yield is ~45% of companies producing a verified-email DM, so ~2 companies per lead.
+COMPANIES_PER_LEAD_HEADROOM = int(os.environ.get("SIGNAL_COMPANIES_PER_LEAD", "4"))
 
 
 def theirstack_credits_today() -> int | None:
@@ -3244,10 +3251,53 @@ def _prospeo_dms_by_domain(domain, dm_titles, max_dms):
     return people[:max_dms]
 
 
+def _leads_today(source_id: str) -> int:
+    """signal_leads this source has already produced since 00:00 UTC. `leads_per_day`
+    is a DAILY budget, but the pull runs 8x a day (pg_cron `0 */3 * * *`), so a
+    per-invocation cap would silently permit 8x the stated number."""
+    from datetime import datetime, timezone
+    midnight = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    n = _sb_count(f"signal_leads?source_id=eq.{source_id}&pulled_at=gte.{midnight}")
+    return n or 0
+
+
+def _enrichment_backlog(source_id: str, limit: int) -> list[dict]:
+    """Companies this source has BOUGHT but not yet tried to enrich, newest job
+    first. Bought jobs are recorded as signals immediately; enrichment (AI-ARK +
+    Prospeo, billed per person) drains this backlog at leads_per_day. Without the
+    backlog a full-window buy would throw away everything past the daily budget."""
+    rows = sb("GET", f"signals?source=eq.theirstack&detail->>source_id=eq.{source_id}"
+                     f"&enriched_at=is.null&order=detected_at.desc&limit={int(limit)}"
+                     f"&select=id,company_domain,detail,detected_at")
+    return rows if isinstance(rows, list) else []
+
+
+def _mark_enriched(signal_ids: list) -> None:
+    """Enrichment ATTEMPTED — pass or fail. ~55% of hiring companies never yield a
+    verified-email DM; without this mark they'd be re-bought from AI-ARK/Prospeo on
+    every tick, forever."""
+    if not signal_ids:
+        return
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    ids = ",".join(str(i) for i in signal_ids)
+    sb("PATCH", f"signals?id=in.({ids})", {"enriched_at": now}, prefer="return=minimal")
+
+
 def pull_hiring_source(src: dict, drafts: list) -> dict:
-    """The TheirStack hiring pipeline, server-side and idempotent:
-    TheirStack jobs (unblurred) -> new companies -> Supabase signals+companies
-    -> Prospeo DM-find per company -> signal_leads -> rendered in the tool.
+    """The TheirStack hiring pipeline, server-side and idempotent. Two budgets,
+    deliberately separate, because they bill against different providers:
+
+      BUY (TheirStack, 1 credit per job) — paginate the whole matching window via
+      an ascending discovered_at cursor. Record every new company as a signal.
+      Bounded by THEIRSTACK_DAILY_CAP; resumes next tick where it stopped.
+
+      ENRICH (AI-ARK + Prospeo, billed per person) — drain the unenriched signal
+      backlog at leads_per_day, oldest budget first. A company is marked enriched
+      whether or not it produced a lead.
+
+    Previously these were one loop: it bought exactly one 100-job page and enriched
+    from it, so a source matching 3,000 posts saw 100 and the rest were never bought.
     No local state files — dedupe lives in Supabase (signals unique index +
     signal_leads (source_id, linkedin_url) + a per-source domain skip)."""
     from datetime import datetime, timezone
@@ -3272,8 +3322,31 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     days = min(int(cfg.get("days") or 30), 30)  # freshness: never act on posts older than 30d
     # ONE user-facing pace knob; internals derive from it
     leads_per_day = max(1, int(cfg.get("leads_per_day") or 20))
-    limit = min(leads_per_day * 6, 100)  # scan headroom for dedupe + no-DM + off-brief-skipped companies
     max_dms = 5                          # fixed: at most 5 decision makers per company
+
+    # ENRICH budget: what's LEFT of today's leads, not a fresh allowance per tick.
+    # pg_cron fires `0 */3 * * *` (8x a day), so a per-invocation cap would quietly
+    # permit 8x leads_per_day. Once the day's budget is filled every later tick is
+    # a no-op, and buys nothing.
+    done_today = _leads_today(src["id"])
+    enrich_budget = max(0, leads_per_day - done_today)
+    if enrich_budget <= 0:
+        return {"ok": False, "message":
+                f"Today's budget for this signal is full ({done_today}/{leads_per_day} leads). "
+                "It resumes at midnight UTC. Raise 'leads per day' on the source to pull more."}
+
+    # BUY budget: this pull's job ceiling, floored by whatever the day's credit cap
+    # still allows. `None` spend = Supabase unreadable; never hard-block on that.
+    spent_today = theirstack_credits_today()
+    job_budget = THEIRSTACK_JOBS_PER_PULL
+    if spent_today is not None:
+        job_budget = min(job_budget, max(0, THEIRSTACK_DAILY_CAP - spent_today))
+
+    # Enrichment ceiling. AI-ARK and Prospeo bill per person, and ~55% of hiring
+    # companies yield no verified-email DM at all, so a lead costs roughly 2
+    # companies. 4x headroom covers a bad-yield source without letting one pull
+    # enrich unboundedly when the DM hit-rate collapses.
+    company_budget = max(200, enrich_budget * COMPANIES_PER_LEAD_HEADROOM)
 
     # client for exclusion checks, resolved via the campaign draft
     camp = next((c for c in read_json_list(CAMPAIGN_DRAFTS)
@@ -3298,135 +3371,51 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         pats = [re.escape(n.lower()) for n in negatives]
         precision["job_title_pattern_not"] = pats
         precision["job_description_pattern_not"] = pats
-    # CREDIT CURSOR. TheirStack charges 1 credit per job returned and charges
-    # again for a job we already downloaded. Without this, every 3-hourly tick
-    # re-bought the same 30-day window (7 sources x ~100 jobs x 8 ticks/day),
-    # then the `already` dedupe below binned the lot. Resume from the newest
-    # discovered_at this source has seen, excluding the ids sitting exactly on
-    # that timestamp (`gte` is inclusive, so they'd otherwise be re-charged).
-    # First-ever pull has no cursor and legitimately buys the full window.
-    cursor = src.get("last_discovered_at")
-    if cursor:
-        precision["discovered_at_gte"] = cursor
-        boundary = [i for i in (src.get("last_discovered_ids") or []) if isinstance(i, int)]
-        if boundary:
-            precision["job_id_not"] = boundary[:500]
-
-    filter_dropped = False
-    jobs, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit,
-                                 extra=precision, negatives=negatives, source_id=src["id"])
-    if not jobs and not meta.get("_credits") and precision.get("company_description_pattern_or"):
-        # the description REQUIRE gate starves niche roles to zero (most company
-        # descriptions never contain the literal phrase). Drop it, keep the safe
-        # NOT-excludes, and self-heal the source so probes and pulls agree.
-        # Gated on _credits==0: if the API DID return jobs and our own client-side
-        # filters emptied them, a retry buys a second page for nothing.
-        precision.pop("company_description_pattern_or")
-        jobs, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit,
-                                     extra=precision, negatives=negatives, source_id=src["id"])
-        if jobs:
-            (src.setdefault("params", {})).pop("company_description_pattern_or", None)
-            (src.get("config") or {}).pop("company_description_pattern_or", None)
-            filter_dropped = True  # tell the user their REQUIRE-word filter was auto-removed
-    # Advance the credit cursor on every PAID response, BEFORE any early return.
-    # Jobs we bought and then discarded (KILL words, negatives, off-brief) still
-    # advance it — otherwise a page that filters to zero is re-bought every tick.
-    # Persisted to the drafts doc (what read_drafts serves back to the next tick)
-    # as well as signal_sources, because most exits below never reach write_drafts.
-    if meta.get("_max_discovered_at"):
-        src["last_discovered_at"] = meta["_max_discovered_at"]
-        src["last_discovered_ids"] = meta.get("_max_discovered_ids") or []
-        # single-doc upsert, not write_drafts() — this must not rewrite the whole
-        # sources table on a path that may have read it non-strictly.
-        sb("POST", "sources?on_conflict=id", {"id": src["id"], "doc": src},
-           prefer="resolution=merge-duplicates,return=minimal")
-        sb("PATCH", f"signal_sources?id=eq.{src['id']}",
-           {"last_discovered_at": src["last_discovered_at"],
-            "last_discovered_ids": src["last_discovered_ids"]})
-
-    total_jobs = meta.get("total_results") or len(jobs)
-    if not jobs and meta.get("_error"):
-        # a real provider error (bad filter/auth/rate-limit) — never report it as
-        # the benign "no jobs today", or a broken signal looks like an idle one.
-        return {"ok": False, "message":
-                f"The hiring search couldn't run: {meta['_error']}. "
-                "Your targeting is saved — fix the flagged issue and try again."}
-    if not jobs:
-        note = ("No live job posts match this signal today. That's normal for a hiring signal. "
-                "It keeps checking daily and adds companies as they start hiring. "
-                "Your campaign audience is unchanged.")
-        if unmapped_countries:
-            note += (" (Skipped unrecognised countries: "
-                     f"{', '.join(unmapped_countries)}.)")
-        return {"ok": False, "message": note}
-
-    # freshness in code too: a post dated older than 30 days never acts
+    # ── BUY + ENRICH ─────────────────────────────────────────────────────
+    # Goal: fill today's leads_per_day, however many job pages that takes — not
+    # "one 100-job page and hope". Jobs are bought page by page against an
+    # ascending discovered_at cursor (TheirStack re-charges for repeats, so a
+    # cursor is the only way to page without re-buying). Every company bought is
+    # recorded as a signal immediately; enrichment then drains that backlog until
+    # the budget is met. A page bought at the boundary is therefore never wasted:
+    # whatever we didn't enrich is already paid for and waits as backlog.
     from datetime import timedelta
-    min_posted = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-    jobs = [j for j in jobs if not j.get("date_posted") or j["date_posted"] >= min_posted]
-
-    # newest first, one row per company
-    jobs.sort(key=lambda j: j.get("date_posted") or "", reverse=True)
-    uniq, seen = [], set()
-    for j in jobs:
-        if j["domain"] not in seen:
-            seen.add(j["domain"])
-            uniq.append(j)
-
-    # Re-touch window: skip a company only if THIS source scanned it in the
-    # last 90 days — a company that re-posts after 3 months is re-engaged.
-    # NB: strftime with Z, not isoformat() — a literal '+' in the URL decodes
-    # to a space and PostgREST rejects the timestamp (query would silently
-    # return an error dict and nothing would ever be skipped)
-    scan_cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    existing = sb("GET", f"signals?source=eq.theirstack&detail->>source_id=eq.{src['id']}"
-                         f"&created_at=gte.{scan_cutoff}&select=company_domain") or []
-    already = {r.get("company_domain") for r in existing if isinstance(r, dict)}
-    fresh = [j for j in uniq if j["domain"] not in already]
-
     template = ensure_hiring_vars(src.get("icebreaker"))  # guarantee {{company}} + {{job_title}}
     now_iso = datetime.now(timezone.utc).isoformat()
+    min_posted = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    scan_cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def lead_excluded(email, domain):
         return is_suppressed(client_id, email, domain)  # shared helper (also used at push time)
 
-    prospects, signals_n, scanned, dropped = [], 0, 0, {"no_email": 0, "excluded": 0}
-    for j in fresh:
-        if len(prospects) >= leads_per_day:
-            break  # pace hit - stop enriching, the rest waits for tomorrow
-        scanned += 1
-        domain = j["domain"]
-        detected = (j["date_posted"] + "T00:00:00Z") if j.get("date_posted") else now_iso
-        from name_hygiene import clean_company_name
-        jc = clean_company_name(j["company"]) if j.get("company") else j.get("company")  # email-ready everywhere
-        # company row FIRST — signals.company_domain has an FK to companies(domain)
-        sb("POST", "companies?on_conflict=domain", {
-            "domain": domain, "name": jc or None,
-            "industry": j["industry"] or None,
-            "employee_count": j["employee_count"],
-            "employee_range": j["employee_range"] or None,
-            "country": j["country"] or None,
-        }, prefer="resolution=merge-duplicates,return=minimal")
-        # then the hiring signal (dedupe via the signals_dedupe unique index;
-        # a genuine cross-source duplicate 409s and is harmlessly swallowed)
-        sb("POST", "signals", {
-            "signal_type": "hiring", "source": "theirstack", "company_domain": domain,
-            "detected_at": detected,
-            "detail": {"job_title": j["job_title"], "job_url": j["job_url"],
-                       "company": jc, "source_id": src["id"]},
-        }, prefer="resolution=ignore-duplicates,return=minimal")
-        signals_n += 1
+    prospects, dropped = [], {"no_email": 0, "excluded": 0}
+    signals_n = companies_tried = bought = 0
+    exhausted = capped = filter_dropped = False
+    walk_error = None
+    meta: dict = {}
+    first_total = None
 
-        # AI-ARK bills per person returned: never request more than the day still needs
-        for person in dm_find_by_domain(domain, dm_titles, min(max_dms, leads_per_day - len(prospects))):
-            if len(prospects) >= leads_per_day:
+    def _persist_cursor(cur, bids):
+        """A paid page must advance the cursor before anything else can fail."""
+        src["last_discovered_at"], src["last_discovered_ids"] = cur, list(bids)
+        sb("POST", "sources?on_conflict=id", {"id": src["id"], "doc": src},
+           prefer="resolution=merge-duplicates,return=minimal")
+        sb("PATCH", f"signal_sources?id=eq.{src['id']}",
+           {"last_discovered_at": cur, "last_discovered_ids": list(bids)})
+
+    def _enrich(domain, jc, job_title, job_url):
+        """AI-ARK + Prospeo for one company. Billed per person, so never ask for
+        more decision-makers than the day still needs. Returns nothing; appends."""
+        nonlocal companies_tried
+        companies_tried += 1
+        from name_hygiene import clean_company_name, clean_job_title, email_safe
+        want = min(max_dms, enrich_budget - len(prospects))
+        for person in dm_find_by_domain(domain, dm_titles, want):
+            if len(prospects) >= enrich_budget:
                 break
-            # clean the DISPLAY company too (signal_leads is cleaned at write, but the
-            # prospect card + signal record showed the raw name) — email-ready everywhere
             person["company"] = clean_company_name(person.get("company")) or jc
             person["domain"] = person.get("domain") or domain
-            # verified email is the keep-gate (Prospeo enrich-person)
-            try:
+            try:  # verified email is the keep-gate (Prospeo enrich-person)
                 email = find_email(person)
             except Exception:  # noqa: BLE001 — credit/key failure: skip, never guess
                 email = None
@@ -3437,17 +3426,178 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 dropped["excluded"] += 1
                 continue
             person["email"] = email
-            from name_hygiene import clean_job_title, email_safe
-            role = clean_job_title(j["job_title"]) or ""  # email-ready: no emoji/pipe, tidy casing
-            person["hiring_for"] = role
-            person["job_url"] = j["job_url"]
-            person["role"] = role
+            role = clean_job_title(job_title or "") or ""
+            person["hiring_for"] = person["role"] = role
+            person["job_url"] = job_url
             ice = fill_icebreaker(template, person)
-            # re-run email_safe AFTER the role merge so a raw title can't leak a special char
             person["icebreaker"] = email_safe(ice.replace("{{role}}", role).replace("{role}", role))
             person["verdict"] = None
             prospects.append(person)
-    left_over = len(fresh) - scanned
+
+    def _drain_backlog():
+        """Enrich companies we have ALREADY paid TheirStack for, in batches, until the
+        lead budget is met or the backlog runs dry or the enrichment ceiling is hit.
+
+        Draining to EMPTY before buying is the invariant that makes paging safe: if we
+        stopped draining early and bought another page, we'd be spending TheirStack
+        credits while paid-for inventory sat untouched, and that inventory would then
+        cost AI-ARK/Prospeo credits tomorrow anyway. Buy last, enrich first."""
+        while len(prospects) < enrich_budget and companies_tried < company_budget:
+            rows = _enrichment_backlog(src["id"], 200)
+            if not rows:
+                return
+            done = []
+            for row in rows:
+                if len(prospects) >= enrich_budget or companies_tried >= company_budget:
+                    break
+                d = row.get("detail") or {}
+                _enrich(row.get("company_domain"), d.get("company"), d.get("job_title"), d.get("job_url"))
+                done.append(row.get("id"))
+            # attempted, pass or fail — ~55% of hiring companies never yield a
+            # verified-email DM, and without this mark they'd be re-enriched forever
+            _mark_enriched(done)
+            if len(done) < len(rows):
+                return  # stopped on a budget, not on an empty backlog
+
+    def _record(page):
+        """Every company on a paid page becomes a signal, budget or no budget."""
+        nonlocal signals_n
+        from name_hygiene import clean_company_name
+        page = [j for j in page if not j.get("date_posted") or j["date_posted"] >= min_posted]
+        page.sort(key=lambda j: j.get("date_posted") or "", reverse=True)
+        uniq, seen_d = [], set()
+        for j in page:
+            if j["domain"] not in seen_d:
+                seen_d.add(j["domain"])
+                uniq.append(j)
+        if not uniq:
+            return 0
+        # Re-touch window: skip a company only if THIS source scanned it in the last
+        # 90 days — a company that re-posts after 3 months is re-engaged.
+        # NB: strftime with Z, not isoformat() — a literal '+' in the URL decodes to
+        # a space and PostgREST rejects the timestamp.
+        existing = sb("GET", f"signals?source=eq.theirstack&detail->>source_id=eq.{src['id']}"
+                             f"&created_at=gte.{scan_cutoff}&select=company_domain") or []
+        already = {r.get("company_domain") for r in existing if isinstance(r, dict)}
+        fresh = [j for j in uniq if j["domain"] not in already]
+        for j in fresh:
+            jc = clean_company_name(j["company"]) if j.get("company") else j.get("company")
+            detected = (j["date_posted"] + "T00:00:00Z") if j.get("date_posted") else now_iso
+            # company row FIRST — signals.company_domain has an FK to companies(domain)
+            sb("POST", "companies?on_conflict=domain", {
+                "domain": j["domain"], "name": jc or None,
+                "industry": j["industry"] or None,
+                "employee_count": j["employee_count"],
+                "employee_range": j["employee_range"] or None,
+                "country": j["country"] or None,
+            }, prefer="resolution=merge-duplicates,return=minimal")
+            # enriched_at stays NULL: this is the backlog marker
+            sb("POST", "signals", {
+                "signal_type": "hiring", "source": "theirstack", "company_domain": j["domain"],
+                "detected_at": detected,
+                "detail": {"job_title": j["job_title"], "job_url": j["job_url"],
+                           "company": jc, "source_id": src["id"]},
+            }, prefer="resolution=ignore-duplicates,return=minimal")
+            signals_n += 1
+        return len(fresh)
+
+    # Cursor. No cursor yet = first pull: start at the beginning of the freshness
+    # window and walk forward, so page one is the OLDEST in-window post rather
+    # than an arbitrary slice of the newest.
+    cursor = src.get("last_discovered_at") or \
+        (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    bids = [i for i in (src.get("last_discovered_ids") or []) if isinstance(i, int)]
+
+    while True:
+        _drain_backlog()                       # paid inventory first, always
+        if len(prospects) >= enrich_budget:
+            break                              # today's leads are in
+        if companies_tried >= company_budget:
+            break                              # enrichment ceiling; backlog waits
+        if _sb_count(f"signals?source=eq.theirstack&detail->>source_id=eq.{src['id']}"
+                     f"&enriched_at=is.null"):
+            break                              # backlog left over -> never buy more
+        if bought >= job_budget:
+            break                              # this pull's TheirStack ceiling
+        room = min(100, job_budget - bought)
+        page_extra = {**precision, "discovered_at_gte": cursor}
+        if bids:
+            page_extra["job_id_not"] = bids[:500]  # `gte` is inclusive: skip the boundary
+        page, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, room,
+                                     extra=page_extra, negatives=negatives, source_id=src["id"])
+        credits = meta.get("_credits") or 0
+        bought += credits
+        if first_total is None and meta.get("total_results") is not None:
+            # jobs matching FROM THE CURSOR FORWARD, i.e. everything still unbought.
+            # On a first pull the cursor is the window start, so this is the window.
+            first_total = meta["total_results"]
+
+        if credits == 0 and precision.get("company_description_pattern_or"):
+            # the description REQUIRE gate starves niche roles to zero (most company
+            # descriptions never contain the literal phrase). Drop it, keep the safe
+            # NOT-excludes, self-heal the source so probes and pulls agree, retry.
+            # Free: a zero-credit response bought nothing.
+            precision.pop("company_description_pattern_or")
+            (src.setdefault("params", {})).pop("company_description_pattern_or", None)
+            (src.get("config") or {}).pop("company_description_pattern_or", None)
+            filter_dropped = True
+            continue
+
+        top = meta.get("_max_discovered_at")
+        if top and top != cursor:
+            cursor, bids = top, list(meta.get("_max_discovered_ids") or [])
+            _persist_cursor(cursor, bids)
+        elif top:
+            # a whole page sharing one discovered_at second: widen the exclusion
+            # instead of re-buying it next iteration.
+            bids = list({*bids, *(meta.get("_max_discovered_ids") or [])})
+            if len(bids) > 500:
+                walk_error = ("Over 500 job posts share one discovered_at timestamp; "
+                              "stopped rather than re-buy them.")
+                break
+            _persist_cursor(cursor, bids)
+
+        if meta.get("_capped"):
+            capped = True
+            break
+        if meta.get("_error"):
+            walk_error = meta["_error"]
+            break
+        if credits == 0:
+            exhausted = True   # nothing new left in the window
+            break
+
+        _record(page)          # paid for: bank every company before enriching any
+        _drain_backlog()       # ...then spend enrichment credits up to the budget
+
+        if credits < room:
+            exhausted = True   # short page = end of the window
+            break
+
+    total_jobs = first_total   # matching jobs this pull could still buy, from the cursor
+    if capped and not prospects:
+        return {"ok": False, "message":
+                f"Paused: TheirStack's daily credit cap ({THEIRSTACK_DAILY_CAP}) is spent. "
+                "No jobs were bought. This signal resumes on the next run, from exactly "
+                "where it stopped — nothing is lost or double-charged."}
+    if walk_error and not prospects and not signals_n:
+        # a real provider error (bad filter/auth/rate-limit) — never report it as
+        # the benign "no jobs today", or a broken signal looks like an idle one.
+        return {"ok": False, "message":
+                f"The hiring search couldn't run: {walk_error}. "
+                "Your targeting is saved — fix the flagged issue and try again."}
+    if not prospects and not signals_n:
+        note = ("No live job posts match this signal today. That's normal for a hiring signal. "
+                "It keeps checking daily and adds companies as they start hiring. "
+                "Your campaign audience is unchanged.")
+        if unmapped_countries:
+            note += (" (Skipped unrecognised countries: "
+                     f"{', '.join(unmapped_countries)}.)")
+        return {"ok": False, "message": note}
+
+    # what's still bought-but-unenriched: tomorrow's budget starts here, free
+    left_over = _sb_count(f"signals?source=eq.theirstack"
+                          f"&detail->>source_id=eq.{src['id']}&enriched_at=is.null") or 0
 
     # compounding campaign-level exclusion: never re-pull an individual
     # already seen (any source in this campaign) or previously rejected
@@ -3468,7 +3618,9 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     src["total"] = len(prospects)
     src["total_jobs"] = total_jobs
     src["signals_found"] = signals_n
-    src["companies_scanned"] = len(uniq)
+    src["companies_scanned"] = companies_tried
+    src["jobs_bought"] = bought
+    src["window_exhausted"] = exhausted
     src["left_for_next_run"] = left_over
     src["mechanism"] = "hiring"
     src["last_pull"] = datetime.now().isoformat(timespec="seconds")
@@ -3493,7 +3645,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 + (f" - {drop_note}" if drop_note else " - no decision-maker contacts surfaced yet")
                 + ". The signals are saved; it retries daily.",
                 "total": total_jobs, "signals": signals_n, "dropped": dropped}
-    tail = f" ({left_over} more companies queued for the next run)" if left_over else ""
+    tail = f" ({left_over} companies already bought and queued for the next run)" if left_over else ""
     dm_word = "decision-maker" if len(prospects) == 1 else "decision-makers"
     notices = []
     if filter_dropped:
@@ -3501,11 +3653,20 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                        "- it matched no live jobs. Targeting saved.")
     if unmapped_countries:
         notices.append("Skipped unrecognised countries: " + ", ".join(unmapped_countries) + ".")
+    if capped:
+        notices.append(f"Stopped early: TheirStack's daily credit cap ({THEIRSTACK_DAILY_CAP}) "
+                       "was reached. This signal resumes from the same place on the next run.")
+    elif len(prospects) < enrich_budget and exhausted:
+        notices.append(f"Bought every matching job post in the window and kept "
+                       f"{len(prospects)} of today's {leads_per_day}-lead budget. "
+                       "There simply aren't more live posts to buy right now.")
     return {"ok": True, "total": total_jobs, "signals": signals_n,
-            "companies_scanned": len(uniq), "prospects": prospects, "db_synced": True,
+            "companies_scanned": companies_tried, "jobs_bought": bought,
+            "prospects": prospects, "db_synced": True,
             "dropped": dropped,
             "notice": " ".join(notices) or None,
-            "note": f"{signals_n} hiring companies, {len(prospects)} {dm_word}{tail}"
+            "note": f"{signals_n} hiring companies, {len(prospects)} {dm_word}"
+                    f" from {bought} job posts{tail}"
                     + (f" · {drop_note}" if drop_note else "")}
 
 
