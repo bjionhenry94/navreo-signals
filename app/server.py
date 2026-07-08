@@ -3334,22 +3334,44 @@ def _exclusion_domains(client_id: str | None) -> list:
     return out
 
 
-def _search_exclusions(source_id: str, client_id: str | None) -> list:
+def scanned_domains(source_id: str) -> set:
+    """EVERY company this source has ever pulled. Not a 90-day window: once a source has
+    seen a domain it must never buy a job at that domain again (user rule 2026-07-08).
+
+    Paged, never a bare `limit=N`. A silent truncation here is invisible and expensive:
+    the missing domains simply get re-bought, forever."""
+    out, offset = set(), 0
+    while True:
+        page = sb("GET", f"signals?source=eq.theirstack&detail->>source_id=eq.{source_id}"
+                         f"&select=company_domain&limit=1000&offset={offset}")
+        if not isinstance(page, list) or not page:
+            break
+        out |= {r["company_domain"] for r in page
+                if isinstance(r, dict) and r.get("company_domain")}
+        if len(page) < 1000:
+            break
+        offset += 1000
+        if offset >= 200000:      # safety valve far above real volume (~30 domains/day)
+            print(f"[exclusions] scanned_domains({source_id}) hit the 200k page guard",
+                  file=sys.stderr)
+            break
+    return out
+
+
+def _search_exclusions(source_id: str, client_id: str | None, scanned: set | None = None) -> list:
     """Domains to exclude AT THE SEARCH, so we never buy the job in the first place.
 
-    Measured 2026-07-08: a source's own 176 already-scanned domains removed 24% of its
-    window, and the client exclusion set took it to 46-73%. Those jobs were being bought
-    and then binned by `already` / `lead_excluded` a few lines later.
+    Measured 2026-07-08: a source's own scanned domains removed 24% of its window, and
+    the client exclusion set took it to 46%. Those jobs were being bought and then binned
+    by `already` / `lead_excluded` a few lines later.
 
-    Scanned domains go first so a cap can never evict the highest-hit-rate entries."""
-    from datetime import datetime, timezone, timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rows = sb("GET", f"signals?source=eq.theirstack&detail->>source_id=eq.{source_id}"
-                     f"&created_at=gte.{cutoff}&select=company_domain&limit=20000") or []
-    scanned = [r["company_domain"] for r in rows
-               if isinstance(r, dict) and r.get("company_domain")]
+    Scanned domains go first, so a THEIRSTACK_EXCLUDE_MAX cap can never evict the
+    entries that carry the source's own permanent no-re-pull guarantee. Pass `scanned`
+    to reuse a set the caller already paged."""
+    if scanned is None:
+        scanned = scanned_domains(source_id)
     seen, out = set(), []
-    for d in scanned + _exclusion_domains(client_id):
+    for d in list(scanned) + _exclusion_domains(client_id):
         if d and d not in seen:
             seen.add(d)
             out.append(d)
@@ -3490,14 +3512,16 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     # the name half server-side costs nothing and removes those jobs before we buy them.
     precision["company_name_partial_match_not"] = ["staffing", "talent", "recruit", "consultants"]
 
-    # Search-stage exclusion, built lazily: a tick that buys nothing must not pay the
-    # ~8s the 290k-domain RPC costs. Populated on the first page request.
+    # Search-stage exclusion, built lazily: a tick that buys nothing must not pay for the
+    # exclusion RPC. Rebuilt per page from the SAME scanned set `_record` grows, so a
+    # company banked on page 1 is already excluded on page 2 instead of being re-bought.
     _excl_box: dict = {}
 
     def _page_extra(extra: dict) -> dict:
-        if "v" not in _excl_box:
-            _excl_box["v"] = _search_exclusions(src["id"], client_id)
-        return {**extra, "company_domain_not": _excl_box["v"]} if _excl_box["v"] else extra
+        if "scanned" not in _excl_box:
+            _excl_box["scanned"] = scanned_domains(src["id"])
+        lst = _search_exclusions(src["id"], client_id, scanned=_excl_box["scanned"])
+        return {**extra, "company_domain_not": lst} if lst else extra
     # ── BUY + ENRICH ─────────────────────────────────────────────────────
     # Goal: fill today's leads_per_day, however many job pages that takes — not
     # "one 100-job page and hope". Jobs are bought page by page against an
@@ -3510,7 +3534,6 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
     template = ensure_hiring_vars(src.get("icebreaker"))  # guarantee {{company}} + {{job_title}}
     now_iso = datetime.now(timezone.utc).isoformat()
     min_posted = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-    scan_cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def lead_excluded(email, domain):
         return is_suppressed(client_id, email, domain)  # shared helper (also used at push time)
@@ -3604,14 +3627,16 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                 uniq.append(j)
         if not uniq:
             return 0
-        # Re-touch window: skip a company only if THIS source scanned it in the last
-        # 90 days — a company that re-posts after 3 months is re-engaged.
-        # NB: strftime with Z, not isoformat() — a literal '+' in the URL decodes to
-        # a space and PostgREST rejects the timestamp.
-        existing = sb("GET", f"signals?source=eq.theirstack&detail->>source_id=eq.{src['id']}"
-                             f"&created_at=gte.{scan_cutoff}&select=company_domain") or []
-        already = {r.get("company_domain") for r in existing if isinstance(r, dict)}
+        # Once this source has pulled a domain it never pulls it again (user rule
+        # 2026-07-08). This used to be a 90-day re-touch window; it is now permanent,
+        # and it must agree with the search-stage company_domain_not exclusion built
+        # from the same set — if the two disagree we pay for jobs we then discard.
+        # Memoised for the pull: the set only grows, and only by what _record banks.
+        if "scanned" not in _excl_box:
+            _excl_box["scanned"] = scanned_domains(src["id"])
+        already = _excl_box["scanned"]
         fresh = [j for j in uniq if j["domain"] not in already]
+        already |= {j["domain"] for j in fresh}   # this page is now scanned too
         for j in fresh:
             jc = clean_company_name(j["company"]) if j.get("company") else j.get("company")
             detected = (j["date_posted"] + "T00:00:00Z") if j.get("date_posted") else now_iso

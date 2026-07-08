@@ -163,8 +163,11 @@ class FakeSB:
         if method == "GET" and t == "signals" and "enriched_at=is.null" in path:
             lim = int(path.split("limit=")[1].split("&")[0])
             return [s for s in self.signals if s["enriched_at"] is None][:lim]
-        if method == "GET" and t == "signals":               # the 90-day re-touch skip
-            return [{"company_domain": s["company_domain"]} for s in self.signals]
+        if method == "GET" and t == "signals":               # scanned_domains() paging
+            off = int(path.split("offset=")[1].split("&")[0]) if "offset=" in path else 0
+            lim = int(path.split("limit=")[1].split("&")[0]) if "limit=" in path else 1000
+            rows = [{"company_domain": s["company_domain"]} for s in self.signals]
+            return rows[off:off + lim]
         if method == "POST" and t == "signals":
             if self.swallow_all or any(s["company_domain"] == body["company_domain"]
                                        for s in self.signals):
@@ -289,6 +292,64 @@ def test_daily_leads_split_evenly():
               server._daily_lead_share(mixed[0], mixed) == 80, server._daily_lead_share(mixed[0], mixed))
     finally:
         server.SIGNAL_DAILY_LEADS = orig
+
+
+def test_scanned_domain_is_excluded_forever():
+    """User rule 2026-07-08: once a source pulls a domain, it must never buy a job at
+    that domain again. This was a 90-day re-touch window -- a company pulled today came
+    back into the search in three months. Now permanent, and the search-stage exclusion
+    and the client-side `already` check must agree, or we pay for jobs we then bin."""
+    fake = FakeSB(leads_today=0)
+    # scanned a year ago: the old 90-day window would have let this back in
+    fake.signals.append({"id": 1, "company_domain": "google.com",
+                         "detail": {"source_id": "src-test"}, "enriched_at": "done"})
+    saved = {k: getattr(server, k) for k in
+             ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
+              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "_theirstack_meter")}
+    server.sb = fake
+    # TheirStack returns google.com anyway (as if the exclusion were ignored)
+    server.http_json = Recorder([[job(1, "2026-07-07T10:00:00Z", "google.com"),
+                                  job(2, "2026-07-07T11:00:00Z", "newco.com")]])
+    server.theirstack_credits_today = lambda: 0
+    server._theirstack_meter = lambda *a, **k: None
+    server.is_suppressed = lambda *a, **k: False
+    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.read_json_list = lambda *a, **k: []
+    server.dm_find_by_domain = lambda *a, **k: []
+    server.find_email = lambda p: None
+    server._excl_cache.clear()
+    try:
+        src = build_source(10)
+        server.pull_hiring_source(src, [src])
+        b = server.http_json.bodies[0]
+        check("google.com is excluded at the search, with no expiry",
+              "google.com" in (b.get("company_domain_not") or []))
+        banked = {s["company_domain"] for s in fake.signals}
+        check("and if it comes back anyway it is not re-banked",
+              sorted(banked) == ["google.com", "newco.com"], sorted(banked))
+        check("the genuinely new company IS banked", "newco.com" in banked)
+    finally:
+        for k, v in saved.items():
+            setattr(server, k, v)
+        server._excl_cache.clear()
+
+
+def test_scanned_domains_pages_never_truncates():
+    """A bare limit=N here truncates silently, and every missing domain gets re-bought
+    forever. scanned_domains() must page."""
+    fake = FakeSB()
+    for i in range(2500):                       # > one 1000-row page
+        fake.signals.append({"id": i, "company_domain": f"co{i}.com",
+                             "detail": {"source_id": "src-test"}, "enriched_at": "x"})
+    orig = server.sb
+    server.sb = fake
+    try:
+        got = server.scanned_domains("src-test")
+        check("all 2,500 domains returned across pages", len(got) == 2500, len(got))
+        check("including one from the last page", "co2499.com" in got)
+    finally:
+        server.sb = orig
 
 
 def test_exclusions_applied_at_the_search():
@@ -558,7 +619,8 @@ def test_backlog_drained_before_buying():
 if __name__ == "__main__":
     print("TheirStack credit-cursor + daily-budget regression lock\n")
     for t in (test_cursor_round_trip, test_filtered_page_still_advances_cursor, test_daily_cap_blocks,
-              test_daily_leads_split_evenly, test_exclusions_applied_at_the_search,
+              test_daily_leads_split_evenly, test_scanned_domain_is_excluded_forever,
+              test_scanned_domains_pages_never_truncates, test_exclusions_applied_at_the_search,
               test_no_buy_tick_never_builds_exclusions, test_lead_upsert_never_resets_pushed_status, test_swallowed_signal_still_enriches, test_discovery_floor_is_yesterday, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
               test_backlog_drained_before_buying):
         print(t.__name__)
