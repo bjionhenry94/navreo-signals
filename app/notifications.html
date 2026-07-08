@@ -9,94 +9,111 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="navreo.css">
 <style>
-.note {
-  border: 1px solid var(--line); border-radius: var(--radius);
-  margin-bottom: 12px; position: relative; overflow: hidden;
+/* ══ Report-section shell ══
+   This page now renders the lilly-optimiser Priority Report itself (7
+   numbered sections + an "All clear" tail), not a campaign-grouped note
+   feed. Every section is a collapsible card with a compact always-visible
+   header (name, count, chevron) and a body shown/hidden via a class toggle
+   — never a re-render — mirroring the old group-wrap pattern so an
+   in-flight or just-patched action block's DOM state is never disturbed by
+   expanding/collapsing a sibling section. */
+.rsection { border: 1px solid var(--line); border-radius: var(--radius); margin: 0 0 16px; overflow: hidden; background: var(--card); }
+.rsection-h {
+  display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+  cursor: pointer; user-select: none;
 }
-.note::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--line-2); }
-.note.pr-high::before { background: var(--red); }
-.note.pr-medium::before { background: var(--amber); }
-.note.pr-low::before { background: var(--brown-300); }
-.note.dismissed { opacity: 0.55; }
-.note-main { display: flex; gap: 14px; padding: 16px 18px; align-items: flex-start; }
-.note .t { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.note .d { font-size: 13px; color: var(--ink-2); margin-top: 5px; max-width: 720px; line-height: 1.55; }
-.note .nums { display: flex; gap: 18px; margin-top: 10px; }
-.note .nums .nv { font-family: var(--font-display); font-size: 20px; line-height: 1; }
-.note .nums .nl { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
-.decide { display: flex; gap: 7px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 220px; }
+.rsection-h:hover { background: var(--bg-sunken); }
+.rsection-h:focus-visible { outline: none; box-shadow: var(--focus); }
+.rsection-h .chev { width: 15px; height: 15px; color: var(--ink-3); flex-shrink: 0; transition: transform 0.15s ease; }
+.rsection-h.expanded .chev { transform: rotate(180deg); }
+.rsection-h .snum { font-family: var(--font-display); font-size: 15px; color: var(--ink-3); flex-shrink: 0; }
+.rsection-h .stitle { font-size: 14.5px; font-weight: 600; flex: 1 1 auto; min-width: 0; }
+.rsection-h .scount { font-size: 11.5px; color: var(--brown-400); white-space: nowrap; }
+.rsection-body { padding: 0 16px 16px; }
+.rsection-body.hidden { display: none; }
+.rsection-sub { font-size: 12px; color: var(--ink-3); margin: -2px 0 12px; line-height: 1.5; }
+.rsection.muted { background: var(--bg-sunken); }
+.rsection.muted .rsection-h .stitle { color: var(--ink-2); font-weight: 500; }
+
+/* Table scroll container (mobile rule): every section table scrolls
+   internally rather than pushing the page wider at narrow viewports. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll table.tbl { min-width: 560px; }
+.rsection table.tbl a { color: inherit; text-decoration: none; }
+.rsection table.tbl a:hover { text-decoration: underline; }
+.tbl tr.dimmed td { opacity: 0.5; }
+
+/* Variant analysis campaign header + one-line "whole offer failing" callout */
+.va-group { margin: 0 0 20px; }
+.va-group:last-child { margin-bottom: 0; }
+.va-head { font-size: 13.5px; margin: 0 0 8px; }
+.va-head a { color: inherit; text-decoration: none; font-weight: 700; }
+.va-head a:hover { text-decoration: underline; }
+.va-head .ctx { color: var(--ink-3); font-weight: 400; }
+.va-note { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
+.callout { border: 1px solid var(--line); border-left: 3px solid var(--red); border-radius: var(--radius); padding: 10px 14px; font-size: 13px; background: var(--bg-sunken); }
+.callout b { font-weight: 600; }
+
+/* Section 5 / 6 fix notes */
+.fixnote { font-size: 12px; color: var(--ink-3); margin-top: 10px; line-height: 1.55; }
+
+/* Section 7: Recommended Actions blocks */
+.action-block { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 12px; }
+.action-block:last-child { margin-bottom: 0; }
+.action-block.dismissed { opacity: 0.55; }
+.action-block .ab-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.action-block .ab-title { font-size: 13.5px; line-height: 1.5; flex: 1 1 320px; min-width: 0; }
+.action-block .ab-title a { color: inherit; }
+.action-block .ab-title .ctx { color: var(--ink-2); font-weight: 400; }
+.action-block .ab-pills { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.action-list { margin: 10px 0 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); line-height: 1.6; }
+.action-list li { margin-bottom: 2px; }
+.action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.action-row .btn { min-height: 38px; padding: 8px 16px; box-sizing: border-box; }
+.action-row a.btn { text-decoration: none; }
+
+/* Mobile: action row stacks below the header rather than clipping off the
+   375px viewport, and no page-level horizontal scroll is introduced. */
+@media (max-width: 480px) {
+  .action-block .ab-head { flex-direction: column; }
+  .action-row { flex-direction: column; align-items: stretch; }
+  .action-row .btn { width: 100%; justify-content: center; }
+}
+
+/* Pause-confirmation modal (fix: needs to be automatable/testable, unlike a
+   native window.prompt()). */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(20, 17, 14, 0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 90;
+}
+.modal-overlay.hidden { display: none; }
+.modal-box {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 22px 24px; max-width: 420px; width: calc(100% - 32px);
+  box-shadow: 0 12px 40px rgba(20, 17, 14, 0.25);
+}
+.modal-box h3 { margin: 0 0 8px; font-size: 15px; font-family: var(--font-display); font-weight: 400; }
+.modal-box p { margin: 0 0 12px; font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+.modal-box input {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 9px 12px; font: 500 14px var(--font-mono); margin-bottom: 10px; letter-spacing: 0.05em;
+}
+.modal-box .modal-err { color: #861E10; font-size: 12px; margin: -4px 0 10px; min-height: 15px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.modal-actions .btn { min-height: 38px; }
+
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 4px; flex-wrap: wrap; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .bar-actions { display: flex; align-items: center; gap: 10px; }
 .sel { border: 1px solid var(--line-2); background: var(--card); border-radius: 10px; padding: 7px 11px; font-size: 12.5px; color: var(--ink-2); font-family: inherit; cursor: pointer; }
-/* Rank explainer (fix C): a short, always-muted line right under the
-   filter bar that says WHY the list is ordered the way it is, so testers
-   stop reading tier position as "objectively worse" without qualification. */
 .rank-explainer { font-size: 12px; color: var(--ink-3); line-height: 1.55; margin: 0 2px 18px; max-width: 900px; }
 .rank-explainer .jg { border-bottom: 1px dotted var(--ink-3); cursor: help; }
-.note .d .jg { border-bottom: 1px dotted var(--ink-3); cursor: help; }
-
-/* Collapsible campaign groups (fix A). Each group is a bordered card whose
-   header row is always visible (the "compact one-row summary") and whose
-   body (the full finding cards) is shown/hidden via a plain class toggle —
-   never re-rendered — so an in-flight or just-patched card's DOM state is
-   never disturbed by expanding/collapsing a sibling or ancestor group. */
-.group-wrap { border: 1px solid var(--line); border-radius: var(--radius); margin: 0 0 14px; overflow: hidden; background: var(--card); }
-.group-h {
-  display: flex; align-items: center; gap: 10px; padding: 12px 14px;
-  cursor: pointer; user-select: none;
-}
-.group-h:hover { background: var(--bg-sunken); }
-.group-h:focus-visible { outline: none; box-shadow: var(--focus); }
-.group-h .chev { width: 15px; height: 15px; color: var(--ink-3); flex-shrink: 0; transition: transform 0.15s ease; }
-.group-h.expanded .chev { transform: rotate(180deg); }
-.group-h .gdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.group-h .lab { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
-.group-h .lab a { color: inherit; text-decoration: none; }
-.group-h .lab a:hover { text-decoration: underline; }
-.group-h .desc { font-size: 12px; color: var(--ink-3); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.group-h .gcount { font-size: 11.5px; color: var(--brown-400); white-space: nowrap; }
-.group-h .gratio { font-size: 11px; color: var(--ink-3); white-space: nowrap; border-bottom: 1px dotted var(--ink-3); cursor: help; }
-.group-h .bulk { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.group-h .bulk-progress { font-size: 11px; color: var(--ink-3); white-space: nowrap; min-width: 46px; }
-.group-body { padding: 2px 14px 14px; }
-.group-body.hidden { display: none; }
-/* Per-card action buttons and bulk-action buttons are the primary tap
-   targets on this page (fix E.3) — 26px measured too small; ~38px min. */
-.decide .btn, .bulk-btn, #ackAllVisibleBtn { min-height: 38px; padding: 8px 16px; box-sizing: border-box; }
-
-.group-h { margin: 0; }
-.tier-h {
-  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
-  margin: 26px 0 10px; padding: 9px 2px 9px;
-  border-bottom: 2px solid var(--line-2);
-  position: sticky; top: 0; background: var(--bg); z-index: 5;
-}
-.tier-h:first-child { margin-top: 0; }
-.tier-h .tdot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.tier-h .tlab { font-family: var(--font-display); font-size: 16px; font-weight: 400; letter-spacing: -0.01em; }
-.tier-h .tcount { font-size: 12px; color: var(--ink-3); }
-.tier-toggles { margin-left: auto; display: flex; gap: 4px; }
-.tier-toggle {
-  border: none; background: none; color: var(--ink-3);
-  font: 500 11.5px var(--font-sans); cursor: pointer; padding: 5px 7px;
-  text-decoration: underline; text-underline-offset: 2px; border-radius: 6px;
-}
-.tier-toggle:hover { color: var(--ink); background: var(--bg-sunken); }
 .state-msg { text-align: center; color: var(--brown-400); font-size: 13px; padding: 60px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .state-msg .spin { width: 18px; height: 18px; border-width: 2.5px; }
-/* Back-to-top floating button (fix D.2): id-scoped (not just class-scoped)
-   so nothing else on the page can out-specificity these rules. Root cause
-   of the "computed opacity stuck at 0" report: the old rule animated
-   opacity/transform over 0.18s, and on a backgrounded/unfocused tab (or any
-   throttled-frame context) the browser can pause a running transition
-   mid-flight — elapsed transition time never advances, so the interpolated
-   opacity never leaves its start value even though the .show class (and
-   its pointer-events/visibility) are already applied. Verified live: with
-   the tab backgrounded, computed opacity read back 0 indefinitely despite
-   .show being present. Fix: drop the timed transition entirely for
-   opacity/visibility/transform so showing/hiding is an instant, one-frame
-   style flip — nothing to get stuck mid-interpolation, ever. */
+
+/* Back-to-top floating button — instant show/hide, no timed transition (a
+   backgrounded/throttled tab can pause a mid-flight CSS transition forever,
+   which is why this is a one-frame opacity/visibility flip instead). */
 #backToTop.back-to-top {
   position: fixed; right: 26px; bottom: 26px; z-index: 80;
   width: 42px; height: 42px; border-radius: 50%;
@@ -105,9 +122,7 @@
   cursor: pointer; box-shadow: 0 4px 14px rgba(20, 17, 14, 0.22);
   opacity: 0; visibility: hidden; pointer-events: none;
 }
-#backToTop.back-to-top.show {
-  opacity: 1; visibility: visible; pointer-events: auto;
-}
+#backToTop.back-to-top.show { opacity: 1; visibility: visible; pointer-events: auto; }
 #backToTop.back-to-top:hover { background: var(--orange); }
 #backToTop.back-to-top svg { width: 18px; height: 18px; }
 </style>
@@ -119,7 +134,7 @@
     <div class="pagehead">
       <div>
         <div class="eyebrow">Notifications</div>
-        <h1>What we'd change.</h1>
+        <h1>Campaign Optimisation Priority Report</h1>
       </div>
       <div id="summary" class="freshness"></div>
     </div>
@@ -139,20 +154,19 @@
           <option value="Low">Low</option>
         </select>
         <!-- Page-local client filter removed — the shared rail client switcher
-             (shell.js, .rail-client select) is now the single source of truth for client
+             (shell.js, .rail-client select) is the single source of truth for client
              scoping; see matchesActiveClient()/passesFilters() below. -->
       </div>
       <div class="bar-actions">
-        <button class="btn sm" id="ackAllVisibleBtn" type="button" disabled>Acknowledge all visible (0)</button>
         <button class="btn sm" id="refreshBtn" type="button">Refresh</button>
       </div>
     </div>
     <div class="rank-explainer">
-      Sorted by <b>priority tier</b> (how urgently a human decision is needed —
-      <span class="jg" title="A hard performance floor: cross it and the finding is flagged to stop or change, not just watched.">kill-thresholds</span>
-      and failing <span class="jg" title="A recommendation on which A/B email variant to keep sending vs. cut.">variant calls</span> rank High),
-      then worst <span class="jg" title="Total emails sent divided by positive replies — lower is better.">sent-per-positive</span> ratio within each tier.
-      A Medium campaign can have a worse raw ratio than a High one.
+      This mirrors the lilly-optimiser Priority Report: 7 sections, actionable ones first.
+      <b>Section 1</b> lists campaigns needing optimisation, worst
+      <span class="jg" title="Total emails sent divided by positive replies — lower is better.">sent-per-positive</span>
+      first (zero-positive campaigns at the very top). <b>Section 7</b> is what to do about it,
+      High priority first, largest campaigns first within each tier.
     </div>
     <div id="list"></div>
   </main>
@@ -160,40 +174,73 @@
 <button id="backToTop" class="back-to-top" type="button" title="Back to top" aria-label="Back to top">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
 </button>
+<div id="pauseModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h3>Pause campaign</h3>
+    <p id="pauseModalCampaign"></p>
+    <p>Type <b>PAUSE</b> to confirm. This calls Smartlead's pause endpoint immediately — there is no undo from here.</p>
+    <input id="pauseConfirmInput" type="text" autocomplete="off" placeholder="Type PAUSE">
+    <div class="modal-err" id="pauseModalErr"></div>
+    <div class="modal-actions">
+      <button class="btn sm" id="pauseCancelBtn" type="button">Cancel</button>
+      <button class="btn sm danger" id="pauseConfirmBtn" type="button">Confirm pause</button>
+    </div>
+  </div>
+</div>
 <script src="shell.js"></script>
 <script>
 document.getElementById("rail").outerHTML = renderRail("notifications");
 
-/* Real notifications tab: reads/writes the live optimiser_notifications
-   table via /api/notifications (GET, list) and /api/notifications/{id}
-   (PATCH, {status}) — see app/server.py api_notifications() /
-   update_notification_status(). No more data/notifications.json, no more
-   shell.js loadData() for this page's content, no more no-op decide(). */
+/* Real notifications tab: reads the live optimiser_notifications table via
+   GET /api/notifications, renders it AS the lilly-optimiser Priority Report
+   (7 sections + an All-clear tail — see .claude/skills/lilly-optimiser/SKILL.md
+   "Report Structure"), and writes back through PATCH /api/notifications/{id}
+   (status lifecycle) and POST /api/notifications/{id}/execute (the one
+   API-safe action: pause_campaign / kill_threshold_pivot, gated behind a
+   typed PAUSE confirmation). No full re-render after any action — only the
+   touched DOM node is patched in place. */
 
-const PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };           // unranked/None -> 3, sorts last
-const TIER_LABEL = { 0: "High priority", 1: "Medium priority", 2: "Low priority", 3: "No priority" };
 const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Actioned", dismissed: "Dismissed" };
 const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n" };
+const PRIORITY_PILL_CLASS = { High: "r", Medium: "a", Low: "n" };
 
 let all = [];                 // every row from the last successful fetch
 let loadState = "loading";    // "loading" | "ok" | "error"
 let filters = { status: "all", priority: "all" };
 let clientsList = [];  // dedupeClients(await fetchClientsForSwitcher()) — for resolveClientId() name-matching
 
-/* Per-campaign expand/collapse state (fix A). Keyed the same way as
-   groupAndSort()'s group key. Populated lazily with a smart default the
-   FIRST time a given campaign is seen (High tier -> expanded, everything
-   else -> collapsed); after that, only explicit user clicks change it, so
-   re-renders from a filter change or refresh never fight a manual toggle. */
-const groupExpandState = new Map();
+/* Collapse state per report section (0-8, 8 = All clear). Defaults: 1 and 7
+   expanded (the two actionable-right-now sections), everything else
+   collapsed. Only explicit clicks change it after that, so a filter change
+   or refresh never fights a manual toggle. */
+const sectionExpandState = new Map([[1, true], [7, true]]);
+function isExpanded(num) { return !!sectionExpandState.get(num); }
 
-async function loadNotifications() {
+/* ══ perf: short (60s) TTL cache, keyed by the FULL url (client_id included) ══ */
+const NOTIF_CACHE_TTL = 60000;
+const _notifCache = new Map();
+function cachedGetNotifications(url, ttl = NOTIF_CACHE_TTL) {
+  const now = Date.now();
+  const hit = _notifCache.get(url);
+  if (hit && (now - hit.t) < ttl) return hit.p;
+  const p = fetchJsonWithRetry(url, { cache: "no-store" }, null).then((v) => {
+    if (v === null) throw new Error(`fetch failed: ${url}`);
+    return v;
+  });
+  p.catch(() => { const h = _notifCache.get(url); if (h && h.p === p) _notifCache.delete(url); });
+  _notifCache.set(url, { t: now, p });
+  return p;
+}
+function bustNotifCache() { _notifCache.clear(); }
+
+async function loadNotifications(opts = {}) {
   loadState = "loading";
   draw();
+  if (opts.force) bustNotifCache();
+  const activeClient = getActiveClient();
+  const url = "/api/notifications" + (activeClient ? `?client_id=${encodeURIComponent(activeClient)}` : "");
   try {
-    const r = await fetch("/api/notifications", { cache: "no-store" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
+    const data = await cachedGetNotifications(url);
     all = Array.isArray(data) ? data : [];
     loadState = "ok";
   } catch (e) {
@@ -203,19 +250,11 @@ async function loadNotifications() {
   draw();
 }
 
-/* d.client here is a free-text label (a genuine client name — Navreo, Amplifyy, Arnic —
-   or "Olivia Duncan"/"Unknown", which this prototype never distinguished from a real
-   client). resolveClientId() (shell.js) only matches genuine client names; anything else
-   resolves to null and is treated as "unassigned": always visible under "All clients",
-   hidden once a specific client is selected. */
 function matchesActiveClient(n) {
   const active = getActiveClient();
   if (!active) return true;
   return resolveClientId(n, clientsList) === active;
 }
-
-function priorityRank(p) { return PRIORITY_RANK[p] ?? 3; }
-function priorityClass(p) { return p === "High" ? "pr-high" : p === "Medium" ? "pr-medium" : p === "Low" ? "pr-low" : ""; }
 
 function passesFilters(n) {
   if (filters.status !== "all" && n.status !== filters.status) return false;
@@ -224,142 +263,256 @@ function passesFilters(n) {
   return true;
 }
 
-function campaignKeyOf(n) { return String(n.campaign_id ?? n.campaign_name ?? "unknown"); }
+function campaignLink(name, url) {
+  const label = esc(name || "Unknown campaign");
+  return url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${label}</a>` : label;
+}
 
-/* Group by campaign, then rank each group by the HIGHEST-priority finding
-   among the findings CURRENTLY VISIBLE for that group (i.e. the same set
-   the active filters already produced — `items` here is always
-   `all.filter(passesFilters)`, never the unfiltered full set).
+/* ══ Parsing helpers — pull structured facts out of the free-text
+   title/detail fields build_notifications.py writes, per the exact wording
+   documented in the skill. ══ */
+function parseVariantTitle(title) {
+  if (title === "Whole offer failing") return { wholeOffer: true };
+  const m = /^Variant call: Email\s*(\d+)(?:\s+Var\s+(.+))?$/i.exec(title || "");
+  if (!m) return { email: null, variant: null };
+  return { email: m[1], variant: m[2] || null };
+}
+function parseDistributionTitle(title) {
+  const m = /^Distribution flag: Email\s*(\d+)(?:\s+Var\s+(.+))?$/i.exec(title || "");
+  if (!m) return { email: null, variant: null };
+  return { email: m[1], variant: m[2] || null };
+}
+function parseAngle(detail) {
+  const m = /Angle:\s*(.+)$/s.exec(detail || "");
+  return m ? m[1].trim() : "";
+}
+function parseLeads(detail) {
+  const m = /Leads\s+([\d,]+)/.exec(detail || "");
+  return m ? m[1] : null;
+}
+function parseBugType(detail) {
+  const m = /^(Bug [AB]:[^-]+)-/.exec(detail || "");
+  return m ? m[1].trim() : (detail || "").split(" - ")[0];
+}
+/* Section 7's `detail` is the whole rendered block (header line + "Priority:
+   X" + a blank line + "- " bullets). We already build our own header/pill
+   from the structured columns, so only the bullet lines are pulled out here
+   — otherwise the header text would be duplicated on screen. */
+function parseActionBullets(detail) {
+  return (detail || "").split("\n").filter((l) => l.trim().startsWith("- ")).map((l) => l.trim().slice(2).trim());
+}
+function sentPosCell(n) {
+  return Number.isFinite(n.sent_pos_ratio) ? fmt(n.sent_pos_ratio) : "∞";
+}
 
-   Fix D.1: earlier this recomputed an "open" (non-dismissed) subset and
-   ranked off THAT, which quietly disagreed with the filter whenever a
-   group's only visible findings had all been dismissed (e.g. status filter
-   = "all", priority filter = "High": every visible item in that group IS
-   High, but if all of them happened to be dismissed, "open" filtered them
-   all out and the group fell back to the "No priority" tier — even though
-   every card on screen for that group had a High pill). Ranking directly
-   off the visible set makes "the group's tier" and "the priority pill on
-   every card you can see in it" impossible to disagree, and it makes tier
-   header counts sum to the same total as the top summary by construction:
-   both are counting campaigns within the identical `items` set.
-
-   Within a tier, groups are NOT left in arbitrary order: the campaign with
-   the worst sent_pos_ratio ("sent per positive" — higher = worse) among the
-   findings that put it in this tier sorts first, then the one with more
-   High-priority findings, then alphabetically, then — as a final,
-   ALWAYS-decisive tiebreaker — by campaign id/key ascending. That last step
-   is what makes the sort fully deterministic: every comparison above can
-   legitimately tie (same ratio, same High count, even the same display
-   name), and without a guaranteed-unique last step the browser's sort is
-   free to leave those tied groups in whatever order they happened to arrive
-   from the API, which is exactly why testers saw the top-of-tier order
-   change between reloads with no data change at all. Campaign id is unique
-   per group by construction (it's the Map key below), so this step alone
-   guarantees the same input always produces the same output order. */
-function groupAndSort(items) {
-  const groups = new Map();
-  items.forEach((n) => {
-    const key = campaignKeyOf(n);
-    if (!groups.has(key)) {
-      // Label unresolved free-text clients (e.g. "Olivia Duncan", "Unknown") as
-      // "Unassigned (<name>)" so they're never mistaken for a real client match —
-      // matchesActiveClient() still keeps them visible under "All clients".
-      const label = resolveClientId(n, clientsList) ? n.client : (n.client ? `Unassigned (${n.client})` : "Unassigned");
-      groups.set(key, { key, campaignId: n.campaign_id, campaign_name: n.campaign_name, client: label, items: [] });
-    }
-    groups.get(key).items.push(n);
+/* Campaign-level context (sent / positive / completion %) for the Variant
+   Analysis header and the Section 7 block header, sourced from that
+   campaign's own Section 1 (needs optimisation) or Section 2 (performing)
+   row — the source of truth for campaign totals, per the skill. Built once
+   per draw() from the FULL unfiltered set so a status/priority filter never
+   starves a header of its context numbers. */
+function buildCampaignContext(rows) {
+  const map = new Map();
+  rows.forEach((n) => {
+    if (n.section !== 1 && n.section !== 2) return;
+    map.set(String(n.campaign_id), n);
   });
-  const list = [...groups.values()];
-  list.forEach((g) => {
-    const ranks = g.items.map((n) => priorityRank(n.priority));
-    g.rank = ranks.length ? Math.min(...ranks) : 3;
-    const tierItems = g.items.filter((n) => priorityRank(n.priority) === g.rank);
-    // Number.isFinite (not `typeof x === "number"`) so a genuinely missing
-    // ratio AND a 0-sent/0-positive ratio that computed to NaN are both
-    // excluded from the pool — typeof NaN is "number", so the old check let
-    // NaN through, and NaN in a numeric sort comparator is undefined
-    // behaviour (another source of the reload-to-reload reordering). A
-    // group with no finite ratio anywhere falls back to -Infinity, which
-    // always sorts LAST within its tier: "no data" never outranks a real,
-    // measured bad ratio.
-    const ratioPool = (tierItems.length ? tierItems : g.items).filter((n) => Number.isFinite(n.sent_pos_ratio));
-    g.worstRatio = ratioPool.length ? Math.max(...ratioPool.map((n) => n.sent_pos_ratio)) : -Infinity;
-    g.highCount = g.items.filter((n) => n.priority === "High").length;
-    g.items = [...g.items].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
-  });
-  list.sort((a, b) =>
-    a.rank - b.rank ||
-    b.worstRatio - a.worstRatio ||
-    b.highCount - a.highCount ||
-    String(a.campaign_name || "").localeCompare(String(b.campaign_name || "")) ||
-    compareKeyAsc(a.key, b.key)
-  );
-  return list;
+  return map;
 }
 
-/* Ascending compare for the final tiebreaker: numeric if both keys parse as
-   plain numbers (the common case — campaign_id), otherwise lexical. Either
-   way it's a total order over unique keys, so it never ties. */
-function compareKeyAsc(a, b) {
-  const na = Number(a), nb = Number(b);
-  if (Number.isFinite(na) && Number.isFinite(nb) && String(na) === a && String(nb) === b) return na - nb;
-  return String(a).localeCompare(String(b));
+function contextFor(ctxMap, n) {
+  const ctx = ctxMap.get(String(n.campaign_id));
+  return {
+    sent: ctx ? ctx.sent : n.sent,
+    positive: ctx ? ctx.positive : n.positive,
+    completion_pct: (n.completion_pct ?? (ctx ? ctx.completion_pct : null)),
+    smartlead_url: n.smartlead_url || (ctx && ctx.smartlead_url),
+    client: n.client || (ctx && ctx.client),
+  };
 }
 
-function groupDotColor(rank) {
-  return rank === 0 ? "var(--red)" : rank === 1 ? "var(--amber)" : rank === 2 ? "var(--brown-300)" : "var(--line-2)";
-}
-
-const PRIORITY_TOOLTIP = {
-  High: "High priority — needs a human decision now (kill-threshold crossed, a failing variant call, or a similarly urgent signal).",
-  Medium: "Medium priority — worth a look soon; not urgent.",
-  Low: "Low priority — informational, low urgency.",
-};
 function priorityPill(p) {
-  const cls = p === "High" ? "r" : p === "Medium" ? "a" : "n";
-  const title = PRIORITY_TOOLTIP[p] || "No computed priority for this finding.";
-  return `<span class="pill ${cls}" title="${esc(title)}">${esc(p || "No priority")}</span>`;
+  const cls = PRIORITY_PILL_CLASS[p] || "n";
+  return `<span class="pill ${cls}">${esc(p || "No priority")}</span>`;
 }
 function statusPillN(s) {
   return `<span class="pill ${STATUS_PILL_CLASS[s] || "n"}"><span class="dot"></span>${esc(STATUS_LABEL[s] || s || "Unknown")}</span>`;
 }
 
-/* Cheap jargon tooltips (fix C): after escaping user/API text, wrap the two
-   recurring jargon terms in a dotted-underline span with a plain-English
-   explanation on hover. Runs on already-escaped HTML, so it only ever
-   matches literal words — never touches markup. */
-function annotateJargon(escapedHtml) {
-  return escapedHtml
-    .replace(/\b(kill-threshold(?:s)?)\b/gi, '<span class="jg" title="A hard performance floor — cross it and the finding is flagged to stop or change, not just watched.">$1</span>')
-    .replace(/\b(variant call(?:s)?)\b/gi, '<span class="jg" title="A recommendation on which A/B email variant to keep sending vs. cut.">$1</span>');
+/* ══ Section renderers — table shapes and headings match SKILL.md's
+   "Report Structure" section-by-section, in the same order. ══ */
+
+function section1(rows) {
+  const sorted = [...rows].sort((a, b) => {
+    const az = !(a.positive > 0), bz = !(b.positive > 0);
+    if (az !== bz) return az ? -1 : 1;
+    if (az && bz) return (b.sent || 0) - (a.sent || 0);
+    return (b.sent_pos_ratio || 0) - (a.sent_pos_ratio || 0);
+  });
+  const body = sorted.map((n, i) => `
+    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+      <td>${i + 1}</td>
+      <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
+      <td>${fmt(n.sent)}</td>
+      <td>${fmt(n.positive)}</td>
+      <td>${sentPosCell(n)}</td>
+    </tr>`).join("");
+  return `<div class="table-scroll"><table class="tbl">
+    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th><th>Sent/Pos</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
 }
 
-function statLine(n) {
-  const parts = [];
-  if (n.sent !== undefined && n.sent !== null) parts.push([fmt(n.sent), "sent"]);
-  if (n.positive !== undefined && n.positive !== null) parts.push([fmt(n.positive), "positive"]);
-  if (Number.isFinite(n.sent_pos_ratio)) {
-    // sent_pos_ratio is sent/positives (e.g. 3806.4 emails sent per positive
-    // reply) — NOT a percentage and NOT a reply rate. Show it as the raw
-    // ratio it is; a "%" suffix or "reply rate" label here would be
-    // backwards (bigger number = worse, not better). A non-finite value
-    // (NaN from 0 sent / 0 positive, or an occasional Infinity) has no
-    // sensible "sent per positive" to show, so it's dropped rather than
-    // rendered as the literal string "NaN"/"Infinity".
-    parts.push([fmt(n.sent_pos_ratio), `<span class="jg" title="Total emails sent divided by positive replies — lower is better.">sent per positive</span>`]);
-  }
-  if (!parts.length) return "";
-  return `<div class="nums">${parts.map(([v, l]) => `<div><div class="nv">${v}</div><div class="nl">${l}</div></div>`).join("")}</div>`;
+function section2(rows) {
+  const sorted = [...rows].sort((a, b) => (a.sent_pos_ratio ?? 0) - (b.sent_pos_ratio ?? 0));
+  const body = sorted.map((n, i) => `
+    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+      <td>${i + 1}</td>
+      <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
+      <td>${fmt(n.sent)}</td>
+      <td>${fmt(n.positive)}</td>
+      <td>${sentPosCell(n)}</td>
+    </tr>`).join("");
+  return `<div class="table-scroll"><table class="tbl">
+    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th><th>Sent/Pos</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
 }
 
-/* Button-state rule (documented so it's obvious, not just "your judgment" in
-   the head): each action is disabled once the card is already there or has
-   moved past the point that action makes sense —
-     Acknowledge   -> only meaningful as the FIRST touch: enabled only when status === "new".
-     Mark actioned -> enabled from new/acknowledged/dismissed; disabled once already "actioned".
-     Dismiss       -> enabled from any state except "dismissed".
-   That still lets you move a dismissed finding back into play (mark it
-   actioned) without ever showing a button that would silently no-op. */
+function section3(rows) {
+  const sorted = [...rows].sort((a, b) => (b.completion_pct || 0) - (a.completion_pct || 0));
+  const anyLeads = sorted.some((n) => parseLeads(n.detail));
+  const body = sorted.map((n) => {
+    const leads = parseLeads(n.detail);
+    return `
+    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+      <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
+      <td>${fmt(n.sent)}</td>
+      ${anyLeads ? `<td>${leads ? fmt(Number(leads.replace(/,/g, ""))) : "–"}</td>` : ""}
+      <td>${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) + "%" : "–"}</td>
+      <td>${esc(n.title || "")}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="table-scroll"><table class="tbl">
+    <thead><tr><th>Campaign</th><th>Sent</th>${anyLeads ? "<th>Leads</th>" : ""}<th>Completion</th><th>Status</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+
+function section4(rows, ctxMap) {
+  const groups = new Map();
+  rows.forEach((n) => {
+    const key = String(n.campaign_id);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(n);
+  });
+  const list = [...groups.entries()].map(([key, items]) => {
+    const ctx = contextFor(ctxMap, items[0]);
+    return { key, items, ctx };
+  });
+  // Same "worst first" theme as Section 1: campaigns with the worst
+  // campaign-level sent-per-positive ratio (zero positives = worst, sorts
+  // first) lead the Variant Analysis section too.
+  list.sort((a, b) => {
+    const az = !(a.ctx.positive > 0), bz = !(b.ctx.positive > 0);
+    if (az !== bz) return az ? -1 : 1;
+    if (az && bz) return (b.ctx.sent || 0) - (a.ctx.sent || 0);
+    return (b.ctx.sent / (b.ctx.positive || 1)) - (a.ctx.sent / (a.ctx.positive || 1));
+  });
+  return list.map(({ items, ctx }) => {
+    const first = items[0];
+    const headCompletion = Number.isFinite(ctx.completion_pct) ? `${ctx.completion_pct.toFixed(1)}% complete` : "completion unknown";
+    const headHTML = `<div class="va-head">
+      ${campaignLink(first.campaign_name, ctx.smartlead_url)}
+      <span class="ctx">(${fmt(ctx.sent)} sent, ${fmt(ctx.positive)} pos, ${headCompletion})</span>
+    </div>`;
+    const wholeOffer = items.find((n) => n.title === "Whole offer failing");
+    const variantRows = items.filter((n) => n.title !== "Whole offer failing");
+    let bodyHTML = "";
+    if (wholeOffer) {
+      bodyHTML += `<div class="callout"><b>Whole offer failing:</b> ${esc(wholeOffer.detail || "")} <b>Recommended:</b> ${esc(wholeOffer.suggested_action || "")}</div>`;
+    }
+    if (variantRows.length) {
+      const trs = variantRows.map((n) => {
+        const p = parseVariantTitle(n.title);
+        const angle = parseAngle(n.detail);
+        return `<tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+          <td>Email ${esc(p.email || "?")}</td>
+          <td>${esc(p.variant || "—")}</td>
+          <td>${fmt(n.sent)}</td>
+          <td>${fmt(n.positive)}</td>
+          <td>${sentPosCell(n)}</td>
+          <td>${esc(angle || "–")}</td>
+          <td>${esc(n.suggested_action || "–")}</td>
+        </tr>`;
+      }).join("");
+      bodyHTML += `<div class="table-scroll"><table class="tbl">
+        <thead><tr><th>Email</th><th>Variant</th><th>Sent</th><th>Positive</th><th>Sent/Pos</th><th>Angle</th><th>Recommendation</th></tr></thead>
+        <tbody>${trs}</tbody></table></div>`;
+    }
+    return `<div class="va-group">${headHTML}${bodyHTML}</div>`;
+  }).join("");
+}
+
+function section5(rows) {
+  const sorted = [...rows].sort((a, b) => (a.reply_rate ?? 0) - (b.reply_rate ?? 0));
+  const body = sorted.map((n) => `
+    <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+      <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
+      <td>${fmt(n.sent)}</td>
+      <td>${Number.isFinite(n.reply_rate) ? n.reply_rate.toFixed(2) + "%" : "–"}</td>
+    </tr>`).join("");
+  return `<div class="table-scroll"><table class="tbl">
+    <thead><tr><th>Campaign</th><th>Sent</th><th>Reply Rate</th></tr></thead>
+    <tbody>${body}</tbody></table></div>
+    <div class="fixnote">Recommended next step: run <span class="jg" title="Pulls every lead, classifies each title by function, and reports how much of the list is on-ICP vs off-ICP.">lilly-list-audit</span> on each flagged campaign to confirm the enrolled leads match the intended persona, and check deliverability (spam placement, sender reputation, warmup) in parallel.</div>`;
+}
+
+function section6(rows) {
+  const sorted = [...rows].sort((a, b) => String(a.campaign_name || "").localeCompare(String(b.campaign_name || "")));
+  const body = sorted.map((n) => {
+    const p = parseDistributionTitle(n.title);
+    const bugType = parseBugType(n.detail);
+    const angle = parseAngle(n.detail);
+    const notes = `Email ${esc(p.email || "?")} Var ${esc(p.variant || "—")}${angle ? `: ${esc(angle)}` : ""}`;
+    return `<tr class="${n.status === "dismissed" ? "dimmed" : ""}">
+      <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
+      <td>${esc(bugType)}</td>
+      <td>${notes}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="table-scroll"><table class="tbl">
+    <thead><tr><th>Campaign</th><th>Bug Type</th><th>Notes</th></tr></thead>
+    <tbody>${body}</tbody></table></div>
+    <div class="fixnote">Fix: go into the campaign in the Smartlead UI and manually set the correct traffic split so every intended variant has a non-zero share.</div>`;
+}
+
+function actionBlockHTML(n) {
+  const bullets = parseActionBullets(n.detail);
+  const cls = ["action-block"];
+  if (n.status === "dismissed") cls.push("dismissed");
+  const showPause = !!n.api_safe;
+  const showCopy = !!n.claude_prompt;
+  return `<div class="${cls.join(" ")}" id="ab-${esc(String(n.id))}" data-id="${esc(String(n.id))}">
+    <div class="ab-head">
+      <div class="ab-title">
+        <b>${n.block_number ?? "–"}.</b> ${campaignLink(n.campaign_name, n.smartlead_url)}
+        <span class="ctx">&middot; ${esc(n.client || "Unassigned")} &middot; ${fmt(n.sent)} sent, ${fmt(n.positive)} pos, ${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) : "–"}% complete</span>
+      </div>
+      <div class="ab-pills">
+        ${priorityPill(n.priority)}
+        <span class="ab-status">${statusPillN(n.status)}</span>
+      </div>
+    </div>
+    ${bullets.length ? `<ul class="action-list">${bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+    <div class="action-row">
+      ${showPause ? `<button type="button" class="btn sm danger" data-act="pause" data-id="${esc(String(n.id))}">Pause campaign</button>` : ""}
+      ${showCopy ? `<button type="button" class="btn sm" data-act="copy-prompt" data-id="${esc(String(n.id))}">Copy Claude prompt</button>` : ""}
+      <a class="btn sm" href="${esc(n.smartlead_url || "#")}" target="_blank" rel="noopener">Open in Smartlead</a>
+      ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
+      ${actionBtn(n, "actioned", "Mark actioned", "Actioned")}
+      ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
+    </div>
+  </div>`;
+}
+
 function actionBtn(n, target, label, doneLabel) {
   const disabled = target === "acknowledged" ? n.status !== "new"
                   : target === "actioned" ? n.status === "actioned"
@@ -373,58 +526,41 @@ function actionBtn(n, target, label, doneLabel) {
   return `<button type="button" class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""}>${esc(text)}</button>`;
 }
 
-function cardHTML(n, gkey) {
-  const cls = ["note", priorityClass(n.priority)];
-  if (n.status === "dismissed") cls.push("dismissed");
-  return `
-  <div class="${cls.filter(Boolean).join(" ")}" id="ncard-${esc(String(n.id))}" data-gkey="${esc(String(gkey ?? ""))}">
-    <div class="note-main">
-      <div class="ictile">${ic8("bell")}</div>
-      <div style="flex:1;min-width:0">
-        <div class="t">
-          ${annotateJargon(esc(n.title || "Untitled finding"))}
-          ${priorityPill(n.priority)}
-          ${statusPillN(n.status)}
-        </div>
-        ${n.detail ? `<div class="d">${annotateJargon(esc(n.detail))}</div>` : ""}
-        ${n.suggested_action ? `<div class="d"><b>Suggested:</b> ${annotateJargon(esc(n.suggested_action))}</div>` : ""}
-        ${statLine(n)}
-      </div>
-      <div class="decide">
-        ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
-        ${actionBtn(n, "actioned", "Mark actioned", "Actioned")}
-        ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
-      </div>
+function section7(rows) {
+  const sorted = [...rows].sort((a, b) => (a.block_number ?? 9999) - (b.block_number ?? 9999));
+  return sorted.map(actionBlockHTML).join("");
+}
+
+function section8(rows) {
+  const names = rows.map((n) => campaignLink(n.campaign_name, n.smartlead_url));
+  return `<div class="va-note">${names.join(", ") || "None"}</div>`;
+}
+
+/* ══ Top-level draw ══ */
+function reportSection(num, title, rows, bodyFn, opts = {}) {
+  if (!rows.length && !opts.showEmpty) return "";
+  const expanded = isExpanded(num);
+  const countLabel = opts.countLabel || `${rows.length} ${rows.length === 1 ? "campaign" : "campaigns"}`;
+  return `<div class="rsection${opts.muted ? " muted" : ""}" data-section="${num}">
+    <div class="rsection-h${expanded ? " expanded" : ""}" data-toggle-section="${num}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      <span class="snum">${num}.</span>
+      <span class="stitle">${esc(title)}</span>
+      <span class="scount">${esc(countLabel)}</span>
+    </div>
+    <div class="rsection-body${expanded ? "" : " hidden"}" data-section-body="${num}">
+      ${rows.length ? bodyFn(rows) : `<div class="empty">No findings in this section.</div>`}
     </div>
   </div>`;
 }
 
 function updateSummary() {
   const el = document.getElementById("summary");
-  if (loadState !== "ok") { el.innerHTML = ""; updateGlobalBulkButton(); return; }
-  // Campaign count reflects the CURRENTLY VISIBLE (filtered) set, same as the
-  // findings count next to it — a narrowed filter should never leave a stale
-  // "103 campaigns" sitting next to "Showing 12 of 197 findings".
+  if (loadState !== "ok") { el.innerHTML = ""; return; }
   const shown = all.filter(passesFilters);
   const campaignCount = new Set(shown.map((n) => n.campaign_id ?? n.campaign_name)).size;
   el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${all.length}</b> findings</div>` +
     `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
-  updateGlobalBulkButton();
-}
-
-/* Fix B (global control): keep the "Acknowledge all visible" button's count
-   and enabled state in lockstep with the current filtered view — called
-   from updateSummary(), which itself runs on every load, filter change, and
-   in-place card patch. */
-function updateGlobalBulkButton() {
-  const btn = document.getElementById("ackAllVisibleBtn");
-  if (!btn) return;
-  if (loadState !== "ok") { btn.disabled = true; btn.textContent = "Acknowledge all visible (0)"; return; }
-  if (btn.dataset.busy === "1") return; // mid-bulk-run — leave its progress text alone
-  const shown = all.filter(passesFilters);
-  const n = shown.filter((x) => x.status === "new").length;
-  btn.textContent = `Acknowledge all visible (${n})`;
-  btn.disabled = n === 0;
 }
 
 function draw() {
@@ -443,218 +579,75 @@ function draw() {
     root.innerHTML = `<div class="empty">No notifications match these filters.</div>`;
     return;
   }
-  const groups = groupAndSort(shown);
-  root.innerHTML = renderGroupsWithTierHeaders(groups);
-}
+  const ctxMap = buildCampaignContext(all.filter(matchesActiveClient));
+  const by = (s) => shown.filter((n) => n.section === s);
 
-/* Fix A + fix 1 (tier boundaries): groupAndSort() orders campaigns
-   High -> Medium -> Low -> No-priority tier, and within each tier by
-   worst-first severity. Walk the already-sorted groups and drop in a tier
-   header (with a live campaign count + Expand all/Collapse all toggles)
-   every time the tier changes. A tier with zero surviving campaigns after
-   filtering simply never appears in `groups`, so it's skipped automatically.
+  const html = [
+    reportSection(1, "Campaigns Needing Optimisation", by(1), section1),
+    reportSection(2, "Performing Campaigns", by(2), section2),
+    reportSection(3, "Campaign Lifecycle", by(3), section3),
+    reportSection(4, "Variant Analysis", by(4), (rows) => section4(rows, ctxMap), {
+      countLabel: (() => { const c = new Set(by(4).map((n) => n.campaign_id)).size; return `${c} campaign${c === 1 ? "" : "s"}, ${by(4).length} finding${by(4).length === 1 ? "" : "s"}`; })(),
+    }),
+    reportSection(5, "Low Reply Rate Flags - Campaigns with reply rate under 1%", by(5), section5),
+    reportSection(6, "Variant Distribution Flags", by(6), section6),
+    reportSection(7, "Recommended Actions", by(7), section7, { countLabel: `${by(7).length} action${by(7).length === 1 ? "" : "s"}` }),
+  ].join("");
 
-   Each campaign renders as a `.group-wrap` with a compact, always-visible
-   `.group-h` summary row (name, client, worst-priority dot, finding count,
-   worst sent-per-positive ratio, per-group bulk buttons, chevron) and a
-   `.group-body` holding the full finding cards, shown/hidden by a class
-   toggle — never a re-render — so toggling a group never disturbs another
-   card's freshly-patched DOM state (in-flight or otherwise). Default
-   expand/collapse state is decided once per campaign (High tier starts
-   expanded, everything else starts collapsed) and then persists across
-   redraws via `groupExpandState`. */
-function renderGroupsWithTierHeaders(groups) {
-  let lastRank = null;
-  const counts = new Map();
-  groups.forEach((g) => counts.set(g.rank, (counts.get(g.rank) || 0) + 1));
-  return groups.map((g) => {
-    if (!groupExpandState.has(g.key)) groupExpandState.set(g.key, g.rank === 0);
-    const expanded = !!groupExpandState.get(g.key);
-    let header = "";
-    if (g.rank !== lastRank) {
-      lastRank = g.rank;
-      const n = counts.get(g.rank);
-      header = `
-      <div class="tier-h">
-        <span class="tdot" style="background:${groupDotColor(g.rank)}"></span>
-        <span class="tlab">${esc(TIER_LABEL[g.rank] || "Other")}</span>
-        <span class="tcount">${n} campaign${n === 1 ? "" : "s"}</span>
-        <span class="tier-toggles">
-          <button type="button" class="tier-toggle" data-rank="${g.rank}" data-action="expand">Expand all</button>
-          <button type="button" class="tier-toggle" data-rank="${g.rank}" data-action="collapse">Collapse all</button>
-        </span>
-      </div>`;
-    }
-    const hasOpenNew = g.items.some((n2) => n2.status === "new");
-    const ratioHTML = g.worstRatio > -Infinity
-      ? `<span class="gratio" title="Worst sent-per-positive ratio among this campaign's findings in its tier — higher is worse.">${fmt(g.worstRatio)} sent/pos</span>`
-      : "";
-    return `${header}
-    <div class="group-wrap">
-      <div class="group-h${expanded ? " expanded" : ""}" data-gkey="${esc(g.key)}" data-rank="${g.rank}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
-        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-        <span class="gdot" style="background:${groupDotColor(g.rank)}" title="${esc(TIER_LABEL[g.rank] || "")}"></span>
-        <span class="lab">${g.campaignId ? `<a href="campaigns.html#${esc(String(g.campaignId))}">${esc(g.campaign_name || "Unknown campaign")}</a>` : esc(g.campaign_name || "Unknown campaign")}</span>
-        <span class="desc">${esc(g.client || "")}</span>
-        <span class="gcount">${g.items.length} finding${g.items.length === 1 ? "" : "s"}</span>
-        ${ratioHTML}
-        <span class="bulk">
-          <button type="button" class="btn sm bulk-btn" data-gkey="${esc(g.key)}" data-bulk="acknowledged" ${hasOpenNew ? "" : "disabled"}>Acknowledge all</button>
-          <button type="button" class="btn sm bulk-btn" data-gkey="${esc(g.key)}" data-bulk="dismissed" ${hasOpenNew ? "" : "disabled"}>Dismiss all</button>
-          <span class="bulk-progress" data-gkey="${esc(g.key)}"></span>
-        </span>
-      </div>
-      <div class="group-body${expanded ? "" : " hidden"}" data-gkey="${esc(g.key)}">
-        ${g.items.map((n2) => cardHTML(n2, g.key)).join("")}
-      </div>
-    </div>`;
-  }).join("");
+  const clearRows = by(0);
+  const clearHTML = reportSection(
+    8, `All clear, ${clearRows.length} active campaigns below the 1,500-send report threshold`,
+    clearRows, section8, { muted: true, countLabel: "", showEmpty: true }
+  );
+
+  root.innerHTML = html + clearHTML;
 }
 
 document.getElementById("statusFilter").onchange = (e) => { filters.status = e.target.value; draw(); };
 document.getElementById("priorityFilter").onchange = (e) => { filters.priority = e.target.value; draw(); };
-document.getElementById("refreshBtn").onclick = loadNotifications;
+document.getElementById("refreshBtn").onclick = () => loadNotifications({ force: true });
 
-/* --- expand/collapse (fix A) --- direct DOM class toggles, never a draw(),
-   so nothing already patched in place is ever re-rendered by this. */
-function setGroupExpanded(gkey, expanded) {
-  groupExpandState.set(gkey, expanded);
-  const header = document.querySelector(`.group-h[data-gkey="${CSS.escape(gkey)}"]`);
-  const body = document.querySelector(`.group-body[data-gkey="${CSS.escape(gkey)}"]`);
+/* --- section expand/collapse — direct DOM class toggle, never a draw(), so
+   nothing already patched in place is disturbed. --- */
+function setSectionExpanded(num, expanded) {
+  sectionExpandState.set(num, expanded);
+  const header = document.querySelector(`.rsection-h[data-toggle-section="${num}"]`);
+  const body = document.querySelector(`.rsection-body[data-section-body="${num}"]`);
   if (header) { header.classList.toggle("expanded", expanded); header.setAttribute("aria-expanded", expanded ? "true" : "false"); }
   if (body) body.classList.toggle("hidden", !expanded);
 }
-function toggleGroup(gkey) { setGroupExpanded(gkey, !groupExpandState.get(gkey)); }
 
-/* --- bulk PATCH runner shared by per-group and global bulk actions (fix B).
-   Sequential (the API is per-id only), patches each card in place as its
-   PATCH lands (reusing the same single-card patch path used by individual
-   actions), disables that card's own buttons while its PATCH is in flight,
-   and keeps going on an individual failure rather than aborting the batch —
-   the caller reports how many failed via a toast. */
-async function bulkPatch(ids, targetStatus, onProgress) {
-  let failed = 0;
-  for (let i = 0; i < ids.length; i++) {
-    const id = ids[i];
-    if (onProgress) onProgress(i, ids.length);
-    const card = document.getElementById(`ncard-${CSS.escape(String(id))}`);
-    const cardBtns = card ? [...card.querySelectorAll("button[data-target]")] : [];
-    cardBtns.forEach((b) => { b.disabled = true; });
-    try {
-      const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: targetStatus }),
-      });
-      const updated = await res.json();
-      if (!res.ok || (updated && updated.ok === false)) {
-        throw new Error((updated && updated.message) || `HTTP ${res.status}`);
-      }
-      const idx = all.findIndex((n) => String(n.id) === String(id));
-      if (idx >= 0) all[idx] = { ...all[idx], ...updated };
-      applyCardPatch(idx >= 0 ? all[idx] : { ...updated, id });
-    } catch (err) {
-      failed++;
-      cardBtns.forEach((b) => { b.disabled = false; });
-      console.warn("bulk PATCH failed", id, err);
-    }
-  }
-  if (onProgress) onProgress(ids.length, ids.length);
-  return failed;
-}
-
-function refreshGroupBulkAvailability(gkey) {
-  const hasOpenNew = all.some((n) => campaignKeyOf(n) === gkey && n.status === "new" && passesFilters(n));
-  document.querySelectorAll(`.bulk-btn[data-gkey="${CSS.escape(gkey)}"]`).forEach((b) => { b.disabled = !hasOpenNew; });
-}
-
-async function handleGroupBulk(bulkBtn) {
-  const gkey = bulkBtn.dataset.gkey;
-  const targetStatus = bulkBtn.dataset.bulk;
-  const ids = all.filter((n) => campaignKeyOf(n) === gkey && n.status === "new" && passesFilters(n)).map((n) => n.id);
-  if (!ids.length) return;
-  const wrap = bulkBtn.closest(".bulk");
-  const buttons = wrap ? [...wrap.querySelectorAll(".bulk-btn")] : [bulkBtn];
-  const progressEl = wrap ? wrap.querySelector(".bulk-progress") : null;
-  buttons.forEach((b) => { b.disabled = true; });
-  const failed = await bulkPatch(ids, targetStatus, (done, total) => {
-    if (progressEl) progressEl.textContent = done < total ? `${done}/${total}…` : "";
-  });
-  refreshGroupBulkAvailability(gkey);
-  if (failed) protoNote(`${failed} of ${ids.length} action${ids.length === 1 ? "" : "s"} failed — retry those individually`);
-  else protoNote(`Updated ${ids.length} finding${ids.length === 1 ? "" : "s"}`);
-}
-
-document.getElementById("ackAllVisibleBtn").onclick = async (e) => {
-  e.preventDefault();
-  const btn = e.currentTarget;
-  const shown = all.filter(passesFilters);
-  const ids = shown.filter((n) => n.status === "new").map((n) => n.id);
-  if (!ids.length) return;
-  const ok = confirm(`Acknowledge all ${ids.length} currently visible finding${ids.length === 1 ? "" : "s"} with status "New"?\n\nThis only changes status — nothing is deleted.`);
-  if (!ok) return;
-  const originalText = btn.textContent;
-  btn.dataset.busy = "1";
-  btn.disabled = true;
-  const failed = await bulkPatch(ids, "acknowledged", (done, total) => {
-    btn.textContent = done < total ? `Acknowledging ${done}/${total}…` : originalText;
-  });
-  delete btn.dataset.busy;
-  updateGlobalBulkButton();
-  if (failed) protoNote(`${failed} of ${ids.length} action${ids.length === 1 ? "" : "s"} failed — retry those individually`);
-  else protoNote(`Acknowledged ${ids.length} finding${ids.length === 1 ? "" : "s"}`);
-};
-
-/* Single delegated listener for everything inside #list: bulk buttons,
-   tier-level Expand all/Collapse all, the group header row itself
-   (toggle), the campaign-name link (let it navigate), and per-card action
-   buttons. Every branch that isn't a plain navigation stops propagation so
-   a bulk button or a per-card action button can never also trigger the
-   header row's expand/collapse or bubble into a navigation (fix E.1). */
 document.getElementById("list").addEventListener("click", async (e) => {
-  const bulkBtn = e.target.closest(".bulk-btn");
-  if (bulkBtn) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (bulkBtn.disabled) return;
-    await handleGroupBulk(bulkBtn);
+  const header = e.target.closest("[data-toggle-section]");
+  if (header) {
+    const num = Number(header.dataset.toggleSection);
+    setSectionExpanded(num, !isExpanded(num));
     return;
   }
 
-  const tierToggle = e.target.closest(".tier-toggle");
-  if (tierToggle) {
+  const pauseBtn = e.target.closest('[data-act="pause"]');
+  if (pauseBtn) {
     e.preventDefault();
-    e.stopPropagation();
-    const rank = tierToggle.dataset.rank;
-    const expand = tierToggle.dataset.action === "expand";
-    document.querySelectorAll(`.group-h[data-rank="${rank}"]`).forEach((hdr) => setGroupExpanded(hdr.dataset.gkey, expand));
+    openPauseModal(pauseBtn.dataset.id);
     return;
   }
 
-  const headerRow = e.target.closest(".group-h");
-  if (headerRow) {
-    if (e.target.closest("a")) return; // campaign-name link — let it navigate, don't also toggle
-    toggleGroup(headerRow.dataset.gkey);
+  const copyBtn = e.target.closest('[data-act="copy-prompt"]');
+  if (copyBtn) {
+    e.preventDefault();
+    await copyClaudePrompt(copyBtn.dataset.id, copyBtn);
     return;
   }
 
   const btn = e.target.closest("[data-target]");
   if (!btn || btn.disabled) return;
   e.preventDefault();
-  e.stopPropagation();
-  // The id always comes from the button's own data-nid, read fresh at click
-  // time from the exact element the user clicked — never an array index
-  // into `all` (which can point at a different row after any re-render).
   const id = btn.dataset.nid;
   const target = btn.dataset.target;
-  const card = btn.closest(".note");
-  // Fix E.2: disable every action button on THIS card (not just the one
-  // clicked) while its PATCH is in flight, so a rapid-fire second click on
-  // a sibling button on the same card can't silently fire no PATCH or race
-  // the first one. Restored on failure; a success replaces the whole card
-  // with fresh, correctly-computed button states anyway.
-  const siblingBtns = card ? [...card.querySelectorAll("button[data-target]")].filter((b) => b !== btn) : [];
+  const block = btn.closest(".action-block, .note");
+  const siblingBtns = block ? [...block.querySelectorAll("button[data-target]")].filter((b) => b !== btn) : [];
   const restore = busyBtn(btn, "Working…");
-  if (!restore) return; // already in flight for this button
+  if (!restore) return;
   siblingBtns.forEach((b) => { b.dataset.wasDisabled = b.disabled ? "1" : "0"; b.disabled = true; });
   try {
     const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
@@ -667,16 +660,11 @@ document.getElementById("list").addEventListener("click", async (e) => {
     }
     const idx = all.findIndex((n) => String(n.id) === String(id));
     if (idx >= 0) all[idx] = { ...all[idx], ...updated };
+    bustNotifCache();
     protoNote(`Marked ${STATUS_LABEL[target] || target}`);
-    // Deliberately NOT calling draw()/groupAndSort() here. A full redraw
-    // recomputes each group's priority tier from the CURRENT statuses, so
-    // dismissing/actioning one finding could change its campaign's tier and
-    // reshuffle every other card underneath — that full re-sort-on-every-
-    // action is exactly the reflow/misclick trap testers hit (a different
-    // card lands under the cursor right as they click again). Instead, patch
-    // only this one card's DOM node in place; its screen position and its
-    // neighbours never move, even though its own status just changed.
-    applyCardPatch(idx >= 0 ? all[idx] : { ...updated, id });
+    // Patch only this row/block in place — never draw() — so no other card's
+    // screen position moves and no other in-flight action is disturbed.
+    applyRowPatch(idx >= 0 ? all[idx] : { ...updated, id });
   } catch (err) {
     restore();
     siblingBtns.forEach((b) => { b.disabled = b.dataset.wasDisabled === "1"; delete b.dataset.wasDisabled; });
@@ -684,60 +672,115 @@ document.getElementById("list").addEventListener("click", async (e) => {
   }
 });
 
-// Keyboard support for the clickable group header row (Enter/Space toggles,
-// matching its role="button" semantics).
 document.getElementById("list").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
-  const headerRow = e.target.closest(".group-h");
-  if (!headerRow) return;
+  const header = e.target.closest("[data-toggle-section]");
+  if (!header) return;
   e.preventDefault();
-  toggleGroup(headerRow.dataset.gkey);
+  const num = Number(header.dataset.toggleSection);
+  setSectionExpanded(num, !isExpanded(num));
 });
 
-function applyCardPatch(n) {
-  updateSummary(); // header counts only — never touches #list layout/order
-  const el = document.getElementById(`ncard-${CSS.escape(String(n.id))}`);
-  if (!el) { draw(); return; } // card wasn't on screen for some reason — safe fallback
-  const gkey = el.dataset.gkey;
+/* Section 7 is the only section with per-row actions today, so an in-place
+   patch only ever needs to touch an .action-block. If the row is no longer
+   on screen (e.g. it lives in a currently-collapsed/unaffected section),
+   fall back to a full draw() rather than silently doing nothing. */
+function applyRowPatch(n) {
+  updateSummary();
+  const el = document.getElementById(`ab-${CSS.escape(String(n.id))}`);
+  if (!el) { draw(); return; }
   if (!passesFilters(n)) {
-    // No longer matches the active filters (e.g. status filter = "New" and
-    // this card was just dismissed) — drop just this one card. Filters stay
-    // exactly as the user set them; nothing else in the list moves.
     el.remove();
-    updateGroupCountAfterRemoval(gkey);
+    bumpSectionCount(7, -1);
     return;
   }
   const tmp = document.createElement("div");
-  tmp.innerHTML = cardHTML(n, gkey).trim();
+  tmp.innerHTML = actionBlockHTML(n).trim();
   el.replaceWith(tmp.firstElementChild);
-  if (gkey) refreshGroupBulkAvailability(gkey);
 }
 
-function updateGroupCountAfterRemoval(gkey) {
-  const root = document.getElementById("list");
-  if (gkey) {
-    const remaining = document.querySelectorAll(`.note[data-gkey="${CSS.escape(gkey)}"]`).length;
-    const header = document.querySelector(`.group-h[data-gkey="${CSS.escape(gkey)}"]`);
-    if (header) {
-      if (remaining === 0) header.closest(".group-wrap")?.remove();
-      else {
-        const countEl = header.querySelector(".gcount");
-        if (countEl) countEl.textContent = `${remaining} finding${remaining === 1 ? "" : "s"}`;
-      }
+function bumpSectionCount(num, delta) {
+  const header = document.querySelector(`.rsection-h[data-toggle-section="${num}"] .scount`);
+  if (!header) return;
+  const m = /(\d+)/.exec(header.textContent);
+  if (!m) return;
+  const next = Math.max(0, Number(m[1]) + delta);
+  header.textContent = header.textContent.replace(/\d+/, String(next));
+}
+
+/* --- Pause-campaign flow: typed-confirmation modal -> POST .../execute --- */
+let pauseTargetId = null;
+function openPauseModal(id) {
+  pauseTargetId = id;
+  const row = all.find((n) => String(n.id) === String(id));
+  document.getElementById("pauseModalCampaign").textContent = row ? row.campaign_name : "";
+  document.getElementById("pauseConfirmInput").value = "";
+  document.getElementById("pauseModalErr").textContent = "";
+  document.getElementById("pauseModal").classList.remove("hidden");
+  document.getElementById("pauseConfirmInput").focus();
+}
+function closePauseModal() {
+  pauseTargetId = null;
+  document.getElementById("pauseModal").classList.add("hidden");
+}
+document.getElementById("pauseCancelBtn").onclick = () => closePauseModal();
+document.getElementById("pauseModal").addEventListener("click", (e) => { if (e.target.id === "pauseModal") closePauseModal(); });
+document.getElementById("pauseConfirmBtn").onclick = async () => {
+  const input = document.getElementById("pauseConfirmInput");
+  const errEl = document.getElementById("pauseModalErr");
+  if (input.value.trim() !== "PAUSE") { errEl.textContent = 'Type "PAUSE" exactly to confirm.'; return; }
+  const id = pauseTargetId;
+  const btn = document.getElementById("pauseConfirmBtn");
+  const restore = busyBtn(btn, "Pausing…");
+  if (!restore) return;
+  try {
+    const res = await fetch(`/api/notifications/${encodeURIComponent(id)}/execute`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: "PAUSE" }),
+    });
+    const body = await res.json();
+    if (!res.ok || body.ok === false) {
+      throw new Error(body.message || `HTTP ${res.status}`);
     }
-    refreshGroupBulkAvailability(gkey);
+    const idx = all.findIndex((n) => String(n.id) === String(id));
+    const updated = (body.notification) || (idx >= 0 ? { ...all[idx], status: "actioned" } : null);
+    if (idx >= 0 && updated) all[idx] = { ...all[idx], ...updated };
+    bustNotifCache();
+    protoNote("Campaign paused");
+    closePauseModal();
+    if (idx >= 0) applyRowPatch(all[idx]);
+  } catch (err) {
+    restore();
+    errEl.textContent = err.message || "Pause failed — try again.";
   }
-  if (!root.querySelector(".note")) {
-    root.innerHTML = `<div class="empty">No notifications match these filters.</div>`;
+};
+
+/* --- Copy Claude prompt: clipboard API with a textarea fallback --- */
+async function copyClaudePrompt(id, btn) {
+  const row = all.find((n) => String(n.id) === String(id));
+  const text = row && row.claude_prompt;
+  if (!text) { protoNote("No prompt available for this action"); return; }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      throw new Error("no clipboard API");
+    }
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand("copy"); } catch {}
+    document.body.removeChild(ta);
   }
+  protoNote("Copied");
 }
 
-/* Fix D.2: back-to-top. All 197 findings used to render as one very long
-   flat page with no wayfinding; with fix A collapsing most groups by
-   default the page is far shorter, but on a still-long High tier (or with
-   filters relaxed) the button remains useful. Smooth-scroll was replaced
-   with an instant jump — reliability over animation, since testers hit the
-   smooth-scroll stalling partway and never reaching the top. */
+/* --- back-to-top --- */
 const backToTop = document.getElementById("backToTop");
 const BACK_TO_TOP_THRESHOLD = 480;
 function updateBackToTop() {
@@ -748,14 +791,11 @@ backToTop.onclick = () => window.scrollTo(0, 0);
 updateBackToTop();
 
 loadNotifications();
-/* Populate the free-text -> client-id resolver list once names are available, then
-   re-scope; also re-scope whenever the shared rail switcher changes (this page or
-   another) — the nav links/icons here stay as-is. */
 (async () => {
   clientsList = dedupeClients(await fetchClientsForSwitcher());
-  draw(); // re-scope now that names are available for resolveClientId()'s free-text match
+  draw();
 })();
-window.addEventListener("navreo:client-changed", () => draw());
+window.addEventListener("navreo:client-changed", () => loadNotifications());
 </script>
 </body>
 </html>
