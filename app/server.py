@@ -3300,6 +3300,64 @@ def _daily_lead_share(src: dict, drafts: list) -> int:
     return max(1, min(share, want)) if want > 0 else share
 
 
+THEIRSTACK_EXCLUDE_MAX = int(os.environ.get("THEIRSTACK_EXCLUDE_MAX", "200000"))
+_excl_cache: dict = {}   # {client_id: (domains, expires_epoch)} — 30-min memo
+
+
+def _exclusion_domains(client_id: str | None) -> list:
+    """Every domain this client would reject anyway: prior contact (contact_history)
+    plus suppression lists, exactly what `lead_excluded` already enforces — but
+    row-by-row, AFTER we have paid TheirStack for the job and paid AI-ARK/Prospeo to
+    enrich the company. One RPC (~5MB, ~8s for 290k domains) instead of 290 paged
+    PostgREST reads. Memoised: the list moves slowly, the pull runs every 3 hours."""
+    import time as _t
+    key = client_id or "*"
+    hit = _excl_cache.get(key)
+    if hit and hit[1] > _t.time():
+        return hit[0]
+    try:
+        rows = sb("POST", "rpc/exclusion_domains", {"p_client": client_id})
+    except Exception as e:  # noqa: BLE001
+        rows = {"message": f"{type(e).__name__}: {e}"}
+    if not isinstance(rows, list):
+        # SAY SO. A silent [] here degrades to scanned-domains-only and quietly costs
+        # credits forever — exactly how a PostgREST statement timeout (57014) hid the
+        # whole saving on 2026-07-08. Correctness is unaffected: lead_excluded() still
+        # fails closed on every lead. Cache the failure briefly so it self-heals.
+        print(f"[exclusions] rpc/exclusion_domains failed for client={client_id!r}: "
+              f"{str(rows)[:160]} — search-stage exclusion degraded to scanned domains only",
+              file=sys.stderr)
+        _excl_cache[key] = ([], _t.time() + 60)
+        return []
+    out = [d for d in (canon_domain(str(r)) for r in rows if r) if d]
+    _excl_cache[key] = (out, _t.time() + 1800)
+    return out
+
+
+def _search_exclusions(source_id: str, client_id: str | None) -> list:
+    """Domains to exclude AT THE SEARCH, so we never buy the job in the first place.
+
+    Measured 2026-07-08: a source's own 176 already-scanned domains removed 24% of its
+    window, and the client exclusion set took it to 46-73%. Those jobs were being bought
+    and then binned by `already` / `lead_excluded` a few lines later.
+
+    Scanned domains go first so a cap can never evict the highest-hit-rate entries."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = sb("GET", f"signals?source=eq.theirstack&detail->>source_id=eq.{source_id}"
+                     f"&created_at=gte.{cutoff}&select=company_domain&limit=20000") or []
+    scanned = [r["company_domain"] for r in rows
+               if isinstance(r, dict) and r.get("company_domain")]
+    seen, out = set(), []
+    for d in scanned + _exclusion_domains(client_id):
+        if d and d not in seen:
+            seen.add(d)
+            out.append(d)
+            if len(out) >= THEIRSTACK_EXCLUDE_MAX:
+                break
+    return out
+
+
 def _leads_today(source_id: str) -> int:
     """signal_leads this source has already produced since 00:00 UTC. `leads_per_day`
     is a DAILY budget, but the pull runs 8x a day (pg_cron `0 */3 * * *`), so a
@@ -3428,6 +3486,18 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         pats = [re.escape(n.lower()) for n in negatives]
         precision["job_title_pattern_not"] = pats
         precision["job_description_pattern_not"] = pats
+    # The KILL words below are also enforced client-side against name + industry. Doing
+    # the name half server-side costs nothing and removes those jobs before we buy them.
+    precision["company_name_partial_match_not"] = ["staffing", "talent", "recruit", "consultants"]
+
+    # Search-stage exclusion, built lazily: a tick that buys nothing must not pay the
+    # ~8s the 290k-domain RPC costs. Populated on the first page request.
+    _excl_box: dict = {}
+
+    def _page_extra(extra: dict) -> dict:
+        if "v" not in _excl_box:
+            _excl_box["v"] = _search_exclusions(src["id"], client_id)
+        return {**extra, "company_domain_not": _excl_box["v"]} if _excl_box["v"] else extra
     # ── BUY + ENRICH ─────────────────────────────────────────────────────
     # Goal: fill today's leads_per_day, however many job pages that takes — not
     # "one 100-job page and hope". Jobs are bought page by page against an
@@ -3601,7 +3671,7 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         if bought >= job_budget:
             break                              # this pull's TheirStack ceiling
         room = min(100, job_budget - bought)
-        page_extra = {**precision, "discovered_at_gte": cursor}
+        page_extra = _page_extra({**precision, "discovered_at_gte": cursor})
         if bids:
             page_extra["job_id_not"] = bids[:500]  # `gte` is inclusive: skip the boundary
         page, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, room,

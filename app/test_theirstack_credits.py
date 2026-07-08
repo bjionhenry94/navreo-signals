@@ -142,8 +142,10 @@ def test_daily_cap_blocks():
 class FakeSB:
     """Just enough PostgREST to run pull_hiring_source offline."""
 
-    def __init__(self, leads_today=0, swallow_all=False):
+    def __init__(self, leads_today=0, swallow_all=False, exclusions=()):
         self.swallow_all = swallow_all   # simulate signals_dedupe eating every insert
+        self.exclusions = list(exclusions)
+        self.rpc_calls = 0               # exclusion_domains is slow; count the calls
         self.signals = []          # {id, company_domain, detail, enriched_at}
         self.leads = []
         self.leads_today = leads_today
@@ -151,6 +153,9 @@ class FakeSB:
 
     def __call__(self, method, path, body=None, prefer=""):
         t = path.split("?")[0]
+        if t == "rpc/exclusion_domains":
+            self.rpc_calls += 1
+            return list(self.exclusions)
         if method == "GET" and t == "signal_leads" and "select=count" in path:
             return [{"count": self.leads_today}]
         if method == "GET" and t == "signals" and "select=count" in path:
@@ -284,6 +289,68 @@ def test_daily_leads_split_evenly():
               server._daily_lead_share(mixed[0], mixed) == 80, server._daily_lead_share(mixed[0], mixed))
     finally:
         server.SIGNAL_DAILY_LEADS = orig
+
+
+def test_exclusions_applied_at_the_search():
+    """Buying a job at a company we would reject anyway is pure waste: TheirStack bills
+    for it, AI-ARK/Prospeo bill to enrich it, and `already`/`lead_excluded` then bin it.
+    Measured 2026-07-08: excluding scanned + client-excluded domains removed 46-73% of a
+    source's window. Push it to the search."""
+    fake = FakeSB(leads_today=0, exclusions=["suppressed-a.com", "suppressed-b.com"])
+    fake.signals.append({"id": 99, "company_domain": "already-scanned.com",
+                         "detail": {"source_id": "src-test"}, "enriched_at": "done"})
+    saved = {k: getattr(server, k) for k in
+             ("sb", "http_json", "dm_find_by_domain", "find_email", "is_suppressed",
+              "write_drafts", "sb_sync_source", "read_json_list", "theirstack_credits_today",
+              "_theirstack_meter")}
+    server.sb = fake
+    server.http_json = Recorder([[job(1, "2026-07-07T10:00:00Z")]])
+    server.theirstack_credits_today = lambda: 0
+    server._theirstack_meter = lambda *a, **k: None
+    server.is_suppressed = lambda *a, **k: False
+    server.write_drafts = server.sb_sync_source = lambda *a, **k: None
+    server.read_json_list = lambda *a, **k: []
+    server.dm_find_by_domain = lambda *a, **k: []
+    server.find_email = lambda p: None
+    server._excl_cache.clear()
+    try:
+        src = build_source(10)
+        server.pull_hiring_source(src, [src])
+        b = server.http_json.bodies[0]
+        excl = b.get("company_domain_not") or []
+        check("company_domain_not is sent", bool(excl), excl)
+        check("it carries the source's already-scanned domains", "already-scanned.com" in excl)
+        check("...and the client's exclusion set", "suppressed-a.com" in excl)
+        check("scanned domains come FIRST so a cap can't evict them",
+              excl[0] == "already-scanned.com", excl[:2])
+        check("KILL words pushed server-side too",
+              set(b.get("company_name_partial_match_not") or []) ==
+              {"staffing", "talent", "recruit", "consultants"})
+    finally:
+        for k, v in saved.items():
+            setattr(server, k, v)
+        server._excl_cache.clear()
+
+
+def test_no_buy_tick_never_builds_exclusions():
+    """The exclusion RPC is ~8s over ~5MB. A tick whose lead budget is already filled
+    buys nothing, so it must not pay for the list at all."""
+    fake = FakeSB(leads_today=10, exclusions=["x.com"])   # budget full
+    saved = {k: getattr(server, k) for k in ("sb", "http_json", "read_json_list")}
+    server.sb = fake
+    server.http_json = Recorder([])
+    server.read_json_list = lambda *a, **k: []
+    server._excl_cache.clear()
+    try:
+        src = build_source(10)
+        r = server.pull_hiring_source(src, [src])
+        check("pull declines (budget full)", r.get("ok") is False)
+        check("exclusion RPC never called", fake.rpc_calls == 0, fake.rpc_calls)
+        check("no TheirStack call either", len(server.http_json.bodies) == 0)
+    finally:
+        for k, v in saved.items():
+            setattr(server, k, v)
+        server._excl_cache.clear()
 
 
 def test_lead_upsert_never_resets_pushed_status():
@@ -491,7 +558,8 @@ def test_backlog_drained_before_buying():
 if __name__ == "__main__":
     print("TheirStack credit-cursor + daily-budget regression lock\n")
     for t in (test_cursor_round_trip, test_filtered_page_still_advances_cursor, test_daily_cap_blocks,
-              test_daily_leads_split_evenly, test_lead_upsert_never_resets_pushed_status, test_swallowed_signal_still_enriches, test_discovery_floor_is_yesterday, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
+              test_daily_leads_split_evenly, test_exclusions_applied_at_the_search,
+              test_no_buy_tick_never_builds_exclusions, test_lead_upsert_never_resets_pushed_status, test_swallowed_signal_still_enriches, test_discovery_floor_is_yesterday, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
               test_backlog_drained_before_buying):
         print(t.__name__)
         t()
