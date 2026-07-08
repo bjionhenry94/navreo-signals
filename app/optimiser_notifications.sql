@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS optimiser_notifications (
   claude_prompt text,
   sent int,
   positive int,
+  replied int,
   sent_pos_ratio numeric,
   completion_pct numeric,
   reply_rate numeric,
@@ -71,6 +72,7 @@ ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS smartlead_url text;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS claude_prompt text;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS completion_pct numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS reply_rate numeric;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS replied int;
 ALTER TABLE optimiser_notifications DROP CONSTRAINT IF EXISTS optimiser_notifications_finding_type_check;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_finding_type_check
   CHECK (finding_type in ('needs_optimisation','performing','lifecycle','variant_call','low_reply_flag','distribution_flag','recommended_action','all_clear'));

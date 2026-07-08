@@ -164,7 +164,7 @@
     <div class="rank-explainer">
       This mirrors the lilly-optimiser Priority Report: 7 sections, actionable ones first.
       <b>Section 1</b> lists campaigns needing optimisation, worst
-      <span class="jg" title="Total emails sent divided by positive replies — lower is better.">sent-per-positive</span>
+      <span class="jg" title="Total emails sent divided by positive replies: lower is better.">sent-per-positive</span>
       first (zero-positive campaigns at the very top). <b>Section 7</b> is what to do about it,
       High priority first, largest campaigns first within each tier.
     </div>
@@ -178,7 +178,7 @@
   <div class="modal-box">
     <h3>Pause campaign</h3>
     <p id="pauseModalCampaign"></p>
-    <p>Type <b>PAUSE</b> to confirm. This calls Smartlead's pause endpoint immediately — there is no undo from here.</p>
+    <p>Type <b>PAUSE</b> to confirm. This calls Smartlead's pause endpoint immediately, there is no undo from here.</p>
     <input id="pauseConfirmInput" type="text" autocomplete="off" placeholder="Type PAUSE">
     <div class="modal-err" id="pauseModalErr"></div>
     <div class="modal-actions">
@@ -435,7 +435,7 @@ function section4(rows, ctxMap) {
         const angle = parseAngle(n.detail);
         return `<tr class="${n.status === "dismissed" ? "dimmed" : ""}">
           <td>Email ${esc(p.email || "?")}</td>
-          <td>${esc(p.variant || "—")}</td>
+          <td>${esc(p.variant || "–")}</td>
           <td>${fmt(n.sent)}</td>
           <td>${fmt(n.positive)}</td>
           <td>${sentPosCell(n)}</td>
@@ -457,10 +457,11 @@ function section5(rows) {
     <tr class="${n.status === "dismissed" ? "dimmed" : ""}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${fmt(n.sent)}</td>
+      <td>${Number.isFinite(n.replied) ? fmt(n.replied) : "–"}</td>
       <td>${Number.isFinite(n.reply_rate) ? n.reply_rate.toFixed(2) + "%" : "–"}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>Campaign</th><th>Sent</th><th>Reply Rate</th></tr></thead>
+    <thead><tr><th>Campaign</th><th>Sent</th><th>Unique Replies</th><th>Reply Rate</th></tr></thead>
     <tbody>${body}</tbody></table></div>
     <div class="fixnote">Recommended next step: run <span class="jg" title="Pulls every lead, classifies each title by function, and reports how much of the list is on-ICP vs off-ICP.">lilly-list-audit</span> on each flagged campaign to confirm the enrolled leads match the intended persona, and check deliverability (spam placement, sender reputation, warmup) in parallel.</div>`;
 }
@@ -471,7 +472,7 @@ function section6(rows) {
     const p = parseDistributionTitle(n.title);
     const bugType = parseBugType(n.detail);
     const angle = parseAngle(n.detail);
-    const notes = `Email ${esc(p.email || "?")} Var ${esc(p.variant || "—")}${angle ? `: ${esc(angle)}` : ""}`;
+    const notes = `Email ${esc(p.email || "?")} Var ${esc(p.variant || "–")}${angle ? `: ${esc(angle)}` : ""}`;
     return `<tr class="${n.status === "dismissed" ? "dimmed" : ""}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${esc(bugType)}</td>
@@ -571,7 +572,7 @@ function draw() {
     return;
   }
   if (loadState === "error") {
-    root.innerHTML = `<div class="state-msg">Couldn't load notifications — check your connection and try again.<br><button class="btn sm" onclick="loadNotifications()">Retry</button></div>`;
+    root.innerHTML = `<div class="state-msg">Couldn't load notifications, check your connection and try again.<br><button class="btn sm" onclick="loadNotifications()">Retry</button></div>`;
     return;
   }
   const shown = all.filter(passesFilters);
@@ -668,7 +669,7 @@ document.getElementById("list").addEventListener("click", async (e) => {
   } catch (err) {
     restore();
     siblingBtns.forEach((b) => { b.disabled = b.dataset.wasDisabled === "1"; delete b.dataset.wasDisabled; });
-    protoNote("Action failed — retry. " + (err.message || "network error"));
+    protoNote("Action failed, retry. " + (err.message || "network error"));
   }
 });
 
@@ -751,7 +752,7 @@ document.getElementById("pauseConfirmBtn").onclick = async () => {
     if (idx >= 0) applyRowPatch(all[idx]);
   } catch (err) {
     restore();
-    errEl.textContent = err.message || "Pause failed — try again.";
+    errEl.textContent = err.message || "Pause failed, try again.";
   }
 };
 

@@ -372,6 +372,7 @@ ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS smartlead_url text;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS claude_prompt text;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS completion_pct numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS reply_rate numeric;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS replied int;
 ALTER TABLE optimiser_notifications DROP CONSTRAINT IF EXISTS optimiser_notifications_finding_type_check;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_finding_type_check
   CHECK (finding_type in ('needs_optimisation','performing','lifecycle','variant_call','low_reply_flag','distribution_flag','recommended_action','all_clear'));
@@ -731,7 +732,7 @@ def row_base(ctx: dict) -> dict:
         "campaign_id": ctx["cid"], "campaign_name": ctx["name"],
         "client": ctx["client"], "client_id": ctx["client_id"],
         "smartlead_url": SMARTLEAD_URL_TPL.format(cid=ctx["cid"]),
-        "sent": ctx["sent"], "positive": ctx["positives"],
+        "sent": ctx["sent"], "positive": ctx["positives"], "replied": ctx.get("replies"),
         "sent_pos_ratio": ratio(ctx["sent"], ctx["positives"]),
         "completion_pct": ctx["completion_pct"], "reply_rate": ctx["reply_rate"],
         "api_safe": False, "block_number": None, "claude_prompt": None,
@@ -772,8 +773,15 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
     kill = sent >= KILL_MIN_SENT and (positives == 0 or (r is not None and r >= KILL_RATIO))
     campaign_failing = positives == 0  # with the 1,500+ gate = whole offer failing
 
-    # ---- Section 1: needs optimisation -------------------------------------
-    if any_variant_failing or positives == 0 or (r is not None and r > PERFORMING_RATIO):
+    # ---- Section 1/2: needs optimisation vs performing (mutually exclusive) --
+    # Tier assignment is exclusive: a campaign that qualifies for Section 1
+    # (failing variant OR ratio > 1,500) gets ONLY the section-1 row. Section 2
+    # is ratio <= 1,500 AND NOT section-1-qualified. The failing-variant
+    # context for a campaign that also has ratio <= 1,500 still lives in
+    # Section 4 (variant_call rows), so nothing is lost by dropping the
+    # Section 2 row for it.
+    section1_qualifies = any_variant_failing or positives == 0 or (r is not None and r > PERFORMING_RATIO)
+    if section1_qualifies:
         rows.append({**row_base(ctx), "finding_type": "needs_optimisation", "section": 1,
                      "priority": "High" if (kill or campaign_failing) else "Medium",
                      "title": "Needs optimisation",
@@ -783,9 +791,7 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                          + (" At least one variant has 800+ sends with under 1 positive per 800."
                             if any_variant_failing else "")),
                      "suggested_action": "Review Section 7 recommended actions for this campaign"})
-
-    # ---- Section 2: performing ----------------------------------------------
-    if r is not None and r <= PERFORMING_RATIO:
+    elif r is not None and r <= PERFORMING_RATIO:
         rows.append({**row_base(ctx), "finding_type": "performing", "section": 2,
                      "priority": "Low", "title": "Performing",
                      "detail": clean_text(
