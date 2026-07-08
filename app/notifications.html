@@ -13,21 +13,31 @@
   border: 1px solid var(--line); border-radius: var(--radius);
   margin-bottom: 12px; position: relative; overflow: hidden;
 }
-.note::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
-.note.high::before { background: var(--red); }
-.note.medium::before { background: var(--amber); }
-.note.low::before { background: var(--brown-300); }
-.note.done { opacity: 0.5; }
+.note::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--line-2); }
+.note.pr-high::before { background: var(--red); }
+.note.pr-medium::before { background: var(--amber); }
+.note.pr-low::before { background: var(--brown-300); }
+.note.dismissed { opacity: 0.55; }
 .note-main { display: flex; gap: 14px; padding: 16px 18px; align-items: flex-start; }
 .note .t { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .note .d { font-size: 13px; color: var(--ink-2); margin-top: 5px; max-width: 720px; line-height: 1.55; }
-.note .meta { display: flex; gap: 14px; margin-top: 9px; font-size: 11.5px; color: var(--ink-3); flex-wrap: wrap; }
-.note .meta .rule { font-family: var(--font-mono); font-size: 10.5px; color: var(--orange-700); }
 .note .nums { display: flex; gap: 18px; margin-top: 10px; }
-.note .nums .nv { font-family: var(--font-display); font-size: 22px; line-height: 1; }
+.note .nums .nv { font-family: var(--font-display); font-size: 20px; line-height: 1; }
 .note .nums .nl { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
-.decide { display: flex; gap: 7px; flex-shrink: 0; }
-.counts { display: flex; gap: 8px; margin: 18px 0 16px; flex-wrap: wrap; }
+.decide { display: flex; gap: 7px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 200px; }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 16px; flex-wrap: wrap; }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.sel { border: 1px solid var(--line-2); background: var(--card); border-radius: 10px; padding: 7px 11px; font-size: 12.5px; color: var(--ink-2); font-family: inherit; cursor: pointer; }
+.group-h { display: flex; align-items: center; gap: 9px; margin: 22px 2px 10px; }
+.group-h:first-child { margin-top: 4px; }
+.group-h .gdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.group-h .lab { font-size: 13.5px; font-weight: 600; }
+.group-h .lab a { color: inherit; text-decoration: none; }
+.group-h .lab a:hover { text-decoration: underline; }
+.group-h .desc { font-size: 12px; color: var(--ink-3); }
+.group-h .gcount { margin-left: auto; font-size: 11.5px; color: var(--brown-400); }
+.state-msg { text-align: center; color: var(--brown-400); font-size: 13px; padding: 60px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.state-msg .spin { width: 18px; height: 18px; border-width: 2.5px; }
 </style>
 </head>
 <body>
@@ -39,9 +49,29 @@
         <div class="eyebrow">Notifications</div>
         <h1>What we'd change.</h1>
       </div>
-      <div id="fresh"></div>
+      <div id="summary" class="freshness"></div>
     </div>
-    <div class="counts" id="counts"></div>
+    <div class="bar">
+      <div class="filters">
+        <select class="sel" id="statusFilter">
+          <option value="all">All statuses</option>
+          <option value="new">New</option>
+          <option value="acknowledged">Acknowledged</option>
+          <option value="actioned">Actioned</option>
+          <option value="dismissed">Dismissed</option>
+        </select>
+        <select class="sel" id="priorityFilter">
+          <option value="all">All priorities</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+        <select class="sel" id="clientFilter">
+          <option value="all">All clients</option>
+        </select>
+      </div>
+      <button class="btn sm" id="refreshBtn">Refresh</button>
+    </div>
     <div id="list"></div>
   </main>
 </div>
@@ -49,68 +79,224 @@
 <script>
 document.getElementById("rail").outerHTML = renderRail("notifications");
 
-let notes = [], filter = "all";
-init();
-async function init() {
-  const { notifications, meta } = await loadData("notifications", "meta");
-  notes = (notifications || []).map((n, i) => ({ ...n, _id: i, _state: null }));
-  document.getElementById("fresh").innerHTML = freshnessBlock(meta);
+/* Real notifications tab: reads/writes the live optimiser_notifications
+   table via /api/notifications (GET, list) and /api/notifications/{id}
+   (PATCH, {status}) — see app/server.py api_notifications() /
+   update_notification_status(). No more data/notifications.json, no more
+   shell.js loadData() for this page's content, no more no-op decide(). */
+
+const PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };           // unranked/None -> 3, sorts last
+const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Actioned", dismissed: "Dismissed" };
+const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n" };
+
+let all = [];                 // every row from the last successful fetch
+let loadState = "loading";    // "loading" | "ok" | "error"
+let filters = { status: "all", priority: "all", client: "all" };
+
+async function loadNotifications() {
+  loadState = "loading";
   draw();
+  try {
+    const r = await fetch("/api/notifications", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    all = Array.isArray(data) ? data : [];
+    loadState = "ok";
+  } catch (e) {
+    loadState = "error";
+    console.warn("notifications fetch failed", e);
+  }
+  populateClientFilter();
+  draw();
+}
+
+function populateClientFilter() {
+  const sel = document.getElementById("clientFilter");
+  const prev = sel.value || "all";
+  const clients = [...new Set(all.map((n) => n.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="all">All clients</option>' +
+    clients.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  sel.value = prev === "all" || clients.includes(prev) ? prev : "all";
+  filters.client = sel.value;
+}
+
+function priorityRank(p) { return PRIORITY_RANK[p] ?? 3; }
+function priorityClass(p) { return p === "High" ? "pr-high" : p === "Medium" ? "pr-medium" : p === "Low" ? "pr-low" : ""; }
+
+function passesFilters(n) {
+  if (filters.status !== "all" && n.status !== filters.status) return false;
+  if (filters.priority !== "all" && n.priority !== filters.priority) return false;
+  if (filters.client !== "all" && n.client !== filters.client) return false;
+  return true;
+}
+
+/* Group by campaign, then rank each group by the HIGHEST-priority OPEN
+   (non-dismissed) finding it holds: High-priority groups first, then
+   Medium, Low, and finally groups whose only open findings are unranked
+   (None) or where everything has been dismissed ("all clear"). Within a
+   group, findings sort High -> Medium -> Low -> None. */
+function groupAndSort(items) {
+  const groups = new Map();
+  items.forEach((n) => {
+    const key = String(n.campaign_id ?? n.campaign_name ?? "unknown");
+    if (!groups.has(key)) {
+      groups.set(key, { key, campaignId: n.campaign_id, campaign_name: n.campaign_name, client: n.client, items: [] });
+    }
+    groups.get(key).items.push(n);
+  });
+  const list = [...groups.values()];
+  list.forEach((g) => {
+    const openRanks = g.items
+      .filter((n) => n.status !== "dismissed")
+      .map((n) => priorityRank(n.priority))
+      .filter((r) => r < 3);
+    g.rank = openRanks.length ? Math.min(...openRanks) : 3;
+    g.items = [...g.items].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+  });
+  list.sort((a, b) => a.rank - b.rank || String(a.campaign_name || "").localeCompare(String(b.campaign_name || "")));
+  return list;
+}
+
+function groupDotColor(rank) {
+  return rank === 0 ? "var(--red)" : rank === 1 ? "var(--amber)" : rank === 2 ? "var(--brown-300)" : "var(--line-2)";
+}
+
+function priorityPill(p) {
+  const cls = p === "High" ? "r" : p === "Medium" ? "a" : "n";
+  return `<span class="pill ${cls}">${esc(p || "No priority")}</span>`;
+}
+function statusPillN(s) {
+  return `<span class="pill ${STATUS_PILL_CLASS[s] || "n"}"><span class="dot"></span>${esc(STATUS_LABEL[s] || s || "Unknown")}</span>`;
+}
+
+function statLine(n) {
+  const parts = [];
+  if (n.sent !== undefined && n.sent !== null) parts.push([fmt(n.sent), "sent"]);
+  if (n.positive !== undefined && n.positive !== null) parts.push([fmt(n.positive), "positive"]);
+  if (n.sent_pos_ratio !== undefined && n.sent_pos_ratio !== null) {
+    const v = typeof n.sent_pos_ratio === "number" ? `${n.sent_pos_ratio.toFixed(1)}%` : esc(String(n.sent_pos_ratio));
+    parts.push([v, "reply rate"]);
+  }
+  if (!parts.length) return "";
+  return `<div class="nums">${parts.map(([v, l]) => `<div><div class="nv">${v}</div><div class="nl">${l}</div></div>`).join("")}</div>`;
+}
+
+/* Button-state rule (documented so it's obvious, not just "your judgment" in
+   the head): each action is disabled once the card is already there or has
+   moved past the point that action makes sense —
+     Acknowledge   -> only meaningful as the FIRST touch: enabled only when status === "new".
+     Mark actioned -> enabled from new/acknowledged/dismissed; disabled once already "actioned".
+     Dismiss       -> enabled from any state except "dismissed".
+   That still lets you move a dismissed finding back into play (mark it
+   actioned) without ever showing a button that would silently no-op. */
+function actionBtn(n, target, label, doneLabel) {
+  const disabled = target === "acknowledged" ? n.status !== "new"
+                  : target === "actioned" ? n.status === "actioned"
+                  : n.status === "dismissed";
+  const isDone = n.status === target;
+  const isNextStep = (target === "acknowledged" && n.status === "new") ||
+                      (target === "actioned" && n.status === "acknowledged");
+  const cls = ["btn", "sm"];
+  if (isNextStep && !disabled) cls.push("primary");
+  const text = isDone ? doneLabel : label;
+  return `<button class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""}>${esc(text)}</button>`;
+}
+
+function cardHTML(n) {
+  const cls = ["note", priorityClass(n.priority)];
+  if (n.status === "dismissed") cls.push("dismissed");
+  return `
+  <div class="${cls.filter(Boolean).join(" ")}" id="ncard-${esc(String(n.id))}">
+    <div class="note-main">
+      <div class="ictile">${ic8("bell")}</div>
+      <div style="flex:1;min-width:0">
+        <div class="t">
+          ${esc(n.title || "Untitled finding")}
+          ${priorityPill(n.priority)}
+          ${statusPillN(n.status)}
+        </div>
+        ${n.detail ? `<div class="d">${esc(n.detail)}</div>` : ""}
+        ${n.suggested_action ? `<div class="d"><b>Suggested:</b> ${esc(n.suggested_action)}</div>` : ""}
+        ${statLine(n)}
+      </div>
+      <div class="decide">
+        ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
+        ${actionBtn(n, "actioned", "Mark actioned", "Actioned")}
+        ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
+      </div>
+    </div>
+  </div>`;
+}
+
+function updateSummary() {
+  const el = document.getElementById("summary");
+  if (loadState !== "ok") { el.innerHTML = ""; return; }
+  const shownCount = all.filter(passesFilters).length;
+  const campaignCount = new Set(all.map((n) => n.campaign_id ?? n.campaign_name)).size;
+  el.innerHTML = `<div>Showing <b>${shownCount}</b> of <b>${all.length}</b> findings</div>` +
+    `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
 }
 
 function draw() {
-  const counts = { all: notes.length, high: 0, medium: 0, low: 0 };
-  notes.forEach((n) => counts[n.priority]++);
-  document.getElementById("counts").innerHTML = ["all", "high", "medium", "low"]
-    .filter((k) => counts[k])
-    .map((k) => `<button class="chip ${filter === k ? "on" : ""}" onclick="filter='${k}';draw()">${k === "all" ? "All" : k} <span class="n">${counts[k]}</span></button>`)
-    .join("");
-
-  const CAT = {
-    "dead-variant": ["Copy test", "edit"],
-    "kill-threshold": ["Offer", "target"],
-    "reply-rate": ["Deliverability", "mail"],
-    "email-1 75%": ["Add leads", "people"],
-    "field hygiene": ["List hygiene", "tasklist"],
-  };
-  const catFor = (rule) => Object.entries(CAT).find(([k]) => (rule || "").includes(k))?.[1] || ["Review", "idea"];
-  const plain = (s) => (s || "").replace(/\s*\((lilly|the lead audit)[^)]*\)/gi, "").replace(/lilly-\S+/gi, "").trim();
-
-  const shown = notes.filter((n) => filter === "all" || n.priority === filter);
-  document.getElementById("list").innerHTML = shown.length ? shown.map((n) => {
-    const [cat, icon] = catFor(n.rule);
-    return `
-    <div class="note ${n.priority} ${n._state ? "done" : ""}">
-      <div class="note-main">
-        <div class="ictile">${ic8(icon)}</div>
-        <div style="flex:1">
-          <div class="t">${esc(n.title)}
-            <span class="pill ${n.priority === "high" ? "r" : n.priority === "medium" ? "a" : "n"}">${cat}</span>
-            ${n._state ? `<span class="pill n">${n._state}</span>` : ""}
-          </div>
-          <div class="d">${esc(plain(n.detail))}</div>
-          <div class="nums">${Object.entries(n.numbers || {}).map(([k, v]) =>
-            `<div><div class="nv">${fmt(v)}</div><div class="nl">${esc(k)}</div></div>`).join("")}
-          </div>
-          <div class="meta">
-            <a style="color:var(--orange-700);cursor:pointer;text-decoration:none" href="campaigns.html#${n.campaign_id}">${esc(n.campaign)}</a>
-          </div>
-        </div>
-        <div class="decide">
-          <button class="btn sm" onclick="decide(${n._id},'dismissed')">Dismiss</button>
-          <button class="btn sm primary" onclick="decide(${n._id},'approved')">Approve</button>
-        </div>
-      </div>
-    </div>`;
-  }).join("") : '<div class="empty">Nothing at this priority</div>';
+  updateSummary();
+  const root = document.getElementById("list");
+  if (loadState === "loading") {
+    root.innerHTML = `<div class="state-msg"><span class="btnspin spin"></span>Loading notifications…</div>`;
+    return;
+  }
+  if (loadState === "error") {
+    root.innerHTML = `<div class="state-msg">Couldn't load notifications — check your connection and try again.<br><button class="btn sm" onclick="loadNotifications()">Retry</button></div>`;
+    return;
+  }
+  const shown = all.filter(passesFilters);
+  if (!shown.length) {
+    root.innerHTML = `<div class="empty">No notifications match these filters.</div>`;
+    return;
+  }
+  const groups = groupAndSort(shown);
+  root.innerHTML = groups.map((g) => `
+    <div class="group-h">
+      <span class="gdot" style="background:${groupDotColor(g.rank)}"></span>
+      <span class="lab">${g.campaignId ? `<a href="campaigns.html#${esc(String(g.campaignId))}">${esc(g.campaign_name || "Unknown campaign")}</a>` : esc(g.campaign_name || "Unknown campaign")}</span>
+      <span class="desc">${esc(g.client || "")}</span>
+      <span class="gcount">${g.items.length} finding${g.items.length === 1 ? "" : "s"}</span>
+    </div>
+    ${g.items.map(cardHTML).join("")}
+  `).join("");
 }
 
-function decide(id, state) {
-  const n = notes.find((x) => x._id === id);
-  n._state = state;
-  protoNote("Read-only prototype");
-  draw();
-}
+document.getElementById("statusFilter").onchange = (e) => { filters.status = e.target.value; draw(); };
+document.getElementById("priorityFilter").onchange = (e) => { filters.priority = e.target.value; draw(); };
+document.getElementById("clientFilter").onchange = (e) => { filters.client = e.target.value; draw(); };
+document.getElementById("refreshBtn").onclick = loadNotifications;
+
+document.getElementById("list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-target]");
+  if (!btn || btn.disabled) return;
+  const id = btn.dataset.nid;
+  const target = btn.dataset.target;
+  const restore = busyBtn(btn, "Working…");
+  if (!restore) return; // already in flight for this button
+  try {
+    const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: target }),
+    });
+    const updated = await res.json();
+    if (!res.ok || (updated && updated.ok === false)) {
+      throw new Error((updated && updated.message) || `HTTP ${res.status}`);
+    }
+    const idx = all.findIndex((n) => String(n.id) === String(id));
+    if (idx >= 0) all[idx] = { ...all[idx], ...updated };
+    protoNote(`Marked ${STATUS_LABEL[target] || target}`);
+    draw(); // redraws with the fresh row; button element (and its busy state) is replaced wholesale
+  } catch (err) {
+    restore();
+    protoNote("Couldn't update — " + (err.message || "network error") + ". Nothing changed, try again.");
+  }
+});
+
+loadNotifications();
 </script>
 </body>
 </html>

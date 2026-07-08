@@ -1636,6 +1636,48 @@ def api_lead_counts() -> dict:
     return out
 
 
+NOTIFICATION_STATUSES = ("new", "acknowledged", "actioned", "dismissed")
+_NOTIFICATION_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}  # unranked/None sorts last
+
+
+def api_notifications(qs: dict) -> list:
+    """List optimiser_notifications rows (Optimiser tab feed), optionally
+    filtered by status/priority/client — all AND'd, all pushed to PostgREST as
+    eq. filters rather than fetched-then-filtered in Python. Sort is High >
+    Medium > Low > None priority, newest created_at first within each tier;
+    PostgREST can't express that custom enum order in one order= clause, so we
+    ask it for created_at.desc and re-rank by priority here (a stable sort
+    keeps the created_at ordering intact within each priority group)."""
+    from urllib.parse import quote
+    filters = [f"{key}=eq.{quote(val, safe='')}"
+               for key in ("status", "priority", "client")
+               for val in [(qs.get(key) or [""])[0]] if val]
+    filters.append("order=created_at.desc")
+    rows = sb("GET", f"optimiser_notifications?{'&'.join(filters)}")
+    rows = rows if isinstance(rows, list) else []
+    rows.sort(key=lambda r: _NOTIFICATION_PRIORITY_RANK.get(r.get("priority"), 3))
+    return rows
+
+
+def update_notification_status(nid: str, status: str) -> dict:
+    """Move one optimiser_notifications row through the new -> acknowledged /
+    actioned / dismissed lifecycle (and back to new). actioned_at is stamped
+    the moment status becomes 'actioned' and is otherwise left untouched —
+    reverting to any other status must never clear a timestamp that already
+    recorded when the finding was actioned."""
+    from datetime import datetime, timezone
+    patch = {"status": status}
+    if status == "actioned":
+        patch["actioned_at"] = datetime.now(timezone.utc).isoformat()
+    result = sb("PATCH", f"optimiser_notifications?id=eq.{nid}", patch,
+                prefer="return=representation")
+    if result is None:
+        raise RuntimeError("Supabase unavailable")
+    if not result:
+        raise LookupError("notification not found")
+    return result[0]
+
+
 def save_draft(p: dict) -> dict:
     if (p.get("type") or p.get("mechanism")) == "hiring" and not [t for t in (p.get("titles") or []) if str(t).strip()]:
         return {"ok": False, "message": "A hiring source needs decision-maker roles (who we email at these companies)."}
@@ -4377,6 +4419,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(read_json_list(QA_HISTORY))
         if path == "/api/campaign-drafts":
             return self._json(read_json_list(CAMPAIGN_DRAFTS))
+        if path == "/api/notifications":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(api_notifications(q))
         if path == "/api/clients":
             return self._json(read_json_list(CLIENTS))
         if path == "/api/outreach-destinations":
@@ -4419,6 +4465,29 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(route(payload))
         except Exception as e:  # noqa: BLE001 — surface provider errors to the UI
             return self._json({"ok": False, "message": str(e)[:300]}, 200)
+
+    def do_PATCH(self):
+        path = self.path.split("?")[0]
+        prefix = "/api/notifications/"
+        if not path.startswith(prefix) or len(path) <= len(prefix):
+            return self._json({"ok": False, "message": "unknown endpoint"}, 404)
+        nid = path[len(prefix):]
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length).decode() or "{}")
+        except ValueError:
+            return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+        status = payload.get("status")
+        if status not in NOTIFICATION_STATUSES:
+            return self._json({"ok": False, "message":
+                                f"status must be one of {NOTIFICATION_STATUSES}"}, 400)
+        try:
+            row = update_notification_status(nid, status)
+        except LookupError:
+            return self._json({"ok": False, "message": "notification not found"}, 404)
+        except Exception as e:  # noqa: BLE001 — surface Supabase errors to the caller
+            return self._json({"ok": False, "message": str(e)[:300]}, 502)
+        return self._json(row)
 
 
 if __name__ == "__main__":
