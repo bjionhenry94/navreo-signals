@@ -134,7 +134,14 @@ function passesFilters(n) {
    (non-dismissed) finding it holds: High-priority groups first, then
    Medium, Low, and finally groups whose only open findings are unranked
    (None) or where everything has been dismissed ("all clear"). Within a
-   group, findings sort High -> Medium -> Low -> None. */
+   group, findings sort High -> Medium -> Low -> None.
+
+   Within a tier, groups are NOT left in arbitrary order: the campaign with
+   the worst sent_pos_ratio ("sent per positive" — higher = worse) among the
+   findings that put it in this tier sorts first, then the one with more
+   open High-priority findings, then alphabetically as a last resort. This
+   is what makes the single worst-performing campaign the very first card on
+   the page, with zero manual comparison needed. */
 function groupAndSort(items) {
   const groups = new Map();
   items.forEach((n) => {
@@ -146,14 +153,21 @@ function groupAndSort(items) {
   });
   const list = [...groups.values()];
   list.forEach((g) => {
-    const openRanks = g.items
-      .filter((n) => n.status !== "dismissed")
-      .map((n) => priorityRank(n.priority))
-      .filter((r) => r < 3);
+    const open = g.items.filter((n) => n.status !== "dismissed");
+    const openRanks = open.map((n) => priorityRank(n.priority)).filter((r) => r < 3);
     g.rank = openRanks.length ? Math.min(...openRanks) : 3;
+    const tierItems = open.filter((n) => priorityRank(n.priority) === g.rank);
+    const ratioPool = (tierItems.length ? tierItems : open).filter((n) => typeof n.sent_pos_ratio === "number");
+    g.worstRatio = ratioPool.length ? Math.max(...ratioPool.map((n) => n.sent_pos_ratio)) : -Infinity;
+    g.highCount = open.filter((n) => n.priority === "High").length;
     g.items = [...g.items].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
   });
-  list.sort((a, b) => a.rank - b.rank || String(a.campaign_name || "").localeCompare(String(b.campaign_name || "")));
+  list.sort((a, b) =>
+    a.rank - b.rank ||
+    b.worstRatio - a.worstRatio ||
+    b.highCount - a.highCount ||
+    String(a.campaign_name || "").localeCompare(String(b.campaign_name || ""))
+  );
   return list;
 }
 
@@ -174,8 +188,12 @@ function statLine(n) {
   if (n.sent !== undefined && n.sent !== null) parts.push([fmt(n.sent), "sent"]);
   if (n.positive !== undefined && n.positive !== null) parts.push([fmt(n.positive), "positive"]);
   if (n.sent_pos_ratio !== undefined && n.sent_pos_ratio !== null) {
-    const v = typeof n.sent_pos_ratio === "number" ? `${n.sent_pos_ratio.toFixed(1)}%` : esc(String(n.sent_pos_ratio));
-    parts.push([v, "reply rate"]);
+    // sent_pos_ratio is sent/positives (e.g. 3806.4 emails sent per positive
+    // reply) — NOT a percentage and NOT a reply rate. Show it as the raw
+    // ratio it is; a "%" suffix or "reply rate" label here would be
+    // backwards (bigger number = worse, not better).
+    const v = typeof n.sent_pos_ratio === "number" ? fmt(n.sent_pos_ratio) : esc(String(n.sent_pos_ratio));
+    parts.push([v, "sent per positive"]);
   }
   if (!parts.length) return "";
   return `<div class="nums">${parts.map(([v, l]) => `<div><div class="nv">${v}</div><div class="nl">${l}</div></div>`).join("")}</div>`;
@@ -202,11 +220,11 @@ function actionBtn(n, target, label, doneLabel) {
   return `<button class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""}>${esc(text)}</button>`;
 }
 
-function cardHTML(n) {
+function cardHTML(n, gkey) {
   const cls = ["note", priorityClass(n.priority)];
   if (n.status === "dismissed") cls.push("dismissed");
   return `
-  <div class="${cls.filter(Boolean).join(" ")}" id="ncard-${esc(String(n.id))}">
+  <div class="${cls.filter(Boolean).join(" ")}" id="ncard-${esc(String(n.id))}" data-gkey="${esc(String(gkey ?? ""))}">
     <div class="note-main">
       <div class="ictile">${ic8("bell")}</div>
       <div style="flex:1;min-width:0">
@@ -231,9 +249,12 @@ function cardHTML(n) {
 function updateSummary() {
   const el = document.getElementById("summary");
   if (loadState !== "ok") { el.innerHTML = ""; return; }
-  const shownCount = all.filter(passesFilters).length;
-  const campaignCount = new Set(all.map((n) => n.campaign_id ?? n.campaign_name)).size;
-  el.innerHTML = `<div>Showing <b>${shownCount}</b> of <b>${all.length}</b> findings</div>` +
+  // Campaign count reflects the CURRENTLY VISIBLE (filtered) set, same as the
+  // findings count next to it — a narrowed filter should never leave a stale
+  // "103 campaigns" sitting next to "Showing 12 of 197 findings".
+  const shown = all.filter(passesFilters);
+  const campaignCount = new Set(shown.map((n) => n.campaign_id ?? n.campaign_name)).size;
+  el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${all.length}</b> findings</div>` +
     `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
 }
 
@@ -255,13 +276,13 @@ function draw() {
   }
   const groups = groupAndSort(shown);
   root.innerHTML = groups.map((g) => `
-    <div class="group-h">
+    <div class="group-h" data-gkey="${esc(g.key)}">
       <span class="gdot" style="background:${groupDotColor(g.rank)}"></span>
       <span class="lab">${g.campaignId ? `<a href="campaigns.html#${esc(String(g.campaignId))}">${esc(g.campaign_name || "Unknown campaign")}</a>` : esc(g.campaign_name || "Unknown campaign")}</span>
       <span class="desc">${esc(g.client || "")}</span>
       <span class="gcount">${g.items.length} finding${g.items.length === 1 ? "" : "s"}</span>
     </div>
-    ${g.items.map(cardHTML).join("")}
+    ${g.items.map((n) => cardHTML(n, g.key)).join("")}
   `).join("");
 }
 
@@ -273,6 +294,9 @@ document.getElementById("refreshBtn").onclick = loadNotifications;
 document.getElementById("list").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-target]");
   if (!btn || btn.disabled) return;
+  // The id always comes from the button's own data-nid, read fresh at click
+  // time from the exact element the user clicked — never an array index
+  // into `all` (which can point at a different row after any re-render).
   const id = btn.dataset.nid;
   const target = btn.dataset.target;
   const restore = busyBtn(btn, "Working…");
@@ -289,12 +313,56 @@ document.getElementById("list").addEventListener("click", async (e) => {
     const idx = all.findIndex((n) => String(n.id) === String(id));
     if (idx >= 0) all[idx] = { ...all[idx], ...updated };
     protoNote(`Marked ${STATUS_LABEL[target] || target}`);
-    draw(); // redraws with the fresh row; button element (and its busy state) is replaced wholesale
+    // Deliberately NOT calling draw()/groupAndSort() here. A full redraw
+    // recomputes each group's priority tier from the CURRENT statuses, so
+    // dismissing/actioning one finding could change its campaign's tier and
+    // reshuffle every other card underneath — that full re-sort-on-every-
+    // action is exactly the reflow/misclick trap testers hit (a different
+    // card lands under the cursor right as they click again). Instead, patch
+    // only this one card's DOM node in place; its screen position and its
+    // neighbours never move, even though its own status just changed.
+    applyCardPatch(idx >= 0 ? all[idx] : { ...updated, id });
   } catch (err) {
     restore();
     protoNote("Couldn't update — " + (err.message || "network error") + ". Nothing changed, try again.");
   }
 });
+
+function applyCardPatch(n) {
+  updateSummary(); // header counts only — never touches #list layout/order
+  const el = document.getElementById(`ncard-${CSS.escape(String(n.id))}`);
+  if (!el) { draw(); return; } // card wasn't on screen for some reason — safe fallback
+  const gkey = el.dataset.gkey;
+  if (!passesFilters(n)) {
+    // No longer matches the active filters (e.g. status filter = "New" and
+    // this card was just dismissed) — drop just this one card. Filters stay
+    // exactly as the user set them; nothing else in the list moves.
+    el.remove();
+    updateGroupCountAfterRemoval(gkey);
+    return;
+  }
+  const tmp = document.createElement("div");
+  tmp.innerHTML = cardHTML(n, gkey).trim();
+  el.replaceWith(tmp.firstElementChild);
+}
+
+function updateGroupCountAfterRemoval(gkey) {
+  const root = document.getElementById("list");
+  if (gkey) {
+    const remaining = document.querySelectorAll(`.note[data-gkey="${CSS.escape(gkey)}"]`).length;
+    const header = document.querySelector(`.group-h[data-gkey="${CSS.escape(gkey)}"]`);
+    if (header) {
+      if (remaining === 0) header.remove();
+      else {
+        const countEl = header.querySelector(".gcount");
+        if (countEl) countEl.textContent = `${remaining} finding${remaining === 1 ? "" : "s"}`;
+      }
+    }
+  }
+  if (!root.querySelector(".note")) {
+    root.innerHTML = `<div class="empty">No notifications match these filters.</div>`;
+  }
+}
 
 loadNotifications();
 </script>
