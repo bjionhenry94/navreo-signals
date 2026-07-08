@@ -1381,7 +1381,9 @@ async function renderList() {
   // getActiveClient() (shell.js) migrates a legacy alias id (navreo/amplifyy/arnic) to its
   // canonical client-N id and returns "" for "All clients" — never null/undefined, so the
   // `!activeClient ||` pass-through below always fires for "All clients" (no silent zero-results).
-  const activeClient = getActiveClient();
+  // Guard: getActiveClient ships with the client-switcher shell.js, which deploys
+  // separately — fall back to "" (All clients) when this page lands ahead of it.
+  const activeClient = typeof getActiveClient === "function" ? getActiveClient() : "";
   // Server-side client_id filtering (step 5 perf pass, extended in retry 2 to the
   // 3 remaining heavy GETs): when a client is active, scope each call to just that
   // client's rows instead of fetching the whole table and filtering in the browser.
@@ -2265,7 +2267,7 @@ function openWizard() {
   wizard.classList.add("on");
   loadClients().then(() => {
     if (wiz.newClient) { drawWiz(); return; }
-    const ac = getActiveClient();
+    const ac = typeof getActiveClient === "function" ? getActiveClient() : "";
     if (ac) { const c = (wiz.clients || []).find((x) => x.id === ac); if (c) { pickClient(ac); return; } }
     drawWiz();
   });
@@ -2460,7 +2462,8 @@ async function saveNewClient() {
   const r = await (await fetch("/api/clients", { method: "POST", body: JSON.stringify(nc) })).json();
   await loadClients();
   window._clients = null;
-  setActiveClient(r.id);  // shell.js — persists + broadcasts so the rail switcher picks it up too
+  // shell.js (client-switcher build) — persists + broadcasts so the rail switcher picks it up too
+  if (typeof setActiveClient === "function") setActiveClient(r.id);
   wiz.newClient = null;
   pickClient(r.id);
 }
