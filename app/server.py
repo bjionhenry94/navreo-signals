@@ -21,6 +21,7 @@ import threading
 import json
 import os
 import re
+import socket
 import ssl
 import sys
 import time
@@ -151,7 +152,7 @@ def load_keys() -> dict:
 KEYS = load_keys()
 
 
-def http_json(method: str, url: str, headers: dict, body: dict | None = None):
+def http_json(method: str, url: str, headers: dict, body: dict | None = None, timeout: float = 60):
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode() if body is not None else None,
@@ -159,7 +160,7 @@ def http_json(method: str, url: str, headers: dict, body: dict | None = None):
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=60, context=SSL_CTX) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         # providers return JSON bodies (NO_RESULTS, INVALID_FILTERS...) on 4xx
@@ -613,20 +614,74 @@ def _normalise_company_fields(path: str, body):
     return body
 
 
-def sb(method: str, path: str, body=None, prefer: str = ""):
-    """Best-effort Supabase PostgREST call - an outage must never break the app."""
+_SB_TIMEOUT_S = 15  # explicit, saner than http_json's 60s default - a cold-start
+                     # Supabase stall used to burn ~60s per attempt (~120s across
+                     # the two sequential calls a first page-load makes); capping
+                     # this bounds the worst case even with the one retry below.
+_SB_RETRY_BACKOFF_S = 1.5
+
+
+def _sb_transient(exc: Exception) -> bool:
+    """True for errors worth one retry (network/timeout/5xx); false for 4xx,
+    which won't succeed on a second try."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
+        return True
+    return False
+
+
+def sb(method: str, path: str, body=None, prefer: str = "", headers: dict | None = None):
+    """Best-effort Supabase PostgREST call - an outage must never break the app.
+    `headers` lets callers add per-request headers (e.g. Range for pagination)
+    without disturbing any existing call site - it's None everywhere else.
+    Retries once on a transient failure (timeout/network/5xx) after a short
+    backoff; 4xx failures are not retried. Every failure is logged (path only,
+    up to '?' - never the query string, which can carry the api key) with the
+    attempt number so a Supabase outage is visible in the server log instead
+    of silently degrading."""
     url = KEYS.get("SUPABASE_URL")
     key = KEYS.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
         return None
     if method in ("POST", "PATCH"):
         body = _normalise_company_fields(path, body)
-    try:
-        return http_json(method, f"{url}/rest/v1/{path}",
-                         {"apikey": key, "Authorization": f"Bearer {key}",
-                          "Prefer": prefer or "return=minimal"}, body)
-    except Exception:  # noqa: BLE001
-        return None
+    log_path = path.split("?", 1)[0]
+    last_exc = None
+    for attempt in (1, 2):
+        try:
+            return http_json(method, f"{url}/rest/v1/{path}",
+                             {"apikey": key, "Authorization": f"Bearer {key}",
+                              "Prefer": prefer or "return=minimal", **(headers or {})}, body,
+                             timeout=_SB_TIMEOUT_S)
+        except Exception as e:  # noqa: BLE001
+            last_exc = e
+            print(f"[sb] WARNING {method} {log_path} attempt={attempt} "
+                  f"failed: {type(e).__name__}: {e}", file=sys.stderr)
+            if attempt == 1 and _sb_transient(e):
+                time.sleep(_SB_RETRY_BACKOFF_S)
+                continue
+            break
+    return None
+
+
+def sb_get_all(path: str, page_size: int = 1000):
+    """GET every row for `path`, paginating past PostgREST's default ~1000-row
+    cap via the Range header. Stops once a page comes back shorter than
+    page_size (works without needing to read the Content-Range response
+    header, which http_json/sb don't currently surface). Returns None if any
+    page fails outright - a Supabase outage must be visible to callers as a
+    failure, not silently truncated into a partial-looking success."""
+    out: list = []
+    offset = 0
+    while True:
+        page = sb("GET", path, headers={"Range-Unit": "items", "Range": f"{offset}-{offset + page_size - 1}"})
+        if not isinstance(page, list):
+            return None
+        out.extend(page)
+        if len(page) < page_size:
+            return out
+        offset += page_size
 
 
 def sb_delete_doc(table: str, doc_id):
@@ -1537,9 +1592,234 @@ def read_json_list(path: Path, strict: bool = False) -> list:
     return _file_list(path)
 
 
+# ── endpoint-level read caches (G1) ───────────────────────────────────────
+# /api/sources, /api/campaign-drafts and /api/clients are refetched on every
+# list-view paint with no cache anywhere in the stack — /api/sources is the
+# slowest (a full Supabase doc fetch even for ?slim=1, since the trim only
+# drops the `prospects` key AFTER the fetch) and gates every campaign-list
+# render. Same 30s-TTL dict+Lock pattern as _compute_lead_counts/_LEAD_COUNTS_CACHE
+# below: a failed/degraded read is NEVER cached, so a real Supabase outage keeps
+# retrying on every call instead of getting "stuck" serving nothing for 30s.
+
+# ── S1: stale-while-revalidate (SWR) ──────────────────────────────────────
+# Every cache above/below used to do a hard synchronous re-fetch the instant a
+# request landed past its TTL, so the unlucky caller that crossed the TTL
+# boundary ate the full 2-5s Supabase round-trip. _SWRCache flips that: once a
+# cache has ANY successfully-fetched payload, a request past TTL gets that
+# stale payload back immediately and a single background thread is kicked off
+# to recompute it fresh (a per-entry `refreshing` flag stops duplicate
+# refreshes from concurrent requests during the same stale window). Only a
+# cache with NO payload at all (first request ever, or right after
+# _clear_ui_caches() empties it) pays the synchronous cost — which is exactly
+# the "never serve stale after a mutation" requirement, since clearing sets
+# payload back to None.
+class _SWRCache:
+    """SWR wrapper around a zero-arg `compute()` returning a payload.
+    `is_degraded(payload)` marks a payload as unfit to cache/serve-as-stale
+    (e.g. a `_degraded`/fetch-failed result) - such payloads are returned to
+    the caller once but never stored, so the next call retries for real."""
+
+    def __init__(self, compute, ttl, is_degraded=lambda p: False, name=""):
+        self.compute = compute
+        self.ttl = ttl
+        self.is_degraded = is_degraded
+        self.name = name
+        self.lock = threading.Lock()
+        self.ts = 0.0
+        self.payload = None
+        self.refreshing = False
+
+    def _refresh_bg(self):
+        try:
+            payload = self.compute()
+        except Exception as e:  # noqa: BLE001 - background refresh must never crash
+            print(f"[swr:{self.name}] background refresh failed: {e}")
+            with self.lock:
+                self.refreshing = False
+            return
+        with self.lock:
+            self.refreshing = False
+            if not self.is_degraded(payload):
+                self.ts = time.time()
+                self.payload = payload
+
+    def get(self):
+        now = time.time()
+        with self.lock:
+            payload, ts = self.payload, self.ts
+        if payload is not None:
+            if (now - ts) < self.ttl:
+                return payload  # fresh
+            # stale: serve immediately, kick exactly one bg refresh
+            start_thread = False
+            with self.lock:
+                if not self.refreshing:
+                    self.refreshing = True
+                    start_thread = True
+            if start_thread:
+                threading.Thread(target=self._refresh_bg, daemon=True).start()
+            return payload
+        # no payload cached at all -> synchronous read-through (first call, or
+        # right after _clear_ui_caches() cleared this entry)
+        payload = self.compute()
+        if not self.is_degraded(payload):
+            with self.lock:
+                self.ts = time.time()
+                self.payload = payload
+        return payload
+
+    def clear(self):
+        with self.lock:
+            self.ts = 0.0
+            self.payload = None
+
+
+class _SWRKeyedCache:
+    """Same SWR semantics as _SWRCache, keyed (e.g. per campaign_id/id-set)."""
+
+    def __init__(self, compute, ttl, is_degraded=lambda p: False, name=""):
+        self.compute = compute  # fn(key) -> payload
+        self.ttl = ttl
+        self.is_degraded = is_degraded
+        self.name = name
+        self.lock = threading.Lock()
+        self.entries: dict = {}  # key -> {"ts", "payload", "refreshing"}
+
+    def _refresh_bg(self, key):
+        try:
+            payload = self.compute(key)
+        except Exception as e:  # noqa: BLE001
+            print(f"[swr:{self.name}] background refresh failed for {key!r}: {e}")
+            with self.lock:
+                e2 = self.entries.get(key)
+                if e2 is not None:
+                    e2["refreshing"] = False
+            return
+        with self.lock:
+            e2 = self.entries.get(key)
+            if e2 is not None:
+                e2["refreshing"] = False
+            if not self.is_degraded(payload):
+                self.entries[key] = {"ts": time.time(), "payload": payload, "refreshing": False}
+
+    def get(self, key):
+        now = time.time()
+        with self.lock:
+            entry = self.entries.get(key)
+        if entry is not None:
+            if (now - entry["ts"]) < self.ttl:
+                return entry["payload"]
+            start_thread = False
+            with self.lock:
+                e2 = self.entries.get(key)
+                if e2 is not None and not e2["refreshing"]:
+                    e2["refreshing"] = True
+                    start_thread = True
+            if start_thread:
+                threading.Thread(target=self._refresh_bg, args=(key,), daemon=True).start()
+            return entry["payload"]
+        payload = self.compute(key)
+        if not self.is_degraded(payload):
+            with self.lock:
+                self.entries[key] = {"ts": now, "payload": payload, "refreshing": False}
+        return payload
+
+    def clear(self):
+        with self.lock:
+            self.entries.clear()
+
+
+_SOURCES_TTL_S = 30
+
+
+def _compute_sources_full() -> tuple:
+    docs = _pg_docs("sources")
+    fetch_failed = docs is None
+    drafts = docs if docs is not None else _file_list(DRAFTS)
+    result = sources_for_ui(drafts)
+    return result, fetch_failed
+
+
+_SOURCES_SWR = _SWRCache(_compute_sources_full, _SOURCES_TTL_S,
+                          is_degraded=lambda p: p[1], name="sources")
+
+
+def _cached_sources_full() -> tuple:
+    """(sources, fetch_failed). Computes the FULL sources_for_ui(read_drafts())
+    result once per TTL window (SWR: stale results are served instantly with a
+    background refresh, see _SWRCache); /api/sources derives its ?slim=1
+    variant from this same cached result instead of re-fetching."""
+    return _SOURCES_SWR.get()
+
+
+_CAMPAIGN_DRAFTS_TTL_S = 30
+
+
+def _compute_campaign_drafts() -> tuple:
+    docs = _pg_docs("campaign_drafts")
+    fetch_failed = docs is None
+    result = docs if docs is not None else _file_list(CAMPAIGN_DRAFTS)
+    return result, fetch_failed
+
+
+_CAMPAIGN_DRAFTS_SWR = _SWRCache(_compute_campaign_drafts, _CAMPAIGN_DRAFTS_TTL_S,
+                                  is_degraded=lambda p: p[1], name="campaign-drafts")
+
+
+def _cached_campaign_drafts() -> tuple:
+    """(drafts, fetch_failed) - same SWR pattern as _cached_sources_full()."""
+    return _CAMPAIGN_DRAFTS_SWR.get()
+
+
+def _campaign_client_map() -> dict:
+    """{str(campaign_draft_id): client_id}, built from the cached campaign_drafts
+    list. Shared by /api/sources and /api/lead-counts client_id filtering: neither
+    signal_sources rows nor the sources doc-table can be trusted to carry an
+    up-to-date client_id (it's resolved lazily at sync time - see sb_sync_source,
+    and only AFTER the doc is first written), so joining through the campaign
+    draft (which always carries the real client_id set at creation) is the
+    reliable path — same resolution sb_sync_source itself falls back to."""
+    drafts, _failed = _cached_campaign_drafts()
+    return {str(d.get("id")): d.get("client_id") for d in drafts if d.get("id") and d.get("client_id")}
+
+
+_CLIENTS_TTL_S = 30
+
+
+def _compute_clients() -> tuple:
+    docs = _pg_docs("clients", only_doc=True)
+    fetch_failed = docs is None
+    result = docs if docs is not None else _file_list(CLIENTS)
+    return result, fetch_failed
+
+
+_CLIENTS_SWR = _SWRCache(_compute_clients, _CLIENTS_TTL_S,
+                          is_degraded=lambda p: p[1], name="clients")
+
+
+def _cached_clients() -> tuple:
+    """(clients, fetch_failed) - same SWR pattern as _cached_sources_full()."""
+    return _CLIENTS_SWR.get()
+
+
 def read_drafts(strict: bool = False) -> list:
     r = _pg_docs("sources", strict=strict)
     return r if r is not None else _file_list(DRAFTS)
+
+
+_DRAFTS_READ_TTL_S = 30  # /api/leads[-batch] call read_drafts() just to map campaign_id -> source
+                          # ids/prospects - a single Supabase GET fetching every source's full doc
+                          # (prospects arrays included). That read is the actual cost behind "an
+                          # invalid campaign_id still burns 3-5s" (the expensive part runs before
+                          # the id is even checked). Cache it here so repeat/invalid lookups don't
+                          # re-hit Supabase; never cache a failed/empty read.
+
+_DRAFTS_READ_SWR = _SWRCache(read_drafts, _DRAFTS_READ_TTL_S,
+                              is_degraded=lambda p: not p, name="drafts-read")
+
+
+def _cached_read_drafts() -> list:
+    return _DRAFTS_READ_SWR.get()
 
 
 def _leads_for_sources(srcs: list) -> list:
@@ -1548,7 +1828,13 @@ def _leads_for_sources(srcs: list) -> list:
     if not srcs:
         return []
     ids = ",".join(str(d["id"]) for d in srcs)
-    rows = sb("GET", f"signal_leads?source_id=in.({ids})&order=pulled_at.desc") or []
+    # Column-trimmed select: only the fields the UI (leads tab + list-view activity
+    # chart) actually reads - source_id/pulled_at/campaign_id come via the local
+    # `srcs` join below, so this list is what's pulled straight off each row.
+    # See app/campaigns.html leadRowInner()/velocityChart()/renderList()'s
+    # leads-batch consumer for the read set this mirrors.
+    cols = "source_id,full_name,title,company,domain,linkedin_url,country,icebreaker,email,status,pushed_to,pulled_at"
+    rows = sb_get_all(f"signal_leads?select={cols}&source_id=in.({ids})&order=pulled_at.desc")
     if not isinstance(rows, list):
         return []
     by_src = {d["id"]: d for d in srcs}
@@ -1573,20 +1859,48 @@ def _leads_for_sources(srcs: list) -> list:
     return out
 
 
+_LEADS_TTL_S = 30  # mirrors _LEAD_COUNTS_TTL_S - the leads tab/dashboard poll these on every
+                    # navigation; a short cache keeps tab switches instant without going stale for long
+
+
+def _compute_leads_for_campaign(campaign_id: str) -> list:
+    srcs = [d for d in _cached_read_drafts() if str(d.get("campaign_id")) == campaign_id]
+    return _leads_for_sources(srcs) if srcs else []  # unmatched id -> [] with no Supabase call
+
+
+_LEADS_SWR = _SWRKeyedCache(_compute_leads_for_campaign, _LEADS_TTL_S, name="leads")
+
+
 def api_leads(campaign_id: str) -> list:
     """Every pulled lead for a campaign, straight from Supabase signal_leads —
-    accumulates across pulls (the local file only holds the LAST pull). Newest first."""
-    return _leads_for_sources([d for d in read_drafts() if str(d.get("campaign_id")) == str(campaign_id)])
+    accumulates across pulls (the local file only holds the LAST pull). Newest first.
+    Unknown/invalid campaign_id short-circuits to [] before any signal_leads query;
+    30s TTL SWR cache (keyed by campaign_id) so repeat tab switches are near-instant
+    and a request that lands just past TTL still gets an instant (stale) reply."""
+    campaign_id = str(campaign_id or "")
+    if not campaign_id:
+        return []
+    return _LEADS_SWR.get(campaign_id)
+
+
+def _compute_leads_batch(key: str) -> list:
+    wanted_set = set(key.split(","))
+    srcs = [d for d in _cached_read_drafts() if str(d.get("campaign_id")) in wanted_set]
+    return _leads_for_sources(srcs) if srcs else []
+
+
+_LEADS_BATCH_SWR = _SWRKeyedCache(_compute_leads_batch, _LEADS_TTL_S, name="leads-batch")
 
 
 def api_leads_batch(campaign_ids: str) -> list:
     """Leads for MANY campaigns in one shot — the dashboard needs every campaign's
     leads to draw the activity chart; a single read_drafts + one Supabase query
-    replaces the old N-calls-one-per-campaign waterfall."""
-    wanted = {c.strip() for c in (campaign_ids or "").split(",") if c.strip()}
+    replaces the old N-calls-one-per-campaign waterfall. Same 30s TTL SWR cache as
+    api_leads, keyed by the sorted id set."""
+    wanted = sorted({c.strip() for c in (campaign_ids or "").split(",") if c.strip()})
     if not wanted:
         return []
-    return _leads_for_sources([d for d in read_drafts() if str(d.get("campaign_id")) in wanted])
+    return _LEADS_BATCH_SWR.get(",".join(wanted))
 
 
 def sources_for_ui(drafts: list) -> list:
@@ -1599,8 +1913,13 @@ def sources_for_ui(drafts: list) -> list:
     ids = [str(d["id"]) for d in drafts if d.get("id") and d.get("last_pull")]
     if not ids:
         return drafts
-    rows = sb("GET", f"signal_leads?select=source_id&source_id=in.({','.join(ids)})")
+    rows = sb_get_all(f"signal_leads?select=source_id&source_id=in.({','.join(ids)})")
     if not isinstance(rows, list):
+        # Supabase fetch failed - the local `total` on pulled sources is only the
+        # LAST pull's count, so flag it stale rather than presenting it as live.
+        for d in drafts:
+            if d.get("last_pull"):
+                d["_count_stale"] = True
         return drafts
     counts: dict = {}
     for r in rows:
@@ -1613,17 +1932,21 @@ def sources_for_ui(drafts: list) -> list:
     return drafts
 
 
-def api_lead_counts() -> dict:
+def _compute_lead_counts() -> dict:
     """Per-campaign lead counts from the same signal_leads rows the Leads tab
     reads, so the campaign card and the tab always agree. One query for all
     campaigns; {campaign_id: {leads, sent}}."""
+    # Mirror read_drafts() but keep the Supabase failure visible: an outage must
+    # come back as _degraded, not as "zero leads on every campaign".
+    docs = _pg_docs("sources")
+    drafts = docs if docs is not None else _file_list(DRAFTS)
     by_src = {str(d["id"]): str(d.get("campaign_id"))
-              for d in read_drafts() if d.get("id") and d.get("campaign_id")}
+              for d in drafts if d.get("id") and d.get("campaign_id")}
     if not by_src:
-        return {}
-    rows = sb("GET", f"signal_leads?select=source_id,status,pushed_to&source_id=in.({','.join(by_src)})")
+        return {"_degraded": True} if docs is None else {}
+    rows = sb_get_all(f"signal_leads?select=source_id,status,pushed_to&source_id=in.({','.join(by_src)})")
     if not isinstance(rows, list):
-        return {}
+        return {"_degraded": True}
     out: dict = {}
     for r in rows:
         cid = by_src.get(str(r.get("source_id")))
@@ -1633,11 +1956,63 @@ def api_lead_counts() -> dict:
         c["leads"] += 1
         if r.get("pushed_to") or r.get("status") == "pushed":
             c["sent"] += 1
+    # Every campaign that has a source mapping gets an explicit {leads:0,sent:0}
+    # entry even with zero signal_leads rows, so a MISSING entry in the payload
+    # strictly means "unavailable" (degraded/never fetched), never "no leads yet".
+    for cid in set(by_src.values()):
+        out.setdefault(cid, {"leads": 0, "sent": 0})
+    if docs is None:  # counts built from the stale local fallback source list
+        out["_degraded"] = True
     return out
+
+
+_LEAD_COUNTS_TTL_S = 30  # /api/lead-counts is polled on every list/detail load;
+                          # a short in-process cache avoids re-querying Supabase
+                          # on every page view without going stale for long.
+
+_LEAD_COUNTS_SWR = _SWRCache(_compute_lead_counts, _LEAD_COUNTS_TTL_S,
+                              is_degraded=lambda p: p.get("_degraded"), name="lead-counts")
+
+
+def api_lead_counts() -> dict:
+    """Cached wrapper around _compute_lead_counts() - never caches a `_degraded`
+    result (a transient Supabase outage must not get "stuck" showing degraded
+    for the next 30s once Supabase recovers), so a real outage is retried on
+    every call same as before, but the common healthy case is served from
+    memory for up to _LEAD_COUNTS_TTL_S seconds (SWR: stale-but-good results
+    beyond that are served instantly with a background refresh)."""
+    return _LEAD_COUNTS_SWR.get()
+
+
+def _clear_ui_caches():
+    """Invalidate every UI-facing read cache (G2). Mutations (approve/skip a
+    lead, push, edit a campaign, ...) must be visible on the very next GET, not
+    masked by up-to-30s-stale cached payloads. Called ONCE at the top of each
+    write-dispatch entry point (do_POST, do_PATCH), before any handler runs.
+    Clearing an _SWRCache/_SWRKeyedCache drops its payload entirely (not just
+    the timestamp), so the very next GET after a mutation is guaranteed to do
+    a synchronous read-through — SWR only ever serves a stale payload when one
+    already exists, and clear() removes it."""
+    _SOURCES_SWR.clear()
+    _CAMPAIGN_DRAFTS_SWR.clear()
+    _CLIENTS_SWR.clear()
+    _LEAD_COUNTS_SWR.clear()
+    _LEADS_SWR.clear()
+    _LEADS_BATCH_SWR.clear()
+    _DRAFTS_READ_SWR.clear()
 
 
 NOTIFICATION_STATUSES = ("new", "acknowledged", "actioned", "dismissed")
 _NOTIFICATION_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}  # unranked/None sorts last
+
+# canonical client id -> free-text name variants this table's legacy `client`
+# column has actually held (see app/migrations/2026-07-08-tool-level-clients.sql,
+# NOT yet run against the DB). Mirrors shell.js's CLIENT_ALIAS.
+NOTIFICATIONS_CLIENT_ALIASES = {
+    "client-1": ["Navreo", "navreo"],
+    "client-2": ["Amplifyy", "amplifyy"],
+    "client-3": ["Arnic", "arnic"],
+}
 
 
 def api_notifications(qs: dict) -> list:
@@ -1647,13 +2022,43 @@ def api_notifications(qs: dict) -> list:
     Medium > Low > None priority, newest created_at first within each tier;
     PostgREST can't express that custom enum order in one order= clause, so we
     ask it for created_at.desc and re-rank by priority here (a stable sort
-    keeps the created_at ordering intact within each priority group)."""
+    keeps the created_at ordering intact within each priority group).
+
+    Optional `client_id` (canonical id, e.g. "client-1") pushes an equality
+    filter down to PostgREST instead of the caller fetching everything and
+    filtering client-side. The table only has a free-text `client` column
+    today (no client_id column yet — see the migration file above), so this
+    matches `client` against the known name variants for that id. The query
+    is built as `or=(client_id.eq.<id>,client.in.(<names>))` so that once the
+    migration adds a real client_id column, PostgREST starts honouring the
+    client_id.eq half automatically with zero code changes here. Until then,
+    referencing the not-yet-existing column makes PostgREST error the whole
+    request — caught below by falling back to a plain `client=in.(<names>)`
+    filter, so the client_id param degrades gracefully to today's free-text
+    match instead of silently returning nothing."""
     from urllib.parse import quote
     filters = [f"{key}=eq.{quote(val, safe='')}"
                for key in ("status", "priority", "client")
                for val in [(qs.get(key) or [""])[0]] if val]
-    filters.append("order=created_at.desc")
-    rows = sb("GET", f"optimiser_notifications?{'&'.join(filters)}")
+    client_id = (qs.get("client_id") or [""])[0].strip()
+
+    def _fetch(extra_filters: list):
+        parts = filters + extra_filters + ["order=created_at.desc"]
+        return sb("GET", f"optimiser_notifications?{'&'.join(parts)}")
+
+    if client_id:
+        names = NOTIFICATIONS_CLIENT_ALIASES.get(client_id, [client_id])
+        name_list = ",".join(quote(n, safe="") for n in names)
+        cid_q = quote(client_id, safe="")
+        rows = _fetch([f"or=(client_id.eq.{cid_q},client.in.({name_list}))"])
+        if not isinstance(rows, list):
+            # Most likely cause: client_id column doesn't exist on this table
+            # yet (pre-migration) — PostgREST errors the whole `or=` filter on
+            # an unknown column. Fall back to the free-text-only match so the
+            # param still filters correctly today.
+            rows = _fetch([f"client=in.({name_list})"])
+    else:
+        rows = _fetch([])
     rows = rows if isinstance(rows, list) else []
     rows.sort(key=lambda r: _NOTIFICATION_PRIORITY_RANK.get(r.get("priority"), 3))
     return rows
@@ -1676,6 +2081,89 @@ def update_notification_status(nid: str, status: str) -> dict:
     if not result:
         raise LookupError("notification not found")
     return result[0]
+
+
+# ── executable notification actions (Optimiser CSM-approval gate) ───────
+
+# Only these two action_types have an API-safe executable act attached.
+# kill_threshold_pivot's *executable* half is "pause the campaign" - the
+# strategic re-pivot decision itself always stays human, in the Smartlead UI.
+NOTIFICATION_EXECUTABLE_ACTIONS = {"pause_campaign", "kill_threshold_pivot"}
+
+
+def execute_notification_action(nid: str, payload: dict) -> tuple:
+    """POST /api/notifications/{id}/execute - fires the one API-safe Smartlead
+    action attached to a notification finding.
+
+    Gated behind an explicit CSM {"confirm": "PAUSE"} in the request body:
+    the optimiser guardrails say "NEVER pause or stop a campaign without CSM
+    approval" - the CSM typing/clicking confirm in the UI IS that approval,
+    so this endpoint must never be callable without it.
+
+    HARD CONSTRAINT: this handler may ONLY EVER call Smartlead's
+    POST /campaigns/{id}/status endpoint. Never a sequence-save/variant
+    endpoint - those destroy variant history, and nothing here should ever
+    grow a code path that reaches one.
+
+    Returns (http_status, json_body) for the caller to hand to self._json.
+    """
+    rows = sb("GET", f"optimiser_notifications?id=eq.{nid}")
+    if not isinstance(rows, list) or not rows:
+        return 404, {"ok": False, "message": "notification not found"}
+    row = rows[0]
+
+    action_type = row.get("action_type")
+    api_safe = bool(row.get("api_safe"))
+    smartlead_url = row.get("smartlead_url")
+    if not api_safe or action_type not in NOTIFICATION_EXECUTABLE_ACTIONS:
+        return 400, {"ok": False,
+                      "message": "this action must be done in the Smartlead UI",
+                      "smartlead_url": smartlead_url}
+
+    if payload.get("confirm") != "PAUSE":
+        return 400, {"ok": False,
+                      "message": 'confirmation required: send {"confirm":"PAUSE"}'}
+
+    try:
+        campaign_id = int(row.get("campaign_id"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign_id is not numeric"}
+
+    # The ONLY Smartlead endpoint this handler is allowed to call - see the
+    # HARD CONSTRAINT above. Do not add a sequences/variants call here.
+    url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/status"
+           f"?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}")
+    req = urllib.request.Request(
+        url, data=json.dumps({"status": "PAUSED"}).encode(),
+        headers={"User-Agent": UA, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as resp:
+            sl_status, sl_raw = resp.status, resp.read().decode()
+    except urllib.error.HTTPError as e:
+        sl_status, sl_raw = e.code, e.read().decode()
+    try:
+        sl_body = json.loads(sl_raw) if sl_raw else {}
+    except ValueError:
+        sl_body = sl_raw
+
+    if not (200 <= sl_status < 300):
+        # Smartlead rejected the pause - do NOT touch the notification row.
+        return 502, {"ok": False, "message": "Smartlead pause failed",
+                      "smartlead_status": sl_status, "smartlead_response": sl_body}
+
+    try:
+        updated = update_notification_status(nid, "actioned")
+    except Exception as e:  # noqa: BLE001 - Smartlead already paused; the
+        # notification-row update is best-effort bookkeeping on top of that,
+        # so a failure here must not be reported as the pause having failed.
+        return 200, {"ok": True, "executed": action_type, "campaign_id": campaign_id,
+                      "smartlead_response": sl_body,
+                      "notification_update_error": str(e)[:300]}
+
+    return 200, {"ok": True, "executed": action_type, "campaign_id": campaign_id,
+                  "smartlead_response": sl_body, "notification": updated}
 
 
 def save_draft(p: dict) -> dict:
@@ -1843,13 +2331,16 @@ def heyreach_lists(refresh: bool = False) -> list:
     return items
 
 
-def outreach_destinations(p: dict) -> dict:
-    """Live pickers for the two outreach tools (header dropdowns).
+_OUTREACH_DESTS_TTL_S = 300  # the live Smartlead /campaigns GET was the slowest of
+                              # the 5 list-view calls (baseline ~4s) - the picker
+                              # data doesn't need to be second-fresh, and the
+                              # frontend already calls ?refresh=1 (which bypasses
+                              # this cache, see below) right after creating a new
+                              # destination, so this TTL never hides a just-created
+                              # campaign/list from the picker that created it.
 
-    p['refresh'] forces a live re-pull of HeyReach lists (busting the module cache
-    above) so a list or campaign created moments ago shows up the instant the picker
-    is opened. Smartlead campaigns are always fetched live, so they need no flag."""
-    refresh = bool(p.get("refresh"))
+
+def _compute_outreach_destinations() -> dict:
     out: dict = {"smartlead": [], "heyreach": []}
     try:
         camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
@@ -1859,10 +2350,48 @@ def outreach_destinations(p: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         out["smartlead_error"] = str(e)[:150]
     try:
-        out["heyreach"] = heyreach_lists(refresh=refresh)
+        out["heyreach"] = heyreach_lists(refresh=False)
     except Exception as e:  # noqa: BLE001
         out["heyreach_error"] = str(e)[:150]
     return out
+
+
+_OUTREACH_DESTS_SWR = _SWRCache(_compute_outreach_destinations, _OUTREACH_DESTS_TTL_S,
+                                 name="outreach-destinations")  # always cached, even
+                                 # partial *_error payloads - matches the pre-SWR
+                                 # behavior of this endpoint (soft-fails inline, no
+                                 # top-level _degraded flag to gate on)
+
+
+def outreach_destinations(p: dict) -> dict:
+    """Live pickers for the two outreach tools (header dropdowns).
+
+    p['refresh'] forces a live re-pull of HeyReach lists AND bypasses the SWR
+    cache entirely (synchronous fetch + store), so a list or campaign created
+    moments ago shows up the instant the picker is opened - see campaigns.html's
+    post-create flow which calls this endpoint with ?refresh=1. Non-refresh
+    calls go through _OUTREACH_DESTS_SWR: fresh-within-TTL is served from
+    memory, stale-past-TTL is served instantly with a background refresh (S1),
+    and the live Smartlead /campaigns fetch (baseline ~4s) never blocks a
+    normal picker open once the cache has been populated once."""
+    if bool(p.get("refresh")):
+        out: dict = {"smartlead": [], "heyreach": []}
+        try:
+            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
+            out["smartlead"] = [{"id": c.get("id"), "name": c.get("name") or "", "status": c.get("status")}
+                                for c in (camps if isinstance(camps, list) else [])
+                                if c.get("status") in ("ACTIVE", "PAUSED", "DRAFTED")][:100]
+        except Exception as e:  # noqa: BLE001
+            out["smartlead_error"] = str(e)[:150]
+        try:
+            out["heyreach"] = heyreach_lists(refresh=True)
+        except Exception as e:  # noqa: BLE001
+            out["heyreach_error"] = str(e)[:150]
+        with _OUTREACH_DESTS_SWR.lock:
+            _OUTREACH_DESTS_SWR.ts = time.time()
+            _OUTREACH_DESTS_SWR.payload = out
+        return out
+    return _OUTREACH_DESTS_SWR.get()
 
 
 def _split_name(pr: dict) -> tuple[str, str]:
@@ -4326,13 +4855,30 @@ ROUTES = {
 
 
 class Handler(SimpleHTTPRequestHandler):
+    # S3: HTTP/1.1 keep-alive. Safe only because every response-writing path in
+    # this handler goes through one of: self._json() (always sets Content-Length,
+    # see below), self._serve_static() (always sets Content-Length), or an
+    # unmodified SimpleHTTPRequestHandler/BaseHTTPRequestHandler fallback (static
+    # file GET/HEAD, directory listing, 404/redirect via send_error/send_response)
+    # - the stdlib itself sets Content-Length on every one of those. There is no
+    # chunked/streamed response anywhere in this file. See verification report
+    # for the full audit list.
+    protocol_version = "HTTP/1.1"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PROJECT_DIR), **kwargs)
 
     def end_headers(self):
         # the app ships as static files - stale cached JS against a newer API
-        # silently breaks flows (empty ideas table), so force revalidation
-        self.send_header("Cache-Control", "no-cache, must-revalidate")
+        # silently breaks flows (empty ideas table), so force revalidation.
+        # EXCEPTION: /app/data/*.json are cron-refreshed snapshots (mailboxes,
+        # meta, etc.) — a little staleness (<=60s) is fine per spec, and letting
+        # the browser cache them for 60s avoids re-downloading on every nav.
+        p = self.path.split("?")[0]
+        if p.startswith("/app/data/") and p.endswith(".json"):
+            self.send_header("Cache-Control", "max-age=60")
+        else:
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
         super().end_headers()
 
     def log_message(self, fmt, *args):  # quieter logs
@@ -4363,12 +4909,49 @@ class Handler(SimpleHTTPRequestHandler):
     # conditional requests fall through to SimpleHTTPRequestHandler untouched.
     _GZIP_EXT = {".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".map", ".txt"}
 
+    # Subresources that are safe to ETag/304 (never HTML — page navigations must
+    # always revalidate the no-cache/must-revalidate way; see end_headers()).
+    # This is JS/CSS/fonts/icons — the "static subresources" step 2 targets.
+    # mtime+size is a cheap, good-enough fingerprint (no need to hash file
+    # contents): any real edit changes at least one of the two.
+    _ETAG_EXT = {".js", ".mjs", ".css", ".svg", ".map",
+                 ".png", ".jpg", ".jpeg", ".gif", ".ico",
+                 ".woff", ".woff2", ".ttf", ".eot"}
+
+    def _etag_for(self, fs_path):
+        try:
+            st = os.stat(fs_path)
+        except OSError:
+            return None
+        return f'"{int(st.st_mtime)}-{st.st_size}"'
+
+    def _if_none_match_hit(self, etag):
+        inm = self.headers.get("If-None-Match")
+        if not inm or not etag:
+            return False
+        return etag in [t.strip() for t in inm.split(",")]
+
     def _serve_static(self):
         import os, gzip, mimetypes
-        fs_path = self.translate_path(self.path)
+        fs_path = self.translate_path(self.path.split("?")[0])
         ext = os.path.splitext(fs_path)[1].lower()
-        if not self._accepts_gzip() or ext not in self._GZIP_EXT or os.path.isdir(fs_path):
+        if os.path.isdir(fs_path):
             return super().do_GET()
+
+        # ETag/304 short-circuit for cacheable subresources — cheap mtime+size
+        # fingerprint, checked BEFORE reading the file at all so a 304 never
+        # pays the read/gzip cost. Runs for both the gzip and non-gzip paths
+        # below (fonts/icons don't hit the _GZIP_EXT branch but still get ETags).
+        etag = self._etag_for(fs_path) if ext in self._ETAG_EXT else None
+        if etag and self._if_none_match_hit(etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
+
+        use_gzip = self._accepts_gzip() and ext in self._GZIP_EXT
+        if not use_gzip and not etag:
+            return super().do_GET()  # unhandled extension — untouched fallback (ranges, 404s, etc.)
         try:
             with open(fs_path, "rb") as f:
                 body = f.read()
@@ -4377,15 +4960,19 @@ class Handler(SimpleHTTPRequestHandler):
         ctype = mimetypes.guess_type(fs_path)[0] or "application/octet-stream"
         if ctype.startswith("text/") or ext in (".js", ".mjs", ".json", ".svg"):
             ctype += "; charset=utf-8"
-        gz = gzip.compress(body, 6)
+        send_body = body
         self.send_response(200)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Encoding", "gzip")
-        self.send_header("Vary", "Accept-Encoding")
-        self.send_header("Content-Length", str(len(gz)))
+        if etag:
+            self.send_header("ETag", etag)
+        if use_gzip:
+            send_body = gzip.compress(body, 6)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(send_body)))
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(gz)
+            self.wfile.write(send_body)
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -4395,7 +4982,35 @@ class Handler(SimpleHTTPRequestHandler):
             rows = sb("GET", "signal_cron_runs?order=id.desc&limit=1")
             return self._json((rows or [{}])[0])
         if path == "/api/sources":
-            return self._json(sources_for_ui(read_drafts()))
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            srcs, fetch_failed = _cached_sources_full()
+            if fetch_failed and not srcs:
+                # Supabase errored AND the file fallback yielded nothing - an honest
+                # 503 beats a 200-[] that the UI would render as "no campaigns".
+                return self._json({"error": "supabase_unavailable",
+                                    "message": "Couldn't reach the database - try again."}, 503)
+            # Optional ?client_id= narrows to that client's sources. Sources don't
+            # reliably carry their own client_id (see _campaign_client_map), so this
+            # joins through campaign_id -> the owning campaign draft's client_id,
+            # falling back to a direct client_id match if a row happens to have one.
+            # Filtered from the same cached full list — no extra Supabase round-trip,
+            # and the no-param case (the common path) is byte-identical to today.
+            cid = (q.get("client_id") or [""])[0].strip()
+            if cid:
+                cmap = _campaign_client_map()
+                srcs = [s for s in srcs if s.get("client_id") == cid
+                        or cmap.get(str(s.get("campaign_id"))) == cid]
+            if (q.get("slim") or [""])[0].lower() in ("1", "true", "yes"):
+                # List-view callers only read source meta/counts (name, type,
+                # campaign_id, total, last_pull, destination, _count_stale, etc.)
+                # - never the per-source `prospects` array, which is what makes
+                # this endpoint's payload heavy (baseline ~222KB). Strip just
+                # that one key; every other field is untouched so counts/meta
+                # stay byte-identical to the non-slim response. Derived from the
+                # same cached full result above - no second Supabase fetch.
+                srcs = [{k: v for k, v in s.items() if k != "prospects"} for s in srcs]
+            return self._json(srcs)
         if path == "/api/leads":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -4405,7 +5020,21 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self._json(api_leads_batch((q.get("campaign_ids") or [""])[0]))
         if path == "/api/lead-counts":
-            return self._json(api_lead_counts())
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            counts = api_lead_counts()
+            # Optional ?client_id= narrows to that client's campaigns. Keyed by
+            # campaign_id (a signal_leads aggregate, no client dimension of its
+            # own), so filtering joins through the same campaign_id -> client_id
+            # map /api/sources uses. `_degraded` is a top-level flag, not a
+            # campaign entry - always pass it through untouched. Filtered from the
+            # same cached payload — no extra Supabase round-trip, and the
+            # no-param case (the common path) is byte-identical to today.
+            cid = (q.get("client_id") or [""])[0].strip()
+            if cid:
+                cmap = _campaign_client_map()
+                counts = {k: v for k, v in counts.items() if k == "_degraded" or cmap.get(k) == cid}
+            return self._json(counts)
         if path == "/api/strategy-result":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -4418,13 +5047,29 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/qa-history":
             return self._json(read_json_list(QA_HISTORY))
         if path == "/api/campaign-drafts":
-            return self._json(read_json_list(CAMPAIGN_DRAFTS))
+            drafts, fetch_failed = _cached_campaign_drafts()
+            if fetch_failed and not drafts:
+                return self._json({"error": "supabase_unavailable",
+                                    "message": "Couldn't reach the database - try again."}, 503)
+            # Optional ?client_id= narrows the response to that client's drafts.
+            # campaign_drafts.doc already carries a real client_id (no alias
+            # mapping needed, unlike notifications' free-text `client` column).
+            # Filtered from the same 30s-TTL cached full list — no extra
+            # Supabase round-trip per client, and the no-param case (the
+            # common path) is untouched: same object, same bytes, as today.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            cid = (q.get("client_id") or [""])[0].strip()
+            if cid:
+                drafts = [d for d in drafts if d.get("client_id") == cid]
+            return self._json(drafts)
         if path == "/api/notifications":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(api_notifications(q))
         if path == "/api/clients":
-            return self._json(read_json_list(CLIENTS))
+            clients, _fetch_failed = _cached_clients()
+            return self._json(clients)
         if path == "/api/outreach-destinations":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -4433,6 +5078,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self._serve_static()
 
     def do_POST(self):
+        _clear_ui_caches()  # G2: every POST may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
         if path == "/api/cron/pull-all":
             # External-scheduler batch pull. Token-guarded (header, not body) and
@@ -4455,6 +5101,17 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": True, "started": False, "busy": True}, 200)
             threading.Thread(target=_cron_pull_bg, daemon=True).start()
             return self._json({"ok": True, "started": True}, 202)
+        exec_prefix, exec_suffix = "/api/notifications/", "/execute"
+        if path.startswith(exec_prefix) and path.endswith(exec_suffix) and \
+                len(path) > len(exec_prefix) + len(exec_suffix):
+            nid = path[len(exec_prefix):-len(exec_suffix)]
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            status, body = execute_notification_action(nid, payload)
+            return self._json(body, status)
         route = ROUTES.get(path)
         if not route:
             return self._json({"ok": False, "message": "unknown endpoint"}, 404)
@@ -4467,6 +5124,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": False, "message": str(e)[:300]}, 200)
 
     def do_PATCH(self):
+        _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
         prefix = "/api/notifications/"
         if not path.startswith(prefix) or len(path) <= len(prefix):
@@ -4490,9 +5148,57 @@ class Handler(SimpleHTTPRequestHandler):
         return self._json(row)
 
 
+# ── S1: boot warm-up ───────────────────────────────────────────────────────
+# Pre-populate every G1 endpoint cache BEFORE real traffic arrives, so the
+# very first real request after boot hits a warm SWR cache instead of paying
+# the cold synchronous Supabase round-trip. Runs once, sequentially (so it
+# doesn't hammer Supabase with concurrent cold queries), in a daemon thread so
+# a slow/unreachable Supabase never delays server startup. Any single step's
+# failure is caught and logged — the affected cache is simply left empty and
+# will read through honestly (503/_degraded) on the first real request, or
+# populate on that request/a later successful background refresh.
+def _boot_warmup():
+    t0 = time.time()
+    steps = [
+        ("lead-counts", api_lead_counts),
+        ("sources", _cached_sources_full),
+        ("campaign-drafts", _cached_campaign_drafts),
+        ("clients", _cached_clients),
+        ("drafts-read", _cached_read_drafts),
+        ("outreach-destinations", lambda: outreach_destinations({"refresh": False})),
+    ]
+    for name, fn in steps:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001 - warm-up must never crash the server
+            print(f"[warmup] {name} failed: {e}")
+    # Per-campaign leads + the dashboard's batch call: keyed SWR caches, so the
+    # first visitor to any campaign detail (or the list's chart) after a boot
+    # would otherwise pay the one cold multi-second Supabase read per key.
+    try:
+        counts = api_lead_counts()
+        cids = sorted(c for c in counts if not str(c).startswith("_"))
+        for cid in cids:
+            try:
+                api_leads(cid)
+            except Exception as e:  # noqa: BLE001
+                print(f"[warmup] leads {cid} failed: {e}")
+        # the list view requests leads-batch for the sorted NON-deleted id set —
+        # warm that exact key so the dashboard chart is instant on first paint
+        drafts, _ = _cached_campaign_drafts()
+        live = sorted(str(d.get("id")) for d in (drafts or [])
+                      if d.get("id") and not d.get("deleted_at"))
+        if live:
+            api_leads_batch(",".join(live))
+    except Exception as e:  # noqa: BLE001
+        print(f"[warmup] leads sweep failed: {e}")
+    print(f"[warmup] complete in {time.time() - t0:.1f}s")
+
+
 if __name__ == "__main__":
     # Render injects $PORT and needs 0.0.0.0; locally, argv[1] or 7901 on 127.0.0.1.
     port = int(os.environ.get("PORT") or (sys.argv[1] if len(sys.argv) > 1 else 7901))
     host = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
     print(f"Serving {PROJECT_DIR} + /api on http://{host}:{port}")
+    threading.Thread(target=_boot_warmup, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

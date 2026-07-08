@@ -183,7 +183,8 @@
     <div class="modal-b" id="wiz-body"></div>
     <div class="modal-f">
       <button class="btn" id="wiz-back" onclick="wizBack()">Back</button>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="wiz-next-hint" class="small muted" style="display:none">Pick an option above to continue</span>
         <button class="btn" onclick="closeWizard()">Cancel</button>
         <button class="btn primary" id="wiz-next" onclick="wizNext()">Next</button>
       </div>
@@ -258,6 +259,7 @@ const _nativeFetch = window.fetch.bind(window);
 const _getCache = new Map();   // url -> { t, v, p }   (t=Date.now ms, v=last value, p=promise)
 const GET_TTL = 8000;          // in-memory dedupe window; past it we still show cache + revalidate (SWR)
 const SESSION_TTL = 600000;    // ~"once per session" for /api/clients, /api/outreach-destinations, /api/campaign-drafts
+const LEADS_TTL = 30000;       // matches the server's 30s in-process cache for /api/leads[-batch] - tab switches shouldn't refire a multi-second query
 
 // Persist snapshots to sessionStorage so a full reload / revisit paints the last-known
 // data instantly instead of waiting on the network. Big payloads are skipped, quota errors swallowed.
@@ -279,7 +281,13 @@ function cachedGet(url, ttl = GET_TTL) {
   const now = Date.now();
   const mem = _getCache.get(url);
   if (mem && mem.p && (now - mem.t) < ttl) return mem.p;           // fresh enough in memory
-  const fetchP = _nativeFetch(url).then((r) => r.json()).then((v) => {
+  // fetchJsonWithRetry (shell.js): response.ok check + one 800ms-delayed retry
+  // on a network throw or 5xx, so a transient blip doesn't sink this GET.
+  // It resolves `null` (never rejects) on failure, so re-throw here to keep
+  // cachedGet's existing reject-on-failure contract (every call site does
+  // `cachedGet(...).catch(() => fallback)`).
+  const fetchP = fetchJsonWithRetry(url, {}, null).then((v) => {
+    if (v === null) throw new Error(`fetch failed: ${url}`);
     _getCache.set(url, { t: Date.now(), v, p: Promise.resolve(v) });
     _lsSet(url, v);
     return v;
@@ -357,8 +365,22 @@ async function init() {
   // Every legacy DB.* read (campaigns / campaign_details / signals / audit) is already guarded with
   // `|| []` / optional chaining, so an empty object is behaviourally identical minus the 404s.
   DB = {};
+  // "+ Add new client" in the shared rail switcher lands here with ?newclient=1 (it can't
+  // open the wizard itself since the wizard only exists on this page) — open it once, then
+  // scrub the param so a refresh/back-nav doesn't reopen it.
+  if (new URLSearchParams(location.search).get("newclient")) {
+    history.replaceState(null, "", location.pathname + location.hash);
+    addClientFromSwitcher();
+  }
   route();
   window.addEventListener("hashchange", route);
+  // Shared rail switcher changed client on this or another page — repaint the list so the
+  // two controls (rail + this page) always agree. renderList() recomputes draftsUrl from
+  // the NEW activeClient, which is a different cache key, so this naturally re-fetches
+  // (now server-side client_id-scoped) rather than reusing the old client's cached read.
+  window.addEventListener("navreo:client-changed", () => {
+    if (!location.hash.replace("#", "")) { DB.campaignDrafts = null; renderList(); }
+  });
 }
 
 function route() {
@@ -369,6 +391,7 @@ function route() {
   const id = location.hash.replace("#", "");
   let r;
   if (id.startsWith("cdraft-")) r = renderDraftCampaign(id);
+  else if (id === "deliverability" && window.renderDeliverability) r = renderDeliverability();
   else if (id && (DB.campaigns || []).some((c) => String(c.id) === id)) r = renderDetail(Number(id));
   else r = renderList();
   if (!window._swrRepaint) window.scrollTo(0, 0);
@@ -403,13 +426,16 @@ async function renderDraftCampaign(id) {
   const srcs = (Array.isArray(srcsAll0) ? srcsAll0 : []).filter((s) => String(s.campaign_id) === String(id));
   window._drafts = srcs;
   const people = draftProspects(srcs);
-  // Authoritative lead count comes from the DB (signal_leads accumulates every pull);
-  // the local `people` only holds the LAST pull, so use it just as an offline fallback
-  // - otherwise the tab label disagrees with the Leads tab (which reads the same DB).
-  const dbLeadCount = (counts0 || {})[String(id)]?.leads ?? null;
-  const leadCount = dbLeadCount != null ? dbLeadCount : people.length;
+  // Authoritative lead count comes from the DB (signal_leads accumulates every pull).
+  // If the DB fetch failed (_degraded) or this campaign has no entry, don't fall back
+  // to the local last-pull-only `people` count - that reads as real but is stale/partial.
+  const countsUnavailable = !!(counts0 || {})._degraded || (counts0 || {})[String(id)] === undefined;
+  const dbLeadCount = countsUnavailable ? null : (counts0 || {})[String(id)]?.leads ?? null;
+  const leadCount = dbLeadCount != null ? dbLeadCount : (countsUnavailable ? null : people.length);
   const tabs = ["overview", "leads", "sources"];  // Preview ("copy") tab hidden for now
-  const tabLabel = { overview: "Overview", leads: leadCount ? `Leads (${leadCount})` : "Leads", sources: "Sources", copy: "Preview" };
+  // Loading/unavailable ("…") must read distinctly from a genuine zero ("0") - leadCount is a
+  // real number (including 0) whenever countsUnavailable is false, so don't treat 0 as falsy here.
+  const tabLabel = { overview: "Overview", leads: countsUnavailable ? "Leads (…)" : `Leads (${leadCount})`, sources: "Sources", copy: "Preview" };
   if (!tabs.includes(dtab)) dtab = "overview";
   if (!sessionStorage.getItem("cdtab") && dtab === "overview" && people.some((x) => !x.verdict)) dtab = "leads";  // land where the work is
   main.innerHTML = `
@@ -458,23 +484,23 @@ async function renderDraftCampaign(id) {
   hydrateFade(main);  // ease the real detail view in over the skeleton
   const el = document.getElementById("dtabbody");
   if (dtab === "overview") {
-    const kept = people.filter((x) => x.verdict === "keep").length;
-    const rej = people.filter((x) => x.verdict === "reject").length;
-    const pushed = people.filter((x) => Object.keys(x.pushed || {}).length || x.pushed_to).length;
-    const slN = people.filter((x) => Object.keys(x.pushed || {}).some((k) => k.startsWith("smartlead"))).length;
-    const hrN = people.filter((x) => Object.keys(x.pushed || {}).some((k) => k.startsWith("heyreach"))).length;
-    const feed = [];
+    // Funnel tiles (People found/Approved/Skipped/Sent) must read from the SAME
+    // authoritative /api/leads rows as the Leads tab - NOT `people`/draftProspects,
+    // which is only the last pull's local snapshot per source. That mismatch was
+    // the "People found: 13" vs "Leads (269)" trust-killer on this exact page.
+    // Uses the identical cachedGet url+TTL as the Leads tab fetch below, so a visit
+    // that opens both tabs only ever fires the query once.
+    const tileMeta = [["People found", "people"], ["Approved by you", "thumbsup"], ["Skipped", "error"], ["Sent to outreach", "send"]];
+    const pullFeed = [];
     srcs.forEach((s) => {
-      if (s.last_pull) feed.push({ t: s.last_pull, msg: `${(s.prospects || []).length} new people found · ${s.name}` });
+      if (s.last_pull) pullFeed.push({ t: s.last_pull, msg: `${(s.prospects || []).length} new people found · ${s.name}` });
     });
-    if (pushed) feed.push({ t: "", msg: `${slN} in your email campaign · ${hrN} in your LinkedIn list` });
-    if (kept) feed.push({ t: "", msg: `${kept} qualified by you` });
-    feed.sort((a, b) => (b.t || "").localeCompare(a.t || ""));
+    pullFeed.sort((a, b) => (b.t || "").localeCompare(a.t || ""));
     el.innerHTML = `<div style="display:flex;gap:14px;align-items:flex-start">
       <div style="flex:1;min-width:0">
         <div class="funnel" style="grid-template-columns:repeat(4,1fr)">
-          ${[["People found", people.length, "people", ""], ["Approved by you", kept, "thumbsup", ""], ["Skipped", rej, "error", ""], ["Sent to outreach", pushed, "send", pushed ? `email ${slN} · LinkedIn ${hrN}` : ""]].map(([lab, v, ic, cv]) =>
-            `<div class="fstage"><div class="ictile">${ic8(ic)}</div><div class="lab">${lab}</div><div class="num-hero" style="font-size:26px;margin:6px 0 2px">${fmt(v)}</div><div class="conv">${cv || "&nbsp;"}</div></div>`).join("")}
+          ${tileMeta.map(([lab, ic], i) =>
+            `<div class="fstage"><div class="ictile">${ic8(ic)}</div><div class="lab">${lab}</div><div class="num-hero" id="ov-num-${i}" style="font-size:26px;margin:6px 0 2px" title="loading">…</div><div class="conv" id="ov-cv-${i}">&nbsp;</div></div>`).join("")}
         </div>
         <div class="card panel" style="margin-bottom:0">
           <h2 style="font-size:14px;margin-bottom:2px">Signal velocity</h2>
@@ -484,22 +510,82 @@ async function renderDraftCampaign(id) {
       </div>
       <div class="card panel" style="width:260px;flex-shrink:0;margin-bottom:0">
         <h2 style="font-size:14px">Activity</h2>
-        ${feed.length ? feed.map((f) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(f.msg)}${f.t ? `<div class="muted">${esc(f.t.slice(5, 16).replace("T", " "))}</div>` : ""}</div>`).join("") : '<div class="small muted" style="padding:8px 0">Nothing yet - pulls and approvals show here</div>'}
+        <div id="ov-feed">${pullFeed.length ? pullFeed.map((f) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(f.msg)}${f.t ? `<div class="muted">${esc(f.t.slice(5, 16).replace("T", " "))}</div>` : ""}</div>`).join("") : '<div class="small muted" style="padding:8px 0">Nothing yet - pulls and approvals show here</div>'}</div>
       </div>
     </div>`;
     (async () => {
-      let rows = [];
-      try { rows = await (await fetch(`/api/leads?campaign_id=${id}`, { cache: "no-store" })).json(); } catch {}
-      if (!Array.isArray(rows) || !rows.length) rows = people;
+      let rows = null;
+      try {
+        const fetched = await cachedGet(`/api/leads?campaign_id=${id}`, LEADS_TTL);
+        if (Array.isArray(fetched)) rows = fetched;
+      } catch {}
       const holder = document.getElementById("velchart");
-      if (holder) { holder.innerHTML = velocityChart(rows, srcs); hydrateFade(holder); }
+      if (holder) { holder.innerHTML = velocityChart(rows || [], srcs); hydrateFade(holder); }
+      if (rows === null) {
+        // Fetch failed - degrade every tile to the same "—" + unavailable-tooltip
+        // pattern used elsewhere on this page. NEVER fall back to `people` here;
+        // that's exactly what re-introduces the 20x contradiction this fixes.
+        tileMeta.forEach((_, i) => {
+          const e = document.getElementById(`ov-num-${i}`);
+          if (e) { e.textContent = "—"; e.title = "Live count unavailable — showing no number rather than a stale one"; }
+        });
+        return;
+      }
+      // Same wasSent/toolOf split as the dashboard list view and lead-counts
+      // endpoint, so "Sent to outreach" here == lead-counts.sent exactly.
+      const wasSent = (r) => !!(r.pushed_to || r.status === "pushed" || (r.pushed && Object.keys(r.pushed).length));
+      const toolOf = (r) => { const p = (r.pushed_to || "") + Object.keys(r.pushed || {}).join(","); return /heyreach/i.test(p) ? "heyreach" : /smartlead/i.test(p) ? "smartlead" : (r.email ? "smartlead" : "heyreach"); };
+      const found = rows.length;
+      const kept = rows.filter((r) => r.verdict === "keep").length;
+      const rej = rows.filter((r) => r.verdict === "reject").length;
+      let slN = 0, hrN = 0;
+      rows.forEach((r) => { if (wasSent(r)) { if (toolOf(r) === "heyreach") hrN++; else slN++; } });
+      const pushed = slN + hrN;
+      [found, kept, rej, pushed].forEach((v, i) => {
+        const e = document.getElementById(`ov-num-${i}`);
+        if (e) { e.textContent = fmt(v); e.removeAttribute("title"); }
+      });
+      const cv3 = document.getElementById("ov-cv-3");
+      if (cv3) cv3.innerHTML = pushed ? `email ${slN} · LinkedIn ${hrN}` : "&nbsp;";
+      // Append the derived summary lines after the (already-rendered, time-sorted)
+      // per-source pull entries - same relative order the old synchronous version used.
+      const feedTail = [];
+      if (pushed) feedTail.push(`${slN} in your email campaign · ${hrN} in your LinkedIn list`);
+      if (kept) feedTail.push(`${kept} qualified by you`);
+      const feedEl = document.getElementById("ov-feed");
+      if (feedEl && feedTail.length) {
+        const extra = feedTail.map((msg) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(msg)}</div>`).join("");
+        feedEl.innerHTML = (pullFeed.length ? feedEl.innerHTML : "") + extra;
+      }
     })();
   } else if (dtab === "leads") {
     el.innerHTML = '<div class="card panel"><h2>People</h2><div class="sub">Loading your leads…</div></div>';
     (async () => {
-      let rows = [];
-      try { rows = await (await fetch(`/api/leads?campaign_id=${id}`, { cache: "no-store" })).json(); } catch {}
-      if (!Array.isArray(rows) || !rows.length) rows = people;  // DB empty/offline -> last-pull local view
+      // Authoritative rows (every pull ever, from signal_leads) - NOT `people`/draftProspects,
+      // which is only the last pull's local snapshot per source (e.g. 6 vs the DB's real 254).
+      // Routed through cachedGet (30s TTL, matches the server-side cache) so switching tabs
+      // doesn't refire a multi-second query, with a manual "Retry" escape hatch below.
+      let rows = null;
+      try {
+        const fetched = await cachedGet(`/api/leads?campaign_id=${id}`, LEADS_TTL);
+        if (Array.isArray(fetched)) rows = fetched;
+      } catch {}
+      // Never silently swap in the local snapshot when the authoritative fetch fails or
+      // comes back thinner than the tab header's own count (a transient Supabase hiccup) -
+      // that's exactly how "Leads (254)" ends up showing 6 rows. Only treat a genuinely
+      // empty result as "no pulls yet" when no source here has ever actually been pulled.
+      const neverPulled = srcs.every((s) => !s.last_pull);
+      const looksIncomplete = rows === null
+        || (leadCount != null && rows.length < leadCount)
+        || (leadCount == null && !neverPulled && rows.length === 0);
+      if (looksIncomplete) {
+        el.innerHTML = `<div class="card panel"><h2>People</h2>
+          <div class="small muted" style="padding:20px 4px" title="Live leads list unavailable — showing nothing rather than a short/stale list">
+            — Couldn't load the full leads list right now.
+            <button class="btn sm" onclick="renderDraftCampaign('${id}')">Retry</button>
+          </div></div>`;
+        return;
+      }
       rows = rows.map((pr) => {
         const local = pr._sid != null ? ((srcs || []).find((s) => s.id === pr._sid)?.prospects || [])[pr._idx] : null;
         return local ? { ...pr, ...local, _sid: pr._sid, _idx: pr._idx } : pr;
@@ -513,7 +599,12 @@ async function renderDraftCampaign(id) {
         sent: rows.filter(wasSent).length,
       };
       window._leadRows = rows;
-      const shown = rows.filter((p) => F === "all" ? true : F === "sent" ? wasSent(p) : F === "email" ? (p.email && !wasSent(p)) : (!p.email && !wasSent(p)));
+      // S4: client-side search over name/company/title/email — all rows are already in
+      // memory (`rows`), so this is a pure filter, no new fetch. Case-insensitive substring
+      // match, applied on top of the existing chip filter and before pagination.
+      const q = (window._leadSearch || "").trim().toLowerCase();
+      const matchesSearch = (p) => !q || [p.name, p.company, p.title, p.email].some((v) => (v || "").toLowerCase().includes(q));
+      const shown = rows.filter((p) => (F === "all" ? true : F === "sent" ? wasSent(p) : F === "email" ? (p.email && !wasSent(p)) : (!p.email && !wasSent(p))) && matchesSearch(p));
       const pages = Math.max(1, Math.ceil(shown.length / 10));
       const pg = window._leadsPage = Math.max(0, Math.min(window._leadsPage || 0, pages - 1));
       const slice = shown.slice(pg * 10, pg * 10 + 10);
@@ -526,6 +617,9 @@ async function renderDraftCampaign(id) {
       <h2>People</h2>
       ${rows.length ? `<div style="display:flex;gap:8px;margin:2px 0 12px;flex-wrap:wrap;align-items:center">
         <div style="display:flex;gap:6px;flex-wrap:wrap">${chip("all", "All")}${chip("email", "→ Email")}${chip("linkedin", "→ LinkedIn")}${chip("sent", "✓ Sent")}</div>
+        <input id="leads-search" class="input sm" placeholder="Search name, company, title, email…" value="${esc(window._leadSearch || "")}"
+          style="flex:1;min-width:160px;max-width:260px;border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent"
+          oninput="window._leadSearch=this.value;window._leadsPage=0;renderDraftCampaign('${id}')" autocomplete="off">
         ${(() => {
           const n = rows.filter((x) => !x.verdict && !wasSent(x)).length;
           if (n < 2) return "";
@@ -536,7 +630,7 @@ async function renderDraftCampaign(id) {
             : `<button class="btn sm" style="opacity:.75" data-sendall onclick="window._confirmAll=true;renderDraftCampaign('${id}')">Send all ${n} unreviewed…</button>`}</div>`;
         })()}
       </div>` : '<div class="sub" style="margin:2px 0 8px">No pulls yet - run one from Sources.</div>'}
-      ${slice.map(leadRow).join("")}
+      ${slice.length ? slice.map(leadRow).join("") : (q ? `<div class="sub" style="margin:2px 0 8px">No people match “${esc(window._leadSearch)}”.</div>` : "")}
       ${pages > 1 ? `<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:12px">
         <button class="btn sm" ${pg === 0 ? "disabled" : ""} onclick="window._leadsPage=${pg - 1};renderDraftCampaign('${id}')">← Prev</button>
         <span class="small muted">Page ${pg + 1} of ${pages} · ${shown.length} people</span>
@@ -544,6 +638,11 @@ async function renderDraftCampaign(id) {
       </div>` : ""}
     </div>`;
       hydrateFade(el);  // ease the leads list in once fetched
+      // Re-render replaces #leads-search wholesale on every keystroke (same pattern as the
+      // destination-picker search at destpop-search) - refocus + restore caret so typing
+      // doesn't lose focus after each oninput-triggered rebuild.
+      const sEl = document.getElementById("leads-search");
+      if (sEl && document.activeElement !== sEl) { sEl.focus(); const v = sEl.value; try { sEl.setSelectionRange(v.length, v.length); } catch (_) {} }
     })();
   } else if (dtab === "sources") {
     el.innerHTML = `<div id="draftlist"></div>
@@ -1273,28 +1372,75 @@ const SIG_ICON = { hiring: "briefcase", news: "signal", linkedin: "linkedin", te
 
 /* ══ LIST ══ */
 async function renderList() {
-  // Paint the skeleton frame first so the list feels instant, then hydrate — all four reads
-  // fire in parallel instead of blocking one another (campaign-drafts + clients are cached
-  // for the session; sources + lead-counts are de-duped within the navigation).
+  // Paint the skeleton frame first so the list feels instant, then hydrate. The list can paint
+  // as soon as the CRITICAL group resolves (campaign-drafts + clients + lead-counts + dests) —
+  // /api/sources is the slowest call and only feeds per-row decorations (destination badges,
+  // "sources removed" chip), so it's fetched in parallel but NOT awaited before the first paint;
+  // its result patches those decorations in once it lands (see sourcesP.then(...) below).
   if (!window._swrRepaint) main.innerHTML = listSkeleton();  // keep current view during a background refresh
-  const activeClient = localStorage.getItem("navreo_client") || "";
-  const [drafts0, clients0, srcAll0, leadCounts0, dests0] = await Promise.all([
-    cachedGet("/api/campaign-drafts", SESSION_TTL).catch(() => (Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts : [])),
+  // getActiveClient() (shell.js) migrates a legacy alias id (navreo/amplifyy/arnic) to its
+  // canonical client-N id and returns "" for "All clients" — never null/undefined, so the
+  // `!activeClient ||` pass-through below always fires for "All clients" (no silent zero-results).
+  const activeClient = getActiveClient();
+  // Server-side client_id filtering (step 5 perf pass, extended in retry 2 to the
+  // 3 remaining heavy GETs): when a client is active, scope each call to just that
+  // client's rows instead of fetching the whole table and filtering in the browser.
+  // The URL (including client_id) IS the cache key, so switching clients never
+  // serves a stale cross-client cached list; "All clients" keeps the exact same
+  // unfiltered URL as before, so that path is byte-for-byte unchanged.
+  const draftsUrl = "/api/campaign-drafts" + (activeClient ? `?client_id=${encodeURIComponent(activeClient)}` : "");
+  const sourcesUrl = "/api/sources?slim=1" + (activeClient ? `&client_id=${encodeURIComponent(activeClient)}` : "");
+  const leadCountsUrl = "/api/lead-counts" + (activeClient ? `?client_id=${encodeURIComponent(activeClient)}` : "");
+  // Fired alongside the critical group, patched in later — deliberately NOT in the awaited
+  // Promise.all below so a slow/degraded sources fetch can't hold up the list paint.
+  const sourcesP = cachedGet(sourcesUrl).catch(() => ({ error: "fetch_failed" }));
+  // S2: /api/outreach-destinations only feeds destination badges/pickers (via destBadges()
+  // inside the sourcesP.then() patch-in below), never the headline counts/rows painted in this
+  // first render — it doesn't belong in the critical group either. Fetched here in the background
+  // exactly like sources, and joined with sourcesP below so DB.dests is set before badges render.
+  // /api/outreach-destinations is fleet-wide (Smartlead campaigns + HeyReach lists available
+  // account-wide as picker options) — genuinely no client dimension, so it stays
+  // unfiltered/uncached-per-client on purpose (see server.py comment).
+  const destsP = cachedGet("/api/outreach-destinations", SESSION_TTL).catch(() => (DB.dests || { smartlead: [], heyreach: [] }));
+  const [drafts0, clients0, leadCounts0] = await Promise.all([
+    cachedGet(draftsUrl, SESSION_TTL).catch(() => ({ error: "fetch_failed" })),
     cachedGet("/api/clients", SESSION_TTL).catch(() => (window._clients || [])),
-    cachedGet("/api/sources").catch(() => []),
-    cachedGet("/api/lead-counts").catch(() => ({})),
-    cachedGet("/api/outreach-destinations", SESSION_TTL).catch(() => (DB.dests || { smartlead: [], heyreach: [] })),
+    cachedGet(leadCountsUrl).catch(() => ({})),
   ]);
-  DB.campaignDrafts = Array.isArray(drafts0) ? drafts0 : [];
+  // A 503 (Supabase unreachable AND no file fallback - see server.py /api/campaign-drafts)
+  // comes back as a JSON error object, not an array: fetch() doesn't throw on non-2xx, so this
+  // is the honest signal, not a silent 200-[] that would otherwise read as "no campaigns yet".
+  if (!Array.isArray(drafts0)) {
+    main.innerHTML = `
+      <div class="tabs" style="margin-bottom:14px">
+        <button class="tab on">Campaigns</button>
+        <button class="tab" onclick="location.hash='deliverability'">Deliverability</button>
+      </div>
+      <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Signal campaigns.</h1></div></div>
+      <div class="card panel" style="margin-top:16px">
+        <div class="empty">Couldn't load campaigns — the database didn't respond.
+          <div style="margin-top:12px"><button class="btn sm" onclick="bustCache('/api/campaign-drafts');bustCache('/api/sources');renderList()">Retry</button></div>
+        </div>
+      </div>`;
+    hydrateFade(main);
+    return;
+  }
+  DB.campaignDrafts = drafts0;
   window._clients = Array.isArray(clients0) ? clients0 : [];
-  DB.dests = dests0 || { smartlead: [], heyreach: [] };
-  const srcAll = Array.isArray(srcAll0) ? srcAll0 : [];
+  // DB.dests is patched in by the destsP/sourcesP join below once outreach-destinations lands
+  // (deferred, S2) — keep whatever's already cached (or an empty shape) as the placeholder so
+  // any synchronous read before that (e.g. opening the wizard) doesn't throw.
+  DB.dests = DB.dests || { smartlead: [], heyreach: [] };
   const leadCounts = leadCounts0 || {};
+  const leadCountsDegraded = !!leadCounts._degraded;  // Supabase fetch failed server-side - don't show stale/zero numbers
+  // Safety net: a no-op when the server already scoped draftsUrl to activeClient (every
+  // remaining row's client_id already matches) — still protects correctness if server-side
+  // filtering is ever wrong, absent, or activeClient changes between fetch and this line.
   const forClient = (DB.campaignDrafts || []).filter((d) => !activeClient || d.client_id === activeClient);
   const drafts = forClient.filter((d) => !d.deleted_at);
   const deleted = forClient.filter((d) => d.deleted_at);
-  const totalFound = drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).leads || 0), 0);
-  const totalSent = drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).sent || 0), 0);
+  const totalFound = leadCountsDegraded ? null : drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).leads || 0), 0);
+  const totalSent = leadCountsDegraded ? null : drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).sent || 0), 0);
   const running = drafts.filter((d) => !d.paused).length;
   const paused = drafts.filter((d) => d.paused).length;
   const strow = (label, val, sub, id) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)">
@@ -1302,40 +1448,50 @@ async function renderList() {
         <span class="small" style="color:var(--ink-2)">${label}</span>
         <span style="font-weight:600;font-size:15px;display:inline-flex;align-items:center;gap:5px"${id ? ` id="${id}"` : ""}>${val}</span>
       </div>${sub ? `<div class="muted" style="font-size:10.5px;margin-top:1px">${sub}</div>` : ""}</div>`;
+  // Sources-dependent bits (destination badges, "sources removed" chip) start as an explicit
+  // "checking sources…" placeholder and get patched in by sourcesP.then(...) below once the
+  // (slower) /api/sources call lands - the row itself (name, leads count, paused/running,
+  // Duplicate/Remove) is fully interactive from this first paint.
   const listRows = drafts.length ? drafts.map((dc) => {
-        const srcs = srcAll.filter((s) => String(s.campaign_id) === String(dc.id));
-        const prs = srcs.flatMap((s) => s.prospects || []);
-        const sentLocal = prs.filter((p) => Object.keys(p.pushed || {}).length || p.pushed_to).length;
-        // the real Leads count (Supabase, all pulls) - local last-pull view only when the DB is unreachable
+        // the real Leads count (Supabase, all pulls) - if the DB fetch failed or this
+        // campaign has no entry, show "—" rather than the stale local last-pull count
         const lc = leadCounts[String(dc.id)];
-        const nLeads = lc ? lc.leads : prs.length;
-        const nSent = lc ? lc.sent : sentLocal;
+        const countUnavailable = leadCountsDegraded || !lc;
+        const nLeads = countUnavailable ? null : lc.leads;
+        const nSent = countUnavailable ? null : lc.sent;
+        // S5a: a running campaign with leads but nothing sent yet looks identical to an
+        // actively-sending one at a glance - flag it with the same muted warning-chip
+        // pattern/class ("pill n") already used for "sources removed" below.
+        const notSending = !dc.paused && nLeads != null && nLeads > 0 && nSent === 0;
         return `
         <div class="srcrow click" style="padding:14px 16px;cursor:pointer" onclick="location.hash='${dc.id}'">
           <div class="ictile">${ic8("signal")}</div>
           <div style="flex:1;min-width:0">
             <div style="font-weight:500">${esc(dc.name)}</div>
-            <div class="small muted">${nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"}${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No leads yet"} · ${esc((dc.created_at || "").slice(0, 10))}</div>
-            ${destBadges(dc, srcs)}
+            <div class="small muted">${countUnavailable ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span> <span class="muted" style="font-size:10px">(couldn\'t load)</span>' : (nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"}${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No leads yet")} · ${esc((dc.created_at || "").slice(0, 10))}</div>
+            <div id="srcdeco-${dc.id}" class="small muted" style="margin-top:6px" title="Source-level details still loading">checking sources…</div>
           </div>
           ${dc.paused ? '<span class="pill o">⏸ Paused</span>' : '<span class="pill g">● Running</span>'}
+          ${notSending ? `<span class="pill n" title="This campaign is running and has leads, but none have gone out yet - check its destination/outreach setup">not sending</span>` : ""}
+          <span id="srcpill-${dc.id}"></span>
           <button class="btn sm" title="Copy this campaign and all its targeting into a new one" onclick="duplicateCampaign('${dc.id}', event)">Duplicate</button>
           <button class="btn sm" onclick="removeCampaign('${dc.id}', event)">Remove</button>
         </div>`;
       }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`;
   main.innerHTML = `
+    <div class="tabs" style="margin-bottom:14px">
+      <button class="tab on">Campaigns</button>
+      <button class="tab" onclick="location.hash='deliverability'">Deliverability</button>
+    </div>
     <div class="pagehead">
       <div>
         <div class="eyebrow">Campaigns</div>
         <h1>Signal campaigns.</h1>
       </div>
       <div style="display:flex;gap:10px;align-items:center">
-        <select id="client-switch" style="border:1px solid var(--line-2);border-radius:999px;padding:8px 14px;font:500 13px var(--font-sans);color:var(--ink);background:transparent"
-          onchange="if(this.value==='__new'){this.value=localStorage.getItem('navreo_client')||'';addClientFromSwitcher();}else{localStorage.setItem('navreo_client', this.value);DB.campaignDrafts=null;renderList();}">
-          <option value="">All clients</option>
-          ${(window._clients || []).map((c) => `<option value="${c.id}" ${localStorage.getItem("navreo_client") === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
-          <option value="__new">+ Add new client</option>
-        </select>
+        <!-- Client switcher now lives once, globally, in the shared rail (shell.js
+             renderRail / #rail-client-select) — this page just reads the shared
+             localStorage["navreo_client"] value and re-renders on "navreo:client-changed". -->
         <button class="btn primary" onclick="openWizard()">${ic8("idea")} New campaign</button>
       </div>
     </div>
@@ -1364,17 +1520,37 @@ async function renderList() {
       </div>
       <div class="card panel" style="width:290px;flex-shrink:0;margin-top:0">
         <h2 style="font-size:15px;margin-bottom:6px">Status</h2>
-        ${strow("People found", fmt(totalFound), '<span id="st-foundsplit">everyone your signals have surfaced</span>')}
-        ${strow("Sent to outreach", totalSent ? fmt(totalSent) : "0", "added to your email + LinkedIn outreach", "st-split")}
-        ${strow("Waiting in Leads", '<span id="st-waiting">…</span>', "found, waiting for your ✓ to send them")}
-        ${strow("Skipped", '<span id="st-skipped">…</span>', "you marked these not a fit")}
-        ${strow("Found today", '<span id="st-today">…</span>', "new people from today's run")}
+        ${strow("People found", totalFound == null ? '<span title="Live count unavailable — showing no number rather than a stale one">–</span>' : fmt(totalFound), '<span id="st-foundsplit">everyone your signals have surfaced</span>')}
+        ${strow("Sent to outreach", totalSent == null ? '<span title="Live count unavailable — showing no number rather than a stale one">–</span>' : fmt(totalSent), "added to your email + LinkedIn outreach", "st-split")}
+        ${strow("Waiting in Leads", '<span id="st-waiting" title="loading">…</span>', "found, waiting for your ✓ to send them")}
+        ${strow("Skipped", '<span id="st-skipped" title="loading">…</span>', "you marked these not a fit")}
+        ${strow("Found today", '<span id="st-today" title="loading">…</span>', "new people from today's run")}
         ${strow("Campaigns", `${running} running · ${paused} paused`, "")}
-        ${strow("Last pull", '<span id="st-lastpull">…</span>', "when new people last came in")}
+        ${strow("Last pull", '<span id="st-lastpull" title="loading">…</span>', "when new people last came in")}
+        <div class="muted" style="font-size:10.5px;margin-top:8px" title="When this page's data was fetched/rendered - individual numbers may be served from a short-lived cache and lag a live Supabase read by up to ~30s">as of ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
         <div id="st-warn"></div>
       </div>
     </div>`;
   hydrateFade(main);  // ease the real list in over the skeleton
+  // Patch in the sources-dependent decorations (destination badges, "sources removed" chip)
+  // once the slower /api/sources call lands - the list above already painted without it.
+  // Joined with destsP (S2) so DB.dests is populated before destBadges() reads it.
+  Promise.all([sourcesP, destsP]).then(([srcAll0, dests0]) => {
+    DB.dests = dests0 || DB.dests || { smartlead: [], heyreach: [] };
+    const srcFailed = !Array.isArray(srcAll0);
+    const srcAll = srcFailed ? [] : srcAll0;
+    drafts.forEach((dc) => {
+      const srcs = srcAll.filter((s) => String(s.campaign_id) === String(dc.id));
+      const decoEl = document.getElementById(`srcdeco-${dc.id}`);
+      if (decoEl) decoEl.outerHTML = srcFailed
+        ? `<div id="srcdeco-${dc.id}" class="small muted" style="margin-top:6px" title="Source-level details unavailable right now">— sources unavailable</div>`
+        : destBadges(dc, srcs).replace("<div", `<div id="srcdeco-${dc.id}"`);
+      const pillEl = document.getElementById(`srcpill-${dc.id}`);
+      if (pillEl) pillEl.outerHTML = (!srcFailed && srcs.length && !srcs.some((s) => !s.deleted_at))
+        ? `<span id="srcpill-${dc.id}" class="pill n" title="Every source on this campaign was deleted - it can't find or send anyone until you add one back">sources removed</span>`
+        : `<span id="srcpill-${dc.id}"></span>`;
+    });
+  });
   (async () => {
     // One batched call for every campaign's leads (was N calls, one per campaign).
     let allRows = [];
@@ -1432,6 +1608,10 @@ async function renderList() {
 let tab = "overview";
 function renderDetail(id) {
   const c = (DB.campaigns || []).find((x) => x.id === id);
+  // S5c: same null-guard pattern as renderDraftCampaign()'s `if (!dc) { location.hash = ""; return; }`
+  // - DB.campaigns is always [] on the Supabase-backed deploy (see init()'s comment), so this path
+  // is effectively dead, but a null `c` would otherwise throw on `c.analytics` below.
+  if (!c) { location.hash = ""; return; }
   const d = DB.campaign_details?.[String(id)];
   const a = c.analytics || {};
 
@@ -1557,7 +1737,10 @@ function tabSources(el, c) {
 
 async function renderDrafts(campaignId) {
   let drafts = [];
-  try { drafts = await (await fetch("/api/sources", { cache: "no-store" })).json(); } catch {}
+  try {
+    const j = await (await fetch("/api/sources", { cache: "no-store" })).json();
+    drafts = Array.isArray(j) ? j : [];  // a 503 error body isn't an array - degrade to empty rather than throw
+  } catch {}
   drafts = drafts.filter((s) => String(s.campaign_id) === String(campaignId));
   const el = document.getElementById("draftlist");
   if (!el) return;
@@ -1573,7 +1756,7 @@ async function renderDrafts(campaignId) {
         <div class="ictile">${ic8(meta[0])}</div>
         <div style="flex:1;min-width:200px;cursor:pointer" onclick="window._openSource=window._openSource==='${s.id}'?null:'${s.id}';renderDrafts('${campaignId}')">
           <div style="font-weight:500">${esc(s.name)}${off ? ' <span class="pill n">excluded</span>' : ""}</div>
-          <div class="small muted">${s.last_pull ? `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found · pulled ${esc(s.last_pull.slice(5, 16).replace("T", " "))}` : (s.total ? `≈${fmt(s.total)} people expected` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
+          <div class="small muted">${s.last_pull ? `${s._count_stale ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span>' : `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found`} · pulled ${esc(s.last_pull.slice(5, 16).replace("T", " "))}` : (s.total ? `<span title="Estimate — not yet pulled; not included in lead totals">~${fmt(s.total)} people expected</span>` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
@@ -1648,7 +1831,7 @@ function verdictSeg(s, campaignId, view) {
   const qn = (s.prospects || []).length;
   return `
     <div style="display:flex;gap:6px;align-items:center;margin:14px 0 6px">
-      <button class="btn sm ${view === "qualified" ? "primary" : ""}" onclick="setVerdictView('${s.id}','qualified','${campaignId}')">✓ Qualified (${qn})</button>
+      <button class="btn sm ${view === "qualified" ? "primary" : ""}" title="Showing the ${qn} people from the last pull, not the running total - the daily run keeps finding more" onclick="setVerdictView('${s.id}','qualified','${campaignId}')">✓ Qualified (${qn})</button>
       <button class="btn sm ${view === "unqualified" ? "primary" : ""}" onclick="setVerdictView('${s.id}','unqualified','${campaignId}')">✕ Not qualified (<span id="uq-count-${s.id}">…</span>)</button>
       ${view === "unqualified" ? '<span class="small muted">filtered out by your checks, with the reason</span>' : ""}
     </div>
@@ -1801,7 +1984,8 @@ function pushOutcome(r) {
   return "noDest";  // kept, but no destination set yet
 }
 async function bulkVerdict(id, verdict, campaignId) {
-  const drafts = await (await fetch("/api/sources", { cache: "no-store" })).json();
+  const draftsJson = await (await fetch("/api/sources", { cache: "no-store" })).json();
+  const drafts = Array.isArray(draftsJson) ? draftsJson : [];  // a 503 error body isn't an array - degrade to empty rather than throw
   const s = drafts.find((x) => x.id === id);
   if (verdict === "keep") protoNote("Sending…");
   const tally = { pushed: 0, duplicate: 0, suppressed: 0, failed: 0, noDest: 0 };
@@ -2081,7 +2265,7 @@ function openWizard() {
   wizard.classList.add("on");
   loadClients().then(() => {
     if (wiz.newClient) { drawWiz(); return; }
-    const ac = localStorage.getItem("navreo_client");
+    const ac = getActiveClient();
     if (ac) { const c = (wiz.clients || []).find((x) => x.id === ac); if (c) { pickClient(ac); return; } }
     drawWiz();
   });
@@ -2276,7 +2460,7 @@ async function saveNewClient() {
   const r = await (await fetch("/api/clients", { method: "POST", body: JSON.stringify(nc) })).json();
   await loadClients();
   window._clients = null;
-  localStorage.setItem("navreo_client", r.id);
+  setActiveClient(r.id);  // shell.js — persists + broadcasts so the rail switcher picks it up too
   wiz.newClient = null;
   pickClient(r.id);
 }
@@ -2298,8 +2482,14 @@ function drawWiz() {
   const next = document.getElementById("wiz-next");
   const back = document.getElementById("wiz-back");
   back.style.visibility = (wiz.step === 1 || wiz.step === 7) ? "hidden" : "visible";
-  next.disabled = false;
-  next.style.visibility = (wiz.step === 1 || wiz.step === 2) ? "hidden" : "visible";  // step 2 acts on click (idea card / signal buttons)
+  const nextHint = document.getElementById("wiz-next-hint");
+  next.style.visibility = wiz.step === 1 ? "hidden" : "visible";  // step 1 (client pick) acts on click only
+  // Step 2 ("How do you want to start?") also acts on click (idea card / signal buttons) rather
+  // than a tracked selection + Next — but leaving Next fully hidden there read as "nothing
+  // happens" to anyone who clicked where Next normally sits. Show it in a disabled state with an
+  // inline nudge pointing back at the option cards instead of a silent no-op.
+  next.disabled = wiz.step === 2;
+  if (nextHint) nextHint.style.display = wiz.step === 2 ? "" : "none";
   next.innerHTML = { 2: "Next", 3: "Next", 4: "Next", 5: "Next", 6: "Preview my first leads (runs one live search)", 7: "Save draft campaign" }[wiz.step] || "Next";
 
   if (wiz.step === 1) {
@@ -3492,5 +3682,6 @@ function openQAGate(id) {
   }) }).catch(() => {});
 }
 </script>
+<script src="deliverability-tab.js"></script>
 </body>
 </html>
