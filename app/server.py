@@ -2850,11 +2850,74 @@ def fill_icebreaker(template: str, prospect: dict) -> str:
     return email_safe(out)  # last line of defence: no special char can survive
 
 
-def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=None, negatives=None):
+# ── TheirStack credit control ────────────────────────────────────────────
+# TheirStack bills 1 credit per JOB RETURNED, and RE-CHARGES for a job you have
+# already downloaded (theirstack.com/en/docs/pricing/credits). A pull that
+# re-scans the same `posted_at_max_age_days` window every tick therefore pays
+# full price for the same rows forever, and the dedupe further down (`already`)
+# throws them away for free — which is exactly how ~12k credits/day bought ~350
+# companies on 2026-07-07. Two defences, belt and braces:
+#   1. cursor: `discovered_at_gte` + `job_id_not`, so a tick only pays for jobs
+#      TheirStack discovered since the last successful pull of THIS source.
+#   2. meter + cap: every call's cost is written to provider_usage, and calls
+#      stop once the day's ceiling is hit, so a future regression is bounded
+#      and visible instead of silent.
+THEIRSTACK_DAILY_CAP = int(os.environ.get("THEIRSTACK_DAILY_CAP", "2000"))
+
+
+def theirstack_credits_today() -> int | None:
+    """Credits billed by TheirStack since 00:00 UTC. None when Supabase can't be
+    read — an unknown spend must never hard-block the pull."""
+    from datetime import datetime, timezone
+    midnight = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    rows = sb("GET", f"provider_usage?provider=eq.theirstack&called_at=gte.{midnight}"
+                     f"&select=credits")
+    if not isinstance(rows, list):
+        return None
+    return sum(int(r.get("credits") or 0) for r in rows if isinstance(r, dict))
+
+
+def _theirstack_meter(source_id, credits: int) -> None:
+    """Record what a call actually cost. Never raises — metering must not be able
+    to fail a pull that already happened."""
+    try:
+        sb("POST", "provider_usage", {"provider": "theirstack", "source_id": source_id,
+                                      "credits": int(credits), "endpoint": "/v1/jobs/search"},
+           prefer="return=minimal")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _discovered_watermark(raw: list) -> tuple[str | None, list]:
+    """Newest `discovered_at` in a RAW (unfiltered) response, plus the ids sitting
+    exactly on it. Computed before client-side filtering on purpose: a page whose
+    every job is dropped by KILL/negatives must still advance the cursor, or the
+    next tick re-buys the same rows forever."""
+    stamps = [(j.get("discovered_at") or "") for j in raw]
+    top = max((s for s in stamps if s), default=None)
+    if not top:
+        return None, []
+    ids = [j["id"] for j in raw if j.get("discovered_at") == top and j.get("id") is not None]
+    return top, ids
+
+
+def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=None,
+                    negatives=None, source_id=None, cap=True):
     """Unblurred TheirStack jobs search — real companies + domains (costs
     credits, so callers bound `limit`). Returns (jobs, metadata).
     `negatives`: keywords that must NOT appear in the post title/description —
-    also enforced client-side because API-side pattern filters can miss."""
+    also enforced client-side because API-side pattern filters can miss.
+    Billing: 1 credit per job returned, re-charged on every re-fetch — pass a
+    `discovered_at_gte` cursor via `extra` (see pull_hiring_source) so a repeat
+    tick pays only for genuinely new posts. Every call is metered, and the day's
+    spend is capped by THEIRSTACK_DAILY_CAP unless `cap=False`."""
+    if cap:
+        spent = theirstack_credits_today()
+        if spent is not None and spent >= THEIRSTACK_DAILY_CAP:
+            return [], {"_error": f"TheirStack daily credit cap reached "
+                                  f"({spent}/{THEIRSTACK_DAILY_CAP}). No jobs were fetched. "
+                                  f"Raise THEIRSTACK_DAILY_CAP if this is expected.",
+                        "_capped": True, "_credits": 0}
     body = {
         "posted_at_max_age_days": int(days or 30),
         "job_title_or": job_titles or [],
@@ -2867,9 +2930,18 @@ def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=N
         "include_total_results": True,
     }
     body.update(extra or {})
+    if body.get("discovered_at_gte"):
+        # cursor forward, oldest-new-job first, so a full page never strands the
+        # jobs behind it: the next tick resumes from this page's newest stamp.
+        body["order_by"] = [{"field": "discovered_at", "desc": False}]
     data = http_json("POST", "https://api.theirstack.com/v1/jobs/search",
                      {"Authorization": f"Bearer {KEYS['THEIRSTACK_API_KEY']}"}, body)
+    raw = data.get("data") or []
+    if raw:  # a job returned is a credit spent, whatever we do with it afterwards
+        _theirstack_meter(source_id, len(raw))
     meta = data.get("metadata") or {}
+    meta["_credits"] = len(raw)
+    meta["_max_discovered_at"], meta["_max_discovered_ids"] = _discovered_watermark(raw)
     # a genuine zero-result carries "data": [] + a metadata block. An error body
     # (validation / auth / rate-limit) carries neither — don't read it as "0 jobs".
     if "data" not in data:
@@ -2880,7 +2952,7 @@ def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=N
     jobs = []
     KILL = ("staffing", "talent", "recruit", "consultants")  # empty descriptions dodge pattern_not
     negs = [str(n).strip().lower() for n in (negatives or []) if str(n).strip()]
-    for j in (data.get("data") or []):
+    for j in raw:
         co = j.get("company_object") or {}
         domain = canon_domain(co.get("domain") or j.get("company_domain") or "")
         if not domain:
@@ -3226,18 +3298,52 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
         pats = [re.escape(n.lower()) for n in negatives]
         precision["job_title_pattern_not"] = pats
         precision["job_description_pattern_not"] = pats
+    # CREDIT CURSOR. TheirStack charges 1 credit per job returned and charges
+    # again for a job we already downloaded. Without this, every 3-hourly tick
+    # re-bought the same 30-day window (7 sources x ~100 jobs x 8 ticks/day),
+    # then the `already` dedupe below binned the lot. Resume from the newest
+    # discovered_at this source has seen, excluding the ids sitting exactly on
+    # that timestamp (`gte` is inclusive, so they'd otherwise be re-charged).
+    # First-ever pull has no cursor and legitimately buys the full window.
+    cursor = src.get("last_discovered_at")
+    if cursor:
+        precision["discovered_at_gte"] = cursor
+        boundary = [i for i in (src.get("last_discovered_ids") or []) if isinstance(i, int)]
+        if boundary:
+            precision["job_id_not"] = boundary[:500]
+
     filter_dropped = False
-    jobs, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit, extra=precision, negatives=negatives)
-    if not jobs and precision.get("company_description_pattern_or"):
+    jobs, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit,
+                                 extra=precision, negatives=negatives, source_id=src["id"])
+    if not jobs and not meta.get("_credits") and precision.get("company_description_pattern_or"):
         # the description REQUIRE gate starves niche roles to zero (most company
         # descriptions never contain the literal phrase). Drop it, keep the safe
         # NOT-excludes, and self-heal the source so probes and pulls agree.
+        # Gated on _credits==0: if the API DID return jobs and our own client-side
+        # filters emptied them, a retry buys a second page for nothing.
         precision.pop("company_description_pattern_or")
-        jobs, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit, extra=precision, negatives=negatives)
+        jobs, meta = theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit,
+                                     extra=precision, negatives=negatives, source_id=src["id"])
         if jobs:
             (src.setdefault("params", {})).pop("company_description_pattern_or", None)
             (src.get("config") or {}).pop("company_description_pattern_or", None)
             filter_dropped = True  # tell the user their REQUIRE-word filter was auto-removed
+    # Advance the credit cursor on every PAID response, BEFORE any early return.
+    # Jobs we bought and then discarded (KILL words, negatives, off-brief) still
+    # advance it — otherwise a page that filters to zero is re-bought every tick.
+    # Persisted to the drafts doc (what read_drafts serves back to the next tick)
+    # as well as signal_sources, because most exits below never reach write_drafts.
+    if meta.get("_max_discovered_at"):
+        src["last_discovered_at"] = meta["_max_discovered_at"]
+        src["last_discovered_ids"] = meta.get("_max_discovered_ids") or []
+        # single-doc upsert, not write_drafts() — this must not rewrite the whole
+        # sources table on a path that may have read it non-strictly.
+        sb("POST", "sources?on_conflict=id", {"id": src["id"], "doc": src},
+           prefer="resolution=merge-duplicates,return=minimal")
+        sb("PATCH", f"signal_sources?id=eq.{src['id']}",
+           {"last_discovered_at": src["last_discovered_at"],
+            "last_discovered_ids": src["last_discovered_ids"]})
+
     total_jobs = meta.get("total_results") or len(jobs)
     if not jobs and meta.get("_error"):
         # a real provider error (bad filter/auth/rate-limit) — never report it as
