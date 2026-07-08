@@ -330,6 +330,7 @@ def preview_hiring(p: dict) -> dict:
     # precision layer (description patterns / industry excludes) — passing it
     # here keeps the preview count honest about what a real pull will return
     body.update(p.get("extra") or {})
+    body["company_type"] = "direct_employer"  # invariant: never a job board or agency
     data = http_json("POST", "https://api.theirstack.com/v1/jobs/search",
                      {"Authorization": f"Bearer {KEYS['THEIRSTACK_API_KEY']}"}, body)
     meta = data.get("metadata") or {}
@@ -2964,6 +2965,10 @@ def theirstack_jobs(job_titles, codes, min_emp, max_emp, days, limit=25, extra=N
         "include_total_results": True,
     }
     body.update(extra or {})
+    # INVARIANT, set after the merge so a stray `extra` key can never relax it: we only
+    # ever want the company that is actually hiring, never a job board, staffing agency
+    # or aggregator reposting the ad.
+    body["company_type"] = "direct_employer"
     if body.get("discovered_at_gte"):
         # cursor forward, oldest-new-job first, so a full page never strands the
         # jobs behind it: the next tick resumes from this page's newest stamp.
@@ -3301,6 +3306,11 @@ def _daily_lead_share(src: dict, drafts: list) -> int:
 
 
 THEIRSTACK_EXCLUDE_MAX = int(os.environ.get("THEIRSTACK_EXCLUDE_MAX", "200000"))
+# Fold the client's suppression + prior-contact domains into the SEARCH body too.
+# Off by user instruction (2026-07-08): it is a pure cost optimisation — those domains
+# are still rejected per-lead by lead_excluded(), so this flag cannot change who is
+# contacted, only how many jobs we pay TheirStack for before rejecting them.
+THEIRSTACK_EXCLUDE_SUPPRESSED = os.environ.get("THEIRSTACK_EXCLUDE_SUPPRESSED", "0") == "1"
 _excl_cache: dict = {}   # {client_id: (domains, expires_epoch)} — 30-min memo
 
 
@@ -3361,17 +3371,25 @@ def scanned_domains(source_id: str) -> set:
 def _search_exclusions(source_id: str, client_id: str | None, scanned: set | None = None) -> list:
     """Domains to exclude AT THE SEARCH, so we never buy the job in the first place.
 
-    Measured 2026-07-08: a source's own scanned domains removed 24% of its window, and
-    the client exclusion set took it to 46%. Those jobs were being bought and then binned
-    by `already` / `lead_excluded` a few lines later.
+    The set is this source's OWN scanned domains: once a source pulls a domain it never
+    buys a job there again (user rule 2026-07-08). Measured that day: 21-24% of a
+    source's window, bought and then binned by the `already` check a few lines later.
 
-    Scanned domains go first, so a THEIRSTACK_EXCLUDE_MAX cap can never evict the
-    entries that carry the source's own permanent no-re-pull guarantee. Pass `scanned`
-    to reuse a set the caller already paged."""
+    The client suppression/contact set (~40k domains for client-1) would take that to 46%
+    but is OFF by default at the user's instruction — those lists are still enforced
+    per-lead by lead_excluded(), so turning this on changes cost, never who gets emailed.
+    Set THEIRSTACK_EXCLUDE_SUPPRESSED=1 to fold them back into the search body.
+
+    Scanned domains go first, so a THEIRSTACK_EXCLUDE_MAX cap can never evict the entries
+    that carry the source's permanent no-re-pull guarantee. Pass `scanned` to reuse a set
+    the caller already paged."""
     if scanned is None:
         scanned = scanned_domains(source_id)
+    candidates = list(scanned)
+    if THEIRSTACK_EXCLUDE_SUPPRESSED:
+        candidates += _exclusion_domains(client_id)
     seen, out = set(), []
-    for d in list(scanned) + _exclusion_domains(client_id):
+    for d in candidates:
         if d and d not in seen:
             seen.add(d)
             out.append(d)

@@ -294,6 +294,37 @@ def test_daily_leads_split_evenly():
         server.SIGNAL_DAILY_LEADS = orig
 
 
+def test_company_type_is_always_direct_employer():
+    """We only ever want the company actually hiring -- never a job board, staffing
+    agency or aggregator reposting the ad. Set AFTER the `extra` merge so a stray key
+    in a source's saved targeting can never relax it."""
+    orig = server.http_json
+    try:
+        rec = Recorder([[job(1, "2026-07-07T10:00:00Z")], [job(2, "2026-07-07T11:00:00Z")]])
+        server.http_json = rec
+        server._theirstack_meter = lambda *a, **k: None
+        server.theirstack_credits_today = lambda: 0
+
+        server.theirstack_jobs(["AE"], ["US"], 11, 500, 30, limit=10)
+        check("pull sends company_type=direct_employer",
+              rec.bodies[0].get("company_type") == "direct_employer", rec.bodies[0].get("company_type"))
+
+        # a saved source trying to widen it must be overridden, not obeyed
+        server.theirstack_jobs(["AE"], ["US"], 11, 500, 30, limit=10,
+                               extra={"company_type": "recruitment_agency"})
+        check("an `extra` key cannot relax it",
+              rec.bodies[1].get("company_type") == "direct_employer", rec.bodies[1].get("company_type"))
+
+        rec2 = Recorder([[job(3, "2026-07-07T12:00:00Z")]])
+        server.http_json = rec2
+        server.preview_hiring({"job_titles": ["AE"], "countries": ["United States"],
+                               "extra": {"company_type": "job_board"}})
+        check("the preview cannot relax it either",
+              rec2.bodies[0].get("company_type") == "direct_employer", rec2.bodies[0].get("company_type"))
+    finally:
+        server.http_json = orig
+
+
 def test_scanned_domain_is_excluded_forever():
     """User rule 2026-07-08: once a source pulls a domain, it must never buy a job at
     that domain again. This was a 90-day re-touch window -- a company pulled today came
@@ -381,7 +412,9 @@ def test_exclusions_applied_at_the_search():
         excl = b.get("company_domain_not") or []
         check("company_domain_not is sent", bool(excl), excl)
         check("it carries the source's already-scanned domains", "already-scanned.com" in excl)
-        check("...and the client's exclusion set", "suppressed-a.com" in excl)
+        check("client suppression set is NOT folded in (off by default)",
+              "suppressed-a.com" not in excl, excl[:3])
+        check("...and its RPC is never even called", fake.rpc_calls == 0, fake.rpc_calls)
         check("scanned domains come FIRST so a cap can't evict them",
               excl[0] == "already-scanned.com", excl[:2])
         check("KILL words pushed server-side too",
@@ -619,7 +652,8 @@ def test_backlog_drained_before_buying():
 if __name__ == "__main__":
     print("TheirStack credit-cursor + daily-budget regression lock\n")
     for t in (test_cursor_round_trip, test_filtered_page_still_advances_cursor, test_daily_cap_blocks,
-              test_daily_leads_split_evenly, test_scanned_domain_is_excluded_forever,
+              test_daily_leads_split_evenly, test_company_type_is_always_direct_employer,
+              test_scanned_domain_is_excluded_forever,
               test_scanned_domains_pages_never_truncates, test_exclusions_applied_at_the_search,
               test_no_buy_tick_never_builds_exclusions, test_lead_upsert_never_resets_pushed_status, test_swallowed_signal_still_enriches, test_discovery_floor_is_yesterday, test_preview_stays_free, test_pages_until_budget_filled, test_goes_beyond_page_one, test_budget_spent_buys_nothing,
               test_backlog_drained_before_buying):
