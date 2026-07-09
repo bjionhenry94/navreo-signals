@@ -2871,6 +2871,131 @@ def lists_folder_rename(p: dict) -> tuple:
     return 200, {"ok": True}
 
 
+def lists_rows_delete(p: dict) -> tuple:
+    """POST /api/lists/rows/delete — bulk-delete specific rows from ONE list by
+    row_num. SAFETY: refuses (400) when list_id is missing, row_nums is empty,
+    or row_nums has more than 2000 entries; the DELETE path is asserted to
+    carry `list_id=eq.` before it's ever sent — a past incident wiped a whole
+    table on an unscoped delete and this must never repeat. After deleting,
+    recounts the list's remaining rows and patches `lists.row_count` so the
+    file browser / grid chip stay in sync without a second client round-trip."""
+    list_id = p.get("list_id")
+    if not list_id or not isinstance(list_id, str):
+        return 400, {"ok": False, "message": "list_id is required"}
+    row_nums = p.get("row_nums")
+    if not isinstance(row_nums, list) or not row_nums:
+        return 400, {"ok": False, "message": "row_nums is required and must be a non-empty array"}
+    if len(row_nums) > 2000:
+        return 400, {"ok": False, "message": "can't delete more than 2000 rows in one request"}
+    try:
+        nums = sorted({int(n) for n in row_nums})
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "row_nums must be integers"}
+    if not nums:
+        return 400, {"ok": False, "message": "row_nums is required and must be a non-empty array"}
+    meta = sb("GET", f"lists?id=eq.{list_id}&select=id")
+    if meta is None:
+        return 503, _LISTS_DB_DOWN
+    if not isinstance(meta, list) or not meta:
+        return 404, {"ok": False, "message": "list not found"}
+    in_clause = ",".join(str(n) for n in nums)
+    delete_path = f"list_rows?list_id=eq.{list_id}&row_num=in.({in_clause})"
+    assert "list_id=eq." in delete_path, "refusing an unscoped list_rows delete"  # hard safety gate
+    res = sb("DELETE", delete_path, prefer="return=representation")
+    err = _lists_sb_error(res)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(res, list):
+        return 503, _LISTS_DB_DOWN
+    deleted = len(res)
+    new_count = _sb_count(f"list_rows?list_id=eq.{list_id}")
+    if new_count is not None:
+        sb("PATCH", f"lists?id=eq.{list_id}", {"row_count": new_count})  # best-effort
+    return 200, {"ok": True, "deleted": deleted, "row_count": new_count}
+
+
+def lists_delete(p: dict) -> tuple:
+    """POST /api/lists/delete — hard-delete one list (list_rows cascade via the
+    DB's FK). 404s when the list doesn't exist so the UI can tell "already
+    gone" apart from a real failure."""
+    list_id = p.get("list_id")
+    if not list_id:
+        return 400, {"ok": False, "message": "list_id is required"}
+    existing = sb("GET", f"lists?id=eq.{list_id}&select=id")
+    if existing is None:
+        return 503, _LISTS_DB_DOWN
+    if not isinstance(existing, list) or not existing:
+        return 404, {"ok": False, "message": "list not found"}
+    res = sb("DELETE", f"lists?id=eq.{list_id}", prefer="return=representation")
+    err = _lists_sb_error(res)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(res, list) or not res:
+        return 404, {"ok": False, "message": "list not found"}
+    return 200, {"ok": True}
+
+
+def _slugify_filename(name: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9]+", "-", (name or "list")).strip("-").lower()
+    return s or "list"
+
+
+def api_lists_export_csv(q: dict):
+    """GET /api/lists/export — stream a CSV of the FULL filtered/sorted set
+    (not just one page): loops the api_list_rows_page RPC 2000 rows at a time,
+    advancing the offset until a short page signals the end, so a "Download"
+    click matches exactly what the current search/sort/filters show on
+    screen. Returns a 3-tuple: either ("error", status, body) for the caller
+    to hand to self._json, or ("csv", filename, body_bytes) to stream as-is."""
+    lid = (q.get("id") or [""])[0].strip()
+    if not lid:
+        return "error", 400, {"ok": False, "message": "id is required"}
+    try:
+        filters = json.loads((q.get("filters") or ["{}"])[0] or "{}")
+        if not isinstance(filters, dict):
+            raise ValueError("filters must be a JSON object")
+    except ValueError as e:
+        return "error", 400, {"ok": False, "message": f"filters is not valid JSON: {str(e)[:120]}"}
+    search = (q.get("search") or [""])[0]
+    sort = (q.get("sort") or [""])[0]
+    dir_ = (q.get("dir") or [""])[0]
+    meta = sb("GET", f"lists?id=eq.{lid}&select=id,name,client,columns")
+    if meta is None:
+        return "error", 503, _LISTS_DB_DOWN
+    if not isinstance(meta, list) or not meta:
+        return "error", 404, {"ok": False, "message": "list not found"}
+    columns = meta[0].get("columns") or []
+    name = meta[0].get("name") or "list"
+
+    import csv, io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(columns)
+    offset = 0
+    page_size = 2000
+    while True:
+        page = sb("POST", "rpc/api_list_rows_page", {
+            "p_list_id": lid, "p_offset": offset, "p_limit": page_size,
+            "p_search": search, "p_sort": sort, "p_dir": dir_, "p_filters": filters,
+        })
+        if isinstance(page, list):  # rpc returning a set — unwrap the single row
+            page = page[0] if page else None
+        err = _lists_sb_error(page)
+        if err:
+            return "error", 400, {"ok": False, "message": err[:300]}
+        if not isinstance(page, dict):
+            return "error", 503, _LISTS_DB_DOWN
+        batch = page.get("rows") or []
+        for row in batch:
+            data = row.get("data") or {}
+            writer.writerow([data.get(c) for c in columns])
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    body = buf.getvalue().encode("utf-8-sig")  # BOM so Excel opens UTF-8 cleanly
+    return "csv", f"{_slugify_filename(name)}.csv", body
+
+
 def lists_folder_delete(p: dict) -> tuple:
     """POST /api/lists/folder/delete — refuse (400, friendly message) when the
     folder still has lists filed in it or sub-folders parented to it; those
@@ -2916,6 +3041,8 @@ LISTS_POST_ROUTES = {
     "/api/lists/move": lists_move,
     "/api/lists/favourite": lists_favourite,
     "/api/lists/touch": lists_touch,
+    "/api/lists/rows/delete": lists_rows_delete,
+    "/api/lists/delete": lists_delete,
 }
 
 
@@ -6287,6 +6414,22 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             status, body = api_lists_distinct(q)
             return self._json(body, status)
+        if path == "/api/lists/export":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            kind, a, b = api_lists_export_csv(q)
+            if kind == "error":
+                return self._json(b, a)
+            filename, data = a, b
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(data)
+            return
         return self._serve_static()
 
     def do_POST(self):

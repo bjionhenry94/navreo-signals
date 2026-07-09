@@ -52,36 +52,97 @@ a.sheet-link:hover { color: var(--orange-700); text-decoration: underline; }
 .popover button.p-item.on { color: var(--orange-700); font-weight: 500; }
 
 /* ── Grid viewer ───────────────────────────────────────── */
-.gridbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
 .back-link { color: var(--ink-3); text-decoration: none; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; }
 .back-link:hover { color: var(--ink); }
-.grid-titlewrap { display: flex; align-items: center; gap: 8px; margin-right: 4px; }
-.grid-titlewrap h1 { font-size: 19px; }
+
+/* header bar: back-link + title + client chip + row count on the left,
+   the two primary actions (Download / Share) + overflow menu on the right */
+.gridheader { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 6px 0 14px; }
+.gh-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.gh-sep { color: var(--line-2); font-size: 13px; }
+h1#gridName { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-rows { font-size: 12.5px; }
+.gh-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.gh-right .btn .dlicon { font-size: 14px; line-height: 1; }
+.share-btn.copied { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
+.share-btn.copied.primary { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
+.ov-kebab { width: 32px; height: 32px; justify-content: center; border: 1px solid var(--line-2); }
+
+/* controls row: search + filter chips, spacer, columns + pagination cluster */
+.controlsrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+.searchwrap { position: relative; display: flex; align-items: center; }
+.searchwrap .search-ic { position: absolute; left: 12px; color: var(--ink-3); display: inline-flex; pointer-events: none; }
+.searchwrap .searchinput { padding-left: 30px; width: 220px; }
+.filterbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.filterbar .fchip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-sunken); border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; color: var(--ink-2); }
+.filterbar .fchip button { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 999px; }
+.filterbar .fchip button:hover { color: var(--ink); background: var(--line); }
+.controlsrow .spacer { flex: 1; }
 .numinput {
   border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 10px;
   font: 500 12.5px var(--font-mono); width: 84px; color: var(--ink); background: transparent;
 }
 .numinput:focus { outline: none; box-shadow: var(--focus); }
-.numwrap { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); }
-.share-btn.copied { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
-.filterbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
-.filterbar .fchip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-sunken); border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; color: var(--ink-2); }
-.filterbar .fchip button { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 999px; }
-.filterbar .fchip button:hover { color: var(--ink); background: var(--line); }
+
+/* pagination cluster: ‹ range(popover-trigger) › */
+.pagecluster { display: flex; align-items: center; gap: 2px; }
+.pagebtn {
+  background: none; border: 1px solid var(--line-2); border-radius: 7px; width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--ink-2); font-size: 14px;
+}
+.pagebtn:hover { background: var(--bg-sunken); }
+.pagebtn[disabled] { opacity: .4; cursor: not-allowed; }
+.pagerange {
+  background: none; border: none; font-size: 12px; color: var(--ink-3); padding: 5px 9px; cursor: pointer;
+  border-radius: 7px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.pagerange:hover { background: var(--bg-sunken); color: var(--ink-2); }
+.pagepop { width: 220px; padding: 10px; }
+.pagepop .p-field { margin-bottom: 10px; }
+.pagepop .p-field:last-child { margin-bottom: 0; }
+.pagepop label { display: block; font-size: 11px; color: var(--ink-3); font-weight: 500; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .05em; }
+.pagepop .p-row { display: flex; gap: 6px; }
+.pagepop .p-row .numinput { width: auto; flex: 1; }
+
+/* selection contextual bar */
+.selectbar {
+  display: flex; align-items: center; gap: 12px; background: var(--cream-50); border: 1px solid var(--light-200);
+  border-radius: 10px; padding: 9px 14px; margin: 0 0 10px; font-size: 13px; color: var(--ink-2); font-weight: 500;
+  animation: selectbarIn .15s ease;
+}
+@keyframes selectbarIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.selectbar .spacer { flex: 1; }
+.btn.danger-outline { border-color: var(--red-line); color: var(--red); background: transparent; }
+.btn.danger-outline:hover { background: var(--red-bg); }
+
 .gridwrap { border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; max-width: 100%; max-height: 68vh; }
 table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
-.datagrid th { position: sticky; top: 0; background: var(--bg-sunken); z-index: 5; text-align: left; padding: 0; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+.datagrid th { position: sticky; top: 0; background: var(--bg-sunken); z-index: 5; text-align: left; padding: 0; border-bottom: 1px solid var(--line-2); }
 .datagrid th .thwrap { display: flex; align-items: center; gap: 5px; padding: 8px 10px; cursor: pointer; user-select: none; white-space: nowrap; }
 .datagrid th .thwrap:hover { background: var(--line); }
 .datagrid th .thlbl { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
-.datagrid th .sortarrow { font-size: 10px; color: var(--orange-700); }
+.datagrid th .sortarrow { font-size: 10px; color: var(--orange-700); opacity: 0; transition: opacity .12s; }
+.datagrid th .thwrap:hover .sortarrow, .datagrid th .thwrap.sort-active .sortarrow { opacity: 1; }
 .datagrid th .filt-btn { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 5px; margin-left: auto; }
 .datagrid th .filt-btn:hover { background: var(--line-2); color: var(--ink); }
 .datagrid th .filt-btn.active { color: var(--orange-700); }
-.datagrid th.gutter, .datagrid td.gutter { position: sticky; left: 0; background: var(--bg-sunken); color: var(--ink-3); text-align: right; padding: 6px 10px; border-right: 1px solid var(--line); font-family: var(--font-mono); font-size: 11px; z-index: 4; }
+/* leading checkbox column, then the 1-indexed view-position gutter — both sticky-left */
+.datagrid th.chkcol, .datagrid td.chkcol { position: sticky; left: 0; background: var(--bg-sunken); text-align: center; padding: 6px 4px; width: 32px; z-index: 6; }
+.datagrid td.chkcol { background: var(--card); z-index: 4; }
+.datagrid tr:hover td.chkcol { background: var(--bg-sunken); }
+.datagrid td.chkcol input, .datagrid th.chkcol input { cursor: pointer; }
+.datagrid td.chkcol input { opacity: 0; }
+.datagrid tr:hover td.chkcol input, .datagrid tr.row-selected td.chkcol input { opacity: 1; }
+.datagrid th.gutter, .datagrid td.gutter { position: sticky; left: 32px; background: var(--bg-sunken); color: var(--ink-3); text-align: right; padding: 6px 10px; font-family: var(--font-mono); font-size: 11px; z-index: 4; }
 .datagrid th.gutter { z-index: 6; }
-.datagrid td { padding: 7px 10px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+.datagrid tr:hover td.gutter { background: var(--bg-sunken); }
+.datagrid tr.row-selected td.gutter, .datagrid tr.row-selected td.chkcol { background: var(--cream); }
+.datagrid tr.row-selected td { background: var(--cream); }
+/* horizontal borders only — no vertical lines between data cells */
+.datagrid td { padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
 .datagrid tr:hover td { background: var(--bg-sunken); }
+.datagrid td .celllink { color: inherit; text-decoration: none; }
+.datagrid td .celllink:hover { text-decoration: underline; }
 .colpop { max-height: 320px; overflow-y: auto; }
 .colpop label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; border-radius: 7px; cursor: pointer; }
 .colpop label:hover { background: var(--bg-sunken); }
@@ -97,9 +158,6 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
 .valpicker .vp-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .valpicker .vp-sep { border-top: 1px solid var(--line); margin: 10px 0 8px; }
 .valpicker .vp-empty { font-size: 12px; color: var(--ink-3); padding: 8px 4px; }
-
-/* ── grid toolbar: paging affordance ────────────────────── */
-.pageinfo { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 
 /* ── New folder / move modal ──────────────────────────── */
 .overlay { position: fixed; inset: 0; background: rgba(20,17,14,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
@@ -156,26 +214,47 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
 
     <!-- ═══ VIEW 2: GRID VIEWER ═══ -->
     <div id="view-grid" style="display:none">
-      <a class="back-link" href="lists.html">&larr; All Files</a>
-      <div class="gridbar" style="margin-top:6px">
-        <div class="grid-titlewrap">
+      <div class="gridheader">
+        <div class="gh-left">
+          <a class="back-link" href="lists.html">&larr; All files</a>
+          <span class="gh-sep">/</span>
           <h1 id="gridName">–</h1>
           <span class="chip" id="gridClientChip" style="cursor:default"></span>
-          <span class="chip" id="gridCountChip" style="cursor:default"></span>
+          <span class="muted gh-rows" id="gridCountChip"></span>
         </div>
-        <input class="toolbar search" id="gridSearch" placeholder="Search rows…" style="width:200px">
-        <div class="popwrap" style="position:relative">
-          <button class="btn sm" id="colBtn" data-popover-trigger>columns</button>
+        <div class="gh-right">
+          <button class="btn" id="downloadBtn" title="Download the current view as CSV">
+            <span class="dlicon">&#11123;</span> Download
+          </button>
+          <button class="btn primary share-btn" id="shareBtn">Share</button>
+          <div class="popwrap" style="position:relative">
+            <button class="kebab-btn ov-kebab" id="gridOverflowBtn" data-popover-trigger title="More"></button>
+          </div>
         </div>
-        <div class="numwrap">Starting row <input class="numinput" id="gridOffset" type="number" min="0" step="1" value="0"></div>
-        <div class="numwrap">Limit <input class="numinput" id="gridLimit" type="number" min="1" step="1" value="500"></div>
-        <span class="pageinfo" id="pageInfo"></span>
-        <button class="btn sm" id="pagePrev" title="Previous page">&larr; Prev</button>
-        <button class="btn sm" id="pageNext" title="Next page">Next &rarr;</button>
-        <button class="btn sm" id="gridMoveBtn">Move to folder…</button>
-        <button class="btn sm share-btn" id="shareBtn">Share link</button>
       </div>
-      <div class="filterbar" id="filterBar"></div>
+
+      <div class="controlsrow">
+        <div class="searchwrap">
+          <span class="search-ic" id="gridSearchIc"></span>
+          <input class="toolbar search searchinput" id="gridSearch" placeholder="Search rows…">
+        </div>
+        <div class="filterbar" id="filterBar"></div>
+        <div class="spacer"></div>
+        <button class="btn sm" id="colBtn" data-popover-trigger>columns</button>
+        <div class="pagecluster">
+          <button class="pagebtn" id="pagePrev" title="Previous page">&#8249;</button>
+          <button class="pagerange" id="pageRangeBtn" data-popover-trigger></button>
+          <button class="pagebtn" id="pageNext" title="Next page">&#8250;</button>
+        </div>
+      </div>
+
+      <div class="selectbar" id="selectBar" style="display:none">
+        <span id="selectCount">0 selected</span>
+        <div class="spacer"></div>
+        <button class="btn sm danger-outline" id="delRowsBtn">Delete rows</button>
+        <button class="btn sm" id="clearSelBtn">Clear</button>
+      </div>
+
       <div id="gridStatus"></div>
       <div class="gridwrap" id="gridWrap" style="display:none">
         <table class="datagrid" id="datagrid"></table>
@@ -201,6 +280,19 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
   <div class="modal-f">
     <button class="btn" id="nfCancel">Cancel</button>
     <button class="btn primary" id="nfCreate">Create</button>
+  </div>
+</div></div>
+
+<!-- generic styled confirm modal: replaces every native confirm()/alert()/prompt() in this file -->
+<div class="overlay" id="confirmOverlay"><div class="modal" style="width:400px">
+  <div class="modal-h"><h3 id="confirmTitle">Confirm</h3></div>
+  <div class="modal-b">
+    <div class="consequence" id="confirmBody"></div>
+    <div id="confirmErr"></div>
+  </div>
+  <div class="modal-f">
+    <button class="btn" id="confirmCancelBtn">Cancel</button>
+    <button class="btn primary" id="confirmOkBtn">Confirm</button>
   </div>
 </div></div>
 
@@ -245,6 +337,10 @@ const svgSheet = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const svgStar = (on) => `<svg viewBox="0 0 24 24" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>`;
 const svgKebab = `<svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>`;
 const svgFilt = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>`;
+const svgSearch = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>`;
+document.querySelectorAll(".search-ic").forEach((el) => { el.innerHTML = svgSearch; });
+const gridOverflowBtnEl = document.getElementById("gridOverflowBtn");
+if (gridOverflowBtnEl) gridOverflowBtnEl.innerHTML = svgKebab;
 
 /* ═══════════════════════════ shared state ═══════════════════════════ */
 let LISTS_DATA = null;          // { folders, lists } from /api/lists
@@ -256,6 +352,42 @@ function closeAnyPopover() {
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".popover") && !e.target.closest("[data-popover-trigger]")) closeAnyPopover();
 });
+
+/* ── generic styled confirm modal — replaces every native confirm()/alert()/
+   prompt() in this file. `onConfirm` is an async fn; throw an Error with a
+   user-facing message to show it inline and re-enable the button, or call
+   closeModal() (+ whatever follow-up) on success. */
+function showModal({ title, bodyHtml, confirmLabel = "Confirm", danger = false, onConfirm }) {
+  document.getElementById("confirmTitle").textContent = title;
+  document.getElementById("confirmBody").innerHTML = bodyHtml;
+  document.getElementById("confirmErr").innerHTML = "";
+  const okBtn = document.getElementById("confirmOkBtn");
+  okBtn.textContent = confirmLabel;
+  okBtn.className = "btn " + (danger ? "danger" : "primary");
+  okBtn.onclick = async () => {
+    const restore = busyBtn(okBtn, "Working…");
+    if (!restore) return; // already mid-click
+    try {
+      await onConfirm();
+    } catch (e) {
+      document.getElementById("confirmErr").innerHTML =
+        `<div class="modal-err">${esc(friendlyListsError((e && e.message) || "Something went wrong"))}</div>`;
+      restore();
+    }
+  };
+  document.getElementById("confirmOverlay").classList.add("on");
+}
+function closeModal() { document.getElementById("confirmOverlay").classList.remove("on"); }
+document.getElementById("confirmCancelBtn").onclick = closeModal;
+
+/* Raw DB-trigger messages ("max depth exceeded" and the like) aren't
+   user-facing copy — remap the ones we know about to plain English here
+   rather than showing the trigger's own wording. */
+function friendlyListsError(msg) {
+  if (!msg) return msg;
+  if (/depth|nesting level/i.test(msg)) return "Folders only go two levels deep (client, then theme).";
+  return msg;
+}
 
 async function loadListsIndex(force) {
   if (LISTS_DATA && !force) return LISTS_DATA;
@@ -396,7 +528,10 @@ function openRowMenu(ev, listId) {
   const btn = ev.currentTarget;
   const pop = document.createElement("div");
   pop.className = "popover";
-  pop.innerHTML = `<button class="p-item" onclick="closeAnyPopover();openMoveModal('${esc(listId)}')">Move to folder…</button>`;
+  pop.innerHTML = `
+    <button class="p-item" onclick="closeAnyPopover();openMoveModal('${esc(listId)}')">Move to folder…</button>
+    <button class="p-item" onclick="closeAnyPopover();downloadListCsv('${esc(listId)}')">Download CSV</button>
+    <button class="p-item" onclick="closeAnyPopover();confirmDeleteListById('${esc(listId)}')">Delete list…</button>`;
   document.body.appendChild(pop);
   const r = btn.getBoundingClientRect();
   pop.style.top = (window.scrollY + r.bottom + 4) + "px";
@@ -405,6 +540,36 @@ function openRowMenu(ev, listId) {
   requestAnimationFrame(() => {
     const pr = pop.getBoundingClientRect();
     if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+  });
+}
+
+/* Download straight from the file browser row — no filters/search/sort to
+   carry (this is the whole list, not a viewed slice). */
+function downloadListCsv(listId) {
+  const params = new URLSearchParams({ id: listId });
+  window.location.assign(`/api/lists/export?${params.toString()}`);
+}
+
+/* Delete-list confirm reachable from the file-browser kebab (no grid state
+   loaded yet, so fetch the label straight off the index we already have). */
+function confirmDeleteListById(listId) {
+  const l = (LISTS_DATA.lists || []).find((x) => x.id === listId);
+  const name = l ? l.name : "this list";
+  const rows = l ? (l.row_count || 0) : 0;
+  showModal({
+    title: "Delete list",
+    bodyHtml: `Delete "<b>${esc(name)}</b>"? This list has ${fmt(rows)} row${rows === 1 ? "" : "s"}. This can't be undone.`,
+    confirmLabel: "Delete list",
+    danger: true,
+    onConfirm: async () => {
+      const r = await fetch("/api/lists/delete", { method: "POST", body: JSON.stringify({ list_id: listId }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't delete this list");
+      closeModal();
+      await loadListsIndex(true);
+      renderFileBrowser();
+      protoNote("List deleted");
+    },
   });
 }
 
@@ -431,7 +596,7 @@ document.getElementById("mvConfirm").onclick = async () => {
     const r = await fetch("/api/lists/move", { method: "POST", body: JSON.stringify({ list_id: moveListId, folder_id: folderId }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      document.getElementById("mvErr").innerHTML = `<div class="modal-err">${esc(j.message || "Couldn't move this list")}</div>`;
+      document.getElementById("mvErr").innerHTML = `<div class="modal-err">${esc(friendlyListsError(j.message) || "Couldn't move this list")}</div>`;
       if (restore) restore();
       return;
     }
@@ -493,7 +658,7 @@ document.getElementById("rfSave").onclick = async () => {
     const r = await fetch("/api/lists/folder/rename", { method: "POST", body: JSON.stringify({ folder_id: renameFolderId, name }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      errEl.innerHTML = `<div class="modal-err">${esc(j.message || "Couldn't rename this folder")}</div>`;
+      errEl.innerHTML = `<div class="modal-err">${esc(friendlyListsError(j.message) || "Couldn't rename this folder")}</div>`;
       if (restore) restore();
       return;
     }
@@ -508,25 +673,26 @@ document.getElementById("rfSave").onclick = async () => {
   }
 };
 
-async function deleteFolder(folderId) {
+function deleteFolder(folderId) {
   const f = (LISTS_DATA.folders || []).find((x) => x.id === folderId);
   const label = f && f.name ? f.name : "this folder";
-  if (!confirm(`Delete "${label}"? This can't be undone.`)) return;
-  try {
-    const r = await fetch("/api/lists/folder/delete", { method: "POST", body: JSON.stringify({ folder_id: folderId }) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) {
+  showModal({
+    title: "Delete folder",
+    bodyHtml: `Delete "${esc(label)}"? This can't be undone.`,
+    confirmLabel: "Delete folder",
+    danger: true,
+    onConfirm: async () => {
       // API 400 messages are human-readable (e.g. "still has lists in it") —
       // surface them as-is rather than a generic failure toast.
-      protoNote(j.message || "Couldn't delete this folder", { ms: 4200 });
-      return;
-    }
-    await loadListsIndex(true);
-    renderFileBrowser();
-    protoNote("Folder deleted");
-  } catch {
-    protoNote("Couldn't reach the server — try again");
-  }
+      const r = await fetch("/api/lists/folder/delete", { method: "POST", body: JSON.stringify({ folder_id: folderId }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't delete this folder");
+      closeModal();
+      await loadListsIndex(true);
+      renderFileBrowser();
+      protoNote("Folder deleted");
+    },
+  });
 }
 
 /* ── New folder modal ── */
@@ -569,7 +735,7 @@ document.getElementById("nfCreate").onclick = async () => {
     renderFileBrowser();
     protoNote("Folder created");
   } catch (e) {
-    errEl.innerHTML = `<div class="modal-err">${esc(e.message || "Couldn't create the folder")}</div>`;
+    errEl.innerHTML = `<div class="modal-err">${esc(friendlyListsError(e.message) || "Couldn't create the folder")}</div>`;
     if (restore) restore();
   }
 };
@@ -582,26 +748,46 @@ const grid = {
   id: null, meta: null, columns: [], visible: null /* Set */,
   sort: "", dir: "", filters: {}, search: "", offset: 0, limit: 500,
   total: 0, filtered: 0, loading: false,
+  selected: new Set(), // row_num of every checked row on the CURRENT page
 };
-let gridSearchDebounce = null, gridOffsetDebounce = null, gridLimitDebounce = null;
+let gridSearchDebounce = null;
 
 function esc4attr(s) { return esc(s).replace(/'/g, "&#39;"); }
+
+/* Whole-cell URLs (incl. bare linkedin.com/... without a scheme) and emails
+   render as quiet links — same ink color, underline only on hover, opening
+   in a new tab for URLs. Anything else is escaped text as before. */
+function linkifyCell(raw) {
+  const s = String(raw ?? "");
+  if (!s) return "";
+  const trimmed = s.trim();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return `<a class="celllink" href="mailto:${esc4attr(trimmed)}">${esc(s)}</a>`;
+  }
+  let url = null;
+  if (/^https?:\/\//i.test(trimmed)) url = trimmed;
+  else if (/^(www\.)?linkedin\.com\//i.test(trimmed)) url = "https://" + trimmed;
+  if (url) {
+    return `<a class="celllink" href="${esc4attr(url)}" target="_blank" rel="noopener noreferrer">${esc(s)}</a>`;
+  }
+  return esc(s);
+}
 
 async function openGrid(listId) {
   grid.id = listId; grid.meta = null; grid.columns = []; grid.visible = null;
   grid.sort = ""; grid.dir = ""; grid.filters = {}; grid.search = ""; grid.offset = 0; grid.limit = 500;
+  grid.selected.clear();
   document.getElementById("gridSearch").value = "";
-  document.getElementById("gridOffset").value = 0;
-  document.getElementById("gridLimit").value = 500;
   document.getElementById("gridName").textContent = "Loading…";
   document.getElementById("gridClientChip").textContent = "";
   document.getElementById("gridCountChip").textContent = "";
   document.getElementById("gridWrap").style.display = "none";
   document.getElementById("filterBar").innerHTML = "";
   document.getElementById("gridStatus").innerHTML = `<div class="empty">Loading…</div>`;
-  document.getElementById("pageInfo").textContent = "";
+  document.getElementById("pageRangeBtn").textContent = "";
   document.getElementById("pagePrev").disabled = true;
   document.getElementById("pageNext").disabled = true;
+  updateSelectBar();
   // fire-and-forget touch
   fetch("/api/lists/touch", { method: "POST", body: JSON.stringify({ list_id: listId, by: "Bjion" }) }).catch(() => {});
   await fetchGridRows();
@@ -610,6 +796,8 @@ async function openGrid(listId) {
 async function fetchGridRows() {
   if (grid.loading) return;
   grid.loading = true;
+  grid.selected.clear();  // a new page/search/sort/filter invalidates the old selection
+  updateSelectBar();
   const params = new URLSearchParams({
     id: grid.id, offset: String(grid.offset), limit: String(grid.limit),
     search: grid.search, sort: grid.sort, dir: grid.dir,
@@ -634,7 +822,7 @@ async function fetchGridRows() {
       document.getElementById("gridStatus").innerHTML = `<div class="empty">${esc((j && j.message) || "Something went wrong")}</div>`;
     }
     document.getElementById("gridWrap").style.display = "none";
-    updatePageInfo(0);
+    updatePageRange(0);
     return;
   }
   grid.meta = j;
@@ -646,11 +834,12 @@ async function fetchGridRows() {
   document.getElementById("gridName").textContent = j.name || "Untitled list";
   document.title = `${j.name || "List"} · Navreo`;
   document.getElementById("gridClientChip").innerHTML = esc(j.client || "");
-  document.getElementById("gridCountChip").textContent = `${fmt(grid.filtered)}/${fmt(grid.total)} rows`;
+  document.getElementById("gridCountChip").textContent = `${fmt(grid.filtered)} rows`;
   renderFilterBar();
+  updateDownloadTitle();
 
   const rows = j.rows || [];
-  updatePageInfo(rows.length);
+  updatePageRange(rows.length);
   if (!rows.length) {
     document.getElementById("gridStatus").innerHTML = `<div class="empty">${
       grid.search || Object.keys(grid.filters).length ? "No rows match your search/filters" : "This list is empty"
@@ -663,23 +852,32 @@ async function fetchGridRows() {
   renderDataGrid(rows);
 }
 
-/* "Showing X–Y of Z" + Prev/Next, stepping offset by the current limit —
-   first load used to silently show 500 of 15,953 rows with no cue. */
-function updatePageInfo(rowsLen) {
-  const info = document.getElementById("pageInfo");
+/* "1–500 of 15,953" (1-indexed) on the pagination-cluster's range button,
+   plus the ‹ › enabled state, stepping offset by the current limit. */
+function updatePageRange(rowsLen) {
+  const btn = document.getElementById("pageRangeBtn");
   const prevBtn = document.getElementById("pagePrev");
   const nextBtn = document.getElementById("pageNext");
   if (!grid.filtered) {
-    info.textContent = "No rows";
+    btn.textContent = "No rows";
     prevBtn.disabled = true;
     nextBtn.disabled = true;
     return;
   }
   const from = grid.offset + 1;
   const to = grid.offset + rowsLen;
-  info.textContent = `Showing ${fmt(from)}–${fmt(to)} of ${fmt(grid.filtered)}`;
+  btn.textContent = `${fmt(from)}–${fmt(to)} of ${fmt(grid.filtered)}`;
   prevBtn.disabled = grid.offset <= 0;
   nextBtn.disabled = (grid.offset + grid.limit) >= grid.filtered;
+}
+
+/* Download hits the CURRENT search/sort/filters — what-you-see-is-what-you-
+   download — so the button's title spells that out whenever a view is active. */
+function updateDownloadTitle() {
+  const btn = document.getElementById("downloadBtn");
+  if (!btn) return;
+  const hasView = grid.search || grid.sort || Object.keys(grid.filters).length;
+  btn.title = hasView ? "Download the current view (search/sort/filters applied)" : "Download this list as CSV";
 }
 
 function renderFilterBar() {
@@ -695,19 +893,20 @@ function renderFilterBar() {
 
 function clearColFilter(col) {
   delete grid.filters[col];
-  grid.offset = 0; document.getElementById("gridOffset").value = 0;
+  grid.offset = 0;
   fetchGridRows();
 }
 
 function renderDataGrid(rows) {
   const visibleCols = grid.columns.filter((c) => grid.visible.has(c));
   const thead = `<thead><tr>
+    <th class="chkcol"><input type="checkbox" id="selectAllChk" title="Select all visible rows"></th>
     <th class="gutter">#</th>
     ${visibleCols.map((c) => `
       <th>
-        <div class="thwrap" onclick="cycleSort('${esc4attr(c)}')">
+        <div class="thwrap ${grid.sort === c ? "sort-active" : ""}" onclick="cycleSort('${esc4attr(c)}')">
           <span class="thlbl">${esc(c)}</span>
-          ${grid.sort === c ? `<span class="sortarrow">${grid.dir === "desc" ? "&#9660;" : "&#9650;"}</span>` : ""}
+          <span class="sortarrow">${grid.sort === c ? (grid.dir === "desc" ? "&#9660;" : "&#9650;") : "&#9650;"}</span>
           <button class="filt-btn ${grid.filters[c] ? "active" : ""}" title="Filter" onclick="event.stopPropagation();openColFilter(event,'${esc4attr(c)}')" data-popover-trigger>${svgFilt}</button>
         </div>
       </th>`).join("")}
@@ -715,20 +914,69 @@ function renderDataGrid(rows) {
   // gutter shows the row's position in the current filtered/sorted VIEW
   // (offset+1, offset+2, …) so you can confirm you're looking at "rows
   // 100–200"; the source row_num (used to show ids from the raw sheet,
-  // confusing against the view position) moves to a hover tooltip.
-  const tbody = `<tbody>${rows.map((row, idx) => `
-    <tr>
+  // confusing against the view position) moves to a hover tooltip, and
+  // doubles as the stable key for row selection/deletion.
+  const tbody = `<tbody>${rows.map((row, idx) => {
+    const checked = row.row_num != null && grid.selected.has(row.row_num);
+    return `
+    <tr class="${checked ? "row-selected" : ""}">
+      <td class="chkcol">${row.row_num != null ? `<input type="checkbox" class="rowchk" data-rownum="${row.row_num}" ${checked ? "checked" : ""}>` : ""}</td>
       <td class="gutter" title="${row.row_num != null ? esc4attr(`source row ${fmt(row.row_num)}`) : ""}">${fmt(grid.offset + idx + 1)}</td>
-      ${visibleCols.map((c) => `<td title="${esc4attr(String(row.data ? row.data[c] ?? "" : ""))}">${esc(row.data ? row.data[c] : "")}</td>`).join("")}
-    </tr>`).join("")}</tbody>`;
+      ${visibleCols.map((c) => {
+        const val = row.data ? row.data[c] : "";
+        return `<td title="${esc4attr(String(val ?? ""))}">${linkifyCell(val)}</td>`;
+      }).join("")}
+    </tr>`;
+  }).join("")}</tbody>`;
   document.getElementById("datagrid").innerHTML = thead + tbody;
+  wireGridSelectionHandlers(rows);
+}
+
+/* ── row selection: header checkbox = select-all-VISIBLE (indeterminate when
+   partial), per-row checkboxes toggle membership in grid.selected keyed by
+   row_num, contextual bar reacts to grid.selected.size. ── */
+function wireGridSelectionHandlers(rows) {
+  const selectAllChk = document.getElementById("selectAllChk");
+  const visibleNums = rows.map((r) => r.row_num).filter((n) => n != null);
+  const updateSelectAllState = () => {
+    const selectedVisible = visibleNums.filter((n) => grid.selected.has(n));
+    if (!selectAllChk) return;
+    selectAllChk.checked = visibleNums.length > 0 && selectedVisible.length === visibleNums.length;
+    selectAllChk.indeterminate = selectedVisible.length > 0 && selectedVisible.length < visibleNums.length;
+  };
+  updateSelectAllState();
+  if (selectAllChk) {
+    selectAllChk.onchange = () => {
+      if (selectAllChk.checked) visibleNums.forEach((n) => grid.selected.add(n));
+      else visibleNums.forEach((n) => grid.selected.delete(n));
+      renderDataGrid(rows);
+      updateSelectBar();
+    };
+  }
+  document.querySelectorAll(".rowchk").forEach((cb) => {
+    cb.onchange = () => {
+      const n = parseInt(cb.getAttribute("data-rownum"), 10);
+      if (cb.checked) grid.selected.add(n); else grid.selected.delete(n);
+      const tr = cb.closest("tr");
+      if (tr) tr.classList.toggle("row-selected", cb.checked);
+      updateSelectAllState();
+      updateSelectBar();
+    };
+  });
+}
+
+function updateSelectBar() {
+  const bar = document.getElementById("selectBar");
+  const n = grid.selected.size;
+  document.getElementById("selectCount").textContent = `${fmt(n)} selected`;
+  bar.style.display = n > 0 ? "flex" : "none";
 }
 
 function cycleSort(col) {
   if (grid.sort !== col) { grid.sort = col; grid.dir = "asc"; }
   else if (grid.dir === "asc") { grid.dir = "desc"; }
   else { grid.sort = ""; grid.dir = ""; }
-  grid.offset = 0; document.getElementById("gridOffset").value = 0;
+  grid.offset = 0;
   fetchGridRows();
 }
 
@@ -818,14 +1066,14 @@ function openColFilter(ev, col) {
   const applyValues = () => {
     if (checked.size) grid.filters[col] = [...checked]; else delete grid.filters[col];
     closeAnyPopover();
-    grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    grid.offset = 0;
     fetchGridRows();
   };
   pop.querySelector("#colValApply").onclick = applyValues;
   pop.querySelector("#colValClear").onclick = () => {
     delete grid.filters[col];
     closeAnyPopover();
-    grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    grid.offset = 0;
     fetchGridRows();
   };
 
@@ -834,7 +1082,7 @@ function openColFilter(ev, col) {
     const v = input.value.trim();
     if (v) grid.filters[col] = v; else delete grid.filters[col];
     closeAnyPopover();
-    grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    grid.offset = 0;
     fetchGridRows();
   };
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") applyText(); if (e.key === "Escape") closeAnyPopover(); });
@@ -870,39 +1118,171 @@ document.getElementById("gridSearch").addEventListener("input", (e) => {
   clearTimeout(gridSearchDebounce);
   const v = e.target.value;
   gridSearchDebounce = setTimeout(() => {
-    grid.search = v; grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    grid.search = v; grid.offset = 0;
     fetchGridRows();
   }, 350);
 });
 
-document.getElementById("gridOffset").addEventListener("input", (e) => {
-  clearTimeout(gridOffsetDebounce);
-  gridOffsetDebounce = setTimeout(() => {
-    const v = Math.max(0, parseInt(e.target.value, 10) || 0);
-    grid.offset = v;
-    fetchGridRows();
-  }, 500);
-});
-document.getElementById("gridLimit").addEventListener("input", (e) => {
-  clearTimeout(gridLimitDebounce);
-  gridLimitDebounce = setTimeout(() => {
-    const v = Math.max(1, parseInt(e.target.value, 10) || 500);
-    grid.limit = v;
-    fetchGridRows();
-  }, 500);
-});
-
 document.getElementById("pagePrev").addEventListener("click", () => {
   grid.offset = Math.max(0, grid.offset - grid.limit);
-  document.getElementById("gridOffset").value = grid.offset;
   fetchGridRows();
 });
 document.getElementById("pageNext").addEventListener("click", () => {
   grid.offset = grid.offset + grid.limit;
-  document.getElementById("gridOffset").value = grid.offset;
   fetchGridRows();
 });
-document.getElementById("gridMoveBtn").addEventListener("click", () => openMoveModal(grid.id));
+
+/* pagination popover: 1-indexed "Go to row" + rows-per-page, tucked behind
+   the range label instead of two always-visible number boxes in the toolbar */
+document.getElementById("pageRangeBtn").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  closeAnyPopover();
+  const pop = document.createElement("div");
+  pop.className = "popover pagepop";
+  pop.innerHTML = `
+    <div class="p-field">
+      <label>Go to row</label>
+      <div class="p-row">
+        <input type="number" min="1" class="numinput" id="popGoRow" value="${grid.offset + 1}">
+        <button class="btn sm" id="popGoBtn">Go</button>
+      </div>
+    </div>
+    <div class="p-field">
+      <label>Rows per page</label>
+      <input type="number" min="1" class="numinput" id="popLimit" value="${grid.limit}" style="width:100%">
+    </div>`;
+  document.body.appendChild(pop);
+  const r = ev.currentTarget.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.right - pop.offsetWidth) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+  });
+
+  const goRowInput = pop.querySelector("#popGoRow");
+  const goToRow = () => {
+    const wantRow = Math.max(1, parseInt(goRowInput.value, 10) || 1); // 1-indexed, user-facing
+    grid.offset = Math.max(0, Math.min(wantRow - 1, Math.max(0, grid.filtered - 1)));
+    closeAnyPopover();
+    fetchGridRows();
+  };
+  pop.querySelector("#popGoBtn").onclick = goToRow;
+  goRowInput.addEventListener("keydown", (e) => { if (e.key === "Enter") goToRow(); });
+
+  const limitInput = pop.querySelector("#popLimit");
+  const applyLimit = () => {
+    const v = Math.max(1, parseInt(limitInput.value, 10) || 500);
+    if (v === grid.limit) return;
+    grid.limit = v; grid.offset = 0;
+    fetchGridRows();
+  };
+  limitInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { applyLimit(); closeAnyPopover(); } });
+  limitInput.addEventListener("change", applyLimit);
+});
+
+/* ── selection contextual bar ── */
+document.getElementById("clearSelBtn").addEventListener("click", () => {
+  grid.selected.clear();
+  updateSelectBar();
+  renderDataGrid(_lastRows || []);
+});
+document.getElementById("delRowsBtn").addEventListener("click", () => confirmDeleteRows());
+
+function confirmDeleteRows() {
+  const nums = [...grid.selected];
+  if (!nums.length) return;
+  const name = grid.meta ? grid.meta.name : "this list";
+  showModal({
+    title: "Delete rows",
+    bodyHtml: `Delete ${fmt(nums.length)} row${nums.length === 1 ? "" : "s"} from "${esc(name)}"? This can't be undone.`,
+    confirmLabel: `Delete ${fmt(nums.length)} row${nums.length === 1 ? "" : "s"}`,
+    danger: true,
+    onConfirm: async () => {
+      const r = await fetch("/api/lists/rows/delete", { method: "POST", body: JSON.stringify({ list_id: grid.id, row_nums: nums }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't delete these rows");
+      closeModal();
+      grid.selected.clear();
+      updateSelectBar();
+      protoNote(`${fmt(j.deleted)} row${j.deleted === 1 ? "" : "s"} deleted`);
+      await fetchGridRows();
+    },
+  });
+}
+
+/* ── grid-view overflow menu: Move to folder… / Delete list… ── */
+document.getElementById("gridOverflowBtn").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  closeAnyPopover();
+  const pop = document.createElement("div");
+  pop.className = "popover";
+  pop.innerHTML = `
+    <button class="p-item" onclick="closeAnyPopover();openMoveModal(grid.id)">Move to folder…</button>
+    <button class="p-item" onclick="closeAnyPopover();confirmDeleteList()">Delete list…</button>`;
+  document.body.appendChild(pop);
+  const r = ev.currentTarget.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.right - pop.offsetWidth) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+  });
+});
+
+function confirmDeleteList() {
+  const name = grid.meta ? grid.meta.name : "this list";
+  const rows = grid.total || 0;
+  showModal({
+    title: "Delete list",
+    bodyHtml: `Delete "<b>${esc(name)}</b>"? This list has ${fmt(rows)} row${rows === 1 ? "" : "s"}. This can't be undone.`,
+    confirmLabel: "Delete list",
+    danger: true,
+    onConfirm: async () => {
+      const r = await fetch("/api/lists/delete", { method: "POST", body: JSON.stringify({ list_id: grid.id }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't delete this list");
+      closeModal();
+      await loadListsIndex(true);
+      location.hash = "";
+      protoNote("List deleted");
+    },
+  });
+}
+
+/* ── Download: hits /api/lists/export with the CURRENT search/sort/filters,
+   so what-you-see-is-what-you-download. Fetched as a blob (rather than a
+   plain navigation) so the button can show a "Preparing…" state and surface
+   a friendly error instead of a broken-looking blank navigation. ── */
+document.getElementById("downloadBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("downloadBtn");
+  const restore = busyBtn(btn, "Preparing…");
+  if (!restore) return;
+  try {
+    const params = new URLSearchParams({
+      id: grid.id, search: grid.search, sort: grid.sort, dir: grid.dir,
+      filters: JSON.stringify(grid.filters),
+    });
+    const r = await fetch(`/api/lists/export?${params.toString()}`);
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.message || "Couldn't prepare the download");
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get("Content-Disposition") || "";
+    const m = /filename="([^"]+)"/.exec(cd);
+    const filename = m ? m[1] : "list.csv";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    protoNote(e.message || "Couldn't reach the server — try again", { ms: 4200 });
+  } finally {
+    restore();
+  }
+});
 
 document.getElementById("shareBtn").addEventListener("click", async () => {
   const url = `https://navreo-signals.onrender.com/app/lists.html#${grid.id}`;
