@@ -521,7 +521,7 @@ function setupChartTooltip(wrap) {
     setTimeout(() => elTab && elTab.classList.remove("nj-flash"), 1300);
   }
 
-  function renderCard(job) {
+  function renderCard(job, queuePos) {
     const status = job.status || "queued";
     const label = jEsc(job.label || job.kind || "Job");
     const pill = `<span class="nj-pill ${statusClass(status)}"><span class="nj-dot"></span>${statusLabel(status)}</span>`;
@@ -535,6 +535,13 @@ function setupChartTooltip(wrap) {
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
         progress = `<div class="nj-card-progress"><span>${jEsc(done)} of ${jEsc(total)} · ${pct}%</span>${cancelBtn}</div>`;
       }
+    }
+    if (status === "queued") {
+      const waitTxt = queuePos == null ? "Waiting…"
+        : queuePos <= 0 ? "Next up — starts when the current task finishes"
+        : queuePos === 1 ? "Waiting · 1 task ahead"
+        : `Waiting · ${queuePos} tasks ahead`;
+      progress = `<div class="nj-card-progress"><span class="nj-queue-wait">${waitTxt}</span>${cancelBtn}</div>`;
     }
     if (!progress && cancellable) {
       progress = `<div class="nj-card-progress"><span></span>${cancelBtn}</div>`;
@@ -558,7 +565,20 @@ function setupChartTooltip(wrap) {
     if (!jobs.length) {
       elList.innerHTML = `<div class="nj-empty">No tasks in progress yet.</div>`;
     } else {
-      elList.innerHTML = jobs.map(renderCard).join("");
+      // Queue position: a queued job waits behind every running job plus every
+      // queued job enqueued before it (lower queue_seq). Lets each card show
+      // "next up" / "2nd in line" so a stack of added tasks reads clearly.
+      const running = jobs.filter((j) => j.status === "running").length;
+      const queuedSeqs = jobs.filter((j) => j.status === "queued")
+        .map((j) => j.queue_seq).filter((s) => s != null).sort((a, b) => a - b);
+      const posFor = (job) => {
+        if (job.status !== "queued") return null;
+        const ahead = running + (job.queue_seq != null
+          ? queuedSeqs.filter((s) => s < job.queue_seq).length
+          : 0);
+        return ahead;
+      };
+      elList.innerHTML = jobs.map((j) => renderCard(j, posFor(j))).join("");
     }
     const activeCount = jobs.filter((j) => j.status === "queued" || j.status === "running").length;
     elBadge.textContent = String(activeCount);

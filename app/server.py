@@ -3298,6 +3298,50 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# ── Verify/remove job queue ─────────────────────────────────────────────────
+# ListMint (and the Smartlead delete endpoint) rate-limit hard. Firing several
+# verify jobs at once multiplies the request rate past what any single job's
+# 429-backoff can absorb, so the jobs error out. A single-worker FIFO queue
+# serialises them: every extra job you add sits in `queued` (the sidebar shows
+# it) and starts only when the one ahead finishes. Bump _JOB_WORKERS if a future
+# provider tolerates parallelism — 1 is the safe default for ListMint.
+import queue as _queue
+_JOB_QUEUE: "_queue.Queue" = _queue.Queue()
+_JOB_WORKERS = 1
+_JOB_SEQ = [0]  # monotonic enqueue counter — lets the UI order/number the queue
+
+
+def _enqueue_job(fn, job, args):
+    """Queue a job's worker instead of spawning it immediately. The job is
+    already `queued` in JOBS/app_jobs; the dispatcher flips it to running when
+    a worker slot frees."""
+    with JOBS_LOCK:
+        _JOB_SEQ[0] += 1
+        job["queue_seq"] = _JOB_SEQ[0]
+    _JOB_QUEUE.put((fn, job, args))
+
+
+def _job_dispatcher():
+    while True:
+        fn, job, args = _JOB_QUEUE.get()
+        try:
+            # Cancelled while it sat in the queue? Honour it without doing any
+            # provider work — the cancel route set the flag on the queued job.
+            with JOBS_LOCK:
+                cancelled = job.get("cancel_requested")
+            if cancelled:
+                _job_finished(job, "cancelled")
+                continue
+            fn(*args)
+        except Exception as e:  # noqa: BLE001 — a worker crash must not kill the dispatcher
+            try:
+                _job_finished(job, "failed", str(e)[:300])
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            _JOB_QUEUE.task_done()
+
+
 def _mv_verify_one(email: str, mv_key: str) -> str:
     """One MillionVerifier lookup -> ok|catch_all|unknown|disposable|invalid.
     One retry on timeout/error (per spec); a second failure counts as unknown
@@ -3846,9 +3890,8 @@ def api_verify_campaign(p: dict):
     job = _new_job("verify", label, campaign_id, mode, dry_run)
     job["auto_remove"] = auto_remove
     job["name"] = name
-    threading.Thread(target=_verify_job_worker,
-                     args=(job, campaign_id, mode, mv_key, lm_key, sl_key),
-                     daemon=True).start()
+    _enqueue_job(_verify_job_worker, job,
+                 (job, campaign_id, mode, mv_key, lm_key, sl_key))
     return {"job_id": job["id"]}, 202
 
 
@@ -3860,8 +3903,7 @@ def api_verify_remove(p: dict):
     dry_run = bool(p.get("dry_run"))
     job = _new_job("remove_bad", f"Remove bad leads: campaign {campaign_id}", campaign_id,
                   dry_run=dry_run)
-    threading.Thread(target=_remove_job_worker, args=(job, campaign_id, sl_key, dry_run),
-                     daemon=True).start()
+    _enqueue_job(_remove_job_worker, job, (job, campaign_id, sl_key, dry_run))
     return {"job_id": job["id"]}, 202
 
 
@@ -7635,4 +7677,8 @@ if __name__ == "__main__":
     # Any job left 'running' in app_jobs belonged to the process we're replacing —
     # its worker thread is gone, so mark it interrupted (resumable, cache-cheap).
     threading.Thread(target=_jobs_recover_orphans, daemon=True).start()
+    # Serialise verify/remove jobs so multiple ListMint runs don't blow its rate
+    # limit — extra jobs wait in `queued` until a worker frees.
+    for _ in range(_JOB_WORKERS):
+        threading.Thread(target=_job_dispatcher, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()
