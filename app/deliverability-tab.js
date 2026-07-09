@@ -44,7 +44,7 @@
     { re: /catch-all/i, txt: "Domain accepts any address — risky to email." },
     { re: /reply-guard/i, txt: "Anyone who replied is automatically kept, never deleted." },
     { re: /oauth/i, txt: "Connected via Google/Microsoft sign-in." },
-    { re: /listmint|millionverifier|\bmv\b/i, txt: "Email verification services (e.g. MillionVerifier) — check which leads are safe to email." },
+    { re: /listmint|millionverifier|\bmv\b/i, txt: "Email verification services (ListMint, MillionVerifier) — check which leads are safe to email." },
     // Word-bounded + excludes "warmup noise" (fix #6): the previous /resting|warm.../
     // pattern matched the bare substring "warmup"/"resting" ANYWHERE in a tile's
     // label+note, so it fired on tiles that only mention warmup in passing (e.g.
@@ -92,8 +92,8 @@
     { re: /resting/i, txt: "Sending paused while reputation recovers." },
     // Defect G: these three tool names show up in to-do action text and the
     // per-campaign verify buttons but had no click-popover definition at all.
-    { re: /ListMint/i, txt: "Email verification service — checks which leads are safe to email." },
-    { re: /MillionVerifier/i, txt: "Same family as ListMint — a second verification layer." },
+    { re: /ListMint/i, txt: "Email verification service — checks every lead by live SMTP + real-time catch-all probe." },
+    { re: /MillionVerifier/i, txt: "Bulk email verification service — first layer of the two-layer flow; ListMint re-checks its catch-all/unknown results." },
     { re: /Hypertide/i, txt: "The mailbox hosting provider — they fix hosting-side blocks." },
     // Defect 6a: three terms testers flagged with no click-popover definition —
     // SMTP/IMAP (technical-details tile), OAuth (shows up in reconnect reason
@@ -1225,6 +1225,8 @@ details.dlv-fold:not([open])>*:not(summary){display:none}
 .dlv-vcamp a{font-weight:600;color:var(--ink);text-decoration:none} .dlv-vcamp a:hover{color:var(--orange-700)}
 .dlv-vmeta{font-size:11.5px;color:var(--ink-3)}
 .dlv-vbtns{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}
+/* Item 5d: thin divider between the two per-campaign verify buttons */
+.dlv-vsep{width:1px;align-self:stretch;background:var(--line-2);margin:0 4px;flex-shrink:0}
 .dlv-vresult{flex-basis:100%}
 .dlv-vbox{margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:11px;font-size:12.5px;display:flex;flex-direction:column;gap:6px}
 .dlv-vrow b{color:var(--ink)} .dlv-vkeep b{color:var(--green)} .dlv-vremove b{color:var(--red)}
@@ -1443,9 +1445,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 /* Item 2: temporary success state flashed onto the clicked control itself —
    a durable near-click receipt that survives a missed toast. */
 .dlv-btn-flash{background:var(--green)!important;color:#fff!important;border-color:var(--green)!important;text-decoration:none!important;transition:background .15s,color .15s}
-/* Item 5d: thin divider between the two per-campaign verify buttons so
-   "✓ ListMint" and "✓ MillionVerifier → ListMint" never read as one control. */
-.dlv-vsep{width:1px;align-self:stretch;background:var(--line-2);margin:0 4px;flex-shrink:0}
 /* Item 1: group labels inside the Recent-actions fold — seed rows ("earlier")
    vs rows written by this session ("today — this session"). */
 .dlv-hist-glabel{font-size:10.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin:4px 0 2px}
@@ -1971,8 +1970,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // actions, log stayed empty" contributors this file already fixed once.
     logAction({ action: "view_data", count: n, scope: title });
   }
-  function viewVerifyData(kind, campId, rows) {
-    const title = (kind === "keep" ? "Verify — kept (deliverable)" : "Verify — bad (confirmed invalid)") + " · campaign " + campId;
+  // `v` (the verify result for this campaign) is passed through so the modal
+  // title can state the kept breakdown by category alongside the bad-email
+  // list — the only "who's affected" data the backend actually returns is the
+  // bad list, so kept leads are summarised by count, never fabricated as rows.
+  function viewVerifyData(campId, rows, v) {
+    let title = "Verify — bad (confirmed invalid) · campaign " + campId;
+    if (v) title += " · kept " + v.keep + " (good " + v.good + " · catch-all " + v.catch_all + " · unknown " + v.unknown + ")";
     openDataView(title, toCSV(["email", "result"], rows));
     logAction({ action: "view_data", count: (rows || []).length, scope: title });
   }
@@ -2136,29 +2140,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   /* ============================================================
-     9. Verify pipeline simulation (ListMint / MV→ListMint)
+     9. Verify pipeline — real backend job. Two modes: ListMint (every
+        lead, live SMTP + catch-all probe) and MillionVerifier → ListMint
+        (bulk MV pass first, ListMint re-checks MV's catch-all/unknown
+        results). No fallback fabricates numbers.
      ============================================================ */
-  function simulateVerify(campId, mode) {
-    const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(campId));
-    const total = camp ? Math.max(40, Math.round(camp.sent * 0.62)) : 500;
-    const l1Drop = Math.round(total * 0.055);
-    const l1Catch = Math.round(total * 0.14);
-    const l1Keep = total - l1Drop - l1Catch;
-    const l2Drop = Math.round(l1Catch * 0.32);
-    const l2Keep = l1Catch - l2Drop;
-    const keep = l1Keep + l2Keep;
-    const remove = l1Drop + l2Drop;
-    return {
-      total, layer1Tool: mode === "mv" ? "MillionVerifier" : "ListMint", layer2Tool: "ListMint",
-      l1_keep: l1Keep, l1_catch: l1Catch, l1_drop: l1Drop, l2_keep: l2Keep, l2_drop: l2Drop,
-      keep, remove, unverified: 0,
-    };
-  }
-  function fakeLeadRows(campId, n, tag) {
-    const rows = [];
-    for (let i = 0; i < n; i++) rows.push({ email: "lead" + i + "@" + tag + campId + ".example.com", result: tag });
-    return rows;
-  }
 
   /* ============================================================
      10. Hypertide draft + "Copy for Claude" context (built live)
@@ -2581,14 +2567,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return `<div class="dlv-vcamp"${cl ? ' style="opacity:.7"' : ""}>
       <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>
       <span class="dlv-vmeta">${c.bounce_pct}% bounce · ${fmtN(c.sent)} sent</span>${badge}
-      <div class="dlv-vbtns" style="gap:10px">
-        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}" title="ListMint verification">✓ ${glossify("ListMint")}</button>
+      <div class="dlv-vbtns">
+        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}" title="ListMint verification — SMTP + catch-all, every lead">✓ ${glossify("ListMint")}</button>
         <span class="dlv-vsep" aria-hidden="true"></span>
-        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="mv" data-done="${cl ? esc(cl.date) : ""}" title="MillionVerifier first, ListMint confirms catch-alls">✓ ${glossify("MillionVerifier")} → ${glossify("ListMint")}</button>
+        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="mv" data-done="${cl ? esc(cl.date) : ""}" title="MillionVerifier first, ListMint re-checks catch-alls">✓ ${glossify("MillionVerifier")} → ${glossify("ListMint")}</button>
       </div>
       <div class="dlv-vresult" id="dlv-vr-${c.id}">${renderVerifyResultBox(c.id, (S.ui && S.ui.verifyResults) ? S.ui.verifyResults[c.id] : null)}</div>
       ${dlvDisclose(dlvConsequences(
-        "The campaign's list gets verified before more sends go out. This spends verification credits; undeliverable addresses are archived, not deleted.",
+        "The campaign's list gets verified before more sends go out — ListMint checks every lead live, MillionVerifier → ListMint spends 1 MillionVerifier credit per lead first; nothing is removed until you choose to remove the confirmed-bad ones.",
         "Sends continue to unverified addresses. Bounce rate above 3 percent burns the domains behind this campaign."
       ))}
     </div>`;
@@ -3971,34 +3957,93 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (v.removedSummary) {
       const r = v.removedSummary;
       return `<div class="dlv-vbox">
-        <div class="dlv-vrow dlv-vremove">✓ Removed <b>${r.removed}</b> · reply-guarded (kept) ${r.guarded} · total ${r.before} → ${r.after} · backup saved</div>
+        <div class="dlv-vrow dlv-vremove">✓ Removed <b>${r.removed}</b> · reply-guarded (kept) ${r.guarded} · total ${r.before} → ${r.after} — permanent, no backup</div>
         <div class="dlv-vrow"><a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
       </div>`;
     }
+    // Real verifier counts: good/catch-all/unknown are all kept (none of them
+    // is a confirmed bounce); only `bad` is offered up for removal below.
     return `<div class="dlv-vbox">
-      <div class="dlv-vrow"><b>${v.total}</b> leads &nbsp;·&nbsp; ${v.layer1Tool} good <b>${v.l1_keep}</b> &nbsp;·&nbsp; catch-all <b>${v.l1_catch}</b> (${v.layer2Tool} kept ${v.l2_keep} / dropped ${v.l2_drop}) &nbsp;·&nbsp; ${v.layer1Tool} bad <b>${v.l1_drop}</b></div>
-      <div class="dlv-plain">Catch-all: domain accepts any address — risky to email, so a second tool double-checks it.</div>
-      <div class="dlv-vrow dlv-vkeep">✓ Keep (deliverable): <b>${v.keep}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="keep">View kept (${v.keep})</a></div>
-      <div class="dlv-vrow dlv-vremove">Bad (confirmed invalid): <b>${v.remove}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="remove">View bad (${v.remove})</a></div>
-      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}">Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
+      <div class="dlv-vrow"><b>${v.total}</b> leads &nbsp;·&nbsp; ${v.tool} good <b>${v.good}</b> &nbsp;·&nbsp; catch-all <b>${v.catch_all}</b> &nbsp;·&nbsp; unknown <b>${v.unknown}</b> &nbsp;·&nbsp; bad <b>${v.bad}</b></div>
+      <div class="dlv-plain">Catch-all: domain accepts any address — risky but not confirmed-bad, so it's kept. Unknown: the verifier couldn't confirm either way, so it's kept too.</div>
+      ${v.listmint_recheck ? `<div class="dlv-plain" style="opacity:.75">${esc(v.listmint_recheck)}</div>` : ""}
+      <div class="dlv-vrow dlv-vkeep">✓ Keep (good + catch-all + unknown): <b>${v.keep}</b></div>
+      <div class="dlv-vrow dlv-vremove">Bad (confirmed invalid): <b>${v.remove}</b>${v.remove ? ` &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}">View bad (${v.remove})</a>` : ""}</div>
+      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}"${v.remove ? "" : " disabled"}>Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
       <div class="dlv-plain">Reply-guard: anyone who replied is automatically kept, never deleted.</div>
       ${dlvDisclose(dlvConsequences(
-        "The selected mailboxes leave the rotation. Undoable from the toast in this session, and nothing is deleted at the provider.",
-        "Known-bad mailboxes stay in rotation and keep dragging deliverability for every campaign that uses them."
+        "The selected leads leave the campaign. This is permanent (no backup) — reply-guarded leads are always kept.",
+        "Known-bad leads stay in the campaign and keep dragging deliverability for the domains sending it."
       ))}
     </div>`;
   }
+  // Both verify and remove now run as real async backend jobs (POST kicks one
+  // off, returns 202 + job_id; the job itself runs ListMint and/or
+  // MillionVerifier calls, or the actual deletes). No local mode ever
+  // fabricates a result — sample mode (!isLive()) is refused outright below,
+  // before any confirm dialog fires.
+  const DLV_JOB_POLL_MS = 4000;
+  const DLV_JOB_POLL_CAP_MS = 20 * 60 * 1000; // give up polling after 20min; the job may still finish server-side
+  // Polls GET /api/jobs/<id> (same-origin, not the DLV_API proxy — this is the
+  // new backend, not the /_audit blob layer) until status is done/failed, or
+  // throws once the cap is hit. `onTick` is called with every poll response
+  // (including intermediate "running" ones) so callers can paint progress.
+  async function pollDlvJob(jobId, onTick) {
+    const start = Date.now();
+    for (;;) {
+      let resp, j;
+      try {
+        resp = await fetch("/api/jobs/" + encodeURIComponent(jobId));
+      } catch (e) {
+        throw new Error("Lost connection while checking job status: " + ((e && e.message) || e));
+      }
+      if (!resp.ok) throw new Error("HTTP " + resp.status + " checking job status");
+      try { j = await resp.json(); } catch (e) { throw new Error("Bad job-status response"); }
+      if (onTick) { try { onTick(j); } catch (e) {} }
+      if (j.status === "done" || j.status === "failed") return j;
+      if (Date.now() - start > DLV_JOB_POLL_CAP_MS) throw new Error("Still running after 20 minutes — check back later, it may still finish.");
+      await new Promise((r) => setTimeout(r, DLV_JOB_POLL_MS));
+    }
+  }
+  // Maps the backend's verify-job counts into the shape renderVerifyResultBox
+  // expects. good/catch_all/unknown are all "keep" — only a confirmed `bad`
+  // address is ever offered up for removal. `mode` is the mode this job was
+  // posted with ("listmint" or "mv") — used only as a fallback label; prefer
+  // the job's own `mode`/label if the backend plumbs one through.
+  function verifyToolLabel(mode) {
+    return mode === "listmint" ? "ListMint" : "MillionVerifier";
+  }
+  function mapVerifyCounts(counts, mode) {
+    const c = counts || {};
+    const good = c.good || 0, catchAll = c.catch_all || 0, unknown = c.unknown || 0, bad = c.bad || 0;
+    const total = c.total != null ? c.total : (good + catchAll + unknown + bad);
+    return {
+      total, tool: verifyToolLabel(mode),
+      good, catch_all: catchAll, unknown, bad,
+      keep: good + catchAll + unknown, remove: bad,
+      bad_emails: Array.isArray(c.bad_emails) ? c.bad_emails : [],
+      listmint_recheck: typeof c.listmint_recheck === "string" ? c.listmint_recheck : null,
+    };
+  }
+  function pingJobsSidebar() {
+    // Guarded — the shared jobs sidebar ships separately in shell.js and may
+    // not be loaded on every page that includes this file.
+    if (window.NavreoJobs && typeof window.NavreoJobs.ping === "function") { try { window.NavreoJobs.ping(); } catch (e) {} }
+  }
   async function verifyCampaignAction(id, mode, btn) {
+    if (!isLive()) { toast("Live backend not connected — verification unavailable in sample mode.", "err"); return; }
     const done = btn.dataset.done;
     const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(id));
     const estTotal = camp ? Math.max(40, Math.round(camp.sent * 0.62)) : 500;
-    const flowName = mode === "listmint" ? "ListMint" : "MillionVerifier → ListMint";
-    // Every run — ListMint or MV→ListMint — gets a styled confirm before it
-    // fires (fix #5): testers were surprised a "✓ ListMint" click started
-    // pulling leads immediately with no heads-up that it's read-only. The
-    // already-actioned warning (when present) is folded into the same dialog
-    // rather than stacked as a second confirm.
-    let msg = "Runs a mock verification of this campaign's ~" + estTotal + " leads via " + flowName + " — read-only, nothing is removed until you choose.\n\nProceed?";
+    // Real read-only run — every click still gets a styled confirm first
+    // (fix #5): testers were surprised a click started pulling leads
+    // immediately with no heads-up about credit cost. The already-actioned
+    // warning (when present) is folded into the same dialog rather than
+    // stacked as a second confirm. Message describes the chosen flow so the
+    // user knows what they're about to trigger (mode-specific cost/speed).
+    let msg = mode === "listmint"
+      ? "Runs a REAL, read-only verification of this campaign's ~" + estTotal + " leads via ListMint — checks every lead by live SMTP + catch-all probe (slower, ~3s/lead). Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?"
+      : "Runs a REAL, read-only verification of this campaign's ~" + estTotal + " leads via MillionVerifier → ListMint — 1 MillionVerifier credit per lead, then ListMint re-checks any catch-all/unknown results. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?";
     if (done) msg = "This campaign was already verified + cleaned on " + done + ". Re-running costs credits and shouldn't usually be needed.\n\n" + msg;
     const ok = await dlvConfirm(msg, { title: "Verify campaign" });
     if (!ok) return;
@@ -4008,76 +4053,102 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const orig = btn.innerHTML;
     btn.innerHTML = '<span class="dlv-spinner"></span> Verifying…';
     const out = $id("dlv-vr-" + id);
-    const flow = mode === "listmint" ? "ListMint (general + catch-all)" : "MillionVerifier → ListMint (catch-alls)";
-    if (out) out.innerHTML = `<div class="dlv-vrun">Pulling leads → ${flow}… ${isLive() ? "large lists can take a few minutes." : "simulating."}</div>`;
-    let v;
-    if (isLive()) {
-      try {
-        v = await apiPost("verify?campaign=" + encodeURIComponent(id) + "&mode=" + encodeURIComponent(mode) + "&name=" + encodeURIComponent(camp ? camp.name : ""), null, { timeout: 180000 });
-      } catch (e) {
-        if (out) out.innerHTML = `<div class="dlv-vrun err">Verify failed: ${esc((e && e.message) || String(e))}</div>`;
-        btns.forEach((b) => (b.disabled = false));
-        btn.innerHTML = orig;
-        toast("Verify failed", "err");
-        return;
-      }
-      if (v && v.error) {
-        if (out) out.innerHTML = `<div class="dlv-vrun err">${esc(v.error)}</div>`;
-        btns.forEach((b) => (b.disabled = false));
-        btn.innerHTML = orig;
-        toast(v.error, "err");
-        return;
-      }
-    } else {
-      await new Promise((r) => setTimeout(r, 1500));
-      v = simulateVerify(id, mode);
+    if (out) out.innerHTML = `<div class="dlv-vrun">Starting verification — large lists can take a few minutes.</div>`;
+    const fail = (msgText) => {
+      if (out) out.innerHTML = `<div class="dlv-vrun err">${esc(msgText)}</div>`;
+      btns.forEach((b) => (b.disabled = false));
+      btn.innerHTML = orig;
+      toast(msgText, "err");
+    };
+    let jobId;
+    try {
+      const resp = await fetch("/api/verify-campaign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: id, mode: mode }),
+      });
+      const j = await resp.json().catch(() => ({}));
+      if (resp.status !== 202) { fail((j && (j.message || j.error)) || ("HTTP " + resp.status)); return; }
+      jobId = j.job_id;
+    } catch (e) {
+      fail("Verify failed: " + ((e && e.message) || String(e)));
+      return;
     }
+    pingJobsSidebar();
+    let job;
+    try {
+      job = await pollDlvJob(jobId, (j) => {
+        if (!out || j.status !== "running") return;
+        const p = j.progress || {};
+        out.innerHTML = `<div class="dlv-vrun">Verifying… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"}</div>`;
+      });
+    } catch (e) {
+      fail((e && e.message) || String(e));
+      return;
+    }
+    if (job.status === "failed") { fail(job.error || "Verification failed."); return; }
+    // Prefer the job's own mode/label if the backend plumbs one through;
+    // otherwise fall back to the mode this request was posted with.
+    const v = mapVerifyCounts(job.counts, job.mode || mode);
     _verifyState[id] = v;
     verifyResults()[id] = v; // Part A2: persist so the box survives repaints
     // Item 1: the verify run itself now leaves a typed history row (removal
     // already did). NOTE: deliberately no `campaign` field — derive()'s
     // cleanedCampaignIds treats `h.campaign != null` as "cleaned", and a
     // read-only verify must not mark the campaign clean.
-    logAction({ action: "verify_run", count: v.total, keep: v.keep, remove: v.remove, scope: (camp ? camp.name : "campaign " + id) + " · " + flowName });
+    logAction({ action: "verify_run", count: v.total, keep: v.keep, remove: v.remove, scope: (camp ? camp.name : "campaign " + id) + " · " + v.tool });
     saveState();
     if (out) out.innerHTML = renderVerifyResultBox(id, v);
-    toast("Verified " + v.total + " (" + v.layer1Tool + "→" + v.layer2Tool + ") — keep " + v.keep + ", remove " + v.remove, "ok");
+    toast("Verified " + v.total + " (" + v.tool + ") — keep " + v.keep + ", remove " + v.remove, "ok");
     btns.forEach((b) => (b.disabled = false));
     btn.innerHTML = orig;
   }
   async function removeBadAction(id, btn) {
+    if (!isLive()) { toast("Live backend not connected — verification unavailable in sample mode.", "err"); return; }
     const count = Number(btn.dataset.count || 0);
-    const ok = await dlvConfirm("Delete " + count + " bad leads from this campaign?\n\n• A full backup is saved first (recoverable)\n• Any lead that replied is auto-kept (reply-guard)\n\nProceed?", { title: "Remove bad leads", danger: true, yesLabel: "Delete " + count });
+    const ok = await dlvConfirm("Delete " + count + " bad leads from this campaign?\n\n• Any lead that replied is auto-kept (reply-guard)\n• This is permanent — there is no backup\n\nProceed?", { title: "Remove bad leads", danger: true, yesLabel: "Delete " + count });
     if (!ok) return;
     btn.disabled = true; const orig = btn.innerHTML; btn.innerHTML = '<span class="dlv-spinner"></span> Removing…';
     const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(id));
-    let removed, guarded, before, after;
-    if (isLive()) {
-      let v;
-      try {
-        v = await apiPost("verify-remove?campaign=" + encodeURIComponent(id), null, { timeout: 120000 });
-      } catch (e) {
-        toast("Remove failed", "err");
-        btn.disabled = false; btn.innerHTML = orig;
-        return;
-      }
-      if (v && v.error) {
-        toast(v.error, "err");
-        btn.disabled = false; btn.innerHTML = orig;
-        return;
-      }
-      removed = v.deleted || 0; guarded = v.guarded || 0; before = v.before; after = v.after;
-      if (camp && after != null) camp.sent = after;
-      logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count, failed: v.failed || 0 });
-    } else {
-      await new Promise((r) => setTimeout(r, 700));
-      guarded = Math.max(1, Math.round(count * 0.03));
-      removed = count - guarded > 0 ? count - guarded : count;
-      before = camp ? camp.sent : 0;
-      after = Math.max(0, before - removed);
-      if (camp) camp.sent = after;
-      logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count });
+    const out = $id("dlv-vr-" + id);
+    const fail = (msgText) => {
+      toast(msgText, "err");
+      btn.disabled = false; btn.innerHTML = orig;
+    };
+    let jobId;
+    try {
+      const resp = await fetch("/api/verify-remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: id }),
+      });
+      const j = await resp.json().catch(() => ({}));
+      if (resp.status === 409) { fail((j && j.message) || "Run a verification first, then remove."); return; }
+      if (resp.status !== 202) { fail((j && (j.message || j.error)) || ("HTTP " + resp.status)); return; }
+      jobId = j.job_id;
+    } catch (e) {
+      fail("Remove failed");
+      return;
     }
+    pingJobsSidebar();
+    let job;
+    try {
+      job = await pollDlvJob(jobId, (j) => {
+        if (!out || j.status !== "running") return;
+        const p = j.progress || {};
+        out.innerHTML = `<div class="dlv-vrun">Removing… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"}</div>`;
+      });
+    } catch (e) {
+      fail((e && e.message) || String(e));
+      return;
+    }
+    if (job.status === "failed") { fail(job.error || "Remove failed"); return; }
+    const c = job.counts || {};
+    const removed = c.deleted || 0, guarded = c.guarded || 0, failedCount = c.failed || 0;
+    const before = camp ? camp.sent : 0;
+    const after = Math.max(0, before - removed);
+    if (camp) camp.sent = after;
+    logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count, failed: failedCount });
     // Part A2: replace the persisted result with a "removed" summary so the box
     // still shows (and survives repaints) after the bad leads are gone.
     verifyResults()[id] = { removedSummary: { removed, guarded, before, after } };
@@ -5166,9 +5237,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "verify-view") {
       runAct(act, () => {
         const v = _verifyState[t.dataset.id] || ((S.ui && S.ui.verifyResults) ? S.ui.verifyResults[t.dataset.id] : null);
-        const kind = t.dataset.kind;
-        const n = v ? (kind === "keep" ? v.keep : v.remove) : 0;
-        viewVerifyData(kind, t.dataset.id, fakeLeadRows(t.dataset.id, n, kind));
+        const rows = (v && Array.isArray(v.bad_emails)) ? v.bad_emails.map((email) => ({ email, result: "bad" })) : [];
+        viewVerifyData(t.dataset.id, rows, v);
       });
       return;
     }

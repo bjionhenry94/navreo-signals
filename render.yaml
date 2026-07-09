@@ -23,6 +23,8 @@ envVarGroups:
         sync: false
       - key: MILLIONVERIFIER_API_KEY
         sync: false
+      - key: LISTMINT_API_KEY
+        sync: false
 
 services:
   # The web app + /api. Render injects $PORT; server.py binds 0.0.0.0.
