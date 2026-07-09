@@ -1038,7 +1038,6 @@
 
     const signatureCount = A.signature.missing.length + A.signature.mismatch.length;
     const warmupConfigCount = A.warmupConfig.notWarming.length + A.warmupConfig.wrongSettings.length;
-    const deviationCount = A.sendingDeviation.over.length + A.sendingDeviation.under.length;
     const newCount = A.lifecycle.newUnprocessed.length || A.lifecycle.untagged.length;
     const retiredCount = A.lifecycle.retired.length;
     const reminderDueCount = A.reminders.filter((r) => !r.done && r.dueDate <= today).length;
@@ -1067,7 +1066,7 @@
     return {
       today, dhRows, resting, restingDue: A.domainHealth.restingDue || {}, flaggedTotal, flaggedActionable, restingCount, recovered,
       domainHealthCounts, reasonCounts, blockedReal, blockedSoft, blockedTotal,
-      inboxCounts, inboxBatches, dhBatches, signatureCount, warmupConfigCount, deviationCount, newCount, retiredCount,
+      inboxCounts, inboxBatches, dhBatches, signatureCount, warmupConfigCount, newCount, retiredCount,
       reminderDueCount, blMailboxes, blResting, blSending, blClearedCount, uncleanedVerifyCamps,
     };
   }
@@ -1976,7 +1975,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     inactive: () => toCSV(["email", "domain", "smtp_host", "smtp_ok", "reputation", "error"], S.A.inactiveRows),
     "new-mailboxes": () => toCSV(["email", "domain", "tagged", "in_campaign"], S.A.lifecycle.newUnprocessed.map((r) => ({ email: r.email, domain: r.domain, tagged: r.tagged, in_campaign: r.inCampaign }))),
     retired: () => toCSV(["domain", "mailboxes"], S.A.lifecycle.retired),
-    "sending-deviation": () => toCSV(["email", "domain", "batch", "cap", "baseline", "direction"], [].concat(S.A.sendingDeviation.over, S.A.sendingDeviation.under)),
     signature: () => toCSV(["email", "domain", "from_name", "issue", "signature"], [].concat(
       S.A.signature.missing.map((r) => ({ email: r.email, domain: r.domain, from_name: r.from_name, issue: "missing", signature: "" })),
       S.A.signature.mismatch.map((r) => ({ email: r.email, domain: r.domain, from_name: r.from_name, issue: r.issue, signature: "" })),
@@ -1998,7 +1996,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     inactive: "Inactive mailboxes",
     "new-mailboxes": "New / untagged mailboxes",
     retired: "Retired domains",
-    "sending-deviation": "Sending deviations vs batch baseline",
     signature: "Signature issues",
     "warmup-config": "Warmup config issues",
     "batch-stats": "Performance by batch",
@@ -2092,11 +2089,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const bits = []; if (n) bits.push(n + " mailbox(es) with warmup off"); if (w) bits.push(w + " with wrong settings");
         return { key: "warmup-notwarming", level: "yellow", count: n || w, text: bits.join(" · ") + ".", action: n ? "Enable warmup on all of them with the fleet's standard settings." : "Review and correct their warmup settings.", wcCsv: true };
       }
-      case "sending-deviation": {
-        const n = D.deviationCount;
-        if (!n) return { key: "sending-deviation", level: "yellow", count: 0, resolved: true, text: "Every mailbox is sending at its batch baseline." };
-        return { key: "sending-deviation", level: "yellow", count: n, text: n + " mailbox(es) sending above or below their batch baseline (" + S.A.sendingDeviation.over.length + " over · " + S.A.sendingDeviation.under.length + " under).", action: "Review and align sending caps back to the batch baseline.", devCsv: true };
-      }
       case "reminder-due": {
         const n = D.reminderDueCount;
         if (!n) return { key: "reminder-due", level: "yellow", count: 0, resolved: true, text: "No restore reminders due." };
@@ -2116,7 +2108,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      go stale after an action (fix: to-do items used to only refresh on
      "Mark done"; now every mutating action feeds straight back in here). */
   function recomputeTodos(D) {
-    const kinds = ["blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "sending-deviation", "reminder-due", "retired-domains"];
+    const kinds = ["blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "reminder-due", "retired-domains"];
     let raw = kinds.map((k) => buildTodoItem(k, D)).filter(Boolean);
 
     // Dynamic: domains flagged for warm-up rotation that aren't resting yet.
@@ -2544,7 +2536,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         warmupTile(D),
         tile("New unprocessed", D.newCount, D.newCount + " new/untagged mailbox(es)", sevOf(D.newCount === 0, true), D.newCount ? "new-mailboxes" : null, D.newCount ? { act: "open-process-new", label: "Process…" } : null),
         tile("Signature issues", D.signatureCount, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch", sevOf(D.signatureCount === 0, true), "signature", D.signatureCount ? { act: "open-sig-fix", label: "Fix…" } : null, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch"),
-        tile("Sending vs batch", D.deviationCount, A.sendingDeviation.over.length + " over · " + A.sendingDeviation.under.length + " under their batch baseline", sevOf(D.deviationCount === 0, true), "sending-deviation", null, A.sendingDeviation.over.length + " over · " + A.sendingDeviation.under.length + " under their batch baseline"),
         tile("Retired domains", D.retiredCount, D.retiredCount ? "all mailboxes dead → remove" : "none", sevOf(D.retiredCount === 0, false), D.retiredCount ? "retired" : null),
       ],
     };
@@ -2752,7 +2743,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // (The old "Usual causes:" plain line was folded into the card's numbered
     // step 2 — item 3 — so the same advice isn't printed twice.)
     if (it.sigCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="signature">View signature issues</a></div>`);
-    if (it.devCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="sending-deviation">View deviations</a></div>`);
     if (it.newCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="new-mailboxes">View new/untagged</a></div>`);
     if (it.retiredCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="retired">View retired domains</a></div>`);
     if (it.wcCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="warmup-config">View warmup-config issues</a></div>`);
@@ -5192,7 +5182,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     signatures: (h) => h.action === "signatures",
     "new-unprocessed": (h) => h.action === "process_new",
     "warmup-notwarming": (h) => h.action === "reenable",
-    "sending-deviation": (h) => h.action === "reply_caps",
     "reminder-due": (h) => h.action === "reminder_done",
     "warmup-rotation": (h) => h.action === "warmup_pause",
     // "retired-domains" has no in-app action (its instruction is "remove these
