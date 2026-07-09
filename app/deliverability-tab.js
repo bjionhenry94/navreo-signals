@@ -659,13 +659,21 @@
 .dlv-section-title{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.08em;font-weight:600;margin:26px 0 12px}
 .dlv-fleet-group{margin-bottom:18px}
 .dlv-fleet-glabel{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:8px}
-.dlv-stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:10px}
-.dlv-stat{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--line-2);border-radius:10px;padding:14px 16px}
-.dlv-stat-n{font-family:var(--font-display);font-size:22px;font-weight:400;color:var(--green);line-height:1.05}
-.dlv-stat-l{font-size:12px;font-weight:500;color:var(--ink-3);margin-top:4px}
-.dlv-stat-csv{margin-top:6px}
-.dlv-stat.warn{border-left-color:var(--amber)} .dlv-stat.warn .dlv-stat-n{color:var(--amber)}
-.dlv-stat.bad{border-left-color:var(--red)} .dlv-stat.bad .dlv-stat-n{color:var(--red)}
+/* Design-fix (Fleet-by-the-numbers restyle): tiles now reuse navreo.css's own
+   .stat/.lab/.num-hero/.hint straight from the shared stylesheet (already loaded
+   on this page) so they match the Dashboard's stat tiles font-for-font instead of
+   defining their own (smaller, taller-bodied) look. .dlv-stat only ADDS the
+   severity left-border + number tint on top of that shared component — it no
+   longer redefines background/border/radius/padding/font-size. The grid wraps
+   at a wider min column and drops the old cramped gap; align-items:start (grid
+   items stretch to the tallest row-mate by default) stops one long tile from
+   forcing every tile in its row to inflate to match it. */
+.dlv-stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;align-items:start}
+.dlv-stat{border-left:3px solid var(--line-2)}
+.dlv-stat .num-hero{color:var(--green)}
+.dlv-stat-csv{margin-top:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.dlv-stat.warn{border-left-color:var(--amber)} .dlv-stat.warn .num-hero{color:var(--amber)}
+.dlv-stat.bad{border-left-color:var(--red)} .dlv-stat.bad .num-hero{color:var(--red)}
 .dlv-dl{font-size:11.5px;font-weight:600;color:var(--orange-700);text-decoration:none;cursor:pointer}
 .dlv-dl:hover{text-decoration:underline}
 .dlv-todo-head{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:600;margin:6px 0 12px}
@@ -817,7 +825,10 @@ table.dlv-bt th:not(:first-child),table.dlv-bt td:not(:first-child){text-align:r
 .dlv-confirm-body{font-size:13.5px;color:var(--ink-2);white-space:pre-wrap;line-height:1.55}
 #dlv-confirm-overlay{z-index:260}
 .dlv-plain{font-size:11.5px;color:var(--ink-3);margin-top:4px;line-height:1.4}
-.dlv-stat-plain{font-size:10.5px;color:var(--ink-3);margin-top:5px;line-height:1.3}
+/* Hint-sized (matches .hint's 11.5px/brown-400) so the state-derived
+   breakdown lines (Warmup's "3 to warm up + 2 due back", Signature issues'
+   "N missing · N mismatch", etc.) stay compact instead of reading as body copy. */
+.dlv-stat-plain{font-size:11.5px;color:var(--brown-400);margin-top:4px;line-height:1.3}
 .dlv-mb-cap{font-size:10.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;align-self:center}
 .dlv-todo-resolved-label{font-size:11px;color:var(--ink-3);font-weight:600;margin-top:14px;margin-bottom:-2px}
 .dlv-resolved-chip{opacity:.9}
@@ -1581,15 +1592,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      11. Header + tab strip + banner
      ============================================================ */
   function renderHeaderTabs() {
-    // When mounted as its own rail page (deliverability.html sets window.DLV_STANDALONE),
-    // the left rail already provides top-level nav, so the in-page Campaigns/Deliverability
-    // toggle is redundant and is omitted. It's only shown in the legacy in-campaigns-tab mount.
-    const tabStrip = window.DLV_STANDALONE ? "" : `
+    return `
     <div class="tabs" style="margin-bottom:14px">
       <button class="tab" data-act="goto-campaigns">Campaigns</button>
       <button class="tab on">Deliverability</button>
-    </div>`;
-    return `${tabStrip}
+    </div>
     <div class="pagehead">
       <div>
         <div class="eyebrow">Deliverability</div>
@@ -1751,22 +1758,31 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // same data-act handlers already wired for the to-do cards below — so a
     // tester scanning the numbers doesn't have to hunt for the matching action.
     const act = fixAction ? `<div class="dlv-stat-csv"><a class="dlv-dl" data-act="${esc(fixAction.act)}">${fixAction.label}</a></div>` : "";
+    // Design-fix: the full jargon-dictionary sentence (SURBL/Spamhaus's ~40-word
+    // definition, etc.) used to render unconditionally as an inline paragraph
+    // here — turning tiles like "Blacklisted domains" into a wall of text and,
+    // via CSS Grid's default row-stretch, forcing every OTHER tile in that row
+    // to inflate to match its height. It now attaches to the LABEL as a "?"
+    // popover (same mechanism glossLabel/glossify already use elsewhere) so the
+    // full definition is still one click away, but the tile body stays compact.
     const plain = plainLineFor(label + " " + (note || ""));
-    const plainHtml = plain ? `<div class="dlv-stat-plain">${esc(plain)}</div>` : "";
-    // `extra`: a live, state-derived one-liner for tiles whose headline number is easy to
-    // confuse with a different count shown elsewhere (e.g. a manager's actionable subset,
-    // or a differently-scoped "due" count on another card) — always visible, unlike the
-    // generic jargon-glossary line above which only fires on a dictionary match.
-    // Defect 6a: glossify() (not plain esc()) so a jargon word inside this line
-    // — e.g. "batch baseline" on the Sending-vs-batch tile — gets its own
-    // clickable "?" instead of only ever getting the muted auto-line above.
-    const extraHtml = extra ? `<div class="dlv-stat-plain">${glossify(extra)}</div>` : "";
     // `glossLabel`: a pre-glossified (already-escaped, "?" sup already inserted) label
     // HTML string — used by the technical-details tiles whose LABEL itself is the jargon
     // needing a click-popover (fix #5b), passed instead of the default esc(label) so the
     // inserted <sup> markup isn't re-escaped into visible text.
-    const labelHtml = glossLabel != null ? glossLabel : esc(label);
-    return `<div class="dlv-stat ${sev || ""}" title="${esc(note || "")}"><div class="dlv-stat-n">${value}</div><div class="dlv-stat-l">${labelHtml}</div>${extraHtml}${plainHtml}${csv}${act}</div>`;
+    const labelHtml = glossLabel != null ? glossLabel : (plain ? esc(label) + glossMark(plain) : glossify(label));
+    // `note`: the ONE short hint line under the number (e.g. "last 7 days", "on
+    // SURBL / Spamhaus") — same typography as the Dashboard's .hint.
+    const hintHtml = note ? `<div class="hint">${esc(note)}</div>` : "";
+    // `extra`: a live, state-derived breakdown line for tiles whose headline number is
+    // easy to confuse with a different count shown elsewhere (e.g. a manager's
+    // actionable subset) — kept as a SECOND, hint-sized line, but skipped when it's
+    // identical to `note` so that text isn't printed twice.
+    // Defect 6a: glossify() (not plain esc()) so a jargon word inside this line
+    // — e.g. "batch baseline" on the Sending-vs-batch tile — gets its own
+    // clickable "?" instead of only ever getting the muted auto-line above.
+    const extraHtml = (extra && extra !== note) ? `<div class="dlv-stat-plain">${glossify(extra)}</div>` : "";
+    return `<div class="stat dlv-stat ${sev || ""}"><div class="lab">${labelHtml}</div><div class="num-hero">${value}</div>${hintHtml}${extraHtml}${csv}${act}</div>`;
   }
   function sevOf(ok, warnOk) { return ok ? "" : (warnOk ? "warn" : "bad"); }
 
@@ -1825,19 +1841,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Not part of the headline sum — called out separately so nobody adds them in.
     lines.push("also: " + inactiveN + " inactive mailbox(es) (mostly Maildoso, by design — no action)");
     if (configIssues) lines.push("also: " + configIssues + " mailbox(es) with wrong warmup settings — see CSV");
+    // Design-fix: kept as hint-sized (.dlv-stat-plain now matches .hint's
+    // typography) rather than full body text, so the merged tile stays compact.
     const extraHtml = lines.map((l) => `<div class="dlv-stat-plain">${esc(l)}</div>`).join("");
     const fixLinks = [];
     if (actionableToWarmUp) fixLinks.push(`<a class="dlv-dl" data-act="open-manager">🛠 Open manager ↓</a>`);
     if (configIssues) fixLinks.push(`<a class="dlv-dl" data-act="open-warmup-fix">⚡ Enable warmup…</a>`);
-    const fixHtml = fixLinks.length ? `<div class="dlv-stat-csv" style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">${fixLinks.join("")}</div>` : "";
+    const fixHtml = fixLinks.length ? `<div class="dlv-stat-csv">${fixLinks.join("")}</div>` : "";
     const csvLinks = [
       `<a class="dlv-dl" data-act="csv" data-file="inactive">⬇ inactive (CSV)</a>`,
       `<a class="dlv-dl" data-act="csv" data-file="domain-health-warmup">⬇ to warm up (CSV)</a>`,
     ];
     if (configIssues) csvLinks.push(`<a class="dlv-dl" data-act="csv" data-file="warmup-config">⬇ config issues (CSV)</a>`);
-    const csvHtml = `<div class="dlv-stat-csv" style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">${csvLinks.join("")}</div>`;
+    const csvHtml = `<div class="dlv-stat-csv">${csvLinks.join("")}</div>`;
     const sev = sevOf(actionableTotal === 0, actionableTotal < 20);
-    return `<div class="dlv-stat ${sev}" title="Everything warmup-related — inactive mailboxes, domains flagged for rotation, rests past due, and config issues"><div class="dlv-stat-n">${actionableTotal}</div><div class="dlv-stat-l">Warmup${glossMark(WARMUP_DEF)}</div>${extraHtml}${fixHtml}${csvHtml}</div>`;
+    return `<div class="stat dlv-stat ${sev}" title="Everything warmup-related — inactive mailboxes, domains flagged for rotation, rests past due, and config issues"><div class="lab">Warmup${glossMark(WARMUP_DEF)}</div><div class="num-hero">${actionableTotal}</div>${extraHtml}${fixHtml}${csvHtml}</div>`;
   }
 
   function renderFleetTiles(D) {
