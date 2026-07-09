@@ -3507,7 +3507,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           </div>
           <div id="dlv-pn-hidden-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-top:none;padding:6px 11px"></div>
           <div id="dlv-pn-targets" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:0 0 9px 9px;border-top:none;background:var(--bg-sunken);margin-bottom:14px"></div>
-          <label class="dlv-field-label">Batch tag <span class="dlv-field-hint">(any name works — goes on the ticked mailboxes that have no tag yet)</span></label>
+          <label class="dlv-field-label">Batch tag <span class="dlv-field-hint">(any name works — added to every ticked mailbox; existing tags are kept)</span></label>
           <input class="dlv-input" id="dlv-pn-tag" type="text" list="dlv-pn-taglist" placeholder="e.g. Hypertide (Odd - 2026)" style="margin-bottom:14px" data-act="pn-tag-input">
           <datalist id="dlv-pn-taglist"></datalist>
           <label class="dlv-field-label">Add to campaign <span class="dlv-field-hint">(ticked mailboxes not yet in one)</span></label>
@@ -4054,13 +4054,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // each skip already-done mailboxes. Spell out what THIS click will do.
     const tagVal = (($id("dlv-pn-tag") || {}).value || "").trim();
     const campVal = ($id("dlv-pn-camp") || {}).value || "";
-    const willTag = tagVal ? UI.pn.rows.filter((r) => UI.pn.sel.has(r.email) && !r.tagged).length : 0;
+    // Tags are additive in Smartlead, so the tag lands on every ticked
+    // mailbox (see pnApply) — willTag is the full ticked count, not just the
+    // untagged ones. Only the campaign add skips already-assigned mailboxes.
+    const willTag = tagVal ? n : 0;
     const willAdd = campVal ? UI.pn.rows.filter((r) => UI.pn.sel.has(r.email) && r.inCampaign === false).length : 0;
     const summary = $id("dlv-pn-summary");
     if (summary) {
       if (!n) summary.textContent = "Nothing ticked — tick at least one mailbox above.";
       else if (!tagVal && !campVal) summary.textContent = "Enter a tag and/or pick a campaign to enable Apply. Changes are reversible afterwards.";
-      else if (!willTag && !willAdd) summary.textContent = "The ticked mailboxes already have " + (tagVal ? "a tag" : "") + (tagVal && campVal ? " and " : "") + (campVal ? "a campaign" : "") + " — nothing to do.";
+      else if (!willTag && !willAdd) summary.textContent = "The ticked mailboxes are already in a campaign — nothing to do.";
       else summary.textContent = "This will: " + [tagVal ? "tag " + willTag : "", campVal ? "add " + willAdd + " to the campaign" : ""].filter(Boolean).join(" · ") + ". Reversible afterwards.";
     }
     const applyBtn = $id("dlv-pn-apply-btn");
@@ -4073,51 +4076,45 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!tag && !camp) { toast("Enter a tag or pick a campaign", "err"); return; }
     const selected = UI.pn.rows.filter((r) => UI.pn.sel.has(r.email));
     if (!selected.length) { toast("Tick at least one mailbox first", "err"); return; }
-    const allSelected = selected.length === UI.pn.rows.length;
-    const tagEmails = tag ? selected.filter((r) => !r.tagged).map((r) => r.email) : [];
+    // Smartlead tags are ADDITIVE (tag-mapping never removes existing tags),
+    // so the tag goes on EVERY ticked mailbox — tag-only applies must work
+    // even when the ticked mailboxes already carry another tag. Campaign
+    // stays filtered to the ones not yet in one.
+    const tagEmails = tag ? selected.map((r) => r.email) : [];
     const campEmails = camp ? selected.filter((r) => r.inCampaign === false).map((r) => r.email) : [];
-    if (!tagEmails.length && !campEmails.length) { toast("The ticked mailboxes are already tagged / in a campaign", "err"); return; }
+    if (!tagEmails.length && !campEmails.length) { toast("The ticked mailboxes are already in a campaign", "err"); return; }
     // Drops the processed emails from local audit state so the tile/to-do
     // counts update immediately (live mode re-syncs on the next audit run).
     function markDone() {
       const taggedSet = new Set(tagEmails), campSet = new Set(campEmails);
       const rows = S.A.lifecycle.newUnprocessed;
       rows.forEach((r) => {
-        if (taggedSet.has(r.email)) { r.tagged = true; r.tags = [tag]; }
+        if (taggedSet.has(r.email)) { r.tagged = true; r.tags = (r.tags || []).concat(tag); }
         if (campSet.has(r.email)) r.inCampaign = true;
       });
       S.A.lifecycle.newUnprocessed = rows.filter((r) => !(r.tagged && r.inCampaign));
     }
     if (isLive()) {
+      // Every live apply goes through our own exact endpoint: it resolves the
+      // ticked addresses to Smartlead account ids and applies the tag /
+      // campaign to precisely those. (The audit backend's bulk process-new
+      // only tags mailboxes with no tag yet, which contradicts the additive
+      // tag rule above — so it's not used here even when everything's ticked.)
       const applyBtn = $id("dlv-pn-apply-btn");
       let tagged = 0, added = 0;
-      if (allSelected) {
-        // Everything ticked → the audit backend's bulk call, exactly the old
-        // one-click behaviour.
-        const qs = "tag=" + encodeURIComponent(tag ? b64u(tag) : "") + "&campaign=" + encodeURIComponent(camp || "");
-        let j;
-        try { j = await liveAction("process-new?" + qs, applyBtn, "Applying…", { timeout: 90000 }); }
-        catch (e) { toast("Request failed", "err"); return; }
-        if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "nothing_to_do" ? "Pick a tag or campaign" : "Failed"), "err"); return; }
-        tagged = j.tagged || 0; added = j.addedToCampaign || 0;
-      } else {
-        // A hand-picked subset → one exact call to our own server, which
-        // resolves the ticked addresses to Smartlead account ids and applies
-        // the tag / campaign to precisely those (no substring-filter fan-out).
-        const orig = applyBtn ? applyBtn.innerHTML : null;
-        if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = "Applying…"; }
-        let j;
-        try {
-          const resp = await fetch("/api/process-new-selected", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tag: tag, campaign_id: camp || "", tag_emails: tagEmails, camp_emails: campEmails }),
-          });
-          j = await resp.json();
-        } catch (e) { toast("Request failed", "err"); return; }
-        finally { if (applyBtn) { applyBtn.disabled = false; if (orig != null) applyBtn.innerHTML = orig; } }
-        if (!j || j.ok === false) { toast((j && (j.message || j.reason)) || "Failed", "err"); return; }
-        tagged = j.tagged || 0; added = j.addedToCampaign || 0;
-      }
+      const orig = applyBtn ? applyBtn.innerHTML : null;
+      if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = "Applying…"; }
+      let j;
+      try {
+        const resp = await fetch("/api/process-new-selected", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tag: tag, campaign_id: camp || "", tag_emails: tagEmails, camp_emails: campEmails }),
+        });
+        j = await resp.json();
+      } catch (e) { toast("Request failed", "err"); return; }
+      finally { if (applyBtn) { applyBtn.disabled = false; if (orig != null) applyBtn.innerHTML = orig; } }
+      if (!j || j.ok === false) { toast((j && (j.message || j.reason)) || "Failed", "err"); return; }
+      tagged = j.tagged || 0; added = j.addedToCampaign || 0;
       markDone();
       logAction({action: "process_new", count: tagged + added, scope: (tag ? "tagged " + tagged : "") + (tag && camp ? " · " : "") + (camp ? "added " + added : "") });
       saveState();
