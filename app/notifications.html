@@ -4,9 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Notifications · Navreo</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="navreo.css">
 <style>
 /* ══ Report-section shell ══
@@ -286,9 +283,17 @@
           <option value="Medium">Medium</option>
           <option value="Low">Low</option>
         </select>
-        <!-- Page-local client filter removed — the shared rail client switcher
-             (shell.js, .rail-client select) is the single source of truth for client
-             scoping; see matchesActiveClient()/passesFilters() below. -->
+        <!-- Page-local client filter: restored (2026-07-09) as a self-sufficient
+             fallback until shell.js ships a real global client switcher. Options
+             are computed from the loaded findings (see updateClientFilterUI()).
+             If getActiveClient() ever exists AND returns a real selection, that
+             global choice takes precedence and this select hides itself in favor
+             of a small hint (see updateClientFilterUI()) rather than showing two
+             controls that could disagree. -->
+        <select class="sel" id="clientFilter">
+          <option value="all">All clients</option>
+        </select>
+        <span class="small muted" id="clientFilterHint" style="display:none"></span>
       </div>
       <div class="bar-actions">
         <button class="btn sm" id="refreshBtn" type="button">Refresh</button>
@@ -389,7 +394,7 @@ const ACTION_TYPE_LABEL = {
 
 let all = [];                 // every row from the last successful fetch
 let loadState = "loading";    // "loading" | "ok" | "error"
-let filters = { status: "all", priority: "all" };
+let filters = { status: "all", priority: "all", client: "all" };
 let clientsList = [];  // dedupeClients(await fetchClientsForSwitcher()) — for resolveClientId() name-matching
 
 /* ══ hotfix: decouple from shell.js's tool-level-clients helpers ══
@@ -521,10 +526,23 @@ async function loadNotifications(opts = {}) {
   draw();
 }
 
+/* A row's client bucket, for the local dropdown: the raw `client` value
+   (trimmed), or "Unknown" when it's empty/null. Mirrors the "CSM: Unassigned"
+   fallback used in the Section 7 action-block header, just grouped as a
+   selectable bucket instead of free text. */
+function clientKeyOf(n) {
+  const c = n.client == null ? "" : String(n.client).trim();
+  return c || "Unknown";
+}
+
 function matchesActiveClient(n) {
   const active = safeGetActiveClient();
-  if (!active) return true;
-  return safeResolveClientId(n, clientsList) === active;
+  if (active) return safeResolveClientId(n, clientsList) === active;
+  // No global switcher shipped yet (or it exists but has no selection, i.e.
+  // "all clients") — fall back to the page-local dropdown so this page is
+  // still self-sufficient.
+  if (filters.client === "all") return true;
+  return clientKeyOf(n) === filters.client;
 }
 
 function passesFilters(n) {
@@ -532,6 +550,46 @@ function passesFilters(n) {
   if (filters.priority !== "all" && n.priority !== filters.priority) return false;
   if (!matchesActiveClient(n)) return false;
   return true;
+}
+
+/* Keep the local client dropdown in sync with the loaded data and with the
+   (currently unshipped) global switcher, every draw():
+   - Global switcher present AND set: it wins. Hide the local select (rather
+     than show two controls that could disagree) and show a small hint naming
+     the active client instead.
+   - Otherwise: show the select, rebuild its options from the distinct
+     `client` values actually in `all` (sorted, "Unknown" last if any rows
+     lack a client), and keep the current selection if it's still a valid
+     option, else reset to "All clients". */
+function updateClientFilterUI() {
+  const sel = document.getElementById("clientFilter");
+  const hint = document.getElementById("clientFilterHint");
+  if (!sel || !hint) return;
+  const active = safeGetActiveClient();
+  if (active) {
+    sel.style.display = "none";
+    hint.style.display = "";
+    const activeRow = clientsList.find((c) => String((c && (c.id ?? c.client_id)) ?? c) === String(active));
+    const label = (activeRow && (activeRow.name || activeRow.client)) || "the selected client";
+    hint.textContent = `Client filter set by the global switcher: ${label}`;
+    return;
+  }
+  hint.style.display = "none";
+  sel.style.display = "";
+  const keys = new Set(all.map(clientKeyOf));
+  const named = [...keys].filter((k) => k !== "Unknown").sort((a, b) => a.localeCompare(b));
+  if (keys.has("Unknown")) named.push("Unknown");
+  const prevValue = filters.client;
+  sel.innerHTML = `<option value="all">All clients</option>` +
+    named.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join("");
+  if (prevValue !== "all" && named.includes(prevValue)) {
+    sel.value = prevValue;
+  } else if (prevValue !== "all") {
+    filters.client = "all";
+    sel.value = "all";
+  } else {
+    sel.value = "all";
+  }
 }
 
 function campaignLink(name, url) {
@@ -1063,7 +1121,7 @@ function updateSummary() {
     const clientScoped = all.filter(matchesActiveClient);
     const allClearCount = clientScoped.filter((n) => n.section === 0).length;
     const totalCampaigns = new Set(clientScoped.map((n) => n.campaign_id ?? n.campaign_name)).size;
-    const filterActive = filters.status !== "all" || filters.priority !== "all";
+    const filterActive = filters.status !== "all" || filters.priority !== "all" || filters.client !== "all";
     rollupEl.classList.toggle("rollup-filtered", filterActive);
     rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention &middot; <b>${fmt(highPriority)}</b> high-priority finding${highPriority === 1 ? "" : "s"} &middot; <b>${fmt(all.length)}</b> total finding${all.length === 1 ? "" : "s"} &middot; <b>${fmt(allClearCount)}</b> all-clear &middot; <b>${fmt(totalCampaigns)}</b> total campaign${totalCampaigns === 1 ? "" : "s"}` +
       `<div class="rollup-chips"><button type="button" class="rollup-chip" onclick="jumpToSection(7)">${fmt(tierCount("High"))} High / ${fmt(tierCount("Medium"))} Medium / ${fmt(tierCount("Low"))} Low actions</button>` +
@@ -1073,6 +1131,7 @@ function updateSummary() {
 }
 
 function draw() {
+  updateClientFilterUI();
   updateSummary();
   const root = document.getElementById("list");
   if (loadState === "loading") {
@@ -1120,6 +1179,7 @@ function draw() {
 
 document.getElementById("statusFilter").onchange = (e) => { filters.status = e.target.value; draw(); };
 document.getElementById("priorityFilter").onchange = (e) => { filters.priority = e.target.value; draw(); };
+document.getElementById("clientFilter").onchange = (e) => { filters.client = e.target.value; draw(); };
 document.getElementById("refreshBtn").onclick = () => loadNotifications({ force: true });
 
 /* --- section expand/collapse — direct DOM class toggle, never a draw(), so
