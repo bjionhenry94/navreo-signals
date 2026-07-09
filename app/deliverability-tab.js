@@ -2071,16 +2071,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      11. Header + tab strip + banner
      ============================================================ */
   function renderHeaderTabs() {
-    // On the standalone rail page the left rail IS the top-level nav, so the old
-    // in-page Campaigns/Deliverability toggle is redundant (and would stack a
-    // second tab strip right above the sub-tab bar) — suppress it there. When the
-    // tab is mounted inside campaigns.html (hash route), keep the toggle.
-    const topToggle = window.DLV_STANDALONE ? "" : `
-    <div class="tabs" style="margin-bottom:14px">
-      <button class="tab" data-act="goto-campaigns">Campaigns</button>
-      <button class="tab on">Deliverability</button>
-    </div>`;
-    return `${topToggle}
+    // The left rail is the top-level nav (this page only mounts standalone), so
+    // there is no in-page Campaigns/Deliverability toggle.
+    return `
     <div class="pagehead">
       <div>
         <div class="eyebrow">Deliverability</div>
@@ -4538,7 +4531,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       });
       return;
     }
-    if (act === "goto-campaigns") { runAct(act, () => { location.hash = ""; }); return; }
     if (act === "run-audit") { runAct(act, () => runLiveAudit()); return; }
     if (act === "copy-claude") { runAct(act, () => copyForClaude()); return; }
     if (act === "copy-ctx") { runAct(act, () => copyCtx(t)); return; }

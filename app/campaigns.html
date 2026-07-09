@@ -438,7 +438,7 @@ function route() {
   const id = location.hash.replace("#", "");
   let r;
   if (id.startsWith("cdraft-")) r = renderDraftCampaign(id);
-  else if (id === "deliverability" && window.renderDeliverability) r = renderDeliverability();
+  else if (id === "deliverability") { location.replace("deliverability.html"); return; }  // old in-page tab — now a rail page
   else if (id && (DB.campaigns || []).some((c) => String(c.id) === id)) r = renderDetail(Number(id));
   else r = renderList();
   if (!window._swrRepaint) window.scrollTo(0, 0);
@@ -1477,10 +1477,6 @@ async function renderList() {
   // is the honest signal, not a silent 200-[] that would otherwise read as "no campaigns yet".
   if (!Array.isArray(drafts0)) {
     main.innerHTML = `
-      <div class="tabs" style="margin-bottom:14px">
-        <button class="tab on">Campaigns</button>
-        <button class="tab" onclick="location.hash='deliverability'">Deliverability</button>
-      </div>
       <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Signal campaigns.</h1></div></div>
       <div class="card panel" style="margin-top:16px">
         <div class="empty">Couldn't load campaigns — the database didn't respond.
@@ -1544,10 +1540,6 @@ async function renderList() {
         </div>`;
       }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`;
   main.innerHTML = `
-    <div class="tabs" style="margin-bottom:14px">
-      <button class="tab on">Campaigns</button>
-      <button class="tab" onclick="location.hash='deliverability'">Deliverability</button>
-    </div>
     <div class="pagehead">
       <div>
         <div class="eyebrow">Campaigns</div>
@@ -3753,6 +3745,5 @@ function openQAGate(id) {
   }) }).catch(() => {});
 }
 </script>
-<script src="deliverability-tab.js"></script>
 </body>
 </html>

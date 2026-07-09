@@ -17,9 +17,6 @@
 <script src="shell.js"></script>
 <script src="deliverability-tab.js"></script>
 <script>
-  // Standalone rail page: the left rail is the top-level nav, so the tab's own
-  // in-page Campaigns/Deliverability toggle is suppressed (see renderHeaderTabs).
-  window.DLV_STANDALONE = true;
   document.getElementById("rail").outerHTML = renderRail("deliverability");
   if (window.renderDeliverability) window.renderDeliverability();
 </script>
