@@ -637,6 +637,7 @@
     ["blacklist", "Blacklisted domains"],
     ["manager", "Inbox & domain manager"],
     ["batch", "Performance by batch"],
+    ["reminders", "Restore reminders"],
   ];
   let dlvSubtab = "overview";
   function loadSubtab() {
@@ -2468,21 +2469,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-rem-acts">${status}${r.done ? `<button class="btn sm" data-act="rem-undo" data-id="${r.id}">↩ Undo</button>` : `<button class="btn sm primary" data-act="rem-done" data-id="${r.id}">✓ Mark added</button>`}<button class="btn sm" data-act="rem-remove" data-id="${r.id}" title="Delete this reminder">🗑 Remove</button></div>
     </div>`;
   }
-  function renderRemindersFold(D) {
+  // Formerly a collapsible <details class="dlv-fold"> inside the Overview
+  // scroll — now its own always-visible "Restore reminders" tab panel (dropped
+  // the <details> wrapper, kept everything else: the add-reminder form, empty-
+  // domain inline validation, live "will be due" preview, and per-reminder rows
+  // with warm-up health line + enable-warmup / mark-added / undo / remove).
+  function renderRemindersPanel(D) {
     const rem = S.A.reminders || [];
     const pending = rem.filter((r) => !r.done);
     const dueN = pending.filter((r) => r.dueDate <= todayISO()).length;
     // Defect 6c: the hint used to only count reminders ("N pending"), leaving
     // a reader to guess how many domains that actually covers (one reminder
     // can bundle several domains — see r2's two). Count both, straight off
-    // the same rows the fold lists below.
+    // the same rows the panel lists below.
     const domainSet = new Set();
     rem.forEach((r) => (r.domains || []).forEach((d) => domainSet.add(d)));
     const hintBits = [rem.length + " reminder" + (rem.length === 1 ? "" : "s"), domainSet.size + " domain" + (domainSet.size === 1 ? "" : "s")];
     if (dueN) hintBits.push(dueN + " due");
     const list = rem.length ? rem.map(renderReminderRow).join("") : `<div class="dlv-mb-count" style="padding:10px 0">No reminders yet.</div>`;
-    return `<details class="dlv-fold" id="dlv-fold-reminders" ${dueN ? "open" : ""}>
-      <summary>⏰ Restore reminders<span class="hint">${hintBits.join(" · ")}</span></summary>
+    return `<div class="dlv-subtab-panel" id="dlv-fold-reminders">
+      <div class="dlv-subtab-head">⏰ Restore reminders<span class="hint">${hintBits.join(" · ")}</span></div>
       <div class="dlv-fold-body">
         <label class="dlv-field-label" for="dlv-rem-date">Date the domain was rested/restored <span class="dlv-field-hint">(due date = +14 days)</span></label>
         <div class="dlv-rem-add">
@@ -2494,7 +2500,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-mb-count" id="dlv-rem-hint" style="margin:-6px 0 14px">Will be due ${esc(addDays(todayISO(), 14))}</div>
         ${list}
       </div>
-    </details>`;
+    </div>`;
   }
 
   /* ============================================================
@@ -2781,6 +2787,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (dlvSubtab === "blacklist") panel = renderBlacklistPanel(D);
     else if (dlvSubtab === "manager") panel = renderManagerPanel(D);
     else if (dlvSubtab === "batch") panel = renderBatchPanel();
+    else if (dlvSubtab === "reminders") panel = renderRemindersPanel(D);
     else panel = renderOverviewPanel(D);
     root.innerHTML = [
       renderHeaderTabs(),
@@ -2795,8 +2802,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
   // Overview = every section that stayed in the main scroll (order preserved):
   // coach, verdict, banner, health strip, fleet-by-the-numbers (incl. the
-  // technical-details fold), today's to-do (incl. the Actioned fold), restore
-  // reminders, recent actions. The 3 heavy sections moved out to their own tabs.
+  // technical-details fold), today's to-do (incl. the Actioned fold), recent
+  // actions. The 3 heavy sections + Restore reminders moved out to their own tabs.
   function renderOverviewPanel(D) {
     return [
       renderCoach(),
@@ -2805,7 +2812,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       renderHealthStrip(D),
       renderFleetTiles(D),
       `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
-      renderRemindersFold(D),
       renderHistoryFold(D),
     ].join("");
   }
@@ -4034,9 +4040,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       UI.mgr._domFilterUserSet = true; // honour this deliberate reset over autoDefault
       gotoSubtab("manager", "dlv-fold-manager");
     }); return; }
-    // "Restore reminders" stayed in Overview — this deep link (the to-do
-    // card's "⏰ Reminders ↓" button) can fire from any sub-tab.
-    if (act === "open-reminders") { runAct(act, () => ensureOverviewThenOpenFold("dlv-fold-reminders")); return; }
+    // Rewired: "Restore reminders" is now its own sub-tab (the to-do card's
+    // "⏰ Reminders ↓" button lands here) — switch tab, repaint, jump to top,
+    // flash the heading, exactly like the other three moved sections.
+    if (act === "open-reminders") { runAct(act, () => gotoSubtab("reminders", "dlv-fold-reminders")); return; }
     // Rewired: "Blacklisted domains" is now its own sub-tab (the to-do card's
     // "🚫 Manage ↓" and the Blacklisted-domains tile's fix-link both land here).
     if (act === "open-blacklist") { runAct(act, () => gotoSubtab("blacklist", "dlv-fold-blacklist")); return; }
