@@ -4223,6 +4223,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!tagEmails.length && !campEmails.length) { toast("The ticked mailboxes are already in a campaign", "err"); return; }
     // Drops the processed emails from local audit state so the tile/to-do
     // counts update immediately (live mode re-syncs on the next audit run).
+    // "Processed" = every mailbox this Apply touched: a tag-only apply is a
+    // complete processing choice (leaving campaign on "don't add" means don't
+    // add), so those mailboxes leave the outstanding count NOW instead of
+    // lingering at the old total. The next full audit re-surfaces anything
+    // that still matches the backend's untagged-or-no-campaign criteria.
     function markDone() {
       const taggedSet = new Set(tagEmails), campSet = new Set(campEmails);
       const rows = S.A.lifecycle.newUnprocessed;
@@ -4230,7 +4235,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         if (taggedSet.has(r.email)) { r.tagged = true; r.tags = (r.tags || []).concat(tag); }
         if (campSet.has(r.email)) r.inCampaign = true;
       });
-      S.A.lifecycle.newUnprocessed = rows.filter((r) => !(r.tagged && r.inCampaign));
+      const touched = new Set([].concat(tagEmails, campEmails));
+      S.A.lifecycle.newUnprocessed = rows.filter((r) => !touched.has(r.email));
     }
     if (isLive()) {
       // Every live apply goes through our own exact endpoint: it resolves the
