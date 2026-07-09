@@ -2248,15 +2248,50 @@ def update_notification_status(nid: str, status: str) -> dict:
 
 # ── executable notification actions (Optimiser CSM-approval gate) ───────
 
-# Only these two action_types have an API-safe executable act attached.
+# Only these two action_types have an API-safe executable *pause* act attached.
 # kill_threshold_pivot's *executable* half is "pause the campaign" - the
 # strategic re-pivot decision itself always stays human, in the Smartlead UI.
+# This set gates ONLY the "pause" action below (action_type membership).
+# The "disable_variant" action (below) is gated on a completely separate
+# check - finding_type=="variant_call" AND suggested_action matching
+# /disable/i - since a variant-disable candidate is never one of these two
+# campaign-level action_types; do not add "disable_loser" to this set.
 NOTIFICATION_EXECUTABLE_ACTIONS = {"pause_campaign", "kill_threshold_pivot"}
+
+# request body {"action": ...} allowlist for POST /api/notifications/{id}/execute.
+# "pause" (the default, for backward compatibility with callers that omit
+# `action` entirely - the original pause-only body was just {"confirm":"PAUSE"})
+# and "disable_variant" (BETA - see execute_disable_variant_action below).
+NOTIFICATION_EXECUTE_ACTIONS = {"pause", "disable_variant"}
+
+_VARIANT_CALL_TITLE_RE = re.compile(r"^Variant call: Email\s*(\d+)(?:\s+Var\s+(.+?))?\s*$", re.I)
 
 
 def execute_notification_action(nid: str, payload: dict) -> tuple:
     """POST /api/notifications/{id}/execute - fires the one API-safe Smartlead
-    action attached to a notification finding.
+    action attached to a notification finding. Dispatches on body {"action":
+    "pause"|"disable_variant"} (default "pause" when omitted, matching the
+    original pause-only callers that only ever sent {"confirm":"PAUSE"}).
+
+    Returns (http_status, json_body) for the caller to hand to self._json.
+    """
+    action = str(payload.get("action") or "pause").strip().lower()
+    if action not in NOTIFICATION_EXECUTE_ACTIONS:
+        return 400, {"ok": False, "message": f"unknown action '{action}'"}
+
+    rows = sb("GET", f"optimiser_notifications?id=eq.{nid}")
+    if not isinstance(rows, list) or not rows:
+        return 404, {"ok": False, "message": "notification not found"}
+    row = rows[0]
+
+    if action == "disable_variant":
+        return execute_disable_variant_action(nid, row, payload)
+    return execute_pause_action(nid, row, payload)
+
+
+def execute_pause_action(nid: str, row: dict, payload: dict) -> tuple:
+    """The original pause-campaign action (unchanged behaviour, only moved
+    into its own function to make room for execute_disable_variant_action).
 
     Gated behind an explicit CSM {"confirm": "PAUSE"} in the request body:
     the optimiser guardrails say "NEVER pause or stop a campaign without CSM
@@ -2265,16 +2300,14 @@ def execute_notification_action(nid: str, payload: dict) -> tuple:
 
     HARD CONSTRAINT: this handler may ONLY EVER call Smartlead's
     POST /campaigns/{id}/status endpoint. Never a sequence-save/variant
-    endpoint - those destroy variant history, and nothing here should ever
-    grow a code path that reaches one.
-
-    Returns (http_status, json_body) for the caller to hand to self._json.
+    endpoint - those used to destroy variant history when ids were omitted.
+    (2026-07-09 draft experiments proved an id-carrying sequences POST is a
+    true in-place update that preserves history - see
+    execute_disable_variant_action below, which is now the ONE sanctioned
+    exception that reaches a sequences endpoint, and only via that exact
+    id-carrying + post-verify path. This pause handler still never touches
+    sequences/variants.)
     """
-    rows = sb("GET", f"optimiser_notifications?id=eq.{nid}")
-    if not isinstance(rows, list) or not rows:
-        return 404, {"ok": False, "message": "notification not found"}
-    row = rows[0]
-
     action_type = row.get("action_type")
     api_safe = bool(row.get("api_safe"))
     smartlead_url = row.get("smartlead_url")
@@ -2327,6 +2360,250 @@ def execute_notification_action(nid: str, payload: dict) -> tuple:
 
     return 200, {"ok": True, "executed": action_type, "campaign_id": campaign_id,
                   "smartlead_response": sl_body, "notification": updated}
+
+
+def _redistribute_variant_shares(others: list, target_pct: int) -> dict:
+    """others = [{"id":..., "pct": int>0}, ...] currently-active siblings
+    (never includes the target being disabled, never includes already-0%/
+    deleted variants). Returns {id: new_pct} for `others` only, summing to
+    exactly (target_pct + sum(o['pct'] for o in others)) - i.e. the target's
+    share folded back in, proportionally, to the remaining active variants -
+    using the largest-remainder method so integer percentages always sum
+    exactly right (plain `round()` on each share independently can drift the
+    total off by 1-2 points either way).
+
+    Example: 3 variants at 34/33/33, disabling the 33 -> pool = 33+34=67
+    folded into a new pool of 100 across the 2 survivors: raw shares
+    34/67*100=50.75 and 33/67*100=49.25 -> floors 50/49, remainder 1 goes to
+    the larger fractional remainder -> 51/49 (sums to 100)."""
+    pool = target_pct + sum(o["pct"] for o in others)
+    total_others = sum(o["pct"] for o in others)
+    if total_others <= 0:
+        # Defensive fallback (shouldn't happen - `others` is filtered to
+        # pct>0 by the caller): split the pool evenly.
+        base, rem = divmod(pool, len(others))
+        return {o["id"]: base + (1 if i < rem else 0) for i, o in enumerate(others)}
+    raw = {o["id"]: (o["pct"] / total_others) * pool for o in others}
+    floors = {oid: int(v) for oid, v in raw.items()}
+    remainder = pool - sum(floors.values())
+    order = sorted(others, key=lambda o: raw[o["id"]] - floors[o["id"]], reverse=True)
+    for i in range(remainder):
+        floors[order[i]["id"]] += 1
+    return floors
+
+
+def _build_disable_variant_payload(sequences: list, target_seq_id, target_variant_id, new_pcts: dict) -> list:
+    """Remap a fresh GET /campaigns/{id}/sequences response (list of steps,
+    each with `sequence_variants`) into the POST /campaigns/{id}/sequences
+    body shape - carrying every id through untouched and changing ONLY the
+    distribution percentages named in new_pcts (target -> 0, everyone else
+    per _redistribute_variant_shares). Every step is included (not just the
+    target one) so no other step is dropped/recreated by the save. Field-name
+    remap per 2026-07-09 draft experiments (GET names != POST names):
+    sequence_variants -> seq_variants, delayInDays -> delay_in_days (inside
+    seq_delay_details). Never touches subject/email_body anywhere."""
+    out = []
+    for s in sequences:
+        step = {"id": s.get("id"), "seq_number": s.get("seq_number")}
+        delay = (s.get("seq_delay_details") or {}).get("delayInDays")
+        if delay is not None:
+            step["seq_delay_details"] = {"delay_in_days": delay}
+        if s.get("subject") is not None:
+            step["subject"] = s.get("subject")
+        if s.get("email_body") is not None:
+            step["email_body"] = s.get("email_body")
+        variants = s.get("sequence_variants") or []
+        if variants:
+            seq_variants = []
+            for v in variants:
+                vid = v.get("id")
+                variant = {"id": vid, "variant_label": v.get("variant_label")}
+                if v.get("subject") is not None:
+                    variant["subject"] = v.get("subject")
+                if v.get("email_body") is not None:
+                    variant["email_body"] = v.get("email_body")
+                if s.get("id") == target_seq_id and vid in new_pcts:
+                    variant["variant_distribution_percentage"] = new_pcts[vid]
+                elif v.get("variant_distribution_percentage") is not None:
+                    variant["variant_distribution_percentage"] = v.get("variant_distribution_percentage")
+                seq_variants.append(variant)
+            step["seq_variants"] = seq_variants
+        out.append(step)
+    return out
+
+
+def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
+    """BETA: disables one losing A/B variant (sets its Smartlead traffic
+    distribution to 0%, redistributing its share across the remaining active
+    variants) without ever touching copy or deleting anything. This is the
+    ONE sanctioned code path in this file that reaches Smartlead's sequences
+    endpoint (see execute_pause_action's HARD CONSTRAINT comment above) - and
+    only via the id-carrying-payload + post-verify pattern proven safe in the
+    2026-07-09 draft experiments (memory: reference_smartlead_write_endpoints).
+
+    Eligibility (server-enforced, nothing client-supplied is trusted):
+      - row.finding_type == "variant_call"
+      - row.suggested_action matches /disable/i (e.g. "Clear loser - disable")
+    Anything else -> 400, same "do it in the Smartlead UI" message as pause.
+
+    Confirm token: body must carry {"confirm": "DISABLE"} (the CSM's
+    click/type IS the approval, same contract as the pause action's "PAUSE").
+
+    Title parsing: row.title is "Variant call: Email {n} Var {label}" -
+    if the title has no "Var {label}" half (e.g. bare "Variant call: Email 2")
+    or the regex otherwise fails to match, the variant cannot be uniquely
+    identified from this row alone -> 409, with a smartlead_url escape hatch.
+
+    Guards (each a 4xx, NOTHING mutated if any fires):
+      - step (by email/seq_number) or variant (by label) not found in a
+        fresh GET -> 404 (title parsed fine, but Smartlead's current state
+        doesn't match it - stale row, edited since, etc).
+      - target variant already at 0% distribution -> 400 (nothing to do).
+      - fewer than 2 currently-active (distribution>0, not is_deleted)
+        variants on that step -> 400 (never disable the last active one).
+
+    Post-verify: after the POST, a second fresh GET must show every seq id
+    and every seq_variant_id on this campaign unchanged from the pre-POST
+    snapshot, AND the target variant now at 0%. Any id drift -> 500, loud
+    message, full before/after logged server-side, notification row left
+    untouched (NOT marked actioned) - "check Smartlead" is the escape hatch,
+    not silent retry.
+    """
+    finding_type = row.get("finding_type")
+    suggested_action = row.get("suggested_action") or ""
+    smartlead_url = row.get("smartlead_url")
+    if finding_type != "variant_call":
+        return 400, {"ok": False,
+                      "message": "this action must be done in the Smartlead UI",
+                      "smartlead_url": smartlead_url}
+
+    if payload.get("confirm") != "DISABLE":
+        return 400, {"ok": False,
+                      "message": 'confirmation required: send {"confirm":"DISABLE"}'}
+
+    # Title parse (409) before the /disable/i eligibility half (400): a
+    # "Whole offer failing" variant_call row has BOTH an unparseable title
+    # and a non-disable suggested_action, and its actionable truth is "this
+    # cannot be resolved to one variant" - report that (409 + Smartlead
+    # escape hatch), not a generic ineligibility.
+    title = row.get("title") or ""
+    m = _VARIANT_CALL_TITLE_RE.match(title)
+    email_num = int(m.group(1)) if m else None
+    variant_label = (m.group(2) or "").strip() if m else ""
+    if not m or not variant_label:
+        return 409, {"ok": False,
+                      "message": "variant could not be uniquely identified, use Smartlead",
+                      "smartlead_url": smartlead_url}
+
+    # Second half of eligibility: only rows whose optimiser recommendation
+    # actually says disable (e.g. "Clear loser - disable") may reach the
+    # sequence save. REPLACE / scale-winner / flip rows are never eligible.
+    if not re.search(r"disable", suggested_action, re.I):
+        return 400, {"ok": False,
+                      "message": "this action must be done in the Smartlead UI",
+                      "smartlead_url": smartlead_url}
+
+    try:
+        campaign_id = int(row.get("campaign_id"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign_id is not numeric"}
+
+    api_key = KEYS.get("SMARTLEAD_API_KEY", "")
+    seq_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={api_key}"
+
+    before = http_json("GET", seq_url, {})
+    before_steps = before if isinstance(before, list) else (
+        before.get("data") or before.get("sequences") or [] if isinstance(before, dict) else [])
+    if not before_steps:
+        return 404, {"ok": False, "message": "could not load campaign sequences from Smartlead",
+                      "smartlead_url": smartlead_url}
+
+    target_step = next((s for s in before_steps if int(s.get("seq_number") or 0) == email_num), None)
+    if target_step is None:
+        return 404, {"ok": False, "message": f"email {email_num} not found in this campaign's sequences",
+                      "smartlead_url": smartlead_url}
+
+    step_variants = target_step.get("sequence_variants") or []
+    target_variant = next(
+        (v for v in step_variants
+         if str(v.get("variant_label") or "").strip().lower() == variant_label.lower()),
+        None)
+    if target_variant is None:
+        return 404, {"ok": False,
+                      "message": f"variant {variant_label} not found on Email {email_num}",
+                      "smartlead_url": smartlead_url}
+
+    target_pct = target_variant.get("variant_distribution_percentage")
+    try:
+        target_pct = int(target_pct)
+    except (TypeError, ValueError):
+        target_pct = 0
+    if target_variant.get("is_deleted") or target_pct <= 0:
+        return 400, {"ok": False, "message": "this variant already has 0% distribution - nothing to disable",
+                      "smartlead_url": smartlead_url}
+
+    active = []
+    for v in step_variants:
+        if v.get("is_deleted"):
+            continue
+        try:
+            pct = int(v.get("variant_distribution_percentage") or 0)
+        except (TypeError, ValueError):
+            pct = 0
+        if pct > 0:
+            active.append({"id": v.get("id"), "pct": pct})
+    if len(active) < 2:
+        return 400, {"ok": False,
+                      "message": "fewer than 2 active variants on this step - refusing to disable the last one",
+                      "smartlead_url": smartlead_url}
+
+    others = [a for a in active if a["id"] != target_variant.get("id")]
+    new_pcts = _redistribute_variant_shares(others, target_pct)
+    new_pcts[target_variant.get("id")] = 0
+
+    before_ids = {"seqs": sorted(str(s.get("id")) for s in before_steps),
+                  "variants": sorted(str(v.get("id")) for s in before_steps for v in (s.get("sequence_variants") or []))}
+
+    post_body = _build_disable_variant_payload(before_steps, target_step.get("id"), target_variant.get("id"), new_pcts)
+    save_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={api_key}"
+    sl_resp = http_json("POST", save_url, {}, {"sequences": post_body})
+
+    after = http_json("GET", seq_url, {})
+    after_steps = after if isinstance(after, list) else (
+        after.get("data") or after.get("sequences") or [] if isinstance(after, dict) else [])
+    after_ids = {"seqs": sorted(str(s.get("id")) for s in after_steps),
+                 "variants": sorted(str(v.get("id")) for s in after_steps for v in (s.get("sequence_variants") or []))}
+    after_target_step = next((s for s in after_steps if int(s.get("seq_number") or 0) == email_num), None)
+    after_target_variant = next(
+        (v for v in (after_target_step.get("sequence_variants") or []) if v.get("id") == target_variant.get("id")),
+        None) if after_target_step else None
+    after_target_pct = after_target_variant.get("variant_distribution_percentage") if after_target_variant else None
+
+    print(f"[disable_variant] campaign={campaign_id} email={email_num} variant={variant_label} "
+          f"before_ids={before_ids} after_ids={after_ids} before_pct={target_pct} after_pct={after_target_pct} "
+          f"new_pcts={new_pcts} smartlead_response={sl_resp}")
+
+    if before_ids != after_ids:
+        return 500, {"ok": False,
+                      "message": "id drift detected - variant history may be affected, check Smartlead",
+                      "smartlead_url": smartlead_url}
+    if after_target_pct is None or int(after_target_pct or 0) != 0:
+        return 500, {"ok": False,
+                      "message": "save did not take - variant is not at 0% after saving, check Smartlead",
+                      "smartlead_url": smartlead_url}
+
+    try:
+        updated = update_notification_status(nid, "actioned")
+    except Exception as e:  # noqa: BLE001 - Smartlead already saved; the
+        # notification-row update is best-effort bookkeeping on top of that.
+        return 200, {"ok": True, "executed": "disable_variant", "campaign_id": campaign_id,
+                      "before": {"variant": variant_label, "pct": target_pct},
+                      "after": new_pcts,
+                      "notification_update_error": str(e)[:300]}
+
+    return 200, {"ok": True, "executed": "disable_variant", "campaign_id": campaign_id,
+                 "before": {"variant": variant_label, "pct": target_pct},
+                 "after": new_pcts, "notification": updated}
 
 
 def save_draft(p: dict) -> dict:

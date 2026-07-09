@@ -335,6 +335,22 @@
     </div>
   </div>
 </div>
+<div id="disableVariantModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h3>Disable variant (beta)</h3>
+    <p id="disableVariantModalCampaign"></p>
+    <p id="disableVariantModalTarget"></p>
+    <p>The variant stops receiving traffic. Its share is redistributed across the remaining active variants. Historical stats are preserved. No copy is changed.</p>
+    <p>This is a beta action, first uses are monitored.</p>
+    <p>Type <b>DISABLE</b> to confirm.</p>
+    <input id="disableVariantConfirmInput" type="text" autocomplete="off" placeholder="Type DISABLE">
+    <div class="modal-err" id="disableVariantModalErr"></div>
+    <div class="modal-actions">
+      <button class="btn sm" id="disableVariantCancelBtn" type="button">Cancel</button>
+      <button class="btn sm danger" id="disableVariantConfirmBtn" type="button" disabled>Confirm disable</button>
+    </div>
+  </div>
+</div>
 <div id="actionToast" class="action-toast hidden" role="status" aria-live="polite">
   <span id="actionToastMsg"></span>
   <button type="button" id="actionToastUndo" class="toast-undo">Undo
@@ -349,10 +365,12 @@ document.getElementById("rail").outerHTML = renderRail("notifications");
    GET /api/notifications, renders it AS the lilly-optimiser Priority Report
    (7 sections + an All-clear tail — see .claude/skills/lilly-optimiser/SKILL.md
    "Report Structure"), and writes back through PATCH /api/notifications/{id}
-   (status lifecycle) and POST /api/notifications/{id}/execute (the one
-   API-safe action: pause_campaign / kill_threshold_pivot, gated behind a
-   typed PAUSE confirmation). No full re-render after any action — only the
-   touched DOM node is patched in place. */
+   (status lifecycle) and POST /api/notifications/{id}/execute (two API-safe
+   actions: pause — pause_campaign / kill_threshold_pivot, gated behind a
+   typed PAUSE confirmation — and the BETA disable_variant on qualifying
+   Section 4 variant_call rows, gated behind a typed DISABLE confirmation).
+   No full re-render after any action — only the touched DOM node is patched
+   in place. */
 
 const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Actioned", dismissed: "Dismissed", resolved: "Resolved" };
 const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n", resolved: "n" };
@@ -668,8 +686,24 @@ function rowActionsHTML(n) {
       ${miniActionBtn(n, "acknowledged", "Ack")}
       ${miniActionBtn(n, "actioned", "Action")}
       ${miniActionBtn(n, "dismissed", "Dismiss")}
+      ${disableVariantBtnHTML(n)}
     </div>
   </div>`;
+}
+
+/* BETA "Disable variant" action (Section 4 variant_call rows only) — server
+   re-checks all of this (see execute_disable_variant_action in server.py),
+   this is just the button-visibility mirror so the button never shows on a
+   row the server would reject anyway. Eligible = finding_type "variant_call"
+   with a suggested_action naming disable (e.g. "Clear loser - disable"),
+   still open (not already actioned/dismissed/resolved). */
+function isVariantDisableEligible(n) {
+  return n.finding_type === "variant_call" && /disable/i.test(n.suggested_action || "")
+    && n.status !== "actioned" && !isRetiredStatus(n.status);
+}
+function disableVariantBtnHTML(n) {
+  if (!isVariantDisableEligible(n)) return "";
+  return `<button type="button" class="btn xs danger" data-act="disable-variant" data-id="${esc(String(n.id))}" title="Stop this losing variant's traffic and redistribute its share (beta)">Disable variant (beta)</button>`;
 }
 /* fix #7: real, non-tautological tooltips for the status-action buttons —
    what titling the button "Ack" as title="Ack" told a newcomer nothing they
@@ -1351,6 +1385,13 @@ document.getElementById("list").addEventListener("click", async (e) => {
     return;
   }
 
+  const disableVariantBtn = e.target.closest('[data-act="disable-variant"]');
+  if (disableVariantBtn) {
+    e.preventDefault();
+    openDisableVariantModal(disableVariantBtn.dataset.id);
+    return;
+  }
+
   const copyBtn = e.target.closest('[data-act="copy-prompt"]');
   if (copyBtn) {
     e.preventDefault();
@@ -1512,6 +1553,85 @@ document.getElementById("pauseConfirmBtn").onclick = async () => {
   } catch (err) {
     restore();
     errEl.textContent = err.message || "Pause failed, try again.";
+  }
+};
+
+/* --- Disable-variant flow (BETA): typed-confirmation modal -> POST
+   .../execute {"action":"disable_variant","confirm":"DISABLE"} ---
+   Same hardened pattern as the Pause modal above: confirm button starts
+   disabled on every open and only enables while the typed value is EXACTLY
+   "DISABLE". The server re-validates everything (eligibility, title parse,
+   fresh Smartlead state, id-carrying payload, post-verify) so this modal is
+   purely the CSM-approval gate plus a clear statement of what happens. */
+let disableVariantTargetId = null;
+function openDisableVariantModal(id) {
+  disableVariantTargetId = id;
+  const row = all.find((n) => String(n.id) === String(id));
+  const p = row ? parseVariantTitle(row.title) : {};
+  document.getElementById("disableVariantModalCampaign").textContent =
+    row ? `Campaign: ${row.campaign_name || "Unknown campaign"}` : "";
+  document.getElementById("disableVariantModalTarget").textContent =
+    (p && p.email && p.variant) ? `Variant to disable: Email ${p.email}, Variant ${p.variant}`
+    : "Variant could not be identified from this row. The server will refuse and point you to Smartlead.";
+  document.getElementById("disableVariantConfirmInput").value = "";
+  document.getElementById("disableVariantModalErr").textContent = "";
+  document.getElementById("disableVariantConfirmBtn").disabled = true;
+  document.getElementById("disableVariantModal").classList.remove("hidden");
+  document.getElementById("disableVariantConfirmInput").focus();
+}
+function closeDisableVariantModal() {
+  disableVariantTargetId = null;
+  document.getElementById("disableVariantModal").classList.add("hidden");
+}
+document.getElementById("disableVariantCancelBtn").onclick = () => closeDisableVariantModal();
+document.getElementById("disableVariantModal").addEventListener("click", (e) => {
+  if (e.target.id === "disableVariantModal") closeDisableVariantModal();
+});
+document.getElementById("disableVariantConfirmInput").addEventListener("input", (e) => {
+  document.getElementById("disableVariantConfirmBtn").disabled = e.target.value !== "DISABLE";
+});
+/* Human-readable split from the server's `after` map ({variant_id: pct}).
+   Variant ids are Smartlead-internal, so the CSM-facing line is just the
+   percentage list, the exact numbers being the part that matters. */
+function describeDistribution(after) {
+  if (!after || typeof after !== "object") return "";
+  return Object.values(after).map((pct) => `${pct}%`).join(" / ");
+}
+document.getElementById("disableVariantConfirmBtn").onclick = async () => {
+  const input = document.getElementById("disableVariantConfirmInput");
+  const errEl = document.getElementById("disableVariantModalErr");
+  if (input.value !== "DISABLE") { errEl.textContent = 'Type "DISABLE" exactly to confirm.'; return; }
+  const id = disableVariantTargetId;
+  const btn = document.getElementById("disableVariantConfirmBtn");
+  const restore = busyBtn(btn, "Disabling…");
+  if (!restore) return;
+  try {
+    const res = await fetch(`/api/notifications/${encodeURIComponent(id)}/execute`, {
+      method: "POST",
+      body: JSON.stringify({ action: "disable_variant", confirm: "DISABLE" }),
+    });
+    const body = await res.json();
+    if (!res.ok || body.ok === false) {
+      const err = new Error(body.message || `HTTP ${res.status}`);
+      err.smartleadUrl = body.smartlead_url || null;
+      throw err;
+    }
+    const idx = all.findIndex((n) => String(n.id) === String(id));
+    const updated = (body.notification) || (idx >= 0 ? { ...all[idx], status: "actioned" } : null);
+    if (idx >= 0 && updated) all[idx] = { ...all[idx], ...updated };
+    bustNotifCache();
+    // No Undo: a Smartlead sequence save is a real side effect, same policy
+    // as the pause action above.
+    const split = describeDistribution(body.after);
+    showActionToast(split ? `Variant disabled. New split: ${split}` : "Variant disabled");
+    closeDisableVariantModal();
+    if (idx >= 0) applyRowPatch(all[idx]);
+  } catch (err) {
+    restore();
+    const row = all.find((n) => String(n.id) === String(id));
+    const slUrl = err.smartleadUrl || (row && row.smartlead_url) || null;
+    errEl.innerHTML = esc(err.message || "Disable failed, try again.")
+      + (slUrl ? ` <a href="${esc(slUrl)}" target="_blank" rel="noopener">Open in Smartlead</a>` : "");
   }
 };
 
