@@ -191,10 +191,55 @@
 .action-toast .toast-undo {
   background: rgba(255, 255, 255, 0.18); color: var(--cream); border: none; border-radius: 999px;
   padding: 5px 12px; font: 600 11.5px var(--font-sans); cursor: pointer; flex-shrink: 0;
+  position: relative; overflow: hidden;
 }
 .action-toast .toast-undo:hover { background: rgba(255, 255, 255, 0.3); }
 @media (max-height: 700px) {
   .action-toast { bottom: max(14px, env(safe-area-inset-bottom, 14px)); }
+}
+/* Undo progress bar (fix #3): a shrinking bar along the bottom edge of the
+   toast itself, driven by a CSS transition on width rather than a JS timer
+   loop — started at 100% and transitioned to 0% over the live undo window
+   the instant the toast is shown, so it's always in sync with the real
+   setTimeout that actually hides the toast. */
+.action-toast .toast-progress-track {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2.5px;
+  background: rgba(255, 255, 255, 0.15); border-radius: 0 0 999px 999px; overflow: hidden;
+}
+.action-toast .toast-progress-bar {
+  height: 100%; width: 100%; background: var(--orange); transform-origin: left;
+}
+.action-toast .toast-progress-bar.run { transition: transform linear; transform: scaleX(0); }
+
+/* Section 7 tier expanders (fix #5) — Medium/Low blocks collapsed by default,
+   lazy-built the first time a tier is actually opened. */
+.tier-expander { margin: 4px 0 12px; }
+.tier-expander .tier-toggle { width: 100%; justify-content: center; }
+.tier-body.hidden { display: none; }
+.tier-body { margin-top: 10px; }
+
+/* Rollup count-system fix (#6): when a status/priority filter is active, the
+   top rollup (always full-client totals, never re-scoped by the filter) is
+   greyed out and explicitly labelled, so it can never be read as agreeing OR
+   disagreeing with the filtered section counts below it — it's a different
+   number on purpose. */
+#rollup.rollup-filtered { opacity: 0.55; }
+.rollup-filter-note { color: var(--ink-3); font-weight: 500; }
+.rollup-chips { margin-top: 2px; }
+
+/* Mobile row-actions reachability (fix #8): pin the status/actions cell to
+   the right edge of the TABLE'S OWN scroll container (not the viewport) so
+   it's always on-screen without dragging the inner scrollbar, no matter how
+   wide the rest of the row is. Sticky respects the nearest scrolling
+   ancestor, which is `.table-scroll` here, so this needs no JS and no DOM
+   restructuring. */
+@media (max-width: 480px) {
+  .table-scroll { position: relative; }
+  .actions-td, .actions-th {
+    position: sticky; right: 0; background: var(--card);
+    box-shadow: -6px 0 8px -6px rgba(20, 17, 14, 0.18);
+  }
+  .rsection.muted .actions-td, .rsection.muted .actions-th { background: var(--bg-sunken); }
 }
 </style>
 </head>
@@ -276,7 +321,9 @@
 </div>
 <div id="actionToast" class="action-toast hidden" role="status" aria-live="polite">
   <span id="actionToastMsg"></span>
-  <button type="button" id="actionToastUndo" class="toast-undo">Undo</button>
+  <button type="button" id="actionToastUndo" class="toast-undo">Undo
+    <span class="toast-progress-track"><span id="toastProgressBar" class="toast-progress-bar"></span></span>
+  </button>
 </div>
 <script src="shell.js"></script>
 <script>
@@ -350,6 +397,33 @@ function isExpanded(num) { return !!sectionExpandState.get(num); }
 const sectionRenderers = new Map();
 let sectionNavObserver = null;
 
+/* perf fix (round4): an eagerly-rendered section/tier body with hundreds of
+   rows built in one synchronous innerHTML pass froze the tab (the reported
+   defect — 278 findings, one big DOM-build task with no yield point). This
+   caps any single body build at CHUNK_SIZE rows with a "Show N more" button
+   that builds the rest on click — same lazy-build contract as the existing
+   collapsed-section/tier fix (fix F / #5), just applied inside an
+   already-expanded body too. Only DOM insertion is deferred: counts, rollups
+   and filters above all still read the FULL `all`/`rows` arrays, never the
+   chunked subset, and bulk actions (below) select from the full filtered
+   set, not the rendered rows. chunkShowAll persists "fully expanded" state
+   across draw() (a filter change or refresh) the same way sectionExpandState
+   / tierExpandState do, so a user who already hit "Show more" doesn't get
+   re-collapsed by an unrelated refresh. */
+const CHUNK_SIZE = 40;
+const chunkRenderers = new Map();   // key -> { rows, bodyFn(rowsSubset) }
+const chunkShowAll = new Map();     // key -> true once "Show more" was clicked
+function chunkedHTML(key, rows, bodyFn) {
+  if (rows.length <= CHUNK_SIZE) { chunkRenderers.delete(key); return bodyFn(rows); }
+  chunkRenderers.set(key, { rows, bodyFn });
+  const revealed = chunkShowAll.get(key) ? rows.length : CHUNK_SIZE;
+  const remaining = rows.length - revealed;
+  const btn = remaining > 0
+    ? `<button type="button" class="btn sm chunk-more" data-show-more="${esc(key)}">Show ${fmt(remaining)} more</button>`
+    : "";
+  return `<div data-chunk-body="${esc(key)}">${bodyFn(rows.slice(0, revealed))}</div>${btn}`;
+}
+
 /* fix B1: serialize status-action PATCHes through a tiny promise queue so
    burst-clicking several buttons fires requests one-at-a-time rather than
    in parallel — each caller's OWN button/card is still disabled instantly
@@ -384,7 +458,12 @@ async function loadNotifications(opts = {}) {
   draw();
   if (opts.force) bustNotifCache();
   const activeClient = getActiveClient();
-  const url = "/api/notifications" + (activeClient ? `?client_id=${encodeURIComponent(activeClient)}` : "");
+  // fix #4: initial load never needs claude_prompt (only the on-demand "Copy
+  // Claude prompt" fetch below does) — that column alone was responsible for
+  // most of this endpoint's ~300KB payload across every row.
+  const params = new URLSearchParams({ slim: "1" });
+  if (activeClient) params.set("client_id", activeClient);
+  const url = `/api/notifications?${params.toString()}`;
   try {
     const data = await cachedGetNotifications(url);
     all = Array.isArray(data) ? data : [];
@@ -488,12 +567,20 @@ function rowActionsHTML(n) {
     </div>
   </div>`;
 }
+/* fix #7: real, non-tautological tooltips for the status-action buttons —
+   what titling the button "Ack" as title="Ack" told a newcomer nothing they
+   didn't already see on the button face. */
+const STATUS_ACTION_TOOLTIP = {
+  acknowledged: "Mark as seen — stays in the queue",
+  actioned: "Mark as done",
+  dismissed: "Hide from the queue (undoable)",
+};
 function miniActionBtn(n, target, label) {
   const disabled = target === "acknowledged" ? n.status !== "new"
                   : target === "actioned" ? n.status === "actioned"
                   : n.status === "dismissed";
   const isDone = n.status === target;
-  return `<button type="button" class="btn xs" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""} title="${esc(label)}">${isDone ? "&check;" : esc(label)}</button>`;
+  return `<button type="button" class="btn xs" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""} title="${esc(STATUS_ACTION_TOOLTIP[target] || label)}">${isDone ? "&check;" : esc(label)}</button>`;
 }
 
 /* Campaign-level context (sent / positive / completion %) for the Variant
@@ -652,7 +739,17 @@ function section4(rows, ctxMap) {
         <tbody>${trs}</tbody></table></div>`;
     }
     return `<div class="va-group${allRetired ? " dimmed" : ""}">${headHTML}${bodyHTML}</div>`;
-  }).join("");
+  }).join("") + `<div class="fixnote">Need a fresh angle on any campaign above? A CSM can run <span class="jg" title="A command the CSM can run in Claude Code (Claude with Navreo's skills installed) to have it generate new copy angles/mechanisms for a specific campaign.">/lilly-strategy &lt;slug&gt;</span> for <span class="jg" title="CSM ideation - the CSM (not the client) brainstorming new campaign angles, most often by running /lilly-strategy, once existing variants are underperforming.">CSM ideation</span> on new mechanisms or copy angles.</div>`;
+}
+
+/* fix #7: dynamic-content safety net — if a notification's own detail/
+   suggested_action text (from build_notifications.py, Supabase-sourced) ever
+   contains the literal "/lilly-strategy <slug>" command, wrap it in the same
+   .jg tooltip wherever it's rendered, not just the static Section 4 note
+   above. Runs on already-escaped text so it's safe against injected HTML. */
+function linkifyLillyStrategy(escapedText) {
+  return escapedText.replace(/(\/lilly-strategy\s+[\w.-]+)/g,
+    (m) => `<span class="jg" title="A command the CSM can run in Claude Code to ideate new angles for this campaign.">${m}</span>`);
 }
 
 function section5(rows) {
@@ -691,24 +788,33 @@ function section6(rows) {
     <div class="fixnote">Fix: go into the campaign in the Smartlead UI and manually set the correct traffic split so every intended variant has a non-zero share (<span class="jg" title="How evenly Smartlead's traffic split sends across each variant — should be non-zero for every intended variant.">distribution</span>).</div>`;
 }
 
+// fix #4: action_type values that build_notifications.py always attaches a
+// claude_prompt to (per app/optimiser_notifications.sql's column comment).
+// Gating the button on this set (rather than on n.claude_prompt itself)
+// means the button still shows up correctly on a ?slim=1 row, which never
+// carries claude_prompt text at all — only the on-demand single-row fetch
+// (copyClaudePrompt) does.
+const CLAUDE_PROMPT_ACTION_TYPES = new Set([
+  "replace_variants", "scale_winner", "disable_loser", "kill_threshold_pivot", "run_list_audit",
+]);
 function actionBlockHTML(n) {
   const bullets = parseActionBullets(n.detail);
   const cls = ["action-block"];
   if (isRetiredStatus(n.status)) cls.push("dismissed");
   const showPause = !!n.api_safe;
-  const showCopy = !!n.claude_prompt;
+  const showCopy = CLAUDE_PROMPT_ACTION_TYPES.has(n.action_type);
   return `<div class="${cls.join(" ")}" id="ab-${esc(String(n.id))}" data-id="${esc(String(n.id))}">
     <div class="ab-head">
       <div class="ab-title">
         <b>${n.block_number ?? "–"}.</b> ${campaignLink(n.campaign_name, n.smartlead_url)}
-        <span class="ctx">&middot; <span class="jg" title="Client Success Manager — the client this campaign is run for.">CSM</span>: ${esc(n.client || "Unassigned")} &middot; ${fmt(n.sent)} sent, ${fmt(n.positive)} pos, ${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) : "–"}% complete</span>
+        <span class="ctx">&middot; <span class="jg" title="Client Success Manager — the Navreo team member who manages this client's account, not the client itself.">CSM</span>: ${esc(n.client || "Unassigned")} &middot; ${fmt(n.sent)} sent, ${fmt(n.positive)} pos, ${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) : "–"}% complete</span>
       </div>
       <div class="ab-pills">
         ${priorityPill(n.priority)}
         <span class="ab-status">${statusPillN(n.status)}</span>
       </div>
     </div>
-    ${bullets.length ? `<ul class="action-list">${bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+    ${bullets.length ? `<ul class="action-list">${bullets.map((b) => `<li>${linkifyLillyStrategy(esc(b))}</li>`).join("")}</ul>` : ""}
     <div class="action-row">
       ${showPause ? `<button type="button" class="btn sm danger" data-act="pause" data-id="${esc(String(n.id))}">Pause campaign</button>` : ""}
       ${showCopy ? `<button type="button" class="btn sm" data-act="copy-prompt" data-id="${esc(String(n.id))}">Copy Claude prompt</button>` : ""}
@@ -730,12 +836,59 @@ function actionBtn(n, target, label, doneLabel) {
   const cls = ["btn", "sm"];
   if (isNextStep && !disabled) cls.push("primary");
   const text = isDone ? doneLabel : label;
-  return `<button type="button" class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""}>${esc(text)}</button>`;
+  const tip = STATUS_ACTION_TOOLTIP[target] || label;
+  return `<button type="button" class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""} title="${esc(tip)}">${esc(text)}</button>`;
 }
 
+/* fix #5: Section 7 render weight. With every block eager, 63 blocks (~52,000px)
+   render on first paint even though most CSMs only need the High tier right
+   now. High blocks still render eagerly (they're the whole point of the
+   report); Medium and Low tiers collapse behind a "Show N ... actions"
+   expander whose body is only built the first time it's actually opened —
+   same lazy-render contract as reportSection()'s section-level fix F, just
+   scoped one level deeper (per-tier instead of per-section). State persists
+   across draw() (a filter change or refresh) via tierExpandState, keyed by
+   tier name, mirroring sectionExpandState. */
+const tierExpandState = new Map();
+function tierExpanderHTML(tierKey, tierLabel, rows) {
+  if (!rows.length) return "";
+  const expanded = !!tierExpandState.get(tierKey);
+  sectionRenderers.set(tierKey, { rows, bodyFn: (rs) => rs.map(actionBlockHTML).join("") });
+  const bodyHTML = expanded ? chunkedHTML(tierKey, rows, (rs) => rs.map(actionBlockHTML).join("")) : "";
+  return `<div class="tier-expander" data-tier="${tierKey}">
+    <button type="button" class="btn sm tier-toggle" data-toggle-tier="${tierKey}" data-tier-count="${rows.length}" aria-expanded="${expanded ? "true" : "false"}">
+      ${expanded ? "Hide" : "Show"} ${rows.length} ${tierLabel} action${rows.length === 1 ? "" : "s"}
+    </button>
+    <div class="tier-body${expanded ? "" : " hidden"}" data-tier-body="${tierKey}" data-rendered="${expanded ? "1" : "0"}">${bodyHTML}</div>
+  </div>`;
+}
 function section7(rows) {
   const sorted = [...rows].sort((a, b) => (a.block_number ?? 9999) - (b.block_number ?? 9999));
-  return sorted.map(actionBlockHTML).join("");
+  const high = sorted.filter((n) => n.priority === "High");
+  const medium = sorted.filter((n) => n.priority === "Medium");
+  const low = sorted.filter((n) => n.priority !== "High" && n.priority !== "Medium");
+  return chunkedHTML("7-high", high, (rs) => rs.map(actionBlockHTML).join(""))
+    + tierExpanderHTML("7-medium", "Medium", medium)
+    + tierExpanderHTML("7-low", "Low", low);
+}
+/* Toggle a Section 7 tier expander in place (fix #5's click wiring) — builds
+   the tier's DOM lazily on first open, same pattern as setSectionExpanded. */
+function setTierExpanded(tierKey, tierLabel, expanded) {
+  tierExpandState.set(tierKey, expanded);
+  const btn = document.querySelector(`[data-toggle-tier="${tierKey}"]`);
+  const body = document.querySelector(`[data-tier-body="${tierKey}"]`);
+  if (btn) {
+    const count = btn.dataset.tierCount || "0";
+    btn.textContent = `${expanded ? "Hide" : "Show"} ${count} ${tierLabel} action${count === "1" ? "" : "s"}`;
+    btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+  if (body) {
+    body.classList.toggle("hidden", !expanded);
+    if (expanded && body.dataset.rendered !== "1") {
+      const renderer = sectionRenderers.get(tierKey);
+      if (renderer) { body.innerHTML = chunkedHTML(tierKey, renderer.rows, renderer.bodyFn); body.dataset.rendered = "1"; }
+    }
+  }
 }
 
 function section8(rows) {
@@ -757,8 +910,14 @@ function reportSection(num, title, rows, bodyFn, opts = {}) {
   const expanded = isExpanded(num);
   const countLabel = opts.countLabel || `${rows.length} ${rows.length === 1 ? "campaign" : "campaigns"}`;
   sectionRenderers.set(num, { rows, bodyFn });
+  // Section 7 does its own chunking internally, per priority tier (see
+  // section7()/chunkedHTML("7-high"/...)) — truncating its `rows` here BEFORE
+  // bodyFn splits them into High/Medium/Low would cut off arbitrary
+  // low-block-number rows instead of respecting tier order, so it opts out
+  // of this generic outer chunk and always gets the full row set.
   const bodyHTML = expanded
-    ? (rows.length ? bodyFn(rows) : `<div class="empty">No findings in this section.</div>`)
+    ? (rows.length ? (num === 7 ? bodyFn(rows) : chunkedHTML(`sec-${num}`, rows, bodyFn))
+                    : `<div class="empty">No findings in this section.</div>`)
     : "";
   return `<div class="rsection${opts.muted ? " muted" : ""}" data-section="${num}">
     <div class="rsection-h${expanded ? " expanded" : ""}" data-toggle-section="${num}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
@@ -808,6 +967,13 @@ function updateSummary() {
   // Top-line rollup: always computed from the full client-scoped `all` (not the currently
   // chosen status/priority filter) so a 5-minute user gets the true picture at a glance,
   // and it doesn't silently change meaning as they play with the filter chips below.
+  // fix #6: that's exactly what made testers see "52 campaigns" (rollup, unfiltered)
+  // and "27 campaigns" (a section header, filtered) on screen at once with no way to
+  // tell they were two different numbers on purpose. Fix: when a status/priority
+  // filter is active, grey the whole rollup out and label it explicitly as the
+  // unfiltered totals, rather than silently leaving two different counts unlabelled
+  // on the same screen. Also add the positive half of the picture (all-clear count +
+  // total campaign count) so the rollup isn't only ever bad news.
   if (rollupEl) {
     const needingAttention = new Set(all.filter((n) => n.section === 1).map((n) => n.campaign_id ?? n.campaign_name)).size;
     const highPriority = all.filter((n) => n.priority === "High").length;
@@ -815,8 +981,15 @@ function updateSummary() {
     // Section 7 findings only, clickable straight to Section 7.
     const openActions = all.filter((n) => n.section === 7 && matchesActiveClient(n) && !isRetiredStatus(n.status));
     const tierCount = (p) => openActions.filter((n) => n.priority === p).length;
-    rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention &middot; <b>${fmt(highPriority)}</b> high-priority finding${highPriority === 1 ? "" : "s"} &middot; <b>${fmt(all.length)}</b> total finding${all.length === 1 ? "" : "s"}` +
-      `<div class="rollup-chips"><button type="button" class="rollup-chip" onclick="jumpToSection(7)">${fmt(tierCount("High"))} High / ${fmt(tierCount("Medium"))} Medium / ${fmt(tierCount("Low"))} Low actions</button></div>`;
+    const clientScoped = all.filter(matchesActiveClient);
+    const allClearCount = clientScoped.filter((n) => n.section === 0).length;
+    const totalCampaigns = new Set(clientScoped.map((n) => n.campaign_id ?? n.campaign_name)).size;
+    const filterActive = filters.status !== "all" || filters.priority !== "all";
+    rollupEl.classList.toggle("rollup-filtered", filterActive);
+    rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention &middot; <b>${fmt(highPriority)}</b> high-priority finding${highPriority === 1 ? "" : "s"} &middot; <b>${fmt(all.length)}</b> total finding${all.length === 1 ? "" : "s"} &middot; <b>${fmt(allClearCount)}</b> all-clear &middot; <b>${fmt(totalCampaigns)}</b> total campaign${totalCampaigns === 1 ? "" : "s"}` +
+      `<div class="rollup-chips"><button type="button" class="rollup-chip" onclick="jumpToSection(7)">${fmt(tierCount("High"))} High / ${fmt(tierCount("Medium"))} Medium / ${fmt(tierCount("Low"))} Low actions</button>` +
+      (filterActive ? `<span class="rollup-filter-note"> &middot; totals — clear filter to compare</span>` : "") +
+      `</div>`;
   }
 }
 
@@ -885,27 +1058,67 @@ function setSectionExpanded(num, expanded) {
     if (expanded && body.dataset.rendered !== "1") {
       const renderer = sectionRenderers.get(num);
       if (renderer) {
-        body.innerHTML = renderer.rows.length ? renderer.bodyFn(renderer.rows) : `<div class="empty">No findings in this section.</div>`;
+        body.innerHTML = renderer.rows.length
+          ? (num === 7 ? renderer.bodyFn(renderer.rows) : chunkedHTML(`sec-${num}`, renderer.rows, renderer.bodyFn))
+          : `<div class="empty">No findings in this section.</div>`;
         body.dataset.rendered = "1";
       }
     }
   }
 }
 
-/* fix E1/E2/E3/G: shared jump helpers. Section 7 always renders eagerly
-   (see draw()), so a block id is always in the DOM to scroll to; other
-   sections may need their body built first (fix F). */
+/* fix #1: jump/nav scroll race. The old code called scrollIntoView within a
+   single requestAnimationFrame (or, for the sticky-nav chips, synchronously)
+   right after expanding/lazy-building the target section — often BEFORE the
+   browser had actually laid out the freshly-inserted DOM, so the scroll
+   distance was computed against the pre-expansion layout and landed
+   900-1,500px short (or, for a still-taller Section 7, didn't move at all).
+   Fix: wait a full two animation frames (lets one full layout/paint cycle
+   complete after the synchronous innerHTML build) before measuring/scrolling
+   at all, use instant ("auto") scrolling so there's no smooth-scroll
+   animation left to race a second layout shift, and re-invoke once more on
+   the next frame as belt-and-braces in case something (e.g. late image/font
+   metrics) nudged layout again right after the first scroll. */
+function scrollToElAfterLayout(getEl, block = "start") {
+  const scrollNow = () => { const el = getEl(); if (el) el.scrollIntoView({ behavior: "auto", block }); };
+  // The section/tier body was already built synchronously (setSectionExpanded
+  // / setTierExpanded run innerHTML= before this is called), and scrollIntoView
+  // itself forces whatever layout pass it needs on demand — so an immediate,
+  // synchronous call already fixes the common case with no race at all.
+  scrollNow();
+  // Belt-and-braces re-invoke shortly after, in case something (a web font
+  // swap, a lazily-sized image) nudges layout right after the first scroll.
+  // Fired via BOTH requestAnimationFrame (fires promptly on a visible,
+  // foreground tab) and a short setTimeout (still fires even if rAF is
+  // throttled/paused, e.g. a backgrounded tab) — whichever runs first wins;
+  // the other is a harmless no-op since the target is already in view by then.
+  requestAnimationFrame(scrollNow);
+  setTimeout(scrollNow, 120);
+}
+/* fix E1/E2/E3/G: shared jump helpers. Section 7's High tier always renders
+   eagerly (fix #5's Medium/Low tiers lazy-build on first expand — handled by
+   setTierExpanded before this fires), so a block id is in the DOM to scroll
+   to once the tier it lives in (if any) has been opened. */
 function jumpToSection(num) {
   setSectionExpanded(num, true);
-  const el = document.querySelector(`.rsection[data-section="${num}"]`);
-  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollToElAfterLayout(() => document.querySelector(`.rsection[data-section="${num}"]`), "start");
 }
 function jumpToBlock(id) {
   setSectionExpanded(7, true);
-  requestAnimationFrame(() => {
-    const el = document.getElementById(`ab-${CSS.escape(String(id))}`);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-  });
+  // The target block might live inside a still-collapsed Medium/Low tier
+  // expander — open whichever one contains it before scrolling.
+  const escapedId = CSS.escape(String(id));
+  let el = document.getElementById(`ab-${escapedId}`);
+  if (!el) {
+    document.querySelectorAll("[data-toggle-tier]").forEach((btn) => {
+      const tierKey = btn.closest("[data-tier]")?.dataset.tier;
+      if (tierKey && !tierExpandState.get(tierKey)) {
+        const label = tierKey === "7-medium" ? "Medium" : "Low";
+        setTierExpanded(tierKey, label, true);
+      }
+    });
+  }
+  scrollToElAfterLayout(() => document.getElementById(`ab-${escapedId}`), "center");
 }
 
 /* fix G: highlight whichever section header is currently at the top of the
@@ -950,6 +1163,19 @@ async function performStatusChange(id, target) {
 }
 
 document.getElementById("list").addEventListener("click", async (e) => {
+  const moreBtn = e.target.closest("[data-show-more]");
+  if (moreBtn) {
+    const key = moreBtn.dataset.showMore;
+    chunkShowAll.set(key, true);
+    const renderer = chunkRenderers.get(key);
+    if (renderer) {
+      const wrap = document.querySelector(`[data-chunk-body="${CSS.escape(key)}"]`);
+      if (wrap) wrap.innerHTML = renderer.bodyFn(renderer.rows);
+    }
+    moreBtn.remove();
+    return;
+  }
+
   const header = e.target.closest("[data-toggle-section]");
   if (header) {
     const num = Number(header.dataset.toggleSection);
@@ -957,8 +1183,23 @@ document.getElementById("list").addEventListener("click", async (e) => {
     return;
   }
 
+  const tierBtn = e.target.closest("[data-toggle-tier]");
+  if (tierBtn) {
+    const tierKey = tierBtn.dataset.toggleTier;
+    const label = tierKey === "7-medium" ? "Medium" : "Low";
+    setTierExpanded(tierKey, label, !tierExpandState.get(tierKey));
+    return;
+  }
+
   const jumpEl = e.target.closest("[data-jump-block]");
   if (jumpEl) {
+    // fix #1: the worst-offender callout card wraps a real campaign link
+    // (target="_blank" -> Smartlead) INSIDE the same element that carries
+    // data-jump-block, so `closest()` would otherwise match the outer card
+    // and hijack every click on that inner link into a same-page jump,
+    // silently eating the "open in Smartlead" navigation. Let a click that
+    // actually landed on (or inside) an <a> take its own default action.
+    if (e.target.closest("a")) return;
     e.preventDefault();
     jumpToBlock(jumpEl.dataset.jumpBlock);
     return;
@@ -1135,10 +1376,25 @@ document.getElementById("pauseConfirmBtn").onclick = async () => {
   }
 };
 
-/* --- Copy Claude prompt: clipboard API with a textarea fallback --- */
+/* --- Copy Claude prompt: fetch the ONE full row on demand (fix #4) ---
+   The list load uses ?slim=1 (every column except claude_prompt — see
+   server.py), so `all[]` never carries this row's prompt text. Button shows
+   "Copying…" while the single-row fetch is in flight, then "Copied ✓" for
+   2s on success, before reverting to its normal label. Clipboard API with a
+   textarea fallback for browsers/contexts without navigator.clipboard. */
 async function copyClaudePrompt(id, btn) {
-  const row = all.find((n) => String(n.id) === String(id));
-  const text = row && row.claude_prompt;
+  const restore = busyBtn(btn, "Copying…");
+  if (!restore) return; // already in flight from a previous click
+  let text = null;
+  try {
+    const res = await fetch(`/api/notifications?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+    const rows = await res.json();
+    const row = Array.isArray(rows) ? rows[0] : null;
+    text = row && row.claude_prompt;
+  } catch {
+    text = null;
+  }
+  restore();
   if (!text) { protoNote("No prompt available for this action"); return; }
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1157,33 +1413,67 @@ async function copyClaudePrompt(id, btn) {
     try { document.execCommand("copy"); } catch {}
     document.body.removeChild(ta);
   }
-  protoNote("Copied");
+  const originalLabel = btn.textContent;
+  btn.textContent = "Copied ✓";
+  setTimeout(() => { if (!btn.dataset.busy) btn.textContent = originalLabel; }, 2000);
 }
 
-/* --- Success toast w/ Undo (fix H2/H3) --- */
+/* --- Success toast w/ Undo (fix #3) ---
+   Was: a fixed 6s window with no visible countdown and a silent no-op if
+   Undo was clicked after it had already expired (a scripted click still
+   fires on a hidden button — display:none only blocks a mouse click, not a
+   dispatched one — so that "silent no-op" was reproducible even though the
+   button is no longer visible by then).
+   Now: a 10s window, a visible shrinking progress bar synced to the same
+   timeout, and an explicit "Undo window passed" message on any post-expiry
+   click instead of quietly doing nothing. */
+const UNDO_WINDOW_MS = 10000;
 let toastTimer = null;
 let toastUndoHandler = null;
+let toastExpiresAt = 0;
 function showActionToast(msg, undoFn) {
   const el = document.getElementById("actionToast");
   const msgEl = document.getElementById("actionToastMsg");
   const undoBtn = document.getElementById("actionToastUndo");
+  const bar = document.getElementById("toastProgressBar");
   msgEl.textContent = undoFn ? `${msg} — Undo` : msg;
   undoBtn.style.display = undoFn ? "" : "none";
   toastUndoHandler = undoFn || null;
+  toastExpiresAt = undoFn ? Date.now() + UNDO_WINDOW_MS : 0;
   clearTimeout(toastTimer);
   el.classList.remove("hidden");
-  // 6-second window (fix H2), matching the spec's Undo grace period.
-  toastTimer = setTimeout(hideActionToast, 6000);
+  if (bar) {
+    // Reset instantly to full width (no transition), force a synchronous
+    // reflow so the browser actually commits that reset state, THEN request
+    // the shrink-to-0 transition. Forcing the reflow (rather than waiting on
+    // requestAnimationFrame) means this can't get starved by a throttled/
+    // backgrounded tab — rAF callbacks are paused there, but a synchronous
+    // style read is not.
+    bar.style.transition = "none";
+    bar.style.transform = "scaleX(1)";
+    if (undoFn) {
+      void bar.offsetWidth; // force reflow — commits the reset above
+      bar.style.transition = `transform ${UNDO_WINDOW_MS}ms linear`;
+      bar.style.transform = "scaleX(0)";
+    }
+  }
+  toastTimer = setTimeout(hideActionToast, UNDO_WINDOW_MS);
 }
 function hideActionToast() {
   document.getElementById("actionToast").classList.add("hidden");
   toastUndoHandler = null;
   clearTimeout(toastTimer);
 }
-document.getElementById("actionToastUndo").onclick = async () => {
+document.getElementById("actionToastUndo").onclick = async (e) => {
+  e.preventDefault();
   const fn = toastUndoHandler;
+  const expired = !fn || Date.now() > toastExpiresAt;
+  if (expired) {
+    protoNote("Undo window passed");
+    return;
+  }
   hideActionToast();
-  if (fn) await fn();
+  await fn();
 };
 
 /* --- back-to-top --- */

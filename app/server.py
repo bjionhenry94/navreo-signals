@@ -1294,12 +1294,59 @@ Reply with ONLY a JSON array, no fences, no commentary:
 
 def _default_ideas(p: dict) -> list:
     """Fallback catalogue when headless ideation is unavailable — SIGNALS ONLY
-    (static audiences are out of scope and fail the monthly-volume rule anyway)."""
-    return [
+    (static audiences are out of scope and fail the monthly-volume rule anyway).
+    Purely derived from the request payload — no live/paid lookups of any kind."""
+    ideas = [
         {"idea": "Hiring the roles you sell to", "why": "Live job posts signal the need", "mechanism": "hiring",
          "icebreaker": HIRING_ICE_DEFAULT,
          "params": {"job_titles": p.get("titles") or [], "days": 30}, "fit": 5, "novelty": 4, "intent": 5},
     ]
+    if p.get("titles") or p.get("keywords") or p.get("industries"):
+        ideas.append({"idea": "People engaging with your topics", "why": "Warm - they're already interacting",
+                       "mechanism": "engagement", "icebreaker": "",
+                       "params": {"keywords": p.get("keywords") or []}, "fit": 3, "novelty": 3, "intent": 4})
+    return ideas
+
+
+NO_IDEATION_LABEL = "sized after launch - live sizing unavailable right now"
+
+
+def _fallback_strategy_rows(p: dict) -> list:
+    """Deterministic, ZERO-COST rows for when Stage-1 ideation can't run (no
+    OPENAI_API_KEY, or the model call failed/timed out). Built purely from
+    the request payload + the static idea catalogue above.
+
+    CRITICAL GUARANTEE: this function never calls _search_person, preview_hiring,
+    or any other paid-provider probe — it only assembles dicts from `p` and the
+    static catalogue, so this code path can never spend a Prospeo/TheirStack/
+    AI-Ark/Ocean credit. Callers must return straight from this function's
+    output without falling through to the Stage-2 probe code below."""
+    if p.get("mode") == "direct" and p.get("mechanism") in ("hiring", "engagement"):
+        mech = p["mechanism"]
+        ideas = [{
+            "idea": f"{'Hiring' if mech == 'hiring' else 'Engagement'} signal" + (f" - {p['goal']}" if p.get("goal") else ""),
+            "why": NO_IDEATION_LABEL, "mechanism": mech,
+            "icebreaker": HIRING_ICE_DEFAULT if mech == "hiring" else "",
+            "params": {"job_titles": p.get("titles") or [], "days": 30} if mech == "hiring" else {"keywords": p.get("keywords") or []},
+            "fit": 3, "novelty": 3, "intent": 3,
+        }]
+    else:
+        ideas = _default_ideas(p)
+    rows = []
+    for i, idea in enumerate(ideas):
+        rows.append({
+            "id": f"idea-{i}", "key": idea["mechanism"], "idea": idea["idea"],
+            "signal": idea.get("why") or NO_IDEATION_LABEL, "mechanism": idea["mechanism"],
+            "params": idea.get("params") or {},
+            "companies": None, "dms": None, "dms_total": None,
+            "icebreaker": idea.get("icebreaker") or "",
+            "fit": idea.get("fit"), "novelty": idea.get("novelty"), "intent": idea.get("intent"),
+            "score": 0, "friction": MECH_FRICTION.get(idea["mechanism"], "Med"),
+            "estimated": True, "approx": False,
+            "window_days": None, "companies_total": None,
+            "fallback": True, "label": NO_IDEATION_LABEL,
+        })
+    return rows
 
 
 MECH_FRICTION = {"company_filter": "Easy", "lookalike": "Easy",
@@ -1339,11 +1386,17 @@ def strategy_map(p: dict) -> dict:
 
     ideas = _run_claude_ideation(p)
     if ideas is None:
-        # NEVER serve the static catalogue: it ignores the goal, so every
-        # search "returns the same thing" and the tool feels broken. An honest
-        # error + Try again beats silently wrong ideas. Nothing is cached.
-        return {"ok": False, "rows": [],
-                "message": "The idea engine didn't answer this time. Hit Try again - the second run almost always works."}
+        # Ideation is unavailable (no OPENAI_API_KEY locally, or the model call
+        # failed). Rather than dead-ending the wizard, hand back a deterministic,
+        # clearly-labelled fallback built only from this payload + the static
+        # catalogue. RETURN IMMEDIATELY: the Stage-2 probe closures/calls below
+        # (pro_dms/probe/probe_once -> Prospeo/preview_hiring) are defined further
+        # down in this function body and are never reached on this branch, so this
+        # path is guaranteed to spend zero paid-provider credits. Nothing is cached
+        # (a real ideation run should always get the chance to replace this).
+        return {"ok": True, "cached": False, "rows": _fallback_strategy_rows(p),
+                "fallback": True,
+                "message": "Live idea generation is unavailable right now - showing signals sized after launch."}
     ideation_fallback = False
 
     def pro_dms(filters):
@@ -2055,6 +2108,7 @@ def _clear_ui_caches():
     _LEADS_SWR.clear()
     _LEADS_BATCH_SWR.clear()
     _DRAFTS_READ_SWR.clear()
+    _NOTIFICATIONS_SWR.clear()
 
 
 NOTIFICATION_STATUSES = ("new", "acknowledged", "actioned", "dismissed")
@@ -2068,6 +2122,63 @@ NOTIFICATIONS_CLIENT_ALIASES = {
     "client-2": ["Amplifyy", "amplifyy"],
     "client-3": ["Arnic", "arnic"],
 }
+
+# Every optimiser_notifications column EXCEPT claude_prompt (per
+# app/optimiser_notifications.sql) — the ?slim=1 payload-weight fix. Keep in
+# sync with that schema file if columns are ever added/removed.
+NOTIFICATIONS_SLIM_SELECT = (
+    "id,campaign_id,campaign_name,client,client_id,finding_type,section,"
+    "block_number,priority,title,detail,suggested_action,action_type,"
+    "api_safe,smartlead_url,sent,positive,replied,sent_pos_ratio,"
+    "completion_pct,reply_rate,status,created_at,actioned_at"
+)
+
+
+_NOTIFICATIONS_TTL_S = 60  # G1/S1: unfiltered /api/notifications was a single
+# uncached Supabase round-trip (every column incl. the heavy claude_prompt
+# text) on EVERY list-view paint - 278 rows and rising, no pagination, no
+# cache anywhere in the stack (unlike sources/campaign-drafts/clients above).
+# Same SWR pattern as those: keyed by the tuple of filter params that affect
+# the query (slim/status/priority/client/client_id), so the common no-filter
+# call and each per-client ?slim=1&client_id= call get independent 60s-TTL
+# entries. `id=` single-row lookups (the "Copy Claude prompt" fetch) always
+# bypass this cache - see api_notifications() below - since that's already a
+# cheap single-row fetch and must never serve a stale claude_prompt.
+
+
+def _compute_notifications_list(key: tuple) -> list:
+    """key = (slim, status, priority, client, client_id) - see api_notifications()."""
+    from urllib.parse import quote
+    slim, status, priority, client, client_id = key
+    select_param = [f"select={quote(NOTIFICATIONS_SLIM_SELECT, safe=',')}"] if slim else []
+    filters = [f"{k}=eq.{quote(v, safe='')}"
+               for k, v in (("status", status), ("priority", priority), ("client", client)) if v]
+
+    def _fetch(extra_filters: list):
+        parts = select_param + filters + extra_filters + ["order=created_at.desc"]
+        return sb("GET", f"optimiser_notifications?{'&'.join(parts)}")
+
+    if client_id:
+        names = NOTIFICATIONS_CLIENT_ALIASES.get(client_id, [client_id])
+        name_list = ",".join(quote(n, safe="") for n in names)
+        cid_q = quote(client_id, safe="")
+        rows = _fetch([f"or=(client_id.eq.{cid_q},client.in.({name_list}))"])
+        if not isinstance(rows, list):
+            # Most likely cause: client_id column doesn't exist on this table
+            # yet (pre-migration) - PostgREST errors the whole `or=` filter on
+            # an unknown column. Fall back to the free-text-only match so the
+            # param still filters correctly today.
+            rows = _fetch([f"client=in.({name_list})"])
+    else:
+        rows = _fetch([])
+    rows = rows if isinstance(rows, list) else []
+    rows.sort(key=lambda r: _NOTIFICATION_PRIORITY_RANK.get(r.get("priority"), 3))
+    return rows
+
+
+_NOTIFICATIONS_SWR = _SWRKeyedCache(_compute_notifications_list, _NOTIFICATIONS_TTL_S,
+                                     is_degraded=lambda p: not isinstance(p, list),
+                                     name="notifications")
 
 
 def api_notifications(qs: dict) -> list:
@@ -2090,33 +2201,30 @@ def api_notifications(qs: dict) -> list:
     referencing the not-yet-existing column makes PostgREST error the whole
     request — caught below by falling back to a plain `client=in.(<names>)`
     filter, so the client_id param degrades gracefully to today's free-text
-    match instead of silently returning nothing."""
+    match instead of silently returning nothing.
+
+    Optional `id=<uuid>` short-circuits everything above and returns just that
+    one row, full (never slimmed) — used by the frontend's on-demand "Copy
+    Claude prompt" fetch so the initial list load doesn't have to carry every
+    row's claude_prompt text.
+
+    Optional `slim=1` selects every column EXCEPT claude_prompt (by far the
+    heaviest column — a pre-built Claude Code prompt, often several KB of
+    text, present on most Section 7 rows). The initial page load uses this to
+    cut payload weight; call again with `id=` when the full text is actually
+    needed for one row."""
     from urllib.parse import quote
-    filters = [f"{key}=eq.{quote(val, safe='')}"
-               for key in ("status", "priority", "client")
-               for val in [(qs.get(key) or [""])[0]] if val]
+    row_id = (qs.get("id") or [""])[0].strip()
+    if row_id:
+        rows = sb("GET", f"optimiser_notifications?id=eq.{quote(row_id, safe='')}")
+        return rows if isinstance(rows, list) else []
+    slim = (qs.get("slim") or [""])[0].strip() in ("1", "true", "yes")
+    status = (qs.get("status") or [""])[0]
+    priority = (qs.get("priority") or [""])[0]
+    client = (qs.get("client") or [""])[0]
     client_id = (qs.get("client_id") or [""])[0].strip()
-
-    def _fetch(extra_filters: list):
-        parts = filters + extra_filters + ["order=created_at.desc"]
-        return sb("GET", f"optimiser_notifications?{'&'.join(parts)}")
-
-    if client_id:
-        names = NOTIFICATIONS_CLIENT_ALIASES.get(client_id, [client_id])
-        name_list = ",".join(quote(n, safe="") for n in names)
-        cid_q = quote(client_id, safe="")
-        rows = _fetch([f"or=(client_id.eq.{cid_q},client.in.({name_list}))"])
-        if not isinstance(rows, list):
-            # Most likely cause: client_id column doesn't exist on this table
-            # yet (pre-migration) — PostgREST errors the whole `or=` filter on
-            # an unknown column. Fall back to the free-text-only match so the
-            # param still filters correctly today.
-            rows = _fetch([f"client=in.({name_list})"])
-    else:
-        rows = _fetch([])
-    rows = rows if isinstance(rows, list) else []
-    rows.sort(key=lambda r: _NOTIFICATION_PRIORITY_RANK.get(r.get("priority"), 3))
-    return rows
+    key = (slim, status, priority, client, client_id)
+    return _NOTIFICATIONS_SWR.get(key)
 
 
 def update_notification_status(nid: str, status: str) -> dict:
