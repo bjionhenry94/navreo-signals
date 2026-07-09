@@ -3507,9 +3507,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           </div>
           <div id="dlv-pn-hidden-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-top:none;padding:6px 11px"></div>
           <div id="dlv-pn-targets" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:0 0 9px 9px;border-top:none;background:var(--bg-sunken);margin-bottom:14px"></div>
-          <label class="dlv-field-label">Batch tag <span class="dlv-field-hint">(any name works — added to every ticked mailbox; existing tags are kept)</span></label>
+          <label class="dlv-field-label">Batch tag <span class="dlv-field-hint">(pick an existing tag or type a new name to create it — added to every ticked mailbox; existing tags are kept)</span></label>
           <input class="dlv-input" id="dlv-pn-tag" type="text" list="dlv-pn-taglist" placeholder="e.g. Hypertide (Odd - 2026)" style="margin-bottom:14px" data-act="pn-tag-input">
           <datalist id="dlv-pn-taglist"></datalist>
+          <div class="small muted" id="dlv-pn-tag-status" style="display:none;margin:-10px 0 14px"></div>
           <label class="dlv-field-label">Add to campaign <span class="dlv-field-hint">(ticked mailboxes not yet in one)</span></label>
           <select class="dlv-select" id="dlv-pn-camp" data-act="pn-camp-change"><option value="">— don't add —</option></select>
         </div>
@@ -3969,6 +3970,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // campaign ids, not the mock roster — pull the live list the same way the
     // real dashboard's openProcessNew() does (GET /api/campaigns).
     sel.innerHTML = `<option value="">— don't add —</option>` + S.campaigns.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    // Known tag names feed both the datalist and the existing-vs-new status
+    // line under the field. Sample mode gets a small mock roster so the
+    // affordance is visible there too.
+    UI.pn.tagNames = isLive() ? [] : ["Hypertide (Odd - 2026)", "Amplifyy - Maildoso"];
+    const dl0 = $id("dlv-pn-taglist");
+    if (dl0) dl0.innerHTML = UI.pn.tagNames.map((n) => `<option value="${esc(n)}">`).join("");
     openModal("dlv-pn-overlay");
     if (isLive()) {
       // Best-effort tag autocomplete: a typo in the tag field silently mints a
@@ -3976,7 +3983,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // real names. Fire-and-forget — the field works fine without it.
       fetch("/api/mailbox-tag-names").then((r) => r.json()).then((j) => {
         const dl = $id("dlv-pn-taglist");
-        if (dl && j && Array.isArray(j.names)) dl.innerHTML = j.names.map((n) => `<option value="${esc(n)}">`).join("");
+        if (j && Array.isArray(j.names)) {
+          UI.pn.tagNames = j.names;
+          if (dl) dl.innerHTML = j.names.map((n) => `<option value="${esc(n)}">`).join("");
+          pnSyncCounts(); // refresh the existing-vs-new status line
+        }
       }).catch(() => {});
       try {
         const camps = await apiGet("campaigns", { timeout: 20000 });
@@ -4059,6 +4070,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // untagged ones. Only the campaign add skips already-assigned mailboxes.
     const willTag = tagVal ? n : 0;
     const willAdd = campVal ? UI.pn.rows.filter((r) => UI.pn.sel.has(r.email) && r.inCampaign === false).length : 0;
+    // Existing-vs-new status under the tag field: typing a name that isn't in
+    // the known tag list creates it on Apply — say so, so "create a new tag"
+    // is a visible option and a typo'd near-duplicate is a visible mistake.
+    // Silent when the known list hasn't loaded (can't tell new from existing).
+    const tagStatus = $id("dlv-pn-tag-status");
+    if (tagStatus) {
+      const names = UI.pn.tagNames || [];
+      if (!tagVal || !names.length) tagStatus.style.display = "none";
+      else {
+        const exists = names.some((x) => x.toLowerCase() === tagVal.toLowerCase());
+        tagStatus.textContent = exists ? "Existing tag — the ticked mailboxes join it."
+          : "New tag — “" + tagVal + "” will be created when you hit Apply.";
+        tagStatus.style.display = "block";
+      }
+    }
     const summary = $id("dlv-pn-summary");
     if (summary) {
       if (!n) summary.textContent = "Nothing ticked — tick at least one mailbox above.";
