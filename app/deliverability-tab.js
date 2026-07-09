@@ -754,6 +754,9 @@ details.dlv-fold:not([open])>*:not(summary){display:none}
 .dlv-bl-summary{font-size:13px;font-weight:500;margin-bottom:10px}
 .dlv-bl-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
 .dlv-bl-scroll{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg-sunken)}
+.dlv-view-scroll{max-height:56vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.dlv-view-scroll table.tbl{margin:0}
+.dlv-view-scroll table.tbl thead th{position:sticky;top:0;background:var(--card);z-index:1}
 .dlv-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
 .dlv-tag.blocked{background:var(--red-bg);color:#861E10} .dlv-tag.inactive{background:var(--amber-bg);color:#6B4A00}
 .dlv-tag.md{background:#F2F2F0;color:var(--ink-2)} .dlv-tag.ok{background:var(--green-bg);color:#195C3F}
@@ -1341,7 +1344,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   /* ============================================================
-     7. CSV export — Blob-based, no network
+     7. In-tool data view — datasets are still built as CSV text
+        (same generators as before, so every view matches exactly
+        what the old CSV export contained) but are now parsed and
+        rendered as a read-only table inside a modal instead of
+        ever being downloaded. No Blob, no createObjectURL, no
+        <a download> anywhere in this file anymore.
      ============================================================ */
   function csvCell(v) {
     if (v == null) return "";
@@ -1353,17 +1361,53 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     rows.forEach((r) => lines.push(headers.map((h) => csvCell(r[h])).join(",")));
     return lines.join("\n");
   }
-  function downloadCSV(filename, headers, rows) {
-    const csv = toCSV(headers, rows || []);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    const n = (rows || []).length;
-    logAction({ action: "csv_download", count: n, scope: filename });
-    toast("Downloaded " + filename + " — " + n + " row" + (n === 1 ? "" : "s"), "ok");
+  // Minimal RFC4180-ish single-line parser (handles quoted fields with
+  // embedded commas/escaped quotes) — enough to round-trip whatever toCSV()
+  // above produced, without needing per-dataset column wiring on the view side.
+  function parseCSVLine(line) {
+    const out = [];
+    let cur = "", inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQ) {
+        if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+        else cur += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ",") { out.push(cur); cur = ""; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+  function parseCSV(csvText) {
+    const lines = (csvText || "").split("\n").filter((l) => l.length > 0);
+    if (!lines.length) return { header: [], rows: [] };
+    return { header: parseCSVLine(lines[0]), rows: lines.slice(1).map(parseCSVLine) };
+  }
+  // Reusable in-tool viewer — every former CSV download opens this instead.
+  // `title` is shown in the modal head; `csvText` is one of the CSV_BUILDERS'
+  // strings (or any other toCSV()-shaped string). Renders into the persistent
+  // dlv-view-overlay modal (see ensureModals()) using the app's existing
+  // table.tbl styling, scrollable so 60+ row datasets don't blow the modal up.
+  function openDataView(title, csvText) {
+    let titleEl = $id("dlv-view-title"), countEl = $id("dlv-view-count"), bodyEl = $id("dlv-view-body");
+    if (!titleEl || !countEl || !bodyEl) {
+      ensureModals();
+      titleEl = $id("dlv-view-title"); countEl = $id("dlv-view-count"); bodyEl = $id("dlv-view-body");
+    }
+    if (!titleEl || !countEl || !bodyEl) return;
+    const { header, rows } = parseCSV(csvText);
+    titleEl.textContent = title;
+    if (!rows.length) {
+      countEl.textContent = "";
+      bodyEl.innerHTML = `<div class="dlv-empty">Nothing to show — all clear.</div>`;
+    } else {
+      countEl.textContent = rows.length + " row" + (rows.length === 1 ? "" : "s");
+      const theadHtml = "<tr>" + header.map((h) => `<th>${esc(h)}</th>`).join("") + "</tr>";
+      const tbodyHtml = rows.map((r) => "<tr>" + header.map((_, i) => `<td>${esc(r[i] != null ? r[i] : "")}</td>`).join("") + "</tr>").join("");
+      bodyEl.innerHTML = `<table class="tbl"><thead>${theadHtml}</thead><tbody>${tbodyHtml}</tbody></table>`;
+    }
+    openModal("dlv-view-overlay");
   }
 
   const CSV_BUILDERS = {
@@ -1386,25 +1430,39 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     "domain-health-warmup": () => toCSV(["domain", "sent", "leads_contacted", "replied", "reply_rate_pct", "positive_replied", "bounce_rate_pct", "action"], S.A.domainHealth.rows.filter((d) => dhFlag(d, dhCutoffMin().minSent, dhCutoffMin().cutoff) === "warmup").map((d) => ({ domain: d.domain, sent: d.sent, leads_contacted: d.lead, replied: d.replied, reply_rate_pct: d.reply_rate, positive_replied: d.positive, bounce_rate_pct: d.bounce_rate, action: "MOVE TO WARMUP" }))),
     mailboxes: () => toCSV(["email", "domain", "provider", "kind", "warmup_status", "reason_category", "smtp_ok", "imap_ok", "reputation", "eligible", "reason"], S.A.inboxRows.filter((r) => r.kind !== "ok").map((r) => ({ email: r.email, domain: r.domain, provider: r.provider, kind: r.kind, warmup_status: r.warmup_status, reason_category: r.reason_category, smtp_ok: true, imap_ok: true, reputation: "", eligible: r.kind === "warmupoff", reason: r.reason }))),
   };
-  function handleCSV(name) {
+  // Friendly modal titles for each CSV_BUILDERS key — falls back to the raw
+  // key if a new builder is ever added without a title.
+  const DATA_TITLES = {
+    blacklist: "Blacklisted domains",
+    blocked: "Blocked mailboxes",
+    inactive: "Inactive mailboxes",
+    "new-mailboxes": "New / untagged mailboxes",
+    retired: "Retired domains",
+    "sending-deviation": "Sending deviations vs batch baseline",
+    signature: "Signature issues",
+    "warmup-config": "Warmup config issues",
+    "batch-stats": "Performance by batch",
+    "domain-health": "Domain health — full table",
+    "domain-health-warmup": "Domains to warm up",
+    mailboxes: "Problem mailboxes",
+  };
+  function viewData(name) {
     const build = CSV_BUILDERS[name];
     if (!build) return;
     const csv = build();
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = name + ".csv";
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    const title = DATA_TITLES[name] || name;
+    openDataView(title, csv);
     // Row count = every CSV line minus its one header line.
     const n = Math.max(0, csv.split("\n").length - 1);
-    // Item 1: CSV downloads used to leave no history trace at all — one of the
-    // "did 5+ actions, log stayed empty" contributors.
-    logAction({ action: "csv_download", count: n, scope: name + ".csv" });
-    toast("Downloaded " + name + ".csv — " + n + " row" + (n === 1 ? "" : "s"), "ok");
+    // Item 1 (carried over from the old CSV-download history entries): every
+    // view still leaves a trace in "Recent actions" — one of the "did 5+
+    // actions, log stayed empty" contributors this file already fixed once.
+    logAction({ action: "view_data", count: n, scope: title });
   }
-  function downloadVerifyCSV(kind, campId, rows) {
-    downloadCSV("verify-" + kind + "-" + campId + ".csv", ["email", "result"], rows);
+  function viewVerifyData(kind, campId, rows) {
+    const title = (kind === "keep" ? "Verify — kept (deliverable)" : "Verify — bad (confirmed invalid)") + " · campaign " + campId;
+    openDataView(title, toCSV(["email", "result"], rows));
+    logAction({ action: "view_data", count: (rows || []).length, scope: title });
   }
 
   /* ============================================================
@@ -1804,7 +1862,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
          once did.)
      ============================================================ */
   function tile(label, value, note, sev, csvName, fixAction, extra, glossLabel) {
-    const csv = csvName ? `<div class="dlv-stat-csv"><a class="dlv-dl" data-act="csv" data-file="${csvName}">⬇ list (CSV)</a></div>` : "";
+    const csv = csvName ? `<div class="dlv-stat-csv"><a class="dlv-dl" data-act="view-data" data-file="${csvName}">👁 View list</a></div>` : "";
     // Actionable tiles get a small link straight to their fix, reusing the
     // same data-act handlers already wired for the to-do cards below — so a
     // tester scanning the numbers doesn't have to hunt for the matching action.
@@ -1900,10 +1958,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (configIssues) fixLinks.push(`<a class="dlv-dl" data-act="open-warmup-fix">⚡ Enable warmup…</a>`);
     const fixHtml = fixLinks.length ? `<div class="dlv-stat-csv">${fixLinks.join("")}</div>` : "";
     const csvLinks = [
-      `<a class="dlv-dl" data-act="csv" data-file="inactive">⬇ inactive (CSV)</a>`,
-      `<a class="dlv-dl" data-act="csv" data-file="domain-health-warmup">⬇ to warm up (CSV)</a>`,
+      `<a class="dlv-dl" data-act="view-data" data-file="inactive">👁 View inactive</a>`,
+      `<a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">👁 View to warm up</a>`,
     ];
-    if (configIssues) csvLinks.push(`<a class="dlv-dl" data-act="csv" data-file="warmup-config">⬇ config issues (CSV)</a>`);
+    if (configIssues) csvLinks.push(`<a class="dlv-dl" data-act="view-data" data-file="warmup-config">👁 View config issues</a>`);
     const csvHtml = `<div class="dlv-stat-csv">${csvLinks.join("")}</div>`;
     const sev = sevOf(actionableTotal === 0, actionableTotal < 20);
     return `<div class="stat dlv-stat ${sev}" title="Everything warmup-related — inactive mailboxes, domains flagged for rotation, rests past due, and config issues"><div class="lab">Warmup${glossMark(WARMUP_DEF)}</div><div class="num-hero">${actionableTotal}</div>${extraHtml}${fixHtml}${csvHtml}</div>`;
@@ -2036,11 +2094,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (it.blacklistRows && it.blacklistRows.length) extraBits.push(`<div class="dlv-ai-action" style="margin-top:6px">${it.blacklistRows.length} domain(s) listed. Full list + actions in the <b>Blacklisted domains</b> tab, or <a class="dlv-dl" data-act="open-manager">open the manager for advanced rotation</a>.</div>`);
     // (The old "Usual causes:" plain line was folded into the card's numbered
     // step 2 — item 3 — so the same advice isn't printed twice.)
-    if (it.sigCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="csv" data-file="signature">⬇ signature issues (CSV)</a></div>`);
-    if (it.devCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="csv" data-file="sending-deviation">⬇ deviations (CSV)</a></div>`);
-    if (it.newCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="csv" data-file="new-mailboxes">⬇ new/untagged (CSV)</a></div>`);
-    if (it.retiredCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="csv" data-file="retired">⬇ retired domains (CSV)</a></div>`);
-    if (it.wcCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="csv" data-file="warmup-config">⬇ warmup-config issues (CSV)</a></div>`);
+    if (it.sigCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="signature">👁 View signature issues</a></div>`);
+    if (it.devCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="sending-deviation">👁 View deviations</a></div>`);
+    if (it.newCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="new-mailboxes">👁 View new/untagged</a></div>`);
+    if (it.retiredCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="retired">👁 View retired domains</a></div>`);
+    if (it.wcCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="warmup-config">👁 View warmup-config issues</a></div>`);
     const btns = [];
     if (it.hypertide) {
       btns.push(`<button class="btn sm" data-act="draft-email">✉️ Draft email</button>`);
@@ -2166,7 +2224,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           ${(() => { const n = rows.filter((r) => !(r.rested > 0) && !r.cleared).length; return n ? `<button class="btn sm" data-act="pause-blacklisted" title="Pauses every blacklisted domain that is still sending — the bulk action, distinct from each row's own ⏸ Pause">⏸ Pause all still-sending (${n})</button>` : ""; })()}
           ${D.blClearedCount > 0 ? `<button class="btn sm" data-act="reactivate-cleared">☀️ Reactivate cleared (${D.blClearedCount})</button>` : ""}
           <button class="btn sm" data-act="open-delisting">📋 Delisting prep</button>
-          <a class="dlv-dl" data-act="csv" data-file="blacklist" style="align-self:center;margin-left:4px">⬇ CSV</a>
+          <a class="dlv-dl" data-act="view-data" data-file="blacklist" style="align-self:center;margin-left:4px">👁 View</a>
         </div>
         <div class="dlv-bl-scroll"><div class="dlv-vcamps">${rows.map(renderBlacklistRow).join("")}</div></div>`;
     } else {
@@ -2249,8 +2307,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ? `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th>`
       : `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Mailbox</th><th>Batch</th><th style="text-align:right">Cap/day</th><th style="text-align:right">Due back</th><th>Warmup / status</th><th>Issue</th><th style="text-align:right">Action</th>`;
     const foot = isD
-      ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="csv" data-file="domain-health-warmup">⬇ warmup list</a> &nbsp; <a class="dlv-dl" data-act="csv" data-file="domain-health">⬇ full table</a></div>`
-      : `<div style="margin-top:8px"><a class="dlv-dl" data-act="csv" data-file="mailboxes">⬇ problem mailboxes CSV</a></div>`;
+      ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">👁 View warmup list</a> &nbsp; <a class="dlv-dl" data-act="view-data" data-file="domain-health">👁 View full table</a></div>`
+      : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">👁 View problem mailboxes</a></div>`;
     return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
       <div class="dlv-subtab-head">🛠 Inbox &amp; domain manager<span class="hint">${D.flaggedActionable ? D.flaggedActionable + " domain(s) need warm-up →" : ""} pause · reactivate · reconnect</span></div>
       <div class="dlv-fold-body">
@@ -2436,7 +2494,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return `<tr><td class="dlv-bt-name">${esc(b.batch)}</td><td>${b.mailboxes}</td><td>${b.sending}</td><td>${b.warmup}</td><td>${b.sent ? fmtN(b.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${blk}</td><td>${issues ? `<span class="dlv-bt-y">${issues}</span>` : `<span class="dlv-bt-mut">0</span>`}</td></tr>`;
     }).join("");
     return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Batch</th><th>Mailboxes</th><th>Sending</th><th>Warmup</th><th>Sent (7d)</th><th>Reply&nbsp;%</th><th>Bounce&nbsp;%</th><th>Blacklist</th><th>Issues</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
-      <div class="dlv-mb-count" style="margin-top:10px">Reply / Bounce are volume-weighted over the last 7 days. "Issues" = dead + blocked. <a class="dlv-dl" data-act="csv" data-file="batch-stats">⬇ batch performance (CSV)</a></div>`;
+      <div class="dlv-mb-count" style="margin-top:10px">Reply / Bounce are volume-weighted over the last 7 days. "Issues" = dead + blocked. <a class="dlv-dl" data-act="view-data" data-file="batch-stats">👁 View batch performance</a></div>`;
   }
 
   /* ============================================================
@@ -2540,6 +2598,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       mark_done: () => `✓ ${h.date} — Marked to-do done · ${esc(h.scope || h.key || "")}`,
       mark_undone: () => `↩ ${h.date} — Un-marked to-do · ${esc(h.scope || h.key || "")}`,
       csv_download: () => `⬇ ${h.date} — Downloaded <b>${esc(h.scope || "CSV")}</b>${h.count != null ? " · " + h.count + " row(s)" : ""}`,
+      view_data: () => `👁 ${h.date} — Viewed <b>${esc(h.scope || "dataset")}</b>${h.count != null ? " · " + h.count + " row(s)" : ""}`,
       copy: () => `⧉ ${h.date} — Copied ${esc(h.scope || "text")}`,
       verify_run: () => `🔍 ${h.date} — Verified <b>${esc(h.scope || "")}</b> — ${h.count != null ? h.count + " leads checked · " : ""}keep ${h.keep != null ? h.keep : "?"} / remove ${h.remove != null ? h.remove : "?"}`,
     };
@@ -2748,6 +2807,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-modal-head"><h3>🗂 Sync to Notion — preview</h3><button class="x" data-act="close-modal" data-modal="dlv-notion-overlay">&times;</button></div>
         <div class="dlv-modal-body"><p class="small muted" style="margin-bottom:10px">This is exactly what would be written — nothing is sent until you confirm.</p><div id="dlv-notion-body"></div></div>
         <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto">Mock — no network call.</span><button class="btn" data-act="close-modal" data-modal="dlv-notion-overlay">Cancel</button><button class="btn primary" id="dlv-notion-sync-btn" data-act="notion-sync">Sync 0 domain(s)</button></div>
+      </div>
+    </div>
+
+    <div class="dlv-modal-overlay" id="dlv-view-overlay" data-act="overlay-bg" data-modal="dlv-view-overlay">
+      <div class="dlv-modal wide">
+        <div class="dlv-modal-head"><h3 id="dlv-view-title">View</h3><button class="x" data-act="close-modal" data-modal="dlv-view-overlay">&times;</button></div>
+        <div class="dlv-modal-body"><div class="dlv-mb-count" id="dlv-view-count" style="margin-bottom:8px"></div><div class="dlv-view-scroll" id="dlv-view-body"></div></div>
+        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto">Read-only view — no file is downloaded.</span><button class="btn" data-act="close-modal" data-modal="dlv-view-overlay">Close</button></div>
       </div>
     </div>
 
@@ -3118,8 +3185,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return `<div class="dlv-vbox">
       <div class="dlv-vrow"><b>${v.total}</b> leads &nbsp;·&nbsp; ${v.layer1Tool} good <b>${v.l1_keep}</b> &nbsp;·&nbsp; catch-all <b>${v.l1_catch}</b> (${v.layer2Tool} kept ${v.l2_keep} / dropped ${v.l2_drop}) &nbsp;·&nbsp; ${v.layer1Tool} bad <b>${v.l1_drop}</b></div>
       <div class="dlv-plain">Catch-all: domain accepts any address — risky to email, so a second tool double-checks it.</div>
-      <div class="dlv-vrow dlv-vkeep">✅ Keep (deliverable): <b>${v.keep}</b> &nbsp; <a class="dlv-dl" data-act="verify-csv" data-id="${esc(id)}" data-kind="keep">⬇ keep.csv</a></div>
-      <div class="dlv-vrow dlv-vremove">🗑 Bad (confirmed invalid): <b>${v.remove}</b> &nbsp; <a class="dlv-dl" data-act="verify-csv" data-id="${esc(id)}" data-kind="remove">⬇ remove.csv</a></div>
+      <div class="dlv-vrow dlv-vkeep">✅ Keep (deliverable): <b>${v.keep}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="keep">👁 View kept (${v.keep})</a></div>
+      <div class="dlv-vrow dlv-vremove">🗑 Bad (confirmed invalid): <b>${v.remove}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="remove">👁 View bad (${v.remove})</a></div>
       <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}">🗑 Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
       <div class="dlv-plain">Reply-guard: anyone who replied is automatically kept, never deleted.</div>
     </div>`;
@@ -4012,14 +4079,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // button actually lives in, not a single shared-by-id node.
     if (act === "toast-undo") { runAct(act, () => { dismissToastEl(t.closest(".dlv-toast")); unmarkDone(t.dataset.key); }); return; }
     if (act === "draft-email") { runAct(act, () => onDraftEmailClick()); return; }
-    if (act === "csv") { runAct(act, () => { handleCSV(t.dataset.file); flashBtn(t, "✓ Downloaded"); }); return; }
-    if (act === "verify-csv") {
+    if (act === "view-data") { runAct(act, () => viewData(t.dataset.file)); return; }
+    if (act === "verify-view") {
       runAct(act, () => {
         const v = _verifyState[t.dataset.id] || ((S.ui && S.ui.verifyResults) ? S.ui.verifyResults[t.dataset.id] : null);
         const kind = t.dataset.kind;
         const n = v ? (kind === "keep" ? v.keep : v.remove) : 0;
-        downloadVerifyCSV(kind, t.dataset.id, fakeLeadRows(t.dataset.id, n, kind));
-        flashBtn(t, "✓ Downloaded");
+        viewVerifyData(kind, t.dataset.id, fakeLeadRows(t.dataset.id, n, kind));
       });
       return;
     }
