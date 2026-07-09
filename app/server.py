@@ -5560,6 +5560,48 @@ class Handler(SimpleHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(send_body)
 
+    # ── Deliverability proxy ────────────────────────────────────────────────
+    # Forwards /api/deliverability/<rest> to the standalone audit dashboard's
+    # live /api/<rest> (which does the real Smartlead work), adding server-side
+    # HTTP Basic Auth so the browser never sees the credentials and we avoid a
+    # cross-origin call. Purely additive — touches no existing route. Needs
+    # DELIV_AUDIT_AUTH="user:pass" in the environment (Render env var); without
+    # it we return a clear 503 instead of a silently broken UI.
+    _DELIV_AUDIT_BASE = "https://navreo-email-deliverability-audit.onrender.com/api/"
+
+    def _proxy_deliverability(self, method):
+        import base64, urllib.error
+        auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
+        if ":" not in auth:
+            return self._json({"error": "deliverability_backend_unconfigured",
+                               "message": "Live deliverability backend isn't configured on this "
+                                          "server yet (set the DELIV_AUDIT_AUTH env var)."}, 503)
+        url = self._DELIV_AUDIT_BASE + self.path[len("/api/deliverability/"):]  # keeps query string
+        body = None
+        if method == "POST":
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+        req = urllib.request.Request(url, data=body, method=method)
+        req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
+        if method == "POST":
+            req.add_header("Content-Type", self.headers.get("Content-Type") or "application/json")
+        try:
+            # /api/run kicks off a full live audit (~1-2 min) — give it headroom.
+            with urllib.request.urlopen(req, timeout=180, context=SSL_CTX) as resp:
+                data, ctype, status = resp.read(), resp.headers.get("Content-Type", "application/octet-stream"), resp.status
+        except urllib.error.HTTPError as e:
+            data = e.read()
+            ctype = (e.headers.get("Content-Type", "text/plain") if e.headers else "text/plain")
+            status = e.code
+        except Exception as e:  # noqa: BLE001 — network/timeout: surface upstream failure as 502
+            return self._json({"error": "deliverability_upstream_error", "message": str(e)[:300]}, 502)
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
@@ -5668,6 +5710,8 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(outreach_destinations({"refresh": refresh}))
+        if path.startswith("/api/deliverability/"):
+            return self._proxy_deliverability("GET")
         return self._serve_static()
 
     def do_POST(self):
@@ -5705,6 +5749,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             status, body = execute_notification_action(nid, payload)
             return self._json(body, status)
+        if path.startswith("/api/deliverability/"):
+            return self._proxy_deliverability("POST")
         route = ROUTES.get(path)
         if not route:
             return self._json({"ok": False, "message": "unknown endpoint"}, 404)
