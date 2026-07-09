@@ -2581,16 +2581,28 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
     spans.forEach((s) => {
       const n = _leadCounts[s.dataset.cid];
-      s.textContent = n != null ? fmtN(n) + " leads to verify" : "lead count unavailable";
+      const sent = Number(s.dataset.sent || 0);
+      if (n != null) {
+        const pct = n > 0 ? Math.min(100, Math.round((sent / n) * 100)) : 0;
+        s.textContent = `${fmtN(n)} to verify · ${pct}% campaign complete`;
+      } else {
+        s.textContent = `lead count unavailable · ${fmtN(sent)} sent`;
+      }
     });
   }
 
   function renderVerifyCampRow(c) {
     const cl = (S.A.history || []).find((h) => String(h.campaign) === String(c.id));
     const badge = cl ? `<span class="dlv-badge-cleaned" title="Already actioned ${esc(cl.date)}">✓ already actioned ${esc(cl.date)}${cl.removed != null ? " · −" + cl.removed : ""}</span>` : "";
+    const vleadsContent = (() => {
+      const n = _leadCounts[c.id];
+      if (n == null) return "counting leads…";
+      const pct = n > 0 ? Math.min(100, Math.round((c.sent / n) * 100)) : 0;
+      return `${fmtN(n)} to verify · ${pct}% campaign complete`;
+    })();
     return `<div class="dlv-vcamp"${cl ? ' style="opacity:.7"' : ""}>
       <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>
-      <span class="dlv-vmeta">${c.bounce_pct}% bounce · ${fmtN(c.sent)} sent${isLive() ? ` · <span class="dlv-vleads" data-cid="${c.id}">${_leadCounts[c.id] != null ? fmtN(_leadCounts[c.id]) + " leads to verify" : "counting leads…"}</span>` : ""}</span>${badge}
+      <span class="dlv-vmeta">${c.bounce_pct}% bounce${isLive() ? ` · <span class="dlv-vleads" data-cid="${c.id}" data-sent="${c.sent}">${vleadsContent}</span>` : ""}</span>${badge}
       <div class="dlv-vbtns">
         <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}" title="ListMint verification — SMTP + catch-all, every lead">✓ ${glossify("ListMint")}</button>
         <span class="dlv-vsep" aria-hidden="true"></span>
@@ -4025,7 +4037,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (!resp.ok) throw new Error("HTTP " + resp.status + " checking job status");
       try { j = await resp.json(); } catch (e) { throw new Error("Bad job-status response"); }
       if (onTick) { try { onTick(j); } catch (e) {} }
-      if (j.status === "done" || j.status === "failed") return j;
+      if (j.status === "done" || j.status === "failed" || j.status === "cancelled") return j;
       if (Date.now() - start > DLV_JOB_POLL_CAP_MS) throw new Error("Still running after 20 minutes — check back later, it may still finish.");
       await new Promise((r) => setTimeout(r, DLV_JOB_POLL_MS));
     }
@@ -4117,6 +4129,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return;
     }
     if (job.status === "failed") { fail(job.error || "Verification failed."); return; }
+    if (job.status === "cancelled") {
+      if (out) out.innerHTML = `<div class="dlv-vrun">Verification cancelled.</div>`;
+      btns.forEach((b) => (b.disabled = false));
+      btn.innerHTML = orig;
+      return;
+    }
     // Prefer the job's own mode/label if the backend plumbs one through;
     // otherwise fall back to the mode this request was posted with.
     const v = mapVerifyCounts(job.counts, job.mode || mode);
@@ -4179,13 +4197,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const before = camp ? camp.sent : 0;
     const after = Math.max(0, before - removed);
     if (camp) camp.sent = after;
-    logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count, failed: failedCount });
+    logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count, failed: failedCount, cancelled: job.status === "cancelled" || undefined });
     // Part A2: replace the persisted result with a "removed" summary so the box
     // still shows (and survives repaints) after the bad leads are gone.
     verifyResults()[id] = { removedSummary: { removed, guarded, before, after } };
     delete _verifyState[id];
     saveState();
-    toast("Removed " + removed + " · kept " + guarded + " replied", "ok");
+    // Cancelled-with-partial-progress is still real work done — refresh the
+    // page data the same way a completed remove does, just with a neutral
+    // (not celebratory) toast that names the partial count.
+    toast(job.status === "cancelled"
+      ? "Removal cancelled — " + removed + " already removed"
+      : "Removed " + removed + " · kept " + guarded + " replied", job.status === "cancelled" ? "neutral" : "ok");
     paintPage();
   }
 

@@ -273,7 +273,7 @@ function setupChartTooltip(wrap) {
   wrap.addEventListener("pointerleave", hide);
 }
 
-/* ── Background actions sidebar ───────────────────────────
+/* ── Tasks in progress sidebar ─────────────────────────────
    Self-contained widget: its own DOM, its own <style>, plain fetch only.
    Deliberately does NOT call any other helper in this file (esc, fmt, pulledAgo,
    etc.) so it works even on pages that only load a stub of shell.js — this is
@@ -320,15 +320,24 @@ function setupChartTooltip(wrap) {
   }
 
   function statusLabel(status) {
-    return { queued: "Queued", running: "Running", done: "Done", failed: "Failed" }[status] || jEsc(status || "?");
+    return { queued: "Queued", running: "Running", done: "Done", failed: "Failed", cancelled: "Cancelled" }[status] || jEsc(status || "?");
   }
   function statusClass(status) {
-    return { queued: "jq-n", running: "jq-b", done: "jq-g", failed: "jq-r" }[status] || "jq-n";
+    return { queued: "jq-n", running: "jq-b", done: "jq-g", failed: "jq-r", cancelled: "jq-c" }[status] || "jq-n";
   }
 
   function countsLine(job) {
     const c = job.counts;
     if (job.error && job.status === "failed") return jEsc(job.error);
+    if (job.status === "cancelled") {
+      const kind = String(job.kind || "").toLowerCase();
+      if (c && typeof c === "object" && (c.deleted != null || c.removed != null) && kind.includes("remove")) {
+        return `${jEsc(c.deleted ?? c.removed)} removed before cancel`;
+      }
+      const done = job.progress && job.progress.done;
+      if (done != null && done > 0) return `${jEsc(done)} checked before cancel`;
+      return "stopped before finishing";
+    }
     if (!c || typeof c !== "object") return "";
     const kind = String(job.kind || "").toLowerCase();
     if (kind.includes("verify")) {
@@ -422,10 +431,19 @@ function setupChartTooltip(wrap) {
 .nj-pill.jq-b { background: var(--orange-100, #FFE4D6); color: var(--orange-700, #A83100); }
 .nj-pill.jq-g { background: var(--green-bg, #E2F1E9); color: #195C3F; }
 .nj-pill.jq-r { background: var(--red-bg, #F7DCD5); color: #861E10; }
-.nj-card-progress { font-size: 11.5px; color: var(--ink-3, #6B6055); margin-bottom: 3px; }
+.nj-pill.jq-c { background: #F2F2F0; color: var(--ink-3, #6B6055); }
+.nj-card-progress { font-size: 11.5px; color: var(--ink-3, #6B6055); margin-bottom: 3px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .nj-card-time { font-size: 11px; color: var(--brown-400, #A89684); margin-bottom: 4px; }
 .nj-card-counts { font-size: 11.5px; color: var(--ink-2, #3A332C); line-height: 1.4; }
 .nj-card.jf-failed .nj-card-counts { color: var(--red, #C2371F); }
+.nj-cancel-btn {
+  border: 1px solid var(--line, #ECECEA); background: var(--card, #fff);
+  color: var(--ink-3, #6B6055); font-size: 10.5px; font-weight: 500;
+  padding: 2px 8px; border-radius: 999px; cursor: pointer; flex: none;
+  line-height: 1.4;
+}
+.nj-cancel-btn:hover { background: var(--bg-sunken, #F7F7F6); color: var(--ink, #14110E); }
+.nj-cancel-btn:disabled { opacity: 0.5; cursor: default; }
     `;
     document.head.appendChild(style);
   }
@@ -436,14 +454,14 @@ function setupChartTooltip(wrap) {
     elTab = document.createElement("button");
     elTab.id = "nav-jobs-tab";
     elTab.type = "button";
-    elTab.innerHTML = `<span class="nj-badge" id="nav-jobs-badge">0</span><span class="nj-label">Actions</span>`;
+    elTab.innerHTML = `<span class="nj-badge" id="nav-jobs-badge">0</span><span class="nj-label">Tasks</span>`;
     elTab.addEventListener("click", () => setOpen(!isOpen(), isOpen()));
 
     elPanel = document.createElement("div");
     elPanel.id = "nav-jobs-panel";
     elPanel.innerHTML = `
       <div class="nj-head">
-        <div class="nj-title">Background actions</div>
+        <div class="nj-title">Tasks in progress</div>
         <button type="button" class="nj-close" aria-label="Close">&times;</button>
       </div>
       <div class="nj-list" id="nav-jobs-list"></div>
@@ -452,10 +470,29 @@ function setupChartTooltip(wrap) {
 
     elBadge = elTab.querySelector("#nav-jobs-badge");
     elList = elPanel.querySelector("#nav-jobs-list");
+    elList.addEventListener("click", onListClick);
 
     elRoot.appendChild(elTab);
     elRoot.appendChild(elPanel);
     document.body.appendChild(elRoot);
+  }
+
+  // Set of job ids with an in-flight cancel POST — guards double-clicks
+  // (the next poll removes the id once the job leaves queued/running).
+  const cancelling = new Set();
+
+  function onListClick(e) {
+    const btn = e.target.closest(".nj-cancel-btn");
+    if (!btn) return;
+    const jid = btn.getAttribute("data-jid");
+    if (!jid || cancelling.has(jid)) return;
+    cancelling.add(jid);
+    btn.disabled = true;
+    btn.textContent = "Cancelling…";
+    fetch(`/api/jobs/${encodeURIComponent(jid)}/cancel`, { method: "POST" })
+      .then(() => fetchJobs())
+      .catch(() => { /* next poll will reconcile state either way */ })
+      .finally(() => cancelling.delete(jid));
   }
 
   function setOpen(open, userInitiated) {
@@ -487,19 +524,25 @@ function setupChartTooltip(wrap) {
     const status = job.status || "queued";
     const label = jEsc(job.label || job.kind || "Job");
     const pill = `<span class="nj-pill ${statusClass(status)}"><span class="nj-dot"></span>${statusLabel(status)}</span>`;
+    const cancellable = status === "queued" || status === "running";
+    const cancelBtn = cancellable
+      ? `<button type="button" class="nj-cancel-btn" data-jid="${jEsc(job.id)}">Cancel</button>` : "";
     let progress = "";
     if (status === "running" && job.progress && typeof job.progress === "object") {
       const done = job.progress.done, total = job.progress.total;
       if (done != null && total != null) {
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-        progress = `<div class="nj-card-progress">${jEsc(done)} of ${jEsc(total)} · ${pct}%</div>`;
+        progress = `<div class="nj-card-progress"><span>${jEsc(done)} of ${jEsc(total)} · ${pct}%</span>${cancelBtn}</div>`;
       }
+    }
+    if (!progress && cancellable) {
+      progress = `<div class="nj-card-progress"><span></span>${cancelBtn}</div>`;
     }
     const startedIso = job.started_at || job.finished_at;
     const timeStr = jRelTime(startedIso);
     const timeLine = timeStr ? `<div class="nj-card-time">${timeStr}</div>` : "";
     let countsHtml = "";
-    if (status === "done" || status === "failed") {
+    if (status === "done" || status === "failed" || status === "cancelled") {
       const line = countsLine(job);
       if (line) countsHtml = `<div class="nj-card-counts">${line}</div>`;
     }
@@ -512,7 +555,7 @@ function setupChartTooltip(wrap) {
 
   function render() {
     if (!jobs.length) {
-      elList.innerHTML = `<div class="nj-empty">No background actions yet.</div>`;
+      elList.innerHTML = `<div class="nj-empty">No tasks in progress yet.</div>`;
     } else {
       elList.innerHTML = jobs.map(renderCard).join("");
     }
@@ -548,7 +591,7 @@ function setupChartTooltip(wrap) {
       .catch((err) => {
         if (!warnedOnce) {
           warnedOnce = true;
-          console.warn("[nav-jobs] background actions unavailable:", err && err.message ? err.message : err);
+          console.warn("[nav-jobs] tasks in progress unavailable:", err && err.message ? err.message : err);
         }
         backendOk = false;
         if (elTab) elTab.classList.remove("nj-show");
@@ -566,7 +609,7 @@ function setupChartTooltip(wrap) {
     list.forEach((j) => {
       if (!knownIds.has(j.id)) newIds.push(j.id);
       const prevStatus = prevStatusById[j.id];
-      if (prevStatus === "running" && (j.status === "done" || j.status === "failed")) anyJustFinished = true;
+      if (prevStatus === "running" && (j.status === "done" || j.status === "failed" || j.status === "cancelled")) anyJustFinished = true;
     });
 
     jobs = list;

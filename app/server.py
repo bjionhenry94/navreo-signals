@@ -3216,7 +3216,8 @@ def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool =
     job = {"id": uuid.uuid4().hex[:10], "kind": kind, "label": label,
            "campaign_id": campaign_id, "mode": mode, "status": "queued",
            "progress": {"done": 0, "total": 0}, "started_at": None,
-           "finished_at": None, "counts": {}, "error": None, "dry_run": dry_run}
+           "finished_at": None, "counts": {}, "error": None, "dry_run": dry_run,
+           "cancel_requested": False}
     with JOBS_LOCK:
         JOBS[job["id"]] = job
         if len(JOBS) > _JOBS_CAP:
@@ -3362,6 +3363,9 @@ def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict):
     """Run ListMint over `rows` (subset of the details list), writing
     lm_result + overriding verdict in place. Chunked + sequential."""
     for i in range(0, len(rows), _LM_CHUNK):
+        with JOBS_LOCK:
+            if job.get("cancel_requested"):
+                return True  # signal caller: stopped early, don't mark done
         if i:
             time.sleep(1.0)  # pace chunks — cheaper than eating 429 backoffs
         chunk = rows[i:i + _LM_CHUNK]
@@ -3376,6 +3380,7 @@ def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict):
                 api_errors[err] = api_errors.get(err, 0) + 1
             with JOBS_LOCK:
                 job["progress"]["done"] += 1
+    return False  # ran to completion, not cancelled
 
 
 def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
@@ -3403,7 +3408,14 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
             from concurrent.futures import ThreadPoolExecutor, as_completed
             ex = ThreadPoolExecutor(max_workers=8)
             futs = {ex.submit(_mv_verify_one, d["email"], mv_key): d for d in details}
+            cancelled = False
             for fut in as_completed(futs):
+                with JOBS_LOCK:
+                    if job.get("cancel_requested"):
+                        cancelled = True
+                if cancelled:
+                    ex.shutdown(wait=False)
+                    break
                 d = futs[fut]
                 mv_result = fut.result()
                 if mv_result.startswith("error:"):
@@ -3417,6 +3429,9 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
                                 "unknown")
                 with JOBS_LOCK:
                     job["progress"]["done"] += 1
+            if cancelled:
+                _job_finished(job, "cancelled")
+                return
             ex.shutdown(wait=True)
             errored = sum(api_errors.values())
             if leads and errored > len(leads) // 2:
@@ -3431,11 +3446,15 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
             if lm_key and recheck:
                 with JOBS_LOCK:
                     job["progress"]["total"] += len(recheck)
-                _listmint_pass(job, recheck, lm_key, api_errors)
+                if _listmint_pass(job, recheck, lm_key, api_errors):
+                    _job_finished(job, "cancelled")
+                    return
         else:  # mode == "listmint" — ListMint on every lead, no MV involved
             with JOBS_LOCK:
                 job["progress"]["total"] = len(leads)
-            _listmint_pass(job, details, lm_key, api_errors)
+            if _listmint_pass(job, details, lm_key, api_errors):
+                _job_finished(job, "cancelled")
+                return
             errored = sum(api_errors.values())
             if leads and errored > len(leads) // 2:
                 top = max(api_errors, key=api_errors.get)
@@ -3473,7 +3492,13 @@ def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
         with JOBS_LOCK:
             job["progress"]["total"] = len(to_delete)
         deleted, failed, removed_emails = [], 0, []
+        cancelled = False
         for d in to_delete:
+            with JOBS_LOCK:
+                if job.get("cancel_requested"):
+                    cancelled = True
+            if cancelled:
+                break
             if not dry_run:
                 try:
                     url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads/"
@@ -3498,6 +3523,18 @@ def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
                   "guarded": len(guarded), "failed": failed}
         with JOBS_LOCK:
             job["counts"] = counts
+        if cancelled:
+            if not dry_run and deleted:
+                # only log a ledger row when something real actually happened -
+                # a cancel before the first delete leaves no trace to record.
+                log_activity("/api/verify-remove",
+                             payload={"campaign_id": campaign_id, **counts,
+                                      "removed_emails": removed_emails[:100],
+                                      "dry_run": dry_run, "cancelled": True},
+                             actor="deliverability", action="remove_bad",
+                             entity="campaign", entity_id=campaign_id)
+            _job_finished(job, "cancelled")
+            return
         log_activity("/api/verify-remove",
                      payload={"campaign_id": campaign_id, **counts,
                               "removed_emails": removed_emails[:100], "dry_run": dry_run},
@@ -7029,6 +7066,16 @@ class Handler(SimpleHTTPRequestHandler):
                          entity_id=nid)
             status, body = execute_notification_action(nid, payload)
             return self._json(body, status)
+        if path.startswith("/api/jobs/") and path.endswith("/cancel"):
+            jid = path[len("/api/jobs/"):-len("/cancel")]
+            with JOBS_LOCK:
+                job = JOBS.get(jid)
+                if not job:
+                    return self._json({"error": "not_found"}, 404)
+                if job["status"] not in ("queued", "running"):
+                    return self._json({"error": "not_cancellable"}, 409)
+                job["cancel_requested"] = True
+            return self._json({"ok": True})
         if path == "/api/verify-campaign":
             length = int(self.headers.get("Content-Length") or 0)
             try:
