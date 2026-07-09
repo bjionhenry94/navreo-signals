@@ -232,3 +232,28 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .proto-note.on { transform: translateX(-50%) translateY(0); }
 
 ::selection { background: var(--orange-100); }
+
+/* ── "Details & who's affected" pattern (ported from mailboxes.html) ── */
+.det-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 900px) {
+  .det-grid { grid-template-columns: 1fr; }
+}
+.det-block .h {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--ink-3); margin-bottom: 7px; display: flex; align-items: center; gap: 6px;
+}
+.det-block .consequence { font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.det-block .mono {
+  font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap;
+  color: var(--ink-3); line-height: 1.55;
+}
+.disclose { border: 1px solid var(--line); border-radius: 8px; }
+.disclose summary {
+  font-size: 13px; font-weight: 500; color: var(--ink-3); cursor: pointer;
+  list-style: none; padding: 8px 0;
+}
+.disclose summary::-webkit-details-marker { display: none; }
+.disclose .dc {
+  padding: 12px 14px; background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 8px;
+}
+.affbar { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 6px; }

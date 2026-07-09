@@ -138,6 +138,51 @@
   };
 
   /* ============================================================
+     0b. "Details and who's affected" disclosure builders — shared by
+         every pattern-classified action row (blacklist pause/reactivate,
+         warmup fix, signature fix, provider draft, reconnect, domain
+         reactivation/caps, remove-bad, campaign verify). Ported from the
+         mailboxes.html detailsHTML() pattern and the shared .det-grid /
+         .det-block / .disclose / .dc classes at the bottom of navreo.css.
+     ============================================================ */
+  // The two-column "If you approve" / "If you skip" grid. Callers pass
+  // already-interpolated, plain (non-glossified) strings — esc() happens here.
+  function dlvConsequences(approveTxt, skipTxt) {
+    return `<div class="det-grid">
+      <div class="det-block"><div class="h">If you approve</div><div class="consequence">${esc(approveTxt)}</div></div>
+      <div class="det-block"><div class="h">If you skip</div><div class="consequence">${esc(skipTxt)}</div></div>
+    </div>`;
+  }
+  // "Your affected <noun>, all N shown" / "first 8 of N shown" header text.
+  function dlvAffLabel(noun, total, cap) {
+    cap = cap || 8;
+    return total > cap ? "Your affected " + noun + ", first " + cap + " of " + total + " shown" : "Your affected " + noun + ", all " + total + " shown";
+  }
+  // Capped affected-entities table: `rows` is an array of already-escaped-or-
+  // plain cell arrays, `headers` an array of header labels. Caps at `cap`
+  // (default 8) rows and appends a muted "... and N more" row when truncated.
+  function dlvAffTable(headers, rows, headLabel, cap) {
+    cap = cap || 8;
+    const shown = rows.slice(0, cap);
+    const more = rows.length - shown.length;
+    const bodyRows = shown.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")
+      + (more > 0 ? `<tr><td colspan="${headers.length}" style="color:var(--ink-3)">… and ${more} more (open the fix to see all)</td></tr>` : "");
+    const label = headLabel || ("Your affected, " + (more > 0 ? "first " + shown.length + " of " + rows.length + " shown" : "all " + rows.length + " shown"));
+    return `<div class="det-block" style="margin:14px 0 6px"><div class="h">${esc(label)}</div></div>
+      <div class="tblwrap"><table class="tbl"><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
+  }
+  // Nested technical fold — mono det-blocks of raw signal, one per [title, text] pair.
+  function dlvTechFold(blocks) {
+    const body = blocks.filter((b) => b && b[1]).map((b, i) => `<div class="det-block"${i ? ' style="margin-top:12px"' : ""}><div class="h">${esc(b[0])}</div><div class="mono">${esc(b[1])}</div></div>`).join("");
+    if (!body) return "";
+    return `<details class="disclose" style="margin-top:12px"><summary>Show technical detail (exact action and raw signal)</summary><div class="dc">${body}</div></details>`;
+  }
+  // Wraps the whole thing in the collapsed outer <details>.
+  function dlvDisclose(innerHtml) {
+    return `<details class="disclose"><summary>Details and who's affected</summary><div class="dc">${innerHtml}</div></details>`;
+  }
+
+  /* ============================================================
      1. MOCK data — shaped like the real audit blob captured in
         scratchpad/audit-dashboard/*.json, trimmed to demo scale.
      ============================================================ */
@@ -2462,10 +2507,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="mv" data-done="${cl ? esc(cl.date) : ""}" title="MillionVerifier first, ListMint confirms catch-alls">✓ ${glossify("MillionVerifier")} → ${glossify("ListMint")}</button>
       </div>
       <div class="dlv-vresult" id="dlv-vr-${c.id}">${renderVerifyResultBox(c.id, (S.ui && S.ui.verifyResults) ? S.ui.verifyResults[c.id] : null)}</div>
+      ${dlvDisclose(dlvConsequences(
+        "The campaign's list gets verified before more sends go out. This spends verification credits; undeliverable addresses are archived, not deleted.",
+        "Sends continue to unverified addresses. Bounce rate above 3 percent burns the domains behind this campaign."
+      ))}
     </div>`;
   }
 
-  function renderTodoCard(it, i) {
+  function renderTodoCard(it, i, D) {
     const extraBits = [];
     if (it.verifyCamps && it.verifyCamps.length) extraBits.push(`<div class="dlv-vcamps">${it.verifyCamps.map(renderVerifyCampRow).join("")}</div>`);
     // Item 5a: the card's own "🚫 Manage ↓" button (below) deliberately opens
@@ -2483,6 +2532,38 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (it.newCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="new-mailboxes">👁 View new/untagged</a></div>`);
     if (it.retiredCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="retired">👁 View retired domains</a></div>`);
     if (it.wcCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="warmup-config">👁 View warmup-config issues</a></div>`);
+    // Family 2 disclosure: this to-do row is the to-do-list home for the
+    // "open-warmup-fix" tile/button (which itself has no room for one) — see
+    // buttons below.
+    if (it.key === "warmup-notwarming") {
+      const notWarming = S.A.warmupConfig.notWarming || [], wrongSettings = S.A.warmupConfig.wrongSettings || [];
+      const rows = notWarming.map((r) => [esc(r.email), esc(r.domain), esc(r.reason || "warmup off")])
+        .concat(wrongSettings.map((r) => [esc(r.email), esc(r.domain), esc(r.issue || "wrong settings")]));
+      const techLines = [];
+      if (notWarming.length) techLines.push(["Warmup off - blocked_reason breakdown", notWarming.map((r) => r.email + ": " + (r.reason || "warmup off")).join("\n")]);
+      if (wrongSettings.length) techLines.push(["Wrong settings - blocked_reason breakdown", wrongSettings.map((r) => r.email + ": " + r.issue).join("\n")]);
+      extraBits.push(dlvDisclose(
+        dlvConsequences(
+          "Warmup switches back on for the mailboxes you select, so their reputation rebuilds in the background. Note: Maildoso-managed inboxes run warmup externally, so an INACTIVE status there can be intentional. Only re-enable ones you know should be warming.",
+          "These inboxes keep sending with no warmup. Reputation drifts down slowly and more of them will get flagged over the coming weeks."
+        ) +
+        dlvAffTable(["Mailbox", "Domain / provider", "Status reason"], rows, dlvAffLabel("inboxes", rows.length)) +
+        dlvTechFold(techLines)
+      ));
+    }
+    // Family 3 disclosure: to-do-list home for the "open-sig-fix" tile/button.
+    if (it.key === "signatures") {
+      const missing = S.A.signature.missing || [], mismatch = S.A.signature.mismatch || [];
+      const rows = missing.map((r) => [esc(r.email), esc("missing signature")])
+        .concat(mismatch.map((r) => [esc(r.email), esc("name mismatch: " + (r.issue || ""))]));
+      extraBits.push(dlvDisclose(
+        dlvConsequences(
+          "The signature name is rewritten to match each sender. You see the exact before and after wording and confirm it before a single email changes.",
+          "Recipients keep getting emails signed by the wrong person. It reads as careless and drags reply rate on every affected inbox."
+        ) +
+        dlvAffTable(["Mailbox", "Issue"], rows, dlvAffLabel("inboxes", rows.length))
+      ));
+    }
     const btns = [];
     if (it.hypertide) {
       btns.push(`<button class="btn sm" data-act="draft-email">✉️ Draft email</button>`);
@@ -2491,6 +2572,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if ((S.A.history || []).some((h) => h && h.action === "hypertide_draft" && h.ts != null)) {
         btns.push(`<span class="dlv-tag ok" style="align-self:center" title="The escalation email was drafted this session">✉️ drafted</span>`);
       }
+      // Family 4 disclosure: to-do-list home for the "draft-email" button. The
+      // exact drafted text is available here via buildHypertideEmail(D) — the
+      // row already names the domains inside that draft body, so no separate
+      // affected table.
+      extraBits.push(dlvDisclose(
+        dlvConsequences(
+          "An email to the provider is drafted naming the affected domains. Nothing sends automatically: you review it and send it yourself.",
+          "The hosting-side problem stays open and the affected inboxes keep underdelivering until someone notices."
+        ) +
+        (D ? `<div class="det-block" style="margin-top:14px"><div class="h">The exact email that gets drafted</div><div class="mono">${esc(buildHypertideEmail(D))}</div></div>` : "")
+      ));
     }
     if (it._openManager) btns.push(`<button class="btn sm" data-act="open-manager">Open manager ↓</button>`);
     if (it.reminderDue) btns.push(`<button class="btn sm" data-act="open-reminders">⏰ Reminders ↓</button>`);
@@ -2529,7 +2621,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       html += `<div class="dlv-todo-head">Today's to-do <span class="dlv-todo-count">${D.activeTodo.length}</span></div><div class="dlv-actions-list">`;
       let ai = 0;
       (D.rawTodo || D.activeTodo).forEach((it) => {
-        if (D.activeTodo.indexOf(it) !== -1) html += renderTodoCard(it, ai++);
+        if (D.activeTodo.indexOf(it) !== -1) html += renderTodoCard(it, ai++, D);
         else if (D.doneTodo.indexOf(it) !== -1) html += stubOf(it);
       });
       html += "</div>";
@@ -2585,12 +2677,35 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Pause — the bulk "⏸ Pause sending" button above stays, this is just a
     // faster path when only one domain needs it (fix #7a).
     const pauseBtn = (!(b.rested > 0) && !b.cleared) ? `<button class="btn sm" data-act="pause-blacklist-domain" data-domain="${esc(b.domain)}" title="Pause sending on just this domain">⏸ Pause</button>` : "";
+    // Family 1 disclosure: pause/reactivate-bl on this specific blacklisted
+    // domain row. approve/skip copy interpolates this row's own mailboxes/
+    // lists; the affected table is always the single domain this row IS.
+    // The consequence copy must match the row's actual primary action: rows
+    // whose primary button is Reactivate (cleared or resting, see reBtn's
+    // `b.rested > 0` condition above) describe resuming, not pausing.
+    let blApproveTxt, blSkipTxt;
+    if (b.cleared || /CLEARED/.test(b.advice || "")) {
+      blApproveTxt = "Sending resumes on this domain with its saved caps restored, so volume ramps back safely instead of jumping. It has been cleared from " + b.lists + ".";
+      blSkipTxt = "The domain stays paused and its " + b.mailboxes + " mailbox(es) stay offline even though the blocklist has cleared it. That is wasted capacity.";
+    } else if (b.rested > 0 || b.restedDue) {
+      blApproveTxt = "Sending resumes on this domain with its saved caps restored, so volume ramps back safely instead of jumping. It is still listed on " + b.lists + ", so only do this once delisting is confirmed.";
+      blSkipTxt = "The domain stays resting with its " + b.mailboxes + " mailbox(es) offline. Fine if you are waiting out the delisting, wasted capacity if it is already clear.";
+    } else {
+      blApproveTxt = "Sending pauses on this domain only. Its " + b.mailboxes + " mailbox(es) stop immediately while every other domain keeps sending, and the saved caps are kept so you can resume with one click after delisting.";
+      blSkipTxt = "Mail keeps going out from a domain listed on " + b.lists + ". Providers that check that list junk or block those sends, and continued volume makes delisting slower.";
+    }
+    const blDisclose = dlvDisclose(
+      dlvConsequences(blApproveTxt, blSkipTxt) +
+      dlvAffTable(["Domain", "Mailboxes", "Lists"], [[esc(b.domain), esc(b.mailboxes + " mailboxes"), esc(b.lists)]], "Your affected domain, all 1 shown") +
+      dlvTechFold([["Lists", b.lists], ["Advice", b.advice], ["Batch", b.batch || "(no batch)"], ["MXToolbox", b.url]])
+    );
     return `<div class="dlv-vcamp">
       <a href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.domain)}</a>${tagChips}
       <span class="dlv-vmeta"><b>${b.mailboxes}</b> mbx</span>
       <span class="dlv-vmeta">${glossify(b.lists)}</span>
       <span class="dlv-tag blocked">${glossify(b.advice)}</span>${restChip}
       <div class="dlv-vbtns">${pauseBtn}${reBtn}<a class="btn sm" href="${esc(b.url)}" target="_blank" rel="noopener">${glossify("MXToolbox")} ↗</a></div>
+      ${blDisclose}
     </div>`;
   }
   // Formerly a collapsible <details class="dlv-fold"> that only rendered when
@@ -2693,11 +2808,42 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const foot = isD
       ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">👁 View warmup list</a> &nbsp; <a class="dlv-dl" data-act="view-data" data-file="domain-health">👁 View full table</a></div>`
       : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">👁 View problem mailboxes</a></div>`;
+    // Family 5 disclosure: reconnect (bulk-reconnect / reconnect-one) — shown
+    // only while the reconnect view is active, using the real reconnect rows.
+    const reconnectRows = (S.A.inboxRows || []).filter((r) => r.kind === "reconnect");
+    const reconnectDisclose = UI.mgr.view === "reconnect" ? dlvDisclose(
+      dlvConsequences(
+        "The failed connections retry now. Reconnected inboxes resume sending on their existing schedules.",
+        "These inboxes stay disconnected and silently send nothing, so your real volume sits below what campaigns report."
+      ) +
+      dlvAffTable(["Mailbox", "Domain", "Failure reason"], reconnectRows.map((r) => [esc(r.email), esc(r.domain), esc(r.reason || r.reason_category || "")]), dlvAffLabel("inboxes", reconnectRows.length)) +
+      dlvTechFold([["Failure reasons", reconnectRows.map((r) => r.email + ": " + (r.reason_category || "") + (r.reason ? " - " + r.reason : "")).join("\n")]])
+    ) : "";
+    // Family 6 disclosure: domain reactivation / caps restore (domain-reactivate,
+    // domain-reactivate-all, domain-reactivate-recovered, bulk-reenable,
+    // caps-apply, bulk-restore) — shown in the domain view, where the
+    // "resting → reactivate" rows this family acts on actually live.
+    let reactivateDisclose = "";
+    if (isD) {
+      const restingDomains = Object.keys(D.resting || {}).filter((dom) => (D.resting[dom] || 0) > 0);
+      const affRows = restingDomains.map((dom) => [esc(dom), esc((D.resting[dom] || 0) + " mailboxes"), esc((D.restingDue && D.restingDue[dom]) ? new Date(D.restingDue[dom]).toISOString().slice(0, 10) : "n/a")]);
+      const savedCapLines = (S.A.inboxRows || []).filter((r) => r._savedCap != null).map((r) => r.email + ": saved cap " + r._savedCap + "/day").join("\n");
+      reactivateDisclose = dlvDisclose(
+        dlvConsequences(
+          "Sending resumes on the selected domain(s) with their saved caps restored, so volume ramps back safely instead of jumping.",
+          "The domain(s) stay paused and their capacity stays offline. Fine if you are resting them deliberately, wasted volume if not."
+        ) +
+        (affRows.length ? dlvAffTable(["Domain", "Resting", "Due back"], affRows, dlvAffLabel("domains", affRows.length)) : `<div class="det-block" style="margin-top:14px"><div class="h">Your affected domains</div><div class="consequence">No domains are currently resting. Nothing to reactivate right now.</div></div>`) +
+        dlvTechFold([["Saved caps", savedCapLines]])
+      );
+    }
     return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
       <div class="dlv-subtab-head">🛠 Inbox &amp; domain manager<span class="hint">${D.flaggedActionable ? D.flaggedActionable + " domain(s) need warm-up →" : ""} pause · reactivate · reconnect</span></div>
       <div class="dlv-fold-body">
         <div class="dlv-plain" style="margin:-2px 0 12px">Rotate tired domains into warm-up rest, reconnect failed mailboxes, and adjust daily sending caps. Changes confirm before applying.</div>
         ${domCtrl}
+        ${reconnectDisclose}
+        ${reactivateDisclose}
         <div class="dlv-mb-bar">
           <span class="dlv-mb-cap">View</span>${viewSel}${isD ? `<span class="dlv-mb-cap">Show</span>` : ""}${domFilter}${batchSel}
           <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search ${isD ? "domain" : "email or domain"}…" value="${esc(UI.mgr.search)}" data-act="mgr-search">
@@ -3632,6 +3778,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-vrow dlv-vremove">🗑 Bad (confirmed invalid): <b>${v.remove}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="remove">👁 View bad (${v.remove})</a></div>
       <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}">🗑 Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
       <div class="dlv-plain">Reply-guard: anyone who replied is automatically kept, never deleted.</div>
+      ${dlvDisclose(dlvConsequences(
+        "The selected mailboxes leave the rotation. Undoable from the toast in this session, and nothing is deleted at the provider.",
+        "Known-bad mailboxes stay in rotation and keep dragging deliverability for every campaign that uses them."
+      ))}
     </div>`;
   }
   async function verifyCampaignAction(id, mode, btn) {
