@@ -4467,13 +4467,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // fabricates a result — sample mode (!isLive()) is refused outright below,
   // before any confirm dialog fires.
   const DLV_JOB_POLL_MS = 4000;
-  const DLV_JOB_POLL_CAP_MS = 20 * 60 * 1000; // give up polling after 20min; the job may still finish server-side
+  const DLV_JOB_POLL_CAP_MS = 100 * 60 * 1000; // large campaigns (10k+ leads) run ~80min; keep the live progress line for the whole run. Past this the job is durable (app_jobs + verify_campaign_state) so the result box repopulates on refresh.
   // Polls GET /api/jobs/<id> (same-origin, not the DLV_API proxy — this is the
   // new backend, not the /_audit blob layer) until status is done/failed, or
   // throws once the cap is hit. `onTick` is called with every poll response
   // (including intermediate "running" ones) so callers can paint progress.
   async function pollDlvJob(jobId, onTick) {
     const start = Date.now();
+    let notFoundStreak = 0;
     for (;;) {
       let resp, j;
       try {
@@ -4481,10 +4482,23 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       } catch (e) {
         throw new Error("Lost connection while checking job status: " + ((e && e.message) || e));
       }
+      if (resp.status === 404) {
+        // The job isn't in memory OR the durable app_jobs table. Almost always a
+        // brief window right after a server restart before the row is readable,
+        // or a job that predates durable jobs. Tolerate a few, then surface it as
+        // interrupted (not a raw HTTP 404) so the result box shows a resume hint.
+        if (++notFoundStreak >= 3) {
+          return { status: "interrupted", campaign_id: null,
+                   error: "The verification was interrupted (the server restarted). Re-run it — emails already checked are cached, so it resumes cheaply." };
+        }
+        await new Promise((r) => setTimeout(r, DLV_JOB_POLL_MS));
+        continue;
+      }
+      notFoundStreak = 0;
       if (!resp.ok) throw new Error("HTTP " + resp.status + " checking job status");
       try { j = await resp.json(); } catch (e) { throw new Error("Bad job-status response"); }
       if (onTick) { try { onTick(j); } catch (e) {} }
-      if (j.status === "done" || j.status === "failed" || j.status === "cancelled") return j;
+      if (j.status === "done" || j.status === "failed" || j.status === "cancelled" || j.status === "interrupted") return j;
       if (Date.now() - start > DLV_JOB_POLL_CAP_MS) throw new Error("Still running after 20 minutes — check back later, it may still finish.");
       await new Promise((r) => setTimeout(r, DLV_JOB_POLL_MS));
     }
@@ -4600,6 +4614,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       btn.innerHTML = orig;
       return;
     }
+    if (job.status === "interrupted") {
+      // Server restarted mid-run — not an error, and re-running is cache-cheap.
+      if (out) out.innerHTML = `<div class="dlv-vrun">${esc(job.error || "Verification was interrupted — re-run to resume (already-checked emails are cached).")}</div>`;
+      btns.forEach((b) => (b.disabled = false));
+      btn.innerHTML = orig;
+      refreshVerifyStatus([id]); // a partial verify may still have written state
+      return;
+    }
     // Prefer the job's own mode/label if the backend plumbs one through;
     // otherwise fall back to the mode this request was posted with.
     const v = mapVerifyCounts(job.counts, job.mode || mode);
@@ -4681,6 +4703,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return;
     }
     if (job.status === "failed") { fail(job.error || "Remove failed"); return; }
+    if (job.status === "interrupted") {
+      // Restart mid-removal — any deletes already done are real and durable.
+      const done = (job.counts || {}).deleted || 0;
+      if (out) out.innerHTML = `<div class="dlv-vrun">Removal was interrupted (server restarted)${done ? " after removing " + done : ""} — re-run to finish the rest.</div>`;
+      btn.disabled = false; btn.innerHTML = orig;
+      refreshVerifyStatus([id]);
+      return;
+    }
     const c = job.counts || {};
     const removed = c.deleted || 0, guarded = c.guarded || 0, failedCount = c.failed || 0;
     const before = camp ? camp.sent : 0;

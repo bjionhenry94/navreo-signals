@@ -3210,9 +3210,27 @@ _LEAD_COUNT_CACHE: dict = {}  # campaign_id (str) -> (total_leads, fetched_at); 
 _JOBS_CAP = 200
 
 
+_JOB_DB_FIELDS = ("id", "kind", "label", "campaign_id", "mode", "status",
+                  "progress", "counts", "error", "dry_run", "started_at",
+                  "finished_at")
+
+
+def _job_persist(job: dict):
+    """Mirror a job to Supabase so it survives a process restart. Fire-and-forget:
+    the ledger must never add latency to, or fail, the job it records. The
+    in-memory JOBS dict stays the fast path; app_jobs is the durability net that
+    /api/jobs and the poll fall back to when memory is gone (post-restart)."""
+    from datetime import datetime, timezone
+    row = {k: job.get(k) for k in _JOB_DB_FIELDS}
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    threading.Thread(
+        target=lambda: sb("POST", "app_jobs?on_conflict=id", row,
+                          prefer="resolution=merge-duplicates,return=minimal"),
+        daemon=True).start()
+
+
 def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool = False) -> dict:
     import uuid
-    from datetime import datetime, timezone
     job = {"id": uuid.uuid4().hex[:10], "kind": kind, "label": label,
            "campaign_id": campaign_id, "mode": mode, "status": "queued",
            "progress": {"done": 0, "total": 0}, "started_at": None,
@@ -3225,8 +3243,9 @@ def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool =
             for jid, j in list(JOBS.items()):
                 if len(JOBS) <= _JOBS_CAP:
                     break
-                if j["status"] in ("done", "failed"):
+                if j["status"] in ("done", "failed", "cancelled", "interrupted"):
                     del JOBS[jid]
+    _job_persist(job)
     return job
 
 
@@ -3235,6 +3254,7 @@ def _job_started(job: dict):
     with JOBS_LOCK:
         job["status"] = "running"
         job["started_at"] = datetime.now(timezone.utc).isoformat()
+    _job_persist(job)
 
 
 def _job_finished(job: dict, status: str, error: str | None = None):
@@ -3243,6 +3263,39 @@ def _job_finished(job: dict, status: str, error: str | None = None):
         job["status"] = status
         job["error"] = error
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _job_persist(job)
+
+
+def _job_get(jid: str) -> dict | None:
+    """A job by id: memory first (live progress), else the durable app_jobs row
+    (survives restarts). Absent everywhere -> None."""
+    with JOBS_LOCK:
+        job = JOBS.get(jid)
+    if job:
+        return job
+    rows = sb("GET", f"app_jobs?id=eq.{jid}&limit=1")
+    return rows[0] if rows else None
+
+
+def _jobs_recover_orphans():
+    """On boot, any app_jobs row still 'running'/'queued' belonged to the process
+    that just died — its worker thread is gone. Mark them 'interrupted' so the UI
+    shows a resumable state instead of a job that polls forever or 404s. Cheap to
+    re-run: per-chunk verdict persistence means a re-verify skips cached emails."""
+    try:
+        stuck = sb("GET", "app_jobs?status=in.(running,queued)&select=id")
+        for r in (stuck or []):
+            sb("PATCH", f"app_jobs?id=eq.{r['id']}",
+               {"status": "interrupted",
+                "error": "Server restarted mid-run — re-run to resume (already-checked emails are cached).",
+                "finished_at": _now_iso()})
+    except Exception:  # noqa: BLE001 — recovery is best-effort; never block boot
+        pass
+
+
+def _now_iso():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _mv_verify_one(email: str, mv_key: str) -> str:
@@ -3385,6 +3438,7 @@ def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict, campaig
                 job["progress"]["done"] += 1
         if campaign_id is not None:
             _persist_verdicts([r for r in chunk if r.get("lm_result")], campaign_id, "listmint")
+        _job_persist(job)  # durable progress so a restart's app_jobs row isn't frozen at 0
     return False  # ran to completion, not cancelled
 
 
@@ -3614,6 +3668,9 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
                                 "unknown")
                 with JOBS_LOCK:
                     job["progress"]["done"] += 1
+                    done = job["progress"]["done"]
+                if done % 100 == 0:
+                    _job_persist(job)  # durable progress heartbeat every 100 leads
             if cancelled:
                 _job_finished(job, "cancelled")
                 return
@@ -7244,9 +7301,14 @@ class Handler(SimpleHTTPRequestHandler):
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(outreach_destinations({"refresh": refresh}))
         if path == "/api/jobs":
+            # Memory first (live progress), then union in durable app_jobs rows
+            # that aren't in memory (recent history + jobs from before a restart).
             with JOBS_LOCK:
-                jobs = list(reversed(JOBS.values()))
-            return self._json({"jobs": jobs})
+                mem = list(reversed(JOBS.values()))
+            seen = {j["id"] for j in mem}
+            db = sb("GET", "app_jobs?order=created_at.desc&limit=50") or []
+            merged = mem + [r for r in db if r.get("id") not in seen]
+            return self._json({"jobs": merged[:50]})
         if path == "/api/campaign-lead-counts":
             # "How many leads will a verify cover?" — Smartlead's total_leads via
             # a limit=1 page per campaign, cached 1hr so repaints don't re-pay
@@ -7299,8 +7361,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": True, "names": names})
         if path.startswith("/api/jobs/"):
             jid = path[len("/api/jobs/"):]
-            with JOBS_LOCK:
-                job = JOBS.get(jid)
+            job = _job_get(jid)  # memory first, then durable app_jobs (survives restart)
             if not job:
                 return self._json({"error": "not_found"}, 404)
             return self._json(job)
@@ -7571,4 +7632,7 @@ if __name__ == "__main__":
     host = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
     print(f"Serving {PROJECT_DIR} + /api on http://{host}:{port}")
     threading.Thread(target=_boot_warmup, daemon=True).start()
+    # Any job left 'running' in app_jobs belonged to the process we're replacing —
+    # its worker thread is gone, so mark it interrupted (resumable, cache-cheap).
+    threading.Thread(target=_jobs_recover_orphans, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

@@ -320,14 +320,15 @@ function setupChartTooltip(wrap) {
   }
 
   function statusLabel(status) {
-    return { queued: "Queued", running: "Running", done: "Done", failed: "Failed", cancelled: "Cancelled" }[status] || jEsc(status || "?");
+    return { queued: "Queued", running: "Running", done: "Done", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted" }[status] || jEsc(status || "?");
   }
   function statusClass(status) {
-    return { queued: "jq-n", running: "jq-b", done: "jq-g", failed: "jq-r", cancelled: "jq-c" }[status] || "jq-n";
+    return { queued: "jq-n", running: "jq-b", done: "jq-g", failed: "jq-r", cancelled: "jq-c", interrupted: "jq-r" }[status] || "jq-n";
   }
 
   function countsLine(job) {
     const c = job.counts;
+    if (job.status === "interrupted") return jEsc(job.error || "Server restarted mid-run — re-run to resume (already-checked emails are cached).");
     if (job.error && job.status === "failed") return jEsc(job.error);
     if (job.status === "cancelled") {
       const kind = String(job.kind || "").toLowerCase();
@@ -542,11 +543,11 @@ function setupChartTooltip(wrap) {
     const timeStr = jRelTime(startedIso);
     const timeLine = timeStr ? `<div class="nj-card-time">${timeStr}</div>` : "";
     let countsHtml = "";
-    if (status === "done" || status === "failed" || status === "cancelled") {
+    if (status === "done" || status === "failed" || status === "cancelled" || status === "interrupted") {
       const line = countsLine(job);
       if (line) countsHtml = `<div class="nj-card-counts">${line}</div>`;
     }
-    const cardCls = status === "failed" ? "nj-card jf-failed" : "nj-card";
+    const cardCls = (status === "failed" || status === "interrupted") ? "nj-card jf-failed" : "nj-card";
     return `<div class="${cardCls}">
       <div class="nj-card-top"><span class="nj-card-label">${label}</span>${pill}</div>
       ${progress}${timeLine}${countsHtml}
@@ -609,7 +610,7 @@ function setupChartTooltip(wrap) {
     list.forEach((j) => {
       if (!knownIds.has(j.id)) newIds.push(j.id);
       const prevStatus = prevStatusById[j.id];
-      if (prevStatus === "running" && (j.status === "done" || j.status === "failed" || j.status === "cancelled")) anyJustFinished = true;
+      if (prevStatus === "running" && (j.status === "done" || j.status === "failed" || j.status === "cancelled" || j.status === "interrupted")) anyJustFinished = true;
     });
 
     jobs = list;
