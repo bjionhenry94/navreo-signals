@@ -1235,6 +1235,12 @@ details.dlv-fold:not([open])>*:not(summary){display:none}
 .dlv-subtab-panel.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-vcamps{display:flex;flex-direction:column;gap:9px;margin-top:8px}
 .dlv-vcamp{background:var(--bg-sunken);border:1px solid var(--line);border-radius:9px;padding:10px 12px;display:flex;flex-wrap:wrap;align-items:center;gap:9px}
+/* A campaign with a running/queued verify job: dim it and lock the buttons so
+   it clearly reads "in progress" and can't be double-fired. The progress note
+   and the campaign name stay full-strength for legibility. */
+.dlv-vcamp-busy{opacity:.85}
+.dlv-vcamp-busy .dlv-vbtns button[disabled]{opacity:.4;cursor:default;pointer-events:none}
+.dlv-vcamp-busy .dlv-vrun{color:var(--orange-700);font-weight:500}
 .dlv-vcamp a{font-weight:600;color:var(--ink);text-decoration:none} .dlv-vcamp a:hover{color:var(--orange-700)}
 .dlv-vmeta{font-size:11.5px;color:var(--ink-3)}
 .dlv-vbtns{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}
@@ -2680,15 +2686,28 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return `${fmtN(n)} to verify · ${pct}% campaign complete`;
     })();
     const sessionV = (S.ui && S.ui.verifyResults) ? S.ui.verifyResults[c.id] : null;
-    return `<div class="dlv-vcamp"${cl ? ' style="opacity:.7"' : ""}>
+    // Server-truth "a job is working on this campaign right now" — greys the row
+    // and disables the verify buttons so it reads as in-progress and can't be
+    // double-fired, even for a queued job or one started in another tab/refresh.
+    const aj = _activeJobs[cid];
+    const busy = !!aj;
+    const busyNote = busy ? (() => {
+      if (aj.status === "queued") return `<div class="dlv-vrun">Queued — waiting for the current task to finish…</div>`;
+      const p = aj.progress || {}, pc = p.total > 0 ? " (" + Math.round(((p.done || 0) / p.total) * 100) + "%)" : "";
+      const verb = aj.kind === "remove_bad" ? "Removing" : "Verifying";
+      return `<div class="dlv-vrun">${verb}… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"}${pc} — see the Tasks panel</div>`;
+    })() : "";
+    const dis = busy ? " disabled" : "";
+    return `<div class="dlv-vcamp${busy ? " dlv-vcamp-busy" : ""}"${cl && !busy ? ' style="opacity:.7"' : ""}>
       <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>
       <span class="dlv-vmeta">${c.bounce_pct}% bounce${isLive() ? ` · <span class="dlv-vleads" data-cid="${c.id}" data-sent="${c.sent}">${vleadsContent}</span>` : ""}</span>${badge}
       <div class="dlv-vbtns">
-        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}" title="ListMint verification — SMTP + catch-all, every lead">✓ ${glossify("ListMint")}</button>
+        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}"${dis} title="ListMint verification — SMTP + catch-all, every lead">✓ ${glossify("ListMint")}</button>
         <span class="dlv-vsep" aria-hidden="true"></span>
-        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="mv" data-done="${cl ? esc(cl.date) : ""}" title="MillionVerifier first, ListMint re-checks catch-alls">✓ ${glossify("MillionVerifier")} → ${glossify("ListMint")}</button>
+        <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="mv" data-done="${cl ? esc(cl.date) : ""}"${dis} title="MillionVerifier first, ListMint re-checks catch-alls">✓ ${glossify("MillionVerifier")} → ${glossify("ListMint")}</button>
         <a class="dlv-dl" data-act="verify-dismiss" data-id="${c.id}" title="Hide this campaign from the verify list until you un-ignore it" style="margin-left:4px;align-self:center">Ignore</a>
       </div>
+      ${busyNote}
       <div class="dlv-vresult" id="dlv-vr-${c.id}">${renderVerifyResultBox(c.id, sessionV, _verifyStatus[cid])}</div>
       ${dlvDisclose(dlvConsequences(
         "The campaign's list gets verified before more sends go out — ListMint checks every lead live, MillionVerifier → ListMint spends 1 MillionVerifier credit per lead first; nothing is removed until you choose to remove the confirmed-bad ones.",
@@ -3672,7 +3691,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
     if (isLive()) fillLeadCounts(); // async; fills the "N leads to verify" spans in place
     if (isLive()) fillVerifyStatus(); // async; server-truth verify state — see 23. Verify pipeline
+    if (isLive() && !_activeJobsStarted) { _activeJobsStarted = true; fillActiveJobs(); } // one self-rescheduling poller
   }
+  let _activeJobsStarted = false;
 
   // Overview = every section that stayed in the main scroll (order preserved):
   // coach, verdict, banner, health strip, fleet-by-the-numbers (incl. the
@@ -4406,6 +4427,43 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // id (string). Populated once per paint (see fillVerifyStatus, called from
   // paintPage) and refreshed on demand after any verify/remove/dismiss
   // action (refreshVerifyStatus).
+  // Which campaigns currently have a queued/running verify (or remove) job —
+  // server truth from /api/jobs, so a row shows "in progress" and greys its
+  // buttons even if THIS tab didn't start the job (another tab, a queued job,
+  // or after a refresh). Keyed by campaign_id -> {status, progress}.
+  const _activeJobs = Object.create(null);
+  let _activeJobsTimer = null;
+  async function fillActiveJobs() {
+    let changed = false;
+    try {
+      const r = await fetch("/api/jobs");
+      const jobs = (r.ok && (await r.json()).jobs) || [];
+      const next = Object.create(null);
+      for (const j of jobs) {
+        const cid = j.campaign_id != null ? String(j.campaign_id) : null;
+        if (!cid) continue;
+        if (j.status === "queued" || j.status === "running") {
+          // newest wins (jobs come newest-first); keep the first seen per campaign
+          if (!next[cid]) next[cid] = { status: j.status, progress: j.progress || {}, kind: j.kind };
+        }
+      }
+      // changed if the set of busy campaigns differs, or a progress bucket moved
+      const keysA = Object.keys(_activeJobs), keysB = Object.keys(next);
+      if (keysA.length !== keysB.length || keysB.some((k) => !_activeJobs[k])) changed = true;
+      else changed = keysB.some((k) => {
+        const a = _activeJobs[k].progress || {}, b = next[k].progress || {};
+        return _activeJobs[k].status !== next[k].status || a.done !== b.done || a.total !== b.total;
+      });
+      Object.keys(_activeJobs).forEach((k) => delete _activeJobs[k]);
+      Object.assign(_activeJobs, next);
+    } catch (e) { /* transient; keep prior state, try again next tick */ }
+    const anyActive = Object.keys(_activeJobs).length > 0;
+    // poll fast while something runs, slow when idle
+    if (_activeJobsTimer) clearTimeout(_activeJobsTimer);
+    if (isLive()) _activeJobsTimer = setTimeout(fillActiveJobs, anyActive ? 4000 : 20000);
+    if (changed) paintPage();
+  }
+
   const _verifyStatus = Object.create(null);
   let _verifyStatusInFlight = false;
   async function fillVerifyStatus() {
@@ -4650,7 +4708,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const resp = await fetch("/api/verify-campaign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.assign({ campaign_id: id, mode: mode }, autoRemove ? { auto_remove: true } : {})),
+        body: JSON.stringify(Object.assign({ campaign_id: id, mode: mode, name: (camp && camp.name) || undefined }, autoRemove ? { auto_remove: true } : {})),
       });
       const j = await resp.json().catch(() => ({}));
       if (resp.status !== 202) { fail((j && (j.message || j.error)) || ("HTTP " + resp.status)); return; }

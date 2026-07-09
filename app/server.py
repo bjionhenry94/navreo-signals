@@ -3921,7 +3921,8 @@ def api_verify_campaign(p: dict):
     dry_run = bool(p.get("dry_run"))
     auto_remove = bool(p.get("auto_remove"))
     name = (p.get("name") or "").strip() or None
-    label = (f"Verify campaign {campaign_id} "
+    who = name or f"campaign {campaign_id}"
+    label = (f"Verify {who} "
              + ("(ListMint)" if mode == "listmint" else "(MillionVerifier → ListMint)"))
     if auto_remove:
         label += " + auto-remove"
