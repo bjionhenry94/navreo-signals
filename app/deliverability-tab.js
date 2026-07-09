@@ -2561,12 +2561,36 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      13. Today's to-do
      ============================================================ */
+  // Verify scope = the campaign's FULL lead list, which is usually far larger
+  // than the "sent" number on the row — surface the real count (and therefore
+  // the real credit cost) before anyone clicks. Lazy: one batched backend call
+  // after paint, cached for the session, spans filled in place (no repaint).
+  const _leadCounts = Object.create(null);
+  let _leadCountsInFlight = false;
+  async function fillLeadCounts() {
+    const spans = [...document.querySelectorAll(".dlv-vleads[data-cid]")];
+    const need = [...new Set(spans.map((s) => s.dataset.cid))].filter((id) => _leadCounts[id] == null);
+    if (need.length && !_leadCountsInFlight) {
+      _leadCountsInFlight = true;
+      try {
+        const r = await fetch("/api/campaign-lead-counts?ids=" + encodeURIComponent(need.join(",")));
+        const counts = (r.ok && (await r.json()).counts) || {};
+        Object.keys(counts).forEach((id) => { if (counts[id] != null) _leadCounts[id] = counts[id]; });
+      } catch (e) { /* count stays unknown — row copy already covers it */ }
+      _leadCountsInFlight = false;
+    }
+    spans.forEach((s) => {
+      const n = _leadCounts[s.dataset.cid];
+      s.textContent = n != null ? fmtN(n) + " leads to verify" : "lead count unavailable";
+    });
+  }
+
   function renderVerifyCampRow(c) {
     const cl = (S.A.history || []).find((h) => String(h.campaign) === String(c.id));
     const badge = cl ? `<span class="dlv-badge-cleaned" title="Already actioned ${esc(cl.date)}">✓ already actioned ${esc(cl.date)}${cl.removed != null ? " · −" + cl.removed : ""}</span>` : "";
     return `<div class="dlv-vcamp"${cl ? ' style="opacity:.7"' : ""}>
       <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>
-      <span class="dlv-vmeta">${c.bounce_pct}% bounce · ${fmtN(c.sent)} sent</span>${badge}
+      <span class="dlv-vmeta">${c.bounce_pct}% bounce · ${fmtN(c.sent)} sent${isLive() ? ` · <span class="dlv-vleads" data-cid="${c.id}">${_leadCounts[c.id] != null ? fmtN(_leadCounts[c.id]) + " leads to verify" : "counting leads…"}</span>` : ""}</span>${badge}
       <div class="dlv-vbtns">
         <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}" title="ListMint verification — SMTP + catch-all, every lead">✓ ${glossify("ListMint")}</button>
         <span class="dlv-vsep" aria-hidden="true"></span>
@@ -3520,6 +3544,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { if (foldState[d.id] != null) d.open = foldState[d.id]; });
     paintManagerRows(); // no-ops safely (guarded on $id("dlv-mgr-body")) unless the Manager tab is active
     scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
+    if (isLive()) fillLeadCounts(); // async; fills the "N leads to verify" spans in place
   }
 
   // Overview = every section that stayed in the main scroll (order preserved):
@@ -4034,7 +4059,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!isLive()) { toast("Live backend not connected — verification unavailable in sample mode.", "err"); return; }
     const done = btn.dataset.done;
     const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(id));
-    const estTotal = camp ? Math.max(40, Math.round(camp.sent * 0.62)) : 500;
+    // Real full-list count from /api/campaign-lead-counts when it has landed;
+    // the sent-based guess only backstops a click that beats the async fill.
+    const realTotal = _leadCounts[String(id)];
+    const estTotal = realTotal != null ? fmtN(realTotal)
+      : "~" + (camp ? Math.max(40, Math.round(camp.sent * 0.62)) : 500) + " (estimating…)";
     // Real read-only run — every click still gets a styled confirm first
     // (fix #5): testers were surprised a click started pulling leads
     // immediately with no heads-up about credit cost. The already-actioned
@@ -4042,8 +4071,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // stacked as a second confirm. Message describes the chosen flow so the
     // user knows what they're about to trigger (mode-specific cost/speed).
     let msg = mode === "listmint"
-      ? "Runs a REAL, read-only verification of this campaign's ~" + estTotal + " leads via ListMint — checks every lead by live SMTP + catch-all probe (slower, ~3s/lead). Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?"
-      : "Runs a REAL, read-only verification of this campaign's ~" + estTotal + " leads via MillionVerifier → ListMint — 1 MillionVerifier credit per lead, then ListMint re-checks any catch-all/unknown results. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?";
+      ? "Runs a REAL, read-only verification of this campaign's " + estTotal + " leads (the FULL lead list, not just sent) via ListMint — live SMTP + catch-all probe on every lead. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?"
+      : "Runs a REAL, read-only verification of this campaign's " + estTotal + " leads (the FULL lead list, not just sent) via MillionVerifier → ListMint — 1 MillionVerifier credit per lead, then ListMint re-checks any catch-all/unknown results. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?";
     if (done) msg = "This campaign was already verified + cleaned on " + done + ". Re-running costs credits and shouldn't usually be needed.\n\n" + msg;
     const ok = await dlvConfirm(msg, { title: "Verify campaign" });
     if (!ok) return;
@@ -4080,7 +4109,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       job = await pollDlvJob(jobId, (j) => {
         if (!out || j.status !== "running") return;
         const p = j.progress || {};
-        out.innerHTML = `<div class="dlv-vrun">Verifying… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"}</div>`;
+        const pct = p.total > 0 ? " (" + Math.round(((p.done || 0) / p.total) * 100) + "%)" : "";
+        out.innerHTML = `<div class="dlv-vrun">Verifying… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"} lead(s)${pct}</div>`;
       });
     } catch (e) {
       fail((e && e.message) || String(e));
@@ -4136,7 +4166,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       job = await pollDlvJob(jobId, (j) => {
         if (!out || j.status !== "running") return;
         const p = j.progress || {};
-        out.innerHTML = `<div class="dlv-vrun">Removing… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"}</div>`;
+        const pct = p.total > 0 ? " (" + Math.round(((p.done || 0) / p.total) * 100) + "%)" : "";
+        out.innerHTML = `<div class="dlv-vrun">Removing… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"}${pct}</div>`;
       });
     } catch (e) {
       fail((e && e.message) || String(e));

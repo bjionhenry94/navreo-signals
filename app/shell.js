@@ -390,6 +390,7 @@ function setupChartTooltip(wrap) {
   transform: translateX(100%); transition: transform 0.22s ease;
 }
 #nav-jobs-panel.nj-open { display: flex; transform: translateX(0); }
+#nav-jobs-tab.nj-shifted { right: min(320px, 90vw); z-index: 202; }
 #nav-jobs-panel .nj-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 16px 12px; border-bottom: 1px solid var(--line, #ECECEA); flex: none;
@@ -436,7 +437,7 @@ function setupChartTooltip(wrap) {
     elTab.id = "nav-jobs-tab";
     elTab.type = "button";
     elTab.innerHTML = `<span class="nj-badge" id="nav-jobs-badge">0</span><span class="nj-label">Actions</span>`;
-    elTab.addEventListener("click", () => setOpen(true));
+    elTab.addEventListener("click", () => setOpen(!isOpen(), isOpen()));
 
     elPanel = document.createElement("div");
     elPanel.id = "nav-jobs-panel";
@@ -460,8 +461,10 @@ function setupChartTooltip(wrap) {
   function setOpen(open, userInitiated) {
     if (open) {
       elPanel.classList.add("nj-open");
+      elTab.classList.add("nj-shifted"); // tab rides the panel edge so it stays a toggle
     } else {
       elPanel.classList.remove("nj-open");
+      elTab.classList.remove("nj-shifted");
       if (userInitiated) userClosedThisView = true;
     }
     saveOpen(open);
@@ -487,7 +490,10 @@ function setupChartTooltip(wrap) {
     let progress = "";
     if (status === "running" && job.progress && typeof job.progress === "object") {
       const done = job.progress.done, total = job.progress.total;
-      if (done != null && total != null) progress = `<div class="nj-card-progress">${jEsc(done)} of ${jEsc(total)}</div>`;
+      if (done != null && total != null) {
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        progress = `<div class="nj-card-progress">${jEsc(done)} of ${jEsc(total)} · ${pct}%</div>`;
+      }
     }
     const startedIso = job.started_at || job.finished_at;
     const timeStr = jRelTime(startedIso);
@@ -589,7 +595,7 @@ function setupChartTooltip(wrap) {
   function init() {
     injectStyle();
     buildDom();
-    if (isOpenSaved()) elPanel.classList.add("nj-open");
+    if (isOpenSaved()) setOpen(true);
     render();
     fetchJobs();
   }

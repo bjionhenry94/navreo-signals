@@ -3206,6 +3206,7 @@ from collections import OrderedDict as _OrderedDict
 JOBS: "_OrderedDict[str, dict]" = _OrderedDict()
 JOBS_LOCK = threading.Lock()
 VERIFY_RESULTS: dict = {}  # campaign_id (str) -> lead-level verify detail, this-session only
+_LEAD_COUNT_CACHE: dict = {}  # campaign_id (str) -> (total_leads, fetched_at); 10-min TTL
 _JOBS_CAP = 200
 
 
@@ -3287,18 +3288,40 @@ def _listmint_verify_batch(emails: list, lm_key: str) -> dict:
     Clay API docs, proven live 2026-07-09). Auth is the api-key QUERY param —
     the header form is rejected. SMTP + catch-all verification is slow
     (~3s/email observed), so callers chunk small and give a long timeout."""
+    import urllib.error
     import urllib.parse
     url = ("https://api.listmint.io/api/verify-emails?return=true&api-key="
            + urllib.parse.quote(lm_key))
-    for attempt in (1, 2):
+    last_err = "no attempts made"
+    for attempt in range(1, 6):
         try:
-            r = http_json("POST", url, {"Content-Type": "application/json"},
-                          {"emails": emails}, timeout=240)
+            req = urllib.request.Request(url, data=json.dumps({"emails": emails}).encode(),
+                                         headers={"User-Agent": UA,
+                                                  "Content-Type": "application/json"},
+                                         method="POST")
+            with urllib.request.urlopen(req, timeout=240, context=SSL_CTX) as resp:
+                r = json.loads(resp.read().decode())
             return {x.get("email"): x.get("result") for x in (r or {}).get("results", [])}
-        except Exception as e:  # noqa: BLE001 — one retry, then surface as batch error
-            if attempt == 2:
-                return {"_error": str(e)[:200]}
-    return {}
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                # Rate-limited: a campaign-sized run WILL hit this. Honour
+                # Retry-After when sent, else back off progressively — waiting
+                # is correct, failing the whole job is not.
+                try:
+                    wait = int((e.headers or {}).get("Retry-After") or 0)
+                except (TypeError, ValueError):
+                    wait = 0
+                last_err = "HTTP 429: Too Many Requests"
+                time.sleep(min(max(wait, 10 * attempt), 120))
+                continue
+            last_err = f"HTTP {e.code}: {str(e.reason)[:150]}"
+            if attempt >= 2:
+                break
+        except Exception as e:  # noqa: BLE001 — one retry on network flake, then surface
+            last_err = str(e)[:200]
+            if attempt >= 2:
+                break
+    return {"_error": last_err}
 
 
 def _fetch_all_smartlead_leads(campaign_id, sl_key: str) -> list:
@@ -3339,6 +3362,8 @@ def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict):
     """Run ListMint over `rows` (subset of the details list), writing
     lm_result + overriding verdict in place. Chunked + sequential."""
     for i in range(0, len(rows), _LM_CHUNK):
+        if i:
+            time.sleep(1.0)  # pace chunks — cheaper than eating 429 backoffs
         chunk = rows[i:i + _LM_CHUNK]
         res = _listmint_verify_batch([r["email"] for r in chunk], lm_key)
         err = res.get("_error")
@@ -6863,6 +6888,31 @@ class Handler(SimpleHTTPRequestHandler):
             with JOBS_LOCK:
                 jobs = list(reversed(JOBS.values()))
             return self._json({"jobs": jobs})
+        if path == "/api/campaign-lead-counts":
+            # "How many leads will a verify cover?" — Smartlead's total_leads via
+            # a limit=1 page per campaign, cached so repaints don't re-pay the
+            # round-trips. The count is the campaign's FULL lead list (verify
+            # scope), not the sent count shown on the audit rows.
+            from urllib.parse import parse_qs, urlparse
+            ids = [s for s in (parse_qs(urlparse(self.path).query).get("ids") or [""])[0]
+                   .split(",") if s.strip()][:25]
+            sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+            out = {}
+            for cid in ids:
+                cached = _LEAD_COUNT_CACHE.get(cid)
+                if cached and time.time() - cached[1] < 600:
+                    out[cid] = cached[0]
+                    continue
+                try:
+                    page = http_json("GET", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads"
+                                            f"?api_key={sl_key}&offset=0&limit=1", {})
+                    n = int((page or {}).get("total_leads") or 0)
+                except Exception:  # noqa: BLE001 — a failed count is "unknown", not a 500
+                    n = None
+                if n is not None:
+                    _LEAD_COUNT_CACHE[cid] = (n, time.time())
+                out[cid] = n
+            return self._json({"counts": out})
         if path.startswith("/api/jobs/"):
             jid = path[len("/api/jobs/"):]
             with JOBS_LOCK:
