@@ -297,6 +297,33 @@ if (typeof fetchJsonWithRetry === "undefined") {
     }
   };
 }
+/* Same deploy-timing fallback as fetchJsonWithRetry above: pulledAgo is the
+   shared "last pulled 3 days ago" formatter in shell.js. Every source card calls
+   it during render, so a stale cached shell.js without it would throw and blank
+   the Sources list. Define an identical copy here when that build hasn't landed. */
+if (typeof pulledAgo === "undefined") {
+  window.pulledAgo = function (iso) {
+    if (!iso) return "";
+    let s = String(iso).trim().replace(" ", "T");
+    if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";
+    const then = new Date(s);
+    if (isNaN(then.getTime())) return esc(String(iso));
+    const secs = Math.max(0, (Date.now() - then.getTime()) / 1000);
+    const plur = (n, w) => `${n} ${w}${n === 1 ? "" : "s"} ago`;
+    let rel;
+    if (secs < 45) rel = "just now";
+    else if (secs < 3600) rel = plur(Math.round(secs / 60) || 1, "min");
+    else if (secs < 86400) rel = plur(Math.floor(secs / 3600), "hour");
+    else if (secs < 86400 * 7) rel = plur(Math.floor(secs / 86400), "day");
+    else {
+      const sameYear = then.getFullYear() === new Date().getFullYear();
+      rel = "on " + then.toLocaleDateString("en-GB",
+        sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+    }
+    const full = then.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    return `<span title="${esc(full)} (your local time)">${esc(rel)}</span>`;
+  };
+}
 function cachedGet(url, ttl = GET_TTL) {
   const now = Date.now();
   const mem = _getCache.get(url);
@@ -530,7 +557,7 @@ async function renderDraftCampaign(id) {
       </div>
       <div class="card panel" style="width:260px;flex-shrink:0;margin-bottom:0">
         <h2 style="font-size:14px">Activity</h2>
-        <div id="ov-feed">${pullFeed.length ? pullFeed.map((f) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(f.msg)}${f.t ? `<div class="muted">${esc(f.t.slice(5, 16).replace("T", " "))}</div>` : ""}</div>`).join("") : '<div class="small muted" style="padding:8px 0">Nothing yet - pulls and approvals show here</div>'}</div>
+        <div id="ov-feed">${pullFeed.length ? pullFeed.map((f) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(f.msg)}${f.t ? `<div class="muted">${pulledAgo(f.t)}</div>` : ""}</div>`).join("") : '<div class="small muted" style="padding:8px 0">Nothing yet - pulls and approvals show here</div>'}</div>
       </div>
     </div>`;
     (async () => {
@@ -1040,7 +1067,7 @@ function leadRowInner(merged, cid) {
           <div style="flex:1;min-width:0">
             <div style="font-weight:500">${merged.linkedin ? `<a href="${esc(merged.linkedin)}" target="_blank" style="color:inherit;text-decoration:none">${esc(merged.name)}</a>` : esc(merged.name)} <span class="small muted">· ${esc(merged.title || "")} · ${esc(merged.company || "")}</span></div>
             <div class="small" style="font-style:italic;color:var(--ink-2)">"${esc(merged.icebreaker || "")}"</div>
-            <div class="small">${merged.linkedin ? `<a href="${esc(merged.linkedin)}" target="_blank" style="color:var(--orange-700);text-decoration:none">LinkedIn Profile ↗</a>` : ""} ${merged.domain ? `&nbsp;<a href="https://${esc(merged.domain)}" target="_blank" style="color:var(--orange-700);text-decoration:none">Website ↗</a>` : ""} ${sigHref(merged) ? `&nbsp;<a href="${esc(sigHref(merged))}" target="_blank" title="${esc(sigTitle(merged))}" style="color:var(--orange-700);text-decoration:none">View signal ↗</a>` : ""} ${merged.pulled_at ? `<span class="muted">· pulled ${esc(String(merged.pulled_at).slice(5, 16).replace("T", " "))}</span>` : ""}</div>
+            <div class="small">${merged.linkedin ? `<a href="${esc(merged.linkedin)}" target="_blank" style="color:var(--orange-700);text-decoration:none">LinkedIn Profile ↗</a>` : ""} ${merged.domain ? `&nbsp;<a href="https://${esc(merged.domain)}" target="_blank" style="color:var(--orange-700);text-decoration:none">Website ↗</a>` : ""} ${sigHref(merged) ? `&nbsp;<a href="${esc(sigHref(merged))}" target="_blank" title="${esc(sigTitle(merged))}" style="color:var(--orange-700);text-decoration:none">View signal ↗</a>` : ""} ${merged.pulled_at ? `<span class="muted">· pulled ${pulledAgo(merged.pulled_at)}</span>` : ""}</div>
             ${pushChips(merged)}${routeNote(merged)}
           </div>
           ${!canAct ? ""
@@ -1605,7 +1632,7 @@ async function renderList() {
     set("st-waiting", fmt(waiting));
     set("st-skipped", fmt(skipped));
     set("st-today", fmt(todayN));
-    set("st-lastpull", lastPull ? esc(String(lastPull).slice(5, 16).replace("T", " ")) : "—");
+    set("st-lastpull", lastPull ? pulledAgo(lastPull) : "—");
     // leads grouped per campaign (the batched leads-fetch replaced the old
     // per-campaign `per` array but this staleness check still referenced it)
     const per = drafts.map((dc) => allRows.filter((r) => String(r.campaign_id) === String(dc.id)));
@@ -1778,7 +1805,7 @@ async function renderDrafts(campaignId) {
         <div class="ictile">${ic8(meta[0])}</div>
         <div style="flex:1;min-width:200px;cursor:pointer" onclick="window._openSource=window._openSource==='${s.id}'?null:'${s.id}';renderDrafts('${campaignId}')">
           <div style="font-weight:500">${esc(s.name)}${off ? ' <span class="pill n">excluded</span>' : ""}</div>
-          <div class="small muted">${s.last_pull ? `${s._count_stale ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span>' : `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found`} · pulled ${esc(s.last_pull.slice(5, 16).replace("T", " "))}` : (s.total ? `<span title="Estimate — not yet pulled; not included in lead totals">~${fmt(s.total)} people expected</span>` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
+          <div class="small muted">${s.last_pull ? `${s._count_stale ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span>' : `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found`} · last pulled ${pulledAgo(s.last_pull)}` : (s.total ? `<span title="Estimate — not yet pulled; not included in lead totals">~${fmt(s.total)} people expected</span>` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}

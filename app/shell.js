@@ -46,6 +46,33 @@ async function loadData(...names) {
 const fmt = (n) => (n === null || n === undefined || isNaN(n)) ? "–" : Number(n).toLocaleString("en-GB");
 const pct = (num, den, digits = 1) => den > 0 ? (100 * num / den).toFixed(digits) + "%" : "–";
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+/* "when was this last pulled" — a relative phrase the user reads at a glance
+   ("3 days ago"), with the exact local timestamp on hover. Replaces the raw
+   "07-06 15:38" slice, which was year-less, timezone-ambiguous, and made the
+   reader compute staleness themselves. Server writes last_pull/pulled_at in UTC
+   with no zone (datetime.now() on Render), so a zone-less string is tagged Z and
+   localised for display. Returns an HTML <span>; the phrase is already escaped. */
+function pulledAgo(iso) {
+  if (!iso) return "";
+  let s = String(iso).trim().replace(" ", "T");
+  if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";  // tag zone-less UTC
+  const then = new Date(s);
+  if (isNaN(then.getTime())) return esc(String(iso));  // unparseable -> show raw, never crash
+  const secs = Math.max(0, (Date.now() - then.getTime()) / 1000);
+  const plur = (n, w) => `${n} ${w}${n === 1 ? "" : "s"} ago`;
+  let rel;
+  if (secs < 45) rel = "just now";
+  else if (secs < 3600) rel = plur(Math.round(secs / 60) || 1, "min");
+  else if (secs < 86400) rel = plur(Math.floor(secs / 3600), "hour");
+  else if (secs < 86400 * 7) rel = plur(Math.floor(secs / 86400), "day");
+  else {
+    const sameYear = then.getFullYear() === new Date().getFullYear();
+    rel = "on " + then.toLocaleDateString("en-GB",
+      sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+  }
+  const full = then.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return `<span title="${esc(full)} (your local time)">${esc(rel)}</span>`;
+}
 /* the proof behind a prospect — job post for hiring, post URL for engagement */
 const sigHref = (p) => p.signal_url || p.job_url || "";
 const sigTitle = (p) => p.hiring_for ? `Hiring: ${p.hiring_for}` : "The signal that surfaced this person";
