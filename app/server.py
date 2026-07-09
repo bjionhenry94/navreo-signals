@@ -6452,6 +6452,91 @@ def _deliv_audit_start(force=False):
     return {"started": True, "running": True}
 
 
+# ── Login gate ──────────────────────────────────────────────────────────────
+# Every page and API endpoint on this host requires a Navreo login — an
+# email+password user in Supabase Auth on the same project that already backs
+# the app. The server exchanges credentials via GoTrue's password grant, then
+# issues its own stateless HMAC-signed cookie, so sessions survive deploys and
+# no new secret is needed on Render: the signing key is derived from
+# SUPABASE_SERVICE_ROLE_KEY, which is already in the environment.
+# Exempt from the gate:
+#   /healthz                      — Render's health check
+#   /api/cron/*                   — self-guarded by the x-navreo-token header
+#   /api/trigify-webhook          — external relay target; write-only staging
+#                                   with its own dedupe (see trigify_webhook)
+#   /app/login.html + its assets  — the login page itself
+AUTH_COOKIE = "navreo_session"
+AUTH_SESSION_DAYS = 30
+
+_AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css"}
+_AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
+_AUTH_PUBLIC_POST = {"/api/auth/login",
+                     "/api/cron/pull-all", "/api/cron/heyreach-sync",
+                     "/api/trigify-webhook"}
+
+
+def _auth_secret() -> bytes:
+    import hashlib
+    srk = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+    return hashlib.sha256((srk + ":navreo-session-v1").encode()).digest()
+
+
+def _mint_session(email: str) -> str:
+    import hmac, hashlib, base64
+    payload = f"{email}|{int(time.time()) + AUTH_SESSION_DAYS * 86400}".encode()
+    sig = hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+def _session_email(cookie_header) -> str | None:
+    """Email of the signed-in user, or None. Verifies signature + expiry."""
+    import hmac, hashlib, base64
+    val = None
+    for part in (cookie_header or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == AUTH_COOKIE:
+            val = v.strip()
+    if not val or "." not in val:
+        return None
+    b64, _, sig = val.rpartition(".")
+    try:
+        payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+    except Exception:  # noqa: BLE001 — malformed cookie is just "not signed in"
+        return None
+    if not hmac.compare_digest(hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest(), sig):
+        return None
+    email, _, exp = payload.decode(errors="replace").rpartition("|")
+    if not email or not exp.isdigit() or int(exp) < time.time():
+        return None
+    return email
+
+
+def _session_cookie(value: str, max_age: int) -> str:
+    # Secure only on Render — a Secure cookie would never be sent back over
+    # plain-http localhost, which is how the server runs in local dev.
+    secure = "; Secure" if os.environ.get("RENDER") else ""
+    return (f"{AUTH_COOKIE}={value}; Path=/; Max-Age={max_age}; "
+            f"HttpOnly; SameSite=Lax{secure}")
+
+
+def auth_login(email: str, password: str):
+    """GoTrue password grant — the actual 'is this a Navreo login' check.
+    Returns (ok, message)."""
+    url = f"{KEYS.get('SUPABASE_URL', '').rstrip('/')}/auth/v1/token?grant_type=password"
+    key = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+    if not key or not KEYS.get("SUPABASE_URL"):
+        return False, "Auth backend is not configured on this server."
+    try:
+        data = http_json("POST", url, {"apikey": key},
+                         {"email": email, "password": password}, timeout=15)
+    except Exception:  # noqa: BLE001 — GoTrue unreachable
+        return False, "Couldn't reach the login service - try again."
+    if isinstance(data, dict) and data.get("access_token"):
+        return True, "ok"
+    msg = (data or {}).get("error_description") or (data or {}).get("msg") or ""
+    return False, "Wrong email or password." if "credentials" in msg.lower() else (msg or "Login failed.")
+
+
 class Handler(SimpleHTTPRequestHandler):
     # S3: HTTP/1.1 keep-alive. Safe only because every response-writing path in
     # this handler goes through one of: self._json() (always sets Content-Length,
@@ -6614,10 +6699,62 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # ── login gate plumbing ────────────────────────────────────────────────
+    def _authed_email(self):
+        return _session_email(self.headers.get("Cookie"))
+
+    def _gate(self, path) -> bool:
+        """True → request may proceed. False → a 401/redirect was written."""
+        if self._authed_email():
+            return True
+        if path.startswith("/api/"):
+            self._json({"error": "auth_required", "message": "Sign in required."}, 401)
+            return False
+        # page navigation → login, preserving the destination
+        from urllib.parse import quote
+        self.send_response(302)
+        self.send_header("Location", "/app/login.html?next=" + quote(self.path))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return False
+
+    def _json_with_cookie(self, obj, cookie, status=200):
+        body = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Set-Cookie", cookie)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_HEAD(self):
+        path = self.path.split("?")[0]
+        if path in _AUTH_PUBLIC_GET or path.startswith(_AUTH_PUBLIC_GET_PREFIX) \
+                or self._authed_email():
+            return super().do_HEAD()
+        self.send_response(401)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
             return self._json({"ok": True})
+        if path == "/api/auth/me":  # who am I (login page uses it to skip itself)
+            return self._json({"email": self._authed_email()})
+        if path == "/api/auth/logout":
+            self.send_response(302)
+            self.send_header("Location", "/app/login.html")
+            self.send_header("Set-Cookie", _session_cookie("", 0))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path not in _AUTH_PUBLIC_GET and not path.startswith(_AUTH_PUBLIC_GET_PREFIX):
+            if not self._gate(path):
+                return
         if path == "/api/cron/last-run":  # observability: latest scheduled batch-pull summary
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -6780,6 +6917,26 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         _clear_ui_caches()  # G2: every POST may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
+        if path == "/api/auth/login":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 4096:
+                return self._json({"ok": False, "message": "payload too large"}, 413)
+            try:
+                p = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            email = (p.get("email") or "").strip().lower()
+            password = p.get("password") or ""
+            ok, msg = auth_login(email, password) if email and password \
+                else (False, "Email and password are required.")
+            if not ok:
+                time.sleep(0.8)  # cheap brute-force drag
+                return self._json({"ok": False, "message": msg}, 401)
+            return self._json_with_cookie(
+                {"ok": True, "email": email},
+                _session_cookie(_mint_session(email), AUTH_SESSION_DAYS * 86400))
+        if path not in _AUTH_PUBLIC_POST and not self._gate(path):
+            return
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
@@ -6875,6 +7032,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_PATCH(self):
         _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
+        if not self._gate(path):
+            return
         prefix = "/api/notifications/"
         if not path.startswith(prefix) or len(path) <= len(prefix):
             return self._json({"ok": False, "message": "unknown endpoint"}, 404)

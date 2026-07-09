@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  .login-card {
+    width: 340px; padding: 36px 32px 32px;
+    background: var(--bg); border: 1px solid var(--line, #E7E4E0);
+    border-radius: 14px; box-shadow: 0 8px 30px rgba(20, 17, 14, .06);
+  }
+  .login-logo {
+    width: 40px; height: 40px; border-radius: 10px; background: var(--ink);
+    color: var(--cream, #FBF7F0); font-family: var(--font-display);
+    font-size: 22px; display: flex; align-items: center; justify-content: center;
+    margin-bottom: 18px;
+  }
+  .login-card h1 { font-size: 22px; margin: 0 0 4px; }
+  .login-card .sub { margin: 0 0 22px; }
+  .login-card label {
+    display: block; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-3); margin: 14px 0 6px;
+  }
+  .login-card input {
+    width: 100%; box-sizing: border-box; padding: 10px 12px; font: inherit;
+    color: var(--ink); background: var(--bg-sunken); border: 1px solid transparent;
+    border-radius: 8px; outline: none;
+  }
+  .login-card input:focus { border-color: var(--ink-3); background: var(--bg); }
+  .login-card button {
+    width: 100%; margin-top: 22px; padding: 11px; font: inherit; font-weight: 600;
+    color: var(--cream, #FBF7F0); background: var(--ink); border: 0;
+    border-radius: 8px; cursor: pointer;
+  }
+  .login-card button:disabled { opacity: .55; cursor: default; }
+  .login-err { display: none; margin: 14px 0 0; font-size: 13px; color: #B3261E; }
+</style>
+</head>
+<body>
+  <form class="login-card" id="f">
+    <div class="login-logo">n</div>
+    <h1>Navreo Signals</h1>
+    <p class="sub">Sign in with your Navreo login.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required autofocus>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button id="go" type="submit">Sign in</button>
+    <p class="login-err" id="err"></p>
+  </form>
+<script>
+  // where to land after login — same-origin paths only (no open redirect)
+  const raw = new URLSearchParams(location.search).get("next") || "";
+  const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/app/index.html";
+
+  // already signed in? go straight through
+  fetch("/api/auth/me").then(r => r.json())
+    .then(d => { if (d.email) location.replace(next); }).catch(() => {});
+
+  const f = document.getElementById("f"), go = document.getElementById("go"),
+        err = document.getElementById("err");
+  f.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    go.disabled = true; err.style.display = "none";
+    try {
+      const r = await fetch("/api/auth/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: document.getElementById("email").value,
+          password: document.getElementById("password").value,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) { location.replace(next); return; }
+      err.textContent = d.message || "Login failed - try again.";
+      err.style.display = "block";
+    } catch {
+      err.textContent = "Couldn't reach the server - try again.";
+      err.style.display = "block";
+    }
+    go.disabled = false;
+  });
+</script>
+</body>
+</html>
