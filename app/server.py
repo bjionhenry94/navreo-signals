@@ -5288,7 +5288,14 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
             return self._json({"ok": True})
         if path == "/api/cron/last-run":  # observability: latest scheduled batch-pull summary
-            rows = sb("GET", "signal_cron_runs?order=id.desc&limit=1")
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            kind = (q.get("kind") or [""])[0].strip()
+            qs = "signal_cron_runs?order=id.desc&limit=1"
+            if kind:
+                # summary is a jsonb column; ->> pulls "kind" out as text for the filter.
+                qs = f"signal_cron_runs?summary->>kind=eq.{kind}&order=id.desc&limit=1"
+            rows = sb("GET", qs)
             return self._json((rows or [{}])[0])
         if path == "/api/sources":
             from urllib.parse import parse_qs, urlparse

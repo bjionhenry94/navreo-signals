@@ -227,6 +227,17 @@
 .rollup-filter-note { color: var(--ink-3); font-weight: 500; }
 .rollup-chips { margin-top: 2px; }
 
+/* Freshness chip: when the daily optimiser generation last succeeded
+   (signal_cron_runs, kind=optimiser_notifications) — NOT page-load time.
+   Muted by default; flips to amber if the last run is stale (>26h, i.e. the
+   daily cron missed its window), which is the one case worth calling out. */
+.freshness-chip {
+  display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; color: var(--ink-3); background: var(--bg-sunken);
+  vertical-align: middle;
+}
+.freshness-chip.warn { color: #6B4A00; background: var(--amber-bg); border: 1px solid var(--amber-line); }
+
 /* Mobile row-actions reachability (fix #8): pin the status/actions cell to
    the right edge of the TABLE'S OWN scroll container (not the viewport) so
    it's always on-screen without dragging the inner scrollbar, no matter how
@@ -946,6 +957,39 @@ function worstOffenderCallout(actionRows) {
   </div>`;
 }
 
+/* Freshness chip: last successful daily optimiser generation (signal_cron_runs,
+   kind=optimiser_notifications), fetched once and independent of loadState/filters -
+   it must reflect when the data was GENERATED, never when this page happened to load. */
+let freshnessTs = null;
+async function loadFreshness() {
+  try {
+    const res = await fetch("/api/cron/last-run?kind=optimiser_notifications", { cache: "no-store" });
+    const data = await res.json();
+    freshnessTs = (data && data.summary && data.summary.ok && data.summary.ts) || null;
+  } catch (e) {
+    freshnessTs = null;
+  }
+  draw();
+}
+function freshnessChipHTML() {
+  if (!freshnessTs) return "";
+  let s = String(freshnessTs).trim().replace(" ", "T");
+  if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";
+  const then = new Date(s);
+  if (isNaN(then.getTime())) return "";
+  const secs = Math.max(0, (Date.now() - then.getTime()) / 1000);
+  const plur = (n, w) => `${n} ${w}${n === 1 ? "" : "s"} ago`;
+  let rel;
+  if (secs < 45) rel = "just now";
+  else if (secs < 3600) rel = plur(Math.round(secs / 60) || 1, "min");
+  else if (secs < 86400) rel = plur(Math.floor(secs / 3600), "hour");
+  else rel = plur(Math.floor(secs / 86400), "day");
+  const stale = secs > 26 * 3600;
+  const tip = "Findings refresh automatically once a day. Loading this page never re-runs the optimiser.";
+  const title = (stale ? `Daily refresh may have failed (last: ${then.toISOString()})` : then.toISOString()) + "\n" + tip;
+  return `<span class="freshness-chip${stale ? " warn" : ""}" title="${esc(title)}">Data updated ${esc(rel)}</span>`;
+}
+
 function updateSummary() {
   const el = document.getElementById("summary");
   const scopeEl = document.getElementById("scopeLine");
@@ -989,7 +1033,7 @@ function updateSummary() {
     rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention &middot; <b>${fmt(highPriority)}</b> high-priority finding${highPriority === 1 ? "" : "s"} &middot; <b>${fmt(all.length)}</b> total finding${all.length === 1 ? "" : "s"} &middot; <b>${fmt(allClearCount)}</b> all-clear &middot; <b>${fmt(totalCampaigns)}</b> total campaign${totalCampaigns === 1 ? "" : "s"}` +
       `<div class="rollup-chips"><button type="button" class="rollup-chip" onclick="jumpToSection(7)">${fmt(tierCount("High"))} High / ${fmt(tierCount("Medium"))} Medium / ${fmt(tierCount("Low"))} Low actions</button>` +
       (filterActive ? `<span class="rollup-filter-note"> &middot; totals — clear filter to compare</span>` : "") +
-      `</div>`;
+      `</div>` + freshnessChipHTML();
   }
 }
 
@@ -1487,6 +1531,7 @@ backToTop.onclick = () => window.scrollTo(0, 0);
 updateBackToTop();
 
 loadNotifications();
+loadFreshness();
 (async () => {
   clientsList = dedupeClients(await fetchClientsForSwitcher());
   draw();
