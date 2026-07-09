@@ -16,6 +16,11 @@
   function daysUntil(iso) { const a = new Date(todayISO() + "T00:00:00Z"), b = new Date(iso + "T00:00:00Z"); return Math.round((b - a) / 864e5); }
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
   function uid(prefix) { return prefix + "_" + Math.random().toString(36).slice(2, 10); }
+  // UTF-8-safe base64, matching the real audit dashboard's own
+  // btoa(unescape(encodeURIComponent(s))) encoding for every ?domains=/?tpl=/
+  // ?tag=/?filter= query param that carries free text (domain lists, a
+  // signature template, a tag, a search filter).
+  function b64u(s) { try { return btoa(unescape(encodeURIComponent(String(s == null ? "" : s)))); } catch (e) { return ""; } }
   function groupCount(arr, keyFn) { const m = {}; (arr || []).forEach((x) => { const k = keyFn(x); if (k == null) return; m[k] = (m[k] || 0) + 1; }); return m; }
 
   /* Plain-English glossary — one short muted line surfaced under jargon-heavy
@@ -650,6 +655,46 @@
   }
   function apiGet(path, opts) { return apiFetch(path, Object.assign({ method: "GET" }, opts)); }
   function apiPost(path, body, opts) { return apiFetch(path, Object.assign({ method: "POST", body: body || {} }, opts)); }
+
+  /* ============================================================
+     3b. LIVE ACTION LAYER (Stage B) — every mutating handler below
+         still runs its full existing confirm → optimistic-mutate →
+         toast → history → repaint flow; only the "what actually
+         changed the numbers" step branches on isLive(). In sample
+         mode nothing here ever fires — handlers fall straight into
+         the same local-S mutation they always have (zero network).
+         Each backend endpoint has its own success/failure shape
+         (some use {ok:false,reason}, bulk mailbox actions use
+         {error}, single reconnect/reenable use {ok:false,message}),
+         so this is a thin POST wrapper, not a one-size-fits-all
+         result parser — callers branch on their own endpoint's shape.
+     ============================================================ */
+  // POSTs `path` via apiPost, putting `btn` (if given) into a busy state for
+  // the duration. Network/HTTP failures (ApiError) propagate to the caller —
+  // callers either catch them locally (to restore custom UI, e.g. a modal's
+  // Apply button) or let them bubble to runAct()'s outer catch, which shows
+  // the generic "⚠ Action failed" toast + console.error (error toast on
+  // failure, satisfied for every call site with no special handling).
+  async function liveAction(path, btn, busyHtml, opts) {
+    let orig = null;
+    if (btn) { orig = btn.innerHTML; btn.disabled = true; if (busyHtml != null) btn.innerHTML = busyHtml; }
+    try {
+      return await apiPost(path, null, opts);
+    } finally {
+      if (btn) { btn.disabled = false; if (orig != null) btn.innerHTML = orig; }
+    }
+  }
+  // Drops the Manager/Domain-health per-panel live read caches so the next
+  // paint re-fetches fresh rows — the exact same invalidation applyAuditBlob()
+  // (a fresh /run blob landing) and the "mgr-refresh" toolbar action already
+  // use; reused here after any action that changes mailbox/domain state
+  // (pause/reactivate/reconnect/reenable/capacity/reply-caps) so the Manager
+  // and Domain-health tables reconcile from the backend instead of only
+  // trusting local optimistic state.
+  function invalidateMgrDh() {
+    DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
+    DATA.dh.key = null; DATA.dh.done = false;
+  }
 
   // Map the live /run blob onto a complete S.A. Base = a fresh mock A so any
   // field the blob does NOT carry (inboxRows for the manager fallback,
@@ -3592,6 +3637,33 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const batch = UI.sig.batch === SIG_ALL ? "" : UI.sig.batch;
     const n = batch ? sigRows().filter((r) => (r.batch || "(no batch)") === batch).length : sigRows().length;
     if (!n) { toast("No mailboxes to update", "err"); return; }
+    if (isLive()) {
+      const filter = (($id("dlv-sig-search") || {}).value || "").trim();
+      let qs = "tpl=" + encodeURIComponent(b64u(tpl));
+      if (batch) qs += "&batch=" + encodeURIComponent(b64u(batch));
+      if (filter) qs += "&filter=" + encodeURIComponent(b64u(filter));
+      const applyBtn = $id("dlv-sig-apply-btn");
+      let j;
+      try { j = await liveAction("fix-signatures?" + qs, applyBtn, applyBtn ? "Applying…" : null, { timeout: 90000 }); }
+      catch (e) { toast("Request failed", "err"); return; }
+      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "empty_template" ? "Signature is empty" : "Failed"), "err"); return; }
+      const applied = j.ok || 0;
+      if (batch) {
+        S.A.signature.missing = S.A.signature.missing.filter((r) => (r.batch || "(no batch)") !== batch);
+        S.A.signature.mismatch = S.A.signature.mismatch.filter((r) => (r.batch || "(no batch)") !== batch);
+      } else {
+        S.A.signature.missing = [];
+        S.A.signature.mismatch = [];
+      }
+      if (batch) S.A.sigTemplates[batch] = tpl; else S.A.sigTemplates._all = tpl;
+      logAction({action: "signatures", count: applied, failed: j.failed || 0, scope: batch || "all brands" });
+      saveState();
+      closeModal("dlv-sig-overlay");
+      toast("Signatures applied to " + applied + " mailbox(es)" + (j.failed ? " · " + j.failed + " failed" : "") + (batch ? " in " + batch : ""), "ok");
+      invalidateMgrDh();
+      paintPage();
+      return;
+    }
     if (batch) {
       S.A.signature.missing = S.A.signature.missing.filter((r) => (r.batch || "(no batch)") !== batch);
       S.A.signature.mismatch = S.A.signature.mismatch.filter((r) => (r.batch || "(no batch)") !== batch);
@@ -3607,7 +3679,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     paintPage();
   }
 
-  function openProcessNewModal() {
+  async function openProcessNewModal() {
     UI.pn.search = "";
     const rows = S.A.lifecycle.newUnprocessed.length ? S.A.lifecycle.newUnprocessed : S.A.lifecycle.untagged;
     $id("dlv-pn-n").textContent = rows.length;
@@ -3620,8 +3692,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return trowHtml(r.email, agoStr(r.created) + (flags.length ? " · " + flags.join(" · ") : ""));
     }).join("") : `<div class="dlv-mb-count" style="padding:8px 12px">No mailboxes</div>`;
     const sel = $id("dlv-pn-camp");
+    // Sample mode: the fixed mock roster. Live mode: the campaign IDs this
+    // modal's Apply hands to POST process-new?campaign= must be REAL Smartlead
+    // campaign ids, not the mock roster — pull the live list the same way the
+    // real dashboard's openProcessNew() does (GET /api/campaigns).
     sel.innerHTML = `<option value="">— don't add —</option>` + S.campaigns.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
     openModal("dlv-pn-overlay");
+    if (isLive()) {
+      try {
+        const camps = await apiGet("campaigns", { timeout: 20000 });
+        if (Array.isArray(camps)) {
+          sel.innerHTML = `<option value="">— don't add —</option>` + camps.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+        }
+      } catch (e) { /* keep the mock roster in the select on failure — Apply still allows "don't add" */ }
+    }
   }
   async function pnApply() {
     // Single-confirm flow: Apply below is the commitment point (see sigApply).
@@ -3629,6 +3713,27 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const camp = $id("dlv-pn-camp").value;
     if (!tag && !camp) { toast("Enter a tag or pick a campaign", "err"); return; }
     const rows = S.A.lifecycle.newUnprocessed;
+    if (isLive()) {
+      const filter = (($id("dlv-pn-search") || {}).value || "").trim();
+      let qs = "tag=" + encodeURIComponent(tag ? b64u(tag) : "") + "&campaign=" + encodeURIComponent(camp || "");
+      if (filter) qs += "&filter=" + encodeURIComponent(b64u(filter));
+      const applyBtn = document.querySelector('[data-act="pn-apply"]');
+      let j;
+      try { j = await liveAction("process-new?" + qs, applyBtn, applyBtn ? "Applying…" : null, { timeout: 90000 }); }
+      catch (e) { toast("Request failed", "err"); return; }
+      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "nothing_to_do" ? "Pick a tag or campaign" : "Failed"), "err"); return; }
+      const tagged = j.tagged || 0, added = j.addedToCampaign || 0;
+      if (tag) rows.forEach((r) => { if (!r.tagged) { r.tagged = true; r.tags = [tag]; } });
+      if (camp) rows.forEach((r) => { r.inCampaign = true; });
+      S.A.lifecycle.newUnprocessed = rows.filter((r) => !(r.tagged && r.inCampaign));
+      logAction({action: "process_new", count: tagged + added, scope: (tag ? "tagged " + tagged : "") + (tag && camp ? " · " : "") + (camp ? "added " + added : "") });
+      saveState();
+      closeModal("dlv-pn-overlay");
+      toast("Tagged " + tagged + " · added " + added + " to campaign", "ok");
+      invalidateMgrDh();
+      paintPage();
+      return;
+    }
     const tagged = tag ? rows.filter((r) => !r.tagged).length : 0;
     const added = camp ? rows.filter((r) => r.inCampaign === false).length : 0;
     if (tag) rows.forEach((r) => { if (!r.tagged) { r.tagged = true; r.tags = [tag]; } });
@@ -3660,6 +3765,29 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const rows = S.A.warmupConfig.notWarming;
     const n = rows.length;
     if (!n) { toast("Nothing to enable", "err"); return; }
+    if (isLive()) {
+      const filter = (($id("dlv-wu-search") || {}).value || "").trim();
+      let qs = "perDay=" + encodeURIComponent(perDay) + "&rampup=" + encodeURIComponent(ramp) + "&replyRate=" + encodeURIComponent(reply);
+      if (filter) qs += "&filter=" + encodeURIComponent(b64u(filter));
+      const applyBtn = document.querySelector('[data-act="wu-apply"]');
+      let j;
+      try { j = await liveAction("fix-warmup?" + qs, applyBtn, applyBtn ? "Enabling…" : null, { timeout: 90000 }); }
+      catch (e) { toast("Request failed", "err"); return; }
+      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : "Failed to enable warmup", "err"); return; }
+      const enabled = j.ok || 0;
+      rows.forEach((r) => {
+        const inv = S.A.inboxRows.find((x) => x.email === r.email);
+        if (inv) { inv.kind = "ok"; inv.warmup_status = "ACTIVE"; inv.cap = Number(perDay); }
+      });
+      S.A.warmupConfig.notWarming = [];
+      logAction({action: "reenable", count: enabled, failed: j.failed || 0, scope: perDay + "/day · " + ramp + " ramp · " + reply + "% reply" });
+      saveState();
+      closeModal("dlv-wu-overlay");
+      toast("Warmup enabled on " + enabled + (j.failed ? " · " + j.failed + " failed" : "") + " mailbox(es)", "ok");
+      invalidateMgrDh();
+      paintPage();
+      return;
+    }
     rows.forEach((r) => {
       const inv = S.A.inboxRows.find((x) => x.email === r.email);
       if (inv) { inv.kind = "ok"; inv.warmup_status = "ACTIVE"; inv.cap = Number(perDay); }
@@ -3723,7 +3851,33 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     });
     return tiers;
   }
-  function openCapsPreviewModal() {
+  // Live mode's last GET-via-POST preview payload ({tierCount, mailboxesToChange,
+  // domains}) — capsApply() reads this only to gate the "nothing to change"
+  // check locally before firing; the source of truth for what actually changes
+  // is always POST reply-caps?mode=apply's own response.
+  let _capsLivePreview = null;
+  async function openCapsPreviewModal() {
+    if (isLive()) {
+      _capsLivePreview = null;
+      $id("dlv-caps-body").innerHTML = `<div class="dlv-empty"><span class="dlv-spinner"></span> Previewing…</div>`;
+      $id("dlv-caps-overlay").querySelector('[data-act="caps-apply"]').disabled = true;
+      openModal("dlv-caps-overlay");
+      let p;
+      try { p = await apiPost("reply-caps?mode=preview", null, { timeout: 60000 }); }
+      catch (e) { $id("dlv-caps-body").innerHTML = `<div class="dlv-empty">Preview failed — try again.</div>`; return; }
+      if (p && p.error) { $id("dlv-caps-body").innerHTML = `<div class="dlv-empty">${esc(p.error)}</div>`; return; }
+      _capsLivePreview = p;
+      const t = p.tierCount || {};
+      const total = p.mailboxesToChange || 0;
+      $id("dlv-caps-body").innerHTML = total ? `
+        <p class="small muted" style="margin-bottom:10px">Set daily send caps by reply rate — OUTLOOK/AZURE mailboxes only (Maildoso excluded):</p>
+        <div class="small" style="margin-bottom:10px">0.8–1.0% reply → 1/day &nbsp;·&nbsp; 1.0–1.2% → 2/day &nbsp;·&nbsp; ≥1.2% → 4/day</div>
+        <div class="small" style="margin-bottom:10px"><b>${p.domains || 0}</b> domain(s) qualify · <b>${total}</b> mailbox(es) will change</div>
+        <div class="small muted">→ 1/day: ${t["1"] || 0} mbx · 2/day: ${t["2"] || 0} mbx · 4/day: ${t["4"] || 0} mbx</div>
+        <div class="small muted" style="margin-top:10px">Resting and below-0.8% domains are left alone. A backup is saved.</div>` : `<div class="dlv-empty">Nothing to change — Outlook/Azure caps already match their reply-rate tier.</div>`;
+      $id("dlv-caps-overlay").querySelector('[data-act="caps-apply"]').disabled = !total;
+      return;
+    }
     const tiers = capsCandidates();
     const total = tiers[1].length + tiers[2].length + tiers[4].length;
     const domains = new Set([].concat(tiers[1], tiers[2], tiers[4]).map((r) => r.domain)).size;
@@ -3738,6 +3892,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
   async function capsApply() {
     // Single-confirm flow: Apply below is the commitment point (see sigApply).
+    if (isLive()) {
+      if (!_capsLivePreview || !_capsLivePreview.mailboxesToChange) { toast("Nothing to change", "err"); return; }
+      const applyBtn = document.querySelector('[data-act="caps-apply"]');
+      let j;
+      try { j = await liveAction("reply-caps?mode=apply", applyBtn, applyBtn ? "Applying…" : null, { timeout: 120000 }); }
+      catch (e) { toast("Reply-caps failed", "err"); return; }
+      const changed = j && j.changed || 0;
+      logAction({action: "reply_caps", count: changed });
+      saveState();
+      closeModal("dlv-caps-overlay");
+      toast("Set caps on " + changed + " Outlook/Azure mailbox(es)" + (j && j.failed ? " · " + j.failed + " failed" : ""), "ok");
+      invalidateMgrDh();
+      paintPage();
+      return;
+    }
     const tiers = capsCandidates();
     const total = tiers[1].length + tiers[2].length + tiers[4].length;
     if (!total) { toast("Nothing to change", "err"); return; }
@@ -3805,9 +3974,29 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     btn.innerHTML = '<span class="dlv-spinner"></span> Verifying…';
     const out = $id("dlv-vr-" + id);
     const flow = mode === "listmint" ? "ListMint (general + catch-all)" : "MillionVerifier → ListMint (catch-alls)";
-    if (out) out.innerHTML = `<div class="dlv-vrun">Pulling leads → ${flow}… simulating.</div>`;
-    await new Promise((r) => setTimeout(r, 1500));
-    const v = simulateVerify(id, mode);
+    if (out) out.innerHTML = `<div class="dlv-vrun">Pulling leads → ${flow}… ${isLive() ? "large lists can take a few minutes." : "simulating."}</div>`;
+    let v;
+    if (isLive()) {
+      try {
+        v = await apiPost("verify?campaign=" + encodeURIComponent(id) + "&mode=" + encodeURIComponent(mode) + "&name=" + encodeURIComponent(camp ? camp.name : ""), null, { timeout: 180000 });
+      } catch (e) {
+        if (out) out.innerHTML = `<div class="dlv-vrun err">Verify failed: ${esc((e && e.message) || String(e))}</div>`;
+        btns.forEach((b) => (b.disabled = false));
+        btn.innerHTML = orig;
+        toast("Verify failed", "err");
+        return;
+      }
+      if (v && v.error) {
+        if (out) out.innerHTML = `<div class="dlv-vrun err">${esc(v.error)}</div>`;
+        btns.forEach((b) => (b.disabled = false));
+        btn.innerHTML = orig;
+        toast(v.error, "err");
+        return;
+      }
+    } else {
+      await new Promise((r) => setTimeout(r, 1500));
+      v = simulateVerify(id, mode);
+    }
     _verifyState[id] = v;
     verifyResults()[id] = v; // Part A2: persist so the box survives repaints
     // Item 1: the verify run itself now leaves a typed history row (removal
@@ -3826,14 +4015,34 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const ok = await dlvConfirm("Delete " + count + " bad leads from this campaign?\n\n• A full backup is saved first (recoverable)\n• Any lead that replied is auto-kept (reply-guard)\n\nProceed?", { title: "Remove bad leads", danger: true, yesLabel: "Delete " + count });
     if (!ok) return;
     btn.disabled = true; const orig = btn.innerHTML; btn.innerHTML = '<span class="dlv-spinner"></span> Removing…';
-    await new Promise((r) => setTimeout(r, 700));
     const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(id));
-    const guarded = Math.max(1, Math.round(count * 0.03));
-    const removed = count - guarded > 0 ? count - guarded : count;
-    const before = camp ? camp.sent : 0;
-    const after = Math.max(0, before - removed);
-    if (camp) camp.sent = after;
-    logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count });
+    let removed, guarded, before, after;
+    if (isLive()) {
+      let v;
+      try {
+        v = await apiPost("verify-remove?campaign=" + encodeURIComponent(id), null, { timeout: 120000 });
+      } catch (e) {
+        toast("Remove failed", "err");
+        btn.disabled = false; btn.innerHTML = orig;
+        return;
+      }
+      if (v && v.error) {
+        toast(v.error, "err");
+        btn.disabled = false; btn.innerHTML = orig;
+        return;
+      }
+      removed = v.deleted || 0; guarded = v.guarded || 0; before = v.before; after = v.after;
+      if (camp && after != null) camp.sent = after;
+      logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count, failed: v.failed || 0 });
+    } else {
+      await new Promise((r) => setTimeout(r, 700));
+      guarded = Math.max(1, Math.round(count * 0.03));
+      removed = count - guarded > 0 ? count - guarded : count;
+      before = camp ? camp.sent : 0;
+      after = Math.max(0, before - removed);
+      if (camp) camp.sent = after;
+      logAction({campaign: id, name: camp ? camp.name : ("campaign " + id), removed, guarded, before, after, total: count });
+    }
     // Part A2: replace the persisted result with a "removed" summary so the box
     // still shows (and survives repaints) after the bad leads are gone.
     verifyResults()[id] = { removedSummary: { removed, guarded, before, after } };
@@ -3896,6 +4105,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     saveState();
     paintPage();
     toast("Marked done", "ok", { undoKey: key });
+    // Live mode: mirror the optimistic local ack to the backend in the
+    // background (fire-and-forget, same as the real dashboard's markDone) —
+    // the UI has already committed above, this just makes it durable.
+    if (isLive()) {
+      apiPost("ack?key=" + encodeURIComponent(key) + "&count=" + encodeURIComponent(Number(count) || 0))
+        .then((j) => { if (j && j.reason === "no_token") toast("Marked done locally — backend has no write token configured", "err"); })
+        .catch(() => {});
+    }
   }
   // Short human label for a to-do key, for history rows — falls back to the key.
   function todoLabelOf(key) {
@@ -3976,6 +4193,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // fold (a separate button from the toast's own inline Undo) gave no
     // confirmation beyond the item quietly reappearing further up the page.
     toast("Undone — back on today's list", "ok");
+    if (isLive()) { apiPost("ack?key=" + encodeURIComponent(key) + "&clear=1").catch(() => {}); }
   }
 
   /* ============================================================
@@ -3988,12 +4206,24 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const ok = await dlvConfirm("Pause sending on " + mbx + " mailbox(es) across " + rows.length + " blacklisted domain(s)?\n\nSets their daily cap to 0 and rests them for 7 days while you fix the underlying cause.\n\nReversible — reactivate any domain at any time.", { title: "Pause sending" });
     if (!ok) return;
     btn.disabled = true; const orig = btn.textContent; btn.textContent = "Pausing…";
-    await new Promise((r) => setTimeout(r, 500));
-    let paused = 0;
-    rows.forEach((r) => { r.rested = r.mailboxes; r.restedDue = Date.now() + 7 * 864e5; paused += r.mailboxes; });
-    logAction({action: "blacklist_pause", mailboxes: paused, domains: rows.length, scope: "blacklist" });
+    let paused, domains;
+    if (isLive()) {
+      let j;
+      try { j = await apiPost("pause-blacklisted", null, { timeout: 60000 }); }
+      catch (e) { toast("Request failed", "err"); btn.disabled = false; btn.textContent = orig; return; }
+      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : "Failed", "err"); btn.disabled = false; btn.textContent = orig; return; }
+      paused = j.paused || 0; domains = j.domains || rows.length;
+      rows.forEach((r) => { r.rested = r.mailboxes; r.restedDue = Date.now() + 7 * 864e5; });
+    } else {
+      await new Promise((r) => setTimeout(r, 500));
+      paused = 0;
+      rows.forEach((r) => { r.rested = r.mailboxes; r.restedDue = Date.now() + 7 * 864e5; paused += r.mailboxes; });
+      domains = rows.length;
+    }
+    logAction({action: "blacklist_pause", mailboxes: paused, domains, scope: "blacklist" });
     saveState();
-    toast("Paused sending on " + paused + " mailbox(es) across " + rows.length + " domain(s) — resting 7 days", "ok");
+    toast("Paused sending on " + paused + " mailbox(es) across " + domains + " domain(s) — resting 7 days", "ok");
+    if (isLive()) invalidateMgrDh();
     paintPage();
   }
   async function reactivateCleared(btn) {
@@ -4002,20 +4232,44 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const mbx = rows.reduce((s, r) => s + r.rested, 0);
     const ok = await dlvConfirm("Reactivate " + rows.length + " cleared domain(s) — " + mbx + " mailbox(es)?\n\nRestores each mailbox to its saved daily cap and resumes sending immediately.\n\nReversible — you can pause them again any time.", { title: "Reactivate cleared" });
     if (!ok) return;
+    if (btn) { btn.disabled = true; }
+    const orig = btn ? btn.textContent : null;
+    if (btn) btn.textContent = "Reactivating…";
     let resumed = 0;
-    rows.forEach((r) => { resumed += r.rested; r.rested = 0; r.restedDue = null; });
+    if (isLive()) {
+      let j;
+      try { j = await apiPost("reactivate-blacklisted", null, { timeout: 60000 }); }
+      catch (e) { toast("Request failed", "err"); if (btn) { btn.disabled = false; btn.textContent = orig; } return; }
+      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : "Failed", "err"); if (btn) { btn.disabled = false; btn.textContent = orig; } return; }
+      resumed = j.reactivated || 0;
+      rows.forEach((r) => { r.rested = 0; r.restedDue = null; });
+    } else {
+      rows.forEach((r) => { resumed += r.rested; r.rested = 0; r.restedDue = null; });
+    }
     logAction({action: "warmup_resume", mailboxes: resumed });
     saveState();
     toast("Reactivated " + resumed + " mailbox(es) across " + rows.length + " cleared domain(s)", "ok");
+    if (isLive()) invalidateMgrDh();
     paintPage();
   }
-  async function reactivateBlacklistDomain(domain) {
+  async function reactivateBlacklistDomain(domain, btn) {
     const ok = await dlvConfirm("Reactivate " + domain + "?\n\nRestores its saved daily cap and resumes sending.\n\nProceed?", { title: "Reactivate domain" });
     if (!ok) return;
     const row = S.A.blacklistRows.find((r) => r.domain === domain);
     if (!row) return;
-    const resumed = row.rested;
-    row.rested = 0; row.restedDue = null;
+    let resumed;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("warmup-resume?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner"></span>', { timeout: 60000 }); }
+      catch (e) { toast("Reactivate failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      resumed = j.resumed || 0;
+      row.rested = 0; row.restedDue = null;
+      invalidateMgrDh();
+    } else {
+      resumed = row.rested;
+      row.rested = 0; row.restedDue = null;
+    }
     logAction({action: "warmup_resume", mailboxes: resumed });
     saveState();
     toast("Reactivated " + domain + " — " + resumed + " mailbox(es)", "ok");
@@ -4024,16 +4278,29 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // Per-domain counterpart to pauseBlacklisted() (the bulk button) — fix #7a:
   // testers wanted to pause the one domain they were looking at without also
   // pausing every other still-sending blacklisted domain in the fold.
-  async function pauseBlacklistDomain(domain) {
+  async function pauseBlacklistDomain(domain, btn) {
     const row = S.A.blacklistRows.find((r) => r.domain === domain);
     if (!row || row.rested > 0) { toast("Already resting", "err"); return; }
     const ok = await dlvConfirm("Pause sending on " + domain + "?\n\nSets its daily cap to 0 and rests it for 7 days across " + row.mailboxes + " mailbox(es) while you fix the underlying cause.\n\nReversible — reactivate any time.", { title: "Pause sending" });
     if (!ok) return;
-    row.rested = row.mailboxes;
-    row.restedDue = Date.now() + 7 * 864e5;
-    logAction({action: "blacklist_pause", mailboxes: row.mailboxes, domains: 1, scope: domain });
+    let mailboxes;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("warmup-pause?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner"></span>', { timeout: 60000 }); }
+      catch (e) { toast("Pause failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      mailboxes = j.paused || 0;
+      row.rested = row.mailboxes;
+      row.restedDue = Date.now() + 7 * 864e5;
+      invalidateMgrDh();
+    } else {
+      mailboxes = row.mailboxes;
+      row.rested = row.mailboxes;
+      row.restedDue = Date.now() + 7 * 864e5;
+    }
+    logAction({action: "blacklist_pause", mailboxes, domains: 1, scope: domain });
     saveState();
-    toast("Paused sending on " + domain + " — " + row.mailboxes + " mailbox(es) resting 7 days", "ok");
+    toast("Paused sending on " + domain + " — " + mailboxes + " mailbox(es) resting 7 days", "ok");
     paintPage();
   }
 
@@ -4056,6 +4323,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     renderDelistBody();
     toast(wasDone ? "Unmarked " + domain + " as submitted" : "Marked " + domain + " as submitted for delisting", "ok");
     paintPage();
+    // Fire-and-forget persist, matching the real dashboard's toggleDelist() —
+    // the optimistic local toggle above is already the source of truth for
+    // this tab's own UI.
+    if (isLive()) {
+      apiPost("delisting?domain=" + encodeURIComponent(b64u(domain)) + (wasDone ? "&clear=1" : "")).catch(() => {});
+    }
   }
   async function delistCopyAll(btn) {
     const rows = delistVisibleRows();
@@ -4068,32 +4341,57 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   async function domainWarmup(domain, btn) {
     const ok = await dlvConfirm("Move " + domain + " to warmup?\n\n• Sets sending capacity to 0 for all its mailboxes\n• Warmup keeps running\n• Current caps are saved so Reactivate restores them\n\nProceed?", { title: "Move to warmup" });
     if (!ok) return;
-    const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
-    mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
-    S.A.domainHealth.resting[domain] = mbx.length || 1;
-    S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
-    logAction({action: "warmup_pause", mailboxes: mbx.length, domains: 1, scope: domain });
+    let mailboxes;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("warmup-pause?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
+      catch (e) { toast("Warmup failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      mailboxes = j.paused || 0;
+      S.A.domainHealth.resting[domain] = mailboxes || 1;
+      S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
+      invalidateMgrDh();
+    } else {
+      const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
+      mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
+      mailboxes = mbx.length;
+      S.A.domainHealth.resting[domain] = mbx.length || 1;
+      S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
+    }
+    logAction({action: "warmup_pause", mailboxes, domains: 1, scope: domain });
     saveState();
     // Part A1 (make the state change unmistakable): name the domain, the count,
     // and that it's now resting with a due-back date — the row itself now reads
     // "🌙 resting · due in 7d".
-    toast("🌙 " + domain + " moved to warm-up — " + mbx.length + " mailbox(es) resting, due back in 7d", "ok");
+    toast("🌙 " + domain + " moved to warm-up — " + mailboxes + " mailbox(es) resting, due back in 7d", "ok");
     paintPage();
   }
   async function domainReactivate(domain, btn) {
     const ok = await dlvConfirm("Reactivate " + domain + "?\n\nRestores each mailbox to its saved daily cap and resumes sending.\n\nProceed?", { title: "Reactivate domain" });
     if (!ok) return;
-    const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
-    mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
-    const resumed = S.A.domainHealth.resting[domain] || mbx.length;
-    delete S.A.domainHealth.resting[domain];
-    delete S.A.domainHealth.restingDue[domain];
+    let resumed;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("warmup-resume?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
+      catch (e) { toast("Reactivate failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      resumed = j.resumed || 0;
+      delete S.A.domainHealth.resting[domain];
+      delete S.A.domainHealth.restingDue[domain];
+      invalidateMgrDh();
+    } else {
+      const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
+      mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
+      resumed = S.A.domainHealth.resting[domain] || mbx.length;
+      delete S.A.domainHealth.resting[domain];
+      delete S.A.domainHealth.restingDue[domain];
+    }
     logAction({action: "warmup_resume", mailboxes: resumed });
     saveState();
     toast("Reactivated " + domain + " — " + resumed + " mailbox(es)", "ok");
     paintPage();
   }
-  async function domainBulkFlagged() {
+  async function domainBulkFlagged(btn) {
     const D = fullDerive();
     const { minSent, cutoff } = dhCutoffMin();
     const domains = D.dhRows.filter((d) => d.flag === "warmup" && !(D.resting[d.domain] > 0)).map((d) => d.domain);
@@ -4101,50 +4399,84 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const ok = await dlvConfirm("Move ALL " + domains.length + " flagged domains to warmup?\n\n• Sets sending capacity to 0 for every mailbox on these domains\n• Warmup keeps running; saved caps let you Reactivate later\n\nProceed?", { title: "Move all flagged", yesLabel: "Move " + domains.length });
     if (!ok) return;
     let paused = 0;
-    domains.forEach((domain) => {
-      const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
-      mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
-      S.A.domainHealth.resting[domain] = mbx.length || 1;
-      S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
-      paused += mbx.length;
-    });
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("warmup-pause?domain=" + encodeURIComponent(domains.join(",")), btn, '<span class="dlv-spinner"></span> Pausing… (may take a few min)', { timeout: 180000 }); }
+      catch (e) { toast("Bulk warmup failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      paused = j.paused || 0;
+      domains.forEach((domain) => {
+        S.A.domainHealth.resting[domain] = S.A.domainHealth.resting[domain] || 1;
+        S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
+      });
+      invalidateMgrDh();
+      if (j.failed) toast("Paused " + paused + " · " + j.failed + " failed (rate limit) — click again to finish, it's safe to re-run", "err");
+    } else {
+      domains.forEach((domain) => {
+        const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
+        mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
+        S.A.domainHealth.resting[domain] = mbx.length || 1;
+        S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
+        paused += mbx.length;
+      });
+    }
     logAction({action: "warmup_pause", mailboxes: paused, domains: domains.length, scope: "bulk flagged" });
     saveState();
     toast("🌙 Moved " + domains.length + " flagged domain(s) to warm-up — " + paused + " mailbox(es) resting, due back in 7d", "ok");
     paintPage();
   }
-  async function domainReactivateAll() {
+  async function domainReactivateAll(btn) {
     const D = fullDerive();
     const domains = Object.keys(D.resting);
     if (!domains.length) { toast("Nothing resting", "err"); return; }
     const ok = await dlvConfirm("Reactivate ALL " + domains.length + " resting domains?\n\nRestores each to its saved daily cap and resumes sending.\n\nProceed?", { title: "Reactivate all", yesLabel: "Reactivate " + domains.length });
     if (!ok) return;
     let resumed = 0;
-    domains.forEach((domain) => {
-      const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
-      mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
-      resumed += S.A.domainHealth.resting[domain] || mbx.length;
-      delete S.A.domainHealth.resting[domain];
-      delete S.A.domainHealth.restingDue[domain];
-    });
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("warmup-resume-all", btn, '<span class="dlv-spinner"></span> Reactivating…', { timeout: 180000 }); }
+      catch (e) { toast("Reactivate failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      resumed = j.resumed || 0;
+      domains.forEach((domain) => { delete S.A.domainHealth.resting[domain]; delete S.A.domainHealth.restingDue[domain]; });
+      invalidateMgrDh();
+    } else {
+      domains.forEach((domain) => {
+        const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
+        mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
+        resumed += S.A.domainHealth.resting[domain] || mbx.length;
+        delete S.A.domainHealth.resting[domain];
+        delete S.A.domainHealth.restingDue[domain];
+      });
+    }
     logAction({action: "warmup_resume", mailboxes: resumed });
     saveState();
     toast("Reactivated " + resumed + " mailbox(es)", "ok");
     paintPage();
   }
-  async function domainReactivateRecovered() {
+  async function domainReactivateRecovered(btn) {
     const doms = window._dlvRecovered || [];
     if (!doms.length) { toast("Nothing recovered", "err"); return; }
     const ok = await dlvConfirm("Reactivate " + doms.length + " recovered domain(s)?\n\n" + doms.join(", ") + "\n\nProceed?", { title: "Reactivate recovered", yesLabel: "Reactivate " + doms.length });
     if (!ok) return;
     let resumed = 0;
-    doms.forEach((domain) => {
-      const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
-      mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
-      resumed += S.A.domainHealth.resting[domain] || mbx.length;
-      delete S.A.domainHealth.resting[domain];
-      delete S.A.domainHealth.restingDue[domain];
-    });
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("warmup-resume?domain=" + encodeURIComponent(doms.join(",")), btn, '<span class="dlv-spinner"></span> Reactivating…', { timeout: 120000 }); }
+      catch (e) { toast("Reactivate failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      resumed = j.resumed || 0;
+      doms.forEach((domain) => { delete S.A.domainHealth.resting[domain]; delete S.A.domainHealth.restingDue[domain]; });
+      invalidateMgrDh();
+    } else {
+      doms.forEach((domain) => {
+        const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
+        mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
+        resumed += S.A.domainHealth.resting[domain] || mbx.length;
+        delete S.A.domainHealth.resting[domain];
+        delete S.A.domainHealth.restingDue[domain];
+      });
+    }
     logAction({action: "warmup_resume", mailboxes: resumed });
     saveState();
     toast("Reactivated " + resumed + " mailbox(es) across " + doms.length + " recovered domain(s)", "ok");
@@ -4154,18 +4486,32 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      28. Mailbox per-row + bulk actions
      ============================================================ */
-  function reconnectOne(id) {
+  async function reconnectOne(id, btn) {
     const r = S.A.inboxRows.find((x) => x.id === id);
     if (!r) return;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("reconnect?id=" + encodeURIComponent(id), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
+      catch (e) { toast("Reconnect failed", "err"); return; }
+      if (!j || j.ok === false) { toast("Failed: " + ((j && j.message) || "error"), "err"); return; }
+      invalidateMgrDh();
+    }
     r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; r.reason = ""; r.reason_category = "";
     logAction({action: "reconnect", count: 1 });
     saveState();
     toast("Reconnect queued", "ok");
     paintPage();
   }
-  function reenableOne(id) {
+  async function reenableOne(id, btn) {
     const r = S.A.inboxRows.find((x) => x.id === id);
     if (!r) return;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("reenable?id=" + encodeURIComponent(id), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
+      catch (e) { toast("Re-enable failed", "err"); return; }
+      if (!j || j.ok === false) { toast("Failed: " + ((j && j.message) || "error"), "err"); return; }
+      invalidateMgrDh();
+    }
     r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15;
     S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => x.email !== r.email);
     logAction({action: "reenable", count: 1, failed: 0 });
@@ -4173,7 +4519,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     toast("Warmup re-enabled", "ok");
     paintPage();
   }
-  async function bulkAction(kind) {
+  async function bulkAction(kind, btn) {
     const ids = [...UI.mgr.sel];
     if (!ids.length) return;
     const rows = S.A.inboxRows.filter((r) => ids.includes(r.id));
@@ -4186,10 +4532,27 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const ok = await dlvConfirm(confirms[kind], { title: "Confirm bulk action" });
     if (!ok) return;
     let n = 0;
-    if (kind === "reconnect") { rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; n++; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect", "ok"); }
-    else if (kind === "reenable") { rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; n++; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !ids.includes((S.A.inboxRows.find((y) => y.email === x.email) || {}).id)); logAction({action: "reenable", count: n, failed: 0 }); toast("Re-enabled warmup on " + n + " mailbox(es)", "ok"); }
-    else if (kind === "warmup") { const doms = new Set(); rows.forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; n++; doms.add(r.domain); } }); logAction({action: "warmup_pause", mailboxes: n, domains: doms.size }); toast("Paused sending on " + n + " mailbox(es) across " + doms.size + " domain(s) — resting 7 days", "ok"); }
-    else if (kind === "restore") { rows.forEach((r) => { if (r.rested || r._savedCap != null) { r.cap = r._savedCap != null ? r._savedCap : 20; delete r._savedCap; r.rested = false; r.restedAt = null; n++; } }); logAction({action: "warmup_resume", mailboxes: n }); toast("Restored " + n + " mailbox(es) to sending", "ok"); }
+    // Live endpoint path per kind: reconnect/reenable/warmup(→capacity-pause)/
+    // restore(→capacity-resume), all bulk `?ids=<csv>` — the real dashboard's
+    // _bulkAct() failure sentinel is `j.error` (a string), NOT `ok:false`.
+    if (isLive()) {
+      const paths = { reconnect: "reconnect?ids=", reenable: "reenable?ids=", warmup: "capacity-pause?ids=", restore: "capacity-resume?ids=" };
+      const busy = { reconnect: "Reconnecting…", reenable: "Re-enabling…", warmup: "Pausing…", restore: "Restoring…" };
+      let j;
+      try { j = await liveAction(paths[kind] + ids.join(","), btn, btn ? '<span class="dlv-spinner" style="width:14px;height:14px"></span> ' + busy[kind] : null, { timeout: 120000 }); }
+      catch (e) { toast("Request failed", "err"); return; }
+      if (j && j.error) { toast(j.error, "err"); return; }
+      if (kind === "reconnect") { n = j.count || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect", "ok"); }
+      else if (kind === "reenable") { n = j.ok || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !ids.includes((S.A.inboxRows.find((y) => y.email === x.email) || {}).id)); logAction({action: "reenable", count: n, failed: j.failed || 0 }); toast("Re-enabled " + n + (j.failed ? " · " + j.failed + " failed" : ""), "ok"); }
+      else if (kind === "warmup") { n = j.paused || 0; rows.forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; } }); logAction({action: "warmup_pause", mailboxes: n, domains: new Set(rows.map((r) => r.domain)).size }); toast("Put " + n + " into warmup" + (j.skipped ? " (" + j.skipped + " already 0)" : ""), "ok"); }
+      else if (kind === "restore") { n = j.resumed || 0; rows.forEach((r) => { if (r.rested || r._savedCap != null) { r.cap = r._savedCap != null ? r._savedCap : 20; delete r._savedCap; r.rested = false; r.restedAt = null; } }); logAction({action: "warmup_resume", mailboxes: n }); toast("Restored " + n + (j.skipped ? " · " + j.skipped + " skipped (not dashboard-rested)" : ""), "ok"); }
+      invalidateMgrDh();
+    } else {
+      if (kind === "reconnect") { rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; n++; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect", "ok"); }
+      else if (kind === "reenable") { rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; n++; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !ids.includes((S.A.inboxRows.find((y) => y.email === x.email) || {}).id)); logAction({action: "reenable", count: n, failed: 0 }); toast("Re-enabled warmup on " + n + " mailbox(es)", "ok"); }
+      else if (kind === "warmup") { const doms = new Set(); rows.forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; n++; doms.add(r.domain); } }); logAction({action: "warmup_pause", mailboxes: n, domains: doms.size }); toast("Paused sending on " + n + " mailbox(es) across " + doms.size + " domain(s) — resting 7 days", "ok"); }
+      else if (kind === "restore") { rows.forEach((r) => { if (r.rested || r._savedCap != null) { r.cap = r._savedCap != null ? r._savedCap : 20; delete r._savedCap; r.rested = false; r.restedAt = null; n++; } }); logAction({action: "warmup_resume", mailboxes: n }); toast("Restored " + n + " mailbox(es) to sending", "ok"); }
+    }
     UI.mgr.sel = new Set();
     saveState();
     paintPage();
@@ -4198,7 +4561,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      29. Reminders
      ============================================================ */
-  function remAdd() {
+  async function remAdd() {
     const domsEl = $id("dlv-rem-doms");
     const doms = domsEl.value.trim();
     const date = $id("dlv-rem-date").value || todayISO();
@@ -4216,6 +4579,19 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (errEl) errEl.classList.remove("show");
     domsEl.classList.remove("dlv-input-err");
     const domains = doms.split(/[\s,;]+/).filter(Boolean);
+    if (isLive()) {
+      let j;
+      try { j = await apiPost("reminder?domains=" + encodeURIComponent(b64u(doms)) + "&date=" + encodeURIComponent(date), null, { timeout: 30000 }); }
+      catch (e) { toast("Could not confirm — refresh to check", "err"); return; }
+      if (j && j.ok === false) { toast(j.reason === "no_token" ? "Backend has no write token configured — reminder not saved" : "Failed", "err"); return; }
+      if (j && Array.isArray(j.reminders)) S.A.reminders = j.reminders;
+      domsEl.value = "";
+      logAction({action: "reminder_add", count: domains.length, scope: domains.join(", ") });
+      saveState();
+      toast("Reminder added — due in 14 days", "ok");
+      paintPage();
+      return;
+    }
     const id = uid("r");
     S.A.reminders.unshift({ id, domains, note: "", restoredDate: date, dueDate: addDays(date, 14), done: false, ts: Date.now() });
     S.A.remHealth[id] = { total: domains.length, warming: domains.length, failed: 0, dead: 0, reasons: {} };
@@ -4231,18 +4607,36 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     saveState();
     toast(undo ? "Reminder restored to pending" : "Reminder marked added back", "ok");
     paintPage();
+    if (isLive()) { apiPost("reminder-done?id=" + encodeURIComponent(id) + (undo ? "&undo=1" : "")).catch(() => {}); }
   }
-  function remEnableWarmup(id) {
+  async function remEnableWarmup(id) {
     const h = S.A.remHealth[id];
     if (!h) return;
     const n = h.reasons.off || 0;
     if (!n) { toast("Nothing to enable — those mailboxes are already warming or blocked/missing", ""); return; }
+    if (isLive()) {
+      let j;
+      try { j = await apiPost("reminder-enable-warmup?id=" + encodeURIComponent(id), null, { timeout: 60000 }); }
+      catch (e) { toast("Request failed", "err"); return; }
+      if (!j || j.ok === false) { toast("Failed to enable warm-up", "err"); return; }
+      if ((j.attempted || 0) === 0) { toast("Nothing to enable — those mailboxes are already warming or are blocked/missing (not a warm-up toggle)", ""); return; }
+      const enabled = j.enabled || 0;
+      h.warming += enabled; h.failed = Math.max(0, h.failed - enabled); h.reasons = Object.assign({}, h.reasons, { off: Math.max(0, (h.reasons.off || 0) - enabled) });
+      logAction({action: "reenable", count: enabled, failed: j.failed || 0, scope: "restore reminder" });
+      saveState();
+      toast("Warm-up enabled on " + enabled + " of " + (j.attempted || 0) + " mailbox(es)" + (j.failed ? " · " + j.failed + " failed" : ""), "ok");
+      paintPage();
+      return;
+    }
     h.warming += n; h.failed -= n; h.reasons = Object.assign({}, h.reasons, { off: 0 });
     logAction({action: "reenable", count: n, failed: 0, scope: "restore reminder" });
     saveState();
     toast("Warm-up enabled on " + n + " mailbox(es)", "ok");
     paintPage();
   }
+  // NOTE (deviation): the real audit dashboard has no "delete a reminder
+  // outright" endpoint — only add / mark-done / undo / enable-warmup. This
+  // stays a local-only mutation in BOTH modes; there is nothing to wire it to.
   async function remRemove(id) {
     const r = S.A.reminders.find((x) => x.id === id);
     if (!r) return;
@@ -4338,6 +4732,22 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!n) { toast("Nothing to sync", "err"); return; }
     const btn = $id("dlv-notion-sync-btn");
     busySet(btn, '<span class="dlv-spinner"></span> Syncing…');
+    if (isLive()) {
+      let j;
+      try { j = await apiPost("notion-sync?scope=changed", null, { timeout: 60000 }); }
+      catch (e) { busyRestore(btn); toast("Notion sync failed", "err"); return; }
+      if (j && j.reason === "no_token") { busyRestore(btn); toast("No Notion token set on the backend — add it to enable sync", "err"); return; }
+      if (j && j.reason) { busyRestore(btn); toast("Notion sync failed: " + (j.message || j.reason), "err"); return; }
+      const updated = j.updated || 0;
+      logAction({action: "notion_sync", count: updated, scope: "changed" });
+      saveState();
+      busyRestore(btn);
+      closeModal("dlv-notion-overlay");
+      toast("Notion: updated " + updated + " domain(s)" + (j.missing ? " · " + j.missing + " not in DB" : "") + (j.failed ? " · " + j.failed + " failed" : ""), "ok");
+      paintPage();
+      flashBtn(document.querySelector('[data-act="sync-notion"]'), "✓ Synced");
+      return;
+    }
     await new Promise((r) => setTimeout(r, 900));
     logAction({action: "notion_sync", count: n, scope: "changed" });
     saveState();
@@ -4375,6 +4785,30 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const btn = document.querySelector('[data-act="slack-send"]');
     if (!btn) return;
     busySet(btn, '<span class="dlv-spinner"></span> Sending…');
+    if (isLive()) {
+      let j;
+      try { j = await apiPost("slack", null, { timeout: 30000 }); }
+      catch (e) { busyRestore(btn); toast("Slack error", "err"); return; }
+      if (j && j.ok) {
+        logAction({action: "slack_post", count: 1 });
+        saveState();
+        busyRestore(btn);
+        closeModal("dlv-slack-overlay");
+        toast("Posted to #team-hangout ✓", "ok");
+        paintPage();
+        flashBtn(document.querySelector('[data-act="send-slack"]'), "✓ Posted");
+        return;
+      }
+      busyRestore(btn);
+      if (j && j.reason === "no_webhook") {
+        try { await navigator.clipboard.writeText(j.text || ""); } catch (e) {}
+        toast("No Slack webhook set — report copied to clipboard, paste it in", "err");
+      } else {
+        try { await navigator.clipboard.writeText((j && j.text) || ""); } catch (e) {}
+        toast("Slack post failed (" + ((j && (j.status || j.reason)) || "error") + ") — text copied", "err");
+      }
+      return;
+    }
     await new Promise((r) => setTimeout(r, 900));
     logAction({action: "slack_post", count: 1 });
     saveState();
@@ -4743,8 +5177,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "remove-bad") { runAct(act, () => removeBadAction(t.dataset.id, t)); return; }
     if (act === "pause-blacklisted") { runAct(act, () => pauseBlacklisted(t)); return; }
     if (act === "reactivate-cleared") { runAct(act, () => reactivateCleared(t)); return; }
-    if (act === "domain-reactivate-bl") { runAct(act, () => reactivateBlacklistDomain(t.dataset.domain)); return; }
-    if (act === "pause-blacklist-domain") { runAct(act, () => pauseBlacklistDomain(t.dataset.domain)); return; }
+    if (act === "domain-reactivate-bl") { runAct(act, () => reactivateBlacklistDomain(t.dataset.domain, t)); return; }
+    if (act === "pause-blacklist-domain") { runAct(act, () => pauseBlacklistDomain(t.dataset.domain, t)); return; }
     if (act === "dl-copy-all") { runAct(act, () => delistCopyAll(t)); return; }
     if (act === "dl-copy-req") { runAct(act, () => delistCopyReq(t.dataset.domain, t)); return; }
     if (act === "dl-toggle") { runAct(act, () => delistToggle(t.dataset.domain, t.dataset.done === "1")); return; }
@@ -4762,15 +5196,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }); return; }
     if (act === "domain-warmup") { runAct(act, () => domainWarmup(t.dataset.domain, t)); return; }
     if (act === "domain-reactivate") { runAct(act, () => domainReactivate(t.dataset.domain, t)); return; }
-    if (act === "domain-bulk-flagged") { runAct(act, () => domainBulkFlagged()); return; }
-    if (act === "domain-reactivate-all") { runAct(act, () => domainReactivateAll()); return; }
-    if (act === "domain-reactivate-recovered") { runAct(act, () => domainReactivateRecovered()); return; }
-    if (act === "reconnect-one") { runAct(act, () => reconnectOne(Number(t.dataset.id))); return; }
-    if (act === "reenable-one") { runAct(act, () => reenableOne(Number(t.dataset.id))); return; }
-    if (act === "bulk-reconnect") { runAct(act, () => bulkAction("reconnect")); return; }
-    if (act === "bulk-reenable") { runAct(act, () => bulkAction("reenable")); return; }
-    if (act === "bulk-warmup") { runAct(act, () => bulkAction("warmup")); return; }
-    if (act === "bulk-restore") { runAct(act, () => bulkAction("restore")); return; }
+    if (act === "domain-bulk-flagged") { runAct(act, () => domainBulkFlagged(t)); return; }
+    if (act === "domain-reactivate-all") { runAct(act, () => domainReactivateAll(t)); return; }
+    if (act === "domain-reactivate-recovered") { runAct(act, () => domainReactivateRecovered(t)); return; }
+    if (act === "reconnect-one") { runAct(act, () => reconnectOne(Number(t.dataset.id), t)); return; }
+    if (act === "reenable-one") { runAct(act, () => reenableOne(Number(t.dataset.id), t)); return; }
+    if (act === "bulk-reconnect") { runAct(act, () => bulkAction("reconnect", t)); return; }
+    if (act === "bulk-reenable") { runAct(act, () => bulkAction("reenable", t)); return; }
+    if (act === "bulk-warmup") { runAct(act, () => bulkAction("warmup", t)); return; }
+    if (act === "bulk-restore") { runAct(act, () => bulkAction("restore", t)); return; }
     if (act === "rem-add") { runAct(act, () => remAdd()); return; }
     if (act === "rem-done") { runAct(act, () => remDone(t.dataset.id, false)); return; }
     if (act === "rem-undo") { runAct(act, () => remDone(t.dataset.id, true)); return; }
