@@ -3504,12 +3504,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           <input class="dlv-input" id="dlv-sig-search" type="text" placeholder="Type to narrow the list… (e.g. henry)" style="margin:6px 0 0" data-act="sig-search">
           <div class="dlv-sig-selbar">
             <label class="dlv-sig-selall"><input type="checkbox" id="dlv-sig-master" data-act="sig-master"> <span id="dlv-sig-master-label">Select all</span></label>
-            <a class="dlv-dl" id="dlv-sig-only" data-act="sig-only-shown" style="display:none">Select only these</a>
+            <a class="dlv-dl" id="dlv-sig-only" data-act="sig-only-shown" style="display:none" title="Keeps ticked ONLY the rows this search shows — everything hidden gets unticked">Tick only these, untick the rest</a>
+            <a class="dlv-dl" id="dlv-sig-untick" data-act="sig-untick-shown" style="display:none" title="Unticks the rows this search shows — everything hidden keeps its tick">Untick these, keep the rest</a>
             <span class="small muted" id="dlv-sig-selcount" style="margin-left:auto">0 selected</span>
           </div>
           <div id="dlv-sig-targets" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:0 0 9px 9px;border-top:none;background:var(--bg-sunken)"></div>
         </div>
-        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Overwrites existing signatures — reversible by re-applying.</span><button class="btn" data-act="close-modal" data-modal="dlv-sig-overlay">Cancel</button><button class="btn primary" id="dlv-sig-apply-btn" data-act="sig-apply">Apply to <span id="dlv-sig-n2">0</span> inboxes</button></div>
+        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Overwrites existing signatures — to change it later, just run this again with a new signature.</span><button class="btn" data-act="close-modal" data-modal="dlv-sig-overlay">Cancel</button><button class="btn primary" id="dlv-sig-apply-btn" data-act="sig-apply">Apply to <span id="dlv-sig-n2">0</span> inboxes</button></div>
       </div>
     </div>
 
@@ -3522,6 +3523,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           <input class="dlv-input" id="dlv-pn-search" type="text" placeholder="Type to narrow the list… (e.g. henry, or a domain)" style="margin:6px 0 0" data-act="pn-search">
           <div class="dlv-sig-selbar">
             <label class="dlv-sig-selall"><input type="checkbox" id="dlv-pn-master" data-act="pn-master"> <span id="dlv-pn-master-label">Select all</span></label>
+            <a class="dlv-dl" id="dlv-pn-only" data-act="pn-only-shown" style="display:none" title="Keeps ticked ONLY the rows this search shows — everything hidden gets unticked">Tick only these, untick the rest</a>
+            <a class="dlv-dl" id="dlv-pn-untick" data-act="pn-untick-shown" style="display:none" title="Unticks the rows this search shows — everything hidden keeps its tick">Untick these, keep the rest</a>
             <span class="small muted" id="dlv-pn-selcount" style="margin-left:auto">0 selected</span>
           </div>
           <div id="dlv-pn-hidden-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-top:none;padding:6px 11px"></div>
@@ -3539,23 +3542,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-wu-overlay" data-act="overlay-bg" data-modal="dlv-wu-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>Enable warmup on <span id="dlv-wu-n">0</span> mailbox(es)</h3><button class="x" data-act="close-modal" data-modal="dlv-wu-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Enable warmup on <span id="dlv-wu-n">0</span> mailbox(es) <span id="dlv-wu-brk" class="dlv-field-hint"></span></h3><button class="x" data-act="close-modal" data-modal="dlv-wu-overlay">&times;</button></div>
         <div class="dlv-modal-body">
-          <p class="small muted" id="dlv-wu-std" style="margin-bottom:12px"></p>
+          <p class="small muted" id="dlv-wu-std" style="margin-bottom:6px"></p>
+          <p class="small muted" style="margin-bottom:12px">Warmup quietly exchanges emails between our own inboxes so providers see healthy activity — it protects deliverability. Mailboxes with it off, or set differently from the fleet standard, are listed here.</p>
           <label class="dlv-field-label">Which mailboxes? <span class="dlv-field-hint">— tick the ones to fix (all ticked to start; ticks are kept while you search)</span></label>
           <input class="dlv-input" id="dlv-wu-search" type="text" placeholder="Type to narrow the list… (e.g. henry, or a domain)" style="margin:6px 0 0" data-act="wu-search">
           <div class="dlv-sig-selbar">
             <label class="dlv-sig-selall"><input type="checkbox" id="dlv-wu-master" data-act="wu-master"> <span id="dlv-wu-master-label">Select all</span></label>
-            <a class="dlv-dl" id="dlv-wu-only" data-act="wu-only-shown" style="display:none">Select only these</a>
+            <a class="dlv-dl" id="dlv-wu-only" data-act="wu-only-shown" style="display:none" title="Keeps ticked ONLY the rows this search shows — everything hidden gets unticked">Tick only these, untick the rest</a>
+            <a class="dlv-dl" id="dlv-wu-untick" data-act="wu-untick-shown" style="display:none" title="Unticks the rows this search shows — everything hidden keeps its tick">Untick these, keep the rest</a>
             <span class="small muted" id="dlv-wu-selcount" style="margin-left:auto">0 selected</span>
           </div>
           <div id="dlv-wu-hidden-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-top:none;padding:6px 11px"></div>
           <div id="dlv-wu-targets" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:0 0 9px 9px;border-top:none;background:var(--bg-sunken);margin-bottom:16px"></div>
           <div style="display:flex;gap:12px;flex-wrap:wrap">
-            <label style="flex:1;min-width:130px" class="dlv-field-label">Warm-up / day<input class="dlv-input" id="dlv-wu-perday" type="number" min="1" value="35" style="margin-top:6px"></label>
-            <label style="flex:1;min-width:130px" class="dlv-field-label">Daily ramp-up<input class="dlv-input" id="dlv-wu-ramp" type="number" min="0" value="5" style="margin-top:6px"></label>
-            <label style="flex:1;min-width:130px" class="dlv-field-label">Reply rate %<input class="dlv-input" id="dlv-wu-reply" type="number" min="0" max="100" value="38" style="margin-top:6px"></label>
+            <label style="flex:1;min-width:130px" class="dlv-field-label">Warm-up / day<input class="dlv-input" id="dlv-wu-perday" type="number" min="1" value="35" style="margin-top:6px" data-act="wu-setting-input"></label>
+            <label style="flex:1;min-width:130px" class="dlv-field-label">Daily ramp-up<input class="dlv-input" id="dlv-wu-ramp" type="number" min="0" value="5" style="margin-top:6px" data-act="wu-setting-input"></label>
+            <label style="flex:1;min-width:130px" class="dlv-field-label">Reply rate %<input class="dlv-input" id="dlv-wu-reply" type="number" min="0" max="100" value="38" style="margin-top:6px" data-act="wu-setting-input"></label>
           </div>
+          <p class="small muted" id="dlv-wu-summary" style="margin-top:10px"></p>
         </div>
         <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Reversible — you can adjust or disable warmup again later.</span><button class="btn" data-act="close-modal" data-modal="dlv-wu-overlay">Cancel</button><button class="btn primary" id="dlv-wu-apply-btn" data-act="wu-apply">Enable on <span id="dlv-wu-n2">0</span> mailbox(es)</button></div>
       </div>
@@ -3850,10 +3856,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const q = (UI.sig.search || "").trim();
     const mLabel = $id("dlv-sig-master-label");
     if (mLabel) mLabel.textContent = q ? "Select all shown (" + vis.length + ")" : "Select all";
-    // "Select only these" appears only while a search is narrowing the list —
-    // one click = exactly the shown rows, nothing hidden stays ticked.
+    // "Tick only these" / "Untick these" appear only while a search is
+    // narrowing the list — one click = exactly (or none of) the shown rows.
     const only = $id("dlv-sig-only");
     if (only) only.style.display = q && vis.length ? "" : "none";
+    const untick = $id("dlv-sig-untick");
+    if (untick) untick.style.display = q && vis.length ? "" : "none";
     const n = UI.sig.sel.size;
     const count = $id("dlv-sig-selcount");
     if (count) count.textContent = isPick ? "" : (n + " of " + UI.sig.rows.length + " selected");
@@ -3943,9 +3951,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
             (byDomain[d] = byDomain[d] || []).push(r);
           });
           const domains = Object.keys(byDomain).sort();
+          // Narrate mailboxes, not domains — "1 of 6" on a 20-mailbox ticked
+          // set read as the tool ignoring the selection (panel finding).
+          let doneSoFar = 0;
           for (let i = 0; i < domains.length; i++) {
             const d = domains[i];
-            if (applyBtn) applyBtn.innerHTML = "Applying " + esc(d) + " (" + (i + 1) + " of " + domains.length + ")…";
+            if (applyBtn) applyBtn.innerHTML = "Applying " + esc(d) + "… (" + (doneSoFar + byDomain[d].length) + " of " + selected.length + " mailboxes)";
             try {
               const j = await sigFixCall(base + "&filter=" + encodeURIComponent(b64u("@" + d)));
               if (j && j.ok === false) {
@@ -3961,9 +3972,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
               } else {
                 applied += j.ok || 0; failed += j.failed || 0;
                 if (Array.isArray(j.fails)) failDetails.push(...j.fails);
-                dropApplied(byDomain[d].map((r) => r.email));
+                // Keep any per-mailbox failures on the broken list — dropping
+                // them here would hide the failure until the next audit.
+                const failedSet = new Set((j.fails || []).map((f) => f.email));
+                dropApplied(byDomain[d].map((r) => r.email).filter((e) => !failedSet.has(e)));
               }
             } catch (e) { failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: String((e && e.message) || e) }); }
+            doneSoFar += byDomain[d].length;
           }
         } else {
           // A hand-picked subset → one scoped call per ticked inbox. The
@@ -3973,7 +3988,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           const done = [];
           for (let i = 0; i < selected.length; i++) {
             const r = selected[i];
-            if (applyBtn) applyBtn.innerHTML = "Applying " + (i + 1) + " of " + selected.length + "…";
+            if (applyBtn) applyBtn.innerHTML = "Applying " + (i + 1) + " of " + selected.length + " mailboxes…";
             try {
               const j = await sigFixCall(base + "&filter=" + encodeURIComponent(b64u(r.email)));
               if (j && j.ok === false) {
@@ -3982,8 +3997,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
               } else if (!(j.ok || 0) && !(j.failed || 0)) {
                 failed++; failDetails.push({ email: r.email, error: "not found in the backend's mailbox list" });
               } else {
-                applied += j.ok || 0; failed += j.failed || 0; done.push(r.email);
+                applied += j.ok || 0; failed += j.failed || 0;
                 if (Array.isArray(j.fails)) failDetails.push(...j.fails);
+                // Only count this mailbox done if its own write didn't fail.
+                if (!(j.fails || []).some((f) => f.email === r.email)) done.push(r.email);
               }
             } catch (e) { failed++; failDetails.push({ email: r.email, error: String((e && e.message) || e) }); }
           }
@@ -4030,7 +4047,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Same select-what-you-see model as the signature modal: every row is a
     // tickbox (all ticked on open, so the one-click "process everything" flow
     // is unchanged), the search narrows the list, and the master tickbox /
-    // "Select only these" act on the narrowed view.
+    // "Tick only these" act on the narrowed view.
     UI.pn.rows = [...rows].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
     UI.pn.sel = new Set(UI.pn.rows.map((r) => r.email));
     $id("dlv-pn-n").textContent = rows.length;
@@ -4045,7 +4062,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // (~4s) runs would let a fast pick add mailboxes to the wrong campaign.
     // Live shows a disabled "loading" state until the real list lands.
     if (isLive()) {
-      sel.innerHTML = `<option value="">Loading campaigns…</option>`;
+      sel.innerHTML = `<option value="">Loading your campaigns… (a moment)</option>`;
       sel.disabled = true;
     } else {
       sel.innerHTML = `<option value="">— don't add —</option>` + S.campaigns.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
@@ -4130,13 +4147,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const q = (UI.pn.search || "").trim();
     const mLabel = $id("dlv-pn-master-label");
     if (mLabel) mLabel.textContent = q ? "Select all " + vis.length + " shown" : "Select all";
+    // "Tick only these" / "Untick these" appear only while a search is
+    // narrowing the list, matching sig/wu.
+    const only = $id("dlv-pn-only");
+    if (only) only.style.display = q && vis.length ? "" : "none";
+    const untick = $id("dlv-pn-untick");
+    if (untick) untick.style.display = q && vis.length ? "" : "none";
     const n = UI.pn.sel.size;
     const count = $id("dlv-pn-selcount");
     if (count) count.textContent = n + " of " + UI.pn.rows.length + " selected";
     // Panel finding: with a search typed, ticked rows scroll out of sight and
     // people tag far more than they meant to. Say it, in amber, with the fix
-    // one click away. This strip is the ONLY untick-the-rest control (a second
-    // identically-behaving link in the bar above read as a different action) —
+    // one click away. This amber strip fires only when there are HIDDEN ticks
+    // (rows outside the current search) — the bar-above links act on the
+    // VISIBLE rows instead, so the two never overlap.
     // and it appears exactly when unticking the rest would do anything.
     const hiddenSel = n - visSel;
     const warn = $id("dlv-pn-hidden-warn");
@@ -4271,13 +4295,24 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // "wrong" needs its settings rewritten — same fix-warmup call either way.
     const off = (S.A.warmupConfig.notWarming || []).map((r) => Object.assign({}, r, { configKind: "off" }));
     const wrong = (S.A.warmupConfig.wrongSettings || []).map((r) => Object.assign({}, r, { configKind: "wrong" }));
-    UI.wu.rows = [...off, ...wrong].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
+    // Grouped, not date-shuffled: every "off" row before every "wrong settings"
+    // row, newest-first within each group — testers hunting one kind in a
+    // 22-row mixed list hated the churn.
+    off.sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
+    wrong.sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
+    UI.wu.rows = [...off, ...wrong];
     // Same select-what-you-see model as the signature/process-new modals:
     // every row starts ticked, so the one-click "fix everything" flow is
     // unchanged, but a hand-picked subset now drives the write instead of
     // whatever text happened to be sitting in the search box.
     UI.wu.sel = new Set(UI.wu.rows.map((r) => r.email));
     $id("dlv-wu-n").textContent = UI.wu.rows.length;
+    // Spell out the 22 = 14 off + 8 wrong split right in the header — testers
+    // read the bare total as a bug when the card above already broke it out.
+    const brkParts = [];
+    if (off.length) brkParts.push(off.length + " off");
+    if (wrong.length) brkParts.push(wrong.length + " wrong settings");
+    $id("dlv-wu-brk").textContent = brkParts.length ? "(" + brkParts.join(" · ") + ")" : "";
     $id("dlv-wu-search").value = "";
     const std = S.A.warmupConfig.standard || "";
     if (std) { const p = std.split("/"); if (p[0]) $id("dlv-wu-reply").value = p[0]; if (p[1]) $id("dlv-wu-perday").value = p[1]; $id("dlv-wu-std").textContent = "Your fleet's most common setting is " + p[0] + "% reply · " + p[1] + " warm-up/day (pre-filled below)."; }
@@ -4287,7 +4322,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
   function wuKind(r) { return r.configKind === "wrong" ? "wrong settings" : "warmup off"; }
   // The rows the search currently shows — selection actions (master tickbox,
-  // "Select only these") act on these, matching sig/pn.
+  // "Tick only these" / "Untick these") act on these, matching sig/pn.
   function wuVisibleRows() {
     const q = (UI.wu.search || "").trim().toLowerCase();
     if (!q) return UI.wu.rows;
@@ -4326,6 +4361,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (mLabel) mLabel.textContent = q ? "Select all shown (" + vis.length + ")" : "Select all";
     const only = $id("dlv-wu-only");
     if (only) only.style.display = q && vis.length ? "" : "none";
+    const untick = $id("dlv-wu-untick");
+    if (untick) untick.style.display = q && vis.length ? "" : "none";
     const n = UI.wu.sel.size;
     const count = $id("dlv-wu-selcount");
     if (count) count.textContent = n + " of " + UI.wu.rows.length + " selected";
@@ -4343,6 +4380,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     $id("dlv-wu-n2").textContent = n;
     const applyBtn = $id("dlv-wu-apply-btn");
     if (applyBtn) applyBtn.disabled = n === 0;
+    // Live summary, mirroring dlv-pn-summary: say exactly what Apply will do
+    // with the current settings, and that anything left unticked is untouched.
+    const summary = $id("dlv-wu-summary");
+    if (summary) {
+      if (!n) summary.textContent = "Nothing ticked — tick at least one mailbox above.";
+      else {
+        const perDay = ($id("dlv-wu-perday") || {}).value || 35;
+        const ramp = ($id("dlv-wu-ramp") || {}).value || 5;
+        const reply = ($id("dlv-wu-reply") || {}).value || 38;
+        const unticked = UI.wu.rows.length - n;
+        summary.textContent = "This will switch warmup to " + perDay + "/day · " + ramp + " ramp-up · " + reply + "% reply on " + n + " mailbox(es)"
+          + (unticked > 0 ? "; " + unticked + " unticked stay exactly as they are." : ".");
+      }
+    }
   }
   async function wuApply() {
     // Single-confirm flow: Apply below is the commitment point (see sigApply).
@@ -4380,21 +4431,30 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
             (byDomain[d] = byDomain[d] || []).push(r);
           });
           const domains = Object.keys(byDomain).sort();
+          // Narrate mailboxes, not domains (see sigApply).
+          let doneSoFar = 0;
           for (let i = 0; i < domains.length; i++) {
             const d = domains[i];
-            if (applyBtn) applyBtn.innerHTML = "Applying " + esc(d) + " (" + (i + 1) + " of " + domains.length + ")…";
+            if (applyBtn) applyBtn.innerHTML = "Applying " + esc(d) + "… (" + (doneSoFar + byDomain[d].length) + " of " + selected.length + " mailboxes)";
             try {
               const j = await wuFixCall(base + "&filter=" + encodeURIComponent(b64u("@" + d)));
               if (j && j.ok === false) {
                 if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
                 failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: j.reason || "failed" });
+              } else if (!(j.ok || 0) && !(j.failed || 0)) {
+                // Touched nothing = the backend's mailbox list doesn't know
+                // these addresses — keep them listed as failed (see sigApply).
+                failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: "not found in the backend's mailbox list" });
               } else {
-                const emails = byDomain[d].map((r) => r.email);
                 applied += j.ok || 0; failed += j.failed || 0;
                 if (Array.isArray(j.fails)) failDetails.push(...j.fails);
+                // Keep any per-mailbox failures on the broken list (see sigApply).
+                const failedSet = new Set((j.fails || []).map((f) => f.email));
+                const emails = byDomain[d].map((r) => r.email).filter((e) => !failedSet.has(e));
                 dropApplied(emails); markLocalActive(emails);
               }
             } catch (e) { failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: String((e && e.message) || e) }); }
+            doneSoFar += byDomain[d].length;
           }
         } else {
           // A hand-picked subset → one scoped call per ticked mailbox, same
@@ -4402,15 +4462,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           const done = [];
           for (let i = 0; i < selected.length; i++) {
             const r = selected[i];
-            if (applyBtn) applyBtn.innerHTML = "Applying " + (i + 1) + " of " + selected.length + "…";
+            if (applyBtn) applyBtn.innerHTML = "Applying " + (i + 1) + " of " + selected.length + " mailboxes…";
             try {
               const j = await wuFixCall(base + "&filter=" + encodeURIComponent(b64u(r.email)));
               if (j && j.ok === false) {
                 if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
                 failed++; failDetails.push({ email: r.email, error: j.reason || "failed" });
+              } else if (!(j.ok || 0) && !(j.failed || 0)) {
+                failed++; failDetails.push({ email: r.email, error: "not found in the backend's mailbox list" });
               } else {
-                applied += j.ok || 0; failed += j.failed || 0; done.push(r.email);
+                applied += j.ok || 0; failed += j.failed || 0;
                 if (Array.isArray(j.fails)) failDetails.push(...j.fails);
+                if (!(j.fails || []).some((f) => f.email === r.email)) done.push(r.email);
               }
             } catch (e) { failed++; failDetails.push({ email: r.email, error: String((e && e.message) || e) }); }
           }
@@ -6203,6 +6266,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       sigPaintList();
       return;
     }
+    if (act === "sig-untick-shown") {
+      // The exclude gesture: removes the visible rows from the selection,
+      // leaving anything outside the search untouched.
+      sigVisibleRows().forEach((r) => UI.sig.sel.delete(r.email));
+      sigPaintList();
+      return;
+    }
     if (act === "pn-apply") { runAct(act, () => pnApply()); return; }
     if (act === "pn-only-shown") {
       // One click = the ticked set becomes exactly the rows the search shows.
@@ -6210,10 +6280,24 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       pnPaintList();
       return;
     }
+    if (act === "pn-untick-shown") {
+      // The exclude gesture: removes the visible rows from the selection,
+      // leaving anything outside the search untouched.
+      pnVisibleRows().forEach((r) => UI.pn.sel.delete(r.email));
+      pnPaintList();
+      return;
+    }
     if (act === "wu-apply") { runAct(act, () => wuApply()); return; }
     if (act === "wu-only-shown") {
       // One click = the ticked set becomes exactly the rows the search shows.
       UI.wu.sel = new Set(wuVisibleRows().map((r) => r.email));
+      wuPaintList();
+      return;
+    }
+    if (act === "wu-untick-shown") {
+      // The exclude gesture: removes the visible rows from the selection,
+      // leaving anything outside the search untouched.
+      wuVisibleRows().forEach((r) => UI.wu.sel.delete(r.email));
       wuPaintList();
       return;
     }
@@ -6368,6 +6452,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "pn-search") { UI.pn.search = t.value; pnPaintList(); return; }
     if (act === "pn-tag-input") { pnSyncCounts(); return; }
     if (act === "wu-search") { UI.wu.search = t.value; wuPaintList(); return; }
+    if (act === "wu-setting-input") { wuSyncCounts(); return; }
   }
 
   /* ============================================================

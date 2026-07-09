@@ -310,7 +310,9 @@ def _fix_signatures(q: dict):
     fail_set = set(_STATE["scenario"].get("fail_emails") or [])
     targets = [r for r in _STATE["fleet"].values() if r["sig_state"] in ("missing", "mismatch")]
     if batch:
-        targets = [r for r in targets if r["brand"] == batch]
+        # The UI sends the batch LABEL it read off the audit blob (r["batch"]),
+        # never the internal brand key — match what we emit.
+        targets = [r for r in targets if batch in (r["batch"], r["brand"])]
     if filt:
         fl = filt.lower()
         targets = [r for r in targets if fl in r["email"].lower()]
@@ -359,7 +361,7 @@ def _inboxes(q: dict):
     batch = q.get("batch") or ""
     rows = list(_STATE["fleet"].values())
     if batch:
-        rows = [r for r in rows if r["brand"] == batch]
+        rows = [r for r in rows if batch in (r["batch"], r["brand"])]
 
     def kind_of(r):
         if r["warmup_state"] == "off":
