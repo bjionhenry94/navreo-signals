@@ -544,15 +544,30 @@
     mode: null,
     probed: false,          // the config probe (GET campaigns) resolved once
     booting: false,         // a bootData() pass is in flight
-    runLoading: false,      // a POST /run is in flight
-    runError: null,         // last /run failure kind (banner)
     sampleDismissed: false, // user closed the "sample data" banner
     // Manager (mailbox views) live cache — keyed by view+batch.
     mgr: { key: null, pendingKey: null, loading: false, error: false, rows: null, counts: null, batches: null, total: null, truncated: false },
     // Domain-health live cache — keyed by window+minSent+cutoff.
     dh: { key: null, pendingKey: null, loading: false, error: false, done: false },
+    // Stage B: cached-blob + poll state for GET/_audit + POST /_audit/refresh
+    // (replaces the old synchronous POST /run — see loadAudit()/startAuditPoll()).
+    audit: {
+      loading: false,     // an initial GET /_audit (or a force-refresh kickoff) is in flight
+      polling: false,     // the 10s background poll loop is active
+      pollTimer: null,    // setInterval handle for the poll loop
+      pollStart: null,    // Date.now() when the current poll loop began (for the ~6min cap)
+      timedOut: false,    // poll cap exceeded — "still running" choice shown
+      ageSec: null,       // ageSec of the last blob we painted (freshness note)
+      error: null,        // last graceful-failure message (non-"unconfigured")
+      failSample: false,  // true while Overview is showing sample figures due to that error
+      sampleApplied: false, // guards against re-wiping the fallback mock on every retry tick
+      postRefreshCleanup: false, // "Run Live Audit" button asked for the done-stub/selection wipe once the NEXT blob lands
+    },
   };
   function isLive() { return DATA.mode === "live"; }
+  const AUDIT_POLL_MS = 10000;         // GET /_audit poll interval while a run is in flight
+  const AUDIT_POLL_CAP_MS = 6 * 60 * 1000; // give up waiting after ~6 minutes
+  const AUDIT_CLIENT_STALE_MS = 5 * 60 * 1000; // re-poll a cached live S.A after 5 min in-session
 
   // Typed fetch error so callers can distinguish 503 (backend unconfigured)
   // from 502 (upstream error) from a raw network/timeout failure.
@@ -639,12 +654,22 @@
   }
 
   // Probe the backend once and set DATA.mode; in live mode, overlay the cheap
-  // /reminders immediately and kick a background /run to fill the aggregate S.A
-  // (unless the in-memory / sessionStorage S is already a live snapshot).
+  // /reminders immediately and load the cached audit blob (Stage B: read-cached
+  // + poll — see loadAudit() — instead of the old synchronous POST /run).
   async function bootData() {
     if (DATA.booting) return;
     if (DATA.probed) {
-      if (isLive() && !(S.A && S.A._live) && !DATA.runLoading) runLiveAuditBg(false);
+      if (isLive()) {
+        if (S.A && S.A._live) {
+          // Cached-live guard (req #4): only re-poll a fresh-enough in-memory
+          // snapshot when it's actually gone stale client-side; a tab switch
+          // or reload that still has a recent live S.A repaints instantly.
+          const age = Date.now() - (S.A._liveLoadedAt || 0);
+          if (age > AUDIT_CLIENT_STALE_MS && !DATA.audit.loading && !DATA.audit.polling) loadAudit();
+        } else if (!DATA.audit.loading && !DATA.audit.polling) {
+          loadAudit();
+        }
+      }
       return;
     }
     DATA.booting = true;
@@ -658,39 +683,151 @@
     DATA.booting = false;
     try { sessionStorage.setItem("dlv_data_mode", DATA.mode); } catch (e) {}
     if (isLive()) {
-      // Cheap live wins first: reminders paint before the ~2-min /run resolves.
+      // Cheap live wins first: reminders paint before the cached/pending audit resolves.
       apiGet("reminders", { timeout: 20000 }).then((rem) => {
         if (Array.isArray(rem)) { S.A.reminders = rem; saveState(); paintPage(); }
       }).catch(() => {});
-      if (!(S.A && S.A._live)) runLiveAuditBg(false);
-      else paintPage();
+      if (S.A && S.A._live) {
+        const age = Date.now() - (S.A._liveLoadedAt || 0);
+        if (age > AUDIT_CLIENT_STALE_MS) loadAudit(); else paintPage();
+      } else {
+        loadAudit();
+      }
     } else {
       paintPage(); // surface the sample-data banner
     }
   }
 
-  // POST /run in the background (~1-2 min): non-blocking banner while it runs,
-  // then S.A ← mapped blob + repaint. `force` is cosmetic (the button path);
-  // it always runs regardless of the current snapshot.
-  async function runLiveAuditBg(force) {
-    if (DATA.runLoading) return;
-    DATA.runLoading = true; DATA.runError = null;
-    paintPage(); // show the "Running live audit…" banner
-    try {
-      const blob = await apiPost("run", {}, { timeout: 200000 });
-      S.A = mapRunBlob(blob);
-      DATA.mode = "live";
-      if (S.ui) delete S.ui.redSnapshot; // re-baseline partial-progress math to live
+  // ── Stage B: cached-blob + poll audit loader (replaces the synchronous
+  // POST /run, which took ~4min and 502'd through the proxy well before that).
+  //
+  //   GET /_audit → {blob, ts, ageSec, running, error, configured, stale}
+  //   POST /_audit/refresh → {started, running} | {fresh:true}   (fire-and-forget kick)
+  //
+  // handleAuditResult() is the single place that reads a /_audit response and
+  // decides what happens next, whether it came from the initial GET or from a
+  // poll tick — see the branches inlined below.
+  function auditAgeLabel(ageSec) {
+    const n = Number(ageSec);
+    if (!Number.isFinite(n) || n < 0) return "just now";
+    if (n < 90) return "just now";
+    if (n < 3600) return Math.max(1, Math.round(n / 60)) + "m ago";
+    return Math.max(1, Math.round(n / 3600)) + "h ago";
+  }
+
+  function stopAuditPoll() {
+    if (DATA.audit.pollTimer) { clearInterval(DATA.audit.pollTimer); DATA.audit.pollTimer = null; }
+    DATA.audit.polling = false;
+  }
+
+  // A fresh blob landed (initial load, poll tick, or a completed background
+  // refresh) — map it onto S.A exactly as the old /run path did, then clear
+  // every "waiting on the backend" flag so the UI reads as settled+live.
+  function applyAuditBlob(blob, ageSec) {
+    S.A = mapRunBlob(blob);
+    S.A._liveLoadedAt = Date.now();
+    DATA.mode = "live";
+    if (S.ui) delete S.ui.redSnapshot; // re-baseline partial-progress math to live
+    saveState();
+    // Invalidate the per-panel live caches so they re-fetch against the new run.
+    DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
+    DATA.dh.key = null; DATA.dh.done = false;
+    DATA.audit.loading = false; DATA.audit.error = null; DATA.audit.failSample = false;
+    DATA.audit.sampleApplied = false; DATA.audit.timedOut = false; DATA.audit.ageSec = ageSec;
+    if (DATA.audit.postRefreshCleanup) {
+      clearDoneStubs(); UI.mgr.sel = new Set(); DATA.audit.postRefreshCleanup = false;
+      toast("Live audit complete", "ok");
+    }
+  }
+
+  // Requirement 1d — a real backend error (not "unconfigured", which bootData's
+  // own config probe already routes to full sample mode): keep isLive() true
+  // (manager/domain/reminders keep live-fetching per req #4) but reset the
+  // Overview aggregate to the sample snapshot so the summary never shows a
+  // stuck spinner. Guarded so a second failed retry doesn't re-wipe whatever
+  // the owner did in this fallback state.
+  function enterAuditFailSample(message) {
+    stopAuditPoll();
+    DATA.audit.loading = false; DATA.audit.error = message; DATA.audit.failSample = true;
+    DATA.audit.timedOut = false;
+    if (!S.A || S.A._live || !DATA.audit.sampleApplied) {
+      S.A = buildMock();
+      S.A.date = todayISO();
+      DATA.audit.sampleApplied = true;
       saveState();
-      // Invalidate the per-panel live caches so they re-fetch against the new run.
-      DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
-      DATA.dh.key = null; DATA.dh.done = false;
+    }
+  }
+
+  function startAuditPoll() {
+    if (!DATA.audit.pollStart) DATA.audit.pollStart = Date.now();
+    DATA.audit.polling = true; DATA.audit.loading = true; DATA.audit.error = null;
+    DATA.audit.failSample = false; DATA.audit.timedOut = false;
+    if (DATA.audit.pollTimer) return; // already ticking
+    DATA.audit.pollTimer = setInterval(() => {
+      if (Date.now() - DATA.audit.pollStart > AUDIT_POLL_CAP_MS) {
+        stopAuditPoll();
+        DATA.audit.loading = false; DATA.audit.timedOut = true;
+        paintPage();
+        return;
+      }
+      apiGet("_audit", { timeout: 20000 }).then((r) => handleAuditResult(r, { polling: true }))
+        .catch(() => { /* transient poll hiccup — keep polling, next tick retries */ });
+    }, AUDIT_POLL_MS);
+  }
+
+  // Central handler for every GET /_audit response (initial load AND each poll
+  // tick funnel through here) — see spec 1b-1f / 2 for the branch order.
+  function handleAuditResult(r, opts) {
+    opts = opts || {};
+    r = r || {};
+    if (r.configured === false) { // 1b
+      stopAuditPoll();
+      DATA.mode = "sample";
+      DATA.audit.loading = false; DATA.audit.failSample = false; DATA.audit.error = null;
+      paintPage();
+      return;
+    }
+    if (r.blob) { // 1c
+      stopAuditPoll();
+      applyAuditBlob(r.blob, r.ageSec);
+      paintPage();
+      if (r.stale) apiPost("_audit/refresh", {}, { timeout: 20000 }).catch(() => {}); // silent bg top-up
+      return;
+    }
+    if (r.error && r.error !== "unconfigured") { // 1d
+      enterAuditFailSample(r.error);
+      paintPage();
+      return;
+    }
+    // blob null, no real error: 1e (kick a refresh first) or 1f (already running) → poll.
+    if (!r.running && !opts.polling) apiPost("_audit/refresh", {}, { timeout: 20000 }).catch(() => {});
+    startAuditPoll();
+    if (!opts.polling) paintPage();
+  }
+
+  async function loadAudit() {
+    if (DATA.audit.loading || DATA.audit.polling) return;
+    DATA.audit.loading = true;
+    try {
+      const r = await apiGet("_audit", { timeout: 20000 });
+      handleAuditResult(r, {});
     } catch (e) {
-      DATA.runError = (e && e.kind) ? e.kind : "error";
-    } finally {
-      DATA.runLoading = false;
+      enterAuditFailSample((e && e.message) || "network error");
       paintPage();
     }
+  }
+
+  // Force a fresh snapshot: POST /_audit/refresh, then fall into the same poll
+  // loop as a natural cache-miss (unless the backend says it's already fresh).
+  async function forceAuditRefresh() {
+    DATA.audit.error = null; DATA.audit.failSample = false; DATA.audit.timedOut = false;
+    paintPage();
+    let resp = null;
+    try { resp = await apiPost("_audit/refresh", {}, { timeout: 20000 }); } catch (e) {}
+    if (resp && resp.fresh) { await loadAudit(); return; }
+    DATA.audit.pollStart = Date.now();
+    startAuditPoll();
+    paintPage();
   }
 
   // ── Manager live fetch: mailbox views via GET /inboxes?view=&batch= ──
@@ -2029,6 +2166,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (st.yellow) parts.push("🟡 " + st.yellow + " to review");
     if (st.note) parts.push("📝 " + st.note + " note" + (st.note === 1 ? "" : "s"));
     if (!st.red && !st.yellow && !st.note) parts.push("✓ rest healthy");
+    // Freshness note (req 1c) — only meaningful once a real /_audit blob has
+    // actually been painted; the sample-fallback and pre-load states skip it.
+    if (isLive() && S.A._live && !DATA.audit.failSample) parts.push("live · as of " + auditAgeLabel(DATA.audit.ageSec));
     return `
     <div class="dlv-banner">
       <div class="dlv-dot ${st.dot}"></div>
@@ -3114,16 +3254,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <button class="dlv-data-banner-x" data-act="dismiss-sample-banner" title="Dismiss">&times;</button>
       </div>`;
     }
-    if (isLive() && DATA.runLoading) {
-      return `<div class="dlv-data-banner running" id="dlv-data-banner">
-        <span class="dlv-spinner ink"></span>
-        <span class="dlv-data-banner-txt">Running live audit… (~1–2 min) — the numbers below refresh automatically when it finishes.</span>
+    // Graceful failure (req 1d) — a real backend error, Overview is showing
+    // sample figures while manager/domains/reminders stay live underneath.
+    if (isLive() && DATA.audit.failSample) {
+      return `<div class="dlv-data-banner err" id="dlv-data-banner">
+        <span class="dlv-data-banner-txt">Live audit unavailable (${esc(DATA.audit.error || "error")}). Showing sample figures for the summary — mailbox, domain &amp; reminder data below is live.</span>
+        <button class="btn sm dlv-btn-caution" data-act="retry-audit" style="margin-left:8px">Retry</button>
       </div>`;
     }
-    if (isLive() && DATA.runError) {
-      return `<div class="dlv-data-banner err" id="dlv-data-banner">
-        <span class="dlv-data-banner-txt">Live audit couldn't complete (${esc(DATA.runError)}) — showing the last snapshot. Retry with ⚠ Run Live Audit.</span>
-        <button class="dlv-data-banner-x" data-act="dismiss-run-error" title="Dismiss">&times;</button>
+    // Poll cap exceeded (req 2) — let the owner choose to keep waiting or bail to sample.
+    if (isLive() && DATA.audit.timedOut) {
+      return `<div class="dlv-data-banner running" id="dlv-data-banner">
+        <span class="dlv-data-banner-txt">Still running the live audit — this is taking longer than the usual ~4 min.</span>
+        <button class="btn sm" data-act="audit-keep-waiting" style="margin-left:8px">Keep waiting</button>
+        <button class="btn sm dlv-btn-caution" data-act="audit-use-sample" style="margin-left:8px">Use sample summary</button>
+      </div>`;
+    }
+    if (isLive() && DATA.audit.polling) {
+      return `<div class="dlv-data-banner running" id="dlv-data-banner">
+        <span class="dlv-spinner ink"></span>
+        <span class="dlv-data-banner-txt">Running live audit… (up to ~4 min) — the numbers below refresh automatically when it finishes; everything stays usable meanwhile.</span>
       </div>`;
     }
     return "";
@@ -3970,16 +4120,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   async function runLiveAudit() {
     const btn = $id("dlv-run-btn");
     if (!btn || btn.dataset.busy) return;
-    // Live mode: force a fresh POST /run (~1-2 min) against the real backend.
+    // Live mode: kick a fresh background run (~1-2 min) via POST /_audit/refresh,
+    // then poll — non-blocking, so the button doesn't hang the tab the way the
+    // old synchronous POST /run did.
     if (isLive()) {
-      const ok = await dlvConfirm("Pull a fresh live audit?\n\nThis runs a brand-new live snapshot from Smartlead (~1–2 min) and clears every action you've taken this session (marked-done items, pauses, signatures, tags…).\n\nNot reversible.", { title: "Run Live Audit", danger: true, yesLabel: "Run audit" });
+      const ok = await dlvConfirm("Pull a fresh live audit?\n\nThis pulls a fresh live snapshot from Smartlead in the background (~1–2 min) — the tab stays usable while it runs. Once it lands it clears every action you've taken this session (marked-done items, pauses, signatures, tags…).\n\nNot reversible.", { title: "Run Live Audit", danger: true, yesLabel: "Run audit" });
       if (!ok) return;
       btn.dataset.busy = "1";
-      await runLiveAuditBg(true); // shows the running banner + repaints on resolve
-      clearDoneStubs();
-      UI.mgr.sel = new Set();
-      delete btn.dataset.busy;
-      toast(DATA.runError ? "Live audit failed — showing the last snapshot" : "Live audit complete", DATA.runError ? "" : "ok");
+      DATA.audit.postRefreshCleanup = true; // clearDoneStubs()/mgr selection reset once the new blob lands
+      toast("Pulling a fresh live audit in the background…", "ok");
+      forceAuditRefresh().finally(() => { delete btn.dataset.busy; });
       return;
     }
     // Sample mode: no live backend to hit — just rebuild the mock snapshot.
@@ -4357,7 +4507,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "scroll-todo") { runAct(act, () => openFoldlessScroll("dlv-todo-anchor")); return; }
     // Stage-A data-source banner dismiss buttons.
     if (act === "dismiss-sample-banner") { runAct(act, () => { DATA.sampleDismissed = true; paintPage(); }); return; }
-    if (act === "dismiss-run-error") { runAct(act, () => { DATA.runError = null; paintPage(); }); return; }
+    // Graceful-failure Retry (req 1d) — same non-destructive kick as the poll
+    // path, no confirm (unlike ⚠ Run Live Audit, retrying isn't destructive:
+    // there's no live snapshot yet to wipe).
+    if (act === "retry-audit") { runAct(act, () => forceAuditRefresh()); return; }
+    // Poll-cap (~6min) choices (req 2).
+    if (act === "audit-keep-waiting") { runAct(act, () => { DATA.audit.timedOut = false; DATA.audit.pollStart = Date.now(); startAuditPoll(); paintPage(); }); return; }
+    if (act === "audit-use-sample") { runAct(act, () => { stopAuditPoll(); enterAuditFailSample("timed out"); paintPage(); }); return; }
     // Defect H: the "or undo later from Recent actions ↓" hint line inside an
     // undo toast — scrolls to (and opens) the Recent-actions fold. Recent
     // actions stayed in Overview (it wasn't one of the 3 moved sections), but
