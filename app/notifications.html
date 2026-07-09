@@ -409,79 +409,6 @@ const ACTION_TYPE_LABEL = {
   nearing_completion: "nearing completion",
   none: "flagged for review",
 };
-/* Skip copy shared by pause_campaign / kill_threshold_pivot: states the
-   sends-per-positive ratio against the fixed 1-per-2,500 kill threshold. */
-function killThresholdSkipCopy(n) {
-  const sent = n.sent, positive = n.positive;
-  const ratio = positive > 0 ? Math.round(sent / positive) : null;
-  if (ratio != null) {
-    return `In plain terms: ${fmt(sent)} emails have bought ${fmt(positive)} positive replies, one for every ${fmt(ratio)} sends. The cut-off is one per 2,500 sends. Every further send spends budget and domain reputation with no realistic payback.`;
-  }
-  return `In plain terms: ${fmt(sent)} emails have gone out without a single positive reply. Every further send spends budget and domain reputation with no realistic payback.`;
-}
-/* Joins a list of strings with commas and "and" before the last item, e.g.
-   ["A", "B", "C"] -> "A, B and C". */
-function joinWithAnd(items) {
-  if (items.length <= 1) return items.join("");
-  if (items.length === 2) return items.join(" and ");
-  return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
-}
-/* replace_variants approve copy: names the exact variants pulled from the
-   notification's detail text (e.g. "Replace Email 1 Var C") when present,
-   falling back to the generic sentence when detail doesn't name any. */
-function replaceVariantsApproveCopy(n) {
-  const matches = String(n.detail || "").match(/Replace (Email \d+ Var \w+)/g);
-  if (matches && matches.length) {
-    const names = matches.map((m) => m.replace(/^Replace /, ""));
-    return `${joinWithAnd(names)} get rewritten (the Copy Claude prompt button gives you a ready-made brief). Note: saving a sequence in Smartlead resets variant stats, so make the change once rather than iterating live.`;
-  }
-  return "The flagged copy variants get rewritten (the Copy Claude prompt button gives you a ready-made brief). Note: saving a sequence in Smartlead resets variant stats, so make the change once rather than iterating live.";
-}
-/* "Details & who's affected" copy per action_type — ported pattern from
-   mailboxes.html's detailsHTML(). {fields} below are interpolated from the
-   notification row `n` (fmt() for numbers, matching the rest of this file).
-   run_list_audit gets no affected table; upload_leads gets neither the
-   affected table nor the technical fold (see DETAIL_PATTERN_OPTS below).
-   Types not listed here (nearing_completion, none, null/unknown) keep the
-   pre-existing compact render untouched. */
-const DETAIL_PATTERN = {
-  pause_campaign: {
-    approve: (n) => "The campaign pauses immediately, and that is the only automatic part. The pivot itself stays a CSM decision: approving does not change targeting or write anything new. Pausing is reversible from Smartlead at any time.",
-    skip: (n) => killThresholdSkipCopy(n),
-  },
-  kill_threshold_pivot: {
-    approve: (n) => "The campaign pauses immediately, and that is the only automatic part. The pivot itself stays a CSM decision: approving does not change targeting or write anything new. Pausing is reversible from Smartlead at any time.",
-    skip: (n) => killThresholdSkipCopy(n),
-  },
-  replace_variants: {
-    approve: (n) => replaceVariantsApproveCopy(n),
-    skip: (n) => "The campaign keeps splitting sends into copy that is proven to underperform, dragging the whole campaign's reply rate down.",
-  },
-  disable_loser: {
-    approve: (n) => "The losing variant stops receiving sends and its share re-routes to the stronger variants. Reversible in Smartlead if you change your mind.",
-    skip: (n) => "A known loser keeps taking its share of sends that stronger variants would convert.",
-  },
-  scale_winner: {
-    approve: (n) => "The winning variant gets a larger share of sends, so more leads see the copy that is already proven to convert.",
-    skip: (n) => "The winner stays capped at its current share and the extra replies it would earn are left on the table.",
-  },
-  fix_distribution: {
-    approve: (n) => "The traffic split is rebalanced so each variant gets its intended share and the test reads true again.",
-    skip: (n) => "The skewed split keeps over-feeding one variant, so the variant stats stay unreliable and decisions made on them will be wrong.",
-  },
-  run_list_audit: {
-    approve: (n) => "The lead list is audited for bad or off-brief contacts before any more sends go out to it.",
-    skip: (n) => "Sends continue into a list flagged for quality issues, risking bounces that damage the sending domains.",
-    noAffected: true,
-  },
-  upload_leads: {
-    approve: (n) => `Fresh leads are added and the campaign keeps sending without a gap (it is ${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) : "–"}% through its current list).`,
-    skip: (n) => "The campaign runs out of leads, inboxes go idle, and the warm sending cadence is lost.",
-    noAffected: true,
-    noTech: true,
-  },
-};
-
 let all = [];                 // every row from the last successful fetch
 let loadState = "loading";    // "loading" | "ok" | "error"
 let filters = { status: "all", priority: "all", client: "all" };
@@ -1007,31 +934,6 @@ function section6(rows) {
 const CLAUDE_PROMPT_ACTION_TYPES = new Set([
   "replace_variants", "scale_winner", "disable_loser", "kill_threshold_pivot", "run_list_audit",
 ]);
-function actionDetailHTML(n) {
-  const pattern = DETAIL_PATTERN[n.action_type];
-  if (!pattern) return "";
-  const affected = pattern.noAffected ? "" : `
-  <div class="affbar"><div class="det-block" style="margin:0"><div class="h" style="margin:0">Your affected campaign, all 1 shown</div></div></div>
-  <table class="tbl"><tbody><tr><td>${campaignLink(n.campaign_name, n.smartlead_url)}</td><td>${fmt(n.sent)} sent &middot; ${fmt(n.positive)} positive &middot; ${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) : "–"}% complete</td><td>CSM: ${esc(n.client || "Unassigned")}</td></tr></tbody></table>`;
-  const tech = pattern.noTech ? "" : `
-  <details class="disclose"><summary>Show technical detail (exact action and raw signal)</summary><div class="dc">
-    <div class="det-block"><div class="h">What this action does</div><div class="mono">${esc(n.detail || "")}</div></div>
-    <div class="det-block" style="margin-top:12px"><div class="h">Why this fired (raw)</div><div class="mono">${esc([
-      `action_type: ${n.action_type}`,
-      `priority: ${n.priority}`,
-      `status: ${n.status}`,
-      `sent: ${n.sent}`,
-      `positive: ${n.positive}`,
-      `completion_pct: ${n.completion_pct}`,
-    ].join("\n"))}</div></div>
-  </div></details>`;
-  return `<details class="disclose"><summary>Details and who's affected</summary><div class="dc">
-  <div class="det-grid">
-    <div class="det-block"><div class="h">If you approve</div><div class="consequence">${esc(pattern.approve(n))}</div></div>
-    <div class="det-block"><div class="h">If you skip</div><div class="consequence">${esc(pattern.skip(n))}</div></div>
-  </div>${affected}${tech}
-</div></details>`;
-}
 function actionBlockHTML(n) {
   const bullets = parseActionBullets(n.detail);
   const cls = ["action-block"];
@@ -1050,7 +952,6 @@ function actionBlockHTML(n) {
       </div>
     </div>
     ${bullets.length ? `<ul class="action-list">${bullets.map((b) => `<li>${linkifyLillyStrategy(esc(b))}</li>`).join("")}</ul>` : ""}
-    ${actionDetailHTML(n)}
     <div class="action-row">
       ${showPause ? `<button type="button" class="btn sm danger" data-act="pause" data-id="${esc(String(n.id))}">Pause campaign</button>` : ""}
       ${showCopy ? `<button type="button" class="btn sm" data-act="copy-prompt" data-id="${esc(String(n.id))}">Copy Claude prompt</button>` : ""}
