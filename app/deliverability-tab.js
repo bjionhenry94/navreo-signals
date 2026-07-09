@@ -3876,6 +3876,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const applyBtn = $id("dlv-sig-apply-btn");
       const base = "tpl=" + encodeURIComponent(b64u(tpl)) + (batch ? "&batch=" + encodeURIComponent(b64u(batch)) : "");
       let applied = 0, failed = 0;
+      const failDetails = []; // backend's per-mailbox fail reasons — surfaced, never discarded
       const orig = applyBtn ? applyBtn.innerHTML : null;
       try {
         if (allInScope) {
@@ -3883,6 +3884,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           const j = await liveAction("fix-signatures?" + base, applyBtn, "Applying…", { timeout: 90000 });
           if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "empty_template" ? "Signature is empty" : "Failed"), "err"); return; }
           applied = j.ok || 0; failed = j.failed || 0;
+          if (Array.isArray(j.fails)) failDetails.push(...j.fails);
           dropApplied(selected.map((r) => r.email));
         } else {
           // A hand-picked subset → one scoped call per ticked inbox. The
@@ -3898,9 +3900,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
               const j = await liveAction("fix-signatures?" + base + "&filter=" + encodeURIComponent(b64u(r.email)), null, null, { timeout: 90000 });
               if (j && j.ok === false) {
                 if (j.reason === "run_first") { toast("Run a live audit first", "err"); return; }
-                failed++;
-              } else { applied += j.ok || 0; failed += j.failed || 0; done.push(r.email); }
-            } catch (e) { failed++; }
+                failed++; failDetails.push({ email: r.email, error: j.reason || "failed" });
+              } else {
+                applied += j.ok || 0; failed += j.failed || 0; done.push(r.email);
+                if (Array.isArray(j.fails)) failDetails.push(...j.fails);
+              }
+            } catch (e) { failed++; failDetails.push({ email: r.email, error: String((e && e.message) || e) }); }
           }
           dropApplied(done);
         }
@@ -3910,7 +3915,22 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       logAction({action: "signatures", count: applied, failed: failed, scope: batch || "all brands" });
       saveState();
       closeModal("dlv-sig-overlay");
-      toast("Signatures applied to " + applied + " mailbox(es)" + (failed ? " · " + failed + " failed" : "") + (batch ? " in " + batch : ""), failed ? "err" : "ok");
+      // Failures carry the backend's per-mailbox reason — show the most common
+      // one in the toast (the bare count told the owner nothing) and dump the
+      // full list to the console for support.
+      let failWhy = "";
+      if (failed && failDetails.length) {
+        console.warn("fix-signatures failures:", failDetails);
+        const msgOf = (f) => String((f && (f.error || f.reason || f.message)) || f || "unknown error");
+        const tally = {};
+        failDetails.forEach((f) => { const m = msgOf(f); tally[m] = (tally[m] || 0) + 1; });
+        failWhy = " — " + Object.entries(tally).sort((a, b) => b[1] - a[1])[0][0];
+      }
+      // Every write failing = the backend's mailbox snapshot has gone stale
+      // (proven live 2026-07-09: 0/63 on a stale snapshot, 50/50 right after
+      // a fresh audit). Say the fix, not just the failure.
+      if (failed && !applied) failWhy += " — click Run Live Audit to refresh the mailbox list, then Apply again";
+      toast("Signatures applied to " + applied + " mailbox(es)" + (failed ? " · " + failed + " failed" + failWhy : "") + (batch ? " in " + batch : ""), failed ? "err" : "ok");
       invalidateMgrDh();
       paintPage();
       return;
