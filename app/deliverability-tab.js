@@ -182,6 +182,9 @@
     if (!body) return "";
     return `<details class="disclose" style="margin-top:12px"><summary>Show technical detail (exact action and raw signal)</summary><div class="dc">${body}</div></details>`;
   }
+  // Small icon tile for permanent panel headings — same .ictile treatment as
+  // the dashboard's stat tiles / campaigns' source rows (ic8 comes from shell.js).
+  function headIc(name) { return `<span class="ictile dlv-headic">${ic8(name)}</span>`; }
   // Wraps the whole thing in the collapsed outer <details>.
   function dlvDisclose(innerHtml) {
     return `<details class="disclose"><summary>Details and who's affected</summary><div class="dc">${innerHtml}</div></details>`;
@@ -1140,7 +1143,8 @@
    heavier weight, and a small ⚠ so it visibly stands apart from the harmless
    Copy/Slack/Notion buttons to its left (still NOT the solid .btn.danger used
    at final confirm points). */
-.dlv-btn-caution{background:var(--red-bg);border:2px solid var(--red);color:#861E10;font-weight:700;box-shadow:0 0 0 3px rgba(200,40,20,.08)}
+.dlv-btn-caution{background:var(--red-bg);border:2px solid var(--red);color:#861E10;font-weight:600}
+.dlv-btn-caution .ic8{width:14px;height:14px}
 .dlv-btn-caution:hover{background:var(--red);border-color:var(--red);color:#fff}
 .dlv-banner{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin:16px 0 22px}
 .dlv-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
@@ -1160,20 +1164,27 @@
    items stretch to the tallest row-mate by default) stops one long tile from
    forcing every tile in its row to inflate to match it. */
 .dlv-stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;align-items:start}
-.dlv-stat{border-left:3px solid var(--line-2)}
-.dlv-stat .num-hero{color:var(--green)}
+/* Round-2 colour discipline (GTME panel): healthy tiles are plain white cards
+   with ink numbers, exactly like the dashboard's stat tiles — a coloured
+   left border + tinted number now appears ONLY on flagged (warn/bad) tiles,
+   so colour reads as severity, never decoration. */
+.dlv-stat .num-hero{color:var(--ink)}
 .dlv-stat-csv{margin-top:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
-.dlv-stat.warn{border-left-color:var(--amber)} .dlv-stat.warn .num-hero{color:var(--amber)}
-.dlv-stat.bad{border-left-color:var(--red)} .dlv-stat.bad .num-hero{color:var(--red)}
+.dlv-stat.warn{border-left:3px solid var(--amber)} .dlv-stat.warn .num-hero{color:var(--amber)}
+.dlv-stat.bad{border-left:3px solid var(--red)} .dlv-stat.bad .num-hero{color:var(--red)}
 .dlv-dl{font-size:11.5px;font-weight:600;color:var(--orange-700);text-decoration:none;cursor:pointer}
 .dlv-dl:hover{text-decoration:underline}
 .dlv-todo-head{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:600;margin:6px 0 12px}
 .dlv-todo-count{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;border-radius:12px;background:var(--orange);color:#fff;font-size:12.5px;font-weight:700}
 .dlv-actions-list{display:flex;flex-direction:column;gap:11px}
 .dlv-ai{display:flex;flex-wrap:wrap;gap:13px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--line-2);border-radius:12px;padding:16px 18px}
-.dlv-ai.red{border-left-color:var(--red)} .dlv-ai.yellow{border-left-color:var(--amber)} .dlv-ai.note{border-left-color:var(--ink-3)} .dlv-ai.done{opacity:.65}
+/* Round-2 colour discipline: only RED (urgent) rows keep the strong bar +
+   solid red number badge, so "do this first" pops at a glance. Yellow rows
+   drop to a soft amber bar + pastel badge; notes go neutral — same severity
+   encoding, quieter voice (GTME panel consensus). */
+.dlv-ai.red{border-left-color:var(--red)} .dlv-ai.yellow{border-left-color:var(--amber-line)} .dlv-ai.note{border-left-color:var(--line-2)} .dlv-ai.done{opacity:.65}
 .dlv-ai-n{flex-shrink:0;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:#fff}
-.dlv-ai-n.red{background:var(--red)} .dlv-ai-n.yellow{background:var(--amber)} .dlv-ai-n.note{background:var(--ink-3)}
+.dlv-ai-n.red{background:var(--red)} .dlv-ai-n.yellow{background:var(--amber-bg);color:#6B4A00} .dlv-ai-n.note{background:var(--bg-sunken);color:var(--ink-2)}
 .dlv-ai-body{flex:1;min-width:0}
 .dlv-ai-text{font-weight:600;font-size:14px}
 .dlv-ai-action{font-size:12.5px;color:var(--ink-3);margin-top:5px}
@@ -1188,8 +1199,8 @@ details.dlv-fold{border:1px solid var(--line);border-radius:12px;background:var(
 details.dlv-fold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:14px 16px;font-size:14px;font-weight:600;user-select:none}
 details.dlv-fold>summary::-webkit-details-marker{display:none}
 details.dlv-fold>summary .hint{font-weight:500;font-size:12px;color:var(--ink-3)}
-details.dlv-fold>summary::after{content:'▸ open';margin-left:auto;font-size:11.5px;font-weight:600;color:var(--ink-3)}
-details.dlv-fold[open]>summary::after{content:'▾ close'}
+details.dlv-fold>summary::after{content:'Show ▾';margin-left:auto;font-size:11.5px;font-weight:600;color:var(--ink-3)}
+details.dlv-fold[open]>summary::after{content:'Hide ▴'}
 details.dlv-fold[open]>summary{border-bottom:1px solid var(--line)}
 /* Defect D fix: don't rely solely on the UA stylesheet's native collapse of a
    closed <details> (some rendering contexts don't apply it), so a closed fold
@@ -1356,10 +1367,16 @@ table.dlv-bt th:not(:first-child),table.dlv-bt td:not(:first-child){text-align:r
 details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-todo-anchor.dlv-flash{animation:dlvFlash 1.5s ease-out;border-radius:12px}
 .dlv-health-strip{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px}
-.dlv-health-chip{flex:1 1 220px;min-width:220px;border:1px solid var(--line);border-left:4px solid var(--line-2);border-radius:10px;padding:12px 16px;font-size:13.5px;font-weight:600;line-height:1.4;background:var(--card)}
-.dlv-health-chip.g{border-left-color:var(--green);color:#195C3F;background:var(--green-bg)}
-.dlv-health-chip.a{border-left-color:var(--amber);color:#6B4A00;background:var(--amber-bg)}
-.dlv-health-chip.r{border-left-color:var(--red);color:#861E10;background:var(--red-bg)}
+/* Round-2 colour discipline (GTME panel consensus): green/amber chips are
+   quiet white cards — a coloured dot carries the state, ink carries the text
+   (same dot+label pattern as the Signals tab's "Running" pill). ONLY the red
+   chip keeps a full tinted fill: a fire must still read from across the room
+   (skeptic panelist's counter-weight). */
+.dlv-health-chip{flex:1 1 220px;min-width:220px;border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:13px;font-weight:500;line-height:1.4;background:var(--card);color:var(--ink-2)}
+.dlv-health-chip.g .dot{background:var(--green)}
+.dlv-health-chip.a .dot{background:var(--amber)}
+.dlv-health-chip.r{border-color:var(--red-line);border-left:4px solid var(--red);color:#861E10;background:var(--red-bg);font-weight:600}
+.dlv-health-chip.r .dot{background:var(--red)}
 .dlv-health-chip[data-act]{cursor:pointer}
 .dlv-health-chip[data-act]:hover{filter:brightness(.96)}
 /* Part C(c): one-glance verdict line — the single leading sentence above the
@@ -1445,6 +1462,25 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-rem-err{display:none;color:var(--red);font-size:12px;font-weight:600;margin:-6px 0 10px}
 .dlv-rem-err.show{display:block}
 .dlv-input.dlv-input-err{border-color:var(--red)}
+/* ── Signals-tab visual alignment pass ─────────────────────────
+   Emoji glyphs across the tab are replaced by the design system's own
+   vocabulary: currentColor dots (like .pill .dot), masked ic8 icon tiles
+   (like the dashboard stat tiles), and plain text buttons (like the
+   campaigns list's Duplicate/Remove). Rules below support that. */
+.dlv-headic{width:28px;height:28px;border-radius:8px;background:var(--bg-sunken)}
+.dlv-headic .ic8{width:14px;height:14px;color:var(--ink-2)}
+.dlv-verdict .vdot{width:10px;height:10px;border-radius:999px;background:currentColor;flex-shrink:0;margin-top:5px}
+.dlv-health-chip{display:flex;align-items:flex-start;gap:9px}
+.dlv-health-chip .dot{width:8px;height:8px;border-radius:999px;background:currentColor;flex-shrink:0;margin-top:6px}
+/* "Details and who's affected" / "Show technical detail" disclosures: a
+   chevron + real padding so a closed one reads as an expandable row, not an
+   empty input field. */
+.dlv .disclose{overflow:hidden}
+.dlv .disclose>summary{padding:9px 14px;color:var(--ink-3);display:flex;align-items:center;gap:8px}
+.dlv .disclose>summary:hover{background:var(--bg-sunken);color:var(--ink-2)}
+.dlv .disclose>summary::before{content:'▸';font-size:10px;color:var(--ink-3);transition:transform .15s ease}
+.dlv .disclose[open]>summary::before{transform:rotate(90deg)}
+.dlv .disclose .dc{border:none;border-top:1px solid var(--line);border-radius:0}
 `;
     const st = document.createElement("style");
     st.id = "dlv-styles";
@@ -1512,7 +1548,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // (renderHistoryFold() below also now mirrors the same Undo into Recent
       // actions, so either path works regardless of which one this points to).
       el.innerHTML = `<div class="dlv-toast-row"><span>${esc(msg)}</span><button type="button" class="dlv-toast-undo" data-act="toast-undo" data-key="${esc(opts.undoKey)}">↩ Undo</button></div>` +
-        `<div class="dlv-toast-hint">or undo later from <a data-act="scroll-actioned">✅ Actioned ↓</a></div>` +
+        `<div class="dlv-toast-hint">or undo later from <a data-act="scroll-actioned">Actioned ↓</a></div>` +
         `<div class="dlv-toast-bar"></div>`;
       const dur = 10000;
       const bar = el.querySelector(".dlv-toast-bar");
@@ -1968,11 +2004,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         return { key: "blacklist", level: "red", count: actionable, short: "blacklisted domains still sending",
           text: actionable + " of " + total + " domain(s) on SURBL / Spamhaus blocklists still sending.",
           actionLines: [
-            "1) Pause the still-sending domains (⏸ buttons below).",
+            "1) Pause the still-sending domains (the Pause buttons below).",
             "2) The usual cause is bad lead lists or spammy copy — run the lead verification in the campaigns item below / review your copy.",
             // Fix #3b (holdout VA): expectation-setting — delisting is NOT a
             // button in this tool, it's a manual form on each blocklist's site.
-            "3) Then file for delisting (📋 Delisting prep below) — a manual step on each blocklist's own website (has a CAPTCHA): copy the prepared request text, or hand this to your admin.",
+            "3) Then file for delisting (Delisting prep below) — a manual step on each blocklist's own website (has a CAPTCHA): copy the prepared request text, or hand this to your admin.",
           ],
           action: "Pause sending, fix the cause (lead lists / copy), then file for delisting.",
           blacklistRows: S.A.blacklistRows };
@@ -2171,11 +2207,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       </div>
       <div class="dlv-actions">
         <button class="dlv-tips-btn" data-act="show-coach" title="Show the quick intro / tips for this page again">? Show tips</button>
-        <button class="btn" data-act="copy-claude" title="Copies a text summary you can paste to an AI assistant or teammate.">📋 Copy for Claude</button>
-        <button class="btn" data-act="sync-notion">🗂 Sync to Notion</button>
-        <button class="btn" data-act="send-slack">📤 Send to Slack</button>
+        <button class="btn sm" data-act="copy-claude" title="Copies a text summary you can paste to an AI assistant or teammate.">Copy for Claude</button>
+        <button class="btn sm" data-act="sync-notion">Sync to Notion</button>
+        <button class="btn sm" data-act="send-slack">Send to Slack</button>
         <span class="dlv-hdr-sep" aria-hidden="true"></span>
-        <button class="btn dlv-btn-caution" data-act="run-audit" id="dlv-run-btn" title="Destructive — wipes every action taken this session and pulls a fresh snapshot.">⚠ Run Live Audit</button>
+        <button class="btn dlv-btn-caution" data-act="run-audit" id="dlv-run-btn" title="Destructive — wipes every action taken this session and pulls a fresh snapshot.">${ic8("error")} Run Live Audit</button>
       </div>
     </div>`;
   }
@@ -2200,7 +2236,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (coachSeen() && !UI.coachOpen) return "";
     return `<div class="dlv-coach" id="dlv-coach">
       <button class="dlv-coach-x" data-act="coach-dismiss" title="Dismiss">&times;</button>
-      <h3>👋 New here? This page lists what needs attention today.</h3>
+      <h3>New here? This page lists what needs attention today.</h3>
       <ul>
         <li>Click any <b>?</b> for a plain-English definition of any term.</li>
         <li>Every button that changes something asks you to <b>confirm first</b> — and can be undone.</li>
@@ -2219,9 +2255,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const A = S.A;
     const bounceBad = Number(A.bounce_pct) >= 2;
     const repliesDown = A.replyTrend && A.replyTrend.drop;
-    let sev, dot, phrase;
+    let sev, phrase;
     if (st.red > 0) {
-      sev = "r"; dot = "🔴";
+      sev = "r";
       const topRed = D.activeTodo.find((x) => x.level === "red");
       const start = topRed && topRed.short ? topRed.short : (topRed ? topRed.text : "the urgent items");
       const bits = [st.red + " urgent fix" + (st.red === 1 ? "" : "es")];
@@ -2229,25 +2265,24 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (bounceBad) bits.push("bounce over limit");
       phrase = "Needs attention — " + bits.join(" and ") + ". Start with: " + start + ".";
     } else if (st.yellow > 0 || repliesDown) {
-      sev = "a"; dot = "🟡";
+      sev = "a";
       const bits = [];
       if (st.yellow > 0) bits.push(st.yellow + " thing" + (st.yellow === 1 ? "" : "s") + " to review");
       if (repliesDown) bits.push("replies trending down");
       phrase = "Mostly healthy — " + (bits.join(" and ") || "a few things to review") + ". No fires, but worth a look today.";
     } else {
-      sev = "g"; dot = "🟢";
+      sev = "g";
       phrase = "Healthy sending — nothing urgent today. The numbers below are for reference.";
     }
-    return `<div class="dlv-verdict ${sev}"><span class="vdot">${dot}</span><span>Overall: ${esc(phrase)}</span></div>`;
+    return `<div class="dlv-verdict ${sev}"><span class="vdot"></span><span>Overall: ${esc(phrase)}</span></div>`;
   }
 
   function renderBanner(D) {
     const st = computeStatus(D);
-    const emoji = { g: "🟢", a: "🟡", r: "🔴" }[st.dot];
     const parts = [fmtN(S.A.inboxes) + " inboxes", S.A.domains + " domains", S.A.active + " active"];
-    if (st.red) parts.push("🔴 " + st.red + " urgent");
-    if (st.yellow) parts.push("🟡 " + st.yellow + " to review");
-    if (st.note) parts.push("📝 " + st.note + " note" + (st.note === 1 ? "" : "s"));
+    if (st.red) parts.push(st.red + " urgent");
+    if (st.yellow) parts.push(st.yellow + " to review");
+    if (st.note) parts.push(st.note + " note" + (st.note === 1 ? "" : "s"));
     if (!st.red && !st.yellow && !st.note) parts.push("✓ rest healthy");
     // Freshness note (req 1c) — only meaningful once a real /_audit blob has
     // actually been painted; the sample-fallback and pre-load states skip it.
@@ -2255,7 +2290,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return `
     <div class="dlv-banner">
       <div class="dlv-dot ${st.dot}"></div>
-      <div><h2>${emoji} ${esc(S.A.date)} — ${st.status}</h2><div class="sub">${parts.join(" · ")}</div></div>
+      <div><h2>${esc(S.A.date)} — ${st.status}</h2><div class="sub">${parts.join(" · ")}</div></div>
     </div>`;
   }
 
@@ -2273,12 +2308,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Fix #4c (panels 9-10): "✓ Sending healthy" read as a page-level
     // all-clear that contradicted the "3 urgent" chip beside it — scope the
     // claim to the one metric it's actually about (bounce rate).
-    if (F.bounceOk) chips.push({ sev: "g", html: "✓ Bounce rate healthy — " + A.bounce_pct + "%, under the 2% limit" });
-    else chips.push({ sev: F.bounceWarn ? "a" : "r", html: (F.bounceWarn ? "⚠" : "🔴") + " Bounce rate elevated — " + A.bounce_pct + "% (fleet limit 2%)" });
+    if (F.bounceOk) chips.push({ sev: "g", html: "Bounce rate healthy — " + A.bounce_pct + "%, under the 2% limit" });
+    else chips.push({ sev: F.bounceWarn ? "a" : "r", html: "Bounce rate elevated — " + A.bounce_pct + "% (fleet limit 2%)" });
     // 2. Reply trend — surfaced ONLY when it's actually declining; a flat/rising
     // trend has nothing urgent to say here (it's still in "Fleet by the numbers").
     if (A.replyTrend && A.replyTrend.drop) {
-      chips.push({ sev: "a", html: "⚠ Replies trending down — " + A.replyTrend.wkRate + "% this week ▼ vs " + A.replyTrend.prevRate + "% prior 4-wk avg" });
+      chips.push({ sev: "a", html: "Replies trending down — " + A.replyTrend.wkRate + "% this week ▼ vs " + A.replyTrend.prevRate + "% prior 4-wk avg" });
     }
     // 3. Action needed — reuses computeStatus()'s own red/yellow/note counts
     // (same numbers the banner above prints), so this can't ever show a
@@ -2312,17 +2347,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // as "nothing happened" to an owner who just did something. Call out
       // how many active red items have moved since session start.
       const prog = D.status.redInProgress > 0 ? " (" + D.status.redInProgress + " in progress)" : "";
-      chips.push({ sev: "r", html: "🔴 " + D.status.red + " urgent" + prog + topTxt + " →" + more, act: "scroll-todo" });
+      chips.push({ sev: "r", html: D.status.red + " urgent" + prog + topTxt + " →" + more, act: "scroll-todo" });
     } else if (D.status.yellow > 0) {
-      chips.push({ sev: "a", html: "🟡 " + D.status.yellow + " thing" + (D.status.yellow === 1 ? "" : "s") + " to review today →", act: "scroll-todo" });
+      chips.push({ sev: "a", html: D.status.yellow + " thing" + (D.status.yellow === 1 ? "" : "s") + " to review today →", act: "scroll-todo" });
     }
     // 4. Authentication — always shown. Fix #8b: lead with the problem count
     // instead of burying it in an "X of Y" ratio a reader has to do subtraction
     // on, and say "all N" rather than the more awkward "N of N" when clean.
-    if (F.authIssueDomains === 0) chips.push({ sev: "g", html: "✓ Authentication OK on all " + A.domains + " domains" });
-    else chips.push({ sev: "a", html: "⚠ " + F.authIssueDomains + " domain" + (F.authIssueDomains === 1 ? "" : "s") + " missing auth records — " + F.authOkDomains + " of " + A.domains + " OK" });
+    if (F.authIssueDomains === 0) chips.push({ sev: "g", html: "Authentication OK on all " + A.domains + " domains" });
+    else chips.push({ sev: "a", html: "" + F.authIssueDomains + " domain" + (F.authIssueDomains === 1 ? "" : "s") + " missing auth records — " + F.authOkDomains + " of " + A.domains + " OK" });
     return `<div class="dlv-health-strip">` + chips.map((c) =>
-      `<div class="dlv-health-chip ${c.sev}"${c.act ? ` data-act="${c.act}"` : ""}>${c.html}</div>`
+      `<div class="dlv-health-chip ${c.sev}"${c.act ? ` data-act="${c.act}"` : ""}><span class="dot"></span><span>${c.html}</span></div>`
     ).join("") + `</div>`;
   }
 
@@ -2334,7 +2369,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
          once did.)
      ============================================================ */
   function tile(label, value, note, sev, csvName, fixAction, extra, glossLabel) {
-    const csv = csvName ? `<div class="dlv-stat-csv"><a class="dlv-dl" data-act="view-data" data-file="${csvName}">👁 View list</a></div>` : "";
+    const csv = csvName ? `<div class="dlv-stat-csv"><a class="dlv-dl" data-act="view-data" data-file="${csvName}">View list</a></div>` : "";
     // Actionable tiles get a small link straight to their fix, reusing the
     // same data-act handlers already wired for the to-do cards below — so a
     // tester scanning the numbers doesn't have to hunt for the matching action.
@@ -2428,14 +2463,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // typography) rather than full body text, so the merged tile stays compact.
     const extraHtml = lines.map((l) => `<div class="dlv-stat-plain">${esc(l)}</div>`).join("");
     const fixLinks = [];
-    if (actionableToWarmUp) fixLinks.push(`<a class="dlv-dl" data-act="open-manager">🛠 Open manager ↓</a>`);
-    if (configIssues) fixLinks.push(`<a class="dlv-dl" data-act="open-warmup-fix">⚡ Enable warmup…</a>`);
+    if (actionableToWarmUp) fixLinks.push(`<a class="dlv-dl" data-act="open-manager">Open manager ↓</a>`);
+    if (configIssues) fixLinks.push(`<a class="dlv-dl" data-act="open-warmup-fix">Enable warmup…</a>`);
     const fixHtml = fixLinks.length ? `<div class="dlv-stat-csv">${fixLinks.join("")}</div>` : "";
     const csvLinks = [
-      `<a class="dlv-dl" data-act="view-data" data-file="inactive">👁 View inactive</a>`,
-      `<a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">👁 View to warm up</a>`,
+      `<a class="dlv-dl" data-act="view-data" data-file="inactive">View inactive</a>`,
+      `<a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">View to warm up</a>`,
     ];
-    if (configIssues) csvLinks.push(`<a class="dlv-dl" data-act="view-data" data-file="warmup-config">👁 View config issues</a>`);
+    if (configIssues) csvLinks.push(`<a class="dlv-dl" data-act="view-data" data-file="warmup-config">View config issues</a>`);
     const csvHtml = `<div class="dlv-stat-csv">${csvLinks.join("")}</div>`;
     const sev = sevOf(actionableTotal === 0, actionableTotal < 20);
     return `<div class="stat dlv-stat ${sev}" title="Everything warmup-related — inactive mailboxes, domains flagged for rotation, rests past due, and config issues"><div class="lab">Warmup${glossMark(WARMUP_DEF)}</div><div class="num-hero">${actionableTotal}</div>${extraHtml}${fixHtml}${csvHtml}</div>`;
@@ -2456,7 +2491,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // number actually is instead.
         tile("Emails sent", fmtN(A.sent), "last 7 days across all campaigns", ""),
         replyTrendTile(A),
-        tile("Blacklisted domains", A.blacklistRows.length, A.blacklistRows.length ? "Spamhaus DBL / SURBL" : "clean", sevOf(A.blacklistRows.length === 0, false), A.blacklistRows.length ? "blacklist" : null, A.blacklistRows.length ? { act: "open-blacklist", label: "🚫 Manage ↓" } : null),
+        tile("Blacklisted domains", A.blacklistRows.length, A.blacklistRows.length ? "Spamhaus DBL / SURBL" : "clean", sevOf(A.blacklistRows.length === 0, false), A.blacklistRows.length ? "blacklist" : null, A.blacklistRows.length ? { act: "open-blacklist", label: "Manage ↓" } : null),
         // Defect 5: this used to read the static seed value A.campLow, which
         // never moved even after a campaign got verified+cleaned — while the
         // to-do's "verify" card counts the exact same campaigns live off
@@ -2472,8 +2507,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ],
       F: [
         warmupTile(D),
-        tile("New unprocessed", D.newCount, D.newCount + " new/untagged mailbox(es)", sevOf(D.newCount === 0, true), D.newCount ? "new-mailboxes" : null, D.newCount ? { act: "open-process-new", label: "🏷 Process…" } : null),
-        tile("Signature issues", D.signatureCount, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch", sevOf(D.signatureCount === 0, true), "signature", D.signatureCount ? { act: "open-sig-fix", label: "✍️ Fix…" } : null, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch"),
+        tile("New unprocessed", D.newCount, D.newCount + " new/untagged mailbox(es)", sevOf(D.newCount === 0, true), D.newCount ? "new-mailboxes" : null, D.newCount ? { act: "open-process-new", label: "Process…" } : null),
+        tile("Signature issues", D.signatureCount, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch", sevOf(D.signatureCount === 0, true), "signature", D.signatureCount ? { act: "open-sig-fix", label: "Fix…" } : null, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch"),
         tile("Sending vs batch", D.deviationCount, A.sendingDeviation.over.length + " over · " + A.sendingDeviation.under.length + " under their batch baseline", sevOf(D.deviationCount === 0, true), "sending-deviation", null, A.sendingDeviation.over.length + " over · " + A.sendingDeviation.under.length + " under their batch baseline"),
         tile("Retired domains", D.retiredCount, D.retiredCount ? "all mailboxes dead → remove" : "none", sevOf(D.retiredCount === 0, false), D.retiredCount ? "retired" : null),
       ],
@@ -2492,8 +2527,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       html += `<div class="dlv-fleet-group"><div class="dlv-fleet-glabel">Blocked breakdown</div><div class="dlv-stat-grid">${items}</div></div>`;
     }
     html += `<div class="dlv-signpost-row">
-      <a class="dlv-dl" data-act="open-batch">▲▼ Best &amp; worst batch ↓</a>
-      <a class="dlv-dl" data-act="open-manager">🛠 Open manager ↓</a>
+      <a class="dlv-dl" data-act="open-batch">Best &amp; worst batch ↓</a>
+      <a class="dlv-dl" data-act="open-manager">Open manager ↓</a>
     </div>`;
     return `<div class="dlv-section-title">Fleet by the numbers</div>${html}`;
   }
@@ -2532,7 +2567,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const open = (S.ui && S.ui.techOpen != null) ? S.ui.techOpen : F.anyInfraIssue;
     const summary = F.authIssueDomains + " domain(s) missing auth records · " + F.nsIssues + " nameserver issue(s)";
     return `<details class="dlv-fold" id="dlv-fold-tech" ${open ? "open" : ""}>
-      <summary>🔧 Technical details — authentication &amp; DNS<span class="hint">${esc(summary)}</span></summary>
+      <summary>Technical details — authentication &amp; DNS<span class="hint">${esc(summary)}</span></summary>
       <div class="dlv-fold-body"><div class="dlv-stat-grid">${tiles}</div></div>
     </details>`;
   }
@@ -2562,7 +2597,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function renderTodoCard(it, i, D) {
     const extraBits = [];
     if (it.verifyCamps && it.verifyCamps.length) extraBits.push(`<div class="dlv-vcamps">${it.verifyCamps.map(renderVerifyCampRow).join("")}</div>`);
-    // Item 5a: the card's own "🚫 Manage ↓" button (below) deliberately opens
+    // Item 5a: the card's own "Manage ↓" button (below) deliberately opens
     // just the Blacklisted-domains fold — the simple, matching-scope target
     // for "pause these domains". The full inbox & domain manager (bulk
     // multi-domain rotation, filters, CSV export) is a different, heavier
@@ -2572,11 +2607,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (it.blacklistRows && it.blacklistRows.length) extraBits.push(`<div class="dlv-ai-action" style="margin-top:6px">${it.blacklistRows.length} domain(s) listed. Full list + actions in the <b>Blacklisted domains</b> tab, or <a class="dlv-dl" data-act="open-manager">open the manager for advanced rotation</a>.</div>`);
     // (The old "Usual causes:" plain line was folded into the card's numbered
     // step 2 — item 3 — so the same advice isn't printed twice.)
-    if (it.sigCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="signature">👁 View signature issues</a></div>`);
-    if (it.devCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="sending-deviation">👁 View deviations</a></div>`);
-    if (it.newCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="new-mailboxes">👁 View new/untagged</a></div>`);
-    if (it.retiredCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="retired">👁 View retired domains</a></div>`);
-    if (it.wcCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="warmup-config">👁 View warmup-config issues</a></div>`);
+    if (it.sigCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="signature">View signature issues</a></div>`);
+    if (it.devCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="sending-deviation">View deviations</a></div>`);
+    if (it.newCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="new-mailboxes">View new/untagged</a></div>`);
+    if (it.retiredCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="retired">View retired domains</a></div>`);
+    if (it.wcCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="warmup-config">View warmup-config issues</a></div>`);
     // Family 2 disclosure: this to-do row is the to-do-list home for the
     // "open-warmup-fix" tile/button (which itself has no room for one) — see
     // buttons below.
@@ -2611,11 +2646,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
     const btns = [];
     if (it.hypertide) {
-      btns.push(`<button class="btn sm" data-act="draft-email">✉️ Draft email</button>`);
+      btns.push(`<button class="btn sm" data-act="draft-email">Draft email</button>`);
       // Item 2: once "Draft email" has been used this session, the card carries
       // a small durable chip — evidence that outlives the toast and the modal.
       if ((S.A.history || []).some((h) => h && h.action === "hypertide_draft" && h.ts != null)) {
-        btns.push(`<span class="dlv-tag ok" style="align-self:center" title="The escalation email was drafted this session">✉️ drafted</span>`);
+        btns.push(`<span class="dlv-tag ok" style="align-self:center" title="The escalation email was drafted this session">✓ drafted</span>`);
       }
       // Family 4 disclosure: to-do-list home for the "draft-email" button. The
       // exact drafted text is available here via buildHypertideEmail(D) — the
@@ -2630,11 +2665,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ));
     }
     if (it._openManager) btns.push(`<button class="btn sm" data-act="open-manager">Open manager ↓</button>`);
-    if (it.reminderDue) btns.push(`<button class="btn sm" data-act="open-reminders">⏰ Reminders ↓</button>`);
-    if (it.key === "warmup-notwarming" && it.count > 0) btns.push(`<button class="btn sm primary" data-act="open-warmup-fix">⚡ Enable warmup on all</button>`);
-    if (it.key === "signatures") btns.push(`<button class="btn sm primary" data-act="open-sig-fix">✍️ Fix signatures…</button>`);
-    if (it.key === "new-unprocessed") btns.push(`<button class="btn sm primary" data-act="open-process-new">🏷 Process…</button>`);
-    if (it.blacklistRows) btns.push(`<button class="btn sm" data-act="open-blacklist">🚫 Manage ↓</button>`);
+    if (it.reminderDue) btns.push(`<button class="btn sm" data-act="open-reminders">Reminders ↓</button>`);
+    if (it.key === "warmup-notwarming" && it.count > 0) btns.push(`<button class="btn sm primary" data-act="open-warmup-fix">Enable warmup on all</button>`);
+    if (it.key === "signatures") btns.push(`<button class="btn sm primary" data-act="open-sig-fix">Fix signatures…</button>`);
+    if (it.key === "new-unprocessed") btns.push(`<button class="btn sm primary" data-act="open-process-new">Process…</button>`);
+    if (it.blacklistRows) btns.push(`<button class="btn sm" data-act="open-blacklist">Manage ↓</button>`);
     if (it.key) btns.push(`<button class="btn sm" data-act="mark-done" data-key="${it.key}" data-count="${it.count || 0}" title="Mark as actioned">✓ Mark done</button>`);
     const plain = plainLineFor(it.text + " " + (it.action || ""));
     // Item 3: multi-step cards render each numbered step on its own line —
@@ -2675,7 +2710,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // (this is exactly the "last item vanished into All clear" moment).
       const stubs = D.doneTodo.map(stubOf).join("");
       if (stubs) html += `<div class="dlv-actions-list" style="margin-bottom:12px">${stubs}</div>`;
-      html += `<div class="dlv-all-clear"><div class="big">🟢 All clear</div><div class="sub">${(D.doneTodo.length || D.resolvedTodo.length) ? "Everything flagged today has been handled." : "Nothing needs action today — the numbers above are for reference."}</div></div>`;
+      html += `<div class="dlv-all-clear"><div class="big">✓ All clear</div><div class="sub">${(D.doneTodo.length || D.resolvedTodo.length) ? "Everything flagged today has been handled." : "Nothing needs action today — the numbers above are for reference."}</div></div>`;
     }
     if (D.resolvedTodo.length) {
       html += `<div class="dlv-todo-resolved-label">Auto-resolved today</div><div class="dlv-good-row">${D.resolvedTodo.map((it) => `<span class="dlv-good-chip dlv-resolved-chip" title="${esc(it.text)}">✓ handled</span>`).join("")}</div>`;
@@ -2688,7 +2723,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // in ~3s — the ONLY other way to know this fold is where undos live was
       // reading that toast at the moment it fired. A persistent hint right on
       // the (always-visible) summary means it's still findable tomorrow.
-      html += `<details class="dlv-fold" id="dlv-fold-actioned"><summary>✅ Actioned<span class="hint">${D.doneTodo.length} marked done — reappears only if it grows · (undo items you marked done here — any time)</span></summary><div class="dlv-fold-body"><div class="dlv-actions-list">` +
+      html += `<details class="dlv-fold" id="dlv-fold-actioned"><summary>Actioned<span class="hint">${D.doneTodo.length} marked done — reappears only if it grows · (undo items you marked done here — any time)</span></summary><div class="dlv-fold-body"><div class="dlv-actions-list">` +
         D.doneTodo.map(renderAckRow).join("") +
         "</div></div></details>";
     }
@@ -2716,12 +2751,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // state they encode is already conveyed by the friendlier restChip below.
     (b.tags || []).forEach((t) => { if (!/^dash-rest-\d+$/i.test(t)) chips.push(t); });
     const tagChips = chips.length ? chips.map((t) => `<span class="dlv-tag md">${esc(t)}</span>`).join("") : `<span class="dlv-tag md" style="opacity:.6">untagged</span>`;
-    const restChip = b.rested > 0 ? `<span class="dlv-tag inactive">🌙 ${glossify("resting")} (${b.rested})</span>${blDueChip(b.restedDue)}` : (b.cleared ? `<span class="dlv-tag ok">✓ cleared</span>` : "");
-    const reBtn = b.rested > 0 ? `<button class="btn sm" data-act="domain-reactivate-bl" data-domain="${esc(b.domain)}" title="Restore saved caps and resume sending">☀️ Reactivate</button>` : "";
+    const restChip = b.rested > 0 ? `<span class="dlv-tag inactive">${glossify("resting")} (${b.rested})</span>${blDueChip(b.restedDue)}` : (b.cleared ? `<span class="dlv-tag ok">✓ cleared</span>` : "");
+    const reBtn = b.rested > 0 ? `<button class="btn sm" data-act="domain-reactivate-bl" data-domain="${esc(b.domain)}" title="Restore saved caps and resume sending">Reactivate</button>` : "";
     // Still-sending (not resting, not cleared) domains get their own per-domain
     // Pause — the bulk "⏸ Pause sending" button above stays, this is just a
     // faster path when only one domain needs it (fix #7a).
-    const pauseBtn = (!(b.rested > 0) && !b.cleared) ? `<button class="btn sm" data-act="pause-blacklist-domain" data-domain="${esc(b.domain)}" title="Pause sending on just this domain">⏸ Pause</button>` : "";
+    const pauseBtn = (!(b.rested > 0) && !b.cleared) ? `<button class="btn sm" data-act="pause-blacklist-domain" data-domain="${esc(b.domain)}" title="Pause sending on just this domain">Pause</button>` : "";
     // Family 1 disclosure: pause/reactivate-bl on this specific blacklisted
     // domain row. approve/skip copy interpolates this row's own mailboxes/
     // lists; the affected table is always the single domain this row IS.
@@ -2765,17 +2800,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (D.blClearedCount > 0) summaryBits.push(D.blClearedCount + " cleared, ready to reactivate");
       body = `<div class="dlv-bl-summary">${summaryBits.join(" · ")}</div>
         <div class="dlv-bl-actions">
-          ${(() => { const n = rows.filter((r) => !(r.rested > 0) && !r.cleared).length; return n ? `<button class="btn sm" data-act="pause-blacklisted" title="Pauses every blacklisted domain that is still sending — the bulk action, distinct from each row's own ⏸ Pause">⏸ Pause all still-sending (${n})</button>` : ""; })()}
-          ${D.blClearedCount > 0 ? `<button class="btn sm" data-act="reactivate-cleared">☀️ Reactivate cleared (${D.blClearedCount})</button>` : ""}
-          <button class="btn sm" data-act="open-delisting">📋 Delisting prep</button>
-          <a class="dlv-dl" data-act="view-data" data-file="blacklist" style="align-self:center;margin-left:4px">👁 View</a>
+          ${(() => { const n = rows.filter((r) => !(r.rested > 0) && !r.cleared).length; return n ? `<button class="btn sm" data-act="pause-blacklisted" title="Pauses every blacklisted domain that is still sending — the bulk action, distinct from each row's own Pause">Pause all still-sending (${n})</button>` : ""; })()}
+          ${D.blClearedCount > 0 ? `<button class="btn sm" data-act="reactivate-cleared">Reactivate cleared (${D.blClearedCount})</button>` : ""}
+          <button class="btn sm" data-act="open-delisting">Delisting prep</button>
+          <a class="dlv-dl" data-act="view-data" data-file="blacklist" style="align-self:center;margin-left:4px">View</a>
         </div>
         <div class="dlv-bl-scroll"><div class="dlv-vcamps">${rows.map(renderBlacklistRow).join("")}</div></div>`;
     } else {
       body = `<div class="dlv-empty">✓ No domains currently blacklisted.</div>`;
     }
     return `<div class="dlv-subtab-panel" id="dlv-fold-blacklist">
-      <div class="dlv-subtab-head">🚫 Blacklisted domains<span class="hint">${hint}</span></div>
+      <div class="dlv-subtab-head">${headIc("error")}Blacklisted domains<span class="hint">${hint}</span></div>
       <div class="dlv-fold-body">${body}</div>
     </div>`;
   }
@@ -2828,7 +2863,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <option value="all" ${UI.mgr.view === "all" ? "selected" : ""}>All mailboxes (${mc.total})</option>
     </select>`;
     const domFilter = isD ? `<select class="dlv-select" style="width:auto" data-act="mgr-domfilter">
-      <option value="resting" ${UI.mgr.domFilter === "resting" ? "selected" : ""}>🌙 Warmed up by dashboard (${dc.resting})</option>
+      <option value="resting" ${UI.mgr.domFilter === "resting" ? "selected" : ""}>Warmed up by dashboard (${dc.resting})</option>
       <option value="warmup" ${UI.mgr.domFilter === "warmup" ? "selected" : ""}>Needs warm-up · flagged (${dc.flagged})</option>
       <option value="maildoso" ${UI.mgr.domFilter === "maildoso" ? "selected" : ""}>Maildoso (by design)</option>
       <option value="keep" ${UI.mgr.domFilter === "keep" ? "selected" : ""}>Keep active</option>
@@ -2851,8 +2886,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ? `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th>`
       : `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Mailbox</th><th>Batch</th><th style="text-align:right">Cap/day</th><th style="text-align:right">Due back</th><th>Warmup / status</th><th>Issue</th><th style="text-align:right">Action</th>`;
     const foot = isD
-      ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">👁 View warmup list</a> &nbsp; <a class="dlv-dl" data-act="view-data" data-file="domain-health">👁 View full table</a></div>`
-      : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">👁 View problem mailboxes</a></div>`;
+      ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">View warmup list</a> &nbsp; <a class="dlv-dl" data-act="view-data" data-file="domain-health">View full table</a></div>`
+      : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">View problem mailboxes</a></div>`;
     // Family 5 disclosure: reconnect (bulk-reconnect / reconnect-one) — shown
     // only while the reconnect view is active, using the real reconnect rows.
     const reconnectRows = (S.A.inboxRows || []).filter((r) => r.kind === "reconnect");
@@ -2883,7 +2918,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       );
     }
     return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
-      <div class="dlv-subtab-head">🛠 Inbox &amp; domain manager<span class="hint">${D.flaggedActionable ? D.flaggedActionable + " domain(s) need warm-up →" : ""} pause · reactivate · reconnect</span></div>
+      <div class="dlv-subtab-head">${headIc("mail")}Inbox &amp; domain manager<span class="hint">${D.flaggedActionable ? D.flaggedActionable + " domain(s) need warm-up →" : ""} pause · reactivate · reconnect</span></div>
       <div class="dlv-fold-body">
         <div class="dlv-plain" style="margin:-2px 0 12px">Rotate tired domains into warm-up rest, reconnect failed mailboxes, and adjust daily sending caps. Changes confirm before applying.</div>
         ${domCtrl}
@@ -2893,7 +2928,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           <span class="dlv-mb-cap">View</span>${viewSel}${isD ? `<span class="dlv-mb-cap">Show</span>` : ""}${domFilter}${batchSel}
           <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search ${isD ? "domain" : "email or domain"}…" value="${esc(UI.mgr.search)}" data-act="mgr-search">
           <button class="btn sm" data-act="mgr-refresh" title="Re-pull the current view from Smartlead">↻ Refresh</button>
-          ${isD ? `<button class="btn sm primary" data-act="open-caps-preview" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">⚙ Caps by reply rate</button>${glossMark("Sets each mailbox's daily send limit based on how well its domain is replying.")}` : ""}
+          ${isD ? `<button class="btn sm primary" data-act="open-caps-preview" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>${glossMark("Sets each mailbox's daily send limit based on how well its domain is replying.")}` : ""}
           <span class="dlv-mb-count" id="dlv-mgr-count"></span>
           <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"></span>
         </div>
@@ -2938,10 +2973,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const bw = $id("dlv-mgr-bulk");
     if (bw) {
       const n = UI.mgr.sel.size;
-      if (UI.mgr.view === "reconnect") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reconnect">🔌 Reconnect (${n})</button>`;
-      else if (UI.mgr.view === "warmupoff") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reenable">⚡ Re-enable (${n})</button>`;
+      if (UI.mgr.view === "reconnect") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reconnect">Reconnect (${n})</button>`;
+      else if (UI.mgr.view === "warmupoff") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reenable">Re-enable (${n})</button>`;
       else if (UI.mgr.view === "blocked") bw.innerHTML = "";
-      else bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-warmup">🌙 Put in warmup (${n})</button><button class="btn sm primary" ${n ? "" : "disabled"} data-act="bulk-restore">☀️ Restore sending (${n})</button>`;
+      else bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-warmup">Put in warmup (${n})</button><button class="btn sm primary" ${n ? "" : "disabled"} data-act="bulk-restore">Restore sending (${n})</button>`;
     }
     body.innerHTML = rows.map((r) => {
       const ck = selectable ? `<td class="ck"><input type="checkbox" ${UI.mgr.sel.has(r.id) ? "checked" : ""} data-act="mgr-row-select" data-id="${r.id}"></td>` : `<td class="ck"></td>`;
@@ -2957,8 +2992,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (r.maildoso) st += ` <span class="dlv-tag md">Maildoso</span>`;
       let action;
       if (r.kind === "blocked") action = `<span class="dlv-mb-dom">${esc(r.reason_category || "hosting")} → Hypertide</span>`;
-      else if (r.kind === "reconnect") action = `<button class="btn sm" data-act="reconnect-one" data-id="${r.id}">🔌 Reconnect</button>`;
-      else if (r.kind === "warmupoff") action = `<button class="btn sm" data-act="reenable-one" data-id="${r.id}">⚡ Re-enable</button>`;
+      else if (r.kind === "reconnect") action = `<button class="btn sm" data-act="reconnect-one" data-id="${r.id}">Reconnect</button>`;
+      else if (r.kind === "warmupoff") action = `<button class="btn sm" data-act="reenable-one" data-id="${r.id}">Re-enable</button>`;
       else action = "";
       return `<tr id="dlv-mb-${r.id}">${ck}
         <td><div class="dlv-mb-email">${esc(r.email)}</div><div class="dlv-mb-dom">${esc(r.domain)}</div></td>
@@ -3005,9 +3040,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const bulk = $id("dlv-mgr-bulk");
     if (bulk) {
       let b = "";
-      if (f === "resting" && recovered.length) b += `<button class="btn sm" style="background:var(--green);color:#fff;border-color:var(--green)" data-act="domain-reactivate-recovered">☀️ Reactivate recovered (${recovered.length})</button>`;
-      if (D.flaggedActionable) b += `<button class="btn sm" data-act="domain-bulk-flagged">🌙 Move all flagged (${D.flaggedActionable})</button>`;
-      if (D.restingCount) b += `<button class="btn sm primary" data-act="domain-reactivate-all">☀️ Reactivate all (${D.restingCount})</button>`;
+      if (f === "resting" && recovered.length) b += `<button class="btn sm" style="background:var(--green);color:#fff;border-color:var(--green)" data-act="domain-reactivate-recovered">Reactivate recovered (${recovered.length})</button>`;
+      if (D.flaggedActionable) b += `<button class="btn sm" data-act="domain-bulk-flagged">Move all flagged (${D.flaggedActionable})</button>`;
+      if (D.restingCount) b += `<button class="btn sm primary" data-act="domain-reactivate-all">Reactivate all (${D.restingCount})</button>`;
       bulk.innerHTML = b;
     }
     const isRec = (d) => d.sent > 0 && d.reply_rate >= cutoff;
@@ -3018,10 +3053,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const restN = resting[d.domain] || 0;
       let action;
       if (restN > 0) {
-        const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive">🌙 resting (${restN})</span>${blDueChip(restingDue[d.domain])}`;
-        action = pill + ` <button class="btn sm" data-act="domain-reactivate" data-domain="${esc(d.domain)}">☀️ Reactivate</button>`;
+        const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive">resting (${restN})</span>${blDueChip(restingDue[d.domain])}`;
+        action = pill + ` <button class="btn sm" data-act="domain-reactivate" data-domain="${esc(d.domain)}">Reactivate</button>`;
       } else if (d.flag === "maildoso") action = `<span class="dlv-tag md">Maildoso · warming</span>`;
-      else if (d.flag === "warmup") action = `<button class="btn sm" data-act="domain-warmup" data-domain="${esc(d.domain)}">🌙 Warm up</button>`;
+      else if (d.flag === "warmup") action = `<button class="btn sm" data-act="domain-warmup" data-domain="${esc(d.domain)}">Warm up</button>`;
       else if (d.flag === "watch") action = `<span class="dlv-tag inactive">watch</span>`;
       else action = `<span class="dlv-tag ok">keep</span>`;
       return `<tr><td><div class="dlv-mb-email">${esc(d.domain)}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
@@ -3074,7 +3109,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       body = `<div class="dlv-empty">No batch/provider data yet.</div>`;
     }
     return `<div class="dlv-subtab-panel" id="dlv-fold-batch">
-      <div class="dlv-subtab-head">📦 Performance by batch (client / mailbox pool)${glossMark(BATCH_DEF)}<span class="hint">${bs.length ? bs.length + " batches · compare deliverability" : "no data yet"}</span></div>
+      <div class="dlv-subtab-head">${headIc("chart")}Performance by batch (client / mailbox pool)${glossMark(BATCH_DEF)}<span class="hint">${bs.length ? bs.length + " batches · compare deliverability" : "no data yet"}</span></div>
       <div class="dlv-fold-body">${summary}${body}</div>
     </div>`;
   }
@@ -3089,7 +3124,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return `<tr><td class="dlv-bt-name">${esc(b.batch)}</td><td>${b.mailboxes}</td><td>${b.sending}</td><td>${b.warmup}</td><td>${b.sent ? fmtN(b.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${blk}</td><td>${issues ? `<span class="dlv-bt-y">${issues}</span>` : `<span class="dlv-bt-mut">0</span>`}</td></tr>`;
     }).join("");
     return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Batch</th><th>Mailboxes</th><th>Sending</th><th>Warmup</th><th>Sent (7d)</th><th>Reply&nbsp;%</th><th>Bounce&nbsp;%</th><th>Blacklist</th><th>Issues</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
-      <div class="dlv-mb-count" style="margin-top:10px">Reply / Bounce are volume-weighted over the last 7 days. "Issues" = dead + blocked. <a class="dlv-dl" data-act="view-data" data-file="batch-stats">👁 View batch performance</a></div>`;
+      <div class="dlv-mb-count" style="margin-top:10px">Reply / Bounce are volume-weighted over the last 7 days. "Issues" = dead + blocked. <a class="dlv-dl" data-act="view-data" data-file="batch-stats">View batch performance</a></div>`;
   }
 
   /* ============================================================
@@ -3106,7 +3141,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!r.done && h) {
       const enableable = h.reasons.off || 0;
       let s = `<b>${h.total}</b> mailboxes · <span style="color:var(--green)">${h.warming} warming</span>`;
-      if (h.failed) s += ` · <span style="color:var(--red);font-weight:700">${h.failed} not warming</span>` + (enableable ? ` <button class="btn sm" style="padding:4px 9px;font-size:11px" data-act="rem-enable-warmup" data-id="${r.id}">⚡ Enable warmup (${enableable})</button>` : "");
+      if (h.failed) s += ` · <span style="color:var(--red);font-weight:700">${h.failed} not warming</span>` + (enableable ? ` <button class="btn sm" style="padding:4px 9px;font-size:11px" data-act="rem-enable-warmup" data-id="${r.id}">Enable warmup (${enableable})</button>` : "");
       else s += ` <span style="color:var(--green)">✓ all warming</span>`;
       if (h.dead) s += ` · <span style="color:var(--ink-3)">${h.dead} dead (needs reconnect)</span>`;
       const parts = Object.entries(h.reasons || {}).filter(([k, v]) => v > 0).map(([k, v]) => `<b>${v}</b> ${WU_REASON_TXT[k] || k}`);
@@ -3119,7 +3154,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-rem-meta">restored ${esc(r.restoredDate)} · due ${esc(r.dueDate)}${r.note ? " · " + esc(r.note) : ""}</div>
         ${healthLine}
       </div>
-      <div class="dlv-rem-acts">${status}${r.done ? `<button class="btn sm" data-act="rem-undo" data-id="${r.id}">↩ Undo</button>` : `<button class="btn sm primary" data-act="rem-done" data-id="${r.id}">✓ Mark added</button>`}<button class="btn sm" data-act="rem-remove" data-id="${r.id}" title="Delete this reminder">🗑 Remove</button></div>
+      <div class="dlv-rem-acts">${status}${r.done ? `<button class="btn sm" data-act="rem-undo" data-id="${r.id}">↩ Undo</button>` : `<button class="btn sm primary" data-act="rem-done" data-id="${r.id}">✓ Mark added</button>`}<button class="btn sm" data-act="rem-remove" data-id="${r.id}" title="Delete this reminder">Remove</button></div>
     </div>`;
   }
   // Formerly a collapsible <details class="dlv-fold"> inside the Overview
@@ -3141,7 +3176,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (dueN) hintBits.push(dueN + " due");
     const list = rem.length ? rem.map(renderReminderRow).join("") : `<div class="dlv-mb-count" style="padding:10px 0">No reminders yet.</div>`;
     return `<div class="dlv-subtab-panel" id="dlv-fold-reminders">
-      <div class="dlv-subtab-head">⏰ Restore reminders<span class="hint">${hintBits.join(" · ")}</span></div>
+      <div class="dlv-subtab-head">${headIc("bell")}Restore reminders<span class="hint">${hintBits.join(" · ")}</span></div>
       <div class="dlv-fold-body">
         <label class="dlv-field-label" for="dlv-rem-date">Date the domain was rested/restored <span class="dlv-field-hint">(due date = +14 days)</span></label>
         <div class="dlv-rem-add">
@@ -3161,41 +3196,41 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      ============================================================ */
   function renderHistoryRow(h) {
     const map = {
-      reenable: () => `⚡ ${h.date} — Re-enabled warmup — <b>${h.count}</b> mailbox(es)${h.failed ? " · " + h.failed + " failed" : ""}${h.scope ? " · " + h.scope : ""}`,
-      reconnect: () => `🔌 ${h.date} — Reconnected — queued <b>${h.count}</b> mailbox(es)`,
+      reenable: () => `${h.date} — Re-enabled warmup — <b>${h.count}</b> mailbox(es)${h.failed ? " · " + h.failed + " failed" : ""}${h.scope ? " · " + h.scope : ""}`,
+      reconnect: () => `${h.date} — Reconnected — queued <b>${h.count}</b> mailbox(es)`,
       // Item 5b: domain-health rotation pauses only — blacklist pauses now log
       // as their own `blacklist_pause` action below so the two never read the
       // same in the log (a rotation pause and "I paused the blacklisted
       // domain I was just looking at" are different situations to a reader
       // scanning Recent actions).
       warmup_pause: () => (h.domains === 1 && h.scope && h.scope !== "bulk flagged")
-        ? `🌙 ${h.date} — Moved ${esc(h.scope)} to warm-up — <b>${h.mailboxes}</b> mailbox(es)`
-        : `🌙 ${h.date} — Moved to warm-up — <b>${h.mailboxes}</b> mailbox(es) across ${h.domains} domain(s)${h.scope ? " · " + h.scope : ""}`,
+        ? `${h.date} — Moved ${esc(h.scope)} to warm-up — <b>${h.mailboxes}</b> mailbox(es)`
+        : `${h.date} — Moved to warm-up — <b>${h.mailboxes}</b> mailbox(es) across ${h.domains} domain(s)${h.scope ? " · " + h.scope : ""}`,
       blacklist_pause: () => (h.domains === 1 && h.scope && h.scope !== "blacklist")
-        ? `⏸ ${h.date} — Paused blacklisted domain ${esc(h.scope)} — <b>${h.mailboxes}</b> mailbox(es)`
-        : `⏸ ${h.date} — Paused ${h.domains} blacklisted domain(s) — <b>${h.mailboxes}</b> mailbox(es)`,
-      warmup_resume: () => `☀️ ${h.date} — Reactivated — restored <b>${h.mailboxes}</b> mailbox(es)`,
-      notion_sync: () => `🗂 ${h.date} — Synced to Notion — <b>${h.count}</b> domain(s) (${h.scope || "changed"})`,
-      signatures: () => `✍️ ${h.date} — Applied signatures — <b>${h.count}</b> mailbox(es)${h.failed ? " · " + h.failed + " failed" : ""}${h.scope ? " · " + h.scope : ""}`,
-      process_new: () => `🏷 ${h.date} — Processed new mailboxes — <b>${h.count}</b> mailbox(es)${h.scope ? " · " + h.scope : ""}`,
-      reply_caps: () => `⚙ ${h.date} — Set caps by reply rate — <b>${h.count}</b> mailbox(es)`,
-      slack_post: () => `📤 ${h.date} — Posted the deliverability summary to #team-hangout`,
-      reminder_add: () => `⏰ ${h.date} — Added restore reminder — <b>${h.count}</b> domain(s)${h.scope ? " · " + esc(h.scope) : ""}`,
+        ? `${h.date} — Paused blacklisted domain ${esc(h.scope)} — <b>${h.mailboxes}</b> mailbox(es)`
+        : `${h.date} — Paused ${h.domains} blacklisted domain(s) — <b>${h.mailboxes}</b> mailbox(es)`,
+      warmup_resume: () => `${h.date} — Reactivated — restored <b>${h.mailboxes}</b> mailbox(es)`,
+      notion_sync: () => `${h.date} — Synced to Notion — <b>${h.count}</b> domain(s) (${h.scope || "changed"})`,
+      signatures: () => `${h.date} — Applied signatures — <b>${h.count}</b> mailbox(es)${h.failed ? " · " + h.failed + " failed" : ""}${h.scope ? " · " + h.scope : ""}`,
+      process_new: () => `${h.date} — Processed new mailboxes — <b>${h.count}</b> mailbox(es)${h.scope ? " · " + h.scope : ""}`,
+      reply_caps: () => `${h.date} — Set caps by reply rate — <b>${h.count}</b> mailbox(es)`,
+      slack_post: () => `${h.date} — Posted the deliverability summary to #team-hangout`,
+      reminder_add: () => `${h.date} — Added restore reminder — <b>${h.count}</b> domain(s)${h.scope ? " · " + esc(h.scope) : ""}`,
       reminder_done: () => `✓ ${h.date} — Reminder marked added back${h.scope ? " · " + esc(h.scope) : ""}`,
       reminder_undo: () => `↩ ${h.date} — Reminder restored to pending${h.scope ? " · " + esc(h.scope) : ""}`,
-      reminder_removed: () => `🗑 ${h.date} — Removed restore reminder${h.scope ? " · " + esc(h.scope) : ""}`,
-      delist_submitted: () => `📋 ${h.date} — Marked <b>${esc(h.scope || "")}</b> as submitted for delisting`,
+      reminder_removed: () => `${h.date} — Removed restore reminder${h.scope ? " · " + esc(h.scope) : ""}`,
+      delist_submitted: () => `${h.date} — Marked <b>${esc(h.scope || "")}</b> as submitted for delisting`,
       delist_undo: () => `↩ ${h.date} — Unmarked <b>${esc(h.scope || "")}</b> as submitted`,
-      hypertide_draft: () => `✉️ ${h.date} — Drafted the Hypertide escalation email`,
+      hypertide_draft: () => `${h.date} — Drafted the Hypertide escalation email`,
       // Item 1: five action types that previously wrote NO history row at all
       // (or wrote to a different store) — the biggest contributor to
       // "did 5+ actions and the log stayed empty".
       mark_done: () => `✓ ${h.date} — Marked to-do done · ${esc(h.scope || h.key || "")}`,
       mark_undone: () => `↩ ${h.date} — Un-marked to-do · ${esc(h.scope || h.key || "")}`,
       csv_download: () => `⬇ ${h.date} — Downloaded <b>${esc(h.scope || "CSV")}</b>${h.count != null ? " · " + h.count + " row(s)" : ""}`,
-      view_data: () => `👁 ${h.date} — Viewed <b>${esc(h.scope || "dataset")}</b>${h.count != null ? " · " + h.count + " row(s)" : ""}`,
+      view_data: () => `${h.date} — Viewed <b>${esc(h.scope || "dataset")}</b>${h.count != null ? " · " + h.count + " row(s)" : ""}`,
       copy: () => `⧉ ${h.date} — Copied ${esc(h.scope || "text")}`,
-      verify_run: () => `🔍 ${h.date} — Verified <b>${esc(h.scope || "")}</b> — ${h.count != null ? h.count + " leads checked · " : ""}keep ${h.keep != null ? h.keep : "?"} / remove ${h.remove != null ? h.remove : "?"}`,
+      verify_run: () => `${h.date} — Verified <b>${esc(h.scope || "")}</b> — ${h.count != null ? h.count + " leads checked · " : ""}keep ${h.keep != null ? h.keep : "?"} / remove ${h.remove != null ? h.remove : "?"}`,
     };
     // Item 1: rows written by THIS session carry a `ts` (stamped by
     // logAction()); seed rows from buildMock() never do. Session rows get an
@@ -3231,7 +3266,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (earlierRows.length) inner += `<div class="dlv-hist-glabel" style="margin-top:10px">Earlier (${earlierRows.length})</div>` + earlierRows.map(renderHistoryRow).join("");
     const hint = sessRows.length + " this session · " + earlierRows.length + " earlier — already done, don't redo";
     return `<details class="dlv-fold" id="dlv-fold-history">
-      <summary>🕓 Recent actions<span class="hint">${esc(hint)}</span></summary>
+      <summary>Recent actions<span class="hint">${esc(hint)}</span></summary>
       <div class="dlv-fold-body"><div class="dlv-actions-list">${inner}</div></div>
     </details>`;
   }
@@ -3294,7 +3329,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-hypertide-overlay" data-act="overlay-bg" data-modal="dlv-hypertide-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>✉️ Hypertide escalation — draft</h3><button class="x" data-act="close-modal" data-modal="dlv-hypertide-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Hypertide escalation — draft</h3><button class="x" data-act="close-modal" data-modal="dlv-hypertide-overlay">&times;</button></div>
         <div class="dlv-modal-body"><pre id="dlv-hypertide-body"></pre></div>
         <div class="dlv-modal-foot"><button class="btn" data-act="close-modal" data-modal="dlv-hypertide-overlay">Close</button><button class="btn primary" data-act="copy-hypertide">Copy email</button></div>
       </div>
@@ -3302,15 +3337,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-ctx-overlay" data-act="overlay-bg" data-modal="dlv-ctx-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>📋 Audit context — paste into a Claude chat</h3><button class="x" data-act="close-modal" data-modal="dlv-ctx-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Audit context — paste into a Claude chat</h3><button class="x" data-act="close-modal" data-modal="dlv-ctx-overlay">&times;</button></div>
         <div class="dlv-modal-body"><pre id="dlv-ctx-body"></pre></div>
-        <div class="dlv-modal-foot"><button class="btn" data-act="close-modal" data-modal="dlv-ctx-overlay">Close</button><button class="btn primary" data-act="copy-ctx">📋 Copy all</button></div>
+        <div class="dlv-modal-foot"><button class="btn" data-act="close-modal" data-modal="dlv-ctx-overlay">Close</button><button class="btn primary" data-act="copy-ctx">Copy all</button></div>
       </div>
     </div>
 
     <div class="dlv-modal-overlay" id="dlv-sig-overlay" data-act="overlay-bg" data-modal="dlv-sig-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>✍️ Apply signatures</h3><button class="x" data-act="close-modal" data-modal="dlv-sig-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Apply signatures</h3><button class="x" data-act="close-modal" data-modal="dlv-sig-overlay">&times;</button></div>
         <div class="dlv-modal-body">
           <label class="dlv-field-label">Apply to <span class="dlv-field-hint">(pick a brand/batch — or explicitly choose “All brands”)</span></label>
           <select class="dlv-select" id="dlv-sig-batch" style="margin-bottom:6px" data-act="sig-batch-change"></select>
@@ -3320,9 +3355,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 {{name}}</textarea>
           <div class="small muted" style="margin-top:10px">Preview (for "Jacki Arnic"):</div>
           <pre class="dlv-preview" id="dlv-sig-preview"></pre>
-          <div id="dlv-sig-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:8px;padding:8px 11px;margin:12px 0">⚠ This writes the same signature to every brand. Pick a brand above to load its own saved signature.</div>
+          <div id="dlv-sig-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:8px;padding:8px 11px;margin:12px 0">This writes the same signature to every brand. Pick a brand above to load its own saved signature.</div>
           <p class="small muted" style="margin:12px 0 10px">Writes to <b id="dlv-sig-n">0</b> mailbox(es):</p>
-          <input class="dlv-input" id="dlv-sig-search" type="text" placeholder="🔍 search inboxes… (e.g. henry)" style="margin-bottom:8px" data-act="sig-search">
+          <input class="dlv-input" id="dlv-sig-search" type="text" placeholder="Search inboxes… (e.g. henry)" style="margin-bottom:8px" data-act="sig-search">
           <div class="small muted" style="margin-bottom:5px">Inboxes that will be updated (<span id="dlv-sig-target-n">0</span>):</div>
           <div id="dlv-sig-targets" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--bg-sunken)"></div>
         </div>
@@ -3332,10 +3367,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-pn-overlay" data-act="overlay-bg" data-modal="dlv-pn-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>🏷 Process <span id="dlv-pn-n">0</span> new mailbox(es)</h3><button class="x" data-act="close-modal" data-modal="dlv-pn-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Process <span id="dlv-pn-n">0</span> new mailbox(es)</h3><button class="x" data-act="close-modal" data-modal="dlv-pn-overlay">&times;</button></div>
         <div class="dlv-modal-body">
           <p class="small muted" style="margin-bottom:12px">Tag the untagged ones, and/or add the ones not yet in a campaign. Leave a field blank to skip it.</p>
-          <input class="dlv-input" id="dlv-pn-search" type="text" placeholder="🔍 search inboxes…" style="margin-bottom:8px" data-act="pn-search">
+          <input class="dlv-input" id="dlv-pn-search" type="text" placeholder="Search inboxes…" style="margin-bottom:8px" data-act="pn-search">
           <div class="small muted" style="margin-bottom:5px">These mailboxes (<span id="dlv-pn-target-n">0</span>):</div>
           <div id="dlv-pn-targets" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--bg-sunken);margin-bottom:14px"></div>
           <label class="dlv-field-label">Batch tag <span class="dlv-field-hint">(applied to untagged mailboxes)</span></label>
@@ -3349,10 +3384,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-wu-overlay" data-act="overlay-bg" data-modal="dlv-wu-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>⚡ Enable warmup on <span id="dlv-wu-n">0</span> mailbox(es)</h3><button class="x" data-act="close-modal" data-modal="dlv-wu-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Enable warmup on <span id="dlv-wu-n">0</span> mailbox(es)</h3><button class="x" data-act="close-modal" data-modal="dlv-wu-overlay">&times;</button></div>
         <div class="dlv-modal-body">
           <p class="small muted" id="dlv-wu-std" style="margin-bottom:12px"></p>
-          <input class="dlv-input" id="dlv-wu-search" type="text" placeholder="🔍 search inboxes…" style="margin-bottom:8px" data-act="wu-search">
+          <input class="dlv-input" id="dlv-wu-search" type="text" placeholder="Search inboxes…" style="margin-bottom:8px" data-act="wu-search">
           <div class="small muted" style="margin-bottom:5px">These mailboxes (<span id="dlv-wu-target-n">0</span>):</div>
           <div id="dlv-wu-targets" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--bg-sunken);margin-bottom:16px"></div>
           <div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -3367,7 +3402,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-delist-overlay" data-act="overlay-bg" data-modal="dlv-delist-overlay">
       <div class="dlv-modal wide">
-        <div class="dlv-modal-head"><h3>📋 ${glossify("Delisting prep")}</h3><button class="x" data-act="close-modal" data-modal="dlv-delist-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>${glossify("Delisting prep")}</h3><button class="x" data-act="close-modal" data-modal="dlv-delist-overlay">&times;</button></div>
         <!-- Fix #3b (holdout VA): plain expectation-setting intro — delisting is
              a manual form on each blocklist's own website, not a button here. -->
         <p class="small muted" id="dlv-dl-intro" style="padding:12px 22px 0">Delisting is a manual step on each blocklist's own website (has a CAPTCHA) — copy the prepared request text below, or hand this to your admin.</p>
@@ -3383,7 +3418,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-caps-overlay" data-act="overlay-bg" data-modal="dlv-caps-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>⚙ Caps by reply rate — preview</h3><button class="x" data-act="close-modal" data-modal="dlv-caps-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Caps by reply rate — preview</h3><button class="x" data-act="close-modal" data-modal="dlv-caps-overlay">&times;</button></div>
         <div class="dlv-modal-body" id="dlv-caps-body"></div>
         <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">A backup of current caps is saved first — reversible.</span><button class="btn" data-act="close-modal" data-modal="dlv-caps-overlay">Cancel</button><button class="btn primary" data-act="caps-apply">Apply</button></div>
       </div>
@@ -3391,7 +3426,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-slack-overlay" data-act="overlay-bg" data-modal="dlv-slack-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>📤 Send to Slack — preview</h3><button class="x" data-act="close-modal" data-modal="dlv-slack-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Send to Slack — preview</h3><button class="x" data-act="close-modal" data-modal="dlv-slack-overlay">&times;</button></div>
         <div class="dlv-modal-body"><p class="small muted" style="margin-bottom:10px">This is the exact message that will post — nothing is sent until you confirm.</p><pre id="dlv-slack-body"></pre></div>
         <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto">Mock — no network call.</span><button class="btn" data-act="close-modal" data-modal="dlv-slack-overlay">Cancel</button><button class="btn primary" data-act="slack-send">Send to #team-hangout</button></div>
       </div>
@@ -3399,7 +3434,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     <div class="dlv-modal-overlay" id="dlv-notion-overlay" data-act="overlay-bg" data-modal="dlv-notion-overlay">
       <div class="dlv-modal">
-        <div class="dlv-modal-head"><h3>🗂 Sync to Notion — preview</h3><button class="x" data-act="close-modal" data-modal="dlv-notion-overlay">&times;</button></div>
+        <div class="dlv-modal-head"><h3>Sync to Notion — preview</h3><button class="x" data-act="close-modal" data-modal="dlv-notion-overlay">&times;</button></div>
         <div class="dlv-modal-body"><p class="small muted" style="margin-bottom:10px">This is exactly what would be written — nothing is sent until you confirm.</p><div id="dlv-notion-body"></div></div>
         <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto">Mock — no network call.</span><button class="btn" data-act="close-modal" data-modal="dlv-notion-overlay">Cancel</button><button class="btn primary" id="dlv-notion-sync-btn" data-act="notion-sync">Sync 0 domain(s)</button></div>
       </div>
@@ -3936,16 +3971,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (v.removedSummary) {
       const r = v.removedSummary;
       return `<div class="dlv-vbox">
-        <div class="dlv-vrow dlv-vremove">✅ Removed <b>${r.removed}</b> · reply-guarded (kept) ${r.guarded} · total ${r.before} → ${r.after} · backup saved</div>
+        <div class="dlv-vrow dlv-vremove">✓ Removed <b>${r.removed}</b> · reply-guarded (kept) ${r.guarded} · total ${r.before} → ${r.after} · backup saved</div>
         <div class="dlv-vrow"><a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
       </div>`;
     }
     return `<div class="dlv-vbox">
       <div class="dlv-vrow"><b>${v.total}</b> leads &nbsp;·&nbsp; ${v.layer1Tool} good <b>${v.l1_keep}</b> &nbsp;·&nbsp; catch-all <b>${v.l1_catch}</b> (${v.layer2Tool} kept ${v.l2_keep} / dropped ${v.l2_drop}) &nbsp;·&nbsp; ${v.layer1Tool} bad <b>${v.l1_drop}</b></div>
       <div class="dlv-plain">Catch-all: domain accepts any address — risky to email, so a second tool double-checks it.</div>
-      <div class="dlv-vrow dlv-vkeep">✅ Keep (deliverable): <b>${v.keep}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="keep">👁 View kept (${v.keep})</a></div>
-      <div class="dlv-vrow dlv-vremove">🗑 Bad (confirmed invalid): <b>${v.remove}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="remove">👁 View bad (${v.remove})</a></div>
-      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}">🗑 Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
+      <div class="dlv-vrow dlv-vkeep">✓ Keep (deliverable): <b>${v.keep}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="keep">View kept (${v.keep})</a></div>
+      <div class="dlv-vrow dlv-vremove">Bad (confirmed invalid): <b>${v.remove}</b> &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}" data-kind="remove">View bad (${v.remove})</a></div>
+      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}">Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
       <div class="dlv-plain">Reply-guard: anyone who replied is automatically kept, never deleted.</div>
       ${dlvDisclose(dlvConsequences(
         "The selected mailboxes leave the rotation. Undoable from the toast in this session, and nothing is deleted at the provider.",
@@ -4091,7 +4126,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     });
   }
   function renderDoneStub(it) {
-    return `<div class="dlv-done-stub" id="dlv-stub-${esc(it.key)}">✓ Marked done — <a data-act="unmark-done" data-key="${esc(it.key)}">↩ Undo</a> · it's now in <a data-act="scroll-actioned">✅ Actioned ↓</a><span class="dlv-stub-what">${esc(it.short || it.text)}</span></div>`;
+    return `<div class="dlv-done-stub" id="dlv-stub-${esc(it.key)}">✓ Marked done — <a data-act="unmark-done" data-key="${esc(it.key)}">↩ Undo</a> · it's now in <a data-act="scroll-actioned">Actioned ↓</a><span class="dlv-stub-what">${esc(it.short || it.text)}</span></div>`;
   }
   function markDone(key, count) {
     S.A.acks = (S.A.acks || []).filter((x) => x && typeof x === "object" && x.key !== key);
@@ -4363,7 +4398,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Part A1 (make the state change unmistakable): name the domain, the count,
     // and that it's now resting with a due-back date — the row itself now reads
     // "🌙 resting · due in 7d".
-    toast("🌙 " + domain + " moved to warm-up — " + mailboxes + " mailbox(es) resting, due back in 7d", "ok");
+    toast(domain + " moved to warm-up — " + mailboxes + " mailbox(es) resting, due back in 7d", "ok");
     paintPage();
   }
   async function domainReactivate(domain, btn) {
@@ -4422,7 +4457,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
     logAction({action: "warmup_pause", mailboxes: paused, domains: domains.length, scope: "bulk flagged" });
     saveState();
-    toast("🌙 Moved " + domains.length + " flagged domain(s) to warm-up — " + paused + " mailbox(es) resting, due back in 7d", "ok");
+    toast("Moved " + domains.length + " flagged domain(s) to warm-up — " + paused + " mailbox(es) resting, due back in 7d", "ok");
     paintPage();
   }
   async function domainReactivateAll(btn) {
@@ -4975,7 +5010,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // instead of silent nothing.
   function reportActionError(act, err) {
     console.error("[deliverability] action failed:", act, err);
-    toast("⚠ Action failed" + (act ? " — " + act : ""), "err");
+    toast("Action failed" + (act ? " — " + act : ""), "err");
   }
   function runAct(act, fn) {
     try {
@@ -5159,7 +5194,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // flash the heading, exactly like the other three moved sections.
     if (act === "open-reminders") { runAct(act, () => gotoSubtab("reminders", "dlv-fold-reminders")); return; }
     // Rewired: "Blacklisted domains" is now its own sub-tab (the to-do card's
-    // "🚫 Manage ↓" and the Blacklisted-domains tile's fix-link both land here).
+    // "Manage ↓" and the Blacklisted-domains tile's fix-link both land here).
     if (act === "open-blacklist") { runAct(act, () => gotoSubtab("blacklist", "dlv-fold-blacklist")); return; }
     // Rewired: "Performance by batch" is now its own sub-tab (the Fleet-tiles
     // "▲▼ Best & worst batch ↓" signpost lands here).
