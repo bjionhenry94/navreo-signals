@@ -41,7 +41,6 @@
 .table-scroll table.tbl { min-width: 560px; }
 .rsection table.tbl a { color: inherit; text-decoration: none; }
 .rsection table.tbl a:hover { text-decoration: underline; }
-.tbl tr.dimmed td { opacity: 0.5; }
 
 /* Variant analysis campaign header + one-line "whole offer failing" callout */
 .va-group { margin: 0 0 20px; }
@@ -77,7 +76,14 @@
 @media (max-width: 480px) {
   .action-block .ab-head { flex-direction: column; }
   .action-row { flex-direction: column; align-items: stretch; }
-  .action-row .btn { width: 100%; justify-content: center; }
+  .action-row .btn { width: 100%; justify-content: center; min-height: 44px; }
+  /* fix I: reclaim the section indent that's ours to shrink (the 64px nav
+     rail itself is shell-owned, left alone) and give touch targets a 44px
+     minimum so mini row-actions are tappable. */
+  .main { padding-left: 14px; padding-right: 14px; }
+  .row-actions .btn, .section-nav .nav-chip { min-height: 44px; }
+  .mini-actions .btn.xs { min-height: 44px; padding-left: 10px; padding-right: 10px; }
+  .action-toast { bottom: max(14px, env(safe-area-inset-bottom, 14px)); }
 }
 
 /* Pause-confirmation modal (fix: needs to be automatable/testable, unlike a
@@ -125,6 +131,71 @@
 #backToTop.back-to-top.show { opacity: 1; visibility: visible; pointer-events: auto; }
 #backToTop.back-to-top:hover { background: var(--orange); }
 #backToTop.back-to-top svg { width: 18px; height: 18px; }
+
+/* ══ Row-level status pill + mini actions — sections 1-6 tables (fix C) ══ */
+.row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; white-space: nowrap; }
+.mini-actions { display: flex; gap: 4px; }
+.btn.xs { padding: 3px 9px; font-size: 10.5px; min-height: auto; }
+.actions-th, .actions-td { white-space: nowrap; }
+.jump-link { font-size: 11.5px; color: var(--orange-700); text-decoration: none; margin-left: 6px; white-space: nowrap; }
+.jump-link:hover { text-decoration: underline; }
+
+/* Generic retired-row dimming — applies to table rows AND non-table blocks
+   (Section 4's campaign-level groups + the "whole offer failing" callout),
+   not just `.tbl tr.dimmed td` (fix D). */
+.dimmed { opacity: 0.5; }
+.callout .row-actions { margin-top: 8px; }
+
+/* Worst-offender bridge callout + header rollup chips (fix E) */
+.worst-offender {
+  border: 1px solid var(--line); border-left: 3px solid var(--red); border-radius: var(--radius);
+  padding: 12px 16px; font-size: 13px; background: var(--bg-sunken); margin: 0 0 16px; cursor: pointer;
+}
+.worst-offender:hover { background: var(--card); }
+.worst-offender b { font-weight: 600; }
+.rollup-chip {
+  font: 600 11.5px var(--font-mono); border: none; background: transparent; color: inherit;
+  cursor: pointer; padding: 0; text-decoration: underline dotted; text-underline-offset: 2px;
+}
+.rollup-chip:hover { color: var(--orange-700); }
+
+/* Sticky section nav (fix G) */
+.section-nav {
+  position: sticky; top: 0; z-index: 60; display: flex; gap: 6px; align-items: center;
+  padding: 8px 0; margin: 0 0 12px; background: var(--card); border-bottom: 1px solid var(--line);
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+.section-nav .nav-chip {
+  flex-shrink: 0; border: 1px solid var(--line-2); background: transparent; border-radius: 999px;
+  min-width: 28px; height: 28px; padding: 0 8px; box-sizing: border-box; display: flex;
+  align-items: center; justify-content: center; font: 600 12px var(--font-sans); color: var(--ink-2);
+  cursor: pointer;
+}
+.section-nav .nav-chip:hover { background: var(--bg-sunken); }
+.section-nav .nav-chip.current { background: var(--ink); color: var(--cream); border-color: var(--ink); }
+
+/* Newcomer-layer tooltip term (fix H1) — dotted-underline discoverability cue */
+.jg { border-bottom: 1px dotted var(--ink-3); cursor: help; }
+
+/* Custom action toast w/ Undo (fix H2/H3). It lives as a direct child of
+   <body> and is `position: fixed`, so its containing block is the viewport —
+   bottom is kept small so it stays inside a short (≤812px) viewport. */
+.action-toast {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: var(--ink); color: var(--cream); font-size: 12.5px; font-weight: 500;
+  padding: 10px 10px 10px 18px; border-radius: 999px; z-index: 95;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px); box-sizing: border-box;
+  box-shadow: 0 8px 24px rgba(20, 17, 14, 0.25);
+}
+.action-toast.hidden { display: none; }
+.action-toast .toast-undo {
+  background: rgba(255, 255, 255, 0.18); color: var(--cream); border: none; border-radius: 999px;
+  padding: 5px 12px; font: 600 11.5px var(--font-sans); cursor: pointer; flex-shrink: 0;
+}
+.action-toast .toast-undo:hover { background: rgba(255, 255, 255, 0.3); }
+@media (max-height: 700px) {
+  .action-toast { bottom: max(14px, env(safe-area-inset-bottom, 14px)); }
+}
 </style>
 </head>
 <body>
@@ -135,9 +206,14 @@
       <div>
         <div class="eyebrow">Notifications</div>
         <h1>Campaign Optimisation Priority Report</h1>
+        <!-- Scope-mismatch fix: this report covers every Smartlead campaign for the client
+             (~30-40, most never built as a Signal campaign in this tool) - say that plainly so
+             a much bigger number here than on Campaigns doesn't read as broken data. -->
+        <div class="small muted" id="scopeLine" style="margin-top:2px"></div>
       </div>
       <div id="summary" class="freshness"></div>
     </div>
+    <div id="rollup" class="small" style="margin:2px 0 14px"></div>
     <div class="bar">
       <div class="filters">
         <select class="sel" id="statusFilter">
@@ -169,6 +245,16 @@
       first (zero-positive campaigns at the very top). <b>Section 7</b> is what to do about it,
       High priority first, largest campaigns first within each tier.
     </div>
+    <nav id="sectionNav" class="section-nav" aria-label="Jump to report section">
+      <button type="button" class="nav-chip" data-nav-section="1" title="Campaigns Needing Optimisation">1</button>
+      <button type="button" class="nav-chip" data-nav-section="2" title="Performing Campaigns">2</button>
+      <button type="button" class="nav-chip" data-nav-section="3" title="Campaign Lifecycle">3</button>
+      <button type="button" class="nav-chip" data-nav-section="4" title="Variant Analysis">4</button>
+      <button type="button" class="nav-chip" data-nav-section="5" title="Low Reply Rate Flags">5</button>
+      <button type="button" class="nav-chip" data-nav-section="6" title="Variant Distribution Flags">6</button>
+      <button type="button" class="nav-chip" data-nav-section="7" title="Recommended Actions">7</button>
+      <button type="button" class="nav-chip" data-nav-section="8" title="All clear">&check;</button>
+    </nav>
     <div id="list"></div>
   </main>
 </div>
@@ -184,9 +270,13 @@
     <div class="modal-err" id="pauseModalErr"></div>
     <div class="modal-actions">
       <button class="btn sm" id="pauseCancelBtn" type="button">Cancel</button>
-      <button class="btn sm danger" id="pauseConfirmBtn" type="button">Confirm pause</button>
+      <button class="btn sm danger" id="pauseConfirmBtn" type="button" disabled>Confirm pause</button>
     </div>
   </div>
+</div>
+<div id="actionToast" class="action-toast hidden" role="status" aria-live="polite">
+  <span id="actionToastMsg"></span>
+  <button type="button" id="actionToastUndo" class="toast-undo">Undo</button>
 </div>
 <script src="shell.js"></script>
 <script>
@@ -203,7 +293,15 @@ document.getElementById("rail").outerHTML = renderRail("notifications");
 
 const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Actioned", dismissed: "Dismissed", resolved: "Resolved" };
 const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n", resolved: "n" };
-const STATUS_TOOLTIP = { resolved: "No longer flagged by the latest optimiser run" };
+/* One-line tooltip per status, for newcomers hovering a status pill anywhere
+   on the page (fix H1) — every status gets one, not just resolved. */
+const STATUS_TOOLTIP = {
+  new: "Not yet reviewed by a CSM.",
+  acknowledged: "A CSM has seen this and plans to act on it.",
+  actioned: "A CSM has acted on this finding.",
+  dismissed: "A CSM reviewed this and chose not to act — won't reappear as pending.",
+  resolved: "No longer flagged by the latest optimiser run.",
+};
 /* A row is "retired" (visually dimmed, excluded from open counts wherever
    dismissed is) if it's either explicitly dismissed by a CSM or auto-resolved
    because the latest optimiser run no longer emits it. Manual status changes
@@ -211,6 +309,25 @@ const STATUS_TOOLTIP = { resolved: "No longer flagged by the latest optimiser ru
    grouping match dismissed. */
 function isRetiredStatus(s) { return s === "dismissed" || s === "resolved"; }
 const PRIORITY_PILL_CLASS = { High: "r", Medium: "a", Low: "n" };
+const PRIORITY_TOOLTIP = {
+  High: "Kill-threshold breach or zero-positive spend — act now.",
+  Medium: "Underperforming but not critical — act this week.",
+  Low: "Minor optimisation — act when convenient.",
+};
+/* Human label for the worst-offender callout (fix E2) — action_type values
+   per build_notifications.py's CHECK constraint. */
+const ACTION_TYPE_LABEL = {
+  pause_campaign: "kill threshold reached",
+  kill_threshold_pivot: "kill threshold reached",
+  replace_variants: "variant underperforming",
+  disable_loser: "losing variant needs disabling",
+  scale_winner: "winning variant ready to scale",
+  fix_distribution: "traffic split misconfigured",
+  run_list_audit: "list quality needs auditing",
+  upload_leads: "running low on leads",
+  nearing_completion: "nearing completion",
+  none: "flagged for review",
+};
 
 let all = [];                 // every row from the last successful fetch
 let loadState = "loading";    // "loading" | "ok" | "error"
@@ -223,6 +340,27 @@ let clientsList = [];  // dedupeClients(await fetchClientsForSwitcher()) — for
    or refresh never fights a manual toggle. */
 const sectionExpandState = new Map([[1, true], [7, true]]);
 function isExpanded(num) { return !!sectionExpandState.get(num); }
+
+/* fix F: lazy section-body rendering. A collapsed section's DOM is never
+   built on initial draw() — reportSection() only stashes {rows, bodyFn}
+   here, and setSectionExpanded() builds the body HTML the first time a
+   section is actually expanded. Refreshed on every draw() (even while
+   collapsed) so expanding right after a filter change renders the current
+   filtered subset, not stale data from page load. */
+const sectionRenderers = new Map();
+let sectionNavObserver = null;
+
+/* fix B1: serialize status-action PATCHes through a tiny promise queue so
+   burst-clicking several buttons fires requests one-at-a-time rather than
+   in parallel — each caller's OWN button/card is still disabled instantly
+   (via busyBtn, before the task is even queued), so only network execution
+   is serialized, never the UI feedback or other cards' clickability. */
+let statusActionQueue = Promise.resolve();
+function enqueueStatusAction(task) {
+  const run = statusActionQueue.then(task, task);
+  statusActionQueue = run.then(() => {}, () => {});
+  return run;
+}
 
 /* ══ perf: short (60s) TTL cache, keyed by the FULL url (client_id included) ══ */
 const NOTIF_CACHE_TTL = 60000;
@@ -310,7 +448,52 @@ function parseActionBullets(detail) {
   return (detail || "").split("\n").filter((l) => l.trim().startsWith("- ")).map((l) => l.trim().slice(2).trim());
 }
 function sentPosCell(n) {
-  return Number.isFinite(n.sent_pos_ratio) ? fmt(n.sent_pos_ratio) : "∞";
+  if (Number.isFinite(n.sent_pos_ratio)) return fmt(n.sent_pos_ratio);
+  return `<span class="jg" title="Zero positive replies recorded for this campaign — the ratio is undefined.">∞</span>`;
+}
+const SENT_POS_TH = `<th><span class="jg" title="Total emails sent divided by positive replies: lower is better.">Sent/Pos</span></th>`;
+
+/* fix E3: campaign_id -> the id of its first Section 7 block, built from
+   whatever Section 7 is CURRENTLY rendering (the filtered/shown set) so a
+   jump-link is only ever offered when its destination actually exists in
+   the DOM to scroll to. */
+function buildCampaignToBlockMap(actionRows) {
+  const map = new Map();
+  actionRows.forEach((n) => {
+    const key = String(n.campaign_id);
+    if (!map.has(key)) map.set(key, n.id);
+  });
+  return map;
+}
+function jumpLinkHTML(campaignId, blockMap) {
+  if (campaignId == null || !blockMap) return "";
+  const blockId = blockMap.get(String(campaignId));
+  if (blockId == null) return "";
+  return ` <a href="#ab-${esc(String(blockId))}" class="jump-link" data-jump-block="${esc(String(blockId))}">&rarr; actions</a>`;
+}
+
+/* fix C: compact per-row status pill + mini status-action buttons, shared
+   by every Section 1-6 table row (and the Section 4 whole-offer callout)
+   so findings outside Section 7 are no longer stuck with no way to
+   acknowledge / action / dismiss them. Wired through the same
+   data-nid/data-target contract as Section 7's actionBtn(), so the one
+   delegated click handler on #list covers both. */
+function rowActionsHTML(n) {
+  return `<div class="row-actions">
+    ${statusPillN(n.status)}
+    <div class="mini-actions">
+      ${miniActionBtn(n, "acknowledged", "Ack")}
+      ${miniActionBtn(n, "actioned", "Action")}
+      ${miniActionBtn(n, "dismissed", "Dismiss")}
+    </div>
+  </div>`;
+}
+function miniActionBtn(n, target, label) {
+  const disabled = target === "acknowledged" ? n.status !== "new"
+                  : target === "actioned" ? n.status === "actioned"
+                  : n.status === "dismissed";
+  const isDone = n.status === target;
+  return `<button type="button" class="btn xs" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""} title="${esc(label)}">${isDone ? "&check;" : esc(label)}</button>`;
 }
 
 /* Campaign-level context (sent / positive / completion %) for the Variant
@@ -341,7 +524,8 @@ function contextFor(ctxMap, n) {
 
 function priorityPill(p) {
   const cls = PRIORITY_PILL_CLASS[p] || "n";
-  return `<span class="pill ${cls}">${esc(p || "No priority")}</span>`;
+  const tip = PRIORITY_TOOLTIP[p];
+  return `<span class="pill ${cls}"${tip ? ` title="${esc(tip)}"` : ""}>${esc(p || "No priority")}</span>`;
 }
 function statusPillN(s) {
   const tip = STATUS_TOOLTIP[s];
@@ -351,7 +535,7 @@ function statusPillN(s) {
 /* ══ Section renderers — table shapes and headings match SKILL.md's
    "Report Structure" section-by-section, in the same order. ══ */
 
-function section1(rows) {
+function section1(rows, blockMap) {
   const sorted = [...rows].sort((a, b) => {
     const az = !(a.positive > 0), bz = !(b.positive > 0);
     if (az !== bz) return az ? -1 : 1;
@@ -359,30 +543,32 @@ function section1(rows) {
     return (b.sent_pos_ratio || 0) - (a.sent_pos_ratio || 0);
   });
   const body = sorted.map((n, i) => `
-    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
       <td>${i + 1}</td>
-      <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
+      <td>${campaignLink(n.campaign_name, n.smartlead_url)}${jumpLinkHTML(n.campaign_id, blockMap)}</td>
       <td>${fmt(n.sent)}</td>
       <td>${fmt(n.positive)}</td>
       <td>${sentPosCell(n)}</td>
+      <td class="actions-td">${rowActionsHTML(n)}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th><th>Sent/Pos</th></tr></thead>
+    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th class="actions-th">Status</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }
 
-function section2(rows) {
+function section2(rows, blockMap) {
   const sorted = [...rows].sort((a, b) => (a.sent_pos_ratio ?? 0) - (b.sent_pos_ratio ?? 0));
   const body = sorted.map((n, i) => `
-    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
       <td>${i + 1}</td>
-      <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
+      <td>${campaignLink(n.campaign_name, n.smartlead_url)}${jumpLinkHTML(n.campaign_id, blockMap)}</td>
       <td>${fmt(n.sent)}</td>
       <td>${fmt(n.positive)}</td>
       <td>${sentPosCell(n)}</td>
+      <td class="actions-td">${rowActionsHTML(n)}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th><th>Sent/Pos</th></tr></thead>
+    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th class="actions-th">Status</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }
 
@@ -392,16 +578,17 @@ function section3(rows) {
   const body = sorted.map((n) => {
     const leads = parseLeads(n.detail);
     return `
-    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${fmt(n.sent)}</td>
       ${anyLeads ? `<td>${leads ? fmt(Number(leads.replace(/,/g, ""))) : "–"}</td>` : ""}
       <td>${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) + "%" : "–"}</td>
       <td>${esc(n.title || "")}</td>
+      <td class="actions-td">${rowActionsHTML(n)}</td>
     </tr>`;
   }).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>Campaign</th><th>Sent</th>${anyLeads ? "<th>Leads</th>" : ""}<th>Completion</th><th>Status</th></tr></thead>
+    <thead><tr><th>Campaign</th><th>Sent</th>${anyLeads ? "<th>Leads</th>" : ""}<th>Completion</th><th>Lifecycle</th><th class="actions-th">Status</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }
 
@@ -428,51 +615,60 @@ function section4(rows, ctxMap) {
   return list.map(({ items, ctx }) => {
     const first = items[0];
     const headCompletion = Number.isFinite(ctx.completion_pct) ? `${ctx.completion_pct.toFixed(1)}% complete` : "completion unknown";
+    // fix D: dim the whole campaign-level group (not just its individual
+    // rows) once every finding under it has been dismissed/resolved.
+    const allRetired = items.every((n) => isRetiredStatus(n.status));
     const headHTML = `<div class="va-head">
       ${campaignLink(first.campaign_name, ctx.smartlead_url)}
       <span class="ctx">(${fmt(ctx.sent)} sent, ${fmt(ctx.positive)} pos, ${headCompletion})</span>
+      ${allRetired ? statusPillN("resolved") : ""}
     </div>`;
     const wholeOffer = items.find((n) => n.title === "Whole offer failing");
     const variantRows = items.filter((n) => n.title !== "Whole offer failing");
     let bodyHTML = "";
     if (wholeOffer) {
-      bodyHTML += `<div class="callout"><b>Whole offer failing:</b> ${esc(wholeOffer.detail || "")} <b>Recommended:</b> ${esc(wholeOffer.suggested_action || "")}</div>`;
+      bodyHTML += `<div class="callout${isRetiredStatus(wholeOffer.status) ? " dimmed" : ""}" id="row-${esc(String(wholeOffer.id))}">
+        <b>Whole offer failing:</b> ${esc(wholeOffer.detail || "")} <b>Recommended:</b> ${esc(wholeOffer.suggested_action || "")}
+        ${rowActionsHTML(wholeOffer)}
+      </div>`;
     }
     if (variantRows.length) {
       const trs = variantRows.map((n) => {
         const p = parseVariantTitle(n.title);
         const angle = parseAngle(n.detail);
-        return `<tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
+        return `<tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
           <td>Email ${esc(p.email || "?")}</td>
-          <td>${esc(p.variant || "–")}</td>
+          <td><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">${esc(p.variant || "–")}</span></td>
           <td>${fmt(n.sent)}</td>
           <td>${fmt(n.positive)}</td>
           <td>${sentPosCell(n)}</td>
-          <td>${esc(angle || "–")}</td>
+          <td><span class="jg" title="The persuasion angle or theme this variant's copy uses.">${esc(angle || "–")}</span></td>
           <td>${esc(n.suggested_action || "–")}</td>
+          <td class="actions-td">${rowActionsHTML(n)}</td>
         </tr>`;
       }).join("");
       bodyHTML += `<div class="table-scroll"><table class="tbl">
-        <thead><tr><th>Email</th><th>Variant</th><th>Sent</th><th>Positive</th><th>Sent/Pos</th><th>Angle</th><th>Recommendation</th></tr></thead>
+        <thead><tr><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th><th>Recommendation</th><th class="actions-th">Status</th></tr></thead>
         <tbody>${trs}</tbody></table></div>`;
     }
-    return `<div class="va-group">${headHTML}${bodyHTML}</div>`;
+    return `<div class="va-group${allRetired ? " dimmed" : ""}">${headHTML}${bodyHTML}</div>`;
   }).join("");
 }
 
 function section5(rows) {
   const sorted = [...rows].sort((a, b) => (a.reply_rate ?? 0) - (b.reply_rate ?? 0));
   const body = sorted.map((n) => `
-    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
+    <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${fmt(n.sent)}</td>
       <td>${Number.isFinite(n.replied) ? fmt(n.replied) : "–"}</td>
       <td>${Number.isFinite(n.reply_rate) ? n.reply_rate.toFixed(2) + "%" : "–"}</td>
+      <td class="actions-td">${rowActionsHTML(n)}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>Campaign</th><th>Sent</th><th>Unique Replies</th><th>Reply Rate</th></tr></thead>
+    <thead><tr><th>Campaign</th><th>Sent</th><th>Unique Replies</th><th>Reply Rate</th><th class="actions-th">Status</th></tr></thead>
     <tbody>${body}</tbody></table></div>
-    <div class="fixnote">Recommended next step: run <span class="jg" title="Pulls every lead, classifies each title by function, and reports how much of the list is on-ICP vs off-ICP.">lilly-list-audit</span> on each flagged campaign to confirm the enrolled leads match the intended persona, and check deliverability (spam placement, sender reputation, warmup) in parallel.</div>`;
+    <div class="fixnote">Recommended next step: run <span class="jg" title="Pulls every lead, classifies each title by function, and reports how much of the list is on-ICP vs off-ICP.">lilly-list-audit</span> on each flagged campaign to confirm the enrolled leads match the intended <span class="jg" title="Ideal Customer Profile — the target buyer persona this campaign is built for.">ICP</span>, and check deliverability (spam placement, sender reputation, warmup) in parallel.</div>`;
 }
 
 function section6(rows) {
@@ -482,16 +678,17 @@ function section6(rows) {
     const bugType = parseBugType(n.detail);
     const angle = parseAngle(n.detail);
     const notes = `Email ${esc(p.email || "?")} Var ${esc(p.variant || "–")}${angle ? `: ${esc(angle)}` : ""}`;
-    return `<tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}">
+    return `<tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}</td>
       <td>${esc(bugType)}</td>
       <td>${notes}</td>
+      <td class="actions-td">${rowActionsHTML(n)}</td>
     </tr>`;
   }).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>Campaign</th><th>Bug Type</th><th>Notes</th></tr></thead>
+    <thead><tr><th>Campaign</th><th>Bug Type</th><th>Notes</th><th class="actions-th">Status</th></tr></thead>
     <tbody>${body}</tbody></table></div>
-    <div class="fixnote">Fix: go into the campaign in the Smartlead UI and manually set the correct traffic split so every intended variant has a non-zero share.</div>`;
+    <div class="fixnote">Fix: go into the campaign in the Smartlead UI and manually set the correct traffic split so every intended variant has a non-zero share (<span class="jg" title="How evenly Smartlead's traffic split sends across each variant — should be non-zero for every intended variant.">distribution</span>).</div>`;
 }
 
 function actionBlockHTML(n) {
@@ -504,7 +701,7 @@ function actionBlockHTML(n) {
     <div class="ab-head">
       <div class="ab-title">
         <b>${n.block_number ?? "–"}.</b> ${campaignLink(n.campaign_name, n.smartlead_url)}
-        <span class="ctx">&middot; ${esc(n.client || "Unassigned")} &middot; ${fmt(n.sent)} sent, ${fmt(n.positive)} pos, ${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) : "–"}% complete</span>
+        <span class="ctx">&middot; <span class="jg" title="Client Success Manager — the client this campaign is run for.">CSM</span>: ${esc(n.client || "Unassigned")} &middot; ${fmt(n.sent)} sent, ${fmt(n.positive)} pos, ${Number.isFinite(n.completion_pct) ? n.completion_pct.toFixed(1) : "–"}% complete</span>
       </div>
       <div class="ab-pills">
         ${priorityPill(n.priority)}
@@ -547,30 +744,80 @@ function section8(rows) {
 }
 
 /* ══ Top-level draw ══ */
+/* fix F: a collapsed section's body is NOT built here — only stashed in
+   sectionRenderers so setSectionExpanded() can build it lazily on first
+   expand. Section headers (and their counts, always computed from the DATA
+   array, never the DOM) still render eagerly for every section so filters,
+   the sticky nav and the count labels stay correct regardless of expand
+   state. `title` is raw HTML (not escaped) so callers can embed a `.jg`
+   tooltip term in a section title — every call site below passes a static
+   string literal, never user data. */
 function reportSection(num, title, rows, bodyFn, opts = {}) {
-  if (!rows.length && !opts.showEmpty) return "";
+  if (!rows.length && !opts.showEmpty) { sectionRenderers.delete(num); return ""; }
   const expanded = isExpanded(num);
   const countLabel = opts.countLabel || `${rows.length} ${rows.length === 1 ? "campaign" : "campaigns"}`;
+  sectionRenderers.set(num, { rows, bodyFn });
+  const bodyHTML = expanded
+    ? (rows.length ? bodyFn(rows) : `<div class="empty">No findings in this section.</div>`)
+    : "";
   return `<div class="rsection${opts.muted ? " muted" : ""}" data-section="${num}">
     <div class="rsection-h${expanded ? " expanded" : ""}" data-toggle-section="${num}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       <span class="snum">${num}.</span>
-      <span class="stitle">${esc(title)}</span>
+      <span class="stitle">${title}</span>
       <span class="scount">${esc(countLabel)}</span>
     </div>
-    <div class="rsection-body${expanded ? "" : " hidden"}" data-section-body="${num}">
-      ${rows.length ? bodyFn(rows) : `<div class="empty">No findings in this section.</div>`}
+    <div class="rsection-body${expanded ? "" : " hidden"}" data-section-body="${num}" data-rendered="${expanded ? "1" : "0"}">
+      ${bodyHTML}
     </div>
+  </div>`;
+}
+
+/* fix E2: one-line "worst offender" callout above Section 1, pointing at
+   whatever Section 7 currently considers block #1 (lowest block_number =
+   most urgent, same ordering section7() sorts by). Built from `by(7)` (the
+   currently filtered/rendered set) so its jump target always exists. */
+function worstOffenderCallout(actionRows) {
+  if (!actionRows.length) return "";
+  const top = [...actionRows].sort((a, b) => (a.block_number ?? 9999) - (b.block_number ?? 9999))[0];
+  const reasonLabel = esc(ACTION_TYPE_LABEL[top.action_type] || parseActionBullets(top.detail)[0] || "flagged for action");
+  const reasonHTML = reasonLabel.replace(/kill threshold/, `<span class="jg" title="This campaign hit the automatic kill threshold — spend/sends passed the cutoff with no positive signal.">kill threshold</span>`);
+  return `<div class="worst-offender" data-jump-block="${esc(String(top.id))}">
+    <b>Most urgent:</b> ${campaignLink(top.campaign_name, top.smartlead_url)} &mdash; ${reasonHTML} &rarr; block #${esc(String(top.block_number ?? "?"))}
   </div>`;
 }
 
 function updateSummary() {
   const el = document.getElementById("summary");
-  if (loadState !== "ok") { el.innerHTML = ""; return; }
+  const scopeEl = document.getElementById("scopeLine");
+  const rollupEl = document.getElementById("rollup");
+  if (loadState !== "ok") { el.innerHTML = ""; if (scopeEl) scopeEl.textContent = ""; if (rollupEl) rollupEl.innerHTML = ""; return; }
   const shown = all.filter(passesFilters);
   const campaignCount = new Set(shown.map((n) => n.campaign_id ?? n.campaign_name)).size;
   el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${all.length}</b> findings</div>` +
     `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
+
+  // `all` is already scoped to the active client server-side (GET /api/notifications?client_id=...),
+  // so it's exactly the set of findings behind Notifications' "N campaigns" - the same number
+  // Campaigns' much shorter Signal-campaigns list gets compared against and looks "broken" next to.
+  if (scopeEl) {
+    const allClientCampaigns = new Set(all.map((n) => n.campaign_id ?? n.campaign_name)).size;
+    scopeEl.textContent = `Covers ALL Smartlead campaigns for the selected client (${allClientCampaigns} campaign${allClientCampaigns === 1 ? "" : "s"}) — including ones not managed as Signal campaigns in this tool.`;
+  }
+
+  // Top-line rollup: always computed from the full client-scoped `all` (not the currently
+  // chosen status/priority filter) so a 5-minute user gets the true picture at a glance,
+  // and it doesn't silently change meaning as they play with the filter chips below.
+  if (rollupEl) {
+    const needingAttention = new Set(all.filter((n) => n.section === 1).map((n) => n.campaign_id ?? n.campaign_name)).size;
+    const highPriority = all.filter((n) => n.priority === "High").length;
+    // fix E1: N High / N Medium / N Low actions, scoped to open (non-retired)
+    // Section 7 findings only, clickable straight to Section 7.
+    const openActions = all.filter((n) => n.section === 7 && matchesActiveClient(n) && !isRetiredStatus(n.status));
+    const tierCount = (p) => openActions.filter((n) => n.priority === p).length;
+    rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention &middot; <b>${fmt(highPriority)}</b> high-priority finding${highPriority === 1 ? "" : "s"} &middot; <b>${fmt(all.length)}</b> total finding${all.length === 1 ? "" : "s"}` +
+      `<div class="rollup-chips"><button type="button" class="rollup-chip" onclick="jumpToSection(7)">${fmt(tierCount("High"))} High / ${fmt(tierCount("Medium"))} Medium / ${fmt(tierCount("Low"))} Low actions</button></div>`;
+  }
 }
 
 function draw() {
@@ -591,26 +838,32 @@ function draw() {
   }
   const ctxMap = buildCampaignContext(all.filter(matchesActiveClient));
   const by = (s) => shown.filter((n) => n.section === s);
+  // fix E3: campaign -> Section 7 block map, built from what Section 7 is
+  // actually about to render, so a jump-link is only ever offered when its
+  // destination will exist in the DOM.
+  const blockMap = buildCampaignToBlockMap(by(7));
 
   const html = [
-    reportSection(1, "Campaigns Needing Optimisation", by(1), section1),
-    reportSection(2, "Performing Campaigns", by(2), section2),
+    worstOffenderCallout(by(7)),
+    reportSection(1, "Campaigns Needing Optimisation", by(1), (rows) => section1(rows, blockMap)),
+    reportSection(2, "Performing Campaigns", by(2), (rows) => section2(rows, blockMap)),
     reportSection(3, "Campaign Lifecycle", by(3), section3),
-    reportSection(4, "Variant Analysis", by(4), (rows) => section4(rows, ctxMap), {
+    reportSection(4, `<span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> Analysis`, by(4), (rows) => section4(rows, ctxMap), {
       countLabel: (() => { const c = new Set(by(4).map((n) => n.campaign_id)).size; return `${c} campaign${c === 1 ? "" : "s"}, ${by(4).length} finding${by(4).length === 1 ? "" : "s"}`; })(),
     }),
     reportSection(5, "Low Reply Rate Flags - Campaigns with reply rate under 1%", by(5), section5),
-    reportSection(6, "Variant Distribution Flags", by(6), section6),
+    reportSection(6, `<span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> <span class="jg" title="How evenly Smartlead's traffic split sends across each variant — should be non-zero for every intended variant.">Distribution</span> Flags`, by(6), section6),
     reportSection(7, "Recommended Actions", by(7), section7, { countLabel: `${by(7).length} action${by(7).length === 1 ? "" : "s"}` }),
   ].join("");
 
   const clearRows = by(0);
   const clearHTML = reportSection(
-    8, `All clear, ${clearRows.length} active campaigns below the 1,500-send report threshold`,
+    8, `All clear, ${esc(String(clearRows.length))} active campaigns below the 1,500-send report threshold`,
     clearRows, section8, { muted: true, countLabel: "", showEmpty: true }
   );
 
   root.innerHTML = html + clearHTML;
+  setupSectionNavObserver();
 }
 
 document.getElementById("statusFilter").onchange = (e) => { filters.status = e.target.value; draw(); };
@@ -624,7 +877,76 @@ function setSectionExpanded(num, expanded) {
   const header = document.querySelector(`.rsection-h[data-toggle-section="${num}"]`);
   const body = document.querySelector(`.rsection-body[data-section-body="${num}"]`);
   if (header) { header.classList.toggle("expanded", expanded); header.setAttribute("aria-expanded", expanded ? "true" : "false"); }
-  if (body) body.classList.toggle("hidden", !expanded);
+  if (body) {
+    body.classList.toggle("hidden", !expanded);
+    // fix F: build this section's DOM on first expand, using whatever rows
+    // were most recently stashed for it (so a filter applied while it was
+    // still collapsed is honoured the moment it opens).
+    if (expanded && body.dataset.rendered !== "1") {
+      const renderer = sectionRenderers.get(num);
+      if (renderer) {
+        body.innerHTML = renderer.rows.length ? renderer.bodyFn(renderer.rows) : `<div class="empty">No findings in this section.</div>`;
+        body.dataset.rendered = "1";
+      }
+    }
+  }
+}
+
+/* fix E1/E2/E3/G: shared jump helpers. Section 7 always renders eagerly
+   (see draw()), so a block id is always in the DOM to scroll to; other
+   sections may need their body built first (fix F). */
+function jumpToSection(num) {
+  setSectionExpanded(num, true);
+  const el = document.querySelector(`.rsection[data-section="${num}"]`);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function jumpToBlock(id) {
+  setSectionExpanded(7, true);
+  requestAnimationFrame(() => {
+    const el = document.getElementById(`ab-${CSS.escape(String(id))}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+
+/* fix G: highlight whichever section header is currently at the top of the
+   viewport in the sticky nav. Re-created on every draw() since .rsection-h
+   nodes are rebuilt each time. */
+function setupSectionNavObserver() {
+  const navEl = document.getElementById("sectionNav");
+  if (!navEl) return;
+  if (sectionNavObserver) sectionNavObserver.disconnect();
+  sectionNavObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const sec = entry.target.closest(".rsection");
+      if (!sec) return;
+      const num = sec.dataset.section;
+      navEl.querySelectorAll(".nav-chip").forEach((c) => c.classList.toggle("current", c.dataset.navSection === num));
+    });
+  }, { rootMargin: "-10% 0px -75% 0px", threshold: 0 });
+  document.querySelectorAll(".rsection-h").forEach((h) => sectionNavObserver.observe(h));
+}
+document.getElementById("sectionNav").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-nav-section]");
+  if (!chip) return;
+  jumpToSection(Number(chip.dataset.navSection));
+});
+
+/* fix B: one core PATCH call, shared by a normal status action and its Undo
+   so both go through the same request shape / cache-bust / `all[]` update. */
+async function performStatusChange(id, target) {
+  const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: target }),
+  });
+  const updated = await res.json();
+  if (!res.ok || (updated && updated.ok === false)) {
+    throw new Error((updated && updated.message) || `HTTP ${res.status}`);
+  }
+  const idx = all.findIndex((n) => String(n.id) === String(id));
+  if (idx >= 0) all[idx] = { ...all[idx], ...updated };
+  bustNotifCache();
+  return idx >= 0 ? all[idx] : { ...updated, id };
 }
 
 document.getElementById("list").addEventListener("click", async (e) => {
@@ -632,6 +954,13 @@ document.getElementById("list").addEventListener("click", async (e) => {
   if (header) {
     const num = Number(header.dataset.toggleSection);
     setSectionExpanded(num, !isExpanded(num));
+    return;
+  }
+
+  const jumpEl = e.target.closest("[data-jump-block]");
+  if (jumpEl) {
+    e.preventDefault();
+    jumpToBlock(jumpEl.dataset.jumpBlock);
     return;
   }
 
@@ -654,32 +983,43 @@ document.getElementById("list").addEventListener("click", async (e) => {
   e.preventDefault();
   const id = btn.dataset.nid;
   const target = btn.dataset.target;
-  const block = btn.closest(".action-block, .note");
+  // Every row/block wrapper carries a stable id="row-{id}" or id="ab-{id}"
+  // (fix C/B3) — used both to scope "disable this card's OTHER buttons
+  // while its own PATCH is in flight" and to find this row again after a
+  // queued predecessor has already re-rendered the DOM.
+  const block = btn.closest("[id^='row-'], [id^='ab-']");
   const siblingBtns = block ? [...block.querySelectorAll("button[data-target]")].filter((b) => b !== btn) : [];
   const restore = busyBtn(btn, "Working…");
   if (!restore) return;
   siblingBtns.forEach((b) => { b.dataset.wasDisabled = b.disabled ? "1" : "0"; b.disabled = true; });
-  try {
-    const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: target }),
-    });
-    const updated = await res.json();
-    if (!res.ok || (updated && updated.ok === false)) {
-      throw new Error((updated && updated.message) || `HTTP ${res.status}`);
+  const prevRow = all.find((n) => String(n.id) === String(id));
+  const prevStatus = prevRow ? prevRow.status : null;
+
+  // fix B1: only the ACTUAL network call is serialized through the queue —
+  // the busy/disabled state above already applied synchronously at click
+  // time, so this card shows "Working…" immediately and other cards stay
+  // fully clickable while this one waits its turn.
+  enqueueStatusAction(async () => {
+    try {
+      const updated = await performStatusChange(id, target);
+      // Patch only this row/block in place — never draw() — so no other
+      // card's screen position moves and no other in-flight action is
+      // disturbed.
+      applyRowPatch(updated);
+      showActionToast(`Marked ${STATUS_LABEL[target] || target}`, prevStatus != null ? async () => {
+        try {
+          const restored = await performStatusChange(id, prevStatus);
+          applyRowPatch(restored);
+        } catch (err) {
+          protoNote("Undo failed, retry. " + (err.message || "network error"));
+        }
+      } : null);
+    } catch (err) {
+      restore();
+      siblingBtns.forEach((b) => { b.disabled = b.dataset.wasDisabled === "1"; delete b.dataset.wasDisabled; });
+      protoNote("Action failed, retry. " + (err.message || "network error"));
     }
-    const idx = all.findIndex((n) => String(n.id) === String(id));
-    if (idx >= 0) all[idx] = { ...all[idx], ...updated };
-    bustNotifCache();
-    protoNote(`Marked ${STATUS_LABEL[target] || target}`);
-    // Patch only this row/block in place — never draw() — so no other card's
-    // screen position moves and no other in-flight action is disturbed.
-    applyRowPatch(idx >= 0 ? all[idx] : { ...updated, id });
-  } catch (err) {
-    restore();
-    siblingBtns.forEach((b) => { b.disabled = b.dataset.wasDisabled === "1"; delete b.dataset.wasDisabled; });
-    protoNote("Action failed, retry. " + (err.message || "network error"));
-  }
+  });
 });
 
 document.getElementById("list").addEventListener("keydown", (e) => {
@@ -691,22 +1031,41 @@ document.getElementById("list").addEventListener("keydown", (e) => {
   setSectionExpanded(num, !isExpanded(num));
 });
 
-/* Section 7 is the only section with per-row actions today, so an in-place
-   patch only ever needs to touch an .action-block. If the row is no longer
-   on screen (e.g. it lives in a currently-collapsed/unaffected section),
-   fall back to a full draw() rather than silently doing nothing. */
+/* Every section now has per-row actions (fix C), so an in-place patch needs
+   to handle two shapes: a Section 7 `#ab-{id}` block (full re-render of that
+   block) or a `#row-{id}` table row / callout elsewhere (just its status
+   pill + mini actions need updating — everything else about the row is
+   unchanged by a status action). If the row isn't on screen at all (e.g. it
+   lives in a currently-collapsed/not-yet-rendered section — fix F), fall
+   back to a full draw() rather than silently doing nothing. */
 function applyRowPatch(n) {
   updateSummary();
-  const el = document.getElementById(`ab-${CSS.escape(String(n.id))}`);
-  if (!el) { draw(); return; }
-  if (!passesFilters(n)) {
-    el.remove();
-    bumpSectionCount(7, -1);
+  const ab = document.getElementById(`ab-${CSS.escape(String(n.id))}`);
+  if (ab) {
+    if (!passesFilters(n)) { ab.remove(); bumpSectionCount(7, -1); return; }
+    const tmp = document.createElement("div");
+    tmp.innerHTML = actionBlockHTML(n).trim();
+    ab.replaceWith(tmp.firstElementChild);
     return;
   }
-  const tmp = document.createElement("div");
-  tmp.innerHTML = actionBlockHTML(n).trim();
-  el.replaceWith(tmp.firstElementChild);
+  const rowEl = document.getElementById(`row-${CSS.escape(String(n.id))}`);
+  if (rowEl) {
+    if (!passesFilters(n)) {
+      const sectionBody = rowEl.closest("[data-section-body]");
+      rowEl.remove();
+      // Section 4's count label mixes a campaign count with a finding count
+      // in one string ("N campaigns, M findings") — not safely decrementable
+      // by a generic "bump the first number" pass, so it's left to the next
+      // full draw() to recompute exactly.
+      if (sectionBody && sectionBody.dataset.sectionBody !== "4") bumpSectionCount(Number(sectionBody.dataset.sectionBody), -1);
+      return;
+    }
+    rowEl.classList.toggle("dimmed", isRetiredStatus(n.status));
+    const cell = rowEl.querySelector(".row-actions");
+    if (cell) cell.outerHTML = rowActionsHTML(n);
+    return;
+  }
+  draw();
 }
 
 function bumpSectionCount(num, delta) {
@@ -726,6 +1085,9 @@ function openPauseModal(id) {
   document.getElementById("pauseModalCampaign").textContent = row ? row.campaign_name : "";
   document.getElementById("pauseConfirmInput").value = "";
   document.getElementById("pauseModalErr").textContent = "";
+  // fix A: Confirm always starts disabled on open, regardless of whatever
+  // was typed into a previous invocation of this same modal.
+  document.getElementById("pauseConfirmBtn").disabled = true;
   document.getElementById("pauseModal").classList.remove("hidden");
   document.getElementById("pauseConfirmInput").focus();
 }
@@ -735,10 +1097,16 @@ function closePauseModal() {
 }
 document.getElementById("pauseCancelBtn").onclick = () => closePauseModal();
 document.getElementById("pauseModal").addEventListener("click", (e) => { if (e.target.id === "pauseModal") closePauseModal(); });
+/* fix A: Confirm pause is disabled by default (see the `disabled` attribute
+   on the button in markup + openPauseModal above) and only enables once the
+   typed value is EXACTLY "PAUSE" — re-checked on every keystroke. */
+document.getElementById("pauseConfirmInput").addEventListener("input", (e) => {
+  document.getElementById("pauseConfirmBtn").disabled = e.target.value !== "PAUSE";
+});
 document.getElementById("pauseConfirmBtn").onclick = async () => {
   const input = document.getElementById("pauseConfirmInput");
   const errEl = document.getElementById("pauseModalErr");
-  if (input.value.trim() !== "PAUSE") { errEl.textContent = 'Type "PAUSE" exactly to confirm.'; return; }
+  if (input.value !== "PAUSE") { errEl.textContent = 'Type "PAUSE" exactly to confirm.'; return; }
   const id = pauseTargetId;
   const btn = document.getElementById("pauseConfirmBtn");
   const restore = busyBtn(btn, "Pausing…");
@@ -756,7 +1124,9 @@ document.getElementById("pauseConfirmBtn").onclick = async () => {
     const updated = (body.notification) || (idx >= 0 ? { ...all[idx], status: "actioned" } : null);
     if (idx >= 0 && updated) all[idx] = { ...all[idx], ...updated };
     bustNotifCache();
-    protoNote("Campaign paused");
+    // No Undo here — pausing a live Smartlead campaign is a real, one-way
+    // side effect (the modal already says so), unlike a status-only PATCH.
+    showActionToast("Campaign paused");
     closePauseModal();
     if (idx >= 0) applyRowPatch(all[idx]);
   } catch (err) {
@@ -789,6 +1159,32 @@ async function copyClaudePrompt(id, btn) {
   }
   protoNote("Copied");
 }
+
+/* --- Success toast w/ Undo (fix H2/H3) --- */
+let toastTimer = null;
+let toastUndoHandler = null;
+function showActionToast(msg, undoFn) {
+  const el = document.getElementById("actionToast");
+  const msgEl = document.getElementById("actionToastMsg");
+  const undoBtn = document.getElementById("actionToastUndo");
+  msgEl.textContent = undoFn ? `${msg} — Undo` : msg;
+  undoBtn.style.display = undoFn ? "" : "none";
+  toastUndoHandler = undoFn || null;
+  clearTimeout(toastTimer);
+  el.classList.remove("hidden");
+  // 6-second window (fix H2), matching the spec's Undo grace period.
+  toastTimer = setTimeout(hideActionToast, 6000);
+}
+function hideActionToast() {
+  document.getElementById("actionToast").classList.add("hidden");
+  toastUndoHandler = null;
+  clearTimeout(toastTimer);
+}
+document.getElementById("actionToastUndo").onclick = async () => {
+  const fn = toastUndoHandler;
+  hideActionToast();
+  if (fn) await fn();
+};
 
 /* --- back-to-top --- */
 const backToTop = document.getElementById("backToTop");
