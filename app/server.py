@@ -2679,6 +2679,18 @@ _LISTS_DB_DOWN = {"error": "supabase_unavailable",
                   "message": "Couldn't reach the database - try again."}
 
 
+def _lists_is_duplicate_error(res) -> bool:
+    """True when `res` is a PostgREST unique-violation error (code 23505) —
+    a panel tester saw this raw ('duplicate key value violates unique
+    constraint "..."') verbatim in the new-folder modal. Callers swap it for
+    a friendly message naming the folder instead of surfacing it as-is."""
+    if not isinstance(res, dict):
+        return False
+    if str(res.get("code") or "") == "23505":
+        return True
+    return "duplicate key value violates unique constraint" in str(res.get("message") or "")
+
+
 def api_lists_index() -> tuple:
     """GET /api/lists — every folder + every list's metadata (never rows)."""
     folders = sb("GET", "list_folders?select=id,client,name,parent_id"
@@ -2738,6 +2750,38 @@ def api_lists_rows(q: dict) -> tuple:
                  "rows": page.get("rows") or []}
 
 
+def api_lists_distinct(q: dict) -> tuple:
+    """GET /api/lists/distinct — distinct values (+counts) for one column via
+    the api_list_distinct_values RPC. Powers the Sheets/Clay-style value-picker
+    in the column filter popover (checked values -> exact array filter)."""
+    lid = (q.get("id") or [""])[0].strip()
+    col = (q.get("col") or [""])[0].strip()
+    if not lid:
+        return 400, {"ok": False, "message": "id is required"}
+    if not col:
+        return 400, {"ok": False, "message": "col is required"}
+    meta = sb("GET", f"lists?id=eq.{lid}&select=id")
+    if meta is None:
+        return 503, _LISTS_DB_DOWN
+    if not isinstance(meta, list) or not meta:
+        return 404, {"ok": False, "message": "list not found"}
+    try:
+        limit = int((q.get("limit") or ["100"])[0] or 100)
+    except ValueError:
+        return 400, {"ok": False, "message": "limit must be an integer"}
+    res = sb("POST", "rpc/api_list_distinct_values", {
+        "p_list_id": lid, "p_col": col,
+        "p_search": (q.get("search") or [""])[0] or None,
+        "p_limit": limit,
+    })
+    err = _lists_sb_error(res)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(res, list):
+        return 503, _LISTS_DB_DOWN
+    return 200, {"id": lid, "col": col, "values": res}
+
+
 def lists_create_folder(p: dict) -> tuple:
     """POST /api/lists/folder — a client root (name null) or, with parent_id,
     a themed sub-folder (name required). A DB trigger enforces max depth —
@@ -2752,6 +2796,9 @@ def lists_create_folder(p: dict) -> tuple:
     res = sb("POST", "list_folders",
              {"client": client, "name": name, "parent_id": parent_id},
              prefer="return=representation")
+    if _lists_is_duplicate_error(res):
+        return 400, {"ok": False,
+                     "message": f"A folder named '{name or client}' already exists here."}
     err = _lists_sb_error(res)
     if err:  # e.g. the max-depth trigger
         return 400, {"ok": False, "message": err[:300]}
@@ -2794,11 +2841,78 @@ def lists_touch(p: dict) -> tuple:
     return _lists_patch(p.get("list_id"), patch)
 
 
+def lists_folder_rename(p: dict) -> tuple:
+    """POST /api/lists/folder/rename — rename a themed sub-folder. Client
+    ROOT folders (name IS NULL) aren't renameable — a panel tester needed
+    that spelled out rather than a generic failure."""
+    folder_id = p.get("folder_id")
+    if not folder_id:
+        return 400, {"ok": False, "message": "folder_id is required"}
+    name = str(p.get("name") or "").strip()
+    if not name:
+        return 400, {"ok": False, "message": "name is required"}
+    existing = sb("GET", f"list_folders?id=eq.{folder_id}&select=id,name")
+    if existing is None:
+        return 503, _LISTS_DB_DOWN
+    if not isinstance(existing, list) or not existing:
+        return 404, {"ok": False, "message": "folder not found"}
+    if existing[0].get("name") is None:
+        return 400, {"ok": False, "message": "Client root folders can't be renamed."}
+    res = sb("PATCH", f"list_folders?id=eq.{folder_id}", {"name": name},
+             prefer="return=representation")
+    if _lists_is_duplicate_error(res):
+        return 400, {"ok": False,
+                     "message": f"A folder named '{name}' already exists here."}
+    err = _lists_sb_error(res)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(res, list) or not res:
+        return 404, {"ok": False, "message": "folder not found"}
+    return 200, {"ok": True}
+
+
+def lists_folder_delete(p: dict) -> tuple:
+    """POST /api/lists/folder/delete — refuse (400, friendly message) when the
+    folder still has lists filed in it or sub-folders parented to it; those
+    were panel-clutter with no way to remove them otherwise. Empty ones are
+    hard-deleted."""
+    folder_id = p.get("folder_id")
+    if not folder_id:
+        return 400, {"ok": False, "message": "folder_id is required"}
+    child_lists = sb("GET", f"lists?folder_id=eq.{folder_id}&select=id&limit=1")
+    if child_lists is None:
+        return 503, _LISTS_DB_DOWN
+    err = _lists_sb_error(child_lists)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if child_lists:
+        return 400, {"ok": False,
+                     "message": "This folder still has lists in it - move or delete them first."}
+    child_folders = sb("GET", f"list_folders?parent_id=eq.{folder_id}&select=id&limit=1")
+    if child_folders is None:
+        return 503, _LISTS_DB_DOWN
+    err = _lists_sb_error(child_folders)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if child_folders:
+        return 400, {"ok": False,
+                     "message": "This folder still has sub-folders in it - move or delete them first."}
+    res = sb("DELETE", f"list_folders?id=eq.{folder_id}", prefer="return=representation")
+    err = _lists_sb_error(res)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(res, list) or not res:
+        return 404, {"ok": False, "message": "folder not found"}
+    return 200, {"ok": True}
+
+
 # POST /api/lists/* dispatch — kept OUT of ROUTES because these handlers
 # return (status, body) so validation/trigger failures answer with real 4xx
 # codes (ROUTES handlers always answer 200). do_POST checks this map first.
 LISTS_POST_ROUTES = {
     "/api/lists/folder": lists_create_folder,
+    "/api/lists/folder/rename": lists_folder_rename,
+    "/api/lists/folder/delete": lists_folder_delete,
     "/api/lists/move": lists_move,
     "/api/lists/favourite": lists_favourite,
     "/api/lists/touch": lists_touch,
@@ -6168,6 +6282,11 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             status, body = api_lists_rows(q)
             return self._json(body, status)
+        if path == "/api/lists/distinct":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            status, body = api_lists_distinct(q)
+            return self._json(body, status)
         return self._serve_static()
 
     def do_POST(self):
@@ -6234,7 +6353,7 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             log_activity(path, payload, action=path.rsplit("/", 1)[-1],
-                         entity="list", entity_id=payload.get("list_id"))
+                         entity="list", entity_id=payload.get("list_id") or payload.get("folder_id"))
             status, body = lists_route(payload)
             return self._json(body, status)
         route = ROUTES.get(path)

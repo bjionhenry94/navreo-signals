@@ -88,6 +88,18 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
 .filtinput-pop { padding: 8px; }
 .filtinput-pop input { width: 180px; border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; font-size: 12.5px; font-family: inherit; }
 .filtinput-pop .row { display: flex; gap: 6px; margin-top: 8px; }
+/* value-picker (Sheets/Clay-style column filter) */
+.valpicker { width: 260px; }
+.valpicker .vp-search { width: 100%; border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; font: 400 12.5px var(--font-sans); color: var(--ink); background: transparent; margin-bottom: 6px; }
+.valpicker .vp-search:focus { outline: none; box-shadow: var(--focus); }
+.valpicker .colpop { max-height: 170px; margin-bottom: 4px; }
+.valpicker .vp-cnt { color: var(--ink-3); font-size: 11px; flex-shrink: 0; margin-left: 8px; }
+.valpicker .vp-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.valpicker .vp-sep { border-top: 1px solid var(--line); margin: 10px 0 8px; }
+.valpicker .vp-empty { font-size: 12px; color: var(--ink-3); padding: 8px 4px; }
+
+/* ── grid toolbar: paging affordance ────────────────────── */
+.pageinfo { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 
 /* ── New folder / move modal ──────────────────────────── */
 .overlay { position: fixed; inset: 0; background: rgba(20,17,14,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
@@ -134,7 +146,7 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
           <thead>
             <tr>
               <th>Name</th><th>Favorite</th><th>Clients</th><th>Created at</th>
-              <th>Last opened</th><th>Owner</th><th>Access</th><th></th>
+              <th>Last opened</th><th>Owner</th><th>Access</th><th>Actions</th>
             </tr>
           </thead>
           <tbody id="filesBody"></tbody>
@@ -157,6 +169,10 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
         </div>
         <div class="numwrap">Starting row <input class="numinput" id="gridOffset" type="number" min="0" step="1" value="0"></div>
         <div class="numwrap">Limit <input class="numinput" id="gridLimit" type="number" min="1" step="1" value="500"></div>
+        <span class="pageinfo" id="pageInfo"></span>
+        <button class="btn sm" id="pagePrev" title="Previous page">&larr; Prev</button>
+        <button class="btn sm" id="pageNext" title="Next page">Next &rarr;</button>
+        <button class="btn sm" id="gridMoveBtn">Move to folder…</button>
         <button class="btn sm share-btn" id="shareBtn">Share link</button>
       </div>
       <div class="filterbar" id="filterBar"></div>
@@ -200,6 +216,21 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
   <div class="modal-f">
     <button class="btn" id="mvCancel">Cancel</button>
     <button class="btn primary" id="mvConfirm">Move</button>
+  </div>
+</div></div>
+
+<div class="overlay" id="renameFolderOverlay"><div class="modal" style="width:360px">
+  <div class="modal-h"><h3>Rename folder</h3></div>
+  <div class="modal-b">
+    <div class="field">
+      <label>Folder name</label>
+      <input type="text" id="rfName" placeholder="e.g. Q3 Outbound">
+    </div>
+    <div id="rfErr"></div>
+  </div>
+  <div class="modal-f">
+    <button class="btn" id="rfCancel">Cancel</button>
+    <button class="btn primary" id="rfSave">Save</button>
   </div>
 </div></div>
 
@@ -298,8 +329,12 @@ function renderFileBrowser() {
       <td><button class="kebab-btn" data-popover-trigger title="Options" onclick="openRowMenu(event,'${esc(l.id)}')">${svgKebab}</button></td>
     </tr>`;
 
-  const folderRow = (key, label, depth, expandable) => {
+  const folderRow = (key, label, depth, folderObj) => {
+    // folderObj is null for the top-level client grouping row (not a real,
+    // renameable/deleteable list_folders record on its own) and the actual
+    // folder row for a themed sub-folder — only the latter gets a kebab menu.
     const isOpen = openFolders.has(key) || !!q;
+    const kebab = folderObj ? `<button class="kebab-btn" data-popover-trigger title="Options" onclick="openFolderMenu(event,'${esc(folderObj.id)}')">${svgKebab}</button>` : "";
     return { html: `
     <tr class="row-folder" data-folder-key="${esc(key)}">
       <td>
@@ -309,7 +344,7 @@ function renderFileBrowser() {
           <span class="lbl">${esc(label)}</span>
         </div>
       </td>
-      <td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td></td>
+      <td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td>${kebab}</td>
     </tr>`, isOpen };
   };
 
@@ -319,7 +354,7 @@ function renderFileBrowser() {
     if (!anyMatch) return;
 
     const rootKey = `client:${grp.client}`;
-    const { html: rootHtml, isOpen: rootOpen } = folderRow(rootKey, grp.client, 0, true);
+    const { html: rootHtml, isOpen: rootOpen } = folderRow(rootKey, grp.client, 0, null);
     rows.push(rootHtml);
     if (!rootOpen) return;
 
@@ -329,7 +364,7 @@ function renderFileBrowser() {
       const sheetsHere = sg.sheets.filter((l) => sheetMatches(l, q));
       if (q && !sheetsHere.length) return;
       const subKey = sg.folder.id;
-      const { html: subHtml, isOpen: subOpen } = folderRow(subKey, sg.folder.name, 1, true);
+      const { html: subHtml, isOpen: subOpen } = folderRow(subKey, sg.folder.name, 1, sg.folder);
       rows.push(subHtml);
       if (subOpen) sheetsHere.forEach((l) => rows.push(sheetRow(l, 2)));
     });
@@ -411,6 +446,89 @@ document.getElementById("mvConfirm").onclick = async () => {
   }
 };
 
+/* ── Folder kebab menu (rename / delete) ── */
+function openFolderMenu(ev, folderId) {
+  ev.stopPropagation();
+  closeAnyPopover();
+  const f = (LISTS_DATA.folders || []).find((x) => x.id === folderId);
+  if (!f) return;
+  const btn = ev.currentTarget;
+  const pop = document.createElement("div");
+  pop.className = "popover";
+  const items = [];
+  if (f.name !== null) {
+    items.push(`<button class="p-item" onclick="closeAnyPopover();openRenameFolderModal('${esc(folderId)}')">Rename…</button>`);
+  }
+  items.push(`<button class="p-item" onclick="closeAnyPopover();deleteFolder('${esc(folderId)}')">Delete folder</button>`);
+  pop.innerHTML = items.join("");
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.right - pop.offsetWidth) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+  });
+}
+
+let renameFolderId = null;
+function openRenameFolderModal(folderId) {
+  renameFolderId = folderId;
+  const f = (LISTS_DATA.folders || []).find((x) => x.id === folderId);
+  document.getElementById("rfName").value = f ? (f.name || "") : "";
+  document.getElementById("rfErr").innerHTML = "";
+  document.getElementById("renameFolderOverlay").classList.add("on");
+}
+document.getElementById("rfCancel").onclick = () => document.getElementById("renameFolderOverlay").classList.remove("on");
+document.getElementById("rfSave").onclick = async () => {
+  const name = document.getElementById("rfName").value.trim();
+  const errEl = document.getElementById("rfErr");
+  errEl.innerHTML = "";
+  if (!name) {
+    errEl.innerHTML = `<div class="modal-err">Name is required</div>`;
+    return;
+  }
+  const restore = busyBtn(document.getElementById("rfSave"), "Saving…");
+  try {
+    const r = await fetch("/api/lists/folder/rename", { method: "POST", body: JSON.stringify({ folder_id: renameFolderId, name }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) {
+      errEl.innerHTML = `<div class="modal-err">${esc(j.message || "Couldn't rename this folder")}</div>`;
+      if (restore) restore();
+      return;
+    }
+    document.getElementById("renameFolderOverlay").classList.remove("on");
+    if (restore) restore();
+    await loadListsIndex(true);
+    renderFileBrowser();
+    protoNote("Folder renamed");
+  } catch {
+    errEl.innerHTML = `<div class="modal-err">Couldn't reach the server — try again</div>`;
+    if (restore) restore();
+  }
+};
+
+async function deleteFolder(folderId) {
+  const f = (LISTS_DATA.folders || []).find((x) => x.id === folderId);
+  const label = f && f.name ? f.name : "this folder";
+  if (!confirm(`Delete "${label}"? This can't be undone.`)) return;
+  try {
+    const r = await fetch("/api/lists/folder/delete", { method: "POST", body: JSON.stringify({ folder_id: folderId }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) {
+      // API 400 messages are human-readable (e.g. "still has lists in it") —
+      // surface them as-is rather than a generic failure toast.
+      protoNote(j.message || "Couldn't delete this folder", { ms: 4200 });
+      return;
+    }
+    await loadListsIndex(true);
+    renderFileBrowser();
+    protoNote("Folder deleted");
+  } catch {
+    protoNote("Couldn't reach the server — try again");
+  }
+}
+
 /* ── New folder modal ── */
 document.getElementById("newFolderBtn").onclick = () => {
   const sel = document.getElementById("nfClient");
@@ -481,6 +599,9 @@ async function openGrid(listId) {
   document.getElementById("gridWrap").style.display = "none";
   document.getElementById("filterBar").innerHTML = "";
   document.getElementById("gridStatus").innerHTML = `<div class="empty">Loading…</div>`;
+  document.getElementById("pageInfo").textContent = "";
+  document.getElementById("pagePrev").disabled = true;
+  document.getElementById("pageNext").disabled = true;
   // fire-and-forget touch
   fetch("/api/lists/touch", { method: "POST", body: JSON.stringify({ list_id: listId, by: "Bjion" }) }).catch(() => {});
   await fetchGridRows();
@@ -513,6 +634,7 @@ async function fetchGridRows() {
       document.getElementById("gridStatus").innerHTML = `<div class="empty">${esc((j && j.message) || "Something went wrong")}</div>`;
     }
     document.getElementById("gridWrap").style.display = "none";
+    updatePageInfo(0);
     return;
   }
   grid.meta = j;
@@ -528,6 +650,7 @@ async function fetchGridRows() {
   renderFilterBar();
 
   const rows = j.rows || [];
+  updatePageInfo(rows.length);
   if (!rows.length) {
     document.getElementById("gridStatus").innerHTML = `<div class="empty">${
       grid.search || Object.keys(grid.filters).length ? "No rows match your search/filters" : "This list is empty"
@@ -540,11 +663,34 @@ async function fetchGridRows() {
   renderDataGrid(rows);
 }
 
+/* "Showing X–Y of Z" + Prev/Next, stepping offset by the current limit —
+   first load used to silently show 500 of 15,953 rows with no cue. */
+function updatePageInfo(rowsLen) {
+  const info = document.getElementById("pageInfo");
+  const prevBtn = document.getElementById("pagePrev");
+  const nextBtn = document.getElementById("pageNext");
+  if (!grid.filtered) {
+    info.textContent = "No rows";
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+  const from = grid.offset + 1;
+  const to = grid.offset + rowsLen;
+  info.textContent = `Showing ${fmt(from)}–${fmt(to)} of ${fmt(grid.filtered)}`;
+  prevBtn.disabled = grid.offset <= 0;
+  nextBtn.disabled = (grid.offset + grid.limit) >= grid.filtered;
+}
+
 function renderFilterBar() {
   const cols = Object.keys(grid.filters);
-  document.getElementById("filterBar").innerHTML = cols.length ? cols.map((c) => `
-    <span class="fchip">${esc(c)}: “${esc(grid.filters[c])}”<button title="Clear filter" onclick="clearColFilter('${esc4attr(c)}')">&times;</button></span>
-  `).join("") : "";
+  document.getElementById("filterBar").innerHTML = cols.length ? cols.map((c) => {
+    const v = grid.filters[c];
+    const label = Array.isArray(v)
+      ? (v.length === 1 ? `“${esc(v[0])}”` : `${v.length} selected`)
+      : `“${esc(v)}”`;
+    return `<span class="fchip">${esc(c)}: ${label}<button title="Clear filter" onclick="clearColFilter('${esc4attr(c)}')">&times;</button></span>`;
+  }).join("") : "";
 }
 
 function clearColFilter(col) {
@@ -566,9 +712,13 @@ function renderDataGrid(rows) {
         </div>
       </th>`).join("")}
   </tr></thead>`;
-  const tbody = `<tbody>${rows.map((row) => `
+  // gutter shows the row's position in the current filtered/sorted VIEW
+  // (offset+1, offset+2, …) so you can confirm you're looking at "rows
+  // 100–200"; the source row_num (used to show ids from the raw sheet,
+  // confusing against the view position) moves to a hover tooltip.
+  const tbody = `<tbody>${rows.map((row, idx) => `
     <tr>
-      <td class="gutter">${row.row_num != null ? fmt(row.row_num) : ""}</td>
+      <td class="gutter" title="${row.row_num != null ? esc4attr(`source row ${fmt(row.row_num)}`) : ""}">${fmt(grid.offset + idx + 1)}</td>
       ${visibleCols.map((c) => `<td title="${esc4attr(String(row.data ? row.data[c] ?? "" : ""))}">${esc(row.data ? row.data[c] : "")}</td>`).join("")}
     </tr>`).join("")}</tbody>`;
   document.getElementById("datagrid").innerHTML = thead + tbody;
@@ -582,35 +732,113 @@ function cycleSort(col) {
   fetchGridRows();
 }
 
+/* Sheets/Clay-style value-picker: checked values -> exact array filter
+   (via /api/lists/distinct), "contains text…" underneath -> substring
+   filter — substring-only filtering used to make row counts untrustworthy
+   (a "CEO" contains-filter also matched "CEO/Founder" or "GM & CEO"). */
+async function fetchDistinctValues(col, search) {
+  const params = new URLSearchParams({ id: grid.id, col, search: search || "", limit: "100" });
+  try {
+    const r = await fetch(`/api/lists/distinct?${params.toString()}`, { cache: "no-store" });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !Array.isArray(j.values)) return null;
+    return j.values;
+  } catch { return null; }
+}
+
 function openColFilter(ev, col) {
   closeAnyPopover();
   const btn = ev.currentTarget;
+  const cur = grid.filters[col];
+  const checked = new Set(Array.isArray(cur) ? cur : []);
+  const containsInit = typeof cur === "string" ? cur : "";
+
   const pop = document.createElement("div");
-  pop.className = "popover filtinput-pop";
-  const cur = grid.filters[col] || "";
+  pop.className = "popover filtinput-pop valpicker";
   pop.innerHTML = `
-    <div style="font-size:12px;color:var(--ink-3);margin-bottom:6px">Filter “${esc(col)}” contains…</div>
-    <input type="text" value="${esc4attr(cur)}" id="colFiltInput">
+    <div style="font-size:12px;color:var(--ink-3);margin-bottom:6px">Filter “${esc(col)}”</div>
+    <input type="text" class="vp-search" id="colValSearch" placeholder="Search values…">
+    <div class="colpop" id="colValList"><div class="vp-empty">Loading values…</div></div>
     <div class="row">
-      <button class="btn sm primary" id="colFiltApply">Apply</button>
-      <button class="btn sm" id="colFiltClear">Clear</button>
+      <button class="btn sm primary" id="colValApply">Apply</button>
+      <button class="btn sm" id="colValClear">Clear</button>
+    </div>
+    <div class="vp-sep"></div>
+    <div style="font-size:12px;color:var(--ink-3);margin-bottom:6px">…or contains text</div>
+    <input type="text" value="${esc4attr(containsInit)}" id="colFiltInput" placeholder="contains…">
+    <div class="row">
+      <button class="btn sm" id="colFiltApply">Apply text filter</button>
     </div>`;
   document.body.appendChild(pop);
   const r = btn.getBoundingClientRect();
   pop.style.top = (window.scrollY + r.bottom + 4) + "px";
   pop.style.left = (window.scrollX + r.left - 140) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+  });
+
+  const listEl = pop.querySelector("#colValList");
+  const renderValueList = (values) => {
+    if (!values) {
+      listEl.innerHTML = `<div class="vp-empty">Couldn't load values — use the contains filter below</div>`;
+      return;
+    }
+    if (!values.length) {
+      listEl.innerHTML = `<div class="vp-empty">No values found</div>`;
+      return;
+    }
+    listEl.innerHTML = values.map((v) => `
+      <label style="justify-content:space-between">
+        <span style="display:flex;align-items:center;gap:8px;min-width:0">
+          <input type="checkbox" value="${esc4attr(v.value)}" ${checked.has(v.value) ? "checked" : ""}>
+          <span class="vp-lbl">${esc(v.value)}</span>
+        </span>
+        <span class="vp-cnt">${fmt(v.count)}</span>
+      </label>`).join("");
+    listEl.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) checked.add(cb.value); else checked.delete(cb.value);
+      });
+    });
+  };
+
+  let valSearchDebounce = null;
+  const loadValues = async (term) => {
+    listEl.innerHTML = `<div class="vp-empty">Loading values…</div>`;
+    renderValueList(await fetchDistinctValues(col, term));
+  };
+  loadValues("");
+  pop.querySelector("#colValSearch").addEventListener("input", (e) => {
+    clearTimeout(valSearchDebounce);
+    const v = e.target.value;
+    valSearchDebounce = setTimeout(() => loadValues(v), 300);
+  });
+
+  const applyValues = () => {
+    if (checked.size) grid.filters[col] = [...checked]; else delete grid.filters[col];
+    closeAnyPopover();
+    grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    fetchGridRows();
+  };
+  pop.querySelector("#colValApply").onclick = applyValues;
+  pop.querySelector("#colValClear").onclick = () => {
+    delete grid.filters[col];
+    closeAnyPopover();
+    grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    fetchGridRows();
+  };
+
   const input = pop.querySelector("#colFiltInput");
-  input.focus(); input.select();
-  const apply = () => {
+  const applyText = () => {
     const v = input.value.trim();
     if (v) grid.filters[col] = v; else delete grid.filters[col];
     closeAnyPopover();
     grid.offset = 0; document.getElementById("gridOffset").value = 0;
     fetchGridRows();
   };
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); if (e.key === "Escape") closeAnyPopover(); });
-  pop.querySelector("#colFiltApply").onclick = apply;
-  pop.querySelector("#colFiltClear").onclick = () => { delete grid.filters[col]; closeAnyPopover(); grid.offset = 0; document.getElementById("gridOffset").value = 0; fetchGridRows(); };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") applyText(); if (e.key === "Escape") closeAnyPopover(); });
+  pop.querySelector("#colFiltApply").onclick = applyText;
 }
 
 document.getElementById("colBtn").onclick = (ev) => {
@@ -663,6 +891,18 @@ document.getElementById("gridLimit").addEventListener("input", (e) => {
     fetchGridRows();
   }, 500);
 });
+
+document.getElementById("pagePrev").addEventListener("click", () => {
+  grid.offset = Math.max(0, grid.offset - grid.limit);
+  document.getElementById("gridOffset").value = grid.offset;
+  fetchGridRows();
+});
+document.getElementById("pageNext").addEventListener("click", () => {
+  grid.offset = grid.offset + grid.limit;
+  document.getElementById("gridOffset").value = grid.offset;
+  fetchGridRows();
+});
+document.getElementById("gridMoveBtn").addEventListener("click", () => openMoveModal(grid.id));
 
 document.getElementById("shareBtn").addEventListener("click", async () => {
   const url = `https://navreo-signals.onrender.com/app/lists.html#${grid.id}`;
