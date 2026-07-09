@@ -413,6 +413,20 @@ function setupChartTooltip(wrap) {
   color: var(--ink-3, #6B6055); padding: 4px 6px; border-radius: 6px;
 }
 #nav-jobs-panel .nj-close:hover { background: var(--bg-sunken, #F7F7F6); }
+#nav-jobs-panel .nj-head-actions { display: flex; align-items: center; gap: 6px; }
+#nav-jobs-panel .nj-clear-btn {
+  border: 1px solid var(--line, #ECECEA); background: var(--card, #fff);
+  color: var(--ink-3, #6B6055); font-size: 11px; font-weight: 500;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer; line-height: 1.4;
+}
+#nav-jobs-panel .nj-clear-btn:hover { background: var(--bg-sunken, #F7F7F6); color: var(--ink, #14110E); }
+#nav-jobs-panel .nj-clear-btn:disabled { opacity: 0.5; cursor: default; }
+.nj-dismiss-btn {
+  border: none; background: none; cursor: pointer; font-size: 16px; line-height: 1;
+  color: var(--brown-400, #A89684); padding: 0 2px 0 6px; flex: none; align-self: flex-start;
+}
+.nj-dismiss-btn:hover { color: var(--ink, #14110E); }
+.nj-dismiss-btn:disabled { opacity: 0.4; cursor: default; }
 #nav-jobs-panel .nj-list { flex: 1; overflow-y: auto; padding: 10px 14px 16px; }
 #nav-jobs-panel .nj-empty {
   text-align: center; color: var(--brown-400, #A89684); font-size: 13px; padding: 40px 0;
@@ -471,11 +485,24 @@ function setupChartTooltip(wrap) {
     elPanel.innerHTML = `
       <div class="nj-head">
         <div class="nj-title">Tasks in progress</div>
-        <button type="button" class="nj-close" aria-label="Close">&times;</button>
+        <div class="nj-head-actions">
+          <button type="button" class="nj-clear-btn" title="Remove all finished tasks">Clear finished</button>
+          <button type="button" class="nj-close" aria-label="Close">&times;</button>
+        </div>
       </div>
       <div class="nj-list" id="nav-jobs-list"></div>
     `;
     elPanel.querySelector(".nj-close").addEventListener("click", () => setOpen(false, true));
+    elPanel.querySelector(".nj-clear-btn").addEventListener("click", (e) => {
+      const b = e.currentTarget; b.disabled = true; b.textContent = "Clearing…";
+      // Optimistic: drop finished from the list now.
+      jobs = jobs.filter((j) => j.status === "queued" || j.status === "running");
+      render();
+      fetch("/api/jobs/dismiss-finished", { method: "POST" })
+        .then(() => fetchJobs())
+        .catch(() => { /* next poll reconciles */ })
+        .finally(() => { b.disabled = false; b.textContent = "Clear finished"; });
+    });
 
     elBadge = elTab.querySelector("#nav-jobs-badge");
     elList = elPanel.querySelector("#nav-jobs-list");
@@ -490,8 +517,24 @@ function setupChartTooltip(wrap) {
   // (the next poll removes the id once the job leaves queued/running).
   const cancelling = new Set();
   const resuming = new Set();  // same guard for in-flight Resume POSTs
+  const dismissing = new Set();  // same guard for in-flight Dismiss POSTs
 
   function onListClick(e) {
+    const dismiss = e.target.closest(".nj-dismiss-btn");
+    if (dismiss) {
+      const jid = dismiss.getAttribute("data-jid");
+      if (!jid || dismissing.has(jid)) return;
+      dismissing.add(jid);
+      dismiss.disabled = true;
+      // Optimistic: drop it from the local list immediately so it feels instant.
+      jobs = jobs.filter((j) => j.id !== jid);
+      render();
+      fetch(`/api/jobs/${encodeURIComponent(jid)}/dismiss`, { method: "POST" })
+        .then(() => fetchJobs())
+        .catch(() => { /* next poll reconciles */ })
+        .finally(() => dismissing.delete(jid));
+      return;
+    }
     const resume = e.target.closest(".nj-resume-btn");
     if (resume) {
       const jid = resume.getAttribute("data-jid");
@@ -587,9 +630,13 @@ function setupChartTooltip(wrap) {
       if (line) countsHtml = `<div class="nj-card-counts">${line}</div>`;
     }
     const cardCls = (status === "failed" || status === "interrupted") ? "nj-card jf-failed" : "nj-card";
-    const resumeRow = resumeBtn ? `<div class="nj-card-actions">${resumeBtn}</div>` : "";
+    // Dismiss: remove a FINISHED task from the panel. Not shown while live.
+    const finished = status === "done" || status === "failed" || status === "cancelled" || status === "interrupted";
+    const dismissBtn = finished
+      ? `<button type="button" class="nj-dismiss-btn" data-jid="${jEsc(job.id)}" title="Remove this task from the list" aria-label="Dismiss">&times;</button>` : "";
+    const resumeRow = (resumeBtn) ? `<div class="nj-card-actions">${resumeBtn}</div>` : "";
     return `<div class="${cardCls}">
-      <div class="nj-card-top"><span class="nj-card-label">${label}</span>${pill}</div>
+      <div class="nj-card-top"><span class="nj-card-label">${label}</span>${pill}${dismissBtn}</div>
       ${progress}${timeLine}${countsHtml}${resumeRow}
     </div>`;
   }

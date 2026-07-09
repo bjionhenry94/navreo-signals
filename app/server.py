@@ -3316,9 +3316,11 @@ def _is_mock_job_row(r: dict) -> bool:
     return label.startswith("[TEST]") or cid.startswith("MOCK")
 
 
-_SERVER_INSTANCE = (os.environ.get("RENDER_INSTANCE_ID")
-                    or os.environ.get("RENDER_SERVICE_ID")
-                    or ("render" if os.environ.get("RENDER") else "local"))
+_ON_RENDER = bool(os.environ.get("RENDER"))
+# STABLE per-service id (NOT RENDER_INSTANCE_ID, which changes every deploy —
+# a new instance must be able to reclaim the previous incarnation's orphans, so
+# all incarnations of the service share one owner). Local dev gets "local".
+_SERVER_INSTANCE = os.environ.get("RENDER_SERVICE_ID") or ("render" if _ON_RENDER else "local")
 
 
 def _jobs_recover_orphans():
@@ -3342,7 +3344,11 @@ def _jobs_recover_orphans():
         return
     for r in (stuck or []):
         owner = r.get("owner")
-        mine = (owner == _SERVER_INSTANCE) or (owner is None and _SERVER_INSTANCE == "render")
+        # Reclaim this service's own orphans, plus legacy no-owner rows when we
+        # are the Render service (never when we're a local/dev box — that's the
+        # whole point of the guard). This lets a new deploy clean up the previous
+        # incarnation's in-flight jobs while a local server stays hands-off.
+        mine = (owner == _SERVER_INSTANCE) or (owner is None and _ON_RENDER)
         if not mine:
             continue  # another instance owns this job — leave it strictly alone
         try:
@@ -3422,6 +3428,39 @@ def resume_job(jid: str):
     except Exception:  # noqa: BLE001
         pass
     return {"job_id": new_job["id"]}, 202
+
+
+_FINISHED_STATUSES = ("done", "failed", "cancelled", "interrupted")
+
+
+def dismiss_job(jid: str):
+    """Remove ONE finished task from the panel — deletes its app_jobs row and
+    drops it from memory. Refuses to dismiss a live (queued/running) job so an
+    in-flight verification can't be hidden out from under itself."""
+    job = _job_get(jid)
+    if not job:
+        return {"ok": True, "already_gone": True}, 200  # idempotent — nothing to remove
+    if job.get("status") not in _FINISHED_STATUSES:
+        return {"error": "job_active",
+                "message": "This task is still running — cancel it first if you want it gone."}, 409
+    with JOBS_LOCK:
+        JOBS.pop(jid, None)
+    sb("DELETE", f"app_jobs?id=eq.{jid}")
+    return {"ok": True}, 200
+
+
+def dismiss_finished_jobs():
+    """Clear ALL finished tasks at once (the panel's 'Clear finished' action).
+    Live jobs are left untouched. Scoped to this instance's own rows + legacy
+    no-owner rows on Render, so a dev box can't wipe production's history."""
+    with JOBS_LOCK:
+        gone = [jid for jid, j in list(JOBS.items()) if j.get("status") in _FINISHED_STATUSES]
+        for jid in gone:
+            JOBS.pop(jid, None)
+    owner_clause = (f"&or=(owner.eq.{_SERVER_INSTANCE},owner.is.null)" if _ON_RENDER
+                    else f"&owner=eq.{_SERVER_INSTANCE}")
+    sb("DELETE", f"app_jobs?status=in.({','.join(_FINISHED_STATUSES)}){owner_clause}")
+    return {"ok": True, "cleared_memory": len(gone)}
 
 
 # ── Verify/remove job queue ─────────────────────────────────────────────────
@@ -7897,6 +7936,12 @@ class Handler(SimpleHTTPRequestHandler):
             jid = path[len("/api/jobs/"):-len("/resume")]
             body, status = resume_job(jid)
             return self._json(body, status)
+        if path.startswith("/api/jobs/") and path.endswith("/dismiss"):
+            jid = path[len("/api/jobs/"):-len("/dismiss")]
+            body, status = dismiss_job(jid)
+            return self._json(body, status)
+        if path == "/api/jobs/dismiss-finished":
+            return self._json(dismiss_finished_jobs())
         if path == "/api/verify-campaign":
             length = int(self.headers.get("Content-Length") or 0)
             try:
