@@ -3433,7 +3433,7 @@ def _fetch_all_smartlead_leads(campaign_id, sl_key: str) -> list:
     while True:
         url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads"
                f"?api_key={sl_key}&offset={offset}&limit=100")
-        page = http_json("GET", url, {})
+        page = _smartlead_get_retry(url)
         rows = (page or {}).get("data") or []
         if not rows:
             break
@@ -3447,7 +3447,45 @@ def _fetch_all_smartlead_leads(campaign_id, sl_key: str) -> list:
         if len(rows) < 100:
             break
         offset += 100
+        time.sleep(0.25)  # pace pagination — a 12k-lead campaign is ~125 pages;
+                          # firing them back-to-back trips Smartlead's rate limit
     return leads
+
+
+def _smartlead_get_retry(url: str, attempts: int = 5) -> dict:
+    """Smartlead GET with 429/5xx backoff. A big campaign pages ~125 times, and
+    Smartlead rate-limits — without this the raw 'HTTP Error 429' propagates and
+    kills the whole verify job on the very first fetch. Honours Retry-After."""
+    import urllib.error
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code in (429, 500, 502, 503, 504) and attempt < attempts:
+                try:
+                    wait = int((e.headers or {}).get("Retry-After") or 0)
+                except (TypeError, ValueError):
+                    wait = 0
+                time.sleep(min(max(wait, 3 * attempt), 30))
+                continue
+            # a JSON error body is still useful to the caller; mirror http_json
+            try:
+                return json.loads(e.read().decode())
+            except Exception:  # noqa: BLE001
+                raise
+        except Exception as e:  # noqa: BLE001 — transient network: one more try
+            last = e
+            if attempt < attempts:
+                time.sleep(3 * attempt)
+                continue
+            raise
+    if last:
+        raise last
+    return {}
 
 
 _LM_MAP = {"valid": "good", "catch_all_valid": "catch_all",
