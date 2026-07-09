@@ -392,6 +392,41 @@ let loadState = "loading";    // "loading" | "ok" | "error"
 let filters = { status: "all", priority: "all" };
 let clientsList = [];  // dedupeClients(await fetchClientsForSwitcher()) — for resolveClientId() name-matching
 
+/* ══ hotfix: decouple from shell.js's tool-level-clients helpers ══
+   getActiveClient()/fetchClientsForSwitcher()/dedupeClients()/resolveClientId()
+   and fetchJsonWithRetry() only exist in an unshipped shell.js. Guard every
+   call so this page works standalone against the currently-committed
+   shell.js, and picks the client switcher back up automatically once that
+   work ships (no null active client == pre-switcher "all clients" behavior,
+   which passesFilters()/matchesActiveClient() already treat correctly). */
+function safeGetActiveClient() {
+  return (typeof getActiveClient === "function") ? getActiveClient() : null;
+}
+function safeResolveClientId(row, clients) {
+  return (typeof resolveClientId === "function") ? resolveClientId(row, clients) : null;
+}
+async function safeFetchClientsForSwitcher() {
+  return (typeof fetchClientsForSwitcher === "function") ? fetchClientsForSwitcher() : [];
+}
+function safeDedupeClients(clients) {
+  return (typeof dedupeClients === "function") ? dedupeClients(clients) : (clients || []);
+}
+/* Fully local — deliberately does not call the shell.js fetchJsonWithRetry at
+   all, so this page has no runtime dependency on it: fetch + ok-check + one
+   retry on failure. */
+async function localFetchJsonWithRetry(url, opts = {}, fallback = null) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, opts);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      if (attempt === 1) return fallback;
+    }
+  }
+  return fallback;
+}
+
 /* Collapse state per report section (0-8, 8 = All clear). Defaults: 1 and 7
    expanded (the two actionable-right-now sections), everything else
    collapsed. Only explicit clicks change it after that, so a filter change
@@ -454,7 +489,7 @@ function cachedGetNotifications(url, ttl = NOTIF_CACHE_TTL) {
   const now = Date.now();
   const hit = _notifCache.get(url);
   if (hit && (now - hit.t) < ttl) return hit.p;
-  const p = fetchJsonWithRetry(url, { cache: "no-store" }, null).then((v) => {
+  const p = localFetchJsonWithRetry(url, { cache: "no-store" }, null).then((v) => {
     if (v === null) throw new Error(`fetch failed: ${url}`);
     return v;
   });
@@ -467,15 +502,15 @@ function bustNotifCache() { _notifCache.clear(); }
 async function loadNotifications(opts = {}) {
   loadState = "loading";
   draw();
-  if (opts.force) bustNotifCache();
-  const activeClient = getActiveClient();
-  // fix #4: initial load never needs claude_prompt (only the on-demand "Copy
-  // Claude prompt" fetch below does) — that column alone was responsible for
-  // most of this endpoint's ~300KB payload across every row.
-  const params = new URLSearchParams({ slim: "1" });
-  if (activeClient) params.set("client_id", activeClient);
-  const url = `/api/notifications?${params.toString()}`;
   try {
+    if (opts.force) bustNotifCache();
+    const activeClient = safeGetActiveClient();
+    // fix #4: initial load never needs claude_prompt (only the on-demand "Copy
+    // Claude prompt" fetch below does) — that column alone was responsible for
+    // most of this endpoint's ~300KB payload across every row.
+    const params = new URLSearchParams({ slim: "1" });
+    if (activeClient) params.set("client_id", activeClient);
+    const url = `/api/notifications?${params.toString()}`;
     const data = await cachedGetNotifications(url);
     all = Array.isArray(data) ? data : [];
     loadState = "ok";
@@ -487,9 +522,9 @@ async function loadNotifications(opts = {}) {
 }
 
 function matchesActiveClient(n) {
-  const active = getActiveClient();
+  const active = safeGetActiveClient();
   if (!active) return true;
-  return resolveClientId(n, clientsList) === active;
+  return safeResolveClientId(n, clientsList) === active;
 }
 
 function passesFilters(n) {
@@ -1530,13 +1565,23 @@ window.addEventListener("scroll", updateBackToTop, { passive: true });
 backToTop.onclick = () => window.scrollTo(0, 0);
 updateBackToTop();
 
-loadNotifications();
-loadFreshness();
-(async () => {
-  clientsList = dedupeClients(await fetchClientsForSwitcher());
-  draw();
-})();
-window.addEventListener("navreo:client-changed", () => loadNotifications());
+try {
+  loadNotifications();
+  loadFreshness();
+  (async () => {
+    try {
+      clientsList = safeDedupeClients(await safeFetchClientsForSwitcher());
+      draw();
+    } catch (e) {
+      console.warn("client switcher bootstrap failed", e);
+    }
+  })();
+  window.addEventListener("navreo:client-changed", () => loadNotifications());
+} catch (e) {
+  console.warn("notifications bootstrap failed", e);
+  loadState = "error";
+  try { draw(); } catch (e2) { /* DOM not ready enough even for error state */ }
+}
 </script>
 </body>
 </html>
