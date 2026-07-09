@@ -1106,7 +1106,7 @@
     mgr: { view: "domain", batch: "", search: "", sel: new Set(), domFilter: "resting" },
     dh: { minSent: null, cutoff: null, start: null, end: null },
     sig: { batch: "", search: "", sel: new Set(), rows: [] },
-    pn: { search: "" },
+    pn: { search: "", sel: new Set(), rows: [] },
     wu: { search: "" },
     delist: { includeYoung: false },
     coachOpen: false, // Part B1: transient "re-opened the coach via Show tips" flag
@@ -3498,16 +3498,22 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-modal">
         <div class="dlv-modal-head"><h3>Process <span id="dlv-pn-n">0</span> new mailbox(es)</h3><button class="x" data-act="close-modal" data-modal="dlv-pn-overlay">&times;</button></div>
         <div class="dlv-modal-body">
-          <p class="small muted" style="margin-bottom:12px">Tag the untagged ones, and/or add the ones not yet in a campaign. Leave a field blank to skip it.</p>
-          <input class="dlv-input" id="dlv-pn-search" type="text" placeholder="Search inboxes…" style="margin-bottom:8px" data-act="pn-search">
-          <div class="small muted" style="margin-bottom:5px">These mailboxes (<span id="dlv-pn-target-n">0</span>):</div>
-          <div id="dlv-pn-targets" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--bg-sunken);margin-bottom:14px"></div>
-          <label class="dlv-field-label">Batch tag <span class="dlv-field-hint">(applied to untagged mailboxes)</span></label>
-          <input class="dlv-input" id="dlv-pn-tag" type="text" placeholder="e.g. Hypertide (Odd - 2026)" style="margin-bottom:14px">
-          <label class="dlv-field-label">Add to campaign <span class="dlv-field-hint">(mailboxes not yet assigned)</span></label>
-          <select class="dlv-select" id="dlv-pn-camp"><option value="">— don't add —</option></select>
+          <p class="small muted" style="margin-bottom:12px">Tick the mailboxes to process, then give them a tag and/or add them to a campaign. Leave a field blank to skip it.</p>
+          <label class="dlv-field-label">Which mailboxes? <span class="dlv-field-hint">— tick the ones to process (all ticked to start; ticks are kept while you search)</span></label>
+          <input class="dlv-input" id="dlv-pn-search" type="text" placeholder="Type to narrow the list… (e.g. henry, or a domain)" style="margin:6px 0 0" data-act="pn-search">
+          <div class="dlv-sig-selbar">
+            <label class="dlv-sig-selall"><input type="checkbox" id="dlv-pn-master" data-act="pn-master"> <span id="dlv-pn-master-label">Select all</span></label>
+            <span class="small muted" id="dlv-pn-selcount" style="margin-left:auto">0 selected</span>
+          </div>
+          <div id="dlv-pn-hidden-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-top:none;padding:6px 11px"></div>
+          <div id="dlv-pn-targets" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:0 0 9px 9px;border-top:none;background:var(--bg-sunken);margin-bottom:14px"></div>
+          <label class="dlv-field-label">Batch tag <span class="dlv-field-hint">(any name works — goes on the ticked mailboxes that have no tag yet)</span></label>
+          <input class="dlv-input" id="dlv-pn-tag" type="text" list="dlv-pn-taglist" placeholder="e.g. Hypertide (Odd - 2026)" style="margin-bottom:14px" data-act="pn-tag-input">
+          <datalist id="dlv-pn-taglist"></datalist>
+          <label class="dlv-field-label">Add to campaign <span class="dlv-field-hint">(ticked mailboxes not yet in one)</span></label>
+          <select class="dlv-select" id="dlv-pn-camp" data-act="pn-camp-change"><option value="">— don't add —</option></select>
         </div>
-        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Tagging &amp; campaign changes are reversible afterwards.</span><button class="btn" data-act="close-modal" data-modal="dlv-pn-overlay">Cancel</button><button class="btn primary" data-act="pn-apply">Apply</button></div>
+        <div class="dlv-modal-foot"><span class="small muted" id="dlv-pn-summary" style="margin-right:auto;max-width:60%"></span><button class="btn" data-act="close-modal" data-modal="dlv-pn-overlay">Cancel</button><button class="btn primary" id="dlv-pn-apply-btn" data-act="pn-apply">Apply to <span id="dlv-pn-n2">0</span> mailbox(es)</button></div>
       </div>
     </div>
 
@@ -3947,15 +3953,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   async function openProcessNewModal() {
     UI.pn.search = "";
     const rows = S.A.lifecycle.newUnprocessed.length ? S.A.lifecycle.newUnprocessed : S.A.lifecycle.untagged;
+    // Same select-what-you-see model as the signature modal: every row is a
+    // tickbox (all ticked on open, so the one-click "process everything" flow
+    // is unchanged), the search narrows the list, and the master tickbox /
+    // "Select only these" act on the narrowed view.
+    UI.pn.rows = [...rows].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
+    UI.pn.sel = new Set(UI.pn.rows.map((r) => r.email));
     $id("dlv-pn-n").textContent = rows.length;
-    $id("dlv-pn-target-n").textContent = rows.length;
     $id("dlv-pn-tag").value = "";
     $id("dlv-pn-search").value = "";
-    const sorted = [...rows].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
-    $id("dlv-pn-targets").innerHTML = sorted.length ? sorted.map((r) => {
-      const flags = []; if (!r.tagged) flags.push("untagged"); if (r.inCampaign === false) flags.push("no campaign");
-      return trowHtml(r.email, agoStr(r.created) + (flags.length ? " · " + flags.join(" · ") : ""));
-    }).join("") : `<div class="dlv-mb-count" style="padding:8px 12px">No mailboxes</div>`;
+    pnPaintList();
     const sel = $id("dlv-pn-camp");
     // Sample mode: the fixed mock roster. Live mode: the campaign IDs this
     // modal's Apply hands to POST process-new?campaign= must be REAL Smartlead
@@ -3964,6 +3971,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     sel.innerHTML = `<option value="">— don't add —</option>` + S.campaigns.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
     openModal("dlv-pn-overlay");
     if (isLive()) {
+      // Best-effort tag autocomplete: a typo in the tag field silently mints a
+      // brand-new Smartlead tag object (undeletable via API), so surface the
+      // real names. Fire-and-forget — the field works fine without it.
+      fetch("/api/mailbox-tag-names").then((r) => r.json()).then((j) => {
+        const dl = $id("dlv-pn-taglist");
+        if (dl && j && Array.isArray(j.names)) dl.innerHTML = j.names.map((n) => `<option value="${esc(n)}">`).join("");
+      }).catch(() => {});
       try {
         const camps = await apiGet("campaigns", { timeout: 20000 });
         if (Array.isArray(camps)) {
@@ -3972,43 +3986,172 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       } catch (e) { /* keep the mock roster in the select on failure — Apply still allows "don't add" */ }
     }
   }
+  function pnKind(r) {
+    const flags = [];
+    if (!r.tagged) flags.push("untagged");
+    if (r.inCampaign === false) flags.push("no campaign");
+    return flags.join(" · ");
+  }
+  // The rows the search currently shows — selection actions act on these.
+  // Matches the address (so a person, brand, or domain fragment works) and the
+  // status words, so typing "untagged" or "no campaign" narrows by state too.
+  function pnVisibleRows() {
+    const q = (UI.pn.search || "").trim().toLowerCase();
+    if (!q) return UI.pn.rows;
+    return UI.pn.rows.filter((r) => (r.email || "").toLowerCase().includes(q) || pnKind(r).includes(q));
+  }
+  function pnTrowHtml(r) {
+    const on = UI.pn.sel.has(r.email);
+    return `<label class="dlv-sig-trow">`
+      + `<input type="checkbox" data-act="pn-row-select" data-email="${esc(r.email)}"${on ? " checked" : ""}>`
+      + `<span class="dlv-sig-email">${esc(r.email)}</span>`
+      + `<span class="dlv-sig-kind">${esc(pnKind(r))}</span>`
+      + `<span class="dlv-sig-when">${esc(agoStr(r.created))}</span></label>`;
+  }
+  function pnPaintList() {
+    const vis = pnVisibleRows();
+    const q = (UI.pn.search || "").trim();
+    const empty = UI.pn.rows.length ? "No mailboxes match “" + esc(q) + "” — clear the search to see all " + UI.pn.rows.length : "No mailboxes";
+    $id("dlv-pn-targets").innerHTML = vis.length ? vis.map(pnTrowHtml).join("")
+      : `<div class="dlv-mb-count" style="padding:8px 12px">${empty}</div>`;
+    pnSyncCounts();
+  }
+  // Single source of truth for the modal's counts: master tickbox state,
+  // "N of M selected", the hidden-ticks warning, the will-do summary, and the
+  // Apply button label + enabled state.
+  function pnSyncCounts() {
+    const vis = pnVisibleRows();
+    const visSel = vis.filter((r) => UI.pn.sel.has(r.email)).length;
+    const master = $id("dlv-pn-master");
+    if (master) {
+      master.checked = vis.length > 0 && visSel === vis.length;
+      master.indeterminate = visSel > 0 && visSel < vis.length;
+      master.disabled = !vis.length;
+    }
+    const q = (UI.pn.search || "").trim();
+    const mLabel = $id("dlv-pn-master-label");
+    if (mLabel) mLabel.textContent = q ? "Select all " + vis.length + " shown" : "Select all";
+    const n = UI.pn.sel.size;
+    const count = $id("dlv-pn-selcount");
+    if (count) count.textContent = n + " of " + UI.pn.rows.length + " selected";
+    // Panel finding: with a search typed, ticked rows scroll out of sight and
+    // people tag far more than they meant to. Say it, in amber, with the fix
+    // one click away. This strip is the ONLY untick-the-rest control (a second
+    // identically-behaving link in the bar above read as a different action) —
+    // and it appears exactly when unticking the rest would do anything.
+    const hiddenSel = n - visSel;
+    const warn = $id("dlv-pn-hidden-warn");
+    if (warn) {
+      if (q && hiddenSel > 0) {
+        warn.innerHTML = "Ticks are kept while you search: " + hiddenSel + " ticked mailbox(es) sit outside this search and would also be processed — "
+          + `<a class="dlv-dl" data-act="pn-only-shown">untick them, keep only what's shown</a>`;
+        warn.style.display = "block";
+      } else warn.style.display = "none";
+    }
+    const n2 = $id("dlv-pn-n2");
+    if (n2) n2.textContent = n;
+    // Panel finding: one flat "Apply to N" hides that the tag and the campaign
+    // each skip already-done mailboxes. Spell out what THIS click will do.
+    const tagVal = (($id("dlv-pn-tag") || {}).value || "").trim();
+    const campVal = ($id("dlv-pn-camp") || {}).value || "";
+    const willTag = tagVal ? UI.pn.rows.filter((r) => UI.pn.sel.has(r.email) && !r.tagged).length : 0;
+    const willAdd = campVal ? UI.pn.rows.filter((r) => UI.pn.sel.has(r.email) && r.inCampaign === false).length : 0;
+    const summary = $id("dlv-pn-summary");
+    if (summary) {
+      if (!n) summary.textContent = "Nothing ticked — tick at least one mailbox above.";
+      else if (!tagVal && !campVal) summary.textContent = "Enter a tag and/or pick a campaign to enable Apply. Changes are reversible afterwards.";
+      else if (!willTag && !willAdd) summary.textContent = "The ticked mailboxes already have " + (tagVal ? "a tag" : "") + (tagVal && campVal ? " and " : "") + (campVal ? "a campaign" : "") + " — nothing to do.";
+      else summary.textContent = "This will: " + [tagVal ? "tag " + willTag : "", campVal ? "add " + willAdd + " to the campaign" : ""].filter(Boolean).join(" · ") + ". Reversible afterwards.";
+    }
+    const applyBtn = $id("dlv-pn-apply-btn");
+    if (applyBtn) applyBtn.disabled = !n || (!tagVal && !campVal) || (!willTag && !willAdd);
+  }
   async function pnApply() {
     // Single-confirm flow: Apply below is the commitment point (see sigApply).
     const tag = $id("dlv-pn-tag").value.trim();
     const camp = $id("dlv-pn-camp").value;
     if (!tag && !camp) { toast("Enter a tag or pick a campaign", "err"); return; }
-    const rows = S.A.lifecycle.newUnprocessed;
-    if (isLive()) {
-      const filter = (($id("dlv-pn-search") || {}).value || "").trim();
-      let qs = "tag=" + encodeURIComponent(tag ? b64u(tag) : "") + "&campaign=" + encodeURIComponent(camp || "");
-      if (filter) qs += "&filter=" + encodeURIComponent(b64u(filter));
-      const applyBtn = document.querySelector('[data-act="pn-apply"]');
-      let j;
-      try { j = await liveAction("process-new?" + qs, applyBtn, applyBtn ? "Applying…" : null, { timeout: 90000 }); }
-      catch (e) { toast("Request failed", "err"); return; }
-      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "nothing_to_do" ? "Pick a tag or campaign" : "Failed"), "err"); return; }
-      const tagged = j.tagged || 0, added = j.addedToCampaign || 0;
-      if (tag) rows.forEach((r) => { if (!r.tagged) { r.tagged = true; r.tags = [tag]; } });
-      if (camp) rows.forEach((r) => { r.inCampaign = true; });
+    const selected = UI.pn.rows.filter((r) => UI.pn.sel.has(r.email));
+    if (!selected.length) { toast("Tick at least one mailbox first", "err"); return; }
+    const allSelected = selected.length === UI.pn.rows.length;
+    const tagEmails = tag ? selected.filter((r) => !r.tagged).map((r) => r.email) : [];
+    const campEmails = camp ? selected.filter((r) => r.inCampaign === false).map((r) => r.email) : [];
+    if (!tagEmails.length && !campEmails.length) { toast("The ticked mailboxes are already tagged / in a campaign", "err"); return; }
+    // Drops the processed emails from local audit state so the tile/to-do
+    // counts update immediately (live mode re-syncs on the next audit run).
+    function markDone() {
+      const taggedSet = new Set(tagEmails), campSet = new Set(campEmails);
+      const rows = S.A.lifecycle.newUnprocessed;
+      rows.forEach((r) => {
+        if (taggedSet.has(r.email)) { r.tagged = true; r.tags = [tag]; }
+        if (campSet.has(r.email)) r.inCampaign = true;
+      });
       S.A.lifecycle.newUnprocessed = rows.filter((r) => !(r.tagged && r.inCampaign));
+    }
+    if (isLive()) {
+      const applyBtn = $id("dlv-pn-apply-btn");
+      let tagged = 0, added = 0;
+      if (allSelected) {
+        // Everything ticked → the audit backend's bulk call, exactly the old
+        // one-click behaviour.
+        const qs = "tag=" + encodeURIComponent(tag ? b64u(tag) : "") + "&campaign=" + encodeURIComponent(camp || "");
+        let j;
+        try { j = await liveAction("process-new?" + qs, applyBtn, "Applying…", { timeout: 90000 }); }
+        catch (e) { toast("Request failed", "err"); return; }
+        if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "nothing_to_do" ? "Pick a tag or campaign" : "Failed"), "err"); return; }
+        tagged = j.tagged || 0; added = j.addedToCampaign || 0;
+      } else {
+        // A hand-picked subset → one exact call to our own server, which
+        // resolves the ticked addresses to Smartlead account ids and applies
+        // the tag / campaign to precisely those (no substring-filter fan-out).
+        const orig = applyBtn ? applyBtn.innerHTML : null;
+        if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = "Applying…"; }
+        let j;
+        try {
+          const resp = await fetch("/api/process-new-selected", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tag: tag, campaign_id: camp || "", tag_emails: tagEmails, camp_emails: campEmails }),
+          });
+          j = await resp.json();
+        } catch (e) { toast("Request failed", "err"); return; }
+        finally { if (applyBtn) { applyBtn.disabled = false; if (orig != null) applyBtn.innerHTML = orig; } }
+        if (!j || j.ok === false) { toast((j && (j.message || j.reason)) || "Failed", "err"); return; }
+        tagged = j.tagged || 0; added = j.addedToCampaign || 0;
+      }
+      markDone();
       logAction({action: "process_new", count: tagged + added, scope: (tag ? "tagged " + tagged : "") + (tag && camp ? " · " : "") + (camp ? "added " + added : "") });
       saveState();
-      closeModal("dlv-pn-overlay");
-      toast("Tagged " + tagged + " · added " + added + " to campaign", "ok");
+      pnFinishApply(selected, tagEmails, campEmails, tagged, added);
       invalidateMgrDh();
       paintPage();
       return;
     }
-    const tagged = tag ? rows.filter((r) => !r.tagged).length : 0;
-    const added = camp ? rows.filter((r) => r.inCampaign === false).length : 0;
-    if (tag) rows.forEach((r) => { if (!r.tagged) { r.tagged = true; r.tags = [tag]; } });
-    if (camp) rows.forEach((r) => { r.inCampaign = true; });
-    S.A.lifecycle.newUnprocessed = rows.filter((r) => !(r.tagged && r.inCampaign));
+    const tagged = tagEmails.length, added = campEmails.length;
+    markDone();
     logAction({action: "process_new", count: tagged + added, scope: (tag ? "tagged " + tagged : "") + (tag && camp ? " · " : "") + (camp ? "added " + added : "") });
     saveState();
-    closeModal("dlv-pn-overlay");
-    toast("Tagged " + tagged + " · added " + added + " to campaign", "ok");
+    pnFinishApply(selected, tagEmails, campEmails, tagged, added);
     paintPage();
+  }
+  // Post-apply: receipt toast (with the already-done count, so "Apply to 20"
+  // that only tags 17 isn't a silent mystery), and — panel finding from the
+  // weekly multi-brand flow — keep the modal OPEN with the remaining
+  // mailboxes reloaded when there's more to process, instead of forcing a
+  // reopen per brand. Everything processed → close as before.
+  function pnFinishApply(selected, tagEmails, campEmails, tagged, added) {
+    const touched = new Set([].concat(tagEmails, campEmails));
+    const skipped = selected.filter((r) => !touched.has(r.email)).length;
+    toast("Tagged " + tagged + " · added " + added + " to campaign" + (skipped ? " · " + skipped + " ticked needed nothing" : ""), "ok");
+    const left = S.A.lifecycle.newUnprocessed;
+    if (!left.length) { closeModal("dlv-pn-overlay"); return; }
+    UI.pn.search = "";
+    UI.pn.rows = [...left].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
+    UI.pn.sel = new Set(UI.pn.rows.map((r) => r.email));
+    $id("dlv-pn-n").textContent = left.length;
+    $id("dlv-pn-tag").value = "";
+    $id("dlv-pn-camp").value = "";
+    $id("dlv-pn-search").value = "";
+    pnPaintList();
   }
 
   function openWarmupFixModal() {
@@ -5730,6 +5873,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return;
     }
     if (act === "pn-apply") { runAct(act, () => pnApply()); return; }
+    if (act === "pn-only-shown") {
+      // One click = the ticked set becomes exactly the rows the search shows.
+      UI.pn.sel = new Set(pnVisibleRows().map((r) => r.email));
+      pnPaintList();
+      return;
+    }
     if (act === "wu-apply") { runAct(act, () => wuApply()); return; }
     if (act === "verify-campaign") { runAct(act, () => verifyCampaignAction(t.dataset.id, t.dataset.mode, t)); return; }
     if (act === "remove-bad") { runAct(act, () => removeBadAction(t.dataset.id, t)); return; }
@@ -5811,6 +5960,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       sigPaintList();
       return;
     }
+    if (act === "pn-row-select") {
+      const em = t.dataset.email;
+      if (t.checked) UI.pn.sel.add(em); else UI.pn.sel.delete(em);
+      pnSyncCounts();
+      return;
+    }
+    if (act === "pn-master") {
+      // Same select-what-you-see rule as sig-master above.
+      const vis = pnVisibleRows();
+      if (t.checked) vis.forEach((r) => UI.pn.sel.add(r.email)); else vis.forEach((r) => UI.pn.sel.delete(r.email));
+      pnPaintList();
+      return;
+    }
+    if (act === "pn-camp-change") { pnSyncCounts(); return; }
     if (act === "dl-include-young") { UI.delist.includeYoung = t.checked; renderDelistBody(); return; }
     if (act === "rem-date-input") { updateRemDateHint(t.value); return; }
   }
@@ -5852,7 +6015,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
     if (act === "sig-search") { UI.sig.search = t.value; sigPaintList(); return; }
     if (act === "sig-tpl-input") { sigUpdatePreview(); return; }
-    if (act === "pn-search") { const r = inboxFilterRows("dlv-pn-targets", t.value); $id("dlv-pn-target-n").textContent = t.value.trim() ? r.shown + " of " + r.total : String(r.total); return; }
+    if (act === "pn-search") { UI.pn.search = t.value; pnPaintList(); return; }
+    if (act === "pn-tag-input") { pnSyncCounts(); return; }
     if (act === "wu-search") { const r = inboxFilterRows("dlv-wu-targets", t.value); $id("dlv-wu-target-n").textContent = t.value.trim() ? r.shown + " of " + r.total : String(r.total); return; }
   }
 

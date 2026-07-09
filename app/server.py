@@ -3841,6 +3841,80 @@ def api_verify_dismiss(p: dict):
     return {"ok": True}, 200
 
 
+def _smartlead_json(method: str, path: str, body: dict | None = None, timeout: float = 60):
+    key = KEYS.get("SMARTLEAD_API_KEY", "")
+    sep = "&" if "?" in path else "?"
+    return http_json(method, f"{SMARTLEAD_BASE}{path}{sep}api_key={key}", {}, body, timeout=timeout)
+
+
+def api_process_new_selected(p: dict):
+    """Tag and/or add-to-campaign an EXACT set of mailboxes, by address.
+
+    The audit backend's process-new only scopes by a single substring filter,
+    so a hand-picked selection in the Process-new modal comes here instead:
+    addresses resolve to Smartlead account ids via POST /email-accounts/tag-list,
+    the tag name resolves to a tag id (GET /email-accounts/tags, created via
+    POST /tags if missing), assignment goes through /email-accounts/tag-mapping
+    (additive + idempotent, hard cap 25 accounts/call), and the campaign add is
+    POST /campaigns/{id}/email-accounts. Endpoint facts verified live
+    2026-05-22 (memory: smartlead-api-realities) + probe 2026-07-09.
+    """
+    tag = (p.get("tag") or "").strip()
+    campaign_id = str(p.get("campaign_id") or "").strip()
+    tag_emails = [e.strip() for e in (p.get("tag_emails") or []) if isinstance(e, str) and e.strip()]
+    camp_emails = [e.strip() for e in (p.get("camp_emails") or []) if isinstance(e, str) and e.strip()]
+    if not (tag and tag_emails) and not (campaign_id and camp_emails):
+        return {"ok": False, "reason": "nothing_to_do"}, 200
+    if not KEYS.get("SMARTLEAD_API_KEY"):
+        return {"ok": False, "message": "SMARTLEAD_API_KEY missing on this server"}, 503
+    try:
+        # 1. address → Smartlead email_account_id (tag-list is the one endpoint
+        #    that resolves accounts by address; chunked defensively).
+        want = sorted({*(tag_emails if tag else []), *(camp_emails if campaign_id else [])})
+        ids: dict = {}
+        for i in range(0, len(want), 100):
+            r = _smartlead_json("POST", "/email-accounts/tag-list", {"email_ids": want[i:i + 100]})
+            for row in ((r or {}).get("data") or []):
+                if row.get("email_account_id") and row.get("email_id"):
+                    ids[row["email_id"]] = row["email_account_id"]
+        unresolved = [e for e in want if e not in ids]
+
+        tagged = 0
+        if tag and tag_emails:
+            # 2. tag name → id: reuse an existing tag object (names are the UI
+            #    identity; duplicate tag objects can't be API-deleted).
+            tags = _smartlead_json("GET", "/email-accounts/tags") or []
+            tag_id = next((t["id"] for t in tags
+                           if isinstance(t, dict) and (t.get("name") or "").strip().lower() == tag.lower()), None)
+            if tag_id is None:
+                made = _smartlead_json("POST", "/tags", {"name": tag, "color": "#B1D4FC"})
+                tag_id = ((made or {}).get("data") or {}).get("id")
+            if not tag_id:
+                return {"ok": False, "message": f"couldn't create Smartlead tag {tag!r}"}, 502
+            acct = [ids[e] for e in tag_emails if e in ids]
+            for i in range(0, len(acct), 25):
+                _smartlead_json("POST", "/email-accounts/tag-mapping",
+                                {"email_account_ids": acct[i:i + 25], "tag_ids": [tag_id]})
+            tagged = len(acct)
+
+        added = 0
+        if campaign_id and camp_emails:
+            acct = [ids[e] for e in camp_emails if e in ids]
+            for i in range(0, len(acct), 100):
+                _smartlead_json("POST", f"/campaigns/{campaign_id}/email-accounts",
+                                {"email_account_ids": acct[i:i + 100]})
+            added = len(acct)
+    except Exception as e:  # noqa: BLE001 — surface provider errors to the UI
+        return {"ok": False, "message": str(e)[:300]}, 502
+    log_activity("/api/process-new-selected",
+                 payload={"tag": tag, "campaign_id": campaign_id,
+                          "tag_emails": len(tag_emails), "camp_emails": len(camp_emails)},
+                 actor="deliverability", action="process_new_selected",
+                 entity="mailboxes", entity_id=tag or campaign_id)
+    return {"ok": True, "tagged": tagged, "addedToCampaign": added,
+            **({"unresolved": unresolved} if unresolved else {})}, 200
+
+
 _HR_LISTS: dict = {}
 
 
@@ -7212,6 +7286,17 @@ class Handler(SimpleHTTPRequestHandler):
             ids = [s for s in (parse_qs(urlparse(self.path).query).get("ids") or [""])[0]
                    .split(",") if s.strip()]
             return self._json(api_verify_status(ids))
+        if path == "/api/mailbox-tag-names":
+            # Existing Smartlead tag names for the Process-new modal's tag
+            # autocomplete — a typo there silently creates a brand-new tag
+            # object (which the API can't delete), so offer the real names.
+            try:
+                tags = _smartlead_json("GET", "/email-accounts/tags") or []
+                names = sorted({(t.get("name") or "").strip() for t in tags
+                                if isinstance(t, dict)} - {""}, key=str.lower)
+            except Exception as e:  # noqa: BLE001 — autocomplete is best-effort
+                return self._json({"ok": False, "message": str(e)[:200]}, 502)
+            return self._json({"ok": True, "names": names})
         if path.startswith("/api/jobs/"):
             jid = path[len("/api/jobs/"):]
             with JOBS_LOCK:
@@ -7361,6 +7446,14 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_verify_dismiss(payload)
+            return self._json(body, status)
+        if path == "/api/process-new-selected":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_process_new_selected(payload)
             return self._json(body, status)
         if path == "/api/deliverability/_audit/refresh":
             length = int(self.headers.get("Content-Length") or 0)
