@@ -160,5 +160,113 @@ function lineChart(el, series, opts = {}) {
     if (i % step === 0) svg += `<text x="${x(i)}" y="${h - 6}" text-anchor="middle" font-size="10" fill="#A89684">${esc(p.label || "")}</text>`;
   });
   svg += "</svg>";
-  el.innerHTML = svg;
+  el.innerHTML = chartWrap(svg, {
+    W: w, H: h, padT: pad.t, padB: pad.b, maxV: maxY,
+    xs: labels.map((_, i) => +x(i).toFixed(1)),
+    labels: labels.map((p) => p.label || ""),
+    // `vals` position the hover dot on the drawn line (may be scaled); `disp` is the
+    // true number shown in the tooltip (pass p.raw when the plotted y is scaled).
+    series: series.map((s) => ({
+      name: s.name || "", color: s.color,
+      vals: s.points.map((p) => p.y),
+      disp: s.points.map((p) => (p.raw != null ? p.raw : p.y)),
+    })),
+    suffix: opts.suffix || "",
+  });
+  hydrateCharts(el);
+}
+
+/* Wrap a built <svg> string in a positioned container that carries the chart's
+   data payload, so hydrateCharts() can wire an interactive tooltip after insertion.
+   The JSON is HTML-escaped for the attribute; getAttribute() decodes it back. */
+function chartWrap(svg, cfg) {
+  return `<div class="chartwrap" data-chart="${esc(JSON.stringify(cfg))}">${svg}</div>`;
+}
+
+/* Find every chart container under `root` (inclusive) and attach hover tooltips. */
+function hydrateCharts(root) {
+  if (!root) return;
+  const wraps = [];
+  if (root.matches && root.matches(".chartwrap[data-chart]")) wraps.push(root);
+  if (root.querySelectorAll) root.querySelectorAll(".chartwrap[data-chart]").forEach((w) => wraps.push(w));
+  wraps.forEach(setupChartTooltip);
+}
+
+/* Attach a crosshair + floating tooltip to one .chartwrap. Uses the SVG's own
+   coordinate transform (getScreenCTM) so hit-testing and positioning stay correct
+   under viewBox scaling and preserveAspectRatio letterboxing at any pixel width. */
+function setupChartTooltip(wrap) {
+  if (wrap._ttReady) return;
+  let cfg; try { cfg = JSON.parse(wrap.getAttribute("data-chart")); } catch { return; }
+  const svg = wrap.querySelector("svg");
+  if (!svg || !cfg || !Array.isArray(cfg.xs) || !cfg.xs.length) return;
+  wrap._ttReady = true;
+
+  const { W, H, padT, padB, maxV, xs, labels, series, suffix } = cfg;
+  const NS = "http://www.w3.org/2000/svg";
+  const yOf = (v) => padT + (1 - v / maxV) * (H - padT - padB);
+
+  const guide = document.createElementNS(NS, "line");
+  guide.setAttribute("y1", padT); guide.setAttribute("y2", H - padB);
+  guide.setAttribute("stroke", "var(--ink-3, #6B6055)");
+  guide.setAttribute("stroke-width", "1"); guide.setAttribute("stroke-dasharray", "3 3");
+  guide.setAttribute("pointer-events", "none"); guide.style.opacity = "0";
+  svg.appendChild(guide);
+
+  const dots = series.map((s) => {
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("r", "3.5"); c.setAttribute("fill", "var(--bg, #fff)");
+    c.setAttribute("stroke", s.color); c.setAttribute("stroke-width", "2");
+    c.setAttribute("pointer-events", "none"); c.style.opacity = "0";
+    svg.appendChild(c); return c;
+  });
+
+  const tip = document.createElement("div");
+  tip.className = "charttip"; tip.style.opacity = "0";
+  wrap.appendChild(tip);
+
+  const pt = svg.createSVGPoint();
+  const toLocal = (clientX, clientY) => {
+    const ctm = svg.getScreenCTM(); if (!ctm) return null;
+    pt.x = clientX; pt.y = clientY;
+    return pt.matrixTransform(ctm.inverse());
+  };
+  const nearestIdx = (localX) => {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < xs.length; i++) { const d = Math.abs(xs[i] - localX); if (d < bd) { bd = d; best = i; } }
+    return best;
+  };
+
+  function show(i) {
+    const gx = xs[i];
+    guide.setAttribute("x1", gx); guide.setAttribute("x2", gx);
+    guide.style.opacity = xs.length > 1 ? "1" : "0";
+    series.forEach((s, si) => {
+      const v = s.vals[i];
+      if (v == null || isNaN(v)) { dots[si].style.opacity = "0"; return; }
+      dots[si].setAttribute("cx", gx); dots[si].setAttribute("cy", +yOf(v).toFixed(1));
+      dots[si].style.opacity = "1";
+    });
+    tip.innerHTML = `<div class="charttip-h">${esc(labels[i] || "")}</div>` +
+      series.map((s, si) => `<div class="charttip-r"><span class="charttip-sw" style="background:${s.color}"></span>` +
+        `${s.name ? `<span class="charttip-nm">${esc(s.name)}</span>` : ""}` +
+        `<b>${fmt((s.disp || s.vals)[i])}${suffix || ""}</b></div>`).join("");
+
+    const ctm = svg.getScreenCTM(); const wr = wrap.getBoundingClientRect();
+    pt.x = gx; pt.y = padT; const sc = pt.matrixTransform(ctm);
+    tip.style.opacity = "1";
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = sc.x - wr.left - tw / 2;
+    left = Math.min(Math.max(left, 4), wrap.clientWidth - tw - 4);
+    let top = sc.y - wr.top - th - 10;
+    if (top < 4) top = sc.y - wr.top + 14;
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+  }
+  function hide() { guide.style.opacity = "0"; dots.forEach((d) => (d.style.opacity = "0")); tip.style.opacity = "0"; }
+
+  const move = (e) => { const l = toLocal(e.clientX, e.clientY); if (l) show(nearestIdx(l.x)); };
+  wrap.style.touchAction = "pan-y";
+  wrap.addEventListener("pointermove", move);
+  wrap.addEventListener("pointerdown", move);
+  wrap.addEventListener("pointerleave", hide);
 }

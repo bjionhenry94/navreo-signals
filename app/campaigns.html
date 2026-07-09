@@ -567,7 +567,7 @@ async function renderDraftCampaign(id) {
         if (Array.isArray(fetched)) rows = fetched;
       } catch {}
       const holder = document.getElementById("velchart");
-      if (holder) { holder.innerHTML = velocityChart(rows || [], srcs); hydrateFade(holder); }
+      if (holder) { holder.innerHTML = velocityChart(rows || [], srcs); hydrateFade(holder); hydrateCharts(holder); }
       if (rows === null) {
         // Fetch failed - degrade every tile to the same "—" + unavailable-tooltip
         // pattern used elsewhere on this page. NEVER fall back to `people` here;
@@ -1269,7 +1269,15 @@ function velocityChart(rows, srcs) {
   const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
   const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(dates.length - 1)].join("");
   const legend = series.map((s) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:0;border-top:${s.width >= 2 ? "3" : "2"}px solid ${s.color};display:inline-block"></span>${esc(String(s.name).length > 34 ? String(s.name).slice(0, 33) + "…" : s.name)}</span>`).join("");
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-width:${W}px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>
+  const svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-width:${W}px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>`;
+  const chart = chartWrap(svg, {
+    W, H, padT, padB, maxV,
+    xs: dates.map((_, i) => +x(i).toFixed(1)),
+    labels: dates.map((d) => d.slice(5)),
+    series: series.map((s) => ({ name: s.name, color: s.color, vals: s.vals })),
+    suffix: "",
+  });
+  return `${chart}
     <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
     ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps pulling.</div>' : ""}`;
 }
@@ -1291,7 +1299,15 @@ function activityChart(dates, series) {
   const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
   const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(dates.length - 1)].join("");
   const legend = series.map((s) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:0;border-top:${(s.width || 2) >= 2.5 ? "3" : "2"}px solid ${s.color};display:inline-block"></span>${esc(s.name)}</span>`).join("");
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:210px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>
+  const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:210px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>`;
+  const chart = chartWrap(svg, {
+    W, H, padT, padB, maxV,
+    xs: dates.map((_, i) => +x(i).toFixed(1)),
+    labels: dates.map((d) => d.slice(5)),
+    series: series.map((s) => ({ name: s.name, color: s.color, vals: s.vals })),
+    suffix: "",
+  });
+  return `${chart}
     <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
     ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps going.</div>' : ""}`;
 }
@@ -1626,7 +1642,7 @@ async function renderList() {
       { name: "Sent to outreach", color: "#2F9E44", width: 2, vals: dates.map((d) => sentByDate[d] || 0) },
     ];
     const set = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
-    const chartEl = document.getElementById("dash-chart"); if (chartEl) { chartEl.innerHTML = activityChart(dates, series); hydrateFade(chartEl); }
+    const chartEl = document.getElementById("dash-chart"); if (chartEl) { chartEl.innerHTML = activityChart(dates, series); hydrateFade(chartEl); hydrateCharts(chartEl); }
     set("st-split", (sEmail + sLi) ? `${destLogo("smartlead")} ${sEmail} · ${destLogo("heyreach")} ${sLi}` : "0");
     set("st-foundsplit", `${destLogo("smartlead")} ${fmt(foundEmail)} have an email · ${destLogo("heyreach")} ${fmt(foundNoEmail)} no email`);
     set("st-waiting", fmt(waiting));
@@ -1721,8 +1737,10 @@ function tabOverview(el, c, d, a) {
   if (daily.length) {
     const label = (dt) => new Date(dt).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
     lineChart(document.getElementById("dchart"), [
-      { color: "#14110E", points: daily.map((r) => ({ y: r.sent, label: label(r.date) })) },
-      { color: "#FF4D00", points: daily.map((r) => ({ y: r.replies * 20, label: label(r.date) })) },
+      { name: "Sent", color: "#14110E", points: daily.map((r) => ({ y: r.sent, label: label(r.date) })) },
+      // replies are plotted ×20 so they read on the same axis as sends; `raw` keeps the
+      // true reply count for the tooltip.
+      { name: "Replies", color: "#FF4D00", points: daily.map((r) => ({ y: r.replies * 20, raw: r.replies, label: label(r.date) })) },
     ]);
   } else document.getElementById("dchart").innerHTML = '<div class="empty">No daily data</div>';
 }
