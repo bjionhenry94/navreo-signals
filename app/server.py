@@ -218,7 +218,15 @@ def http_json(method: str, url: str, headers: dict, body: dict | None = None, ti
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
-            return json.loads(resp.read().decode())
+            raw = resp.read().decode()
+            # A 2xx with an empty body (PostgREST `return=minimal`, HTTP 204) is
+            # SUCCESS, not a failure — returning {} here stops sb() from mis-reading
+            # it as a JSONDecodeError and firing a pointless retry. Under load
+            # (rapid per-chunk job persists) those phantom retries pile up and can
+            # saturate the server, so this guard is a real fix, not cosmetic.
+            if not raw.strip():
+                return {}
+            return json.loads(raw)
     except urllib.error.HTTPError as e:
         # providers return JSON bodies (NO_RESULTS, INVALID_FILTERS...) on 4xx
         try:
@@ -3809,9 +3817,14 @@ def _mock_verify_worker(job: dict, campaign_id, mode: str):
         details = []
         for i, ld in enumerate(targets):
             with JOBS_LOCK:
-                if job.get("cancel_requested"):
-                    _job_finished(job, "cancelled")
-                    return
+                cancelled = job.get("cancel_requested")
+            if cancelled:
+                # NOTE: call _job_finished OUTSIDE the lock — it re-acquires
+                # JOBS_LOCK, so calling it while held self-deadlocks the worker
+                # thread and, because it never releases, hangs every endpoint
+                # that needs JOBS_LOCK (/api/jobs, cancel, new jobs).
+                _job_finished(job, "cancelled")
+                return
             time.sleep(0.03)  # visible progress movement in the UI, no real API call
             m = i % 20
             verdict = "bad" if m < 3 else "catch_all" if m < 5 else "good"  # ~15% / ~10% / rest

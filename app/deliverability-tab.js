@@ -1107,7 +1107,7 @@
     dh: { minSent: null, cutoff: null, start: null, end: null },
     sig: { batch: "", search: "", sel: new Set(), rows: [] },
     pn: { search: "", sel: new Set(), rows: [] },
-    wu: { search: "" },
+    wu: { search: "", sel: new Set(), rows: [] },
     delist: { includeYoung: false },
     coachOpen: false, // Part B1: transient "re-opened the coach via Show tips" flag
   };
@@ -2074,7 +2074,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       case "verify": {
         const n = D.uncleanedVerifyCamps.length;
         if (!n) return { key: "verify-campaigns", level: "red", count: 0, resolved: true, text: "All flagged campaigns have been re-verified and cleaned." };
-        return { key: "verify-campaigns", level: "red", count: n, short: "low-reply campaigns need lead verification", text: n + " campaign(s) below 1% reply with elevated bounce — leads likely need re-verifying.", action: "Run ListMint (or MillionVerifier → ListMint) on each, then remove confirmed-bad leads.", verifyCamps: D.uncleanedVerifyCamps };
+        return { key: "verify-campaigns", level: "red", count: n, short: "low-reply campaigns need lead verification", text: n + " campaign(s) below 1% reply with elevated bounce — leads likely need re-verifying.", action: "Verify the remaining not-yet-contacted prospects on each (ListMint, or MillionVerifier → ListMint), then remove the confirmed-undeliverable ones.", verifyCamps: D.uncleanedVerifyCamps };
       }
       case "signatures": {
         const n = D.signatureCount;
@@ -2710,7 +2710,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ${busyNote}
       <div class="dlv-vresult" id="dlv-vr-${c.id}">${renderVerifyResultBox(c.id, sessionV, _verifyStatus[cid])}</div>
       ${dlvDisclose(dlvConsequences(
-        "The campaign's list gets verified before more sends go out — ListMint checks every lead live, MillionVerifier → ListMint spends 1 MillionVerifier credit per lead first; nothing is removed until you choose to remove the confirmed-bad ones.",
+        "Verifies the campaign's remaining not-yet-contacted prospects (the ones still queued to send) before more sends go out — ListMint checks every one live, MillionVerifier → ListMint spends 1 MillionVerifier credit per lead first; already-contacted leads are left untouched, and nothing is removed until you choose to remove the confirmed-bad ones.",
         "Sends continue to unverified addresses. Bounce rate above 3 percent burns the domains behind this campaign."
       ))}
     </div>`;
@@ -3542,16 +3542,22 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-modal-head"><h3>Enable warmup on <span id="dlv-wu-n">0</span> mailbox(es)</h3><button class="x" data-act="close-modal" data-modal="dlv-wu-overlay">&times;</button></div>
         <div class="dlv-modal-body">
           <p class="small muted" id="dlv-wu-std" style="margin-bottom:12px"></p>
-          <input class="dlv-input" id="dlv-wu-search" type="text" placeholder="Search inboxes…" style="margin-bottom:8px" data-act="wu-search">
-          <div class="small muted" style="margin-bottom:5px">These mailboxes (<span id="dlv-wu-target-n">0</span>):</div>
-          <div id="dlv-wu-targets" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--bg-sunken);margin-bottom:16px"></div>
+          <label class="dlv-field-label">Which mailboxes? <span class="dlv-field-hint">— tick the ones to fix (all ticked to start; ticks are kept while you search)</span></label>
+          <input class="dlv-input" id="dlv-wu-search" type="text" placeholder="Type to narrow the list… (e.g. henry, or a domain)" style="margin:6px 0 0" data-act="wu-search">
+          <div class="dlv-sig-selbar">
+            <label class="dlv-sig-selall"><input type="checkbox" id="dlv-wu-master" data-act="wu-master"> <span id="dlv-wu-master-label">Select all</span></label>
+            <a class="dlv-dl" id="dlv-wu-only" data-act="wu-only-shown" style="display:none">Select only these</a>
+            <span class="small muted" id="dlv-wu-selcount" style="margin-left:auto">0 selected</span>
+          </div>
+          <div id="dlv-wu-hidden-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-top:none;padding:6px 11px"></div>
+          <div id="dlv-wu-targets" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:0 0 9px 9px;border-top:none;background:var(--bg-sunken);margin-bottom:16px"></div>
           <div style="display:flex;gap:12px;flex-wrap:wrap">
             <label style="flex:1;min-width:130px" class="dlv-field-label">Warm-up / day<input class="dlv-input" id="dlv-wu-perday" type="number" min="1" value="35" style="margin-top:6px"></label>
             <label style="flex:1;min-width:130px" class="dlv-field-label">Daily ramp-up<input class="dlv-input" id="dlv-wu-ramp" type="number" min="0" value="5" style="margin-top:6px"></label>
             <label style="flex:1;min-width:130px" class="dlv-field-label">Reply rate %<input class="dlv-input" id="dlv-wu-reply" type="number" min="0" max="100" value="38" style="margin-top:6px"></label>
           </div>
         </div>
-        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Reversible — you can adjust or disable warmup again later.</span><button class="btn" data-act="close-modal" data-modal="dlv-wu-overlay">Cancel</button><button class="btn primary" data-act="wu-apply">Enable warmup</button></div>
+        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Reversible — you can adjust or disable warmup again later.</span><button class="btn" data-act="close-modal" data-modal="dlv-wu-overlay">Cancel</button><button class="btn primary" id="dlv-wu-apply-btn" data-act="wu-apply">Enable on <span id="dlv-wu-n2">0</span> mailbox(es)</button></div>
       </div>
     </div>
 
@@ -3714,19 +3720,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      21. Modal open/populate helpers
      ============================================================ */
-  function inboxFilterRows(containerId, term) {
-    term = String(term || "").trim().toLowerCase();
-    const rows = [...document.querySelectorAll("#" + containerId + " .dlv-sig-trow")];
-    let shown = 0;
-    rows.forEach((r) => {
-      const em = ((r.querySelector(".dlv-sig-email") || {}).textContent || "").toLowerCase();
-      const vis = !term || em.includes(term);
-      r.style.display = vis ? "" : "none";
-      if (vis) shown++;
-    });
-    return { shown, total: rows.length };
-  }
-  function trowHtml(email, when) { return `<div class="dlv-sig-trow"><span class="dlv-sig-email">${esc(email)}</span><span class="dlv-sig-when">${esc(when)}</span></div>`; }
   function agoStr(created) {
     if (!created) return "date unknown";
     const t = new Date(created);
@@ -3879,6 +3872,34 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (whoEl) whoEl.textContent = '"' + who + '"';
     $id("dlv-sig-preview").textContent = ta.value.replace(/\{\{\s*name\s*\}\}/gi, who);
   }
+  // Shared self-heal for the write backend's mailbox snapshot, which expires
+  // minutes after an audit and answers {ok:false,reason:"run_first"} — a
+  // timing trap no owner should have to know about (it caused two straight
+  // 'N failed' runs on 2026-07-09). Call once per Apply click; the returned
+  // function heals at most once across however many scoped calls that Apply
+  // makes (per-domain / per-mailbox), so a second run_first later in the same
+  // loop is treated as a real failure instead of retried forever.
+  function makeSelfHealingCall(path, applyBtn) {
+    let healed = false;
+    return async function callWithHeal(qs) {
+      let j = await liveAction(path + "?" + qs, null, null, { timeout: 90000 });
+      if (j && j.ok === false && j.reason === "run_first" && !healed) {
+        healed = true;
+        if (applyBtn) applyBtn.innerHTML = "Refreshing the mailbox list first… (a few minutes)";
+        try { await apiPost("_audit/refresh", { force: true }, { timeout: 20000 }); } catch (e) {}
+        const deadline = Date.now() + 420000;
+        while (Date.now() < deadline) {
+          await new Promise((res) => setTimeout(res, 15000));
+          let st = null;
+          try { st = await apiGet("_audit", { timeout: 20000 }); } catch (e) { continue; }
+          if (st && !st.running) break;
+        }
+        if (applyBtn) applyBtn.innerHTML = "Applying…";
+        j = await liveAction(path + "?" + qs, null, null, { timeout: 90000 });
+      }
+      return j;
+    };
+  }
   async function sigApply() {
     // The modal's own Apply button IS the commitment point — no second stacked
     // confirm. The consequence/reversibility line lives in the modal footer
@@ -3906,30 +3927,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       let applied = 0, failed = 0;
       const failDetails = []; // backend's per-mailbox fail reasons — surfaced, never discarded
       const orig = applyBtn ? applyBtn.innerHTML : null;
-      // The write backend's mailbox snapshot expires minutes after an audit
-      // and answers "run_first" — a timing trap no owner should have to know
-      // about (it caused two straight 'N failed' runs on 2026-07-09). Heal it
-      // inline: kick a fresh audit, wait it out (~4 min, button narrating),
-      // then retry the same call — once per Apply click.
-      let healed = false;
-      async function sigFixCall(qs) {
-        let j = await liveAction("fix-signatures?" + qs, null, null, { timeout: 90000 });
-        if (j && j.ok === false && j.reason === "run_first" && !healed) {
-          healed = true;
-          if (applyBtn) applyBtn.innerHTML = "Refreshing the mailbox list first… (a few minutes)";
-          try { await apiPost("_audit/refresh", { force: true }, { timeout: 20000 }); } catch (e) {}
-          const deadline = Date.now() + 420000;
-          while (Date.now() < deadline) {
-            await new Promise((res) => setTimeout(res, 15000));
-            let st = null;
-            try { st = await apiGet("_audit", { timeout: 20000 }); } catch (e) { continue; }
-            if (st && !st.running) break;
-          }
-          if (applyBtn) applyBtn.innerHTML = "Applying…";
-          j = await liveAction("fix-signatures?" + qs, null, null, { timeout: 90000 });
-        }
-        return j;
-      }
+      const sigFixCall = makeSelfHealingCall("fix-signatures", applyBtn);
       try {
         if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = "Applying…"; }
         if (allInScope) {
@@ -3954,6 +3952,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
                 if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
                 if (j.reason === "empty_template") { toast("Signature is empty", "err"); return; }
                 failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: j.reason || "failed" });
+              } else if (!(j.ok || 0) && !(j.failed || 0)) {
+                // The call "succeeded" but touched nothing — the backend's
+                // mailbox list doesn't know these addresses (stale snapshot,
+                // renamed domain…). Dropping them locally would fake success
+                // and the next audit would resurrect them; keep them failed.
+                failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: "not found in the backend's mailbox list" });
               } else {
                 applied += j.ok || 0; failed += j.failed || 0;
                 if (Array.isArray(j.fails)) failDetails.push(...j.fails);
@@ -3975,6 +3979,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
               if (j && j.ok === false) {
                 if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
                 failed++; failDetails.push({ email: r.email, error: j.reason || "failed" });
+              } else if (!(j.ok || 0) && !(j.failed || 0)) {
+                failed++; failDetails.push({ email: r.email, error: "not found in the backend's mailbox list" });
               } else {
                 applied += j.ok || 0; failed += j.failed || 0; done.push(r.email);
                 if (Array.isArray(j.fails)) failDetails.push(...j.fails);
@@ -4033,10 +4039,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     pnPaintList();
     const sel = $id("dlv-pn-camp");
     // Sample mode: the fixed mock roster. Live mode: the campaign IDs this
-    // modal's Apply hands to POST process-new?campaign= must be REAL Smartlead
-    // campaign ids, not the mock roster — pull the live list the same way the
-    // real dashboard's openProcessNew() does (GET /api/campaigns).
-    sel.innerHTML = `<option value="">— don't add —</option>` + S.campaigns.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    // modal's Apply hands to the backend must come from the LIVE list (GET
+    // /api/campaigns) — the sample roster's ids are real Smartlead campaign
+    // ids, so painting it as a live placeholder while the slow live fetch
+    // (~4s) runs would let a fast pick add mailboxes to the wrong campaign.
+    // Live shows a disabled "loading" state until the real list lands.
+    if (isLive()) {
+      sel.innerHTML = `<option value="">Loading campaigns…</option>`;
+      sel.disabled = true;
+    } else {
+      sel.innerHTML = `<option value="">— don't add —</option>` + S.campaigns.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    }
     // Known tag names feed both the datalist and the existing-vs-new status
     // line under the field. Sample mode gets a small mock roster so the
     // affordance is visible there too.
@@ -4060,8 +4073,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const camps = await apiGet("campaigns", { timeout: 20000 });
         if (Array.isArray(camps)) {
           sel.innerHTML = `<option value="">— don't add —</option>` + camps.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+        } else {
+          sel.innerHTML = `<option value="">— don't add —</option>`;
         }
-      } catch (e) { /* keep the mock roster in the select on failure — Apply still allows "don't add" */ }
+      } catch (e) {
+        // Couldn't load the live list — offer tag-only rather than a roster
+        // of ids that may not match this workspace.
+        sel.innerHTML = `<option value="">— don't add — (campaign list didn't load)</option>`;
+      }
+      sel.disabled = false;
+      pnSyncCounts(); // the select's value may have reset — refresh the summary
     }
   }
   function pnKind(r) {
@@ -4246,55 +4267,182 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
   function openWarmupFixModal() {
     UI.wu.search = "";
-    const rows = S.A.warmupConfig.notWarming || [];
-    $id("dlv-wu-n").textContent = rows.length;
-    $id("dlv-wu-target-n").textContent = rows.length;
+    // Both broken-warmup groups land in one list — "off" needs enabling,
+    // "wrong" needs its settings rewritten — same fix-warmup call either way.
+    const off = (S.A.warmupConfig.notWarming || []).map((r) => Object.assign({}, r, { configKind: "off" }));
+    const wrong = (S.A.warmupConfig.wrongSettings || []).map((r) => Object.assign({}, r, { configKind: "wrong" }));
+    UI.wu.rows = [...off, ...wrong].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
+    // Same select-what-you-see model as the signature/process-new modals:
+    // every row starts ticked, so the one-click "fix everything" flow is
+    // unchanged, but a hand-picked subset now drives the write instead of
+    // whatever text happened to be sitting in the search box.
+    UI.wu.sel = new Set(UI.wu.rows.map((r) => r.email));
+    $id("dlv-wu-n").textContent = UI.wu.rows.length;
     $id("dlv-wu-search").value = "";
-    const sorted = [...rows].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
-    $id("dlv-wu-targets").innerHTML = sorted.length ? sorted.map((r) => trowHtml(r.email, agoStr(r.created) + " · warmup off")).join("") : `<div class="dlv-mb-count" style="padding:8px 12px">No mailboxes</div>`;
     const std = S.A.warmupConfig.standard || "";
     if (std) { const p = std.split("/"); if (p[0]) $id("dlv-wu-reply").value = p[0]; if (p[1]) $id("dlv-wu-perday").value = p[1]; $id("dlv-wu-std").textContent = "Your fleet's most common setting is " + p[0] + "% reply · " + p[1] + " warm-up/day (pre-filled below)."; }
     else $id("dlv-wu-std").textContent = "No fleet standard detected — using the Navreo default (35/day · 5 ramp-up · 38% reply).";
+    wuPaintList();
     openModal("dlv-wu-overlay");
+  }
+  function wuKind(r) { return r.configKind === "wrong" ? "wrong settings" : "warmup off"; }
+  // The rows the search currently shows — selection actions (master tickbox,
+  // "Select only these") act on these, matching sig/pn.
+  function wuVisibleRows() {
+    const q = (UI.wu.search || "").trim().toLowerCase();
+    if (!q) return UI.wu.rows;
+    return UI.wu.rows.filter((r) => (r.email || "").toLowerCase().includes(q) || wuKind(r).includes(q));
+  }
+  function wuTrowHtml(r) {
+    const on = UI.wu.sel.has(r.email);
+    return `<label class="dlv-sig-trow" title="${esc(r.issue || r.reason || "")}">`
+      + `<input type="checkbox" data-act="wu-row-select" data-email="${esc(r.email)}"${on ? " checked" : ""}>`
+      + `<span class="dlv-sig-email">${esc(r.email)}</span>`
+      + `<span class="dlv-sig-kind">${esc(wuKind(r))}</span>`
+      + `<span class="dlv-sig-when">${esc(agoStr(r.created))}</span></label>`;
+  }
+  function wuPaintList() {
+    const vis = wuVisibleRows();
+    const q = (UI.wu.search || "").trim();
+    const empty = UI.wu.rows.length ? "No mailboxes match “" + esc(q) + "” — clear the search to see all " + UI.wu.rows.length : "No mailboxes need fixing";
+    $id("dlv-wu-targets").innerHTML = vis.length ? vis.map(wuTrowHtml).join("")
+      : `<div class="dlv-mb-count" style="padding:8px 12px">${empty}</div>`;
+    wuSyncCounts();
+  }
+  // Single source of truth for the modal's counts: master tickbox state,
+  // "N of M selected", the hidden-ticks warning, and the Apply button label +
+  // enabled state — mirrors sigSyncCounts/pnSyncCounts.
+  function wuSyncCounts() {
+    const vis = wuVisibleRows();
+    const visSel = vis.filter((r) => UI.wu.sel.has(r.email)).length;
+    const master = $id("dlv-wu-master");
+    if (master) {
+      master.checked = vis.length > 0 && visSel === vis.length;
+      master.indeterminate = visSel > 0 && visSel < vis.length;
+      master.disabled = !vis.length;
+    }
+    const q = (UI.wu.search || "").trim();
+    const mLabel = $id("dlv-wu-master-label");
+    if (mLabel) mLabel.textContent = q ? "Select all shown (" + vis.length + ")" : "Select all";
+    const only = $id("dlv-wu-only");
+    if (only) only.style.display = q && vis.length ? "" : "none";
+    const n = UI.wu.sel.size;
+    const count = $id("dlv-wu-selcount");
+    if (count) count.textContent = n + " of " + UI.wu.rows.length + " selected";
+    // Panel finding (copied from pnSyncCounts): with a search typed, ticked
+    // rows scroll out of sight and people fix far more than they meant to.
+    const hiddenSel = n - visSel;
+    const warn = $id("dlv-wu-hidden-warn");
+    if (warn) {
+      if (q && hiddenSel > 0) {
+        warn.innerHTML = "Ticks are kept while you search: " + hiddenSel + " ticked mailbox(es) sit outside this search and would also be fixed — "
+          + `<a class="dlv-dl" data-act="wu-only-shown">untick them, keep only what's shown</a>`;
+        warn.style.display = "block";
+      } else warn.style.display = "none";
+    }
+    $id("dlv-wu-n2").textContent = n;
+    const applyBtn = $id("dlv-wu-apply-btn");
+    if (applyBtn) applyBtn.disabled = n === 0;
   }
   async function wuApply() {
     // Single-confirm flow: Apply below is the commitment point (see sigApply).
     const perDay = $id("dlv-wu-perday").value || 35, ramp = $id("dlv-wu-ramp").value || 5, reply = $id("dlv-wu-reply").value || 38;
-    const rows = S.A.warmupConfig.notWarming;
-    const n = rows.length;
-    if (!n) { toast("Nothing to enable", "err"); return; }
+    const selected = UI.wu.rows.filter((r) => UI.wu.sel.has(r.email));
+    if (!selected.length) { toast("Tick at least one mailbox first", "err"); return; }
+    const allInScope = selected.length === UI.wu.rows.length;
+    // Drops the fixed emails from local audit state so the tile/to-do counts
+    // update immediately (live mode re-syncs from the backend on next audit).
+    function dropApplied(emails) {
+      const gone = new Set(emails);
+      S.A.warmupConfig.notWarming = (S.A.warmupConfig.notWarming || []).filter((r) => !gone.has(r.email));
+      S.A.warmupConfig.wrongSettings = (S.A.warmupConfig.wrongSettings || []).filter((r) => !gone.has(r.email));
+    }
+    function markLocalActive(emails) {
+      const set = new Set(emails);
+      S.A.inboxRows.forEach((inv) => { if (set.has(inv.email)) { inv.kind = "ok"; inv.warmup_status = "ACTIVE"; inv.cap = Number(perDay); } });
+    }
     if (isLive()) {
-      const filter = (($id("dlv-wu-search") || {}).value || "").trim();
-      let qs = "perDay=" + encodeURIComponent(perDay) + "&rampup=" + encodeURIComponent(ramp) + "&replyRate=" + encodeURIComponent(reply);
-      if (filter) qs += "&filter=" + encodeURIComponent(b64u(filter));
-      const applyBtn = document.querySelector('[data-act="wu-apply"]');
-      let j;
-      try { j = await liveAction("fix-warmup?" + qs, applyBtn, applyBtn ? "Enabling…" : null, { timeout: 90000 }); }
-      catch (e) { toast("Request failed", "err"); return; }
-      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : "Failed to enable warmup", "err"); return; }
-      const enabled = j.ok || 0;
-      rows.forEach((r) => {
-        const inv = S.A.inboxRows.find((x) => x.email === r.email);
-        if (inv) { inv.kind = "ok"; inv.warmup_status = "ACTIVE"; inv.cap = Number(perDay); }
-      });
-      S.A.warmupConfig.notWarming = [];
-      logAction({action: "reenable", count: enabled, failed: j.failed || 0, scope: perDay + "/day · " + ramp + " ramp · " + reply + "% reply" });
+      const applyBtn = $id("dlv-wu-apply-btn");
+      const base = "perDay=" + encodeURIComponent(perDay) + "&rampup=" + encodeURIComponent(ramp) + "&replyRate=" + encodeURIComponent(reply);
+      const wuFixCall = makeSelfHealingCall("fix-warmup", applyBtn);
+      let applied = 0, failed = 0;
+      const failDetails = []; // backend's per-mailbox fail reasons — surfaced, never discarded
+      const orig = applyBtn ? applyBtn.innerHTML : null;
+      try {
+        if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = "Applying…"; }
+        if (allInScope) {
+          // Everything ticked → one scoped call PER DOMAIN, same reasoning as
+          // sigApply: an unfiltered bulk call over a large fleet risks the
+          // hosting edge's ~90-100s timeout.
+          const byDomain = {};
+          selected.forEach((r) => {
+            const d = (r.domain || (r.email.split("@")[1] || "")).toLowerCase();
+            (byDomain[d] = byDomain[d] || []).push(r);
+          });
+          const domains = Object.keys(byDomain).sort();
+          for (let i = 0; i < domains.length; i++) {
+            const d = domains[i];
+            if (applyBtn) applyBtn.innerHTML = "Applying " + esc(d) + " (" + (i + 1) + " of " + domains.length + ")…";
+            try {
+              const j = await wuFixCall(base + "&filter=" + encodeURIComponent(b64u("@" + d)));
+              if (j && j.ok === false) {
+                if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
+                failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: j.reason || "failed" });
+              } else {
+                const emails = byDomain[d].map((r) => r.email);
+                applied += j.ok || 0; failed += j.failed || 0;
+                if (Array.isArray(j.fails)) failDetails.push(...j.fails);
+                dropApplied(emails); markLocalActive(emails);
+              }
+            } catch (e) { failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: String((e && e.message) || e) }); }
+          }
+        } else {
+          // A hand-picked subset → one scoped call per ticked mailbox, same
+          // as sigApply's subset path.
+          const done = [];
+          for (let i = 0; i < selected.length; i++) {
+            const r = selected[i];
+            if (applyBtn) applyBtn.innerHTML = "Applying " + (i + 1) + " of " + selected.length + "…";
+            try {
+              const j = await wuFixCall(base + "&filter=" + encodeURIComponent(b64u(r.email)));
+              if (j && j.ok === false) {
+                if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
+                failed++; failDetails.push({ email: r.email, error: j.reason || "failed" });
+              } else {
+                applied += j.ok || 0; failed += j.failed || 0; done.push(r.email);
+                if (Array.isArray(j.fails)) failDetails.push(...j.fails);
+              }
+            } catch (e) { failed++; failDetails.push({ email: r.email, error: String((e && e.message) || e) }); }
+          }
+          dropApplied(done); markLocalActive(done);
+        }
+      } catch (e) { toast("Request failed", "err"); return; }
+      finally { if (applyBtn) { applyBtn.disabled = false; if (orig != null) applyBtn.innerHTML = orig; } }
+      logAction({action: "reenable", count: applied, failed: failed, scope: perDay + "/day · " + ramp + " ramp · " + reply + "% reply" });
       saveState();
       closeModal("dlv-wu-overlay");
-      toast("Warmup enabled on " + enabled + (j.failed ? " · " + j.failed + " failed" : "") + " mailbox(es)", "ok");
+      // Failures carry the backend's per-mailbox reason — show the most
+      // common one in the toast and dump the full list to the console.
+      let failWhy = "";
+      if (failed && failDetails.length) {
+        console.warn("fix-warmup failures:", failDetails);
+        const msgOf = (f) => String((f && (f.error || f.reason || f.message)) || f || "unknown error");
+        const tally = {};
+        failDetails.forEach((f) => { const m = msgOf(f); tally[m] = (tally[m] || 0) + 1; });
+        failWhy = " — " + Object.entries(tally).sort((a, b) => b[1] - a[1])[0][0];
+      }
+      if (failed && !applied) failWhy += " — click Run Live Audit to refresh the mailbox list, then Apply again";
+      toast("Warmup fixed on " + applied + " mailbox(es)" + (failed ? " · " + failed + " failed" + failWhy : ""), failed ? "err" : "ok");
       invalidateMgrDh();
       paintPage();
       return;
     }
-    rows.forEach((r) => {
-      const inv = S.A.inboxRows.find((x) => x.email === r.email);
-      if (inv) { inv.kind = "ok"; inv.warmup_status = "ACTIVE"; inv.cap = Number(perDay); }
-    });
-    S.A.warmupConfig.notWarming = [];
-    logAction({action: "reenable", count: n, failed: 0, scope: perDay + "/day · " + ramp + " ramp · " + reply + "% reply" });
+    const emails = selected.map((r) => r.email);
+    dropApplied(emails); markLocalActive(emails);
+    logAction({action: "reenable", count: selected.length, failed: 0, scope: perDay + "/day · " + ramp + " ramp · " + reply + "% reply" });
     saveState();
     closeModal("dlv-wu-overlay");
-    toast("Warmup enabled on " + n + " mailbox(es)", "ok");
+    toast("Warmup fixed on " + selected.length + " mailbox(es)", "ok");
     paintPage();
   }
 
@@ -4454,6 +4602,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const a = _activeJobs[k].progress || {}, b = next[k].progress || {};
         return _activeJobs[k].status !== next[k].status || a.done !== b.done || a.total !== b.total;
       });
+      // A campaign that WAS busy and now isn't = its job just finished. Pull the
+      // durable verify-status so the result box + "Remove N bad" (or the removed
+      // summary) appears — this is what makes a REFRESHED page that never saw
+      // the job start still show the outcome. Works for auto-resumed jobs too.
+      const justFinished = keysA.filter((k) => !next[k]);
+      if (justFinished.length) refreshVerifyStatus(justFinished);
       Object.keys(_activeJobs).forEach((k) => delete _activeJobs[k]);
       Object.assign(_activeJobs, next);
     } catch (e) { /* transient; keep prior state, try again next tick */ }
@@ -4653,7 +4807,19 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       guarded: c.guarded != null ? Number(c.guarded) : null,
       bad_emails: Array.isArray(c.bad_emails) ? c.bad_emails : [],
       listmint_recheck: typeof c.listmint_recheck === "string" ? c.listmint_recheck : null,
+      // Already-contacted leads the job deliberately skipped — verification
+      // only ever targets not-yet-contacted (STARTED) leads.
+      contacted_skipped: c.contacted_skipped != null ? Number(c.contacted_skipped) : 0,
     };
+  }
+  // Shared "what just happened" line for toasts + result boxes — reframes
+  // every run around the not-yet-contacted set that was actually touched.
+  // Segments are omitted (not shown as "0") when they don't apply.
+  function fmtVerifyRunSummary(total, removed, contactedSkipped) {
+    const segs = ["Checked " + fmtN(total || 0) + " not-yet-contacted"];
+    if (removed != null && removed > 0) segs.push("removed " + fmtN(removed) + " bad");
+    if (contactedSkipped) segs.push("skipped " + fmtN(contactedSkipped) + " already-contacted");
+    return segs.join(" · ");
   }
   function pingJobsSidebar() {
     // Guarded — the shared jobs sidebar ships separately in shell.js and may
@@ -4676,8 +4842,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // stacked as a second confirm. Message describes the chosen flow so the
     // user knows what they're about to trigger (mode-specific cost/speed).
     let msg = mode === "listmint"
-      ? "Runs a REAL, read-only verification of this campaign's " + estTotal + " leads (the FULL lead list, not just sent) via ListMint — live SMTP + catch-all probe on every lead. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?"
-      : "Runs a REAL, read-only verification of this campaign's " + estTotal + " leads (the FULL lead list, not just sent) via MillionVerifier → ListMint — 1 MillionVerifier credit per lead, then ListMint re-checks any catch-all/unknown results. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?";
+      ? "Verifies the campaign's remaining not-yet-contacted prospects (the ones still queued to send, up to " + estTotal + " leads) via ListMint — live SMTP + catch-all probe on every lead. Already-contacted leads are left untouched. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?"
+      : "Verifies the campaign's remaining not-yet-contacted prospects (the ones still queued to send, up to " + estTotal + " leads) via MillionVerifier → ListMint — 1 MillionVerifier credit per lead, then ListMint re-checks any catch-all/unknown results. Already-contacted leads are left untouched. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?";
     if (done) msg = "This campaign was already verified + cleaned on " + done + ". Re-running costs credits and shouldn't usually be needed.\n\n" + msg;
     // The auto-remove choice has to be made BEFORE the job starts (it's part
     // of the POST body) — a checkbox rendered inside the same confirm dialog
@@ -4685,7 +4851,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // a permanent delete, so opting in has to be a deliberate click.
     const extraHtml = `<label class="small" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-top:10px">` +
       `<input type="checkbox" id="dlv-confirm-extra-check" style="margin-top:2px">` +
-      `<span>Also remove confirmed-bad leads automatically when done (leads that replied are always kept — removal is permanent).</span></label>`;
+      `<span>Automatically remove undeliverable leads when done (only not-yet-contacted ones; nothing already emailed is touched; removal is permanent).</span></label>`;
     const ok = await dlvConfirm(msg, { title: "Verify campaign", extraHtml });
     if (!ok) return;
     const autoRemove = confirmExtraChecked();
@@ -4705,10 +4871,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     };
     let jobId;
     try {
+      // ?mock=1 in the page URL lets the coordinator run a credit-free UI
+      // test — passed through untouched so it never affects normal use.
+      const mockBody = new URLSearchParams(location.search).get("mock") ? { mock: true } : {};
       const resp = await fetch("/api/verify-campaign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.assign({ campaign_id: id, mode: mode, name: (camp && camp.name) || undefined }, autoRemove ? { auto_remove: true } : {})),
+        body: JSON.stringify(Object.assign({ campaign_id: id, mode: mode, name: (camp && camp.name) || undefined }, autoRemove ? { auto_remove: true } : {}, mockBody)),
       });
       const j = await resp.json().catch(() => ({}));
       if (resp.status !== 202) { fail((j && (j.message || j.error)) || ("HTTP " + resp.status)); return; }
@@ -4742,8 +4911,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return;
     }
     if (job.status === "interrupted") {
-      // Server restarted mid-run — not an error, and re-running is cache-cheap.
-      if (out) out.innerHTML = `<div class="dlv-vrun">${esc(job.error || "Verification was interrupted — re-run to resume (already-checked emails are cached).")}</div>`;
+      // Server restarted mid-run — NOT an error and NOT a dead end: the backend
+      // auto-resumes interrupted verify jobs on its next boot (already-checked
+      // emails are cached, so it continues cheaply). Show a reassuring note and
+      // leave the row's busy state to fillActiveJobs, which will re-attach to
+      // the resumed job when it reappears as running.
+      if (out) out.innerHTML = `<div class="dlv-vrun">Interrupted by a server restart — resuming automatically. You can leave this page; it'll finish on its own.</div>`;
+      fillActiveJobs(); // pick the resumed job straight back up
       btns.forEach((b) => (b.disabled = false));
       btn.innerHTML = orig;
       refreshVerifyStatus([id]); // a partial verify may still have written state
@@ -6037,6 +6211,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return;
     }
     if (act === "wu-apply") { runAct(act, () => wuApply()); return; }
+    if (act === "wu-only-shown") {
+      // One click = the ticked set becomes exactly the rows the search shows.
+      UI.wu.sel = new Set(wuVisibleRows().map((r) => r.email));
+      wuPaintList();
+      return;
+    }
     if (act === "verify-campaign") { runAct(act, () => verifyCampaignAction(t.dataset.id, t.dataset.mode, t)); return; }
     if (act === "remove-bad") { runAct(act, () => removeBadAction(t.dataset.id, t)); return; }
     if (act === "pause-blacklisted") { runAct(act, () => pauseBlacklisted(t)); return; }
@@ -6131,6 +6311,19 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return;
     }
     if (act === "pn-camp-change") { pnSyncCounts(); return; }
+    if (act === "wu-row-select") {
+      const em = t.dataset.email;
+      if (t.checked) UI.wu.sel.add(em); else UI.wu.sel.delete(em);
+      wuSyncCounts();
+      return;
+    }
+    if (act === "wu-master") {
+      // Same select-what-you-see rule as sig-master/pn-master above.
+      const vis = wuVisibleRows();
+      if (t.checked) vis.forEach((r) => UI.wu.sel.add(r.email)); else vis.forEach((r) => UI.wu.sel.delete(r.email));
+      wuPaintList();
+      return;
+    }
     if (act === "dl-include-young") { UI.delist.includeYoung = t.checked; renderDelistBody(); return; }
     if (act === "rem-date-input") { updateRemDateHint(t.value); return; }
   }
@@ -6174,7 +6367,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "sig-tpl-input") { sigUpdatePreview(); return; }
     if (act === "pn-search") { UI.pn.search = t.value; pnPaintList(); return; }
     if (act === "pn-tag-input") { pnSyncCounts(); return; }
-    if (act === "wu-search") { const r = inboxFilterRows("dlv-wu-targets", t.value); $id("dlv-wu-target-n").textContent = t.value.trim() ? r.shown + " of " + r.total : String(r.total); return; }
+    if (act === "wu-search") { UI.wu.search = t.value; wuPaintList(); return; }
   }
 
   /* ============================================================
