@@ -1105,7 +1105,7 @@
   const UI = {
     mgr: { view: "domain", batch: "", search: "", sel: new Set(), domFilter: "resting" },
     dh: { minSent: null, cutoff: null, start: null, end: null },
-    sig: { batch: "", search: "" },
+    sig: { batch: "", search: "", sel: new Set(), rows: [] },
     pn: { search: "" },
     wu: { search: "" },
     delist: { includeYoung: false },
@@ -1305,6 +1305,14 @@ table.dlv-bt th:not(:first-child),table.dlv-bt td:not(:first-child){text-align:r
 .dlv-dl-acts{display:flex;gap:7px;flex-shrink:0}
 .dlv-sig-trow{display:flex;justify-content:space-between;gap:10px;padding:6px 11px;font-size:12px;border-bottom:1px solid var(--line)}
 .dlv-sig-trow:last-child{border-bottom:none}
+label.dlv-sig-trow{cursor:pointer;align-items:center}
+label.dlv-sig-trow:hover{background:var(--bg-hover,rgba(0,0,0,.03))}
+label.dlv-sig-trow input{flex-shrink:0;margin:0 2px 0 0;accent-color:var(--accent,#d97757)}
+label.dlv-sig-trow .dlv-sig-email{flex:1}
+.dlv-sig-selbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:8px;padding:7px 11px;border:1px solid var(--line);border-radius:9px 9px 0 0;background:var(--bg-sunken);font-size:12px}
+.dlv-sig-selbar .dlv-sig-selall{display:flex;align-items:center;gap:7px;cursor:pointer;font-weight:600}
+.dlv-sig-selbar input{margin:0;accent-color:var(--accent,#d97757)}
+.dlv-sig-kind{color:var(--ink-3);font-size:11px;white-space:nowrap;flex-shrink:0}
 .dlv-sig-email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dlv-sig-when{color:var(--ink-3);white-space:nowrap;flex-shrink:0}
 .dlv-modal-overlay{position:fixed;inset:0;background:rgba(20,17,14,.45);display:none;align-items:center;justify-content:center;padding:24px;z-index:200}
@@ -1422,7 +1430,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 @keyframes dlvGlossPulse{0%{box-shadow:0 0 0 0 var(--orange-700)}70%{box-shadow:0 0 0 7px rgba(200,140,20,0)}100%{box-shadow:0 0 0 0 rgba(200,140,20,0)}}
 .dlv-gloss.dlv-gloss-pulse{animation:dlvGlossPulse 1.1s ease-out 3}
 /* Part B3: signature modal — disabled Apply + helper text until a brand chosen. */
-.dlv-sig-helper{font-size:12px;color:var(--orange-700);font-weight:600;margin:0 0 6px;display:none}
+.dlv-sig-helper{font-size:12px;color:var(--ink-3);margin:0 0 6px;display:none}
 .dlv-sig-helper.show{display:block}
 .btn.primary:disabled,.btn:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.2)}
 .dlv-gloss{cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;min-width:13px;border-radius:50%;background:var(--amber-bg,rgba(200,140,20,.14));color:var(--orange-700);font-weight:700;font-size:9.5px;line-height:1;vertical-align:super;margin-left:3px;border:1px solid var(--orange-700);user-select:none;opacity:.62;transition:background .15s,color .15s,opacity .15s}
@@ -3464,21 +3472,25 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-modal">
         <div class="dlv-modal-head"><h3>Apply signatures</h3><button class="x" data-act="close-modal" data-modal="dlv-sig-overlay">&times;</button></div>
         <div class="dlv-modal-body">
-          <label class="dlv-field-label">Apply to <span class="dlv-field-hint">(pick a brand/batch — or explicitly choose “All brands”)</span></label>
+          <label class="dlv-field-label">Brand <span class="dlv-field-hint">(or “All brands” at the bottom of the list)</span></label>
           <select class="dlv-select" id="dlv-sig-batch" style="margin-bottom:6px" data-act="sig-batch-change"></select>
-          <p class="dlv-sig-helper" id="dlv-sig-helper">Pick a brand to load its signature.</p>
+          <p class="dlv-sig-helper" id="dlv-sig-helper">First, pick a brand — its saved signature loads for you.</p>
           <label class="dlv-field-label" style="margin-top:6px">Signature template <span class="dlv-field-hint">— use <code>{{name}}</code> for the sender's name, replaced per mailbox with that inbox's from_name</span></label>
           <textarea class="dlv-textarea" id="dlv-sig-tpl" rows="5" data-act="sig-tpl-input" style="margin-top:6px">Best,
 {{name}}</textarea>
-          <div class="small muted" style="margin-top:10px">Preview (for "Jacki Arnic"):</div>
+          <div class="small muted" style="margin-top:10px">Preview (for <span id="dlv-sig-preview-who">"Jacki Arnic"</span>):</div>
           <pre class="dlv-preview" id="dlv-sig-preview"></pre>
           <div id="dlv-sig-warn" style="display:none;font-size:12px;color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:8px;padding:8px 11px;margin:12px 0">This writes the same signature to every brand. Pick a brand above to load its own saved signature.</div>
-          <p class="small muted" style="margin:12px 0 10px">Writes to <b id="dlv-sig-n">0</b> mailbox(es):</p>
-          <input class="dlv-input" id="dlv-sig-search" type="text" placeholder="Search inboxes… (e.g. henry)" style="margin-bottom:8px" data-act="sig-search">
-          <div class="small muted" style="margin-bottom:5px">Inboxes that will be updated (<span id="dlv-sig-target-n">0</span>):</div>
-          <div id="dlv-sig-targets" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--bg-sunken)"></div>
+          <label class="dlv-field-label" style="margin:12px 0 0">Which inboxes get it? <span class="dlv-field-hint">— tick the ones to update (all ticked to start)</span></label>
+          <input class="dlv-input" id="dlv-sig-search" type="text" placeholder="Type to narrow the list… (e.g. henry)" style="margin:6px 0 0" data-act="sig-search">
+          <div class="dlv-sig-selbar">
+            <label class="dlv-sig-selall"><input type="checkbox" id="dlv-sig-master" data-act="sig-master"> <span id="dlv-sig-master-label">Select all</span></label>
+            <a class="dlv-dl" id="dlv-sig-only" data-act="sig-only-shown" style="display:none">Select only these</a>
+            <span class="small muted" id="dlv-sig-selcount" style="margin-left:auto">0 selected</span>
+          </div>
+          <div id="dlv-sig-targets" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:0 0 9px 9px;border-top:none;background:var(--bg-sunken)"></div>
         </div>
-        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Overwrites existing signatures — reversible by re-applying.</span><button class="btn" data-act="close-modal" data-modal="dlv-sig-overlay">Cancel</button><button class="btn primary" id="dlv-sig-apply-btn" data-act="sig-apply">Apply to <span id="dlv-sig-n2">0</span></button></div>
+        <div class="dlv-modal-foot"><span class="small muted" style="margin-right:auto;max-width:60%">Overwrites existing signatures — reversible by re-applying.</span><button class="btn" data-act="close-modal" data-modal="dlv-sig-overlay">Cancel</button><button class="btn primary" id="dlv-sig-apply-btn" data-act="sig-apply">Apply to <span id="dlv-sig-n2">0</span> inboxes</button></div>
       </div>
     </div>
 
@@ -3757,10 +3769,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const v = (isPick || isAll) ? "" : raw; // effective brand filter ("" = every row)
     const rows = sigRows();
     const sub = isPick ? [] : (v ? rows.filter((r) => (r.batch || "(no batch)") === v) : rows);
-    $id("dlv-sig-n").textContent = sub.length; $id("dlv-sig-n2").textContent = sub.length; $id("dlv-sig-target-n").textContent = sub.length;
-    // Apply is disabled until a real choice (a brand, or explicit All) is made.
-    const applyBtn = $id("dlv-sig-apply-btn");
-    if (applyBtn) applyBtn.disabled = isPick;
+    // Changing scope resets the selection to "everything in scope" — the safe,
+    // expected default; unticking is the exception, not the rule.
+    UI.sig.rows = [...sub].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
+    UI.sig.sel = new Set(UI.sig.rows.map((r) => r.email));
+    UI.sig.search = "";
+    const searchEl = $id("dlv-sig-search");
+    if (searchEl) searchEl.value = "";
     const helper = $id("dlv-sig-helper");
     if (helper) helper.classList.toggle("show", isPick);
     if (!isPick) {
@@ -3770,13 +3785,71 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
     // The "writes to every brand" warning shows ONLY for the explicit All opt-in.
     $id("dlv-sig-warn").style.display = isAll ? "block" : "none";
-    const sorted = [...sub].sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0));
-    $id("dlv-sig-targets").innerHTML = sorted.length ? sorted.map((r) => trowHtml(r.email, agoStr(r.created))).join("") : `<div class="dlv-mb-count" style="padding:8px 12px">${isPick ? "Pick a brand to see its inboxes" : "No inboxes"}</div>`;
+    sigPaintList();
+    sigUpdatePreview();
+  }
+  // The rows currently visible under the search filter (selection actions —
+  // master tickbox, Select all/none — act on what the user can SEE, so a
+  // narrowed list means "select just these" instead of a hidden bulk write).
+  function sigVisibleRows() {
+    const q = (UI.sig.search || "").trim().toLowerCase();
+    return q ? UI.sig.rows.filter((r) => r.email.toLowerCase().includes(q)) : UI.sig.rows;
+  }
+  function sigTrowHtml(r) {
+    const kind = r.issue ? "name mismatch" : "no signature yet";
+    const on = UI.sig.sel.has(r.email);
+    return `<label class="dlv-sig-trow" title="${esc(r.issue || "This inbox has no signature yet")}">`
+      + `<input type="checkbox" data-act="sig-row-select" data-email="${esc(r.email)}"${on ? " checked" : ""}>`
+      + `<span class="dlv-sig-email">${esc(r.email)}</span>`
+      + `<span class="dlv-sig-kind">${kind}</span>`
+      + `<span class="dlv-sig-when">${esc(agoStr(r.created))}</span></label>`;
+  }
+  function sigPaintList() {
+    const isPick = UI.sig.batch === SIG_PICK;
+    const vis = sigVisibleRows();
+    const q = (UI.sig.search || "").trim();
+    const empty = isPick ? "Pick a brand above to see its inboxes"
+      : (UI.sig.rows.length ? "No inboxes match “" + esc(q) + "” — clear the search to see all " + UI.sig.rows.length : "No inboxes need fixing");
+    $id("dlv-sig-targets").innerHTML = vis.length ? vis.map(sigTrowHtml).join("")
+      : `<div class="dlv-mb-count" style="padding:8px 12px">${empty}</div>`;
+    sigSyncCounts();
+  }
+  // Single source of truth for every count in the modal: master tickbox
+  // state, "N selected" label, and the Apply button (label + enabled state).
+  function sigSyncCounts() {
+    const isPick = UI.sig.batch === SIG_PICK;
+    const vis = sigVisibleRows();
+    const visSel = vis.filter((r) => UI.sig.sel.has(r.email)).length;
+    const master = $id("dlv-sig-master");
+    if (master) {
+      master.checked = vis.length > 0 && visSel === vis.length;
+      master.indeterminate = visSel > 0 && visSel < vis.length;
+      master.disabled = isPick || !vis.length;
+    }
+    const q = (UI.sig.search || "").trim();
+    const mLabel = $id("dlv-sig-master-label");
+    if (mLabel) mLabel.textContent = q ? "Select all shown (" + vis.length + ")" : "Select all";
+    // "Select only these" appears only while a search is narrowing the list —
+    // one click = exactly the shown rows, nothing hidden stays ticked.
+    const only = $id("dlv-sig-only");
+    if (only) only.style.display = q && vis.length ? "" : "none";
+    const n = UI.sig.sel.size;
+    const count = $id("dlv-sig-selcount");
+    if (count) count.textContent = isPick ? "" : (n + " of " + UI.sig.rows.length + " selected");
+    $id("dlv-sig-n2").textContent = n;
+    const applyBtn = $id("dlv-sig-apply-btn");
+    if (applyBtn) applyBtn.disabled = isPick || n === 0;
     sigUpdatePreview();
   }
   function sigUpdatePreview() {
     const ta = $id("dlv-sig-tpl");
-    $id("dlv-sig-preview").textContent = ta.value.replace(/\{\{\s*name\s*\}\}/gi, "Jacki Arnic");
+    // Preview with a real sender from the current scope so the example is
+    // never a name from someone else's brand.
+    const first = UI.sig.rows.find((r) => UI.sig.sel.has(r.email)) || UI.sig.rows[0];
+    const who = (first && first.from_name) || "Jacki Arnic";
+    const whoEl = $id("dlv-sig-preview-who");
+    if (whoEl) whoEl.textContent = '"' + who + '"';
+    $id("dlv-sig-preview").textContent = ta.value.replace(/\{\{\s*name\s*\}\}/gi, who);
   }
   async function sigApply() {
     // The modal's own Apply button IS the commitment point — no second stacked
@@ -3789,47 +3862,65 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const tpl = $id("dlv-sig-tpl").value;
     if (!tpl.trim()) { toast("Enter a signature first", "err"); return; }
     const batch = UI.sig.batch === SIG_ALL ? "" : UI.sig.batch;
-    const n = batch ? sigRows().filter((r) => (r.batch || "(no batch)") === batch).length : sigRows().length;
-    if (!n) { toast("No mailboxes to update", "err"); return; }
+    const selected = UI.sig.rows.filter((r) => UI.sig.sel.has(r.email));
+    if (!selected.length) { toast("Tick at least one inbox first", "err"); return; }
+    const allInScope = selected.length === UI.sig.rows.length;
+    // Drops the applied emails from local audit state so the tile/to-do counts
+    // update immediately (live mode re-syncs from the backend on next audit).
+    function dropApplied(emails) {
+      const gone = new Set(emails);
+      S.A.signature.missing = S.A.signature.missing.filter((r) => !gone.has(r.email));
+      S.A.signature.mismatch = S.A.signature.mismatch.filter((r) => !gone.has(r.email));
+    }
     if (isLive()) {
-      const filter = (($id("dlv-sig-search") || {}).value || "").trim();
-      let qs = "tpl=" + encodeURIComponent(b64u(tpl));
-      if (batch) qs += "&batch=" + encodeURIComponent(b64u(batch));
-      if (filter) qs += "&filter=" + encodeURIComponent(b64u(filter));
       const applyBtn = $id("dlv-sig-apply-btn");
-      let j;
-      try { j = await liveAction("fix-signatures?" + qs, applyBtn, applyBtn ? "Applying…" : null, { timeout: 90000 }); }
-      catch (e) { toast("Request failed", "err"); return; }
-      if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "empty_template" ? "Signature is empty" : "Failed"), "err"); return; }
-      const applied = j.ok || 0;
-      if (batch) {
-        S.A.signature.missing = S.A.signature.missing.filter((r) => (r.batch || "(no batch)") !== batch);
-        S.A.signature.mismatch = S.A.signature.mismatch.filter((r) => (r.batch || "(no batch)") !== batch);
-      } else {
-        S.A.signature.missing = [];
-        S.A.signature.mismatch = [];
-      }
+      const base = "tpl=" + encodeURIComponent(b64u(tpl)) + (batch ? "&batch=" + encodeURIComponent(b64u(batch)) : "");
+      let applied = 0, failed = 0;
+      const orig = applyBtn ? applyBtn.innerHTML : null;
+      try {
+        if (allInScope) {
+          // Everything ticked → one bulk call, exactly the old behaviour.
+          const j = await liveAction("fix-signatures?" + base, applyBtn, "Applying…", { timeout: 90000 });
+          if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "empty_template" ? "Signature is empty" : "Failed"), "err"); return; }
+          applied = j.ok || 0; failed = j.failed || 0;
+          dropApplied(selected.map((r) => r.email));
+        } else {
+          // A hand-picked subset → one scoped call per ticked inbox. The
+          // backend's filter is an email substring match; a full address pins
+          // it to that mailbox (an overlap inside the same brand would only
+          // re-apply the identical brand signature, which is harmless).
+          if (applyBtn) applyBtn.disabled = true;
+          const done = [];
+          for (let i = 0; i < selected.length; i++) {
+            const r = selected[i];
+            if (applyBtn) applyBtn.innerHTML = "Applying " + (i + 1) + " of " + selected.length + "…";
+            try {
+              const j = await liveAction("fix-signatures?" + base + "&filter=" + encodeURIComponent(b64u(r.email)), null, null, { timeout: 90000 });
+              if (j && j.ok === false) {
+                if (j.reason === "run_first") { toast("Run a live audit first", "err"); return; }
+                failed++;
+              } else { applied += j.ok || 0; failed += j.failed || 0; done.push(r.email); }
+            } catch (e) { failed++; }
+          }
+          dropApplied(done);
+        }
+      } catch (e) { toast("Request failed", "err"); return; }
+      finally { if (applyBtn) { applyBtn.disabled = false; if (orig != null) applyBtn.innerHTML = orig; } }
       if (batch) S.A.sigTemplates[batch] = tpl; else S.A.sigTemplates._all = tpl;
-      logAction({action: "signatures", count: applied, failed: j.failed || 0, scope: batch || "all brands" });
+      logAction({action: "signatures", count: applied, failed: failed, scope: batch || "all brands" });
       saveState();
       closeModal("dlv-sig-overlay");
-      toast("Signatures applied to " + applied + " mailbox(es)" + (j.failed ? " · " + j.failed + " failed" : "") + (batch ? " in " + batch : ""), "ok");
+      toast("Signatures applied to " + applied + " mailbox(es)" + (failed ? " · " + failed + " failed" : "") + (batch ? " in " + batch : ""), failed ? "err" : "ok");
       invalidateMgrDh();
       paintPage();
       return;
     }
-    if (batch) {
-      S.A.signature.missing = S.A.signature.missing.filter((r) => (r.batch || "(no batch)") !== batch);
-      S.A.signature.mismatch = S.A.signature.mismatch.filter((r) => (r.batch || "(no batch)") !== batch);
-    } else {
-      S.A.signature.missing = [];
-      S.A.signature.mismatch = [];
-    }
+    dropApplied(selected.map((r) => r.email));
     if (batch) S.A.sigTemplates[batch] = tpl; else S.A.sigTemplates._all = tpl;
-    logAction({action: "signatures", count: n, failed: 0, scope: batch || "all brands" });
+    logAction({action: "signatures", count: selected.length, failed: 0, scope: batch || "all brands" });
     saveState();
     closeModal("dlv-sig-overlay");
-    toast("Signatures applied to " + n + " mailbox(es)" + (batch ? " in " + batch : ""), "ok");
+    toast("Signatures applied to " + selected.length + " mailbox(es)" + (batch ? " in " + batch : ""), "ok");
     paintPage();
   }
 
@@ -5612,6 +5703,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "open-caps-preview") { runAct(act, () => openCapsPreviewModal()); return; }
     if (act === "caps-apply") { runAct(act, () => capsApply()); return; }
     if (act === "sig-apply") { runAct(act, () => sigApply()); return; }
+    if (act === "sig-only-shown") {
+      // One click = the ticked set becomes exactly the rows the search shows.
+      UI.sig.sel = new Set(sigVisibleRows().map((r) => r.email));
+      sigPaintList();
+      return;
+    }
     if (act === "pn-apply") { runAct(act, () => pnApply()); return; }
     if (act === "wu-apply") { runAct(act, () => wuApply()); return; }
     if (act === "verify-campaign") { runAct(act, () => verifyCampaignAction(t.dataset.id, t.dataset.mode, t)); return; }
@@ -5680,6 +5777,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
     if (act === "mgr-row-select") { const id = Number(t.dataset.id); if (t.checked) UI.mgr.sel.add(id); else UI.mgr.sel.delete(id); paintManagerRows(); return; }
     if (act === "sig-batch-change") { sigOnBatchChange(); return; }
+    if (act === "sig-row-select") {
+      const em = t.dataset.email;
+      if (t.checked) UI.sig.sel.add(em); else UI.sig.sel.delete(em);
+      sigSyncCounts();
+      return;
+    }
+    if (act === "sig-master") {
+      // Acts on the rows the user can see: with a search term typed, ticking
+      // the master box means "select all shown"; unticking clears them.
+      const vis = sigVisibleRows();
+      if (t.checked) vis.forEach((r) => UI.sig.sel.add(r.email)); else vis.forEach((r) => UI.sig.sel.delete(r.email));
+      sigPaintList();
+      return;
+    }
     if (act === "dl-include-young") { UI.delist.includeYoung = t.checked; renderDelistBody(); return; }
     if (act === "rem-date-input") { updateRemDateHint(t.value); return; }
   }
@@ -5719,7 +5830,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       }
       return;
     }
-    if (act === "sig-search") { const r = inboxFilterRows("dlv-sig-targets", t.value); $id("dlv-sig-target-n").textContent = t.value.trim() ? r.shown + " of " + r.total : String(r.total); return; }
+    if (act === "sig-search") { UI.sig.search = t.value; sigPaintList(); return; }
     if (act === "sig-tpl-input") { sigUpdatePreview(); return; }
     if (act === "pn-search") { const r = inboxFilterRows("dlv-pn-targets", t.value); $id("dlv-pn-target-n").textContent = t.value.trim() ? r.shown + " of " + r.total : String(r.total); return; }
     if (act === "wu-search") { const r = inboxFilterRows("dlv-wu-targets", t.value); $id("dlv-wu-target-n").textContent = t.value.trim() ? r.shown + " of " + r.total : String(r.total); return; }
