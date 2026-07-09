@@ -2194,7 +2194,7 @@ NOTIFICATIONS_SLIM_SELECT = (
     "id,campaign_id,campaign_name,client,client_id,finding_type,section,"
     "block_number,priority,title,detail,suggested_action,action_type,"
     "api_safe,smartlead_url,sent,positive,replied,sent_pos_ratio,"
-    "completion_pct,reply_rate,status,created_at,actioned_at"
+    "completion_pct,reply_rate,status,created_at,actioned_at,variants"
 )
 
 
@@ -3226,7 +3226,7 @@ _JOBS_CAP = 200
 
 _JOB_DB_FIELDS = ("id", "kind", "label", "campaign_id", "mode", "status",
                   "progress", "counts", "error", "dry_run", "started_at",
-                  "finished_at", "auto_remove", "resume_count")
+                  "finished_at", "auto_remove", "resume_count", "owner")
 # NOTE: app_jobs has no `mock` column (confirmed live: PGRST204 "column
 # app_jobs.mock does not exist") - the in-memory job dict keeps a `mock` key
 # for runtime branching, but it is deliberately excluded from _JOB_DB_FIELDS.
@@ -3259,7 +3259,8 @@ def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool =
            "progress": {"done": 0, "total": 0}, "started_at": None,
            "finished_at": None, "counts": {}, "error": None, "dry_run": dry_run,
            "cancel_requested": False, "auto_remove": auto_remove,
-           "resume_count": resume_count, "mock": mock}
+           "resume_count": resume_count, "mock": mock,
+           "owner": _SERVER_INSTANCE}  # which server instance owns this job (see recovery)
     with JOBS_LOCK:
         JOBS[job["id"]] = job
         if len(JOBS) > _JOBS_CAP:
@@ -3315,68 +3316,41 @@ def _is_mock_job_row(r: dict) -> bool:
     return label.startswith("[TEST]") or cid.startswith("MOCK")
 
 
+_SERVER_INSTANCE = (os.environ.get("RENDER_INSTANCE_ID")
+                    or os.environ.get("RENDER_SERVICE_ID")
+                    or ("render" if os.environ.get("RENDER") else "local"))
+
+
 def _jobs_recover_orphans():
-    """On boot, any app_jobs row still 'running'/'queued' belonged to the process
-    that just died — its worker thread is gone.
+    """On boot, mark this instance's orphaned in-flight jobs 'interrupted'.
 
-    verify jobs (not dry-run, resume_count < 3) are automatically re-enqueued
-    as a fresh job: the 60-day verdict cache (`_cached_verdicts`) means the
-    resumed pass skips every email already checked, so it naturally continues
-    from where it died instead of re-spending verifier credits. The empty-
-    targets path in `_verify_job_worker` also means a resume against a
-    campaign with nothing left to verify just completes cleanly, so this
-    can't loop on a dead campaign.
+    A job left 'running'/'queued' when a process dies has no live worker, so the
+    UI must be told to stop showing it as active. We DO NOT auto-re-run it: the
+    user resumes on demand with the sidebar's Resume button (which continues
+    cheaply from the 60-day verdict cache). Auto-resume was removed because it
+    stormed — every server incarnation (including overlapping deploy instances
+    and any dev box sharing this Supabase) would re-enqueue the SAME jobs,
+    producing duplicate concurrent ListMint runs and wasted credits.
 
-    Everything else - remove_bad jobs, dry runs, and verify jobs that have
-    already auto-resumed 3 times - is left 'interrupted' so the UI shows a
-    resumable state instead of a job that polls forever or 404s.
-
-    MUST run after the dispatcher worker threads are started (see __main__)
-    since a resume re-enqueues onto _JOB_QUEUE, which needs a consumer."""
+    Ownership guard: only touch rows this instance owns (`owner` = _SERVER_INSTANCE),
+    so a local/dev server can never mark or disturb production's live jobs, and
+    vice-versa. Rows with no owner (legacy) are only reclaimed by the render
+    instance, never by a local box."""
     try:
-        stuck = sb("GET", "app_jobs?status=in.(running,queued)"
-                          "&select=id,kind,label,campaign_id,mode,dry_run,auto_remove,resume_count")
+        stuck = sb("GET", "app_jobs?status=in.(running,queued)&select=id,owner")
     except Exception:  # noqa: BLE001 — recovery is best-effort; never block boot
         return
-    resumed = 0
     for r in (stuck or []):
+        owner = r.get("owner")
+        mine = (owner == _SERVER_INSTANCE) or (owner is None and _SERVER_INSTANCE == "render")
+        if not mine:
+            continue  # another instance owns this job — leave it strictly alone
         try:
-            resume_count = r.get("resume_count") or 0
-            can_resume = (r.get("kind") == "verify" and not r.get("dry_run")
-                         and resume_count < 3 and resumed < _MAX_AUTO_RESUMES_PER_BOOT)
-            if can_resume:
-                campaign_id = r["campaign_id"]
-                mode = r.get("mode") or "mv"
-                mock = _is_mock_job_row(r)
-                sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
-                mv_key = KEYS.get("MILLIONVERIFIER_API_KEY") or os.environ.get("MILLIONVERIFIER_API_KEY")
-                lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY")
-                label = r.get("label") or f"Verify campaign {campaign_id}"
-                new_job = _new_job("verify", label, campaign_id, mode, dry_run=False,
-                                   auto_remove=bool(r.get("auto_remove")),
-                                   resume_count=resume_count + 1, mock=mock)
-                _enqueue_job(_verify_job_worker, new_job,
-                            (new_job, campaign_id, mode, mv_key, lm_key, sl_key))
-                sb("PATCH", f"app_jobs?id=eq.{r['id']}",
-                   {"status": "interrupted",
-                    "error": f"Server restarted mid-run — auto-resumed as job "
-                             f"{new_job['id']} (attempt {resume_count + 1}/3).",
-                    "finished_at": _now_iso()})
-                resumed += 1
-                try:
-                    log_activity("/api/verify-campaign",
-                                 payload={"campaign_id": campaign_id, "old_job_id": r["id"],
-                                          "new_job_id": new_job["id"],
-                                          "resume_count": resume_count + 1},
-                                 actor="deliverability", action="verify_resume",
-                                 entity="campaign", entity_id=campaign_id)
-                except Exception:  # noqa: BLE001 — logging must never block recovery
-                    pass
-            else:
-                sb("PATCH", f"app_jobs?id=eq.{r['id']}",
-                   {"status": "interrupted",
-                    "error": "Server restarted mid-run — re-run to resume (already-checked emails are cached).",
-                    "finished_at": _now_iso()})
+            sb("PATCH", f"app_jobs?id=eq.{r['id']}",
+               {"status": "interrupted",
+                "error": "Interrupted by a server restart — click Resume to continue "
+                         "(already-checked emails are cached, so it picks up where it left off).",
+                "finished_at": _now_iso()})
         except Exception:  # noqa: BLE001 — one bad row must not stop the rest of recovery
             continue
 
@@ -3384,6 +3358,70 @@ def _jobs_recover_orphans():
 def _now_iso():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+def _reenqueue_verify(r: dict, new_resume_count: int):
+    """Reconstruct a fresh verify continuation from a durable app_jobs row and
+    enqueue it. Shared by boot auto-recovery and the manual Resume button. The
+    60-day verdict cache means the continuation skips every already-checked
+    email, so it resumes cheaply from where the old run died. Returns new_job."""
+    campaign_id = r["campaign_id"]
+    mode = r.get("mode") or "mv"
+    mock = _is_mock_job_row(r)
+    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    mv_key = KEYS.get("MILLIONVERIFIER_API_KEY") or os.environ.get("MILLIONVERIFIER_API_KEY")
+    lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY")
+    label = r.get("label") or f"Verify campaign {campaign_id}"
+    new_job = _new_job("verify", label, campaign_id, mode, dry_run=False,
+                       auto_remove=bool(r.get("auto_remove")),
+                       resume_count=new_resume_count, mock=mock)
+    _enqueue_job(_verify_job_worker, new_job,
+                 (new_job, campaign_id, mode, mv_key, lm_key, sl_key))
+    return new_job
+
+
+def _campaign_has_active_job(campaign_id) -> bool:
+    """True if a queued/running job already exists for this campaign — memory
+    first, then the durable table. Stops a manual Resume (or a duplicate click)
+    from spawning a second concurrent run of the same campaign."""
+    cid = str(campaign_id)
+    with JOBS_LOCK:
+        if any(str(j.get("campaign_id")) == cid and j.get("status") in ("queued", "running")
+               for j in JOBS.values()):
+            return True
+    rows = sb("GET", f"app_jobs?campaign_id=eq.{cid}&status=in.(queued,running)&select=id&limit=1")
+    return bool(rows)
+
+
+def resume_job(jid: str):
+    """Manual Resume (the sidebar button). Re-runs an interrupted verify job as
+    a fresh continuation. Returns (body, status)."""
+    job = _job_get(jid)
+    if not job:
+        return {"error": "not_found"}, 404
+    if job.get("kind") != "verify" or job.get("dry_run"):
+        return {"error": "not_resumable",
+                "message": "Only an interrupted verification can be resumed."}, 409
+    if job.get("status") not in ("interrupted", "failed"):
+        return {"error": "not_interrupted",
+                "message": "This task isn't interrupted — nothing to resume."}, 409
+    campaign_id = job.get("campaign_id")
+    if _campaign_has_active_job(campaign_id):
+        return {"error": "already_active",
+                "message": "This campaign is already being verified — no need to resume."}, 409
+    # Manual resume gets a fresh auto-resume budget (reset to 0) since the user
+    # explicitly asked for it; the empty-targets path guarantees it still can't
+    # loop forever on a campaign with nothing left to check.
+    new_job = _reenqueue_verify(job, 0)
+    try:
+        log_activity("/api/jobs/resume",
+                     payload={"campaign_id": campaign_id, "old_job_id": jid,
+                              "new_job_id": new_job["id"]},
+                     actor="deliverability", action="verify_resume_manual",
+                     entity="campaign", entity_id=campaign_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"job_id": new_job["id"]}, 202
 
 
 # ── Verify/remove job queue ─────────────────────────────────────────────────
@@ -7855,6 +7893,10 @@ class Handler(SimpleHTTPRequestHandler):
                 job["cancel_requested"] = True
             log_activity(path, action="cancel", entity="job", entity_id=jid)
             return self._json({"ok": True})
+        if path.startswith("/api/jobs/") and path.endswith("/resume"):
+            jid = path[len("/api/jobs/"):-len("/resume")]
+            body, status = resume_job(jid)
+            return self._json(body, status)
         if path == "/api/verify-campaign":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -7900,7 +7942,13 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             if payload.get("reset"):
-                return self._json(mock_deliv.control("reset", {}))
+                out = mock_deliv.control("reset", {})
+                # Re-sync the cached audit blob so the UI's next paint reads
+                # the pristine fleet instead of a pre-reset snapshot.
+                with _DELIV_AUDIT_LOCK:
+                    _DELIV_AUDIT.update(blob=mock_deliv.run_audit_blob(), ts=time.time(),
+                                        running=False, error=None)
+                return self._json(out)
             return self._json(mock_deliv.control("set-scenario", payload))
         if path == "/api/deliverability/_audit/refresh":
             length = int(self.headers.get("Content-Length") or 0)

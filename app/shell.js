@@ -445,6 +445,14 @@ function setupChartTooltip(wrap) {
 }
 .nj-cancel-btn:hover { background: var(--bg-sunken, #F7F7F6); color: var(--ink, #14110E); }
 .nj-cancel-btn:disabled { opacity: 0.5; cursor: default; }
+.nj-card-actions { margin-top: 8px; }
+.nj-resume-btn {
+  border: 1px solid var(--orange, #FF4D00); background: var(--orange, #FF4D00);
+  color: #fff; font-size: 11px; font-weight: 600;
+  padding: 4px 12px; border-radius: 999px; cursor: pointer; flex: none; line-height: 1.4;
+}
+.nj-resume-btn:hover { background: var(--orange-700, #C63B00); border-color: var(--orange-700, #C63B00); }
+.nj-resume-btn:disabled { opacity: 0.6; cursor: default; }
     `;
     document.head.appendChild(style);
   }
@@ -481,8 +489,26 @@ function setupChartTooltip(wrap) {
   // Set of job ids with an in-flight cancel POST — guards double-clicks
   // (the next poll removes the id once the job leaves queued/running).
   const cancelling = new Set();
+  const resuming = new Set();  // same guard for in-flight Resume POSTs
 
   function onListClick(e) {
+    const resume = e.target.closest(".nj-resume-btn");
+    if (resume) {
+      const jid = resume.getAttribute("data-jid");
+      if (!jid || resuming.has(jid)) return;
+      resuming.add(jid);
+      resume.disabled = true;
+      resume.textContent = "Resuming…";
+      fetch(`/api/jobs/${encodeURIComponent(jid)}/resume`, { method: "POST" })
+        .then((r) => r.json().catch(() => ({})))
+        .then((j) => {
+          if (j && j.job_id) { ping(); }          // new continuation job — refresh fast
+          else if (resume.isConnected) { resume.disabled = false; resume.textContent = "Resume"; }
+        })
+        .catch(() => { if (resume.isConnected) { resume.disabled = false; resume.textContent = "Resume"; } })
+        .finally(() => resuming.delete(jid));
+      return;
+    }
     const btn = e.target.closest(".nj-cancel-btn");
     if (!btn) return;
     const jid = btn.getAttribute("data-jid");
@@ -521,13 +547,19 @@ function setupChartTooltip(wrap) {
     setTimeout(() => elTab && elTab.classList.remove("nj-flash"), 1300);
   }
 
-  function renderCard(job, queuePos) {
+  function renderCard(job, queuePos, campaignBusy) {
     const status = job.status || "queued";
     const label = jEsc(job.label || job.kind || "Job");
     const pill = `<span class="nj-pill ${statusClass(status)}"><span class="nj-dot"></span>${statusLabel(status)}</span>`;
     const cancellable = status === "queued" || status === "running";
     const cancelBtn = cancellable
       ? `<button type="button" class="nj-cancel-btn" data-jid="${jEsc(job.id)}">Cancel</button>` : "";
+    // Resume: an interrupted verification can be continued on demand instead of
+    // waiting for the next server restart's auto-resume. Hidden when that
+    // campaign is already being verified again (no duplicate runs).
+    const resumable = status === "interrupted" && job.kind === "verify" && !job.dry_run && !campaignBusy;
+    const resumeBtn = resumable
+      ? `<button type="button" class="nj-resume-btn" data-jid="${jEsc(job.id)}">Resume</button>` : "";
     let progress = "";
     if (status === "running" && job.progress && typeof job.progress === "object") {
       const done = job.progress.done, total = job.progress.total;
@@ -555,9 +587,10 @@ function setupChartTooltip(wrap) {
       if (line) countsHtml = `<div class="nj-card-counts">${line}</div>`;
     }
     const cardCls = (status === "failed" || status === "interrupted") ? "nj-card jf-failed" : "nj-card";
+    const resumeRow = resumeBtn ? `<div class="nj-card-actions">${resumeBtn}</div>` : "";
     return `<div class="${cardCls}">
       <div class="nj-card-top"><span class="nj-card-label">${label}</span>${pill}</div>
-      ${progress}${timeLine}${countsHtml}
+      ${progress}${timeLine}${countsHtml}${resumeRow}
     </div>`;
   }
 
@@ -578,7 +611,14 @@ function setupChartTooltip(wrap) {
           : 0);
         return ahead;
       };
-      elList.innerHTML = jobs.map((j) => renderCard(j, posFor(j))).join("");
+      // Campaigns with a live job — used to hide Resume on an interrupted card
+      // whose campaign is already being verified again (avoids duplicate runs).
+      const busyCampaigns = new Set(jobs
+        .filter((j) => (j.status === "queued" || j.status === "running") && j.campaign_id != null)
+        .map((j) => String(j.campaign_id)));
+      elList.innerHTML = jobs.map((j) =>
+        renderCard(j, posFor(j), j.campaign_id != null && busyCampaigns.has(String(j.campaign_id)))
+      ).join("");
     }
     const activeCount = jobs.filter((j) => j.status === "queued" || j.status === "running").length;
     elBadge.textContent = String(activeCount);
