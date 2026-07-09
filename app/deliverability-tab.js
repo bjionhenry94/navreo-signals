@@ -529,6 +529,232 @@
   function resetState() { S = freshState(); S.A.date = todayISO(); saveState(); }
 
   /* ============================================================
+     3a. LIVE DATA LAYER (Stage A) — same-origin proxy fetch, live/
+         sample mode, /run-blob → S mapping, per-panel live fetch.
+         READ path only: NO mutating action talks to the backend here
+         (that is Stage B) — every action still mutates the local S,
+         which stays no-op-safe in live mode (its finders guard on the
+         mock ids). The proxy at /api/deliverability/<path> adds the
+         backend Basic-Auth server-side, so nothing is sent client-side.
+     ============================================================ */
+  const DLV_API = "/api/deliverability/";
+  // Data-source mode: null = not probed yet, "live" = backend reachable,
+  // "sample" = backend unconfigured/unreachable → mock data + a banner.
+  const DATA = {
+    mode: null,
+    probed: false,          // the config probe (GET campaigns) resolved once
+    booting: false,         // a bootData() pass is in flight
+    runLoading: false,      // a POST /run is in flight
+    runError: null,         // last /run failure kind (banner)
+    sampleDismissed: false, // user closed the "sample data" banner
+    // Manager (mailbox views) live cache — keyed by view+batch.
+    mgr: { key: null, pendingKey: null, loading: false, error: false, rows: null, counts: null, batches: null, total: null, truncated: false },
+    // Domain-health live cache — keyed by window+minSent+cutoff.
+    dh: { key: null, pendingKey: null, loading: false, error: false, done: false },
+  };
+  function isLive() { return DATA.mode === "live"; }
+
+  // Typed fetch error so callers can distinguish 503 (backend unconfigured)
+  // from 502 (upstream error) from a raw network/timeout failure.
+  // kind ∈ "unconfigured" | "upstream" | "network" | "http".
+  function ApiError(kind, status, message) {
+    this.name = "ApiError"; this.kind = kind; this.status = status || 0;
+    this.message = message || kind;
+  }
+  ApiError.prototype = Object.create(Error.prototype);
+
+  async function apiFetch(path, opts) {
+    opts = opts || {};
+    const ctrl = ("AbortController" in window) ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, opts.timeout || 30000) : null;
+    let resp;
+    try {
+      resp = await fetch(DLV_API + path, {
+        method: opts.method || "GET",
+        headers: opts.body != null ? { "Content-Type": "application/json" } : undefined,
+        body: opts.body != null ? JSON.stringify(opts.body) : undefined,
+        signal: ctrl ? ctrl.signal : undefined,
+        // NO credentials — the same-origin proxy owns the backend auth.
+      });
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      throw new ApiError("network", 0, String((e && e.message) || e));
+    }
+    if (timer) clearTimeout(timer);
+    if (resp.status === 503) throw new ApiError("unconfigured", 503, "deliverability backend not configured");
+    if (resp.status === 502) throw new ApiError("upstream", 502, "deliverability upstream error");
+    if (!resp.ok) throw new ApiError("http", resp.status, "HTTP " + resp.status);
+    const ct = resp.headers.get("Content-Type") || "";
+    if (ct.indexOf("application/json") === -1) return resp.text(); // CSV etc.
+    return resp.json();
+  }
+  function apiGet(path, opts) { return apiFetch(path, Object.assign({ method: "GET" }, opts)); }
+  function apiPost(path, body, opts) { return apiFetch(path, Object.assign({ method: "POST", body: body || {} }, opts)); }
+
+  // Map the live /run blob onto a complete S.A. Base = a fresh mock A so any
+  // field the blob does NOT carry (inboxRows for the manager fallback,
+  // inactiveRows/remHealth for the Stage-C-owned View modals) stays populated
+  // and valid; then overlay every field the backend provides, adapting the
+  // handful of names that differ (blacklist→blacklistRows, highbCamps→
+  // campaignsFlagged). Sets A._live so derive()/warmupTile() prefer the live
+  // pre-computed aggregates over recomputing from the (mock) inboxRows.
+  function mapRunBlob(blob) {
+    const A = buildMock();
+    // Fields whose live shape already matches what the renderers read off S.A.
+    const keep = [
+      "date", "inboxes", "domains", "active", "sent", "reply_pct", "bounce_pct",
+      "replyTrend", "campLow", "highb", "blacklistCleared", "spfMiss", "dkimMiss",
+      "dmarcMiss", "noNS", "quarantine", "reject", "none", "smtp", "imap", "inactive",
+      "warmupResting", "warmupDue", "lifecycle", "warmupConfig", "signature",
+      "sendingDeviation", "batchStats", "history", "acks", "delisting", "reminders",
+      "domainHealth", "sigTemplates",
+      // live-only aggregates that derive() prefers when A._live is set:
+      "blocked", "blockedReal", "blockedSoft", "reasons",
+    ];
+    keep.forEach((k) => { if (blob[k] != null) A[k] = blob[k]; });
+    // blacklist[] → blacklistRows[]: the live rows omit url/advice/cleared that
+    // renderBlacklistRow expects, so synthesize them (Object.assign target-first
+    // so any real backend field of the same name wins).
+    if (Array.isArray(blob.blacklist)) {
+      A.blacklistRows = blob.blacklist.map((b) => Object.assign({
+        url: "https://mxtoolbox.com/domain/" + b.domain + "/blacklist",
+        advice: (b.ageDays != null && b.ageDays < 30) ? "REPLACE (young domain)" : "PAUSE + FIX",
+        cleared: false,
+      }, b));
+    }
+    // highbCamps[] → campaignsFlagged[] (drives the verify to-do + tile count).
+    if (Array.isArray(blob.highbCamps)) {
+      A.campaignsFlagged = blob.highbCamps.map((c) => ({
+        id: c.id, name: c.name,
+        url: c.url || ("https://app.smartlead.ai/app/campaign/" + c.id + "/analytics"),
+        bounce_pct: c.bounce_pct, sent: c.sent,
+      }));
+    }
+    // Per-reminder health isn't in the /run blob — an empty map keeps
+    // renderReminderRow's `S.A.remHealth[r.id]` lookups returning undefined
+    // (health line simply omitted) instead of throwing on a missing object.
+    A.remHealth = {};
+    A._live = true;
+    return A;
+  }
+
+  // Probe the backend once and set DATA.mode; in live mode, overlay the cheap
+  // /reminders immediately and kick a background /run to fill the aggregate S.A
+  // (unless the in-memory / sessionStorage S is already a live snapshot).
+  async function bootData() {
+    if (DATA.booting) return;
+    if (DATA.probed) {
+      if (isLive() && !(S.A && S.A._live) && !DATA.runLoading) runLiveAuditBg(false);
+      return;
+    }
+    DATA.booting = true;
+    try {
+      await apiGet("campaigns", { timeout: 20000 }); // config probe (light)
+      DATA.mode = "live";
+    } catch (e) {
+      DATA.mode = "sample"; // 503 unconfigured OR network/upstream → sample
+    }
+    DATA.probed = true;
+    DATA.booting = false;
+    try { sessionStorage.setItem("dlv_data_mode", DATA.mode); } catch (e) {}
+    if (isLive()) {
+      // Cheap live wins first: reminders paint before the ~2-min /run resolves.
+      apiGet("reminders", { timeout: 20000 }).then((rem) => {
+        if (Array.isArray(rem)) { S.A.reminders = rem; saveState(); paintPage(); }
+      }).catch(() => {});
+      if (!(S.A && S.A._live)) runLiveAuditBg(false);
+      else paintPage();
+    } else {
+      paintPage(); // surface the sample-data banner
+    }
+  }
+
+  // POST /run in the background (~1-2 min): non-blocking banner while it runs,
+  // then S.A ← mapped blob + repaint. `force` is cosmetic (the button path);
+  // it always runs regardless of the current snapshot.
+  async function runLiveAuditBg(force) {
+    if (DATA.runLoading) return;
+    DATA.runLoading = true; DATA.runError = null;
+    paintPage(); // show the "Running live audit…" banner
+    try {
+      const blob = await apiPost("run", {}, { timeout: 200000 });
+      S.A = mapRunBlob(blob);
+      DATA.mode = "live";
+      if (S.ui) delete S.ui.redSnapshot; // re-baseline partial-progress math to live
+      saveState();
+      // Invalidate the per-panel live caches so they re-fetch against the new run.
+      DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
+      DATA.dh.key = null; DATA.dh.done = false;
+    } catch (e) {
+      DATA.runError = (e && e.kind) ? e.kind : "error";
+    } finally {
+      DATA.runLoading = false;
+      paintPage();
+    }
+  }
+
+  // ── Manager live fetch: mailbox views via GET /inboxes?view=&batch= ──
+  function mgrLiveKey() { return "mbx|" + UI.mgr.view + "|" + (UI.mgr.batch || ""); }
+  // Returns true when DATA.mgr holds rows for the current view/batch; otherwise
+  // kicks a fetch (idempotent per key) and returns false so the caller paints a
+  // loading/error state. Search stays a client-side filter on the cached rows.
+  function ensureMgrLive() {
+    const key = mgrLiveKey();
+    if (DATA.mgr.key === key && DATA.mgr.rows) return true;
+    if (DATA.mgr.loading && DATA.mgr.pendingKey === key) return false;
+    DATA.mgr.loading = true; DATA.mgr.error = false; DATA.mgr.pendingKey = key;
+    const q = "inboxes?view=" + encodeURIComponent(UI.mgr.view) + "&batch=" + encodeURIComponent(UI.mgr.batch || "");
+    apiGet(q, { timeout: 90000 }).then((r) => {
+      DATA.mgr.key = key; DATA.mgr.pendingKey = null; DATA.mgr.loading = false; DATA.mgr.error = false;
+      DATA.mgr.rows = (r && Array.isArray(r.rows)) ? r.rows : [];
+      DATA.mgr.counts = (r && r.counts) || null;
+      DATA.mgr.batches = (r && Array.isArray(r.batches)) ? r.batches : null;
+      DATA.mgr.total = r ? r.total : null;
+      DATA.mgr.truncated = !!(r && r.truncated);
+      if (dlvSubtab === "manager") paintPage(); // refresh selector counts + rows
+    }).catch(() => {
+      DATA.mgr.pendingKey = null; DATA.mgr.loading = false; DATA.mgr.error = true;
+      if (dlvSubtab === "manager") paintManagerRows();
+    });
+    return false;
+  }
+
+  // ── Domain view live fetch: GET /domain-health?start&end&minSent&cutoff ──
+  // The /run blob already ships a live domainHealth, so the domain table has
+  // live rows on first open with NO gate; this refetch keeps it in sync when the
+  // owner changes the window/min-sent/cutoff controls (server-affecting params).
+  function dhLiveKey() {
+    const c = dhCutoffMin();
+    return "dh|" + (S.A.domainHealth.start || "") + "|" + (S.A.domainHealth.end || "") + "|" + c.minSent + "|" + c.cutoff;
+  }
+  function ensureDhLive() {
+    const key = dhLiveKey();
+    if (DATA.dh.key === key && DATA.dh.done) return;
+    if (DATA.dh.loading && DATA.dh.pendingKey === key) return;
+    DATA.dh.loading = true; DATA.dh.error = false; DATA.dh.pendingKey = key;
+    const c = dhCutoffMin();
+    const q = "domain-health?start=" + encodeURIComponent(S.A.domainHealth.start || "") +
+      "&end=" + encodeURIComponent(S.A.domainHealth.end || "") +
+      "&minSent=" + encodeURIComponent(c.minSent) + "&cutoff=" + encodeURIComponent(c.cutoff);
+    apiGet(q, { timeout: 120000 }).then((r) => {
+      if (r && Array.isArray(r.rows)) {
+        S.A.domainHealth = Object.assign({}, S.A.domainHealth, {
+          rows: r.rows, resting: r.resting || {}, restingDue: r.restingDue || {},
+          start: r.start || S.A.domainHealth.start, end: r.end || S.A.domainHealth.end,
+          minSent: r.minSent != null ? r.minSent : S.A.domainHealth.minSent,
+          cutoff: r.cutoff != null ? r.cutoff : S.A.domainHealth.cutoff,
+          counts: r.counts || S.A.domainHealth.counts,
+        });
+        saveState();
+      }
+      DATA.dh.key = key; DATA.dh.pendingKey = null; DATA.dh.done = true; DATA.dh.loading = false;
+      if (dlvSubtab === "manager" && UI.mgr.view === "domain") paintPage();
+    }).catch(() => {
+      DATA.dh.pendingKey = null; DATA.dh.loading = false; DATA.dh.error = true; DATA.dh.done = true; DATA.dh.key = key;
+    });
+  }
+
+  /* ============================================================
      3. Derived counts — computed fresh from S every paint so every
         tile / banner / to-do / view-selector count stays in sync.
      ============================================================ */
@@ -549,11 +775,24 @@
     const domainHealthCounts = { total: dhRows.length, sized, flagged: flaggedTotal, keep: Math.max(0, sized - flaggedTotal - maildosoN), maildoso: maildosoN, resting: restingCount };
 
     const blockedRows = A.inboxRows.filter((r) => r.kind === "blocked");
-    const reasonCounts = groupCount(blockedRows, (r) => r.reason_category || "other");
-    const blockedReal = Object.entries(reasonCounts).reduce((s, [k, v]) => s + (k === "soft" ? 0 : v), 0);
-    const blockedSoft = reasonCounts.soft || 0;
+    // Live mode: the /run blob carries pre-computed blocked aggregates over the
+    // full 8k-mailbox fleet — prefer them over recomputing from the mock
+    // inboxRows base (which mapRunBlob() keeps only as a manager fallback).
+    let reasonCounts = groupCount(blockedRows, (r) => r.reason_category || "other");
+    let blockedReal = Object.entries(reasonCounts).reduce((s, [k, v]) => s + (k === "soft" ? 0 : v), 0);
+    let blockedSoft = reasonCounts.soft || 0;
+    let blockedTotal = blockedRows.length;
+    if (A._live) {
+      if (A.reasons && typeof A.reasons === "object") reasonCounts = A.reasons;
+      if (A.blockedReal != null) blockedReal = Number(A.blockedReal);
+      if (A.blockedSoft != null) blockedSoft = Number(A.blockedSoft);
+      if (A.blocked != null) blockedTotal = Number(A.blocked);
+    }
 
-    const inboxCounts = {
+    // Inbox counts feed the manager view-selector labels. In live mode prefer
+    // the counts returned alongside GET /inboxes (full-fleet); until that
+    // resolves fall back to the mock-derived counts so the panel never blanks.
+    let inboxCounts = {
       total: A.inboxRows.length,
       blocked: A.inboxRows.filter((r) => r.kind === "blocked").length,
       reconnect: A.inboxRows.filter((r) => r.kind === "reconnect").length,
@@ -562,7 +801,9 @@
       rested: A.inboxRows.filter((r) => r.kind === "ok" && r.rested).length,
       sending: A.inboxRows.filter((r) => r.kind === "ok" && r.cap > 0).length,
     };
-    const inboxBatches = Object.entries(groupCount(A.inboxRows, (r) => (r.tags || [])[0] || "(no batch)")).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+    if (A._live && DATA.mgr && DATA.mgr.counts) inboxCounts = Object.assign({}, inboxCounts, DATA.mgr.counts);
+    let inboxBatches = Object.entries(groupCount(A.inboxRows, (r) => (r.tags || [])[0] || "(no batch)")).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+    if (A._live && DATA.mgr && Array.isArray(DATA.mgr.batches)) inboxBatches = DATA.mgr.batches.slice();
     const dhBatches = Object.entries(groupCount(dhRows.flatMap((d) => (d.batches || []).map((b) => ({ b }))), (x) => x.b)).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
 
     const signatureCount = A.signature.missing.length + A.signature.mismatch.length;
@@ -582,7 +823,7 @@
 
     return {
       today, dhRows, resting, restingDue: A.domainHealth.restingDue || {}, flaggedTotal, flaggedActionable, restingCount, recovered,
-      domainHealthCounts, reasonCounts, blockedReal, blockedSoft, blockedTotal: blockedRows.length,
+      domainHealthCounts, reasonCounts, blockedReal, blockedSoft, blockedTotal,
       inboxCounts, inboxBatches, dhBatches, signatureCount, warmupConfigCount, deviationCount, newCount, retiredCount,
       reminderDueCount, blMailboxes, blResting, blSending, blClearedCount, uncleanedVerifyCamps,
     };
@@ -859,6 +1100,14 @@ table.dlv-bt th:not(:first-child),table.dlv-bt td:not(:first-child){text-align:r
 .dlv-spinner.ink{border-color:rgba(20,17,14,.2);border-top-color:var(--orange-700)}
 @keyframes dlvspin{to{transform:rotate(360deg)}}
 .dlv-empty{color:var(--ink-3);text-align:center;padding:60px 0;font-size:14px}
+/* Stage-A data-source banner (sample-data notice / running-audit strip). */
+.dlv-data-banner{display:flex;align-items:center;gap:10px;padding:9px 13px;border-radius:9px;margin-bottom:14px;font-size:13px;line-height:1.45;border:1px solid transparent}
+.dlv-data-banner .dlv-data-banner-txt{flex:1}
+.dlv-data-banner.sample{background:var(--amber-50,#fdf6e3);border-color:var(--amber-200,#e7d5a3);color:var(--ink-2)}
+.dlv-data-banner.running{background:var(--surface-2,#f4efe8);border-color:var(--border,#e2d8cb);color:var(--ink-2)}
+.dlv-data-banner.err{background:var(--red-50,#fdeceb);border-color:var(--red-200,#f0bcb7);color:var(--ink-2)}
+.dlv-data-banner-x{background:transparent;border:0;color:var(--ink-3);font-size:20px;line-height:1;cursor:pointer;padding:0 4px}
+.dlv-data-banner-x:hover{color:var(--ink)}
 .dlv-footer{margin-top:30px;color:var(--ink-3);font-size:11.5px;text-align:center}
 .dlv-confirm-body{font-size:13.5px;color:var(--ink-2);white-space:pre-wrap;line-height:1.55}
 #dlv-confirm-overlay{z-index:260}
@@ -1931,7 +2180,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      function's tile list readable. */
   function warmupTile(D) {
     const A = S.A;
-    const inactiveN = A.inactiveRows.length;
+    // Live mode carries the full-fleet inactive count as a scalar (A.inactive);
+    // the mock base only has a handful of inactiveRows for the View modal.
+    const inactiveN = (A._live && A.inactive != null) ? Number(A.inactive) : A.inactiveRows.length;
     const toWarmUpTotal = D.domainHealthCounts.flagged;
     const actionableToWarmUp = D.flaggedActionable;
     const dueBack = A.warmupDue;
@@ -2317,7 +2568,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-mb-bar">
           <span class="dlv-mb-cap">View</span>${viewSel}${isD ? `<span class="dlv-mb-cap">Show</span>` : ""}${domFilter}${batchSel}
           <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search ${isD ? "domain" : "email or domain"}…" value="${esc(UI.mgr.search)}" data-act="mgr-search">
-          <button class="btn sm" data-act="mgr-refresh" title="Re-pull (mock) from Smartlead">↻ Refresh</button>
+          <button class="btn sm" data-act="mgr-refresh" title="Re-pull the current view from Smartlead">↻ Refresh</button>
           ${isD ? `<button class="btn sm primary" data-act="open-caps-preview" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">⚙ Caps by reply rate</button>${glossMark("Sets each mailbox's daily send limit based on how well its domain is replying.")}` : ""}
           <span class="dlv-mb-count" id="dlv-mgr-count"></span>
           <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"></span>
@@ -2336,8 +2587,24 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
   function paintMailboxRows() {
     const body = $id("dlv-mgr-body");
-    const D = fullDerive();
-    let rows = mgrRowsForView(D);
+    if (!body) return;
+    let rows;
+    if (isLive()) {
+      // Live: rows for this view+batch come from GET /inboxes (endpoint already
+      // filters by view & batch; search stays a client-side filter below).
+      if (!ensureMgrLive()) {
+        body.innerHTML = DATA.mgr.error
+          ? `<tr><td colspan="8" class="dlv-empty">Couldn't load live mailboxes — <a class="dlv-dl" data-act="mgr-refresh">retry</a>.</td></tr>`
+          : `<tr><td colspan="8" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading live mailboxes…</td></tr>`;
+        const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
+        const cnt0 = $id("dlv-mgr-count"); if (cnt0) cnt0.textContent = DATA.mgr.error ? "load failed" : "loading…";
+        return;
+      }
+      rows = (DATA.mgr.rows || []).slice();
+    } else {
+      const D = fullDerive();
+      rows = mgrRowsForView(D);
+    }
     const q = (UI.mgr.search || "").trim().toLowerCase();
     if (q) rows = rows.filter((r) => (r.email || "").toLowerCase().includes(q) || (r.domain || "").toLowerCase().includes(q));
     if (UI.mgr.batch) rows = rows.filter((r) => (r.tags || []).includes(UI.mgr.batch));
@@ -2385,6 +2652,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
   function paintDomainRows() {
     const body = $id("dlv-mgr-body");
+    // Live: the /run blob already seeded a live domainHealth, so render current
+    // rows immediately; ensureDhLive() refetches (non-blocking) only when the
+    // window / min-sent / cutoff controls change the query key, then repaints.
+    if (isLive()) ensureDhLive();
     const D = fullDerive();
     const { minSent, cutoff } = dhCutoffMin();
     const resting = D.resting, restingDue = D.restingDue;
@@ -2830,6 +3101,34 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      20. Main paint pipeline
      ============================================================ */
+  // Stage-A data-source banner: a dismissible "sample data" notice when the
+  // live backend isn't configured, or a non-blocking "Running live audit…"
+  // strip while a POST /run is in flight. Rendered at the very top of #dlv-root
+  // (above the header) so it's the first thing the owner sees in either state.
+  function renderDataBanner() {
+    if (DATA.mode === "sample" && !DATA.sampleDismissed) {
+      return `<div class="dlv-data-banner sample" id="dlv-data-banner">
+        <span class="dlv-data-banner-txt">Showing <b>sample data</b> — the live deliverability backend isn't configured yet.` +
+        glossMark("The navreo-signals server needs the DELIV_AUDIT_AUTH env var set so its /api/deliverability proxy can reach the live audit backend.") +
+        `</span>
+        <button class="dlv-data-banner-x" data-act="dismiss-sample-banner" title="Dismiss">&times;</button>
+      </div>`;
+    }
+    if (isLive() && DATA.runLoading) {
+      return `<div class="dlv-data-banner running" id="dlv-data-banner">
+        <span class="dlv-spinner ink"></span>
+        <span class="dlv-data-banner-txt">Running live audit… (~1–2 min) — the numbers below refresh automatically when it finishes.</span>
+      </div>`;
+    }
+    if (isLive() && DATA.runError) {
+      return `<div class="dlv-data-banner err" id="dlv-data-banner">
+        <span class="dlv-data-banner-txt">Live audit couldn't complete (${esc(DATA.runError)}) — showing the last snapshot. Retry with ⚠ Run Live Audit.</span>
+        <button class="dlv-data-banner-x" data-act="dismiss-run-error" title="Dismiss">&times;</button>
+      </div>`;
+    }
+    return "";
+  }
+
   function paintPage() {
     const root = $id("dlv-root");
     if (!root) return;
@@ -2857,6 +3156,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     else if (dlvSubtab === "reminders") panel = renderRemindersPanel(D);
     else panel = renderOverviewPanel(D);
     root.innerHTML = [
+      renderDataBanner(),
       renderHeaderTabs(),
       renderSubtabBar(),
       panel,
@@ -3670,18 +3970,31 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   async function runLiveAudit() {
     const btn = $id("dlv-run-btn");
     if (!btn || btn.dataset.busy) return;
-    const ok = await dlvConfirm("Run a fresh live audit?\n\nThis pulls a brand-new snapshot and clears every action you've taken this session (marked-done items, pauses, signatures, tags…).\n\nNot reversible.", { title: "Run Live Audit", danger: true, yesLabel: "Run audit" });
+    // Live mode: force a fresh POST /run (~1-2 min) against the real backend.
+    if (isLive()) {
+      const ok = await dlvConfirm("Pull a fresh live audit?\n\nThis runs a brand-new live snapshot from Smartlead (~1–2 min) and clears every action you've taken this session (marked-done items, pauses, signatures, tags…).\n\nNot reversible.", { title: "Run Live Audit", danger: true, yesLabel: "Run audit" });
+      if (!ok) return;
+      btn.dataset.busy = "1";
+      await runLiveAuditBg(true); // shows the running banner + repaints on resolve
+      clearDoneStubs();
+      UI.mgr.sel = new Set();
+      delete btn.dataset.busy;
+      toast(DATA.runError ? "Live audit failed — showing the last snapshot" : "Live audit complete", DATA.runError ? "" : "ok");
+      return;
+    }
+    // Sample mode: no live backend to hit — just rebuild the mock snapshot.
+    const ok = await dlvConfirm("Reset the sample data?\n\nThe live deliverability backend isn't configured, so this only rebuilds the demo snapshot and clears every action you've taken this session (marked-done items, pauses, signatures, tags…).\n\nNot reversible.", { title: "Reset sample data", danger: true, yesLabel: "Reset" });
     if (!ok) return;
     btn.dataset.busy = "1"; btn.disabled = true;
     const orig = btn.innerHTML;
-    btn.innerHTML = '<span class="dlv-spinner"></span> Running… (~2s)';
-    await new Promise((r) => setTimeout(r, 2000));
+    btn.innerHTML = '<span class="dlv-spinner"></span> Resetting…';
+    await new Promise((r) => setTimeout(r, 600));
     resetState();
     clearDoneStubs(); // fix #1: stubs describe pre-reset state — drop them
     UI.mgr.sel = new Set();
     delete btn.dataset.busy;
     paintPage();
-    toast("Audit complete", "ok");
+    toast("Sample data reset", "ok");
   }
   function copyForClaude() { openCtxModal(); }
   async function copyCtx(btn) {
@@ -4042,6 +4355,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Part A2: dismiss a persisted per-campaign verify result box.
     if (act === "verify-dismiss") { runAct(act, () => { if (S.ui && S.ui.verifyResults) { delete S.ui.verifyResults[t.dataset.id]; saveState(); paintPage(); } }); return; }
     if (act === "scroll-todo") { runAct(act, () => openFoldlessScroll("dlv-todo-anchor")); return; }
+    // Stage-A data-source banner dismiss buttons.
+    if (act === "dismiss-sample-banner") { runAct(act, () => { DATA.sampleDismissed = true; paintPage(); }); return; }
+    if (act === "dismiss-run-error") { runAct(act, () => { DATA.runError = null; paintPage(); }); return; }
     // Defect H: the "or undo later from Recent actions ↓" hint line inside an
     // undo toast — scrolls to (and opens) the Recent-actions fold. Recent
     // actions stayed in Overview (it wasn't one of the 3 moved sections), but
@@ -4134,7 +4450,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "dl-copy-all") { runAct(act, () => delistCopyAll(t)); return; }
     if (act === "dl-copy-req") { runAct(act, () => delistCopyReq(t.dataset.domain, t)); return; }
     if (act === "dl-toggle") { runAct(act, () => delistToggle(t.dataset.domain, t.dataset.done === "1")); return; }
-    if (act === "mgr-refresh") { runAct(act, () => { toast("Refreshed (mock) from Smartlead", "ok"); paintPage(); }); return; }
+    if (act === "mgr-refresh") { runAct(act, () => {
+      if (isLive()) {
+        // Drop the per-panel live caches so the current view re-pulls fresh.
+        DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
+        DATA.dh.key = null; DATA.dh.done = false;
+        toast("Re-pulling live from Smartlead…", "");
+        paintPage();
+      } else {
+        toast("Refreshed (mock) from Smartlead", "ok");
+        paintPage();
+      }
+    }); return; }
     if (act === "domain-warmup") { runAct(act, () => domainWarmup(t.dataset.domain, t)); return; }
     if (act === "domain-reactivate") { runAct(act, () => domainReactivate(t.dataset.domain, t)); return; }
     if (act === "domain-bulk-flagged") { runAct(act, () => domainBulkFlagged()); return; }
@@ -4239,6 +4566,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     main.innerHTML = '<div id="dlv-root" class="dlv"></div>';
     paintPage();
     maybePulseFirstGloss();
+    // Stage A: probe the live backend and (in live mode) pull the real data.
+    // Non-blocking — the mock/cached snapshot above renders instantly; bootData
+    // repaints once the probe (and any background /run) resolve. Short-circuits
+    // on later mounts (tab switches) via DATA.probed so it runs at most once.
+    bootData();
     return true;
   };
 
