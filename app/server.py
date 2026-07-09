@@ -5440,6 +5440,55 @@ ROUTES = {
 }
 
 
+# ── Live deliverability audit cache (background runner) ──────────────────────
+# The audit backend's POST /api/run does a full live Smartlead sweep and takes
+# ~4 minutes — far too long to hold a browser->proxy request open. So we run it
+# server-side in a daemon thread and cache the result: the tab reads the cached
+# blob instantly via GET /api/deliverability/_audit and asks for a refresh via
+# POST /api/deliverability/_audit/refresh only when it's stale/missing. All other
+# /api/deliverability/* calls (inboxes, domain-health, actions…) still stream
+# through the plain _proxy_deliverability() forwarder.
+_DELIV_AUDIT = {"blob": None, "ts": 0.0, "running": False, "error": None}
+_DELIV_AUDIT_LOCK = threading.Lock()
+_DELIV_AUDIT_TTL_S = 3600  # serve a cached audit up to 1h old before auto-refreshing
+
+
+def _deliv_audit_run_bg():
+    """Fire the ~4-min live audit against the backend once; store blob or error."""
+    import base64, urllib.error  # noqa: F401 — urllib.error referenced via except below
+    auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
+    if ":" not in auth:
+        with _DELIV_AUDIT_LOCK:
+            _DELIV_AUDIT.update(running=False, error="unconfigured")
+        return
+    req = urllib.request.Request(
+        "https://navreo-email-deliverability-audit.onrender.com/api/run", data=b"", method="POST")
+    req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=330, context=SSL_CTX) as resp:
+            blob = json.loads(resp.read())
+        with _DELIV_AUDIT_LOCK:
+            _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
+    except Exception as e:  # noqa: BLE001 — record the failure for the UI; never crash the thread
+        with _DELIV_AUDIT_LOCK:
+            _DELIV_AUDIT.update(running=False, error=str(e)[:300])
+
+
+def _deliv_audit_start(force=False):
+    """Kick a background refresh unless one's already running (or cache is fresh
+    and not forced). Returns a small state dict for the caller."""
+    with _DELIV_AUDIT_LOCK:
+        if _DELIV_AUDIT["running"]:
+            return {"started": False, "running": True}
+        fresh = _DELIV_AUDIT["blob"] is not None and (time.time() - _DELIV_AUDIT["ts"]) < _DELIV_AUDIT_TTL_S
+        if fresh and not force:
+            return {"started": False, "running": False, "fresh": True}
+        _DELIV_AUDIT.update(running=True, error=None)
+    threading.Thread(target=_deliv_audit_run_bg, daemon=True).start()
+    return {"started": True, "running": True}
+
+
 class Handler(SimpleHTTPRequestHandler):
     # S3: HTTP/1.1 keep-alive. Safe only because every response-writing path in
     # this handler goes through one of: self._json() (always sets Content-Length,
@@ -5710,6 +5759,17 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(outreach_destinations({"refresh": refresh}))
+        if path == "/api/deliverability/_audit":
+            # Cached live-audit blob (instant). The tab polls this while a
+            # background run is in flight; it triggers the run via the refresh POST.
+            with _DELIV_AUDIT_LOCK:
+                b, ts, running, err = (_DELIV_AUDIT["blob"], _DELIV_AUDIT["ts"],
+                                       _DELIV_AUDIT["running"], _DELIV_AUDIT["error"])
+            age = (time.time() - ts) if ts else None
+            return self._json({"blob": b, "ts": ts, "ageSec": age, "running": running,
+                               "error": err, "configured": bool(
+                                   (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":")),
+                               "stale": bool(b is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("GET")
         return self._serve_static()
@@ -5749,6 +5809,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             status, body = execute_notification_action(nid, payload)
             return self._json(body, status)
+        if path == "/api/deliverability/_audit/refresh":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                force = bool(json.loads(self.rfile.read(length).decode() or "{}").get("force", True)) if length else True
+            except ValueError:
+                force = True
+            return self._json(_deliv_audit_start(force=force))
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("POST")
         route = ROUTES.get(path)
