@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lists · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* ── File browser ──────────────────────────────────────── */
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 14px; }
+.toolbar .search {
+  border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 15px;
+  font: 400 13px var(--font-sans); width: 240px; background: transparent; color: var(--ink);
+}
+.toolbar .search:focus { outline: none; box-shadow: var(--focus); }
+.toolbar .spacer { flex: 1; }
+
+table.lists-tbl { table-layout: fixed; }
+table.lists-tbl col.c-name { width: 34%; }
+table.lists-tbl col.c-fav { width: 7%; }
+table.lists-tbl col.c-client { width: 14%; }
+table.lists-tbl col.c-created { width: 13%; }
+table.lists-tbl col.c-opened { width: 15%; }
+table.lists-tbl col.c-owner { width: 9%; }
+table.lists-tbl col.c-access { width: 8%; }
+table.lists-tbl col.c-menu { width: 32px; }
+.lists-tbl td, .lists-tbl th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lists-tbl tr.row-folder td { font-weight: 500; }
+.lists-tbl tr.row-folder:hover td { background: var(--bg-sunken); }
+.row-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.row-name .indent { flex-shrink: 0; }
+.row-name .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.row-name .rc { color: var(--ink-3); font-weight: 400; font-size: 11.5px; margin-left: 6px; flex-shrink: 0; }
+.chev { display: inline-flex; width: 14px; height: 14px; color: var(--ink-3); transition: transform .12s; flex-shrink: 0; cursor: pointer; }
+.chev.open { transform: rotate(90deg); }
+.ic-folder, .ic-sheet { width: 15px; height: 15px; color: var(--brown-400); flex-shrink: 0; }
+.ic-sheet { color: var(--ink-3); }
+a.sheet-link { color: var(--ink); text-decoration: none; }
+a.sheet-link:hover { color: var(--orange-700); text-decoration: underline; }
+.star-btn { background: none; border: none; cursor: pointer; padding: 2px; display: inline-flex; color: var(--line-2); }
+.star-btn.on { color: var(--orange); }
+.star-btn:hover { color: var(--orange-600); }
+.kebab-btn { background: none; border: none; cursor: pointer; padding: 3px; border-radius: 6px; color: var(--ink-3); display: inline-flex; }
+.kebab-btn:hover { background: var(--bg-sunken); color: var(--ink-2); }
+.popover { position: absolute; z-index: 60; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(20,17,14,.14); min-width: 200px; padding: 6px; }
+.popover .p-lab { font-size: 11px; color: var(--ink-3); padding: 6px 8px 4px; text-transform: uppercase; letter-spacing: .06em; }
+.popover button.p-item { display: block; width: 100%; text-align: left; background: none; border: none; padding: 7px 8px; font-size: 13px; border-radius: 7px; cursor: pointer; color: var(--ink); }
+.popover button.p-item:hover { background: var(--bg-sunken); }
+.popover button.p-item.on { color: var(--orange-700); font-weight: 500; }
+
+/* ── Grid viewer ───────────────────────────────────────── */
+.gridbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+.back-link { color: var(--ink-3); text-decoration: none; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; }
+.back-link:hover { color: var(--ink); }
+.grid-titlewrap { display: flex; align-items: center; gap: 8px; margin-right: 4px; }
+.grid-titlewrap h1 { font-size: 19px; }
+.numinput {
+  border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 10px;
+  font: 500 12.5px var(--font-mono); width: 84px; color: var(--ink); background: transparent;
+}
+.numinput:focus { outline: none; box-shadow: var(--focus); }
+.numwrap { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); }
+.share-btn.copied { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
+.filterbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
+.filterbar .fchip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-sunken); border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; color: var(--ink-2); }
+.filterbar .fchip button { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 999px; }
+.filterbar .fchip button:hover { color: var(--ink); background: var(--line); }
+.gridwrap { border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; max-width: 100%; max-height: 68vh; }
+table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
+.datagrid th { position: sticky; top: 0; background: var(--bg-sunken); z-index: 5; text-align: left; padding: 0; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+.datagrid th .thwrap { display: flex; align-items: center; gap: 5px; padding: 8px 10px; cursor: pointer; user-select: none; white-space: nowrap; }
+.datagrid th .thwrap:hover { background: var(--line); }
+.datagrid th .thlbl { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
+.datagrid th .sortarrow { font-size: 10px; color: var(--orange-700); }
+.datagrid th .filt-btn { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 5px; margin-left: auto; }
+.datagrid th .filt-btn:hover { background: var(--line-2); color: var(--ink); }
+.datagrid th .filt-btn.active { color: var(--orange-700); }
+.datagrid th.gutter, .datagrid td.gutter { position: sticky; left: 0; background: var(--bg-sunken); color: var(--ink-3); text-align: right; padding: 6px 10px; border-right: 1px solid var(--line); font-family: var(--font-mono); font-size: 11px; z-index: 4; }
+.datagrid th.gutter { z-index: 6; }
+.datagrid td { padding: 7px 10px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+.datagrid tr:hover td { background: var(--bg-sunken); }
+.colpop { max-height: 320px; overflow-y: auto; }
+.colpop label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; border-radius: 7px; cursor: pointer; }
+.colpop label:hover { background: var(--bg-sunken); }
+.filtinput-pop { padding: 8px; }
+.filtinput-pop input { width: 180px; border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; font-size: 12.5px; font-family: inherit; }
+.filtinput-pop .row { display: flex; gap: 6px; margin-top: 8px; }
+
+/* ── New folder / move modal ──────────────────────────── */
+.overlay { position: fixed; inset: 0; background: rgba(20,17,14,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+.overlay.on { display: flex; }
+.modal { background: var(--card); border-radius: 18px; width: 420px; max-width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal-h { padding: 20px 22px 4px; }
+.modal-h h3 { font-size: 16.5px; font-weight: 600; }
+.modal-b { padding: 12px 22px 4px; }
+.modal-b .field { margin-bottom: 14px; }
+.modal-b label { display: block; font-size: 12px; color: var(--ink-3); font-weight: 500; margin-bottom: 6px; }
+.modal-b select, .modal-b input[type=text] {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 11px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent;
+}
+.modal-b select:focus, .modal-b input[type=text]:focus { outline: none; box-shadow: var(--focus); }
+.modal-err { font-size: 12px; color: var(--red); background: var(--red-bg); border: 1px solid var(--red-line); border-radius: 8px; padding: 8px 10px; margin-top: 4px; }
+.modal-f { padding: 14px 22px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 10px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main">
+
+    <!-- ═══ VIEW 1: FILE BROWSER ═══ -->
+    <div id="view-files">
+      <div class="pagehead">
+        <div>
+          <div class="eyebrow">Lists</div>
+          <h1>All Files</h1>
+        </div>
+      </div>
+      <div class="toolbar">
+        <input class="search" id="fbSearch" placeholder="Search lists or clients…">
+        <div class="spacer"></div>
+        <button class="btn primary" id="newFolderBtn">+ New Folder</button>
+      </div>
+      <div id="filesBody-wrap">
+        <table class="tbl lists-tbl">
+          <colgroup>
+            <col class="c-name"><col class="c-fav"><col class="c-client"><col class="c-created">
+            <col class="c-opened"><col class="c-owner"><col class="c-access"><col class="c-menu">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Name</th><th>Favorite</th><th>Clients</th><th>Created at</th>
+              <th>Last opened</th><th>Owner</th><th>Access</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="filesBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ VIEW 2: GRID VIEWER ═══ -->
+    <div id="view-grid" style="display:none">
+      <a class="back-link" href="lists.html">&larr; All Files</a>
+      <div class="gridbar" style="margin-top:6px">
+        <div class="grid-titlewrap">
+          <h1 id="gridName">–</h1>
+          <span class="chip" id="gridClientChip" style="cursor:default"></span>
+          <span class="chip" id="gridCountChip" style="cursor:default"></span>
+        </div>
+        <input class="toolbar search" id="gridSearch" placeholder="Search rows…" style="width:200px">
+        <div class="popwrap" style="position:relative">
+          <button class="btn sm" id="colBtn" data-popover-trigger>columns</button>
+        </div>
+        <div class="numwrap">Starting row <input class="numinput" id="gridOffset" type="number" min="0" step="1" value="0"></div>
+        <div class="numwrap">Limit <input class="numinput" id="gridLimit" type="number" min="1" step="1" value="500"></div>
+        <button class="btn sm share-btn" id="shareBtn">Share link</button>
+      </div>
+      <div class="filterbar" id="filterBar"></div>
+      <div id="gridStatus"></div>
+      <div class="gridwrap" id="gridWrap" style="display:none">
+        <table class="datagrid" id="datagrid"></table>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="overlay" id="folderOverlay"><div class="modal">
+  <div class="modal-h"><h3>New folder</h3></div>
+  <div class="modal-b">
+    <div class="field">
+      <label>Client</label>
+      <select id="nfClient"></select>
+    </div>
+    <div class="field">
+      <label>Folder name (optional — leave blank to just create the client's root folder)</label>
+      <input type="text" id="nfName" placeholder="e.g. Q3 Outbound">
+    </div>
+    <div id="nfErr"></div>
+  </div>
+  <div class="modal-f">
+    <button class="btn" id="nfCancel">Cancel</button>
+    <button class="btn primary" id="nfCreate">Create</button>
+  </div>
+</div></div>
+
+<div class="overlay" id="moveOverlay"><div class="modal" style="width:360px">
+  <div class="modal-h"><h3>Move to folder</h3></div>
+  <div class="modal-b">
+    <div class="field">
+      <label>Destination</label>
+      <select id="mvFolder"></select>
+    </div>
+    <div id="mvErr"></div>
+  </div>
+  <div class="modal-f">
+    <button class="btn" id="mvCancel">Cancel</button>
+    <button class="btn primary" id="mvConfirm">Move</button>
+  </div>
+</div></div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("lists");
+
+/* ── small inline icon set (thin-stroke, currentColor — matches the rest of the app) ── */
+const svgChevron = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><path d="M9 6l6 6-6 6"/></svg>`;
+const svgFolder = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`;
+const svgSheet = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>`;
+const svgStar = (on) => `<svg viewBox="0 0 24 24" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>`;
+const svgKebab = `<svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>`;
+const svgFilt = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>`;
+
+/* ═══════════════════════════ shared state ═══════════════════════════ */
+let LISTS_DATA = null;          // { folders, lists } from /api/lists
+const openFolders = new Set();  // ids of expanded folder/client-group rows, keyed "client:<name>" or folder.id
+
+function closeAnyPopover() {
+  document.querySelectorAll(".popover").forEach((el) => el.remove());
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".popover") && !e.target.closest("[data-popover-trigger]")) closeAnyPopover();
+});
+
+async function loadListsIndex(force) {
+  if (LISTS_DATA && !force) return LISTS_DATA;
+  const r = await fetch("/api/lists", { cache: "no-store" });
+  const j = await r.json().catch(() => null);
+  LISTS_DATA = (j && j.folders && j.lists) ? j : { folders: [], lists: [] };
+  return LISTS_DATA;
+}
+
+/* ═══════════════════════════ VIEW 1: file browser ═══════════════════════════ */
+
+function clientNames(data) {
+  const s = new Set();
+  (data.folders || []).forEach((f) => s.add(f.client));
+  (data.lists || []).forEach((l) => s.add(l.client));
+  return [...s].filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+function buildTree(data) {
+  // per client: root folder row (or null), sub-folders under it, sheets under root/subfolders
+  const clients = clientNames(data);
+  return clients.map((client) => {
+    const cFolders = (data.folders || []).filter((f) => f.client === client);
+    const root = cFolders.find((f) => f.name === null) || null;
+    const subs = cFolders.filter((f) => f.name !== null)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const cLists = (data.lists || []).filter((l) => l.client === client);
+    const rootId = root ? root.id : null;
+    const directSheets = cLists.filter((l) => !l.folder_id || l.folder_id === rootId)
+      .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    const subGroups = subs.map((sf) => ({
+      folder: sf,
+      sheets: cLists.filter((l) => l.folder_id === sf.id)
+        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")),
+    }));
+    return { client, root, subGroups, directSheets };
+  });
+}
+
+function fmtShortDate(iso) {
+  if (!iso) return "–";
+  return pulledAgo(iso) || "–";
+}
+
+function sheetMatches(l, q) {
+  if (!q) return true;
+  const hay = `${l.name || ""} ${l.client || ""}`.toLowerCase();
+  return hay.includes(q);
+}
+
+function renderFileBrowser() {
+  const q = (document.getElementById("fbSearch").value || "").trim().toLowerCase();
+  const tree = buildTree(LISTS_DATA);
+  const rows = [];
+
+  const sheetRow = (l, depth) => `
+    <tr class="row-sheet" data-list-row="${esc(l.id)}">
+      <td>
+        <div class="row-name" style="padding-left:${depth * 22}px">
+          <span class="ic-sheet indent">${svgSheet}</span>
+          <a class="sheet-link lbl" href="#${esc(l.id)}" title="${esc(l.name)}">${esc(l.name)}</a>
+          <span class="rc">${fmt(l.row_count)} rows</span>
+        </div>
+      </td>
+      <td><button class="star-btn ${l.favourite ? "on" : ""}" title="${l.favourite ? "Unfavourite" : "Favourite"}" onclick="toggleFavourite('${esc(l.id)}', ${!l.favourite})">${svgStar(l.favourite)}</button></td>
+      <td>${esc(l.client || "–")}</td>
+      <td>${fmtShortDate(l.created_at)}</td>
+      <td>${l.last_opened_at ? `${pulledAgo(l.last_opened_at)}${l.last_opened_by ? ` <span class="muted small">by ${esc(l.last_opened_by)}</span>` : ""}` : "–"}</td>
+      <td>${esc(l.owner || "–")}</td>
+      <td>${esc(l.access || "–")}</td>
+      <td><button class="kebab-btn" data-popover-trigger title="Options" onclick="openRowMenu(event,'${esc(l.id)}')">${svgKebab}</button></td>
+    </tr>`;
+
+  const folderRow = (key, label, depth, expandable) => {
+    const isOpen = openFolders.has(key) || !!q;
+    return { html: `
+    <tr class="row-folder" data-folder-key="${esc(key)}">
+      <td>
+        <div class="row-name" style="padding-left:${depth * 22}px">
+          <span class="chev ${isOpen ? "open" : ""}" onclick="toggleFolder('${esc(key)}')">${svgChevron}</span>
+          <span class="ic-folder indent">${svgFolder}</span>
+          <span class="lbl">${esc(label)}</span>
+        </div>
+      </td>
+      <td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td></td>
+    </tr>`, isOpen };
+  };
+
+  tree.forEach((grp) => {
+    const allSheets = [...grp.directSheets, ...grp.subGroups.flatMap((g) => g.sheets)];
+    const anyMatch = !q || allSheets.some((l) => sheetMatches(l, q));
+    if (!anyMatch) return;
+
+    const rootKey = `client:${grp.client}`;
+    const { html: rootHtml, isOpen: rootOpen } = folderRow(rootKey, grp.client, 0, true);
+    rows.push(rootHtml);
+    if (!rootOpen) return;
+
+    grp.directSheets.filter((l) => sheetMatches(l, q)).forEach((l) => rows.push(sheetRow(l, 1)));
+
+    grp.subGroups.forEach((sg) => {
+      const sheetsHere = sg.sheets.filter((l) => sheetMatches(l, q));
+      if (q && !sheetsHere.length) return;
+      const subKey = sg.folder.id;
+      const { html: subHtml, isOpen: subOpen } = folderRow(subKey, sg.folder.name, 1, true);
+      rows.push(subHtml);
+      if (subOpen) sheetsHere.forEach((l) => rows.push(sheetRow(l, 2)));
+    });
+  });
+
+  document.getElementById("filesBody").innerHTML = rows.length ? rows.join("") :
+    `<tr><td colspan="8"><div class="empty">${q ? "No lists match your search" : "No lists yet"}</div></td></tr>`;
+}
+
+function toggleFolder(key) {
+  if (openFolders.has(key)) openFolders.delete(key); else openFolders.add(key);
+  renderFileBrowser();
+}
+
+async function toggleFavourite(listId, fav) {
+  const l = (LISTS_DATA.lists || []).find((x) => x.id === listId);
+  if (l) l.favourite = fav; // optimistic
+  renderFileBrowser();
+  try {
+    await fetch("/api/lists/favourite", { method: "POST", body: JSON.stringify({ list_id: listId, favourite: fav }) });
+  } catch { protoNote("Couldn't reach the server — try again"); }
+}
+
+function openRowMenu(ev, listId) {
+  ev.stopPropagation();
+  closeAnyPopover();
+  const l = (LISTS_DATA.lists || []).find((x) => x.id === listId);
+  if (!l) return;
+  const btn = ev.currentTarget;
+  const pop = document.createElement("div");
+  pop.className = "popover";
+  pop.innerHTML = `<button class="p-item" onclick="closeAnyPopover();openMoveModal('${esc(listId)}')">Move to folder…</button>`;
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.right - pop.offsetWidth) + "px";
+  // clamp after measuring
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+  });
+}
+
+/* ── Move to folder modal ── */
+let moveListId = null;
+function openMoveModal(listId) {
+  moveListId = listId;
+  const l = (LISTS_DATA.lists || []).find((x) => x.id === listId);
+  const client = l ? l.client : null;
+  const sel = document.getElementById("mvFolder");
+  const folders = (LISTS_DATA.folders || []).filter((f) => f.client === client);
+  const subs = folders.filter((f) => f.name !== null).sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = `<option value="">${esc(client || "Client")} root (unfiled)</option>` +
+    subs.map((f) => `<option value="${esc(f.id)}" ${l && l.folder_id === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("");
+  if (l && !l.folder_id) sel.value = "";
+  document.getElementById("mvErr").innerHTML = "";
+  document.getElementById("moveOverlay").classList.add("on");
+}
+document.getElementById("mvCancel").onclick = () => document.getElementById("moveOverlay").classList.remove("on");
+document.getElementById("mvConfirm").onclick = async () => {
+  const folderId = document.getElementById("mvFolder").value || null;
+  const restore = busyBtn(document.getElementById("mvConfirm"), "Moving…");
+  try {
+    const r = await fetch("/api/lists/move", { method: "POST", body: JSON.stringify({ list_id: moveListId, folder_id: folderId }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) {
+      document.getElementById("mvErr").innerHTML = `<div class="modal-err">${esc(j.message || "Couldn't move this list")}</div>`;
+      if (restore) restore();
+      return;
+    }
+    document.getElementById("moveOverlay").classList.remove("on");
+    if (restore) restore();
+    await loadListsIndex(true);
+    renderFileBrowser();
+    protoNote("Moved");
+  } catch {
+    document.getElementById("mvErr").innerHTML = `<div class="modal-err">Couldn't reach the server — try again</div>`;
+    if (restore) restore();
+  }
+};
+
+/* ── New folder modal ── */
+document.getElementById("newFolderBtn").onclick = () => {
+  const sel = document.getElementById("nfClient");
+  sel.innerHTML = clientNames(LISTS_DATA).map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  document.getElementById("nfName").value = "";
+  document.getElementById("nfErr").innerHTML = "";
+  document.getElementById("folderOverlay").classList.add("on");
+};
+document.getElementById("nfCancel").onclick = () => document.getElementById("folderOverlay").classList.remove("on");
+document.getElementById("nfCreate").onclick = async () => {
+  const client = document.getElementById("nfClient").value;
+  const name = document.getElementById("nfName").value.trim();
+  const errEl = document.getElementById("nfErr");
+  errEl.innerHTML = "";
+  const restore = busyBtn(document.getElementById("nfCreate"), "Creating…");
+  try {
+    if (!name) {
+      // just ensure the client root folder exists
+      const r = await fetch("/api/lists/folder", { method: "POST", body: JSON.stringify({ client }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't create the folder");
+    } else {
+      let root = (LISTS_DATA.folders || []).find((f) => f.client === client && f.name === null);
+      if (!root) {
+        const r0 = await fetch("/api/lists/folder", { method: "POST", body: JSON.stringify({ client }) });
+        const j0 = await r0.json().catch(() => ({}));
+        if (!r0.ok || j0.ok === false) throw new Error(j0.message || "Couldn't create the client's root folder");
+        root = { id: j0.id };
+      }
+      const r = await fetch("/api/lists/folder", { method: "POST", body: JSON.stringify({ client, name, parent_id: root.id }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't create the folder");
+    }
+    document.getElementById("folderOverlay").classList.remove("on");
+    if (restore) restore();
+    await loadListsIndex(true);
+    openFolders.add(`client:${client}`);
+    renderFileBrowser();
+    protoNote("Folder created");
+  } catch (e) {
+    errEl.innerHTML = `<div class="modal-err">${esc(e.message || "Couldn't create the folder")}</div>`;
+    if (restore) restore();
+  }
+};
+
+document.getElementById("fbSearch").addEventListener("input", renderFileBrowser);
+
+/* ═══════════════════════════ VIEW 2: grid viewer ═══════════════════════════ */
+
+const grid = {
+  id: null, meta: null, columns: [], visible: null /* Set */,
+  sort: "", dir: "", filters: {}, search: "", offset: 0, limit: 500,
+  total: 0, filtered: 0, loading: false,
+};
+let gridSearchDebounce = null, gridOffsetDebounce = null, gridLimitDebounce = null;
+
+function esc4attr(s) { return esc(s).replace(/'/g, "&#39;"); }
+
+async function openGrid(listId) {
+  grid.id = listId; grid.meta = null; grid.columns = []; grid.visible = null;
+  grid.sort = ""; grid.dir = ""; grid.filters = {}; grid.search = ""; grid.offset = 0; grid.limit = 500;
+  document.getElementById("gridSearch").value = "";
+  document.getElementById("gridOffset").value = 0;
+  document.getElementById("gridLimit").value = 500;
+  document.getElementById("gridName").textContent = "Loading…";
+  document.getElementById("gridClientChip").textContent = "";
+  document.getElementById("gridCountChip").textContent = "";
+  document.getElementById("gridWrap").style.display = "none";
+  document.getElementById("filterBar").innerHTML = "";
+  document.getElementById("gridStatus").innerHTML = `<div class="empty">Loading…</div>`;
+  // fire-and-forget touch
+  fetch("/api/lists/touch", { method: "POST", body: JSON.stringify({ list_id: listId, by: "Bjion" }) }).catch(() => {});
+  await fetchGridRows();
+}
+
+async function fetchGridRows() {
+  if (grid.loading) return;
+  grid.loading = true;
+  const params = new URLSearchParams({
+    id: grid.id, offset: String(grid.offset), limit: String(grid.limit),
+    search: grid.search, sort: grid.sort, dir: grid.dir,
+    filters: JSON.stringify(grid.filters),
+  });
+  let r, j;
+  try {
+    r = await fetch(`/api/lists/rows?${params.toString()}`, { cache: "no-store" });
+    j = await r.json().catch(() => null);
+  } catch {
+    grid.loading = false;
+    document.getElementById("gridStatus").innerHTML = `<div class="empty">Couldn't reach the server — try again</div>`;
+    document.getElementById("gridWrap").style.display = "none";
+    return;
+  }
+  grid.loading = false;
+  if (!r.ok) {
+    if (r.status === 404) {
+      document.getElementById("gridName").textContent = "List not found";
+      document.getElementById("gridStatus").innerHTML = `<div class="empty">This list doesn't exist or was removed.</div>`;
+    } else {
+      document.getElementById("gridStatus").innerHTML = `<div class="empty">${esc((j && j.message) || "Something went wrong")}</div>`;
+    }
+    document.getElementById("gridWrap").style.display = "none";
+    return;
+  }
+  grid.meta = j;
+  grid.columns = j.columns || [];
+  if (!grid.visible) grid.visible = new Set(grid.columns);
+  grid.total = j.total || 0;
+  grid.filtered = j.filtered != null ? j.filtered : j.total || 0;
+
+  document.getElementById("gridName").textContent = j.name || "Untitled list";
+  document.title = `${j.name || "List"} · Navreo`;
+  document.getElementById("gridClientChip").innerHTML = esc(j.client || "");
+  document.getElementById("gridCountChip").textContent = `${fmt(grid.filtered)}/${fmt(grid.total)} rows`;
+  renderFilterBar();
+
+  const rows = j.rows || [];
+  if (!rows.length) {
+    document.getElementById("gridStatus").innerHTML = `<div class="empty">${
+      grid.search || Object.keys(grid.filters).length ? "No rows match your search/filters" : "This list is empty"
+    }</div>`;
+    document.getElementById("gridWrap").style.display = "none";
+    return;
+  }
+  document.getElementById("gridStatus").innerHTML = "";
+  document.getElementById("gridWrap").style.display = "block";
+  renderDataGrid(rows);
+}
+
+function renderFilterBar() {
+  const cols = Object.keys(grid.filters);
+  document.getElementById("filterBar").innerHTML = cols.length ? cols.map((c) => `
+    <span class="fchip">${esc(c)}: “${esc(grid.filters[c])}”<button title="Clear filter" onclick="clearColFilter('${esc4attr(c)}')">&times;</button></span>
+  `).join("") : "";
+}
+
+function clearColFilter(col) {
+  delete grid.filters[col];
+  grid.offset = 0; document.getElementById("gridOffset").value = 0;
+  fetchGridRows();
+}
+
+function renderDataGrid(rows) {
+  const visibleCols = grid.columns.filter((c) => grid.visible.has(c));
+  const thead = `<thead><tr>
+    <th class="gutter">#</th>
+    ${visibleCols.map((c) => `
+      <th>
+        <div class="thwrap" onclick="cycleSort('${esc4attr(c)}')">
+          <span class="thlbl">${esc(c)}</span>
+          ${grid.sort === c ? `<span class="sortarrow">${grid.dir === "desc" ? "&#9660;" : "&#9650;"}</span>` : ""}
+          <button class="filt-btn ${grid.filters[c] ? "active" : ""}" title="Filter" onclick="event.stopPropagation();openColFilter(event,'${esc4attr(c)}')" data-popover-trigger>${svgFilt}</button>
+        </div>
+      </th>`).join("")}
+  </tr></thead>`;
+  const tbody = `<tbody>${rows.map((row) => `
+    <tr>
+      <td class="gutter">${row.row_num != null ? fmt(row.row_num) : ""}</td>
+      ${visibleCols.map((c) => `<td title="${esc4attr(String(row.data ? row.data[c] ?? "" : ""))}">${esc(row.data ? row.data[c] : "")}</td>`).join("")}
+    </tr>`).join("")}</tbody>`;
+  document.getElementById("datagrid").innerHTML = thead + tbody;
+}
+
+function cycleSort(col) {
+  if (grid.sort !== col) { grid.sort = col; grid.dir = "asc"; }
+  else if (grid.dir === "asc") { grid.dir = "desc"; }
+  else { grid.sort = ""; grid.dir = ""; }
+  grid.offset = 0; document.getElementById("gridOffset").value = 0;
+  fetchGridRows();
+}
+
+function openColFilter(ev, col) {
+  closeAnyPopover();
+  const btn = ev.currentTarget;
+  const pop = document.createElement("div");
+  pop.className = "popover filtinput-pop";
+  const cur = grid.filters[col] || "";
+  pop.innerHTML = `
+    <div style="font-size:12px;color:var(--ink-3);margin-bottom:6px">Filter “${esc(col)}” contains…</div>
+    <input type="text" value="${esc4attr(cur)}" id="colFiltInput">
+    <div class="row">
+      <button class="btn sm primary" id="colFiltApply">Apply</button>
+      <button class="btn sm" id="colFiltClear">Clear</button>
+    </div>`;
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.left - 140) + "px";
+  const input = pop.querySelector("#colFiltInput");
+  input.focus(); input.select();
+  const apply = () => {
+    const v = input.value.trim();
+    if (v) grid.filters[col] = v; else delete grid.filters[col];
+    closeAnyPopover();
+    grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    fetchGridRows();
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); if (e.key === "Escape") closeAnyPopover(); });
+  pop.querySelector("#colFiltApply").onclick = apply;
+  pop.querySelector("#colFiltClear").onclick = () => { delete grid.filters[col]; closeAnyPopover(); grid.offset = 0; document.getElementById("gridOffset").value = 0; fetchGridRows(); };
+}
+
+document.getElementById("colBtn").onclick = (ev) => {
+  closeAnyPopover();
+  const pop = document.createElement("div");
+  pop.className = "popover colpop";
+  const n = grid.columns.filter((c) => grid.visible.has(c)).length;
+  pop.innerHTML = `<div class="p-lab">${n}/${grid.columns.length} columns</div>` +
+    grid.columns.map((c) => `<label><input type="checkbox" data-col="${esc4attr(c)}" ${grid.visible.has(c) ? "checked" : ""}> ${esc(c)}</label>`).join("");
+  document.body.appendChild(pop);
+  const r = ev.currentTarget.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.left) + "px";
+  pop.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const c = cb.getAttribute("data-col");
+      if (cb.checked) grid.visible.add(c); else grid.visible.delete(c);
+      document.getElementById("colBtn").textContent = `${grid.columns.filter((x) => grid.visible.has(x)).length}/${grid.columns.length} columns`;
+      pop.querySelector(".p-lab").textContent = `${grid.columns.filter((x) => grid.visible.has(x)).length}/${grid.columns.length} columns`;
+      if (grid.meta) renderDataGrid(_lastRows || []);
+    });
+  });
+};
+let _lastRows = [];
+const _origRenderDataGrid = renderDataGrid;
+renderDataGrid = function (rows) { _lastRows = rows; _origRenderDataGrid(rows); };
+
+document.getElementById("gridSearch").addEventListener("input", (e) => {
+  clearTimeout(gridSearchDebounce);
+  const v = e.target.value;
+  gridSearchDebounce = setTimeout(() => {
+    grid.search = v; grid.offset = 0; document.getElementById("gridOffset").value = 0;
+    fetchGridRows();
+  }, 350);
+});
+
+document.getElementById("gridOffset").addEventListener("input", (e) => {
+  clearTimeout(gridOffsetDebounce);
+  gridOffsetDebounce = setTimeout(() => {
+    const v = Math.max(0, parseInt(e.target.value, 10) || 0);
+    grid.offset = v;
+    fetchGridRows();
+  }, 500);
+});
+document.getElementById("gridLimit").addEventListener("input", (e) => {
+  clearTimeout(gridLimitDebounce);
+  gridLimitDebounce = setTimeout(() => {
+    const v = Math.max(1, parseInt(e.target.value, 10) || 500);
+    grid.limit = v;
+    fetchGridRows();
+  }, 500);
+});
+
+document.getElementById("shareBtn").addEventListener("click", async () => {
+  const url = `https://navreo-signals.onrender.com/app/lists.html#${grid.id}`;
+  const btn = document.getElementById("shareBtn");
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = url; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    const orig = btn.textContent;
+    btn.textContent = "Copied ✓"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 2000);
+  } catch {
+    protoNote("Couldn't copy — copy the URL from the address bar's # instead");
+  }
+});
+
+/* ═══════════════════════════ router ═══════════════════════════ */
+function route() {
+  const hash = (location.hash || "").replace(/^#/, "").trim();
+  closeAnyPopover();
+  if (hash) {
+    document.getElementById("view-files").style.display = "none";
+    document.getElementById("view-grid").style.display = "block";
+    openGrid(hash);
+  } else {
+    document.getElementById("view-grid").style.display = "none";
+    document.getElementById("view-files").style.display = "block";
+    renderFileBrowser();
+  }
+}
+window.addEventListener("hashchange", route);
+
+(async () => {
+  await loadListsIndex();
+  route();
+})();
+</script>
+</body>
+</html>

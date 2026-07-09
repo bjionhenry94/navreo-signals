@@ -8,6 +8,7 @@ function ic8(name, cls = "") {
 const ICONS = {
   dashboard: ic8("home", "lg"),
   campaigns: ic8("send", "lg"),
+  lists: ic8("data", "lg"),
   deliverability: ic8("check", "lg"),
   mailboxes: ic8("mail", "lg"),
   notifications: ic8("bell", "lg"),
@@ -16,6 +17,7 @@ const ICONS = {
 const NAV = [
   ["index.html", "dashboard", "Dashboard"],
   ["campaigns.html", "campaigns", "Campaigns"],
+  ["lists.html", "lists", "Lists"],
   ["deliverability.html", "deliverability", "Deliverability"],
   ["mailboxes.html", "mailboxes", "Mailboxes"],
   ["notifications.html", "notifications", "Notifications"],
