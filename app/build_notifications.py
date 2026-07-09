@@ -901,7 +901,6 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
         else:
             # per-variant calls on judged Email 1+ variants
             failing = [v for v in judged if is_failing(v["sent"], v["positives"])]
-            performing_sibs = {v["key"] for v in judged if is_performing_variant(v["sent"], v["positives"])}
             # clear winner: positives, ratio at most half of every other judged
             # sibling with positives, at least one other judged sibling
             winner = None
@@ -915,16 +914,45 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                         others or any(v["positives"] == 0 for v in judged if v["key"] != best["key"])):
                     winner = best
             for v in failing:
-                sib_performing = bool(performing_sibs - {v["key"]})
-                if v["positives"] == 0 and sib_performing:
+                # Disabling only makes sense if there's another currently-active
+                # (distribution > 0, not deleted) variant on the SAME sequence
+                # step to absorb the traffic. Scope both the "does a sibling
+                # perform" check and the "is there any active sibling at all"
+                # check to v's own step - a performing variant on a different
+                # email step must never make this variant look like it has a
+                # sibling to fall back on.
+                step_sibs_active = any(
+                    vid != v["key"] and meta["seq_number"] == v["seq_number"]
+                    and not meta["is_deleted"] and (meta["distribution_pct"] or 0) > 0
+                    for vid, meta in variant_index.items())
+                sib_performing = any(
+                    s["key"] != v["key"] and s["seq_number"] == v["seq_number"]
+                    and is_performing_variant(s["sent"], s["positives"])
+                    for s in judged)
+                if v["positives"] == 0 and sib_performing and step_sibs_active:
                     call, a_type, prio = "Clear loser - disable", "disable_loser", "Medium"
                     bullet = (f"Disable Email {v['seq_number']} Var {v['label']} "
                               f"({v['sent']:,} sent, 0 positives while siblings perform). "
                               "Disable only, never delete.")
                     loser_line = (f"Email {v['seq_number']} Var {v['label']} needs disabling "
                                   f"({v['sent']:,} sent, 0 positives while siblings perform).")
+                    rewrite_note = ""
+                elif not step_sibs_active:
+                    # sole active variant on its step - there is no sibling to
+                    # absorb traffic, so this is a rewrite, not a disable.
+                    call, a_type, prio = "REPLACE", "replace_variants", "High"
+                    rewrite_note = (
+                        " The follow-up copy has failed and needs rewriting."
+                        if v["seq_number"] >= 2 else
+                        " The copy has failed and needs rewriting.")
+                    bullet = (f"Rewrite Email {v['seq_number']} Var {v['label']} "
+                              f"({v['sent']:,} sent, {v['positives']} pos, "
+                              f"{ratio_txt(v['sent'], v['positives'])}/pos) - it is the only active "
+                              "variant on this step, so there is no sibling to absorb traffic. "
+                              "The copy has failed and needs rewriting.")
                 else:
                     call, a_type, prio = "REPLACE", "replace_variants", "High"
+                    rewrite_note = ""
                     bullet = (f"Replace Email {v['seq_number']} Var {v['label']} "
                               f"({v['sent']:,} sent, {v['positives']} pos, "
                               f"{ratio_txt(v['sent'], v['positives'])}/pos - under 1 positive per 800).")
@@ -933,7 +961,8 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                              "title": f"Variant call: Email {v['seq_number']} Var {v['label']}",
                              "detail": clean_text(
                                  f"{v['sent']:,} sent, {v['positives']} positive "
-                                 f"({ratio_txt(v['sent'], v['positives'])}/pos). {call}. "
+                                 f"({ratio_txt(v['sent'], v['positives'])}/pos). {call}."
+                                 f"{rewrite_note} "
                                  f"Angle: {v['angle']}"),
                              "suggested_action": call,
                              "sent": v["sent"], "positive": v["positives"],
