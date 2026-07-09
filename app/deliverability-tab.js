@@ -1049,7 +1049,20 @@
     const blClearedCount = A.blacklistRows.filter((r) => r.cleared).length;
 
     const cleanedCampaignIds = new Set((A.history || []).filter((h) => h.campaign != null).map((h) => String(h.campaign)));
-    const uncleanedVerifyCamps = A.campaignsFlagged.filter((c) => !cleanedCampaignIds.has(String(c.id)));
+    // A campaign drops off the active verify list once it's cleaned (history),
+    // ignored (server-side dismissed — see _verifyStatus/dismissVerifyCampIds),
+    // or the server's own record says there's nothing bad left (bad_remaining
+    // === 0 with a verify on file). The last case matters after a page reload:
+    // without it, a campaign that was verified-and-cleaned in a PRIOR session
+    // (no local `history` row this session) would reappear every time.
+    const uncleanedVerifyCamps = A.campaignsFlagged.filter((c) => {
+      const id = String(c.id);
+      if (cleanedCampaignIds.has(id)) return false;
+      const st = _verifyStatus[id];
+      if (st && st.dismissed) return false;
+      if (st && st.last_verify_at && Number(st.bad_remaining || 0) === 0) return false;
+      return true;
+    });
 
     return {
       today, dhRows, resting, restingDue: A.domainHealth.restingDue || {}, flaggedTotal, flaggedActionable, restingCount, recovered,
@@ -1579,6 +1592,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   let _confirmResolve = null;
+  // Captured at the moment "Proceed" is clicked (see closeConfirm) so callers
+  // that passed opts.extraHtml (e.g. the verify-campaign auto-remove
+  // checkbox) can read the user's choice right after `await dlvConfirm(...)`
+  // resolves, without dlvConfirm's own return value changing shape (every
+  // existing caller only ever checks truthiness of the resolved boolean).
+  let _confirmExtraChecked = false;
+  function confirmExtraChecked() { return _confirmExtraChecked; }
   // Single source of truth for which .dlv- modal(s) are currently shown. paintPage()
   // never touches modals (they're persistent nodes outside #dlv-root), but relying on
   // classList alone let a modal that was "closed" stay stale if something later opened
@@ -1601,6 +1621,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // leaving a confirm that can't be answered right now to somehow
       // answer itself later — dropped, never queued.
       const title = $id("dlv-confirm-title"), body = $id("dlv-confirm-body"), yes = $id("dlv-confirm-yes");
+      const extra = $id("dlv-confirm-extra");
       if (!title || !body || !yes) { resolve(false); return; }
       // Defect 1 root cause: dlvConfirm() shares ONE overlay/title/body/yes
       // set of nodes across every caller. If a confirm is already pending
@@ -1620,11 +1641,25 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       body.textContent = message;
       yes.textContent = opts.yesLabel || "Proceed";
       yes.className = "btn " + (opts.danger ? "danger" : "primary");
+      // opts.extraHtml: optional markup (e.g. a checkbox) rendered inside the
+      // dialog body, below the message. Cleared on every open so a dialog
+      // that doesn't pass one never shows a stale checkbox from a previous
+      // caller sharing these same persistent modal nodes.
+      if (extra) extra.innerHTML = opts.extraHtml || "";
       openModal("dlv-confirm-overlay");
     });
   }
   function closeConfirm(result) {
     const r = _confirmResolve; _confirmResolve = null;
+    // Read any extraHtml checkbox state before the modal closes/clears —
+    // only meaningful (and only ever acted on by callers) when the user hit
+    // Proceed; a decline/force-close always reads as unchecked.
+    if (result) {
+      const cb = $id("dlv-confirm-extra-check");
+      _confirmExtraChecked = !!(cb && cb.checked);
+    } else {
+      _confirmExtraChecked = false;
+    }
     closeModal("dlv-confirm-overlay");
     if (r) r(result);
   }
@@ -2565,41 +2600,78 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // than the "sent" number on the row — surface the real count (and therefore
   // the real credit cost) before anyone clicks. Lazy: one batched backend call
   // after paint, cached for the session, spans filled in place (no repaint).
-  const _leadCounts = Object.create(null);
+  const _leadCounts = Object.create(null); // id -> count | false (permanently unavailable after the retry also failed)
+  const _leadCountsRetrying = new Set(); // ids currently waiting on the one scheduled retry
   let _leadCountsInFlight = false;
+  let _leadCountsRetryScheduled = false; // per PAGE LOAD, not per paint — only the first miss ever arms the timer
+  function renderLeadCountSpans() {
+    document.querySelectorAll(".dlv-vleads[data-cid]").forEach((s) => {
+      const cid = s.dataset.cid;
+      const n = _leadCounts[cid];
+      const sent = Number(s.dataset.sent || 0);
+      if (n != null && n !== false) {
+        const pct = n > 0 ? Math.min(100, Math.round((sent / n) * 100)) : 0;
+        s.textContent = `${fmtN(n)} to verify · ${pct}% campaign complete`;
+      } else if (n === false) {
+        s.textContent = `count unavailable · ${fmtN(sent)} sent`;
+      } else if (_leadCountsRetrying.has(cid)) {
+        s.textContent = `counting leads… (retrying)`;
+      } else {
+        s.textContent = `counting leads…`;
+      }
+    });
+  }
   async function fillLeadCounts() {
     const spans = [...document.querySelectorAll(".dlv-vleads[data-cid]")];
     const need = [...new Set(spans.map((s) => s.dataset.cid))].filter((id) => _leadCounts[id] == null);
     if (need.length && !_leadCountsInFlight) {
       _leadCountsInFlight = true;
+      let failed = [];
       try {
         const r = await fetch("/api/campaign-lead-counts?ids=" + encodeURIComponent(need.join(",")));
         const counts = (r.ok && (await r.json()).counts) || {};
         Object.keys(counts).forEach((id) => { if (counts[id] != null) _leadCounts[id] = counts[id]; });
-      } catch (e) { /* count stays unknown — row copy already covers it */ }
+        failed = need.filter((id) => _leadCounts[id] == null);
+      } catch (e) { failed = need.slice(); } // count stays unknown — retried once below, then falls back
+      failed.forEach((id) => _leadCountsRetrying.add(id));
+      if (failed.length && !_leadCountsRetryScheduled) {
+        // One automatic retry per page load: wait 5s and try the ids that
+        // missed on the first pass exactly once more — covers a transient
+        // blip without looping forever or hammering the endpoint on every
+        // repaint (each repaint re-calls fillLeadCounts(), but this flag
+        // guarantees only the very first miss ever arms a timer).
+        _leadCountsRetryScheduled = true;
+        setTimeout(async () => {
+          const retryIds = [..._leadCountsRetrying];
+          try {
+            const r = await fetch("/api/campaign-lead-counts?ids=" + encodeURIComponent(retryIds.join(",")));
+            const counts = (r.ok && (await r.json()).counts) || {};
+            Object.keys(counts).forEach((id) => { if (counts[id] != null) _leadCounts[id] = counts[id]; });
+          } catch (e) { /* falls through to the "permanently unavailable" fallback below */ }
+          retryIds.forEach((id) => {
+            _leadCountsRetrying.delete(id);
+            if (_leadCounts[id] == null) _leadCounts[id] = false;
+          });
+          renderLeadCountSpans();
+        }, 5000);
+      }
       _leadCountsInFlight = false;
     }
-    spans.forEach((s) => {
-      const n = _leadCounts[s.dataset.cid];
-      const sent = Number(s.dataset.sent || 0);
-      if (n != null) {
-        const pct = n > 0 ? Math.min(100, Math.round((sent / n) * 100)) : 0;
-        s.textContent = `${fmtN(n)} to verify · ${pct}% campaign complete`;
-      } else {
-        s.textContent = `lead count unavailable · ${fmtN(sent)} sent`;
-      }
-    });
+    renderLeadCountSpans();
   }
 
   function renderVerifyCampRow(c) {
+    const cid = String(c.id);
     const cl = (S.A.history || []).find((h) => String(h.campaign) === String(c.id));
     const badge = cl ? `<span class="dlv-badge-cleaned" title="Already actioned ${esc(cl.date)}">✓ already actioned ${esc(cl.date)}${cl.removed != null ? " · −" + cl.removed : ""}</span>` : "";
     const vleadsContent = (() => {
       const n = _leadCounts[c.id];
-      if (n == null) return "counting leads…";
+      if (n === false) return `count unavailable · ${fmtN(c.sent)} sent`;
+      if (n == null) return _leadCountsRetrying.has(cid) ? "counting leads… (retrying)" : "counting leads…";
       const pct = n > 0 ? Math.min(100, Math.round((c.sent / n) * 100)) : 0;
       return `${fmtN(n)} to verify · ${pct}% campaign complete`;
     })();
+    const sessionV = (S.ui && S.ui.verifyResults) ? S.ui.verifyResults[c.id] : null;
     return `<div class="dlv-vcamp"${cl ? ' style="opacity:.7"' : ""}>
       <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>
       <span class="dlv-vmeta">${c.bounce_pct}% bounce${isLive() ? ` · <span class="dlv-vleads" data-cid="${c.id}" data-sent="${c.sent}">${vleadsContent}</span>` : ""}</span>${badge}
@@ -2607,18 +2679,41 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}" title="ListMint verification — SMTP + catch-all, every lead">✓ ${glossify("ListMint")}</button>
         <span class="dlv-vsep" aria-hidden="true"></span>
         <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="mv" data-done="${cl ? esc(cl.date) : ""}" title="MillionVerifier first, ListMint re-checks catch-alls">✓ ${glossify("MillionVerifier")} → ${glossify("ListMint")}</button>
+        <a class="dlv-dl" data-act="verify-dismiss" data-id="${c.id}" title="Hide this campaign from the verify list until you un-ignore it" style="margin-left:4px;align-self:center">Ignore</a>
       </div>
-      <div class="dlv-vresult" id="dlv-vr-${c.id}">${renderVerifyResultBox(c.id, (S.ui && S.ui.verifyResults) ? S.ui.verifyResults[c.id] : null)}</div>
+      <div class="dlv-vresult" id="dlv-vr-${c.id}">${renderVerifyResultBox(c.id, sessionV, _verifyStatus[cid])}</div>
       ${dlvDisclose(dlvConsequences(
         "The campaign's list gets verified before more sends go out — ListMint checks every lead live, MillionVerifier → ListMint spends 1 MillionVerifier credit per lead first; nothing is removed until you choose to remove the confirmed-bad ones.",
         "Sends continue to unverified addresses. Bounce rate above 3 percent burns the domains behind this campaign."
       ))}
     </div>`;
   }
+  // The "Ignored campaigns" fold — dismissed campaigns get pulled out of the
+  // active verify list entirely (see uncleanedVerifyCamps in derive()) but
+  // still need a way back. Renders one row per ignored campaign with an
+  // Un-ignore button; empty string when nothing is ignored (renderTodoCard
+  // only calls this when the verify card itself is showing).
+  function renderIgnoredVerifyFold() {
+    const ids = dismissedVerifyCampIds();
+    if (!ids.size) return "";
+    const camps = (S.A.campaignsFlagged || []).filter((c) => ids.has(String(c.id)));
+    if (!camps.length) return "";
+    const rows = camps.map((c) => {
+      const st = _verifyStatus[String(c.id)] || {};
+      const age = verifyAgeLabel(st.last_verify_at);
+      return `<div class="dlv-vcamp">
+        <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(st.name || c.name)}</a>
+        <span class="dlv-vmeta">${age ? "last verified " + esc(age) : "never verified"}</span>
+        <div class="dlv-vbtns"><button class="btn sm" data-act="verify-undismiss" data-id="${c.id}">Un-ignore</button></div>
+      </div>`;
+    }).join("");
+    return `<details class="dlv-fold" id="dlv-fold-verify-ignored" style="margin-top:8px"><summary>Ignored campaigns<span class="hint">${camps.length} hidden from the verify list</span></summary><div class="dlv-fold-body"><div class="dlv-vcamps">${rows}</div></div></details>`;
+  }
 
   function renderTodoCard(it, i, D) {
     const extraBits = [];
     if (it.verifyCamps && it.verifyCamps.length) extraBits.push(`<div class="dlv-vcamps">${it.verifyCamps.map(renderVerifyCampRow).join("")}</div>`);
+    if (it.key === "verify-campaigns") extraBits.push(renderIgnoredVerifyFold());
     // Item 5a: the card's own "Manage ↓" button (below) deliberately opens
     // just the Blacklisted-domains fold — the simple, matching-scope target
     // for "pause these domains". The full inbox & domain manager (bulk
@@ -3344,7 +3439,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     <div class="dlv-modal-overlay" id="dlv-confirm-overlay" data-act="overlay-bg" data-modal="dlv-confirm-overlay">
       <div class="dlv-modal narrow">
         <div class="dlv-modal-head"><h3 id="dlv-confirm-title">Please confirm</h3></div>
-        <div class="dlv-modal-body"><div class="dlv-confirm-body" id="dlv-confirm-body"></div></div>
+        <div class="dlv-modal-body"><div class="dlv-confirm-body" id="dlv-confirm-body"></div><div id="dlv-confirm-extra"></div></div>
         <div class="dlv-modal-foot"><button class="btn" data-act="confirm-no">Cancel</button><button class="btn primary" id="dlv-confirm-yes" data-act="confirm-yes">Proceed</button></div>
       </div>
     </div>
@@ -3557,6 +3652,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     paintManagerRows(); // no-ops safely (guarded on $id("dlv-mgr-body")) unless the Manager tab is active
     scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
     if (isLive()) fillLeadCounts(); // async; fills the "N leads to verify" spans in place
+    if (isLive()) fillVerifyStatus(); // async; server-truth verify state — see 23. Verify pipeline
   }
 
   // Overview = every section that stayed in the main scroll (order preserved):
@@ -3980,6 +4076,100 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      23. Verify pipeline — per-campaign simulate → keep/remove
      ============================================================ */
+  // --- Server-truth verify status -------------------------------------
+  // Durable per-campaign verify state (last_verify_at, counts, bad_remaining,
+  // dismissed) — survives a refresh or a server restart, unlike the
+  // sessionStorage-backed S.ui.verifyResults mirror below. Keyed by campaign
+  // id (string). Populated once per paint (see fillVerifyStatus, called from
+  // paintPage) and refreshed on demand after any verify/remove/dismiss
+  // action (refreshVerifyStatus).
+  const _verifyStatus = Object.create(null);
+  let _verifyStatusInFlight = false;
+  async function fillVerifyStatus() {
+    const ids = [...new Set((S.A.campaignsFlagged || []).map((c) => String(c.id)))];
+    const need = ids.filter((id) => !(id in _verifyStatus));
+    if (!need.length || _verifyStatusInFlight) return;
+    _verifyStatusInFlight = true;
+    let gotData = false;
+    try {
+      const r = await fetch("/api/verify-status?ids=" + encodeURIComponent(need.join(",")));
+      const j = r.ok ? await r.json() : {};
+      const status = (j && j.status) || {};
+      need.forEach((id) => {
+        _verifyStatus[id] = status[id] || null;
+        if (status[id]) gotData = true;
+      });
+    } catch (e) {
+      // Leave unfetched ids as null so we don't hammer the endpoint every
+      // paint — rows just fall back to session-only state until the next
+      // explicit refresh (e.g. after an action).
+      need.forEach((id) => { if (!(id in _verifyStatus)) _verifyStatus[id] = null; });
+    }
+    _verifyStatusInFlight = false;
+    // Repaint once the first real data lands — result boxes (and the
+    // dismissed-set filter feeding uncleanedVerifyCamps) only read
+    // _verifyStatus during render, so without this the freshly-fetched
+    // "verified 2h ago" state (or a dismissed campaign that should now be
+    // hidden) wouldn't show until some unrelated action happened to repaint.
+    if (gotData) paintPage();
+  }
+  // Force-refetches specific campaign ids regardless of cache state and
+  // repaints — used right after a verify/remove/dismiss job completes so the
+  // row reflects the backend's own record of what just happened, not just
+  // our optimistic local guess.
+  async function refreshVerifyStatus(ids) {
+    ids = [...new Set((ids || []).map(String))];
+    if (!ids.length) return;
+    try {
+      const r = await fetch("/api/verify-status?ids=" + encodeURIComponent(ids.join(",")));
+      const j = r.ok ? await r.json() : {};
+      const status = (j && j.status) || {};
+      ids.forEach((id) => { _verifyStatus[id] = status[id] || _verifyStatus[id] || null; });
+    } catch (e) { /* keep whatever we had; not worth surfacing an error for a background refresh */ }
+    paintPage();
+  }
+  function dismissedVerifyCampIds() {
+    return new Set(Object.keys(_verifyStatus).filter((id) => _verifyStatus[id] && _verifyStatus[id].dismissed));
+  }
+  // <1d reuses the existing auditAgeLabel minute/hour buckets; beyond that we
+  // just show whole days, since "3d ago" is plenty precise for a verify log.
+  function verifyAgeLabel(iso) {
+    if (!iso) return "";
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return "";
+    const ageSec = Math.max(0, (Date.now() - t) / 1000);
+    if (ageSec < 86400) return auditAgeLabel(ageSec);
+    return Math.max(1, Math.floor(ageSec / 86400)) + "d ago";
+  }
+  // Renders the result box purely from server-truth /api/verify-status —
+  // used when there's no in-flight/session result (renderVerifyResultBox
+  // below tries session state first). Never depends on sessionStorage, so
+  // the "Remove N bad" button here survives a refresh or a different tab.
+  function renderVerifyStatusBox(id, status) {
+    const counts = status.counts || {};
+    const good = counts.good || 0, catchAll = counts.catch_all || 0, unknown = counts.unknown || 0, bad = counts.bad || 0;
+    const total = counts.total != null ? counts.total : (good + catchAll + unknown + bad);
+    const segs = [];
+    if (good) segs.push(good + " good");
+    if (catchAll) segs.push(catchAll + " catch-all");
+    if (unknown) segs.push(unknown + " unknown");
+    if (bad) segs.push(bad + " bad");
+    const cachedSeg = counts.cached ? " · " + fmtN(counts.cached) + " from cache" : "";
+    const removedSeg = counts.removed != null ? " · removed " + fmtN(counts.removed) + (counts.guarded ? " (kept " + fmtN(counts.guarded) + " replied)" : "") : "";
+    const age = verifyAgeLabel(status.last_verify_at);
+    const summary = "Verified" + (age ? " " + esc(age) : "") + " · " + fmtN(total) + " checked" + (segs.length ? " · " + segs.join(" / ") : "") + cachedSeg + removedSeg;
+    const badRemaining = status.bad_remaining != null ? Number(status.bad_remaining) : bad;
+    if (!badRemaining) {
+      return `<div class="dlv-vbox">
+        <div class="dlv-vrow">${summary}</div>
+        <div class="dlv-vrow dlv-vkeep">✓ Clean — no bad leads remaining.</div>
+      </div>`;
+    }
+    return `<div class="dlv-vbox">
+      <div class="dlv-vrow">${summary}</div>
+      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${badRemaining}">Remove ${badRemaining} bad — no-reply only (replies auto-kept)</button></div>
+    </div>`;
+  }
   const _verifyState = {}; // campId -> last verify result (legacy in-memory mirror; source of truth is S.ui.verifyResults)
   // Part A2 (regression fix): the keep/bad results box used to be written
   // straight into the (empty-on-every-repaint) #dlv-vr-<id> div and held ONLY
@@ -3989,13 +4179,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // renderVerifyCampRow), so they survive until the user removes-bad or
   // dismisses them.
   function verifyResults() { if (!S.ui) S.ui = {}; if (!S.ui.verifyResults) S.ui.verifyResults = {}; return S.ui.verifyResults; }
-  function renderVerifyResultBox(id, v) {
-    if (!v) return "";
+  function renderVerifyResultBox(id, v, status) {
+    // Priority: an in-flight/session result (v, from S.ui.verifyResults) >
+    // the durable server-truth status (survives refresh + server restarts)
+    // > nothing shown.
+    if (!v) return status && status.last_verify_at ? renderVerifyStatusBox(id, status) : "";
     if (v.removedSummary) {
       const r = v.removedSummary;
       return `<div class="dlv-vbox">
         <div class="dlv-vrow dlv-vremove">✓ Removed <b>${r.removed}</b> · reply-guarded (kept) ${r.guarded} · total ${r.before} → ${r.after} — permanent, no backup</div>
-        <div class="dlv-vrow"><a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
+        <div class="dlv-vrow"><a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ ignore this campaign</a></div>
       </div>`;
     }
     // Real verifier counts: good/catch-all/unknown are all kept (none of them
@@ -4006,7 +4199,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ${v.listmint_recheck ? `<div class="dlv-plain" style="opacity:.75">${esc(v.listmint_recheck)}</div>` : ""}
       <div class="dlv-vrow dlv-vkeep">✓ Keep (good + catch-all + unknown): <b>${v.keep}</b></div>
       <div class="dlv-vrow dlv-vremove">Bad (confirmed invalid): <b>${v.remove}</b>${v.remove ? ` &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}">View bad (${v.remove})</a>` : ""}</div>
-      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}"${v.remove ? "" : " disabled"}>Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ dismiss</a></div>
+      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}"${v.remove ? "" : " disabled"}>Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ ignore this campaign</a></div>
       <div class="dlv-plain">Reply-guard: anyone who replied is automatically kept, never deleted.</div>
       ${dlvDisclose(dlvConsequences(
         "The selected leads leave the campaign. This is permanent (no backup) — reply-guarded leads are always kept.",
@@ -4058,6 +4251,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       total, tool: verifyToolLabel(mode),
       good, catch_all: catchAll, unknown, bad,
       keep: good + catchAll + unknown, remove: bad,
+      cached: c.cached || 0,
+      // Only present when the job ran with auto_remove — null (not 0) means
+      // "no removal happened as part of this job", distinct from "removed 0".
+      removed: c.removed != null ? Number(c.removed) : null,
+      guarded: c.guarded != null ? Number(c.guarded) : null,
       bad_emails: Array.isArray(c.bad_emails) ? c.bad_emails : [],
       listmint_recheck: typeof c.listmint_recheck === "string" ? c.listmint_recheck : null,
     };
@@ -4086,15 +4284,24 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ? "Runs a REAL, read-only verification of this campaign's " + estTotal + " leads (the FULL lead list, not just sent) via ListMint — live SMTP + catch-all probe on every lead. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?"
       : "Runs a REAL, read-only verification of this campaign's " + estTotal + " leads (the FULL lead list, not just sent) via MillionVerifier → ListMint — 1 MillionVerifier credit per lead, then ListMint re-checks any catch-all/unknown results. Nothing is removed until you choose to remove the confirmed-bad ones afterward.\n\nProceed?";
     if (done) msg = "This campaign was already verified + cleaned on " + done + ". Re-running costs credits and shouldn't usually be needed.\n\n" + msg;
-    const ok = await dlvConfirm(msg, { title: "Verify campaign" });
+    // The auto-remove choice has to be made BEFORE the job starts (it's part
+    // of the POST body) — a checkbox rendered inside the same confirm dialog
+    // rather than a second prompt after the fact. Defaults unchecked: this is
+    // a permanent delete, so opting in has to be a deliberate click.
+    const extraHtml = `<label class="small" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-top:10px">` +
+      `<input type="checkbox" id="dlv-confirm-extra-check" style="margin-top:2px">` +
+      `<span>Also remove confirmed-bad leads automatically when done (leads that replied are always kept — removal is permanent).</span></label>`;
+    const ok = await dlvConfirm(msg, { title: "Verify campaign", extraHtml });
     if (!ok) return;
+    const autoRemove = confirmExtraChecked();
     const grp = btn.closest(".dlv-vbtns");
     const btns = grp ? grp.querySelectorAll("button") : [btn];
     btns.forEach((b) => (b.disabled = true));
     const orig = btn.innerHTML;
-    btn.innerHTML = '<span class="dlv-spinner"></span> Verifying…';
+    const runningLabel = autoRemove ? "Verifying + removing…" : "Verifying…";
+    btn.innerHTML = '<span class="dlv-spinner"></span> ' + runningLabel;
     const out = $id("dlv-vr-" + id);
-    if (out) out.innerHTML = `<div class="dlv-vrun">Starting verification — large lists can take a few minutes.</div>`;
+    if (out) out.innerHTML = `<div class="dlv-vrun">Starting ${autoRemove ? "verification + removal" : "verification"} — large lists can take a few minutes.</div>`;
     const fail = (msgText) => {
       if (out) out.innerHTML = `<div class="dlv-vrun err">${esc(msgText)}</div>`;
       btns.forEach((b) => (b.disabled = false));
@@ -4106,7 +4313,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const resp = await fetch("/api/verify-campaign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaign_id: id, mode: mode }),
+        body: JSON.stringify(Object.assign({ campaign_id: id, mode: mode }, autoRemove ? { auto_remove: true } : {})),
       });
       const j = await resp.json().catch(() => ({}));
       if (resp.status !== 202) { fail((j && (j.message || j.error)) || ("HTTP " + resp.status)); return; }
@@ -4122,7 +4329,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         if (!out || j.status !== "running") return;
         const p = j.progress || {};
         const pct = p.total > 0 ? " (" + Math.round(((p.done || 0) / p.total) * 100) + "%)" : "";
-        out.innerHTML = `<div class="dlv-vrun">Verifying… ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"} lead(s)${pct}</div>`;
+        // Distinguishing "now removing" from "still verifying" mid-job isn't
+        // something the job's progress payload tells us — one running label
+        // for the whole auto-remove job is the honest option (per the brief:
+        // fine to keep one generic line) rather than guessing at a phase.
+        out.innerHTML = `<div class="dlv-vrun">${runningLabel} ${p.done != null ? p.done : 0} of ${p.total != null ? p.total : "?"} lead(s)${pct}</div>`;
       });
     } catch (e) {
       fail((e && e.message) || String(e));
@@ -4138,18 +4349,42 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Prefer the job's own mode/label if the backend plumbs one through;
     // otherwise fall back to the mode this request was posted with.
     const v = mapVerifyCounts(job.counts, job.mode || mode);
-    _verifyState[id] = v;
-    verifyResults()[id] = v; // Part A2: persist so the box survives repaints
-    // Item 1: the verify run itself now leaves a typed history row (removal
-    // already did). NOTE: deliberately no `campaign` field — derive()'s
-    // cleanedCampaignIds treats `h.campaign != null` as "cleaned", and a
-    // read-only verify must not mark the campaign clean.
-    logAction({ action: "verify_run", count: v.total, keep: v.keep, remove: v.remove, scope: (camp ? camp.name : "campaign " + id) + " · " + v.tool });
+    const cachedMsg = v.cached ? " · " + fmtN(v.cached) + " from cache" : "";
+    if (v.removed != null) {
+      // auto_remove ran as part of this job — the box now shows the SAME
+      // "removed" summary shape removeBadAction() produces (reuses the
+      // existing renderVerifyResultBox branch), because the bad leads are
+      // already gone; there's nothing left to offer a separate Remove-bad
+      // button for from this box.
+      const before = camp ? camp.sent : 0;
+      const after = Math.max(0, before - v.removed);
+      if (camp) camp.sent = after;
+      verifyResults()[id] = { removedSummary: { removed: v.removed, guarded: v.guarded || 0, before, after } };
+      // Two history rows, matching the two things that happened: a verify
+      // run (no `campaign` field — see note below) plus a removal (with
+      // `campaign` set, same as removeBadAction — this is what marks the
+      // campaign "cleaned" for derive()'s cleanedCampaignIds).
+      logAction({ action: "verify_run", count: v.total, keep: v.keep, remove: v.remove, scope: (camp ? camp.name : "campaign " + id) + " · " + v.tool + " (auto-remove)" });
+      logAction({ campaign: id, name: camp ? camp.name : ("campaign " + id), removed: v.removed, guarded: v.guarded || 0, before, after, total: v.remove });
+      toast("Verified " + v.total + " (" + v.tool + ") · removed " + v.removed + " bad" + (v.guarded ? " · kept " + v.guarded + " replied" : "") + cachedMsg, "ok");
+    } else {
+      // Item 1: the verify run itself now leaves a typed history row (removal
+      // already did). NOTE: deliberately no `campaign` field — derive()'s
+      // cleanedCampaignIds treats `h.campaign != null` as "cleaned", and a
+      // read-only verify must not mark the campaign clean.
+      _verifyState[id] = v;
+      verifyResults()[id] = v; // Part A2: persist so the box survives repaints
+      logAction({ action: "verify_run", count: v.total, keep: v.keep, remove: v.remove, scope: (camp ? camp.name : "campaign " + id) + " · " + v.tool });
+      toast("Verified " + v.total + " (" + v.tool + ") — keep " + v.keep + ", remove " + v.remove + cachedMsg, "ok");
+    }
     saveState();
-    if (out) out.innerHTML = renderVerifyResultBox(id, v);
-    toast("Verified " + v.total + " (" + v.tool + ") — keep " + v.keep + ", remove " + v.remove, "ok");
+    if (out) out.innerHTML = renderVerifyResultBox(id, verifyResults()[id], _verifyStatus[String(id)]);
     btns.forEach((b) => (b.disabled = false));
     btn.innerHTML = orig;
+    // Server-truth refresh: this is what makes the result — and the "Remove
+    // N bad" button in particular — survive a refresh or a server restart,
+    // not just this session's sessionStorage mirror.
+    refreshVerifyStatus([id]);
   }
   async function removeBadAction(id, btn) {
     if (!isLive()) { toast("Live backend not connected — verification unavailable in sample mode.", "err"); return; }
@@ -4209,7 +4444,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     toast(job.status === "cancelled"
       ? "Removal cancelled — " + removed + " already removed"
       : "Removed " + removed + " · kept " + guarded + " replied", job.status === "cancelled" ? "neutral" : "ok");
-    paintPage();
+    // Server-truth refresh (repaints once the fetch resolves) — same reason
+    // as verifyCampaignAction: the row's "Remove N bad" button must reflect
+    // the backend's own bad_remaining, not just this session's guess.
+    refreshVerifyStatus([id]);
   }
 
   /* ============================================================
@@ -5240,7 +5478,51 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "coach-dismiss") { runAct(act, () => { try { localStorage.setItem("dlv_coach_seen", "1"); } catch (e) {} UI.coachOpen = false; paintPage(); }); return; }
     if (act === "show-coach") { runAct(act, () => { UI.coachOpen = true; paintPage(); const c = $id("dlv-coach"); if (c) easeScrollTo(c); }); return; }
     // Part A2: dismiss a persisted per-campaign verify result box.
-    if (act === "verify-dismiss") { runAct(act, () => { if (S.ui && S.ui.verifyResults) { delete S.ui.verifyResults[t.dataset.id]; saveState(); paintPage(); } }); return; }
+    // Ignore/un-ignore a campaign from the verify list — persisted server-side
+    // (POST /api/verify-dismiss) so it stays hidden across refreshes, not just
+    // this session. Fires from the row's own "Ignore" button and from the
+    // "✕ ignore this campaign" link inside a result box (same action either
+    // way — both mean "stop asking me about this campaign").
+    if (act === "verify-dismiss") {
+      runAct(act, async () => {
+        const id = t.dataset.id;
+        const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(id));
+        const name = camp ? camp.name : ("campaign " + id);
+        const ok = await dlvConfirm("Hide this campaign from the verify list? It stays hidden until you un-ignore it.", { title: "Ignore campaign" });
+        if (!ok) return;
+        try {
+          const r = await fetch("/api/verify-dismiss", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ campaign_id: id, name: name, dismissed: true }),
+          });
+          if (!r.ok) { toast("Couldn't ignore this campaign — try again.", "err"); return; }
+        } catch (e) { toast("Couldn't ignore this campaign — try again.", "err"); return; }
+        if (S.ui && S.ui.verifyResults) delete S.ui.verifyResults[id];
+        saveState();
+        toast("Ignored — hidden from the verify list.", "ok");
+        await refreshVerifyStatus([id]);
+      });
+      return;
+    }
+    if (act === "verify-undismiss") {
+      runAct(act, async () => {
+        const id = t.dataset.id;
+        const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(id));
+        const name = (_verifyStatus[String(id)] && _verifyStatus[String(id)].name) || (camp ? camp.name : ("campaign " + id));
+        try {
+          const r = await fetch("/api/verify-dismiss", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ campaign_id: id, name: name, dismissed: false }),
+          });
+          if (!r.ok) { toast("Couldn't un-ignore this campaign — try again.", "err"); return; }
+        } catch (e) { toast("Couldn't un-ignore this campaign — try again.", "err"); return; }
+        toast("Un-ignored — back on the verify list.", "ok");
+        await refreshVerifyStatus([id]);
+      });
+      return;
+    }
     if (act === "scroll-todo") { runAct(act, () => openFoldlessScroll("dlv-todo-anchor")); return; }
     // Stage-A data-source banner dismiss buttons.
     if (act === "dismiss-sample-banner") { runAct(act, () => { DATA.sampleDismissed = true; paintPage(); }); return; }

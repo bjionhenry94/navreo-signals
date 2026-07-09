@@ -3359,9 +3359,12 @@ _LM_CHUNK = 10  # ListMint does live SMTP + catch-all checks (~3s/email) — sma
                 # chunks keep per-request time bounded and progress moving.
 
 
-def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict):
+def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict, campaign_id=None):
     """Run ListMint over `rows` (subset of the details list), writing
-    lm_result + overriding verdict in place. Chunked + sequential."""
+    lm_result + overriding verdict in place. Chunked + sequential. When
+    `campaign_id` is given, each chunk's verdicts are persisted to
+    email_verifications immediately — a mid-run crash or restart only loses
+    the in-flight chunk, not the whole pass."""
     for i in range(0, len(rows), _LM_CHUNK):
         with JOBS_LOCK:
             if job.get("cancel_requested"):
@@ -3380,34 +3383,216 @@ def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict):
                 api_errors[err] = api_errors.get(err, 0) + 1
             with JOBS_LOCK:
                 job["progress"]["done"] += 1
+        if campaign_id is not None:
+            _persist_verdicts([r for r in chunk if r.get("lm_result")], campaign_id, "listmint")
     return False  # ran to completion, not cancelled
+
+
+_VERIFY_TTL_DAYS = 60  # cache window for both tiers below
+
+
+def _people_lookup(emails: list) -> dict:
+    """Which of these emails already have a row in the central `people` table
+    (public.people, email UNIQUE/citext — case-insensitive by the column
+    type, but we lower() our own keys too so the two tiers agree on identity).
+    Chunked at 80/request. Returns {lower_email: True}."""
+    from urllib.parse import quote
+    out = {}
+    uniq = sorted(set(e.lower() for e in emails if e))
+    for i in range(0, len(uniq), 80):
+        chunk = uniq[i:i + 80]
+        enc = ",".join(quote(e, safe="") for e in chunk)
+        rows = sb("GET", f"people?email=in.({enc})&select=email")
+        if isinstance(rows, list):
+            for r in rows:
+                if r.get("email"):
+                    out[r["email"].lower()] = True
+    return out
+
+
+def _cached_verdicts(emails: list) -> dict:
+    """Look up prior verdicts, two tiers, so a re-verify skips emails already
+    checked — MV/ListMint credits are not free.
+    Tier 1: `people` (public.people) is the primary identity store — its
+    email_verification/email_verified_at columns win when present.
+    Tier 2: `email_verifications` is overflow, checked only for emails that
+    tier 1 didn't resolve (no people row, or no verdict on it yet).
+    Both tiers use a 60-day window. Chunked at 80 emails/request. Returns
+    {lower_email: {result, verdict, source}}; best-effort (an outage just
+    means nothing is cached, not a broken run)."""
+    from datetime import datetime, timedelta, timezone
+    from urllib.parse import quote
+    out = {}
+    if not emails:
+        return out
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_VERIFY_TTL_DAYS)).isoformat()
+    uniq = sorted(set(e.lower() for e in emails if e))
+    remaining = set(uniq)
+
+    # tier 1: people
+    for i in range(0, len(uniq), 80):
+        chunk = uniq[i:i + 80]
+        enc = ",".join(quote(e, safe="") for e in chunk)
+        rows = sb("GET", f"people?email=in.({enc})&email_verification=not.is.null"
+                          f"&email_verified_at=gt.{quote(cutoff, safe='')}"
+                          f"&select=email,email_verification,email_verified_at")
+        if isinstance(rows, list):
+            for r in rows:
+                e = (r.get("email") or "").lower()
+                if e and r.get("email_verification"):
+                    out[e] = {"result": None, "verdict": r["email_verification"], "source": "people"}
+                    remaining.discard(e)
+
+    # tier 2: email_verifications overflow — only for what tier 1 missed
+    rem = sorted(remaining)
+    for i in range(0, len(rem), 80):
+        chunk = rem[i:i + 80]
+        enc = ",".join(quote(e, safe="") for e in chunk)
+        rows = sb("GET", f"email_verifications?email=in.({enc})"
+                          f"&verified_at=gt.{quote(cutoff, safe='')}"
+                          f"&select=email,result,verdict,source")
+        if isinstance(rows, list):
+            for r in rows:
+                e = (r.get("email") or "").lower()
+                if e:
+                    out[e] = r
+    return out
+
+
+def _persist_verdicts(rows: list, campaign_id, source: str):
+    """Write fresh verdicts, two tiers.
+    Tier 1: emails that already have a `people` row get PATCHed there
+    (email_verification, email_verified_at) — batched per verdict per chunk
+    to keep request count low. The verify pipeline NEVER inserts new people
+    rows; identity rows aren't ours to fabricate.
+    Tier 2: emails with no people row are upserted into email_verifications
+    as overflow — one row per email, latest wins. Only columns that exist on
+    the table are ever sent (house rule: never send a status-like field
+    that isn't in the row on a merge-duplicates upsert — it silently
+    clobbers unrelated columns)."""
+    from datetime import datetime, timezone
+    from urllib.parse import quote
+    if not rows:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    have_people = _people_lookup([r["email"] for r in rows])
+    to_people = [r for r in rows if r["email"].lower() in have_people]
+    to_overflow = [r for r in rows if r["email"].lower() not in have_people]
+
+    by_verdict: dict = {}
+    for r in to_people:
+        by_verdict.setdefault(r["verdict"], []).append(r["email"].lower())
+    for verdict, es in by_verdict.items():
+        for i in range(0, len(es), 80):
+            chunk = es[i:i + 80]
+            enc = ",".join(quote(e, safe="") for e in chunk)
+            sb("PATCH", f"people?email=in.({enc})",
+               {"email_verification": verdict, "email_verified_at": now})
+
+    if to_overflow:
+        payload = [{"email": r["email"],
+                   "result": (r.get("mv_result") if source == "mv" else r.get("lm_result")),
+                   "verdict": r["verdict"], "source": source,
+                   "campaign_id": str(campaign_id), "lead_id": r.get("lead_id"),
+                   "verified_at": now} for r in to_overflow]
+        sb("POST", "email_verifications?on_conflict=email", payload,
+           prefer="resolution=merge-duplicates,return=minimal")
+
+
+def _verify_state_upsert(campaign_id, **fields):
+    """Upsert verify_campaign_state (pk campaign_id). Only columns present in
+    `fields` are written — everything else keeps its prior value (or NULL on
+    first insert). Best-effort; a Supabase outage must not break verify/remove."""
+    from datetime import datetime, timezone
+    row = {"campaign_id": str(campaign_id),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    row.update({k: v for k, v in fields.items() if v is not None})
+    sb("POST", "verify_campaign_state?on_conflict=campaign_id", row,
+       prefer="resolution=merge-duplicates,return=minimal")
+
+
+def _delete_bad_leads(job: dict, campaign_id, sl_key: str, dry_run: bool, candidates: list):
+    """Shared delete loop used by both the standalone remove job and verify's
+    inline auto-remove tail. Reply-guards (skips) anyone Smartlead has
+    categorised an inbound event for. Extends job["progress"]["total"] by the
+    delete count so an auto-remove tail shows up in the same progress bar as
+    the verify pass it followed. Returns (deleted, guarded, failed, removed_emails, cancelled)."""
+    guarded = [d for d in candidates if d.get("replied")]
+    to_delete = [d for d in candidates if not d.get("replied")]
+    with JOBS_LOCK:
+        job["progress"]["total"] += len(to_delete)
+    deleted, failed, removed_emails = [], 0, []
+    cancelled = False
+    for d in to_delete:
+        with JOBS_LOCK:
+            if job.get("cancel_requested"):
+                cancelled = True
+        if cancelled:
+            break
+        if not dry_run:
+            try:
+                url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads/"
+                       f"{d['lead_id']}?api_key={sl_key}")
+                req = urllib.request.Request(url, method="DELETE",
+                                             headers={"User-Agent": UA})
+                with urllib.request.urlopen(req, timeout=20, context=SSL_CTX):
+                    pass
+                deleted.append(d)
+                removed_emails.append(d["email"])
+            except Exception:  # noqa: BLE001 — one bad delete shouldn't kill the batch
+                failed += 1
+            time.sleep(0.45)  # ~150 req/min ceiling on the Smartlead delete endpoint
+        else:
+            deleted.append(d)  # dry-run: report what WOULD be deleted, delete nothing
+            removed_emails.append(d["email"])
+        with JOBS_LOCK:
+            job["progress"]["done"] += 1
+    return deleted, guarded, failed, removed_emails, cancelled
 
 
 def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
                        lm_key: str, sl_key: str):
+    from datetime import datetime, timezone
     _job_started(job)
     try:
         leads = _fetch_all_smartlead_leads(campaign_id, sl_key)
-        details = [{"lead_id": ld["lead_id"], "email": ld["email"], "mv_result": None,
-                    "lm_result": None, "verdict": "unknown", "replied": ld["replied"]}
-                   for ld in leads]
+        cache = _cached_verdicts([ld["email"] for ld in leads])
+        details, cached_n = [], 0
+        uncached = []
+        for ld in leads:
+            c = cache.get(ld["email"].lower())
+            if c:
+                cached_n += 1
+                details.append({"lead_id": ld["lead_id"], "email": ld["email"],
+                                "mv_result": c.get("result") if c.get("source") == "mv" else None,
+                                "lm_result": c.get("result") if c.get("source") == "listmint" else None,
+                                "verdict": c.get("verdict") or "unknown", "replied": ld["replied"]})
+            else:
+                uncached.append(ld)
+        uncached_details = [{"lead_id": ld["lead_id"], "email": ld["email"], "mv_result": None,
+                             "lm_result": None, "verdict": "unknown", "replied": ld["replied"]}
+                            for ld in uncached]
+        details.extend(uncached_details)
         api_errors = {}  # error message -> count; a mostly-errored run must fail, not "succeed"
+        # progress: cached leads are instantly "done" — only uncached ones do
+        # real work, so total/done both start honest rather than fake-full.
+        with JOBS_LOCK:
+            job["progress"]["total"] = len(leads)
+            job["progress"]["done"] = cached_n
 
         if mode == "mv":
             # Pre-flight: verifying costs 1 MV credit per lead, and MV answers
             # "Insufficient credits" per-call once the balance is gone — which
             # would silently land every lead in `unknown`. Refuse upfront instead.
             balance = _mv_credits(mv_key)
-            if balance is not None and balance < len(leads):
+            if balance is not None and balance < len(uncached):
                 raise RuntimeError(
                     f"MillionVerifier balance is {balance} credits but this campaign "
-                    f"has {len(leads)} leads (1 credit each) — top up at "
+                    f"has {len(uncached)} unverified leads (1 credit each) — top up at "
                     f"millionverifier.com, then re-run.")
-            with JOBS_LOCK:
-                job["progress"]["total"] = len(leads)
             from concurrent.futures import ThreadPoolExecutor, as_completed
             ex = ThreadPoolExecutor(max_workers=8)
-            futs = {ex.submit(_mv_verify_one, d["email"], mv_key): d for d in details}
+            futs = {ex.submit(_mv_verify_one, d["email"], mv_key): d for d in uncached_details}
             cancelled = False
             for fut in as_completed(futs):
                 with JOBS_LOCK:
@@ -3433,48 +3618,78 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
                 _job_finished(job, "cancelled")
                 return
             ex.shutdown(wait=True)
+            _persist_verdicts([d for d in uncached_details if d.get("mv_result")],
+                              campaign_id, "mv")
             errored = sum(api_errors.values())
-            if leads and errored > len(leads) // 2:
+            if uncached and errored > len(uncached) // 2:
                 top = max(api_errors, key=api_errors.get)
                 raise RuntimeError(
-                    f"MillionVerifier rejected {errored} of {len(leads)} lookups "
+                    f"MillionVerifier rejected {errored} of {len(uncached)} lookups "
                     f"(\"{top}\") — verdicts are unusable, nothing was classified.")
             # Second layer: ListMint re-checks only what MV couldn't settle
             # (catch-alls + unknowns). Without a ListMint key the MV verdicts
             # stand alone — noted in counts, never silently.
-            recheck = [d for d in details if d["verdict"] in ("catch_all", "unknown")]
+            recheck = [d for d in uncached_details if d["verdict"] in ("catch_all", "unknown")]
             if lm_key and recheck:
                 with JOBS_LOCK:
                     job["progress"]["total"] += len(recheck)
-                if _listmint_pass(job, recheck, lm_key, api_errors):
+                if _listmint_pass(job, recheck, lm_key, api_errors, campaign_id):
                     _job_finished(job, "cancelled")
                     return
-        else:  # mode == "listmint" — ListMint on every lead, no MV involved
-            with JOBS_LOCK:
-                job["progress"]["total"] = len(leads)
-            if _listmint_pass(job, details, lm_key, api_errors):
+        else:  # mode == "listmint" — ListMint on every uncached lead, no MV involved
+            if _listmint_pass(job, uncached_details, lm_key, api_errors, campaign_id):
                 _job_finished(job, "cancelled")
                 return
             errored = sum(api_errors.values())
-            if leads and errored > len(leads) // 2:
+            if uncached and errored > len(uncached) // 2:
                 top = max(api_errors, key=api_errors.get)
                 raise RuntimeError(
-                    f"ListMint rejected {errored} of {len(leads)} lookups "
+                    f"ListMint rejected {errored} of {len(uncached)} lookups "
                     f"(\"{top}\") — verdicts are unusable, nothing was classified.")
 
         counts = {"good": 0, "catch_all": 0, "unknown": 0, "bad": 0}
         for d in details:
             counts[d["verdict"]] += 1
+        counts["cached"] = cached_n
         bad_emails = [d["email"] for d in details if d["verdict"] == "bad"]
         if mode == "mv" and not lm_key:
             counts["listmint_recheck"] = "skipped (LISTMINT_API_KEY not set)"
         VERIFY_RESULTS[str(campaign_id)] = details
         with JOBS_LOCK:
             job["counts"] = {"total": len(leads), **counts, "bad_emails": bad_emails}
-        log_activity("/api/verify-campaign",
-                     payload={"campaign_id": campaign_id, "mode": mode,
-                              "total": len(leads), **counts,
-                              "bad_emails": bad_emails[:100]},
+
+        # Auto-remove tail: only when asked, only when there's something bad
+        # to remove, and only if the verify pass itself wasn't cancelled.
+        removal = None
+        if job.get("auto_remove") and counts.get("bad", 0) > 0 \
+                and not job.get("cancel_requested"):
+            bad_candidates = [d for d in details if d["verdict"] == "bad"]
+            deleted, guarded, failed, removed_emails, r_cancelled = _delete_bad_leads(
+                job, campaign_id, sl_key, dry_run=False, candidates=bad_candidates)
+            removal = {"removed": len(deleted), "guarded": len(guarded),
+                      "failed_deletes": failed, "removed_emails": removed_emails,
+                      "cancelled": r_cancelled}
+            with JOBS_LOCK:
+                job["counts"]["removed"] = len(deleted)
+                job["counts"]["guarded"] = len(guarded)
+                job["counts"]["failed_deletes"] = failed
+            if not r_cancelled and deleted:
+                VERIFY_RESULTS.pop(str(campaign_id), None)
+
+        bad_remaining = counts.get("bad", 0) - (removal["removed"] if removal else 0)
+        _verify_state_upsert(campaign_id, name=job.get("name") or job.get("label"),
+                             last_verify_at=datetime.now(timezone.utc).isoformat(),
+                             last_counts=job["counts"], bad_remaining=max(0, bad_remaining))
+
+        payload = {"campaign_id": campaign_id, "mode": mode, "total": len(leads),
+                  **counts, "bad_emails": bad_emails[:100]}
+        if job.get("auto_remove"):
+            payload["auto_remove"] = True
+            if removal:
+                payload["removed"] = removal["removed"]
+                payload["guarded"] = removal["guarded"]
+                payload["removed_emails"] = removal["removed_emails"][:100]
+        log_activity("/api/verify-campaign", payload=payload,
                      actor="deliverability", action="verify_run",
                      entity="campaign", entity_id=campaign_id)
         _job_finished(job, "done")
@@ -3485,42 +3700,29 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
 def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
     _job_started(job)
     try:
-        details = VERIFY_RESULTS.get(str(campaign_id)) or []
+        details = VERIFY_RESULTS.get(str(campaign_id))
+        note = None
+        if details is None:
+            # No in-memory session result (fresh process, or never verified
+            # this session) — rebuild candidates from the durable ledger
+            # rather than refusing. bad = anything recorded 'bad' in the
+            # last _VERIFY_TTL_DAYS for this lead's email.
+            leads = _fetch_all_smartlead_leads(campaign_id, sl_key)
+            cache = _cached_verdicts([ld["email"] for ld in leads])
+            details = [{"lead_id": ld["lead_id"], "email": ld["email"],
+                       "verdict": (cache.get(ld["email"].lower()) or {}).get("verdict") or "unknown",
+                       "replied": ld["replied"]} for ld in leads]
+            if not any(d["verdict"] == "bad" for d in details):
+                note = "no confirmed-bad leads on record for this campaign"
         candidates = [d for d in details if d["verdict"] == "bad"]
-        guarded = [d for d in candidates if d.get("replied")]
-        to_delete = [d for d in candidates if not d.get("replied")]
-        with JOBS_LOCK:
-            job["progress"]["total"] = len(to_delete)
-        deleted, failed, removed_emails = [], 0, []
-        cancelled = False
-        for d in to_delete:
-            with JOBS_LOCK:
-                if job.get("cancel_requested"):
-                    cancelled = True
-            if cancelled:
-                break
-            if not dry_run:
-                try:
-                    url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads/"
-                           f"{d['lead_id']}?api_key={sl_key}")
-                    req = urllib.request.Request(url, method="DELETE",
-                                                 headers={"User-Agent": UA})
-                    with urllib.request.urlopen(req, timeout=20, context=SSL_CTX):
-                        pass
-                    deleted.append(d)
-                    removed_emails.append(d["email"])
-                except Exception:  # noqa: BLE001 — one bad delete shouldn't kill the batch
-                    failed += 1
-                time.sleep(0.45)  # ~150 req/min ceiling on the Smartlead delete endpoint
-            else:
-                deleted.append(d)  # dry-run: report what WOULD be deleted, delete nothing
-                removed_emails.append(d["email"])
-            with JOBS_LOCK:
-                job["progress"]["done"] += 1
+        deleted, guarded, failed, removed_emails, cancelled = _delete_bad_leads(
+            job, campaign_id, sl_key, dry_run, candidates)
         # dry_run: "deleted" reports what WOULD be removed (nothing actually was) -
         # the job's own `dry_run` flag is what tells a caller which case it is.
         counts = {"requested": len(candidates), "deleted": len(deleted),
                   "guarded": len(guarded), "failed": failed}
+        if note:
+            counts["detail"] = note
         with JOBS_LOCK:
             job["counts"] = counts
         if cancelled:
@@ -3540,8 +3742,18 @@ def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
                               "removed_emails": removed_emails[:100], "dry_run": dry_run},
                      actor="deliverability", action="remove_bad",
                      entity="campaign", entity_id=campaign_id)
-        if not dry_run and failed == 0:
-            VERIFY_RESULTS.pop(str(campaign_id), None)
+        if not dry_run:
+            if failed == 0:
+                VERIFY_RESULTS.pop(str(campaign_id), None)
+            if deleted:
+                state = sb("GET", f"verify_campaign_state?campaign_id=eq.{campaign_id}"
+                                  "&select=last_counts,name")
+                prev = (state[0] if isinstance(state, list) and state else {})
+                merged_counts = {**(prev.get("last_counts") or {}), "removed": len(deleted),
+                                 "guarded": len(guarded), "failed_deletes": failed}
+                _verify_state_upsert(campaign_id, name=prev.get("name"),
+                                     bad_remaining=max(0, len(candidates) - len(deleted)),
+                                     last_counts=merged_counts)
         _job_finished(job, "done")
     except Exception as e:  # noqa: BLE001
         _job_finished(job, "failed", str(e)[:300])
@@ -3568,9 +3780,15 @@ def api_verify_campaign(p: dict):
                            "~/.navreo-keys.env locally or as a Render env var."}, 503
     sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
     dry_run = bool(p.get("dry_run"))
+    auto_remove = bool(p.get("auto_remove"))
+    name = (p.get("name") or "").strip() or None
     label = (f"Verify campaign {campaign_id} "
              + ("(ListMint)" if mode == "listmint" else "(MillionVerifier → ListMint)"))
+    if auto_remove:
+        label += " + auto-remove"
     job = _new_job("verify", label, campaign_id, mode, dry_run)
+    job["auto_remove"] = auto_remove
+    job["name"] = name
     threading.Thread(target=_verify_job_worker,
                      args=(job, campaign_id, mode, mv_key, lm_key, sl_key),
                      daemon=True).start()
@@ -3581,9 +3799,6 @@ def api_verify_remove(p: dict):
     campaign_id = p.get("campaign_id")
     if not campaign_id:
         return {"error": "missing_campaign_id"}, 400
-    if str(campaign_id) not in VERIFY_RESULTS:
-        return {"error": "no_verify_result",
-                "message": "Run a verification first (results live for this server session)."}, 409
     sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
     dry_run = bool(p.get("dry_run"))
     job = _new_job("remove_bad", f"Remove bad leads: campaign {campaign_id}", campaign_id,
@@ -3591,6 +3806,39 @@ def api_verify_remove(p: dict):
     threading.Thread(target=_remove_job_worker, args=(job, campaign_id, sl_key, dry_run),
                      daemon=True).start()
     return {"job_id": job["id"]}, 202
+
+
+def api_verify_status(ids: list) -> dict:
+    from urllib.parse import quote
+    if not ids:
+        return {"status": {}}
+    in_clause = ",".join(quote(i, safe="") for i in ids[:50])
+    rows = sb("GET", f"verify_campaign_state?campaign_id=in.({in_clause})"
+                      "&select=campaign_id,name,last_verify_at,last_counts,bad_remaining,dismissed")
+    out = {}
+    for r in (rows or []):
+        cid = r.get("campaign_id")
+        if not cid:
+            continue
+        out[cid] = {"name": r.get("name"), "last_verify_at": r.get("last_verify_at"),
+                    "counts": r.get("last_counts"), "bad_remaining": r.get("bad_remaining"),
+                    "dismissed": bool(r.get("dismissed"))}
+    return {"status": out}
+
+
+def api_verify_dismiss(p: dict):
+    campaign_id = p.get("campaign_id")
+    if not campaign_id:
+        return {"error": "missing_campaign_id"}, 400
+    dismissed = bool(p.get("dismissed", True))
+    from datetime import datetime, timezone
+    _verify_state_upsert(campaign_id, name=(p.get("name") or "").strip() or None,
+                         dismissed=dismissed,
+                         dismissed_at=datetime.now(timezone.utc).isoformat() if dismissed else None)
+    log_activity("/api/verify-dismiss", payload={"campaign_id": campaign_id, "dismissed": dismissed},
+                 actor="deliverability", action=("dismiss" if dismissed else "undismiss"),
+                 entity="campaign", entity_id=campaign_id)
+    return {"ok": True}, 200
 
 
 _HR_LISTS: dict = {}
@@ -6927,9 +7175,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"jobs": jobs})
         if path == "/api/campaign-lead-counts":
             # "How many leads will a verify cover?" — Smartlead's total_leads via
-            # a limit=1 page per campaign, cached so repaints don't re-pay the
-            # round-trips. The count is the campaign's FULL lead list (verify
-            # scope), not the sent count shown on the audit rows.
+            # a limit=1 page per campaign, cached 1hr so repaints don't re-pay
+            # the round-trips. The count is the campaign's FULL lead list
+            # (verify scope), not the sent count shown on the audit rows.
+            # Smartlead 429s under load, so each id gets up to 3 attempts
+            # (3s, then 8s backoff) with a generous per-request timeout before
+            # this gives up and reports "unknown" for that one id.
             from urllib.parse import parse_qs, urlparse
             ids = [s for s in (parse_qs(urlparse(self.path).query).get("ids") or [""])[0]
                    .split(",") if s.strip()][:25]
@@ -6937,19 +7188,30 @@ class Handler(SimpleHTTPRequestHandler):
             out = {}
             for cid in ids:
                 cached = _LEAD_COUNT_CACHE.get(cid)
-                if cached and time.time() - cached[1] < 600:
+                if cached and time.time() - cached[1] < 3600:
                     out[cid] = cached[0]
                     continue
-                try:
-                    page = http_json("GET", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads"
-                                            f"?api_key={sl_key}&offset=0&limit=1", {})
-                    n = int((page or {}).get("total_leads") or 0)
-                except Exception:  # noqa: BLE001 — a failed count is "unknown", not a 500
-                    n = None
+                n = None
+                for attempt, backoff in enumerate((0, 3, 8)):
+                    if backoff:
+                        time.sleep(backoff)
+                    try:
+                        page = http_json("GET", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads"
+                                                f"?api_key={sl_key}&offset=0&limit=1", {},
+                                         timeout=30)
+                        n = int((page or {}).get("total_leads") or 0)
+                        break
+                    except Exception:  # noqa: BLE001 — retry, then "unknown" not a 500
+                        continue
                 if n is not None:
                     _LEAD_COUNT_CACHE[cid] = (n, time.time())
                 out[cid] = n
             return self._json({"counts": out})
+        if path == "/api/verify-status":
+            from urllib.parse import parse_qs, urlparse
+            ids = [s for s in (parse_qs(urlparse(self.path).query).get("ids") or [""])[0]
+                   .split(",") if s.strip()]
+            return self._json(api_verify_status(ids))
         if path.startswith("/api/jobs/"):
             jid = path[len("/api/jobs/"):]
             with JOBS_LOCK:
@@ -7091,6 +7353,14 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_verify_remove(payload)
+            return self._json(body, status)
+        if path == "/api/verify-dismiss":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_verify_dismiss(payload)
             return self._json(body, status)
         if path == "/api/deliverability/_audit/refresh":
             length = int(self.headers.get("Content-Length") or 0)
