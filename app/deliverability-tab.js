@@ -879,8 +879,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-sig-helper{font-size:12px;color:var(--orange-700);font-weight:600;margin:0 0 6px;display:none}
 .dlv-sig-helper.show{display:block}
 .btn.primary:disabled,.btn:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.2)}
-.dlv-gloss{cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;min-width:15px;border-radius:50%;background:var(--amber-bg,rgba(200,140,20,.18));color:var(--orange-700);font-weight:700;font-size:10.5px;line-height:1;vertical-align:super;margin-left:3px;border:1px solid var(--orange-700);user-select:none;transition:background .15s,color .15s}
-.dlv-gloss:hover{background:var(--orange-700);color:#fff}
+.dlv-gloss{cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;min-width:13px;border-radius:50%;background:var(--amber-bg,rgba(200,140,20,.14));color:var(--orange-700);font-weight:700;font-size:9.5px;line-height:1;vertical-align:super;margin-left:3px;border:1px solid var(--orange-700);user-select:none;opacity:.62;transition:background .15s,color .15s,opacity .15s}
+.dlv-gloss:hover,.dlv-gloss:focus-visible{background:var(--orange-700);color:#fff;opacity:1}
 .dlv-gloss-pop{position:fixed;z-index:290;max-width:260px;background:var(--ink);color:#fff;border-radius:9px;padding:11px 30px 11px 13px;font-size:12.5px;line-height:1.45;box-shadow:0 16px 40px rgba(20,17,14,.35);display:none;pointer-events:none}
 .dlv-gloss-pop.show{display:block}
 /* Root cause (defect #3, glossary reopen): with several "?" markers packed
@@ -1928,11 +1928,23 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const A = S.A;
     const F = computeHealthFacts(D);
     const dmarcSum = A.quarantine + A.reject + A.none;
+    // Fix (2026-07-09): these four tiles used to carry a THIRD line that just
+    // restated the headline number in prose (e.g. "3 SMTP auth errors · 1 IMAP
+    // sync error" under "3 / 1") — pure repetition, and glossify()'d so nearly
+    // every jargon word in that small grey text got its own inline "?" on top
+    // of the one already on the tile's label. Dropped the restate line
+    // entirely (7th `extra` arg → null) so each tile is just NUMBER + one
+    // plain-esc()'d hint line; the single "?" that survives lives only on the
+    // label (glossLabel, 8th arg), where the concept's full definition is
+    // still one click away.
     const tiles = [
-      tile("SMTP / IMAP fails", A.smtp + " / " + A.imap, "auth / sync errors", sevOf(A.smtp === 0, A.smtp < 10), null, null, A.smtp + " SMTP auth error" + (A.smtp === 1 ? "" : "s") + " · " + A.imap + " IMAP sync error" + (A.imap === 1 ? "" : "s"), glossify("SMTP / IMAP fails")),
-      tile("Missing SPF/DKIM/DMARC", A.spfMiss + " / " + A.dkimMiss + " / " + A.dmarcMiss, "sending-domain auth", sevOf(A.spfMiss + A.dkimMiss + A.dmarcMiss === 0, true), null, null, A.spfMiss + " SPF · " + A.dkimMiss + " DKIM · " + A.dmarcMiss + " DMARC missing", glossify("Missing SPF/DKIM/DMARC")),
+      tile("SMTP / IMAP fails", A.smtp + " / " + A.imap, "auth / sync errors", sevOf(A.smtp === 0, A.smtp < 10), null, null, null, glossify("SMTP / IMAP fails")),
+      // Hint renamed from "sending-domain auth" to spell out the record order
+      // (SPF / DKIM / DMARC) so it maps 1:1 onto the "0 / 0 / 1" headline
+      // instead of a reader having to guess which number is which record.
+      tile("Missing SPF/DKIM/DMARC", A.spfMiss + " / " + A.dkimMiss + " / " + A.dmarcMiss, "SPF / DKIM / DMARC missing", sevOf(A.spfMiss + A.dkimMiss + A.dmarcMiss === 0, true), null, null, null, glossify("Missing SPF/DKIM/DMARC")),
       tile("Nameserver issues", A.noNS, "drift / broken zones", sevOf(A.noNS === 0, true), null, null, null, glossify("Nameserver issues")),
-      tile("DMARC enforcing", A.quarantine + " / " + A.reject, "quarantine / reject (" + A.none + " none) of " + dmarcSum, "", null, null, A.quarantine + " quarantine · " + A.reject + " reject · " + A.none + " none", glossify("DMARC enforcing")),
+      tile("DMARC enforcing", A.quarantine + " / " + A.reject, "quarantine / reject · " + A.none + " none of " + dmarcSum, "", null, null, null, glossify("DMARC enforcing")),
     ].join("");
     const open = (S.ui && S.ui.techOpen != null) ? S.ui.techOpen : F.anyInfraIssue;
     const summary = F.authIssueDomains + " domain(s) missing auth records · " + F.nsIssues + " nameserver issue(s)";
