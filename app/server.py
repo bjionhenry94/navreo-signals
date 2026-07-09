@@ -31,6 +31,8 @@ from pathlib import Path
 
 import certifi
 
+import mock_deliv  # DELIV_MOCK — in-memory fake fleet, only ever called when DELIV_MOCK=1
+
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = APP_DIR.parent
 DRAFTS = APP_DIR / "data" / "draft_sources.json"       # legacy path, kept only as read fallback
@@ -798,6 +800,10 @@ _ACTIVITY_META = {  # endpoint → (action, entity); anything absent logs as-is
     "/api/campaign-drafts/purge": ("delete", "campaign_draft"),
     "/api/tam-map": ("preview", "tam"),
     "/api/strategy-map": ("preview", "strategy"),
+    "/api/verify-campaign": ("verify", "campaign"),
+    "/api/verify-remove": ("remove_leads", "campaign"),
+    "/api/verify-dismiss": ("dismiss", "verification"),
+    "/api/process-new-selected": ("process_new", "mailboxes"),
 }
 
 
@@ -3212,7 +3218,15 @@ _JOBS_CAP = 200
 
 _JOB_DB_FIELDS = ("id", "kind", "label", "campaign_id", "mode", "status",
                   "progress", "counts", "error", "dry_run", "started_at",
-                  "finished_at")
+                  "finished_at", "auto_remove", "resume_count")
+# NOTE: app_jobs has no `mock` column (confirmed live: PGRST204 "column
+# app_jobs.mock does not exist") - the in-memory job dict keeps a `mock` key
+# for runtime branching, but it is deliberately excluded from _JOB_DB_FIELDS.
+# Including it here would make every _job_persist POST 400 (unknown column),
+# silently killing durability for every job, not just mock ones. Mock-ness on
+# a resumed/recovered job is instead inferred from the label ("[TEST] "
+# prefix) / campaign_id ("MOCK" prefix) convention used by api_verify_campaign
+# and the verification steps below - see _is_mock_job_row().
 
 
 def _job_persist(job: dict):
@@ -3229,13 +3243,15 @@ def _job_persist(job: dict):
         daemon=True).start()
 
 
-def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool = False) -> dict:
+def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool = False,
+             auto_remove: bool = False, resume_count: int = 0, mock: bool = False) -> dict:
     import uuid
     job = {"id": uuid.uuid4().hex[:10], "kind": kind, "label": label,
            "campaign_id": campaign_id, "mode": mode, "status": "queued",
            "progress": {"done": 0, "total": 0}, "started_at": None,
            "finished_at": None, "counts": {}, "error": None, "dry_run": dry_run,
-           "cancel_requested": False}
+           "cancel_requested": False, "auto_remove": auto_remove,
+           "resume_count": resume_count, "mock": mock}
     with JOBS_LOCK:
         JOBS[job["id"]] = job
         if len(JOBS) > _JOBS_CAP:
@@ -3277,20 +3293,84 @@ def _job_get(jid: str) -> dict | None:
     return rows[0] if rows else None
 
 
+_MAX_AUTO_RESUMES_PER_BOOT = 25  # guard against a resume storm on a crash-loop boot
+
+
+def _is_mock_job_row(r: dict) -> bool:
+    """app_jobs has no `mock` column, so a job's mock-ness has to be inferred
+    when reconstructing it from a durable row (recovery/resume). Convention:
+    api_verify_campaign prefixes a mock job's label "[TEST] " and the caller
+    is expected to use an obviously-fake campaign_id (the manual test steps
+    use "MOCKTEST..."); either signal is enough."""
+    label = (r.get("label") or "")
+    cid = str(r.get("campaign_id") or "").upper()
+    return label.startswith("[TEST]") or cid.startswith("MOCK")
+
+
 def _jobs_recover_orphans():
     """On boot, any app_jobs row still 'running'/'queued' belonged to the process
-    that just died — its worker thread is gone. Mark them 'interrupted' so the UI
-    shows a resumable state instead of a job that polls forever or 404s. Cheap to
-    re-run: per-chunk verdict persistence means a re-verify skips cached emails."""
+    that just died — its worker thread is gone.
+
+    verify jobs (not dry-run, resume_count < 3) are automatically re-enqueued
+    as a fresh job: the 60-day verdict cache (`_cached_verdicts`) means the
+    resumed pass skips every email already checked, so it naturally continues
+    from where it died instead of re-spending verifier credits. The empty-
+    targets path in `_verify_job_worker` also means a resume against a
+    campaign with nothing left to verify just completes cleanly, so this
+    can't loop on a dead campaign.
+
+    Everything else - remove_bad jobs, dry runs, and verify jobs that have
+    already auto-resumed 3 times - is left 'interrupted' so the UI shows a
+    resumable state instead of a job that polls forever or 404s.
+
+    MUST run after the dispatcher worker threads are started (see __main__)
+    since a resume re-enqueues onto _JOB_QUEUE, which needs a consumer."""
     try:
-        stuck = sb("GET", "app_jobs?status=in.(running,queued)&select=id")
-        for r in (stuck or []):
-            sb("PATCH", f"app_jobs?id=eq.{r['id']}",
-               {"status": "interrupted",
-                "error": "Server restarted mid-run — re-run to resume (already-checked emails are cached).",
-                "finished_at": _now_iso()})
+        stuck = sb("GET", "app_jobs?status=in.(running,queued)"
+                          "&select=id,kind,label,campaign_id,mode,dry_run,auto_remove,resume_count")
     except Exception:  # noqa: BLE001 — recovery is best-effort; never block boot
-        pass
+        return
+    resumed = 0
+    for r in (stuck or []):
+        try:
+            resume_count = r.get("resume_count") or 0
+            can_resume = (r.get("kind") == "verify" and not r.get("dry_run")
+                         and resume_count < 3 and resumed < _MAX_AUTO_RESUMES_PER_BOOT)
+            if can_resume:
+                campaign_id = r["campaign_id"]
+                mode = r.get("mode") or "mv"
+                mock = _is_mock_job_row(r)
+                sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+                mv_key = KEYS.get("MILLIONVERIFIER_API_KEY") or os.environ.get("MILLIONVERIFIER_API_KEY")
+                lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY")
+                label = r.get("label") or f"Verify campaign {campaign_id}"
+                new_job = _new_job("verify", label, campaign_id, mode, dry_run=False,
+                                   auto_remove=bool(r.get("auto_remove")),
+                                   resume_count=resume_count + 1, mock=mock)
+                _enqueue_job(_verify_job_worker, new_job,
+                            (new_job, campaign_id, mode, mv_key, lm_key, sl_key))
+                sb("PATCH", f"app_jobs?id=eq.{r['id']}",
+                   {"status": "interrupted",
+                    "error": f"Server restarted mid-run — auto-resumed as job "
+                             f"{new_job['id']} (attempt {resume_count + 1}/3).",
+                    "finished_at": _now_iso()})
+                resumed += 1
+                try:
+                    log_activity("/api/verify-campaign",
+                                 payload={"campaign_id": campaign_id, "old_job_id": r["id"],
+                                          "new_job_id": new_job["id"],
+                                          "resume_count": resume_count + 1},
+                                 actor="deliverability", action="verify_resume",
+                                 entity="campaign", entity_id=campaign_id)
+                except Exception:  # noqa: BLE001 — logging must never block recovery
+                    pass
+            else:
+                sb("PATCH", f"app_jobs?id=eq.{r['id']}",
+                   {"status": "interrupted",
+                    "error": "Server restarted mid-run — re-run to resume (already-checked emails are cached).",
+                    "finished_at": _now_iso()})
+        except Exception:  # noqa: BLE001 — one bad row must not stop the rest of recovery
+            continue
 
 
 def _now_iso():
@@ -3424,10 +3504,17 @@ def _listmint_verify_batch(emails: list, lm_key: str) -> dict:
 
 def _fetch_all_smartlead_leads(campaign_id, sl_key: str) -> list:
     """Pages /campaigns/{id}/leads to exhaustion. Returns [{lead_id, email,
-    replied}] - replied = lead_category_id is not None, i.e. Smartlead has
-    already categorised an inbound event (reply, OOO, bounce-notice...) for
-    this lead. That's a deliberately conservative definition: anything that
-    LOOKS like the lead engaged guards them from the remove step."""
+    replied, status, is_unsubscribed, contacted}] - replied = lead_category_id
+    is not None, i.e. Smartlead has already categorised an inbound event
+    (reply, OOO, bounce-notice...) for this lead. That's a deliberately
+    conservative definition: anything that LOOKS like the lead engaged guards
+    them from the remove step.
+    contacted = the lead has already been emailed (or otherwise resolved) by
+    Smartlead — status other than STARTED (STARTED = queued, not yet sent),
+    OR is_unsubscribed, OR lead_category_id is not None. Verify/remove only
+    ever operate on the NOT-contacted subset — no point spending a
+    verification credit, or risking a delete, on someone Smartlead already
+    emailed."""
     leads = []
     offset = 0
     while True:
@@ -3442,8 +3529,13 @@ def _fetch_all_smartlead_leads(campaign_id, sl_key: str) -> list:
             email = (lead.get("email") or "").strip()
             if not email:
                 continue
+            status = (row.get("status") or "").strip().upper()
+            is_unsub = bool(row.get("is_unsubscribed"))
+            replied = row.get("lead_category_id") is not None
+            contacted = (status not in ("STARTED", "")) or is_unsub or replied
             leads.append({"lead_id": lead.get("id"), "email": email,
-                          "replied": row.get("lead_category_id") is not None})
+                          "replied": replied, "status": status,
+                          "is_unsubscribed": is_unsub, "contacted": contacted})
         if len(rows) < 100:
             break
         offset += 100
@@ -3686,16 +3778,126 @@ def _delete_bad_leads(job: dict, campaign_id, sl_key: str, dry_run: bool, candid
     return deleted, guarded, failed, removed_emails, cancelled
 
 
-def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
-                       lm_key: str, sl_key: str):
+_MOCK_LEAD_COUNT = 40  # fabricated "uncontacted" lead set for mock verify jobs
+
+
+def _mock_verify_worker(job: dict, campaign_id, mode: str):
+    """Credit-free test double for the verify job lifecycle. Fabricates a
+    deterministic uncontacted lead set (mock+<n>@example.com) and
+    deterministic verdicts (~15% bad, ~10% catch_all, rest good), then drives
+    the SAME job machinery as `_verify_job_worker` - job_started/finished,
+    progress ticks with small sleeps so the UI visibly moves, per-chunk
+    `_job_persist`, cancel honouring, counts including `contacted_skipped`,
+    and an auto-remove tail against the fabricated bad set - without ever
+    calling MillionVerifier, ListMint, or the Smartlead delete endpoint, and
+    without writing to the real `people`/`email_verifications` tables. The
+    only Supabase write is a `verify_campaign_state` row keyed by the given
+    campaign_id, so the UI has something to read; the caller is expected to
+    use an obviously-fake campaign_id (e.g. "MOCKTEST1") and delete that row
+    (and the app_jobs row) once done testing."""
     from datetime import datetime, timezone
     _job_started(job)
     try:
+        targets = [{"lead_id": f"mock-{i}", "email": f"mock+{i}@example.com",
+                    "replied": False, "status": "STARTED", "is_unsubscribed": False,
+                    "contacted": False} for i in range(_MOCK_LEAD_COUNT)]
+        contacted_skipped = 0
+        with JOBS_LOCK:
+            job["progress"]["total"] = len(targets)
+            job["progress"]["done"] = 0
+
+        details = []
+        for i, ld in enumerate(targets):
+            with JOBS_LOCK:
+                if job.get("cancel_requested"):
+                    _job_finished(job, "cancelled")
+                    return
+            time.sleep(0.03)  # visible progress movement in the UI, no real API call
+            m = i % 20
+            verdict = "bad" if m < 3 else "catch_all" if m < 5 else "good"  # ~15% / ~10% / rest
+            details.append({"lead_id": ld["lead_id"], "email": ld["email"], "mv_result": None,
+                            "lm_result": None, "verdict": verdict, "replied": ld["replied"]})
+            with JOBS_LOCK:
+                job["progress"]["done"] += 1
+            if (i + 1) % 10 == 0:
+                _job_persist(job)  # durable per-chunk heartbeat, mirrors the real worker
+
+        counts = {"good": 0, "catch_all": 0, "unknown": 0, "bad": 0}
+        for d in details:
+            counts[d["verdict"]] += 1
+        counts["cached"] = 0
+        counts["contacted_skipped"] = contacted_skipped
+        bad_emails = [d["email"] for d in details if d["verdict"] == "bad"]
+        with JOBS_LOCK:
+            job["counts"] = {"total": len(targets), **counts, "bad_emails": bad_emails}
+
+        removal = None
+        if job.get("auto_remove") and counts.get("bad", 0) > 0 and not job.get("cancel_requested"):
+            bad_candidates = [d for d in details if d["verdict"] == "bad"]
+            with JOBS_LOCK:
+                job["progress"]["total"] += len(bad_candidates)
+            deleted, guarded, failed, removed_emails, r_cancelled = [], [], 0, [], False
+            for d in bad_candidates:
+                with JOBS_LOCK:
+                    if job.get("cancel_requested"):
+                        r_cancelled = True
+                if r_cancelled:
+                    break
+                time.sleep(0.02)  # mock delete: no Smartlead call, no real removal
+                deleted.append(d)
+                removed_emails.append(d["email"])
+                with JOBS_LOCK:
+                    job["progress"]["done"] += 1
+            removal = {"removed": len(deleted), "guarded": len(guarded),
+                      "failed_deletes": failed, "removed_emails": removed_emails,
+                      "cancelled": r_cancelled}
+            with JOBS_LOCK:
+                job["counts"]["removed"] = len(deleted)
+                job["counts"]["guarded"] = len(guarded)
+                job["counts"]["failed_deletes"] = failed
+
+        bad_remaining = counts.get("bad", 0) - (removal["removed"] if removal else 0)
+        _verify_state_upsert(campaign_id, name=job.get("name") or job.get("label"),
+                             last_verify_at=datetime.now(timezone.utc).isoformat(),
+                             last_counts=job["counts"], bad_remaining=max(0, bad_remaining))
+        _job_finished(job, "done")
+    except Exception as e:  # noqa: BLE001 — surface the real failure, never a vague one
+        _job_finished(job, "failed", str(e)[:300])
+
+
+def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
+                       lm_key: str, sl_key: str):
+    from datetime import datetime, timezone
+    if job.get("mock"):
+        _mock_verify_worker(job, campaign_id, mode)
+        return
+    _job_started(job)
+    try:
         leads = _fetch_all_smartlead_leads(campaign_id, sl_key)
-        cache = _cached_verdicts([ld["email"] for ld in leads])
+        # Verify (and any auto-remove that follows) only ever touches leads
+        # Smartlead hasn't already emailed — burning a verify credit, or
+        # risking a delete, on someone already contacted is pointless and
+        # in the delete case actively dangerous.
+        targets = [ld for ld in leads if not ld["contacted"]]
+        contacted_skipped = len(leads) - len(targets)
+        if not targets:
+            with JOBS_LOCK:
+                job["progress"]["total"] = 0
+                job["progress"]["done"] = 0
+                job["counts"] = {"total": 0, "good": 0, "catch_all": 0, "unknown": 0,
+                                 "bad": 0, "cached": 0, "bad_emails": [],
+                                 "contacted_skipped": contacted_skipped,
+                                 "detail": "no not-yet-contacted leads to verify — "
+                                           "the campaign has already sent to everyone"}
+            _verify_state_upsert(campaign_id, name=job.get("name") or job.get("label"),
+                                 last_verify_at=datetime.now(timezone.utc).isoformat(),
+                                 last_counts=job["counts"], bad_remaining=0)
+            _job_finished(job, "done")
+            return
+        cache = _cached_verdicts([ld["email"] for ld in targets])
         details, cached_n = [], 0
         uncached = []
-        for ld in leads:
+        for ld in targets:
             c = cache.get(ld["email"].lower())
             if c:
                 cached_n += 1
@@ -3713,7 +3915,7 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
         # progress: cached leads are instantly "done" — only uncached ones do
         # real work, so total/done both start honest rather than fake-full.
         with JOBS_LOCK:
-            job["progress"]["total"] = len(leads)
+            job["progress"]["total"] = len(targets)
             job["progress"]["done"] = cached_n
 
         if mode == "mv":
@@ -3790,12 +3992,13 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
         for d in details:
             counts[d["verdict"]] += 1
         counts["cached"] = cached_n
+        counts["contacted_skipped"] = contacted_skipped
         bad_emails = [d["email"] for d in details if d["verdict"] == "bad"]
         if mode == "mv" and not lm_key:
             counts["listmint_recheck"] = "skipped (LISTMINT_API_KEY not set)"
         VERIFY_RESULTS[str(campaign_id)] = details
         with JOBS_LOCK:
-            job["counts"] = {"total": len(leads), **counts, "bad_emails": bad_emails}
+            job["counts"] = {"total": len(targets), **counts, "bad_emails": bad_emails}
 
         # Auto-remove tail: only when asked, only when there's something bad
         # to remove, and only if the verify pass itself wasn't cancelled.
@@ -3820,7 +4023,7 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
                              last_verify_at=datetime.now(timezone.utc).isoformat(),
                              last_counts=job["counts"], bad_remaining=max(0, bad_remaining))
 
-        payload = {"campaign_id": campaign_id, "mode": mode, "total": len(leads),
+        payload = {"campaign_id": campaign_id, "mode": mode, "total": len(targets),
                   **counts, "bad_emails": bad_emails[:100]}
         if job.get("auto_remove"):
             payload["auto_remove"] = True
@@ -3847,10 +4050,11 @@ def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
             # rather than refusing. bad = anything recorded 'bad' in the
             # last _VERIFY_TTL_DAYS for this lead's email.
             leads = _fetch_all_smartlead_leads(campaign_id, sl_key)
-            cache = _cached_verdicts([ld["email"] for ld in leads])
+            targets = [ld for ld in leads if not ld["contacted"]]
+            cache = _cached_verdicts([ld["email"] for ld in targets])
             details = [{"lead_id": ld["lead_id"], "email": ld["email"],
                        "verdict": (cache.get(ld["email"].lower()) or {}).get("verdict") or "unknown",
-                       "replied": ld["replied"]} for ld in leads]
+                       "replied": ld["replied"]} for ld in targets]
             if not any(d["verdict"] == "bad" for d in details):
                 note = "no confirmed-bad leads on record for this campaign"
         candidates = [d for d in details if d["verdict"] == "bad"]
@@ -3901,6 +4105,7 @@ def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
 def api_verify_campaign(p: dict):
     campaign_id = p.get("campaign_id")
     mode = (p.get("mode") or "mv").strip().lower()
+    mock = bool(p.get("mock"))
     if not campaign_id:
         return {"error": "missing_campaign_id"}, 400
     if mode not in ("mv", "listmint"):
@@ -3909,14 +4114,18 @@ def api_verify_campaign(p: dict):
                            "\"mv\" (MillionVerifier first, ListMint re-checks catch-alls)."}, 400
     mv_key = KEYS.get("MILLIONVERIFIER_API_KEY") or os.environ.get("MILLIONVERIFIER_API_KEY")
     lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY")
-    if mode == "mv" and not mv_key:
-        return {"error": "millionverifier_not_configured",
-                "message": "MILLIONVERIFIER_API_KEY isn't set on this server - add it to "
-                           "~/.navreo-keys.env locally or as a Render env var."}, 503
-    if mode == "listmint" and not lm_key:
-        return {"error": "listmint_not_configured",
-                "message": "LISTMINT_API_KEY isn't set on this server - add it to "
-                           "~/.navreo-keys.env locally or as a Render env var."}, 503
+    # Mock jobs never touch a real verifier/Smartlead, so key config is
+    # irrelevant to them — this is the whole point of mock mode (credit-free
+    # testing of the job lifecycle).
+    if not mock:
+        if mode == "mv" and not mv_key:
+            return {"error": "millionverifier_not_configured",
+                    "message": "MILLIONVERIFIER_API_KEY isn't set on this server - add it to "
+                               "~/.navreo-keys.env locally or as a Render env var."}, 503
+        if mode == "listmint" and not lm_key:
+            return {"error": "listmint_not_configured",
+                    "message": "LISTMINT_API_KEY isn't set on this server - add it to "
+                               "~/.navreo-keys.env locally or as a Render env var."}, 503
     sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
     dry_run = bool(p.get("dry_run"))
     auto_remove = bool(p.get("auto_remove"))
@@ -3926,8 +4135,10 @@ def api_verify_campaign(p: dict):
              + ("(ListMint)" if mode == "listmint" else "(MillionVerifier → ListMint)"))
     if auto_remove:
         label += " + auto-remove"
-    job = _new_job("verify", label, campaign_id, mode, dry_run)
-    job["auto_remove"] = auto_remove
+    if mock:
+        label = "[TEST] " + label
+    job = _new_job("verify", label, campaign_id, mode, dry_run,
+                   auto_remove=auto_remove, mock=mock)
     job["name"] = name
     _enqueue_job(_verify_job_worker, job,
                  (job, campaign_id, mode, mv_key, lm_key, sl_key))
@@ -3993,7 +4204,9 @@ def _smartlead_json(method: str, path: str, body: dict | None = None, timeout: f
     url = f"{SMARTLEAD_BASE}{path}{sep}api_key={key}"
     for attempt in range(1, attempts + 1):
         try:
-            return http_json(method, url, {}, body, timeout=timeout)
+            if _deliv_mock_on():  # DELIV_MOCK — fake fleet in place of a real Smartlead call,
+                return mock_deliv.smartlead(method, path, body)  # but INSIDE the retry loop so
+            return http_json(method, url, {}, body, timeout=timeout)  # injected 429s exercise it
         except urllib.error.HTTPError as e:
             retriable = e.code == 429 or (method == "GET" and e.code in (500, 502, 503, 504))
             if not retriable or attempt == attempts:
@@ -6959,8 +7172,23 @@ _DELIV_AUDIT_LOCK = threading.Lock()
 _DELIV_AUDIT_TTL_S = 3600  # serve a cached audit up to 1h old before auto-refreshing
 
 
+def _deliv_mock_on() -> bool:  # DELIV_MOCK
+    """True only when DELIV_MOCK=1 is set in the environment — the single gate
+    every mock hook below checks. Absent (prod default) → always False, so
+    every gated block below is a dead no-op and behavior is byte-for-byte
+    unchanged."""
+    return os.environ.get("DELIV_MOCK") == "1"
+
+
 def _deliv_audit_run_bg():
     """Fire the ~4-min live audit against the backend once; store blob or error."""
+    if _deliv_mock_on():  # DELIV_MOCK — fake a short "run", then store a fresh mock blob
+        secs = mock_deliv.scenario_get("audit_run_secs", 3) or 3
+        time.sleep(secs)
+        blob = mock_deliv.run_audit_blob()
+        with _DELIV_AUDIT_LOCK:
+            _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
+        return
     import base64, urllib.error  # noqa: F401 — urllib.error referenced via except below
     auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
     if ":" not in auth:
@@ -7213,6 +7441,14 @@ class Handler(SimpleHTTPRequestHandler):
     _DELIV_AUDIT_BASE = "https://navreo-email-deliverability-audit.onrender.com/api/"
 
     def _proxy_deliverability(self, method):
+        if _deliv_mock_on():  # DELIV_MOCK — serve from the fake fleet, zero network
+            rest = self.path[len("/api/deliverability/"):]
+            body = None
+            if method == "POST":
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else b""
+            status, obj = mock_deliv.handle_proxy(method, rest, body)
+            return self._json(obj, status)
         import base64, urllib.error
         auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
         if ":" not in auth:
@@ -7224,6 +7460,15 @@ class Handler(SimpleHTTPRequestHandler):
         if method == "POST":
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else b""
+            # ledger: every proxied deliverability mutation (apply signatures,
+            # process-new, warmup changes, ...) — previously invisible
+            try:
+                _pl = json.loads(body.decode() or "{}") if body else {}
+            except (ValueError, UnicodeDecodeError):
+                _pl = {"_raw_bytes": len(body or b"")}
+            _rest = self.path.split("?")[0][len("/api/deliverability/"):]
+            log_activity(self.path.split("?")[0], _pl,
+                         action=_rest.strip("/") or "post", entity="deliverability")
         req = urllib.request.Request(url, data=body, method=method)
         req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
         if method == "POST":
@@ -7470,6 +7715,10 @@ class Handler(SimpleHTTPRequestHandler):
             if not job:
                 return self._json({"error": "not_found"}, 404)
             return self._json(job)
+        if path == "/api/deliverability/_mock/state":  # DELIV_MOCK — mock-only, 404 outside mock mode
+            if not _deliv_mock_on():
+                return self._json({"error": "not_found"}, 404)
+            return self._json(mock_deliv.control("get-state", {}))
         if path == "/api/deliverability/_audit":
             # Cached live-audit blob (instant). The tab polls this while a
             # background run is in flight; it triggers the run via the refresh POST.
@@ -7478,7 +7727,7 @@ class Handler(SimpleHTTPRequestHandler):
                                        _DELIV_AUDIT["running"], _DELIV_AUDIT["error"])
             age = (time.time() - ts) if ts else None
             return self._json({"blob": b, "ts": ts, "ageSec": age, "running": running,
-                               "error": err, "configured": bool(
+                               "error": err, "configured": True if _deliv_mock_on() else bool(
                                    (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":")),
                                "stale": bool(b is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
         if path.startswith("/api/deliverability/"):
@@ -7529,6 +7778,9 @@ class Handler(SimpleHTTPRequestHandler):
             password = p.get("password") or ""
             ok, msg = auth_login(email, password) if email and password \
                 else (False, "Email and password are required.")
+            # ledger: attempt + outcome, NEVER the password
+            log_activity(path, {"email": email, "ok": ok}, action="login",
+                         entity="auth", entity_id=email or None)
             if not ok:
                 time.sleep(0.8)  # cheap brute-force drag
                 return self._json({"ok": False, "message": msg}, 401)
@@ -7588,6 +7840,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if job["status"] not in ("queued", "running"):
                     return self._json({"error": "not_cancellable"}, 409)
                 job["cancel_requested"] = True
+            log_activity(path, action="cancel", entity="job", entity_id=jid)
             return self._json({"ok": True})
         if path == "/api/verify-campaign":
             length = int(self.headers.get("Content-Length") or 0)
@@ -7595,6 +7848,7 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
+            log_activity(path, payload)
             body, status = api_verify_campaign(payload)
             return self._json(body, status)
         if path == "/api/verify-remove":
@@ -7603,6 +7857,7 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
+            log_activity(path, payload)
             body, status = api_verify_remove(payload)
             return self._json(body, status)
         if path == "/api/verify-dismiss":
@@ -7611,6 +7866,7 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
+            log_activity(path, payload)
             body, status = api_verify_dismiss(payload)
             return self._json(body, status)
         if path == "/api/process-new-selected":
@@ -7619,14 +7875,28 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
+            log_activity(path, payload)
             body, status = api_process_new_selected(payload)
             return self._json(body, status)
+        if path == "/api/deliverability/_mock/scenario":  # DELIV_MOCK — mock-only, 404 outside mock mode
+            if not _deliv_mock_on():
+                return self._json({"error": "not_found"}, 404)
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            if payload.get("reset"):
+                return self._json(mock_deliv.control("reset", {}))
+            return self._json(mock_deliv.control("set-scenario", payload))
         if path == "/api/deliverability/_audit/refresh":
             length = int(self.headers.get("Content-Length") or 0)
             try:
                 force = bool(json.loads(self.rfile.read(length).decode() or "{}").get("force", True)) if length else True
             except ValueError:
                 force = True
+            log_activity(path, {"force": force}, action="audit_refresh",
+                         entity="deliverability")
             return self._json(_deliv_audit_start(force=force))
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("POST")
@@ -7737,11 +8007,14 @@ if __name__ == "__main__":
     host = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
     print(f"Serving {PROJECT_DIR} + /api on http://{host}:{port}")
     threading.Thread(target=_boot_warmup, daemon=True).start()
-    # Any job left 'running' in app_jobs belonged to the process we're replacing —
-    # its worker thread is gone, so mark it interrupted (resumable, cache-cheap).
-    threading.Thread(target=_jobs_recover_orphans, daemon=True).start()
     # Serialise verify/remove jobs so multiple ListMint runs don't blow its rate
-    # limit — extra jobs wait in `queued` until a worker frees.
+    # limit — extra jobs wait in `queued` until a worker frees. Dispatcher
+    # threads MUST be up before recovery runs below, since an auto-resumed
+    # verify job is re-enqueued onto _JOB_QUEUE and needs a consumer.
     for _ in range(_JOB_WORKERS):
         threading.Thread(target=_job_dispatcher, daemon=True).start()
+    # Any job left 'running'/'queued' in app_jobs belonged to the process we're
+    # replacing — its worker thread is gone. verify jobs get auto-resumed
+    # (re-enqueued); everything else is marked interrupted.
+    threading.Thread(target=_jobs_recover_orphans, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()
