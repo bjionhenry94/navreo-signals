@@ -628,6 +628,28 @@
     coachOpen: false, // Part B1: transient "re-opened the coach via Show tips" flag
   };
 
+  /* Sub-tab shell — pulls the three heavy sections (Blacklisted domains,
+     Inbox & domain manager, Performance by batch) out of the Overview scroll
+     into their own tab panels. Persisted (unlike the ephemeral UI above) so a
+     mid-session reload lands back on whichever sub-tab the owner was using. */
+  const DLV_SUBTABS = [
+    ["overview", "Overview"],
+    ["blacklist", "Blacklisted domains"],
+    ["manager", "Inbox & domain manager"],
+    ["batch", "Performance by batch"],
+  ];
+  let dlvSubtab = "overview";
+  function loadSubtab() {
+    try {
+      const v = sessionStorage.getItem("dlv_subtab");
+      if (v && DLV_SUBTABS.some(([id]) => id === v)) dlvSubtab = v;
+    } catch (e) {}
+  }
+  function setSubtab(id) {
+    dlvSubtab = id;
+    try { sessionStorage.setItem("dlv_subtab", id); } catch (e) {}
+  }
+
   /* ============================================================
      5. CSS injection — one <style id="dlv-styles">, every new
         selector prefixed .dlv-. Existing navreo.css component
@@ -706,6 +728,18 @@ details.dlv-fold[open]>summary{border-bottom:1px solid var(--line)}
    is hidden unless the details carries [open]. */
 details.dlv-fold:not([open])>*:not(summary){display:none}
 .dlv-fold-body{padding:16px}
+/* Sub-tab shell -- the 4 tabs reuse the app's own .tabs/.tab classes for visual
+   consistency (see campaigns.html's detail-view tabs); .dlv-subtabs only adds
+   wrapping so a narrow viewport never clips a tab label off-screen. Moved
+   sections (Blacklisted domains / Inbox and domain manager / Performance by
+   batch) render as an always-expanded .dlv-subtab-panel -- same card look as
+   a details.dlv-fold fold, minus the collapse/toggle behaviour, since these
+   are now permanent tab panels rather than folds. */
+.dlv-subtabs{flex-wrap:wrap;margin:14px 0 18px}
+.dlv-subtab-panel{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.dlv-subtab-head{display:flex;align-items:center;gap:9px;padding:14px 16px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line)}
+.dlv-subtab-head .hint{font-weight:500;font-size:12px;color:var(--ink-3)}
+.dlv-subtab-panel.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-vcamps{display:flex;flex-direction:column;gap:9px;margin-top:8px}
 .dlv-vcamp{background:var(--bg-sunken);border:1px solid var(--line);border-radius:9px;padding:10px 12px;display:flex;flex-wrap:wrap;align-items:center;gap:9px}
 .dlv-vcamp a{font-weight:600;color:var(--ink);text-decoration:none} .dlv-vcamp a:hover{color:var(--orange-700)}
@@ -1592,11 +1626,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      11. Header + tab strip + banner
      ============================================================ */
   function renderHeaderTabs() {
-    return `
+    // On the standalone rail page the left rail IS the top-level nav, so the old
+    // in-page Campaigns/Deliverability toggle is redundant (and would stack a
+    // second tab strip right above the sub-tab bar) — suppress it there. When the
+    // tab is mounted inside campaigns.html (hash route), keep the toggle.
+    const topToggle = window.DLV_STANDALONE ? "" : `
     <div class="tabs" style="margin-bottom:14px">
       <button class="tab" data-act="goto-campaigns">Campaigns</button>
       <button class="tab on">Deliverability</button>
-    </div>
+    </div>`;
+    return `${topToggle}
     <div class="pagehead">
       <div>
         <div class="eyebrow">Deliverability</div>
@@ -1611,6 +1650,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <button class="btn dlv-btn-caution" data-act="run-audit" id="dlv-run-btn" title="Destructive — wipes every action taken this session and pulls a fresh snapshot.">⚠ Run Live Audit</button>
       </div>
     </div>`;
+  }
+
+  /* Sub-tab bar — directly under the page header, above every panel. Always
+     shows regardless of subtab so the moved sections stay one click away from
+     anywhere on the page. Reuses the shared .tabs/.tab classes (see
+     campaigns.html's "Campaigns/Deliverability" toggle above and its own
+     detail-view sub-tabs) so it matches the rest of the tool. */
+  function renderSubtabBar() {
+    return `<div class="tabs dlv-subtabs" role="tablist">` +
+      DLV_SUBTABS.map(([id, label]) => `<button class="tab ${dlvSubtab === id ? "on" : ""}" data-act="dlv-subtab" data-subtab="${id}" role="tab" aria-selected="${dlvSubtab === id}">${esc(label)}</button>`).join("") +
+      `</div>`;
   }
 
   /* Part B1: first-run onboarding coach. Shown when the user has never
@@ -1982,7 +2032,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // tool — mentioned here as a plain secondary link so it's still one
     // click away for anyone who needs it, without it being the DEFAULT
     // target of the primary action.
-    if (it.blacklistRows && it.blacklistRows.length) extraBits.push(`<div class="dlv-ai-action" style="margin-top:6px">${it.blacklistRows.length} domain(s) listed. Full list + actions in the <b>Blacklisted domains</b> section below, or <a class="dlv-dl" data-act="open-manager">open the manager for advanced rotation</a>.</div>`);
+    if (it.blacklistRows && it.blacklistRows.length) extraBits.push(`<div class="dlv-ai-action" style="margin-top:6px">${it.blacklistRows.length} domain(s) listed. Full list + actions in the <b>Blacklisted domains</b> tab, or <a class="dlv-dl" data-act="open-manager">open the manager for advanced rotation</a>.</div>`);
     // (The old "Usual causes:" plain line was folded into the card's numbered
     // step 2 — item 3 — so the same advice isn't printed twice.)
     if (it.sigCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="csv" data-file="signature">⬇ signature issues (CSV)</a></div>`);
@@ -2100,24 +2150,31 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-vbtns">${pauseBtn}${reBtn}<a class="btn sm" href="${esc(b.url)}" target="_blank" rel="noopener">${glossify("MXToolbox")} ↗</a></div>
     </div>`;
   }
-  function renderBlacklistFold(D) {
+  // Formerly a collapsible <details class="dlv-fold"> that only rendered when
+  // there were rows — now its own always-visible "Blacklisted domains" tab
+  // panel, so it renders (with an empty state) even when the fleet is clean.
+  function renderBlacklistPanel(D) {
     const rows = S.A.blacklistRows;
-    if (!rows.length) return "";
-    const summaryBits = [rows.length + " domain(s) on SURBL / Spamhaus", D.blSending + " mailbox(es) still sending", D.blResting + " rested"];
-    if (D.blClearedCount > 0) summaryBits.push(D.blClearedCount + " cleared, ready to reactivate");
-    return `<details class="dlv-fold" id="dlv-fold-blacklist" open>
-      <summary>🚫 Blacklisted domains<span class="hint">${rows.length} listed · pause · reactivate · delist</span></summary>
-      <div class="dlv-fold-body">
-        <div class="dlv-bl-summary">${summaryBits.join(" · ")}</div>
+    const hint = rows.length ? rows.length + " listed · pause · reactivate · delist" : "clean — nothing listed";
+    let body;
+    if (rows.length) {
+      const summaryBits = [rows.length + " domain(s) on SURBL / Spamhaus", D.blSending + " mailbox(es) still sending", D.blResting + " rested"];
+      if (D.blClearedCount > 0) summaryBits.push(D.blClearedCount + " cleared, ready to reactivate");
+      body = `<div class="dlv-bl-summary">${summaryBits.join(" · ")}</div>
         <div class="dlv-bl-actions">
           ${(() => { const n = rows.filter((r) => !(r.rested > 0) && !r.cleared).length; return n ? `<button class="btn sm" data-act="pause-blacklisted" title="Pauses every blacklisted domain that is still sending — the bulk action, distinct from each row's own ⏸ Pause">⏸ Pause all still-sending (${n})</button>` : ""; })()}
           ${D.blClearedCount > 0 ? `<button class="btn sm" data-act="reactivate-cleared">☀️ Reactivate cleared (${D.blClearedCount})</button>` : ""}
           <button class="btn sm" data-act="open-delisting">📋 Delisting prep</button>
           <a class="dlv-dl" data-act="csv" data-file="blacklist" style="align-self:center;margin-left:4px">⬇ CSV</a>
         </div>
-        <div class="dlv-bl-scroll"><div class="dlv-vcamps">${rows.map(renderBlacklistRow).join("")}</div></div>
-      </div>
-    </details>`;
+        <div class="dlv-bl-scroll"><div class="dlv-vcamps">${rows.map(renderBlacklistRow).join("")}</div></div>`;
+    } else {
+      body = `<div class="dlv-empty">✓ No domains currently blacklisted.</div>`;
+    }
+    return `<div class="dlv-subtab-panel" id="dlv-fold-blacklist">
+      <div class="dlv-subtab-head">🚫 Blacklisted domains<span class="hint">${hint}</span></div>
+      <div class="dlv-fold-body">${body}</div>
+    </div>`;
   }
 
   /* ============================================================
@@ -2148,7 +2205,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     UI.mgr.domFilter = D.flaggedActionable > 0 ? "warmup" : "resting";
   }
 
-  function renderManagerFold(D) {
+  // Formerly a collapsible <details class="dlv-fold"> — now its own always-
+  // visible "Inbox & domain manager" tab panel (dropped the <details> wrapper,
+  // kept everything else: intro line, 8-view selector, filters, table, CSV).
+  function renderManagerPanel(D) {
     autoDefaultDomFilter(D);
     const isD = UI.mgr.view === "domain";
     const mc = D.inboxCounts;
@@ -2190,8 +2250,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const foot = isD
       ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="csv" data-file="domain-health-warmup">⬇ warmup list</a> &nbsp; <a class="dlv-dl" data-act="csv" data-file="domain-health">⬇ full table</a></div>`
       : `<div style="margin-top:8px"><a class="dlv-dl" data-act="csv" data-file="mailboxes">⬇ problem mailboxes CSV</a></div>`;
-    return `<details class="dlv-fold" id="dlv-fold-manager" ${D.flaggedActionable ? "open" : ""}>
-      <summary>🛠 Inbox &amp; domain manager<span class="hint">${D.flaggedActionable ? D.flaggedActionable + " domain(s) need warm-up →" : ""} pause · reactivate · reconnect</span></summary>
+    return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
+      <div class="dlv-subtab-head">🛠 Inbox &amp; domain manager<span class="hint">${D.flaggedActionable ? D.flaggedActionable + " domain(s) need warm-up →" : ""} pause · reactivate · reconnect</span></div>
       <div class="dlv-fold-body">
         <div class="dlv-plain" style="margin:-2px 0 12px">Rotate tired domains into warm-up rest, reconnect failed mailboxes, and adjust daily sending caps. Changes confirm before applying.</div>
         ${domCtrl}
@@ -2206,7 +2266,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr>${head}</tr></thead><tbody id="dlv-mgr-body"></tbody></table></div></div>
         ${foot}
       </div>
-    </details>`;
+    </div>`;
   }
 
   function paintManagerRows() {
@@ -2324,14 +2384,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      16. Performance by batch / provider
      ============================================================ */
-  function renderBatchFold() {
+  // Formerly a collapsible <details class="dlv-fold"> — now its own always-
+  // visible "Performance by batch" tab panel (best/worst chips + full table +
+  // CSV, unchanged).
+  function renderBatchPanel() {
     const bs = S.A.batchStats.filter((b) => b.mailboxes > 0);
-    // NOTE: this <details id="dlv-fold-batch"> must always render, even with zero
-    // batches — the "▲▼ Best & worst batch ↓" signpost link (renderFleetTiles) is
-    // unconditional, and openFold("dlv-fold-batch") silently no-ops when the id isn't
-    // in the DOM (fix: that early-return "" here was the one fold link, out of the four,
-    // whose target could vanish — clicking it then just left the page wherever it
-    // already was, which reads as "landed on the to-do list" right below the signpost).
+    // NOTE: this panel must always render, even with zero batches — the
+    // "▲▼ Best & worst batch ↓" signpost link (renderFleetTiles) switches to
+    // this tab unconditionally (fix: that early-return "" here was the one
+    // fold link, out of the four, whose target could vanish — clicking it
+    // then just left the page wherever it already was, which reads as
+    // "landed on the to-do list" right below the signpost).
     let summary = "";
     let body;
     if (bs.length) {
@@ -2356,10 +2419,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     } else {
       body = `<div class="dlv-empty">No batch/provider data yet.</div>`;
     }
-    return `<details class="dlv-fold" id="dlv-fold-batch">
-      <summary>📦 Performance by batch (client / mailbox pool)${glossMark(BATCH_DEF)}<span class="hint">${bs.length ? bs.length + " batches · compare deliverability" : "no data yet"}</span></summary>
+    return `<div class="dlv-subtab-panel" id="dlv-fold-batch">
+      <div class="dlv-subtab-head">📦 Performance by batch (client / mailbox pool)${glossMark(BATCH_DEF)}<span class="hint">${bs.length ? bs.length + " batches · compare deliverability" : "no data yet"}</span></div>
       <div class="dlv-fold-body">${summary}${body}</div>
-    </details>`;
+    </div>`;
   }
   function renderBatchRows(bs) {
     const rr = (v) => (v >= 1 ? "g" : v >= 0.5 ? "y" : "r");
@@ -2711,24 +2774,40 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const foldState = {};
     root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { foldState[d.id] = d.open; });
     const D = fullDerive();
+    // Sub-tab shell: Overview keeps everything except the 3 heavy sections,
+    // which now render as their own always-expanded tab panel instead —
+    // exactly one of the four branches below paints on any given call.
+    let panel;
+    if (dlvSubtab === "blacklist") panel = renderBlacklistPanel(D);
+    else if (dlvSubtab === "manager") panel = renderManagerPanel(D);
+    else if (dlvSubtab === "batch") panel = renderBatchPanel();
+    else panel = renderOverviewPanel(D);
     root.innerHTML = [
       renderHeaderTabs(),
+      renderSubtabBar(),
+      panel,
+      renderFooter(),
+    ].join("");
+    root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { if (foldState[d.id] != null) d.open = foldState[d.id]; });
+    paintManagerRows(); // no-ops safely (guarded on $id("dlv-mgr-body")) unless the Manager tab is active
+    scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
+  }
+
+  // Overview = every section that stayed in the main scroll (order preserved):
+  // coach, verdict, banner, health strip, fleet-by-the-numbers (incl. the
+  // technical-details fold), today's to-do (incl. the Actioned fold), restore
+  // reminders, recent actions. The 3 heavy sections moved out to their own tabs.
+  function renderOverviewPanel(D) {
+    return [
       renderCoach(),
       renderVerdict(D),
       renderBanner(D),
       renderHealthStrip(D),
       renderFleetTiles(D),
       `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
-      renderBlacklistFold(D),
-      renderManagerFold(D),
-      renderBatchFold(),
       renderRemindersFold(D),
       renderHistoryFold(D),
-      renderFooter(),
     ].join("");
-    root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { if (foldState[d.id] != null) d.open = foldState[d.id]; });
-    paintManagerRows();
-    scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
   }
 
   /* ============================================================
@@ -3701,6 +3780,27 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     easeScrollTo(f);
     flashEl(f);
   }
+  // Deep-link target for the 3 sections that moved out of the Overview scroll
+  // into their own sub-tab: switch tabs, repaint, jump to the top of the page
+  // (the panel now starts right under the sub-tab bar), then briefly flash its
+  // heading so the jump reads as unmistakably as the old openFold() did.
+  function gotoSubtab(id, flashId) {
+    setSubtab(id);
+    paintPage();
+    window.scrollTo(0, 0);
+    if (flashId) {
+      const el = $id(flashId);
+      if (el) flashEl(el);
+    }
+  }
+  // A deep link that targets an Overview-only section (Reminders / Recent
+  // actions / Actioned) can, in principle, be clicked from a persistent node
+  // (e.g. a toast) while a different sub-tab is active — force back to
+  // Overview first so the target is guaranteed to exist in the DOM.
+  function ensureOverviewThenOpenFold(id) {
+    if (dlvSubtab !== "overview") { setSubtab("overview"); paintPage(); }
+    openFold(id);
+  }
 
   /* ============================================================
      32. Event delegation — the ONLY listeners this file installs.
@@ -3870,12 +3970,29 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "verify-dismiss") { runAct(act, () => { if (S.ui && S.ui.verifyResults) { delete S.ui.verifyResults[t.dataset.id]; saveState(); paintPage(); } }); return; }
     if (act === "scroll-todo") { runAct(act, () => openFoldlessScroll("dlv-todo-anchor")); return; }
     // Defect H: the "or undo later from Recent actions ↓" hint line inside an
-    // undo toast — scrolls to (and opens) the Recent-actions fold.
-    if (act === "scroll-history") { runAct(act, () => openFold("dlv-fold-history")); return; }
+    // undo toast — scrolls to (and opens) the Recent-actions fold. Recent
+    // actions stayed in Overview (it wasn't one of the 3 moved sections), but
+    // this can fire from a persistent toast while another sub-tab is active,
+    // so force back to Overview first.
+    if (act === "scroll-history") { runAct(act, () => ensureOverviewThenOpenFold("dlv-fold-history")); return; }
     // Defect 3: the undo toast's hint now points here — the "✅ Actioned"
-    // fold, which is where its per-item ↩ Undo button actually lives.
-    if (act === "scroll-actioned") { runAct(act, () => openFold("dlv-fold-actioned")); return; }
+    // fold (part of Overview's "today's to-do"), which is where its per-item
+    // ↩ Undo button actually lives.
+    if (act === "scroll-actioned") { runAct(act, () => ensureOverviewThenOpenFold("dlv-fold-actioned")); return; }
 
+    // Sub-tab bar — switches which panel paintPage() renders, persists the
+    // choice in sessionStorage, and scrolls back to the top (each panel is a
+    // fresh view, not a scroll position within the same document).
+    if (act === "dlv-subtab") {
+      runAct(act, () => {
+        const id = t.dataset.subtab;
+        if (id === dlvSubtab) return;
+        setSubtab(id);
+        paintPage();
+        window.scrollTo(0, 0);
+      });
+      return;
+    }
     if (act === "goto-campaigns") { runAct(act, () => { location.hash = ""; }); return; }
     if (act === "run-audit") { runAct(act, () => runLiveAudit()); return; }
     if (act === "copy-claude") { runAct(act, () => copyForClaude()); return; }
@@ -3904,21 +4021,28 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "unmark-done") { runAct(act, () => unmarkDone(t.dataset.key)); return; }
     // Part C(b): opening the manager via a to-do deep link resets the VIEW to
     // the domain reply-rate rotation table and its filter to the relevant
-    // "needs warm-up" set, then scrolls it into view — so a user arriving from
+    // "needs warm-up" set, then switches to its tab — so a user arriving from
     // "these domains should go into warm-up" lands on exactly that list rather
     // than whatever view/filter was left selected from a previous poke.
+    // Rewired: "Inbox & domain manager" is now its own sub-tab rather than a
+    // fold further down the scroll (blacklist to-do's "advanced rotation"
+    // link, the warm-up to-do's "Open manager ↓", the Warmup tile's fix-link,
+    // and the Fleet-tiles signpost row all land here the same way).
     if (act === "open-manager") { runAct(act, () => {
       UI.mgr.view = "domain";
       UI.mgr.domFilter = "warmup";
       UI.mgr._domFilterUserSet = true; // honour this deliberate reset over autoDefault
-      paintPage();
-      openFold("dlv-fold-manager");
-      const sel = $id("dlv-fold-manager") && $id("dlv-fold-manager").querySelector('[data-act="mgr-view"]');
-      if (sel) easeScrollTo(sel);
+      gotoSubtab("manager", "dlv-fold-manager");
     }); return; }
-    if (act === "open-reminders") { runAct(act, () => openFold("dlv-fold-reminders")); return; }
-    if (act === "open-blacklist") { runAct(act, () => openFold("dlv-fold-blacklist")); return; }
-    if (act === "open-batch") { runAct(act, () => openFold("dlv-fold-batch")); return; }
+    // "Restore reminders" stayed in Overview — this deep link (the to-do
+    // card's "⏰ Reminders ↓" button) can fire from any sub-tab.
+    if (act === "open-reminders") { runAct(act, () => ensureOverviewThenOpenFold("dlv-fold-reminders")); return; }
+    // Rewired: "Blacklisted domains" is now its own sub-tab (the to-do card's
+    // "🚫 Manage ↓" and the Blacklisted-domains tile's fix-link both land here).
+    if (act === "open-blacklist") { runAct(act, () => gotoSubtab("blacklist", "dlv-fold-blacklist")); return; }
+    // Rewired: "Performance by batch" is now its own sub-tab (the Fleet-tiles
+    // "▲▼ Best & worst batch ↓" signpost lands here).
+    if (act === "open-batch") { runAct(act, () => gotoSubtab("batch", "dlv-fold-batch")); return; }
     if (act === "open-warmup-fix") { runAct(act, () => openWarmupFixModal()); return; }
     if (act === "open-sig-fix") { runAct(act, () => openSigFixModal()); return; }
     if (act === "open-process-new") { runAct(act, () => openProcessNewModal()); return; }
@@ -4036,6 +4160,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     ensureModals();
     wireEvents();
     if (!S) loadState();
+    loadSubtab(); // restore the sub-tab the owner was on (sessionStorage "dlv_subtab")
     const main = document.getElementById("main");
     if (!main) return false;
     main.innerHTML = '<div id="dlv-root" class="dlv"></div>';
