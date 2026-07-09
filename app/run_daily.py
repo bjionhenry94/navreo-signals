@@ -14,13 +14,78 @@ Manual invocation is safe any time - every layer is idempotent.
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server  # noqa: E402
+import build_notifications  # noqa: E402 — Lilly Optimiser notifications generator
 
 LOG = Path(__file__).parent / "data" / "daily_log.json"
+
+# The cron ticks every 3h (see render.yaml's "0 */3 * * *"), but the Optimiser
+# report is a ~26-40 min Smartlead pull that only needs to refresh once a day.
+# Gate it here rather than in render.yaml so this file is the single source of
+# truth for "how often" — reuses the same signal_cron_runs table run_daily's
+# own batch-pull summaries already land in (server.cron_pull_all -> sb("POST",
+# "signal_cron_runs", ...)), tagging optimiser rows with
+# summary.kind == "optimiser_notifications" so they're distinguishable from
+# the batch-pull rows without a schema change.
+OPTIMISER_KIND = "optimiser_notifications"
+OPTIMISER_MIN_AGE = timedelta(hours=20)  # daily cadence with headroom under 24h
+
+
+def _last_optimiser_success_ts():
+    """Best-effort read of the most recent successful optimiser run's
+    timestamp from signal_cron_runs. Returns None (== "never ran" == "gate
+    opens") on any failure, so a Supabase hiccup fails toward running the
+    generation rather than silently never running it again."""
+    try:
+        rows = server.sb("GET", "signal_cron_runs?select=summary&order=id.desc&limit=50")
+        for row in rows or []:
+            summary = row.get("summary") if isinstance(row, dict) else None
+            if isinstance(summary, dict) and summary.get("kind") == OPTIMISER_KIND and summary.get("ok"):
+                ts = summary.get("ts")
+                if ts:
+                    return datetime.fromisoformat(ts)
+        return None
+    except Exception as e:  # noqa: BLE001 — never let observability block the gate
+        print(f"  ! could not read last optimiser run ({str(e)[:150]}) - treating as due")
+        return None
+
+
+def _record_optimiser_run(ok: bool, rows=None, error: str | None = None) -> None:
+    """Durable, queryable record of the optimiser generation, same
+    best-effort shape as server.cron_pull_all's own signal_cron_runs write."""
+    summary = {"kind": OPTIMISER_KIND, "ok": ok, "ts": datetime.now().isoformat(timespec="seconds")}
+    if rows is not None:
+        summary["rows"] = rows
+    if error:
+        summary["error"] = error[:200]
+    try:
+        server.sb("POST", "signal_cron_runs", {"summary": summary})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def run_optimiser_refresh() -> None:
+    """Gate: only regenerate optimiser_notifications if the last SUCCESSFUL
+    run is older than OPTIMISER_MIN_AGE (or there has never been one). A
+    failed generation is never recorded as a success, so the very next
+    3-hourly tick retries it rather than waiting another day."""
+    last_ok = _last_optimiser_success_ts()
+    if last_ok is not None and datetime.now() - last_ok < OPTIMISER_MIN_AGE:
+        print(f"optimiser refresh · skipped (last success {last_ok.isoformat(timespec='seconds')}, "
+              f"under {OPTIMISER_MIN_AGE.total_seconds() / 3600:.0f}h old)")
+        return
+    print("optimiser refresh · due - running build_notifications ...")
+    try:
+        rows = build_notifications.main()
+        _record_optimiser_run(ok=True, rows=rows)
+        print(f"optimiser refresh · done ({rows} rows upserted)")
+    except Exception as e:  # noqa: BLE001 — one bad generation must not kill run_daily
+        _record_optimiser_run(ok=False, error=str(e))
+        print(f"optimiser refresh · FAILED: {str(e)[:200]}")
 
 
 def main():
@@ -64,6 +129,8 @@ def main():
     prior = json.loads(LOG.read_text()).get("runs", []) if LOG.exists() else []
     LOG.write_text(json.dumps({"runs": (prior + [run])[-60:]}, indent=1))
     print("run logged.")
+
+    run_optimiser_refresh()  # gated to once/day; never blocks/kills the source pulls above
 
 
 if __name__ == "__main__":

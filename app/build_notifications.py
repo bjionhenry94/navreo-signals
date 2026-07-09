@@ -1213,9 +1213,14 @@ def run_retirement_pass(emitted_keys: set) -> tuple[int, int, list[dict]]:
 
 # -- main ---------------------------------------------------------------------
 
-def main() -> None:
+def main() -> int:
+    """Runs the full optimiser-notifications generation. Returns the number of
+    rows upserted on success. Raises RuntimeError on failure (e.g. table could
+    not be created/verified) so a programmatic caller (app/run_daily.py) can
+    catch it, log, and record a failed run without killing its own process.
+    The CLI entry point below still exits non-zero on that same failure."""
     if not ensure_table():
-        sys.exit(1)
+        raise RuntimeError(f"could not ensure `{TABLE}` table exists - see log above")
     if "--reset-once" in sys.argv:
         wipe_all_rows()
 
@@ -1295,7 +1300,12 @@ def main() -> None:
         for name, n in sorted(_UNMATCHED_CLIENTS.items(), key=lambda kv: -kv[1]):
             print(f"  {name!r}: {n}")
 
+    return upserted
+
 
 if __name__ == "__main__":
     faulthandler.enable()  # surface silent hard crashes in stderr
-    main()
+    try:
+        main()
+    except Exception as e:  # noqa: BLE001 — CLI still exits non-zero on failure
+        sys.exit(f"error: {e}")
