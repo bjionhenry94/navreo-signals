@@ -775,6 +775,56 @@ def sb_sync_source(src: dict):
     }, prefer="resolution=merge-duplicates,return=minimal")
 
 
+# ── activity ledger ─────────────────────────────────────────────────────────
+# Append-only record in Supabase of every write-shaped call the app receives,
+# so the database documents WHO changed WHAT and WHEN — not just the end state.
+# Fire-and-forget: the ledger must never add latency to, or fail, the endpoint
+# it documents. Table: app_activity_log (service-role only, RLS on).
+
+_ACTIVITY_META = {  # endpoint → (action, entity); anything absent logs as-is
+    "/api/clients": ("update", "client"),
+    "/api/role-feedback": ("feedback", "role"),
+    "/api/sources": ("create", "source"),
+    "/api/sources/update": ("update", "source"),
+    "/api/sources/duplicate": ("duplicate", "source"),
+    "/api/sources/pull": ("pull", "source"),
+    "/api/sources/provision-engagement": ("provision", "source"),
+    "/api/trigify-webhook": ("ingest", "engagement_event"),
+    "/api/qa-history": ("create", "qa_run"),
+    "/api/campaign-drafts": ("create", "campaign_draft"),
+    "/api/campaign-drafts/update": ("update", "campaign_draft"),
+    "/api/campaign-drafts/duplicate": ("duplicate", "campaign_draft"),
+    "/api/campaign-drafts/restore": ("restore", "campaign_draft"),
+    "/api/campaign-drafts/purge": ("delete", "campaign_draft"),
+    "/api/tam-map": ("preview", "tam"),
+    "/api/strategy-map": ("preview", "strategy"),
+}
+
+
+def log_activity(endpoint: str, payload=None, actor: str = "app",
+                 action: str | None = None, entity: str | None = None,
+                 entity_id=None):
+    action_d, entity_d = _ACTIVITY_META.get(endpoint, ("preview", None))
+    if entity_id is None and isinstance(payload, dict):
+        entity_id = payload.get("id") or payload.get("source_id") or payload.get("campaign_id")
+    body = payload
+    if isinstance(body, dict):
+        try:
+            if len(json.dumps(body, default=str)) > 6000:  # ledger rows stay light
+                body = {"_truncated": True, "keys": sorted(body.keys())}
+        except Exception:  # noqa: BLE001
+            body = {"_unserialisable": True}
+    row = {"actor": actor, "endpoint": endpoint,
+           "action": action or action_d, "entity": entity or entity_d,
+           "entity_id": str(entity_id) if entity_id is not None else None,
+           "payload": body}
+    # return=representation: PostgREST answers with the row as JSON — a minimal
+    # 201 has an empty body, which http_json can't parse and logs as a warning.
+    threading.Thread(target=lambda: sb("POST", "app_activity_log", row,
+                                       prefer="return=representation"),
+                     daemon=True).start()
+
+
 def client_prefill(p: dict) -> dict:
     """Fetch the client's homepage and prefill name/description from meta
     tags — the Gojiberry 'we analysed your website' moment, LLM-free."""
@@ -2604,6 +2654,155 @@ def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
     return 200, {"ok": True, "executed": "disable_variant", "campaign_id": campaign_id,
                  "before": {"variant": variant_label, "pct": target_pct},
                  "after": new_pcts, "notification": updated}
+
+
+# ── Lists API (read-only viewer over the Supabase list_* tables) ─────────
+# Lists are WRITTEN by skills (straight into Supabase) and only READ here.
+# HARD RULE: nothing in this server ever writes list_rows cell data, and no
+# create-list endpoint exists. The endpoints below serve the viewer UI —
+# browse folders/lists, page rows through the api_list_rows_page RPC (search/
+# filter/sort/pagination all run in the database; Python only proxies) — plus
+# organisational metadata writes on `lists`/`list_folders` (folder create,
+# move, favourite, last-opened stamp). Every handler returns (status, body)
+# for self._json, like execute_notification_action above.
+
+def _lists_sb_error(res) -> str | None:
+    """PostgREST errors surface through http_json as a dict with a `message`
+    key (a normal result here is a list, or the RPC's json object, which has
+    no `message`). Return the message, or None when `res` looks healthy."""
+    if isinstance(res, dict) and res.get("message"):
+        return str(res["message"])
+    return None
+
+
+_LISTS_DB_DOWN = {"error": "supabase_unavailable",
+                  "message": "Couldn't reach the database - try again."}
+
+
+def api_lists_index() -> tuple:
+    """GET /api/lists — every folder + every list's metadata (never rows)."""
+    folders = sb("GET", "list_folders?select=id,client,name,parent_id"
+                        "&order=client.asc,name.asc")
+    lists_ = sb("GET", "lists?select=id,name,client,folder_id,source_skill,"
+                       "owner,favourite,access,row_count,created_at,"
+                       "last_opened_at,last_opened_by&order=created_at.desc")
+    if not isinstance(folders, list) or not isinstance(lists_, list):
+        return 503, _LISTS_DB_DOWN
+    return 200, {"folders": folders, "lists": lists_}
+
+
+def api_lists_rows(q: dict) -> tuple:
+    """GET /api/lists/rows — the list's metadata row + one page of rows via
+    the api_list_rows_page RPC. `q` is a parse_qs dict (values are lists)."""
+    lid = (q.get("id") or [""])[0].strip()
+    if not lid:
+        return 400, {"ok": False, "message": "id is required"}
+    try:
+        filters = json.loads((q.get("filters") or ["{}"])[0] or "{}")
+        if not isinstance(filters, dict):
+            raise ValueError("filters must be a JSON object")
+    except ValueError as e:
+        return 400, {"ok": False,
+                     "message": f"filters is not valid JSON: {str(e)[:120]}"}
+    try:
+        offset = int((q.get("offset") or ["0"])[0] or 0)
+        limit = int((q.get("limit") or ["500"])[0] or 500)
+    except ValueError:
+        return 400, {"ok": False, "message": "offset/limit must be integers"}
+    meta = sb("GET", f"lists?id=eq.{lid}&select=id,name,client,columns")
+    if meta is None:
+        return 503, _LISTS_DB_DOWN
+    if not isinstance(meta, list) or not meta:
+        # a malformed uuid comes back as a PostgREST error dict — same outcome
+        # for the caller as an unknown id: there is no such list.
+        return 404, {"ok": False, "message": "list not found"}
+    page = sb("POST", "rpc/api_list_rows_page", {
+        "p_list_id": lid, "p_offset": offset, "p_limit": limit,
+        "p_search": (q.get("search") or [""])[0],
+        "p_sort": (q.get("sort") or [""])[0],
+        "p_dir": (q.get("dir") or [""])[0],
+        "p_filters": filters,
+    })
+    if isinstance(page, list):  # rpc returning a set — unwrap the single row
+        page = page[0] if page else None
+    err = _lists_sb_error(page)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(page, dict):
+        return 503, _LISTS_DB_DOWN
+    row = meta[0]
+    return 200, {"id": row.get("id"), "name": row.get("name"),
+                 "client": row.get("client"), "columns": row.get("columns"),
+                 "total": page.get("total"), "filtered": page.get("filtered"),
+                 "offset": page.get("offset"), "limit": page.get("limit"),
+                 "rows": page.get("rows") or []}
+
+
+def lists_create_folder(p: dict) -> tuple:
+    """POST /api/lists/folder — a client root (name null) or, with parent_id,
+    a themed sub-folder (name required). A DB trigger enforces max depth —
+    its rejection surfaces as a 400, never a silent success."""
+    client = str(p.get("client") or "").strip()
+    if not client:
+        return 400, {"ok": False, "message": "client is required"}
+    name = str(p.get("name") or "").strip() or None
+    parent_id = p.get("parent_id") or None
+    if parent_id and not name:
+        return 400, {"ok": False, "message": "a sub-folder needs a name"}
+    res = sb("POST", "list_folders",
+             {"client": client, "name": name, "parent_id": parent_id},
+             prefer="return=representation")
+    err = _lists_sb_error(res)
+    if err:  # e.g. the max-depth trigger
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(res, list) or not res:
+        return 502, _LISTS_DB_DOWN
+    return 200, {"id": res[0].get("id")}
+
+
+def _lists_patch(list_id, patch: dict) -> tuple:
+    """Shared PATCH-one-list plumbing for move/favourite/touch. Only ever
+    touches organisational metadata on `lists` — never list_rows."""
+    if not list_id:
+        return 400, {"ok": False, "message": "list_id is required"}
+    res = sb("PATCH", f"lists?id=eq.{list_id}", patch,
+             prefer="return=representation")
+    err = _lists_sb_error(res)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if res is None:
+        return 502, _LISTS_DB_DOWN
+    if not res:
+        return 404, {"ok": False, "message": "list not found"}
+    return 200, {"ok": True}
+
+
+def lists_move(p: dict) -> tuple:
+    # folder_id null/absent = unfiled (back under the client root)
+    return _lists_patch(p.get("list_id"), {"folder_id": p.get("folder_id") or None})
+
+
+def lists_favourite(p: dict) -> tuple:
+    return _lists_patch(p.get("list_id"), {"favourite": bool(p.get("favourite"))})
+
+
+def lists_touch(p: dict) -> tuple:
+    from datetime import datetime, timezone
+    patch = {"last_opened_at": datetime.now(timezone.utc).isoformat()}
+    if p.get("by"):
+        patch["last_opened_by"] = str(p.get("by"))
+    return _lists_patch(p.get("list_id"), patch)
+
+
+# POST /api/lists/* dispatch — kept OUT of ROUTES because these handlers
+# return (status, body) so validation/trigger failures answer with real 4xx
+# codes (ROUTES handlers always answer 200). do_POST checks this map first.
+LISTS_POST_ROUTES = {
+    "/api/lists/folder": lists_create_folder,
+    "/api/lists/move": lists_move,
+    "/api/lists/favourite": lists_favourite,
+    "/api/lists/touch": lists_touch,
+}
 
 
 def save_draft(p: dict) -> dict:
@@ -5411,6 +5610,195 @@ def _cron_pull_bg():
         _CRON_LOCK.release()
 
 
+# ── HeyReach daily snapshot (pg_cron → pg_net → POST /api/cron/heyreach-sync) ─
+# Mirrors everything the HeyReach API exposes into the heyreach_* tables.
+# Those tables are hash-deduped append-only: unique (natural_key, content_hash)
+# + ignore-duplicates upsert means a row lands ONLY when the object is new or
+# its content changed — the tables ARE the HeyReach change ledger. Each run
+# also writes one summary row to app_activity_log (actor='heyreach_sync').
+
+_HEYREACH_SYNC_LOCK = threading.Lock()
+_HEY_PAGE = 100          # HeyReach GetAll page size
+_HEY_MAX_PAGES = 20      # per-object pagination ceiling (bounded batch)
+_HEY_MAX_LEAD_CALLS = 200   # total lead-page requests across all lists per run
+_HEY_SLEEP_S = 0.25      # ~240 req/min, under HeyReach's ~300/min cap
+
+
+def _hey_row(natural: dict, payload: dict) -> dict:
+    import hashlib
+    from datetime import date
+    return {**natural,
+            "content_hash": hashlib.sha256(
+                json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest(),
+            "payload": payload, "snapshot_date": date.today().isoformat()}
+
+
+def _hey_snap_many(table: str, conflict: str, rows: list) -> int:
+    """Batch-insert snapshot rows; hash-dedup makes unchanged rows a no-op
+    (ON CONFLICT DO NOTHING). Returns how many rows were NEW (new/changed)."""
+    if not rows:
+        return 0
+    r = sb("POST", f"{table}?on_conflict={conflict}", rows,
+           prefer="resolution=ignore-duplicates,return=representation")
+    return len(r) if isinstance(r, list) else 0
+
+
+def _hey_snap(table: str, conflict: str, natural: dict, payload: dict) -> bool:
+    return _hey_snap_many(table, conflict, [_hey_row(natural, payload)]) > 0
+
+
+def _hey_pages(path: str, body_extra: dict | None = None, max_pages: int = _HEY_MAX_PAGES):
+    """Yield items across HeyReach's offset pagination, bounded."""
+    off = 0
+    for _ in range(max_pages):
+        r = heyreach(path, {**(body_extra or {}), "offset": off, "limit": _HEY_PAGE})
+        items = (r or {}).get("items") or []
+        yield from items
+        if len(items) < _HEY_PAGE:
+            return
+        off += _HEY_PAGE
+        time.sleep(_HEY_SLEEP_S)
+
+
+def heyreach_sync() -> dict:
+    from datetime import datetime, timedelta, timezone
+    out = {"started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "scanned": {}, "changed": {}, "errors": []}
+
+    def sweep(name, fn):
+        try:
+            scanned, changed = fn()
+            out["scanned"][name], out["changed"][name] = scanned, changed
+        except Exception as e:  # noqa: BLE001 — one object type failing must not kill the run
+            out["errors"].append(f"{name}: {str(e)[:200]}")
+
+    def _accounts():
+        n = c = 0
+        for it in _hey_pages("/li_account/GetAll"):
+            n += 1
+            c += _hey_snap("heyreach_accounts", "heyreach_id,content_hash",
+                           {"heyreach_id": str(it.get("id"))}, it)
+        return n, c
+
+    def _lists():
+        ids, n, c = [], 0, 0
+        for it in _hey_pages("/list/GetAll"):
+            n += 1
+            ids.append(it.get("id"))
+            c += _hey_snap("heyreach_lists", "heyreach_id,content_hash",
+                           {"heyreach_id": str(it.get("id"))}, it)
+        _lists.ids = ids  # reused by _leads without a second GetAll sweep
+        return n, c
+
+    def _campaigns():
+        ids, n, c = [], 0, 0
+        for it in _hey_pages("/campaign/GetAll"):
+            n += 1
+            ids.append(it.get("id"))
+            c += _hey_snap("heyreach_campaigns", "heyreach_id,content_hash",
+                           {"heyreach_id": str(it.get("id"))}, it)
+        _campaigns.ids = ids
+        return n, c
+
+    def _stats():
+        # account-wide rollup (campaign_id=0) + per-campaign, last 30 days;
+        # content-hash dedup means unchanged stats cost zero new rows.
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=30)
+        window = {"startDate": start.isoformat(timespec="seconds"),
+                  "endDate": end.isoformat(timespec="seconds")}
+        n = c = 0
+        r = heyreach("/stats/GetOverallStats",
+                     {**window, "accountIds": [], "campaignIds": []})
+        if r is not None:
+            n += 1
+            c += _hey_snap("heyreach_campaign_stats", "campaign_id,content_hash",
+                           {"campaign_id": 0}, r)
+        for cid in (getattr(_campaigns, "ids", []) or [])[:100]:
+            time.sleep(_HEY_SLEEP_S)
+            r = heyreach("/stats/GetOverallStats",
+                         {**window, "accountIds": [], "campaignIds": [int(cid)]})
+            if r is not None:
+                n += 1
+                c += _hey_snap("heyreach_campaign_stats", "campaign_id,content_hash",
+                               {"campaign_id": int(cid)}, r)
+        return n, c
+
+    def _member_key(it: dict) -> str:
+        import hashlib
+        return str(it.get("profileUrl") or it.get("linkedin_url")
+                   or it.get("linkedInId") or it.get("id")
+                   or hashlib.sha256(json.dumps(it, sort_keys=True,
+                                                default=str).encode()).hexdigest()[:24])
+
+    def _leads():
+        n = c = calls = 0
+        for lid in (getattr(_lists, "ids", []) or []):
+            if calls >= _HEY_MAX_LEAD_CALLS:
+                out["errors"].append(f"leads: call budget hit at list {lid} — rest next run")
+                break
+            off = 0
+            while calls < _HEY_MAX_LEAD_CALLS:
+                calls += 1
+                try:
+                    r = heyreach("/list/GetLeadsFromList",
+                                 {"listId": int(lid), "offset": off, "limit": _HEY_PAGE})
+                except Exception as e:  # noqa: BLE001 — one slow list must not kill the sweep
+                    out["errors"].append(f"leads list {lid}@{off}: {str(e)[:120]}")
+                    break
+                items = (r or {}).get("items") or []
+                n += len(items)
+                c += _hey_snap_many("heyreach_leads",
+                                    "container_type,container_id,member_key,content_hash",
+                                    [_hey_row({"container_type": "list",
+                                               "container_id": str(lid),
+                                               "member_key": _member_key(it)}, it)
+                                     for it in items])
+                if len(items) < _HEY_PAGE:
+                    break
+                off += _HEY_PAGE
+                time.sleep(_HEY_SLEEP_S)
+        return n, c
+
+    def _conversations():
+        n = c = 0
+        buf: list = []
+        for it in _hey_pages("/inbox/GetConversationsV2", {"filters": {}}):
+            n += 1
+            buf.append(_hey_row({"conversation_key": str(it.get("id") or _member_key(it))}, it))
+            if len(buf) >= _HEY_PAGE:
+                c += _hey_snap_many("heyreach_conversations",
+                                    "conversation_key,content_hash", buf)
+                buf = []
+        c += _hey_snap_many("heyreach_conversations", "conversation_key,content_hash", buf)
+        return n, c
+
+    sweep("accounts", _accounts)
+    sweep("lists", _lists)
+    sweep("campaigns", _campaigns)
+    sweep("stats", _stats)
+    sweep("leads", _leads)
+    sweep("conversations", _conversations)
+    out["finished"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:  # durable, queryable record of every sync run (best-effort)
+        sb("POST", "app_activity_log",
+           {"actor": "heyreach_sync", "endpoint": "/api/cron/heyreach-sync",
+            "action": "sync", "entity": "heyreach", "payload": out},
+           prefer="return=representation")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _heyreach_sync_bg():
+    if not _HEYREACH_SYNC_LOCK.acquire(blocking=False):
+        return  # a prior sync is still running — skip this one
+    try:
+        heyreach_sync()
+    finally:
+        _HEYREACH_SYNC_LOCK.release()
+
+
 # ── HTTP plumbing ────────────────────────────────────────────────────────
 
 ROUTES = {
@@ -5772,15 +6160,23 @@ class Handler(SimpleHTTPRequestHandler):
                                "stale": bool(b is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("GET")
+        if path == "/api/lists":
+            status, body = api_lists_index()
+            return self._json(body, status)
+        if path == "/api/lists/rows":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            status, body = api_lists_rows(q)
+            return self._json(body, status)
         return self._serve_static()
 
     def do_POST(self):
         _clear_ui_caches()  # G2: every POST may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
-        if path == "/api/cron/pull-all":
-            # External-scheduler batch pull. Token-guarded (header, not body) and
-            # run OUTSIDE the global drafts_lock — cron_pull_all takes its own
-            # per-source locks and the lock does not nest.
+        if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync"):
+            # External-scheduler endpoints. Token-guarded (header, not body) and
+            # run OUTSIDE the global drafts_lock — each job takes its own locks
+            # and the lock does not nest.
             want = os.environ.get("SIGNAL_PULL_TOKEN") or KEYS.get("SIGNAL_PULL_TOKEN")
             if not want:
                 # No dedicated token set on this host: derive a stable one from a
@@ -5791,11 +6187,19 @@ class Handler(SimpleHTTPRequestHandler):
             got = self.headers.get("x-navreo-token")
             if not want or got != want:
                 return self._json({"ok": False, "message": "unauthorized"}, 401)
-            # Fire-and-forget: the full pull over all sources runs far longer than
-            # any HTTP/pg_net timeout, so kick it to a background thread and return
-            # immediately. Each run's summary lands in signal_cron_runs (Supabase).
+            # Fire-and-forget: both jobs run far longer than any HTTP/pg_net
+            # timeout, so kick to a background thread and return immediately.
+            # Pull summaries land in signal_cron_runs; HeyReach sync summaries
+            # in app_activity_log (actor='heyreach_sync').
+            if path == "/api/cron/heyreach-sync":
+                if _HEYREACH_SYNC_LOCK.locked():
+                    return self._json({"ok": True, "started": False, "busy": True}, 200)
+                log_activity(path, actor="cron", action="sync", entity="heyreach")
+                threading.Thread(target=_heyreach_sync_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
             if _CRON_LOCK.locked():
                 return self._json({"ok": True, "started": False, "busy": True}, 200)
+            log_activity(path, actor="cron", action="pull", entity="signals_batch")
             threading.Thread(target=_cron_pull_bg, daemon=True).start()
             return self._json({"ok": True, "started": True}, 202)
         exec_prefix, exec_suffix = "/api/notifications/", "/execute"
@@ -5807,6 +6211,8 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            log_activity(path, payload, action="execute", entity="notification",
+                         entity_id=nid)
             status, body = execute_notification_action(nid, payload)
             return self._json(body, status)
         if path == "/api/deliverability/_audit/refresh":
@@ -5818,12 +6224,26 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(_deliv_audit_start(force=force))
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("POST")
+        lists_route = LISTS_POST_ROUTES.get(path)
+        if lists_route:
+            # (status, body) handlers — organisational metadata only; nothing
+            # here can write list_rows (see the Lists API HARD RULE above).
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            log_activity(path, payload, action=path.rsplit("/", 1)[-1],
+                         entity="list", entity_id=payload.get("list_id"))
+            status, body = lists_route(payload)
+            return self._json(body, status)
         route = ROUTES.get(path)
         if not route:
             return self._json({"ok": False, "message": "unknown endpoint"}, 404)
         try:
             length = int(self.headers.get("Content-Length") or 0)
             payload = json.loads(self.rfile.read(length).decode() or "{}")
+            log_activity(path, payload)  # ledger first — even a failing call is activity
             with drafts_lock():  # every POST may read-modify-write the drafts files
                 return self._json(route(payload))
         except Exception as e:  # noqa: BLE001 — surface provider errors to the UI
@@ -5845,6 +6265,8 @@ class Handler(SimpleHTTPRequestHandler):
         if status not in NOTIFICATION_STATUSES:
             return self._json({"ok": False, "message":
                                 f"status must be one of {NOTIFICATION_STATUSES}"}, 400)
+        log_activity(path, payload, action="status", entity="notification",
+                     entity_id=nid)
         try:
             row = update_notification_status(nid, status)
         except LookupError:
