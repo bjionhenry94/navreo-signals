@@ -3978,10 +3978,31 @@ def api_verify_dismiss(p: dict):
     return {"ok": True}, 200
 
 
-def _smartlead_json(method: str, path: str, body: dict | None = None, timeout: float = 60):
+def _smartlead_json(method: str, path: str, body: dict | None = None, timeout: float = 60,
+                    attempts: int = 5):
+    """Smartlead call with 429 backoff (honours Retry-After). The 200req/min
+    cap is SHARED with the background verify jobs, so a process-new apply can
+    land mid-throttle and must wait its turn instead of failing the whole
+    apply with 'HTTP Error 429' (seen live 2026-07-09). 5xx retries are
+    GET-only: every POST here except /tags is idempotent, but a retried
+    /tags create after an ambiguous 5xx could double-mint an undeletable tag."""
+    import urllib.error
     key = KEYS.get("SMARTLEAD_API_KEY", "")
     sep = "&" if "?" in path else "?"
-    return http_json(method, f"{SMARTLEAD_BASE}{path}{sep}api_key={key}", {}, body, timeout=timeout)
+    url = f"{SMARTLEAD_BASE}{path}{sep}api_key={key}"
+    for attempt in range(1, attempts + 1):
+        try:
+            return http_json(method, url, {}, body, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            retriable = e.code == 429 or (method == "GET" and e.code in (500, 502, 503, 504))
+            if not retriable or attempt == attempts:
+                raise
+            try:
+                wait = int((e.headers or {}).get("Retry-After") or 0)
+            except (TypeError, ValueError):
+                wait = 0
+            time.sleep(min(max(wait, 3 * attempt), 30))
+    return {}
 
 
 def api_process_new_selected(p: dict):
