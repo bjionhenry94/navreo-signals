@@ -9,6 +9,36 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="navreo.css">
 <style>
+:root { --ctrl-h: 31px; --ctrl-radius: 8px; }
+/* shared sizing for every toolbar control (search / number inputs / buttons) —
+   one height, one radius, one font-size so nothing looks mismatched next to
+   another (previously the grid search input fell through to unstyled browser
+   defaults because ".toolbar .search" is a descendant selector and never
+   matched an element carrying both classes at once). */
+.controlsrow .btn.sm,
+.searchwrap .searchinput,
+.numinput,
+.pagebtn {
+  height: var(--ctrl-h);
+  box-sizing: border-box;
+  border-radius: var(--ctrl-radius);
+  font-size: 13px;
+}
+.controlsrow .btn.sm { padding: 0 13px; }
+.tb-badge {
+  background: var(--orange-100); color: var(--orange-700);
+  font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 7px; line-height: 1.6;
+}
+
+/* ── one reusable border-rotate spinner (table overlay / value-picker) ── */
+.spinner {
+  display: inline-block; border-radius: 50%; border: 2px solid var(--line-2);
+  border-top-color: var(--orange); animation: spin .7s linear infinite; flex-shrink: 0;
+}
+.spinner.sm { width: 13px; height: 13px; border-width: 2px; }
+.spinner.md { width: 22px; height: 22px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── File browser ──────────────────────────────────────── */
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 14px; }
 .toolbar .search {
@@ -68,41 +98,44 @@ h1#gridName { font-family: var(--font-sans); font-weight: 600; font-size: 17px; 
 .share-btn.copied.primary { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
 .ov-kebab { width: 32px; height: 32px; justify-content: center; border: 1px solid var(--line-2); }
 
-/* controls row: search + filter chips, spacer, columns + pagination cluster */
+/* controls row: search + filter chips, spacer, Filter/Sort/columns buttons,
+   Start row + Rows fields, ‹ range of N › cluster — one row, Clay-density. */
 .controlsrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
 .searchwrap { position: relative; display: flex; align-items: center; }
 .searchwrap .search-ic { position: absolute; left: 12px; color: var(--ink-3); display: inline-flex; pointer-events: none; }
-.searchwrap .searchinput { padding-left: 30px; width: 220px; }
+.searchwrap .searchinput {
+  padding: 0 12px 0 30px; width: 240px;
+  border: 1px solid var(--line-2); font: 400 13px var(--font-sans); color: var(--ink); background: transparent;
+}
+.searchwrap .searchinput:focus { outline: none; box-shadow: var(--focus); }
 .filterbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .filterbar .fchip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-sunken); border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; color: var(--ink-2); }
 .filterbar .fchip button { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 999px; }
 .filterbar .fchip button:hover { color: var(--ink); background: var(--line); }
 .controlsrow .spacer { flex: 1; }
 .numinput {
-  border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 10px;
-  font: 500 12.5px var(--font-mono); width: 84px; color: var(--ink); background: transparent;
+  border: 1px solid var(--line-2); padding: 0 10px;
+  font: 500 13px var(--font-mono); width: 74px; color: var(--ink); background: transparent;
 }
 .numinput:focus { outline: none; box-shadow: var(--focus); }
 
-/* pagination cluster: ‹ range(popover-trigger) › */
+/* Start row / Rows — always-visible, small labelled number fields */
+.pagefields { display: flex; align-items: center; gap: 6px; }
+.pagefields label { font-size: 11px; color: var(--ink-3); font-weight: 500; white-space: nowrap; }
+.pagefields .numinput { width: 62px; }
+
+/* pagination cluster: ‹ range-text › */
 .pagecluster { display: flex; align-items: center; gap: 2px; }
 .pagebtn {
-  background: none; border: 1px solid var(--line-2); border-radius: 7px; width: 26px; height: 26px;
-  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--ink-2); font-size: 14px;
+  background: none; border: 1px solid var(--line-2); width: var(--ctrl-h);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--ink-2);
 }
 .pagebtn:hover { background: var(--bg-sunken); }
 .pagebtn[disabled] { opacity: .4; cursor: not-allowed; }
-.pagerange {
-  background: none; border: none; font-size: 12px; color: var(--ink-3); padding: 5px 9px; cursor: pointer;
-  border-radius: 7px; font-variant-numeric: tabular-nums; white-space: nowrap;
+.pagerangetext {
+  font-size: 12px; color: var(--ink-3); padding: 5px 9px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.pagerange:hover { background: var(--bg-sunken); color: var(--ink-2); }
-.pagepop { width: 220px; padding: 10px; }
-.pagepop .p-field { margin-bottom: 10px; }
-.pagepop .p-field:last-child { margin-bottom: 0; }
-.pagepop label { display: block; font-size: 11px; color: var(--ink-3); font-weight: 500; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .05em; }
-.pagepop .p-row { display: flex; gap: 6px; }
-.pagepop .p-row .numinput { width: auto; flex: 1; }
 
 /* selection contextual bar */
 .selectbar {
@@ -115,13 +148,18 @@ h1#gridName { font-family: var(--font-sans); font-weight: 600; font-size: 17px; 
 .btn.danger-outline { border-color: var(--red-line); color: var(--red); background: transparent; }
 .btn.danger-outline:hover { background: var(--red-bg); }
 
-.gridwrap { border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; max-width: 100%; max-height: 68vh; }
+.gridwrap { position: relative; border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; max-width: 100%; max-height: 68vh; }
+.tbl-loading-overlay {
+  position: absolute; inset: 0; min-height: 160px;
+  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: rgba(255,255,255,.78); z-index: 15; font-size: 12.5px; color: var(--ink-2); font-weight: 500;
+}
 table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
 .datagrid th { position: sticky; top: 0; background: var(--bg-sunken); z-index: 5; text-align: left; padding: 0; border-bottom: 1px solid var(--line-2); }
 .datagrid th .thwrap { display: flex; align-items: center; gap: 5px; padding: 8px 10px; cursor: pointer; user-select: none; white-space: nowrap; }
 .datagrid th .thwrap:hover { background: var(--line); }
 .datagrid th .thlbl { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
-.datagrid th .sortarrow { font-size: 10px; color: var(--orange-700); opacity: 0; transition: opacity .12s; }
+.datagrid th .sortarrow { display: inline-flex; align-items: center; color: var(--orange-700); opacity: 0; transition: opacity .12s; }
 .datagrid th .thwrap:hover .sortarrow, .datagrid th .thwrap.sort-active .sortarrow { opacity: 1; }
 .datagrid th .filt-btn { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 5px; margin-left: auto; }
 .datagrid th .filt-btn:hover { background: var(--line-2); color: var(--ink); }
@@ -158,6 +196,39 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
 .valpicker .vp-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .valpicker .vp-sep { border-top: 1px solid var(--line); margin: 10px 0 8px; }
 .valpicker .vp-empty { font-size: 12px; color: var(--ink-3); padding: 8px 4px; }
+.vp-loading { display: flex; align-items: center; gap: 8px; padding: 8px 4px; font-size: 12px; color: var(--ink-3); }
+
+/* ── toolbar Filter button popover: active-filter list + add-filter flow ── */
+.filterpop { width: 280px; }
+.filterpop .fp-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; }
+.filterpop .fp-row:hover { background: var(--bg-sunken); }
+.filterpop .fp-col { font-size: 12.5px; font-weight: 500; color: var(--ink); flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filterpop .fp-val { font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.filterpop .fp-x { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 3px; border-radius: 999px; flex-shrink: 0; }
+.filterpop .fp-x:hover { color: var(--ink); background: var(--line); }
+.filterpop .fp-empty { font-size: 12px; color: var(--ink-3); padding: 6px 8px; }
+.filterpop .fp-addrow { display: flex; gap: 6px; margin-top: 8px; }
+.filterpop select.fp-select {
+  flex: 1; min-width: 0; border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px;
+  font-size: 12.5px; font-family: inherit; background: transparent; color: var(--ink);
+}
+
+/* ── toolbar Sort button popover: column + direction ── */
+.sortpop { width: 230px; padding: 10px; }
+.sortpop .p-field { margin-bottom: 10px; }
+.sortpop .p-field:last-child { margin-bottom: 0; }
+.sortpop label { display: block; font-size: 11px; color: var(--ink-3); font-weight: 500; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .05em; }
+.sortpop select {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px;
+  font-size: 12.5px; font-family: inherit; background: transparent; color: var(--ink);
+}
+.sortpop .dirtoggle { display: flex; gap: 6px; }
+.sortpop .dirtoggle button {
+  flex: 1; border: 1px solid var(--line-2); background: transparent; border-radius: 7px;
+  padding: 6px 0; font-size: 12.5px; cursor: pointer; color: var(--ink-2);
+}
+.sortpop .dirtoggle button.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+.sortpop .sortactions { display: flex; justify-content: space-between; margin-top: 12px; }
 
 /* ── New folder / move modal ──────────────────────────── */
 .overlay { position: fixed; inset: 0; background: rgba(20,17,14,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
@@ -224,7 +295,7 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
         </div>
         <div class="gh-right">
           <button class="btn" id="downloadBtn" title="Download the current view as CSV">
-            <span class="dlicon">&#11123;</span> Download
+            <span class="dlicon" id="dlIcon"></span> Download
           </button>
           <button class="btn primary share-btn" id="shareBtn">Share</button>
           <div class="popwrap" style="position:relative">
@@ -236,15 +307,23 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
       <div class="controlsrow">
         <div class="searchwrap">
           <span class="search-ic" id="gridSearchIc"></span>
-          <input class="toolbar search searchinput" id="gridSearch" placeholder="Search rows…">
+          <input class="searchinput" id="gridSearch" placeholder="Search rows…">
         </div>
         <div class="filterbar" id="filterBar"></div>
         <div class="spacer"></div>
+        <button class="btn sm" id="filterBtn" data-popover-trigger title="Filter rows"></button>
+        <button class="btn sm" id="sortBtn" data-popover-trigger title="Sort rows"></button>
         <button class="btn sm" id="colBtn" data-popover-trigger>columns</button>
+        <div class="pagefields">
+          <label for="startRowInput">Start row</label>
+          <input type="number" min="1" class="numinput" id="startRowInput" title="Jump to a row (1-indexed)">
+          <label for="rowsLimitInput">Rows</label>
+          <input type="number" min="1" class="numinput" id="rowsLimitInput" title="Rows per page">
+        </div>
         <div class="pagecluster">
-          <button class="pagebtn" id="pagePrev" title="Previous page">&#8249;</button>
-          <button class="pagerange" id="pageRangeBtn" data-popover-trigger></button>
-          <button class="pagebtn" id="pageNext" title="Next page">&#8250;</button>
+          <button class="pagebtn" id="pagePrev" title="Previous page"></button>
+          <span class="pagerangetext" id="pageRangeText"></span>
+          <button class="pagebtn" id="pageNext" title="Next page"></button>
         </div>
       </div>
 
@@ -337,10 +416,25 @@ const svgSheet = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const svgStar = (on) => `<svg viewBox="0 0 24 24" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>`;
 const svgKebab = `<svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>`;
 const svgFilt = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>`;
+const svgFiltTb = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>`;
 const svgSearch = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>`;
+const svgSortIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M8 20V4M8 4 4 8m4-4 4 4"/><path d="M16 4v16m0 0 4-4m-4 4-4-4"/></svg>`;
+const svgChevLeft = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M15 6l-6 6 6 6"/></svg>`;
+const svgChevRight = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M9 6l6 6-6 6"/></svg>`;
+const svgCaretUp = `<svg viewBox="0 0 24 24" width="9" height="9" fill="currentColor"><path d="M12 7l6 9H6z"/></svg>`;
+const svgCaretDown = `<svg viewBox="0 0 24 24" width="9" height="9" fill="currentColor"><path d="M6 8h12l-6 9z"/></svg>`;
+/* plain down-arrow, no tray (a tray glyph reads as noise at 14px) — replaces the
+   U+11123 CSV-export entity, which renders as a tofu box on machines missing that glyph */
+const svgDownloadIcon = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M8 3v9m0 0l-3.5-3.5M8 12l3.5-3.5"/></svg>`;
 document.querySelectorAll(".search-ic").forEach((el) => { el.innerHTML = svgSearch; });
 const gridOverflowBtnEl = document.getElementById("gridOverflowBtn");
 if (gridOverflowBtnEl) gridOverflowBtnEl.innerHTML = svgKebab;
+const dlIconEl = document.getElementById("dlIcon");
+if (dlIconEl) dlIconEl.innerHTML = svgDownloadIcon;
+const pagePrevEl = document.getElementById("pagePrev");
+const pageNextEl = document.getElementById("pageNext");
+if (pagePrevEl) pagePrevEl.innerHTML = svgChevLeft;
+if (pageNextEl) pageNextEl.innerHTML = svgChevRight;
 
 /* ═══════════════════════════ shared state ═══════════════════════════ */
 let LISTS_DATA = null;          // { folders, lists } from /api/lists
@@ -782,15 +876,54 @@ async function openGrid(listId) {
   document.getElementById("gridClientChip").textContent = "";
   document.getElementById("gridCountChip").textContent = "";
   document.getElementById("gridWrap").style.display = "none";
+  hideGridOverlay();
   document.getElementById("filterBar").innerHTML = "";
   document.getElementById("gridStatus").innerHTML = `<div class="empty">Loading…</div>`;
-  document.getElementById("pageRangeBtn").textContent = "";
+  document.getElementById("pageRangeText").textContent = "";
   document.getElementById("pagePrev").disabled = true;
   document.getElementById("pageNext").disabled = true;
+  document.getElementById("startRowInput").value = 1;
+  document.getElementById("rowsLimitInput").value = grid.limit;
+  updateFilterBtnLabel();
+  updateSortBtnLabel();
   updateSelectBar();
   // fire-and-forget touch
   fetch("/api/lists/touch", { method: "POST", body: JSON.stringify({ list_id: listId, by: "Bjion" }) }).catch(() => {});
   await fetchGridRows();
+}
+
+/* ── table-region loading overlay: only appears if the fetch runs past
+   150ms (so a fast page/filter change never flickers), and once it's up
+   it grows an elapsed-seconds counter after ~2s so a big filtered query
+   on a large list (e.g. Asteri's 15,953 rows) doesn't read as hung. ── */
+let gridOverlayShowTimer = null;
+let gridOverlayElapsedTimer = null;
+function showGridOverlay(loadStart) {
+  const wrap = document.getElementById("gridWrap");
+  if (!wrap) return;
+  wrap.scrollTop = 0; wrap.scrollLeft = 0;
+  let ov = document.getElementById("gridLoadingOverlay");
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.id = "gridLoadingOverlay";
+    ov.className = "tbl-loading-overlay";
+    wrap.appendChild(ov);
+  }
+  const render = () => {
+    const elapsed = Date.now() - loadStart;
+    const suffix = elapsed >= 2000 ? ` ${Math.floor(elapsed / 1000)}s` : "";
+    ov.innerHTML = `<span class="spinner md"></span><span>Loading rows…${suffix}</span>`;
+  };
+  render();
+  ov.style.display = "flex";
+  clearInterval(gridOverlayElapsedTimer);
+  gridOverlayElapsedTimer = setInterval(render, 1000);
+}
+function hideGridOverlay() {
+  clearTimeout(gridOverlayShowTimer);
+  clearInterval(gridOverlayElapsedTimer);
+  const ov = document.getElementById("gridLoadingOverlay");
+  if (ov) ov.style.display = "none";
 }
 
 async function fetchGridRows() {
@@ -798,6 +931,15 @@ async function fetchGridRows() {
   grid.loading = true;
   grid.selected.clear();  // a new page/search/sort/filter invalidates the old selection
   updateSelectBar();
+
+  // only overlay-spin on top of a table that's already showing rows — the
+  // very first load of a list uses the plain gridStatus "Loading…" text
+  // below, since there's nothing to overlay yet.
+  const hadRows = document.getElementById("gridWrap").style.display === "block";
+  const loadStart = Date.now();
+  clearTimeout(gridOverlayShowTimer);
+  if (hadRows) gridOverlayShowTimer = setTimeout(() => showGridOverlay(loadStart), 150);
+
   const params = new URLSearchParams({
     id: grid.id, offset: String(grid.offset), limit: String(grid.limit),
     search: grid.search, sort: grid.sort, dir: grid.dir,
@@ -809,11 +951,17 @@ async function fetchGridRows() {
     j = await r.json().catch(() => null);
   } catch {
     grid.loading = false;
-    document.getElementById("gridStatus").innerHTML = `<div class="empty">Couldn't reach the server — try again</div>`;
-    document.getElementById("gridWrap").style.display = "none";
+    hideGridOverlay();
+    if (!hadRows) {
+      document.getElementById("gridStatus").innerHTML = `<div class="empty">Couldn't reach the server — try again</div>`;
+      document.getElementById("gridWrap").style.display = "none";
+    } else {
+      protoNote("Couldn't reach the server — try again", { ms: 4200 });
+    }
     return;
   }
   grid.loading = false;
+  hideGridOverlay();
   if (!r.ok) {
     if (r.status === 404) {
       document.getElementById("gridName").textContent = "List not found";
@@ -836,6 +984,7 @@ async function fetchGridRows() {
   document.getElementById("gridClientChip").innerHTML = esc(j.client || "");
   document.getElementById("gridCountChip").textContent = `${fmt(grid.filtered)} rows`;
   renderFilterBar();
+  updateSortBtnLabel();
   updateDownloadTitle();
 
   const rows = j.rows || [];
@@ -852,23 +1001,33 @@ async function fetchGridRows() {
   renderDataGrid(rows);
 }
 
-/* "1–500 of 15,953" (1-indexed) on the pagination-cluster's range button,
-   plus the ‹ › enabled state, stepping offset by the current limit. */
+/* "1–500 of 15,953" (1-indexed) next to the ‹ › cluster, plus keeping the
+   always-visible Start row / Rows fields in sync (skipped while the user is
+   actively typing in one, so it doesn't fight their cursor). */
 function updatePageRange(rowsLen) {
-  const btn = document.getElementById("pageRangeBtn");
+  const rangeEl = document.getElementById("pageRangeText");
   const prevBtn = document.getElementById("pagePrev");
   const nextBtn = document.getElementById("pageNext");
   if (!grid.filtered) {
-    btn.textContent = "No rows";
+    rangeEl.textContent = "No rows";
     prevBtn.disabled = true;
     nextBtn.disabled = true;
+    syncPageFields();
     return;
   }
   const from = grid.offset + 1;
   const to = grid.offset + rowsLen;
-  btn.textContent = `${fmt(from)}–${fmt(to)} of ${fmt(grid.filtered)}`;
+  rangeEl.textContent = `${fmt(from)}–${fmt(to)} of ${fmt(grid.filtered)}`;
   prevBtn.disabled = grid.offset <= 0;
   nextBtn.disabled = (grid.offset + grid.limit) >= grid.filtered;
+  syncPageFields();
+}
+
+function syncPageFields() {
+  const startEl = document.getElementById("startRowInput");
+  const limitEl = document.getElementById("rowsLimitInput");
+  if (startEl && document.activeElement !== startEl) startEl.value = grid.offset + 1;
+  if (limitEl && document.activeElement !== limitEl) limitEl.value = grid.limit;
 }
 
 /* Download hits the CURRENT search/sort/filters — what-you-see-is-what-you-
@@ -880,15 +1039,18 @@ function updateDownloadTitle() {
   btn.title = hasView ? "Download the current view (search/sort/filters applied)" : "Download this list as CSV";
 }
 
+function filterValueLabel(col) {
+  const v = grid.filters[col];
+  if (Array.isArray(v)) return v.length === 1 ? `“${esc(v[0])}”` : `${v.length} selected`;
+  return `“${esc(v)}”`;
+}
+
 function renderFilterBar() {
   const cols = Object.keys(grid.filters);
-  document.getElementById("filterBar").innerHTML = cols.length ? cols.map((c) => {
-    const v = grid.filters[c];
-    const label = Array.isArray(v)
-      ? (v.length === 1 ? `“${esc(v[0])}”` : `${v.length} selected`)
-      : `“${esc(v)}”`;
-    return `<span class="fchip">${esc(c)}: ${label}<button title="Clear filter" onclick="clearColFilter('${esc4attr(c)}')">&times;</button></span>`;
-  }).join("") : "";
+  document.getElementById("filterBar").innerHTML = cols.length ? cols.map((c) =>
+    `<span class="fchip">${esc(c)}: ${filterValueLabel(c)}<button title="Clear filter" onclick="clearColFilter('${esc4attr(c)}')">&times;</button></span>`
+  ).join("") : "";
+  updateFilterBtnLabel();
 }
 
 function clearColFilter(col) {
@@ -896,6 +1058,142 @@ function clearColFilter(col) {
   grid.offset = 0;
   fetchGridRows();
 }
+
+/* ── toolbar Filter button: popover lists active filters (remove ×) plus an
+   Add-filter flow that hands off to the existing per-column value-picker. ── */
+function updateFilterBtnLabel() {
+  const btn = document.getElementById("filterBtn");
+  if (!btn) return;
+  const n = Object.keys(grid.filters).length;
+  btn.innerHTML = `${svgFiltTb}<span>Filter</span>${n ? `<span class="tb-badge">${n}</span>` : ""}`;
+}
+
+function openFilterPopover(anchorBtn) {
+  const pop = document.createElement("div");
+  pop.className = "popover filterpop";
+  const cols = Object.keys(grid.filters);
+  const rowsHtml = cols.length ? cols.map((c) => `
+    <div class="fp-row">
+      <span class="fp-col" title="${esc4attr(c)}">${esc(c)}</span>
+      <span class="fp-val">${filterValueLabel(c)}</span>
+      <button class="fp-x" title="Remove filter" data-col="${esc4attr(c)}">&times;</button>
+    </div>`).join("") : `<div class="fp-empty">No filters active</div>`;
+  const availableCols = grid.columns.filter((c) => grid.filters[c] === undefined);
+  pop.innerHTML = `
+    <div class="p-lab">Active filters</div>
+    ${rowsHtml}
+    <div class="vp-sep"></div>
+    <div class="p-lab">Add filter</div>
+    <div class="fp-addrow">
+      <select class="fp-select" id="fpAddCol">
+        <option value="">Choose column…</option>
+        ${availableCols.map((c) => `<option value="${esc4attr(c)}">${esc(c)}</option>`).join("")}
+      </select>
+      <button class="btn sm primary" id="fpAddBtn">Add</button>
+    </div>`;
+  document.body.appendChild(pop);
+  const r = anchorBtn.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.right - pop.offsetWidth) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+    if (pr.left < 8) pop.style.left = "8px";
+  });
+
+  pop.querySelectorAll(".fp-x").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      delete grid.filters[b.getAttribute("data-col")];
+      closeAnyPopover();
+      grid.offset = 0;
+      fetchGridRows();
+    });
+  });
+  pop.querySelector("#fpAddBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const col = pop.querySelector("#fpAddCol").value;
+    if (!col) return;
+    closeAnyPopover();
+    // hand off to the existing per-column value-picker for this column,
+    // anchored to the toolbar Filter button itself
+    openColFilter({ currentTarget: anchorBtn }, col);
+  });
+}
+document.getElementById("filterBtn").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  closeAnyPopover();
+  openFilterPopover(ev.currentTarget);
+});
+
+/* ── toolbar Sort button: popover with column + Asc/Desc + Clear sort. ── */
+function updateSortBtnLabel() {
+  const btn = document.getElementById("sortBtn");
+  if (!btn) return;
+  if (grid.sort) {
+    const arrow = grid.dir === "desc" ? "↓" : "↑";
+    btn.innerHTML = `${svgSortIcon}<span>Sort · ${esc(grid.sort)} ${arrow}</span>`;
+  } else {
+    btn.innerHTML = `${svgSortIcon}<span>Sort</span>`;
+  }
+}
+
+function openSortPopover(anchorBtn) {
+  const pop = document.createElement("div");
+  pop.className = "popover sortpop";
+  pop.innerHTML = `
+    <div class="p-field">
+      <label>Column</label>
+      <select id="spCol">
+        <option value="">No sort</option>
+        ${grid.columns.map((c) => `<option value="${esc4attr(c)}" ${grid.sort === c ? "selected" : ""}>${esc(c)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="p-field">
+      <label>Direction</label>
+      <div class="dirtoggle">
+        <button type="button" class="${grid.dir !== "desc" ? "on" : ""}" id="spAsc">Asc</button>
+        <button type="button" class="${grid.dir === "desc" ? "on" : ""}" id="spDesc">Desc</button>
+      </div>
+    </div>
+    <div class="sortactions">
+      <button class="btn sm" id="spClear">Clear sort</button>
+      <button class="btn sm primary" id="spApply">Apply</button>
+    </div>`;
+  document.body.appendChild(pop);
+  const r = anchorBtn.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.right - pop.offsetWidth) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+    if (pr.left < 8) pop.style.left = "8px";
+  });
+
+  let dir = grid.dir === "desc" ? "desc" : "asc";
+  const ascBtn = pop.querySelector("#spAsc"), descBtn = pop.querySelector("#spDesc");
+  ascBtn.onclick = () => { dir = "asc"; ascBtn.classList.add("on"); descBtn.classList.remove("on"); };
+  descBtn.onclick = () => { dir = "desc"; descBtn.classList.add("on"); ascBtn.classList.remove("on"); };
+
+  pop.querySelector("#spApply").onclick = () => {
+    const col = pop.querySelector("#spCol").value;
+    closeAnyPopover();
+    grid.sort = col; grid.dir = col ? dir : "";
+    grid.offset = 0;
+    fetchGridRows();
+  };
+  pop.querySelector("#spClear").onclick = () => {
+    closeAnyPopover();
+    grid.sort = ""; grid.dir = "";
+    grid.offset = 0;
+    fetchGridRows();
+  };
+}
+document.getElementById("sortBtn").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  closeAnyPopover();
+  openSortPopover(ev.currentTarget);
+});
 
 function renderDataGrid(rows) {
   const visibleCols = grid.columns.filter((c) => grid.visible.has(c));
@@ -906,7 +1204,7 @@ function renderDataGrid(rows) {
       <th>
         <div class="thwrap ${grid.sort === c ? "sort-active" : ""}" onclick="cycleSort('${esc4attr(c)}')">
           <span class="thlbl">${esc(c)}</span>
-          <span class="sortarrow">${grid.sort === c ? (grid.dir === "desc" ? "&#9660;" : "&#9650;") : "&#9650;"}</span>
+          <span class="sortarrow">${grid.sort === c && grid.dir === "desc" ? svgCaretDown : svgCaretUp}</span>
           <button class="filt-btn ${grid.filters[c] ? "active" : ""}" title="Filter" onclick="event.stopPropagation();openColFilter(event,'${esc4attr(c)}')" data-popover-trigger>${svgFilt}</button>
         </div>
       </th>`).join("")}
@@ -1006,7 +1304,7 @@ function openColFilter(ev, col) {
   pop.innerHTML = `
     <div style="font-size:12px;color:var(--ink-3);margin-bottom:6px">Filter “${esc(col)}”</div>
     <input type="text" class="vp-search" id="colValSearch" placeholder="Search values…">
-    <div class="colpop" id="colValList"><div class="vp-empty">Loading values…</div></div>
+    <div class="colpop" id="colValList"><div class="vp-loading"><span class="spinner sm"></span>Loading values…</div></div>
     <div class="row">
       <button class="btn sm primary" id="colValApply">Apply</button>
       <button class="btn sm" id="colValClear">Clear</button>
@@ -1053,7 +1351,7 @@ function openColFilter(ev, col) {
 
   let valSearchDebounce = null;
   const loadValues = async (term) => {
-    listEl.innerHTML = `<div class="vp-empty">Loading values…</div>`;
+    listEl.innerHTML = `<div class="vp-loading"><span class="spinner sm"></span>Loading values…</div>`;
     renderValueList(await fetchDistinctValues(col, term));
   };
   loadValues("");
@@ -1132,54 +1430,30 @@ document.getElementById("pageNext").addEventListener("click", () => {
   fetchGridRows();
 });
 
-/* pagination popover: 1-indexed "Go to row" + rows-per-page, tucked behind
-   the range label instead of two always-visible number boxes in the toolbar */
-document.getElementById("pageRangeBtn").addEventListener("click", (ev) => {
-  ev.stopPropagation();
-  closeAnyPopover();
-  const pop = document.createElement("div");
-  pop.className = "popover pagepop";
-  pop.innerHTML = `
-    <div class="p-field">
-      <label>Go to row</label>
-      <div class="p-row">
-        <input type="number" min="1" class="numinput" id="popGoRow" value="${grid.offset + 1}">
-        <button class="btn sm" id="popGoBtn">Go</button>
-      </div>
-    </div>
-    <div class="p-field">
-      <label>Rows per page</label>
-      <input type="number" min="1" class="numinput" id="popLimit" value="${grid.limit}" style="width:100%">
-    </div>`;
-  document.body.appendChild(pop);
-  const r = ev.currentTarget.getBoundingClientRect();
-  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
-  pop.style.left = (window.scrollX + r.right - pop.offsetWidth) + "px";
-  requestAnimationFrame(() => {
-    const pr = pop.getBoundingClientRect();
-    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
-  });
+/* Start row / Rows — always-visible fields, in sync with the gutter and the
+   ‹ › cluster (updatePageRange/syncPageFields keep them current after every
+   fetch; typing in one and hitting Enter/blur jumps the grid). */
+function applyStartRow() {
+  const el = document.getElementById("startRowInput");
+  const wantRow = Math.max(1, parseInt(el.value, 10) || 1); // 1-indexed, user-facing
+  const maxOffset = Math.max(0, grid.filtered - 1);
+  const newOffset = Math.max(0, Math.min(wantRow - 1, maxOffset));
+  if (newOffset === grid.offset) { el.value = grid.offset + 1; return; }
+  grid.offset = newOffset;
+  fetchGridRows();
+}
+document.getElementById("startRowInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { applyStartRow(); e.target.blur(); } });
+document.getElementById("startRowInput").addEventListener("change", applyStartRow);
 
-  const goRowInput = pop.querySelector("#popGoRow");
-  const goToRow = () => {
-    const wantRow = Math.max(1, parseInt(goRowInput.value, 10) || 1); // 1-indexed, user-facing
-    grid.offset = Math.max(0, Math.min(wantRow - 1, Math.max(0, grid.filtered - 1)));
-    closeAnyPopover();
-    fetchGridRows();
-  };
-  pop.querySelector("#popGoBtn").onclick = goToRow;
-  goRowInput.addEventListener("keydown", (e) => { if (e.key === "Enter") goToRow(); });
-
-  const limitInput = pop.querySelector("#popLimit");
-  const applyLimit = () => {
-    const v = Math.max(1, parseInt(limitInput.value, 10) || 500);
-    if (v === grid.limit) return;
-    grid.limit = v; grid.offset = 0;
-    fetchGridRows();
-  };
-  limitInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { applyLimit(); closeAnyPopover(); } });
-  limitInput.addEventListener("change", applyLimit);
-});
+function applyRowsLimit() {
+  const el = document.getElementById("rowsLimitInput");
+  const v = Math.max(1, parseInt(el.value, 10) || 500);
+  if (v === grid.limit) { el.value = grid.limit; return; }
+  grid.limit = v; grid.offset = 0;
+  fetchGridRows();
+}
+document.getElementById("rowsLimitInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { applyRowsLimit(); e.target.blur(); } });
+document.getElementById("rowsLimitInput").addEventListener("change", applyRowsLimit);
 
 /* ── selection contextual bar ── */
 document.getElementById("clearSelBtn").addEventListener("click", () => {
@@ -1250,13 +1524,43 @@ function confirmDeleteList() {
   });
 }
 
+/* Same contract as shell.js's busyBtn (spinner + disabled, returns a restore()
+   that undoes it, returns null on a duplicate click) but grows a live elapsed-
+   seconds suffix after `elapsedAfterMs` — for actions that can run long, like
+   exporting a big filtered list, so "Preparing…" doesn't read as hung. */
+function busyBtnTimed(btn, label, elapsedAfterMs = 2000) {
+  if (!btn) return () => {};
+  if (btn.dataset.busy === "1") return null;
+  const html = btn.innerHTML, wasDisabled = btn.disabled;
+  btn.dataset.busy = "1";
+  btn.classList.add("busy");
+  btn.setAttribute("aria-busy", "true");
+  btn.disabled = true;
+  const start = Date.now();
+  const render = () => {
+    const elapsed = Date.now() - start;
+    const suffix = elapsed >= elapsedAfterMs ? ` ${Math.floor(elapsed / 1000)}s` : "";
+    btn.innerHTML = `<span class="btnspin"></span>${esc(label)}${suffix}`;
+  };
+  render();
+  const iv = setInterval(render, 1000);
+  return () => {
+    clearInterval(iv);
+    delete btn.dataset.busy;
+    btn.classList.remove("busy");
+    btn.removeAttribute("aria-busy");
+    btn.disabled = wasDisabled;
+    btn.innerHTML = html;
+  };
+}
+
 /* ── Download: hits /api/lists/export with the CURRENT search/sort/filters,
    so what-you-see-is-what-you-download. Fetched as a blob (rather than a
    plain navigation) so the button can show a "Preparing…" state and surface
    a friendly error instead of a broken-looking blank navigation. ── */
 document.getElementById("downloadBtn").addEventListener("click", async () => {
   const btn = document.getElementById("downloadBtn");
-  const restore = busyBtn(btn, "Preparing…");
+  const restore = busyBtnTimed(btn, "Preparing…");
   if (!restore) return;
   try {
     const params = new URLSearchParams({
