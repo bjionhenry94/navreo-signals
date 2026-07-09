@@ -3885,28 +3885,74 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       let applied = 0, failed = 0;
       const failDetails = []; // backend's per-mailbox fail reasons — surfaced, never discarded
       const orig = applyBtn ? applyBtn.innerHTML : null;
+      // The write backend's mailbox snapshot expires minutes after an audit
+      // and answers "run_first" — a timing trap no owner should have to know
+      // about (it caused two straight 'N failed' runs on 2026-07-09). Heal it
+      // inline: kick a fresh audit, wait it out (~4 min, button narrating),
+      // then retry the same call — once per Apply click.
+      let healed = false;
+      async function sigFixCall(qs) {
+        let j = await liveAction("fix-signatures?" + qs, null, null, { timeout: 90000 });
+        if (j && j.ok === false && j.reason === "run_first" && !healed) {
+          healed = true;
+          if (applyBtn) applyBtn.innerHTML = "Refreshing the mailbox list first… (a few minutes)";
+          try { await apiPost("_audit/refresh", { force: true }, { timeout: 20000 }); } catch (e) {}
+          const deadline = Date.now() + 420000;
+          while (Date.now() < deadline) {
+            await new Promise((res) => setTimeout(res, 15000));
+            let st = null;
+            try { st = await apiGet("_audit", { timeout: 20000 }); } catch (e) { continue; }
+            if (st && !st.running) break;
+          }
+          if (applyBtn) applyBtn.innerHTML = "Applying…";
+          j = await liveAction("fix-signatures?" + qs, null, null, { timeout: 90000 });
+        }
+        return j;
+      }
       try {
+        if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = "Applying…"; }
         if (allInScope) {
-          // Everything ticked → one bulk call, exactly the old behaviour.
-          const j = await liveAction("fix-signatures?" + base, applyBtn, "Applying…", { timeout: 90000 });
-          if (j && j.ok === false) { toast(j.reason === "run_first" ? "Run a live audit first" : (j.reason === "empty_template" ? "Signature is empty" : "Failed"), "err"); return; }
-          applied = j.ok || 0; failed = j.failed || 0;
-          if (Array.isArray(j.fails)) failDetails.push(...j.fails);
-          dropApplied(selected.map((r) => r.email));
+          // Everything ticked → one scoped call PER DOMAIN, never one giant
+          // bulk call: writing hundreds of signatures takes minutes and the
+          // hosting edge kills any request around the 90-100s mark (proven
+          // live 2026-07-09 — unfiltered bulk 502s at ~93s, a 50-mailbox
+          // domain call finishes comfortably). Domain groups are the largest
+          // chunk the backend's substring filter can express.
+          const byDomain = {};
+          selected.forEach((r) => {
+            const d = (r.domain || (r.email.split("@")[1] || "")).toLowerCase();
+            (byDomain[d] = byDomain[d] || []).push(r);
+          });
+          const domains = Object.keys(byDomain).sort();
+          for (let i = 0; i < domains.length; i++) {
+            const d = domains[i];
+            if (applyBtn) applyBtn.innerHTML = "Applying " + esc(d) + " (" + (i + 1) + " of " + domains.length + ")…";
+            try {
+              const j = await sigFixCall(base + "&filter=" + encodeURIComponent(b64u("@" + d)));
+              if (j && j.ok === false) {
+                if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
+                if (j.reason === "empty_template") { toast("Signature is empty", "err"); return; }
+                failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: j.reason || "failed" });
+              } else {
+                applied += j.ok || 0; failed += j.failed || 0;
+                if (Array.isArray(j.fails)) failDetails.push(...j.fails);
+                dropApplied(byDomain[d].map((r) => r.email));
+              }
+            } catch (e) { failed += byDomain[d].length; failDetails.push({ email: "@" + d, error: String((e && e.message) || e) }); }
+          }
         } else {
           // A hand-picked subset → one scoped call per ticked inbox. The
           // backend's filter is an email substring match; a full address pins
           // it to that mailbox (an overlap inside the same brand would only
           // re-apply the identical brand signature, which is harmless).
-          if (applyBtn) applyBtn.disabled = true;
           const done = [];
           for (let i = 0; i < selected.length; i++) {
             const r = selected[i];
             if (applyBtn) applyBtn.innerHTML = "Applying " + (i + 1) + " of " + selected.length + "…";
             try {
-              const j = await liveAction("fix-signatures?" + base + "&filter=" + encodeURIComponent(b64u(r.email)), null, null, { timeout: 90000 });
+              const j = await sigFixCall(base + "&filter=" + encodeURIComponent(b64u(r.email)));
               if (j && j.ok === false) {
-                if (j.reason === "run_first") { toast("Run a live audit first", "err"); return; }
+                if (j.reason === "run_first") { toast("The mailbox list couldn't refresh — try again in a few minutes", "err"); return; }
                 failed++; failDetails.push({ email: r.email, error: j.reason || "failed" });
               } else {
                 applied += j.ok || 0; failed += j.failed || 0; done.push(r.email);

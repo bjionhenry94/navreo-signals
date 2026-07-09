@@ -6950,7 +6950,10 @@ def _deliv_audit_run_bg():
     req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
     req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=330, context=SSL_CTX) as resp:
+        # 2026-07-09: full audits started overrunning the old 330s cap (Smartlead
+        # slows under load), leaving the cache blob-less and the UI stuck kicking
+        # refreshes forever — give the run real headroom.
+        with urllib.request.urlopen(req, timeout=600, context=SSL_CTX) as resp:
             blob = json.loads(resp.read())
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
