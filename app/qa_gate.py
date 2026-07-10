@@ -213,11 +213,12 @@ def render(d, decisions=None, live=False, api_base="", list_id=None):
     links_html = f"<div class='uplinks'>{links}</div>" if links else ""
     uploaded = next((x for x in decisions if x.get("action") == "upload"), None)
     if uploaded:
-        up_html = ("<span class='pill a'><span class='dot'></span>Force-uploaded ⚠ · "
-                   f"{esc(uploaded.get('by') or '')}</span>" if uploaded["mode"] == "forced" else
-                   "<span class='pill g'><span class='dot'></span>Upload approved ✓ · "
-                   f"{esc(uploaded.get('by') or '')}</span>")
-        up_html = f"<div class='upwrap'>{up_html}{links_html}</div>"
+        pill = ("<span class='pill a'><span class='dot'></span>Force-uploaded ⚠</span>"
+                if uploaded["mode"] == "forced" else
+                "<span class='pill g'><span class='dot'></span>Upload approved ✓</span>")
+        by = uploaded.get("by") or ""
+        byline = f"<div class='upby' title='{esc(by)}'>by {esc(by)}</div>" if by else ""
+        up_html = f"<div class='upwrap'>{pill}{byline}{links_html}</div>"
     elif live:
         up_html = """
       <div class="upwrap">
@@ -573,7 +574,9 @@ table.tbl { width:100%; border-collapse:collapse; font-size:13px; }
 .toolbar { display:flex; gap:10px; align-items:center; margin:0 0 4px; flex-wrap:wrap; }
 .pagehead-right { display:flex; gap:22px; align-items:flex-start; }
 .pagehead-far { display:flex; flex-direction:column; gap:10px; align-items:flex-end; position:relative; }
-.upwrap { position:relative; text-align:right; }
+.upwrap { position:relative; display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
+.upby { font-size:11.5px; color:var(--ink-3); max-width:250px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .splitbtn { display:inline-flex; }
 .splitbtn .btn.primary { border-radius:999px 0 0 999px; }
 .splitbtn .btn.caret { border-radius:0 999px 999px 0; border-left:1px solid rgba(255,255,255,0.35); padding:8px 11px; }
@@ -586,7 +589,7 @@ table.tbl { width:100%; border-collapse:collapse; font-size:13px; }
 .upopt b { display:block; font-size:13px; color:var(--ink); font-weight:600; }
 .upopt span { display:block; font-size:11.5px; color:var(--ink-3); margin-top:2px; }
 .upmsg { color:var(--red); max-width:280px; margin-top:6px; }
-.uplinks { display:flex; gap:8px; margin-top:8px; justify-content:flex-end; }
+.uplinks { display:flex; gap:8px; margin-top:6px; justify-content:flex-end; }
 a.btn { text-decoration:none; }
 .attention { outline:2px solid var(--orange); outline-offset:2px; transition:outline 0.3s; }
 .audscore { text-align:right; }
