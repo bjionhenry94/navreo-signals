@@ -7627,7 +7627,7 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync",
-                     "/api/trigify-webhook"}
+                     "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 
 def _auth_secret() -> bytes:
@@ -7920,6 +7920,124 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+
+    # ── upload-gate reviews (lilly-upload-gate) — runs live in qa_gate_runs ──
+    def _qa_token_ok(self):
+        import hashlib
+        want = os.environ.get("SIGNAL_PULL_TOKEN") or KEYS.get("SIGNAL_PULL_TOKEN")
+        if not want:
+            srk = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+            want = hashlib.sha256((srk + ":signal-pull-v1").encode()).hexdigest()[:40] if srk else None
+        return bool(want) and self.headers.get("x-navreo-token") == want
+
+    def _qa_row(self, rid):
+        if not rid.replace("-", "").isalnum():
+            return None
+        rows = sb("GET", f"qa_gate_runs?id=eq.{rid}&select=*")
+        return rows[0] if isinstance(rows, list) and rows else None
+
+    def _qa_gate_get(self, path):
+        import qa_gate
+        from urllib.parse import parse_qs, urlparse
+        parts = path.strip("/").split("/")
+        if parts[:2] == ["api", "qa-gate"] and len(parts) == 3 and parts[2] == "receipts":
+            q = parse_qs(urlparse(self.path).query)
+            lid = (q.get("list_id") or [""])[0].strip()
+            camp = (q.get("campaign_id") or [""])[0].strip()
+            if not lid and not camp:
+                return self._json({"error": "list_id or campaign_id required"}, 400)
+            flt = f"list_id=eq.{lid}" if lid else f"campaign_id=eq.{camp}"
+            rows = sb("GET", f"qa_gate_runs?{flt}&select=id,created_at,campaign_id,"
+                             f"campaign_name,run,decisions&order=created_at.desc&limit=20")
+            if not isinstance(rows, list):
+                return self._json({"error": "db unavailable"}, 503)
+            out = []
+            for r in rows:
+                dec = r.get("decisions") or []
+                up = next((x for x in dec if x.get("action") == "upload"), None)
+                out.append({"id": r["id"], "created_at": r["created_at"],
+                            "campaign_name": r.get("campaign_name"),
+                            "rows_in": (r.get("run") or {}).get("rows_in"),
+                            "flags": len((r.get("run") or {}).get("flags") or []),
+                            "gate": qa_gate.gate_state(r["run"], dec),
+                            "upload": ({"mode": up["mode"], "by": up.get("by"), "at": up.get("at")}
+                                       if up else None),
+                            "url": f"/qa-gate/{r['id']}"})
+            return self._json({"receipts": out})
+        if parts[0] == "qa-gate" and len(parts) == 2:
+            row = self._qa_row(parts[1])
+            if not row:
+                return self._json({"error": "run not found"}, 404)
+            html = qa_gate.render(row["run"], row.get("decisions") or [], live=True,
+                                  api_base=f"/api/qa-gate/{parts[1]}")
+            data = html.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if parts[:2] == ["api", "qa-gate"] and len(parts) == 4:
+            rid, tail = parts[2], parts[3]
+            row = self._qa_row(rid)
+            if not row:
+                return self._json({"error": "run not found"}, 404)
+            run, dec = row["run"], row.get("decisions") or []
+            if tail == "state":
+                state, dropped, _ = qa_gate.resolve(run, dec)
+                return self._json({"decisions": dec, "gate": qa_gate.gate_state(run, dec),
+                                   "open": sum(1 for s2, _ in state.values() if s2 == "open"),
+                                   "dropped": sorted(dropped),
+                                   "upload": next((x for x in dec if x.get("action") == "upload"), None)})
+            if tail == "rows":
+                return self._json(qa_gate.working_rows(run, dec))
+        return self._json({"error": "not found"}, 404)
+
+    def _qa_gate_post(self, path):
+        import qa_gate, datetime
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 8_000_000:
+            return self._json({"error": "payload too large"}, 413)
+        try:
+            body = json.loads(self.rfile.read(length).decode() or "{}")
+        except ValueError:
+            return self._json({"error": "invalid JSON body"}, 400)
+        if path == "/api/qa-gate/runs":
+            if not self._qa_token_ok():
+                return self._json({"error": "unauthorized"}, 401)
+            run = body.get("run")
+            if not isinstance(run, dict) or "flags" not in run or "results" not in run:
+                return self._json({"error": "body.run must be a gate run object (flags+results)"}, 400)
+            row = {"campaign_id": str((run.get("campaign") or {}).get("id") or ""),
+                   "campaign_name": (run.get("campaign") or {}).get("name"),
+                   "list_id": body.get("list_id"), "run": run, "decisions": []}
+            res = sb("POST", "qa_gate_runs", row, prefer="return=representation")
+            if not isinstance(res, list) or not res:
+                return self._json({"error": "db write failed"}, 503)
+            rid = res[0]["id"]
+            log_activity(path, {"campaign": row["campaign_name"], "rows": run.get("rows_in")},
+                         action="create", entity="qa_gate_run", entity_id=str(rid))
+            return self._json({"ok": True, "id": rid, "url": f"/qa-gate/{rid}"})
+        parts = path.strip("/").split("/")
+        if parts[:2] == ["api", "qa-gate"] and len(parts) == 4:
+            rid, action = parts[2], parts[3]
+            row = self._qa_row(rid)
+            if not row:
+                return self._json({"error": "run not found"}, 404)
+            status, payload, newdec = qa_gate.apply_action(
+                row["run"], row.get("decisions") or [], action, body)
+            if newdec is not None:
+                res = sb("PATCH", f"qa_gate_runs?id=eq.{rid}",
+                         {"decisions": newdec,
+                          "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+                if action == "upload":
+                    up = next((x for x in newdec if x.get("action") == "upload"), {})
+                    log_activity(path, {"mode": up.get("mode"), "by": up.get("by")},
+                                 action="upload", entity="qa_gate_run", entity_id=str(rid))
+            return self._json(payload, status)
+        return self._json({"error": "not found"}, 404)
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
@@ -7934,9 +8052,13 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path.startswith("/api/qa-gate/") and self._qa_token_ok():
+            return self._qa_gate_get(path)
         if path not in _AUTH_PUBLIC_GET and not path.startswith(_AUTH_PUBLIC_GET_PREFIX):
             if not self._gate(path):
                 return
+        if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
+            return self._qa_gate_get(path)
         if path == "/api/cron/last-run":  # observability: latest scheduled batch-pull summary
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -8187,8 +8309,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json_with_cookie(
                 {"ok": True, "email": email},
                 _session_cookie(_mint_session(email), AUTH_SESSION_DAYS * 86400))
+        if path.startswith("/api/qa-gate/") and path != "/api/qa-gate/runs" and self._qa_token_ok():
+            return self._qa_gate_post(path)
         if path not in _AUTH_PUBLIC_POST and not self._gate(path):
             return
+        if path.startswith("/api/qa-gate/"):
+            return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks

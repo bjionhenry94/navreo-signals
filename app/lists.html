@@ -623,6 +623,7 @@ function openRowMenu(ev, listId) {
   const pop = document.createElement("div");
   pop.className = "popover";
   pop.innerHTML = `
+    <button class="p-item" onclick="closeAnyPopover();openQaReceipts('${esc(listId)}')">QA receipts…</button>
     <button class="p-item" onclick="closeAnyPopover();openMoveModal('${esc(listId)}')">Move to folder…</button>
     <button class="p-item" onclick="closeAnyPopover();downloadListCsv('${esc(listId)}')">Download CSV</button>
     <button class="p-item" onclick="closeAnyPopover();confirmDeleteListById('${esc(listId)}')">Delete list…</button>`;
@@ -1629,6 +1630,46 @@ window.addEventListener("hashchange", route);
   await loadListsIndex();
   route();
 })();
+</script>
+
+<div class="overlay" id="qaReceiptsOverlay" style="display:none"><div class="modal" style="width:560px">
+  <div class="modal-h"><h3>QA receipts</h3></div>
+  <div class="modal-b" id="qaReceiptsBody" style="padding-bottom:16px"></div>
+  <div class="modal-f"><button class="btn" onclick="document.getElementById('qaReceiptsOverlay').style.display='none'">Close</button></div>
+</div></div>
+<script>
+async function openQaReceipts(listId) {
+  const ov = document.getElementById("qaReceiptsOverlay");
+  const body = document.getElementById("qaReceiptsBody");
+  body.innerHTML = '<div class="muted" style="font-size:13px">Loading…</div>';
+  ov.style.display = "flex";
+  try {
+    const r = await fetch(`/api/qa-gate/receipts?list_id=${encodeURIComponent(listId)}`, { cache: "no-store" });
+    const d = await r.json();
+    const rs = d.receipts || [];
+    if (!rs.length) {
+      body.innerHTML = '<div class="muted" style="font-size:13px">No QA gate runs recorded for this list yet. Every Smartlead upload goes through the upload gate — receipts appear here once this list has been gated.</div>';
+      return;
+    }
+    body.innerHTML = rs.map(x => {
+      const up = x.upload
+        ? (x.upload.mode === "forced"
+            ? `<span style="color:#8F6600;font-weight:600">Force-uploaded ⚠</span> by ${esc(x.upload.by || "?")}`
+            : `<span style="color:#2E7D5B;font-weight:600">Upload approved ✓</span> by ${esc(x.upload.by || "?")}`)
+        : `<span class="muted">no upload decision yet</span>`;
+      return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:10px;font-size:13px">
+        <div style="display:flex;justify-content:space-between;gap:10px">
+          <b>${esc(x.campaign_name || x.campaign_id || "campaign")}</b>
+          <span class="muted">${esc((x.created_at || "").slice(0, 16).replace("T", " "))}</span>
+        </div>
+        <div style="margin-top:4px">${x.rows_in ?? "?"} rows · ${x.flags} flags · gate ${esc(x.gate)} · ${up}</div>
+        <a href="${esc(x.url)}" target="_blank" style="font-size:12px">Open review page →</a>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    body.innerHTML = '<div class="modal-err">Couldn\u2019t load receipts \u2014 try again.</div>';
+  }
+}
 </script>
 </body>
 </html>
