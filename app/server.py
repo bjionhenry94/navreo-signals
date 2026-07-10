@@ -7401,6 +7401,33 @@ def _heyreach_sync_bg():
         _HEYREACH_SYNC_LOCK.release()
 
 
+# ── Smartlead mailbox → Supabase daily sweep (pg_cron → pg_net → POST
+# /api/cron/mailbox-sync). Was a render.yaml cron job, but this service isn't
+# Blueprint-managed so that job never existed in Render — it ran exactly once
+# (the manual 2026-07-08 test) and then never again. Same fix as the signal
+# autopull: schedule it through the mechanism that provably fires here.
+_MAILBOX_SYNC_LOCK = threading.Lock()
+
+
+def _mailbox_sync_bg():
+    if not _MAILBOX_SYNC_LOCK.acquire(blocking=False):
+        return  # a prior sweep is still running — skip this one
+    try:
+        import sync_mailboxes  # lazy: circular-safe (module imports server)
+        sync_mailboxes.main()
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/cron/mailbox-sync",
+            "action": "mailbox_sync_done", "entity": "mailboxes"})
+    except Exception as e:  # noqa: BLE001 — record, never crash the thread
+        print(f"[mailbox-sync] FAILED: {e}", file=sys.stderr)
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/cron/mailbox-sync",
+            "action": "mailbox_sync_failed", "entity": "mailboxes",
+            "payload": {"error": str(e)[:300]}})
+    finally:
+        _MAILBOX_SYNC_LOCK.release()
+
+
 # ── HTTP plumbing ────────────────────────────────────────────────────────
 
 ROUTES = {
@@ -7681,7 +7708,7 @@ AUTH_SESSION_DAYS = 30
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login",
-                     "/api/cron/pull-all", "/api/cron/heyreach-sync",
+                     "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 
@@ -8386,7 +8413,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
-        if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync"):
+        if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
             # and the lock does not nest.
@@ -8404,6 +8431,12 @@ class Handler(SimpleHTTPRequestHandler):
             # timeout, so kick to a background thread and return immediately.
             # Pull summaries land in signal_cron_runs; HeyReach sync summaries
             # in app_activity_log (actor='heyreach_sync').
+            if path == "/api/cron/mailbox-sync":
+                if _MAILBOX_SYNC_LOCK.locked():
+                    return self._json({"ok": True, "started": False, "busy": True}, 200)
+                log_activity(path, actor="cron", action="sync", entity="mailboxes")
+                threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/heyreach-sync":
                 if _HEYREACH_SYNC_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
