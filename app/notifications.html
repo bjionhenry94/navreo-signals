@@ -266,9 +266,20 @@
 /* Section 7 variant breakdown table (inside the Why-expander) */
 table.var-tbl { min-width: 480px; }
 table.var-tbl td, table.var-tbl th { white-space: nowrap; }
-table.var-tbl .var-angle { white-space: normal; max-width: 320px; }
+table.var-tbl .var-angle { white-space: normal; max-width: 320px;
+  /* clamp long angle summaries so rows stay one glance tall - the full text
+     lives in the sequence itself, this column is only a reminder */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 9 columns crush each other under .tbl's shared 560px floor and the angle
+   column ends up wrapping 8+ lines tall - let this table scroll instead */
+.table-scroll table.var-tbl { min-width: 820px; }
 tr.var-zero { background: var(--amber-bg); }
 tr.var-disabled { opacity: 0.55; text-decoration: line-through; }
+.var-status { font-size: 12px; white-space: nowrap; }
+.var-status-on { color: var(--green); }
+.var-status-off { color: var(--ink-3); }
+/* the status word itself must stay readable on struck-through rows */
+tr.var-disabled .var-status { text-decoration: none; display: inline-block; }
 tr.var-failing td.var-flagcell { color: var(--red); }
 tr.var-winner td.var-flagcell { color: var(--green); }
 .var-note { font-size: 12px; color: var(--ink-3); margin: 6px 0 0; }
@@ -1171,9 +1182,21 @@ function variantsTableHTML(n) {
           : `${v.distribution_pct}%`)
       : "–";
     const meetings = (v.meetings === null || v.meetings === undefined) ? "–" : fmt(v.meetings);
+    // Online = still receiving traffic. Off covers both ways a variant stops:
+    // disabled in Smartlead (deleted, or split turned to 0 after sending) and
+    // a split that was never configured (Bug A). The strikethrough alone was
+    // too subtle to read across a long table.
+    const off = flags.includes("disabled") || flags.includes("zero_distribution");
+    const offWhy = flags.includes("zero_distribution")
+      ? "0% split, never configured (Bug A)"
+      : "Disabled in Smartlead - no longer receiving traffic";
+    const statusCell = off
+      ? `<span class="var-status var-status-off jg" title="${esc(offWhy)}">○ Off</span>`
+      : `<span class="var-status var-status-on jg" title="Live - currently receiving traffic">● Online</span>`;
     return `<tr class="${rowCls.join(" ")}">
       <td>Email ${esc(String(v.email ?? "?"))}</td>
       <td>${esc(v.variant || "–")}</td>
+      <td>${statusCell}</td>
       <td class="var-flagcell">${splitCell}</td>
       <td>${fmt(v.sent)}</td>
       <td>${fmt(v.replies)}</td>
@@ -1183,7 +1206,7 @@ function variantsTableHTML(n) {
     </tr>`;
   }).join("");
   return `<div class="table-scroll"><table class="tbl var-tbl">
-    <thead><tr><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th>Split %</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th></tr></thead>
+    <thead><tr><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th><span class="jg" title="Whether this variant is still receiving traffic in Smartlead.">Status</span></th><th>Split %</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 
