@@ -1208,9 +1208,9 @@ function variantsTableHTML(n) {
       ? "Recommendation: get rid of this variant - 800+ sends without earning its keep"
       : (flags.includes("winner") ? "Recommendation: keep - this variant is converting" : "");
     return `<tr class="${rowCls.join(" ")}"${rowTitle ? ` title="${esc(rowTitle)}"` : ""}>
+      <td>${statusCell}</td>
       <td>Email ${esc(String(v.email ?? "?"))}</td>
       <td>${esc(v.variant || "–")}</td>
-      <td>${statusCell}</td>
       <td class="var-flagcell">${splitCell}</td>
       <td>${fmt(v.sent)}</td>
       <td>${fmt(v.replies)}</td>
@@ -1225,7 +1225,7 @@ function variantsTableHTML(n) {
     ? `<div class="var-key small muted"><s>Struck through</s> = our recommendation to get rid of that variant. Status shows what is actually live right now.</div>`
     : "";
   return `<div class="table-scroll"><table class="tbl var-tbl">
-    <thead><tr><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th><span class="jg" title="Whether this variant is still receiving traffic in Smartlead.">Status</span></th><th>Split %</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th></tr></thead>
+    <thead><tr><th><span class="jg" title="Whether this variant is still receiving traffic in Smartlead.">Status</span></th><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th>Split %</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th></tr></thead>
     <tbody>${rows}</tbody></table></div>${keyLine}`;
 }
 
