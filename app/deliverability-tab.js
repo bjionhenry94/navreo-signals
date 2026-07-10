@@ -994,6 +994,13 @@
       DATA.mgr.batches = (r && Array.isArray(r.batches)) ? r.batches : null;
       DATA.mgr.total = r ? r.total : null;
       DATA.mgr.truncated = !!(r && r.truncated);
+      // Live rows just landed — drop selections referencing emails not in them
+      // (e.g. sample-roster phantoms selected before live data loaded), so a
+      // bulk action can never fire against mailboxes that don't exist.
+      if (UI.mgr.sel && UI.mgr.sel.size) {
+        const have = new Set(DATA.mgr.rows.map((x) => x.email));
+        UI.mgr.sel = new Set([...UI.mgr.sel].filter((e) => have.has(e)));
+      }
       if (dlvSubtab === "manager") paintPage(); // refresh selector counts + rows
     }).catch(() => {
       DATA.mgr.pendingKey = null; DATA.mgr.loading = false; DATA.mgr.error = true;
@@ -1084,9 +1091,9 @@
       rested: A.inboxRows.filter((r) => r.kind === "ok" && r.rested).length,
       sending: A.inboxRows.filter((r) => r.kind === "ok" && r.cap > 0).length,
     };
-    if (A._live && DATA.mgr && DATA.mgr.counts) inboxCounts = Object.assign({}, inboxCounts, DATA.mgr.counts);
+    if (isLive() && DATA.mgr && DATA.mgr.counts) inboxCounts = Object.assign({}, inboxCounts, DATA.mgr.counts);
     let inboxBatches = Object.entries(groupCount(A.inboxRows, (r) => (r.tags || [])[0] || "(no batch)")).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
-    if (A._live && DATA.mgr && Array.isArray(DATA.mgr.batches)) inboxBatches = DATA.mgr.batches.slice();
+    if (isLive() && DATA.mgr && Array.isArray(DATA.mgr.batches)) inboxBatches = DATA.mgr.batches.slice();
     const dhBatches = Object.entries(groupCount(dhRows.flatMap((d) => (d.batches || []).map((b) => ({ b }))), (x) => x.b)).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
 
     const signatureCount = A.signature.missing.length + A.signature.mismatch.length;
