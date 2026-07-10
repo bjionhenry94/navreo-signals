@@ -600,7 +600,7 @@ function setupChartTooltip(wrap) {
     // Resume: an interrupted verification can be continued on demand instead of
     // waiting for the next server restart's auto-resume. Hidden when that
     // campaign is already being verified again (no duplicate runs).
-    const resumable = status === "interrupted" && job.kind === "verify" && !job.dry_run && !campaignBusy;
+    const resumable = status === "interrupted" && (job.kind === "verify" || job.kind === "remove_bad") && !job.dry_run && !campaignBusy;
     const resumeBtn = resumable
       ? `<button type="button" class="nj-resume-btn" data-jid="${jEsc(job.id)}">Resume</button>` : "";
     let progress = "";

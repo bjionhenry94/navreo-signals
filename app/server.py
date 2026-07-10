@@ -3405,24 +3405,31 @@ def resume_job(jid: str):
     job = _job_get(jid)
     if not job:
         return {"error": "not_found"}, 404
-    if job.get("kind") != "verify" or job.get("dry_run"):
+    if job.get("kind") not in ("verify", "remove_bad") or job.get("dry_run"):
         return {"error": "not_resumable",
-                "message": "Only an interrupted verification can be resumed."}, 409
+                "message": "Only an interrupted verification or removal can be resumed."}, 409
     if job.get("status") not in ("interrupted", "failed"):
         return {"error": "not_interrupted",
                 "message": "This task isn't interrupted — nothing to resume."}, 409
     campaign_id = job.get("campaign_id")
     if _campaign_has_active_job(campaign_id):
         return {"error": "already_active",
-                "message": "This campaign is already being verified — no need to resume."}, 409
-    # Manual resume gets a fresh auto-resume budget (reset to 0) since the user
-    # explicitly asked for it; the empty-targets path guarantees it still can't
-    # loop forever on a campaign with nothing left to check.
-    new_job = _reenqueue_verify(job, 0)
+                "message": "This campaign already has a task running — no need to resume."}, 409
+    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    if job.get("kind") == "remove_bad":
+        # A remove resumes by re-reading the still-pending bad leads from the
+        # durable table — fast, no re-fetch.
+        new_job = _new_job("remove_bad", job.get("label") or f"Remove bad leads: campaign {campaign_id}",
+                           campaign_id, dry_run=False)
+        _enqueue_job(_remove_job_worker, new_job, (new_job, campaign_id, sl_key, False))
+    else:
+        # Manual resume gets a fresh budget; the empty-targets path guarantees it
+        # still can't loop forever on a campaign with nothing left to check.
+        new_job = _reenqueue_verify(job, 0)
     try:
         log_activity("/api/jobs/resume",
                      payload={"campaign_id": campaign_id, "old_job_id": jid,
-                              "new_job_id": new_job["id"]},
+                              "new_job_id": new_job["id"], "kind": job.get("kind")},
                      actor="deliverability", action="verify_resume_manual",
                      entity="campaign", entity_id=campaign_id)
     except Exception:  # noqa: BLE001
@@ -3824,12 +3831,48 @@ def _verify_state_upsert(campaign_id, **fields):
        prefer="resolution=merge-duplicates,return=minimal")
 
 
+def _store_bad_leads(campaign_id, bad_details: list):
+    """Persist a verify's confirmed-bad leads (id + email) so removal is a direct
+    delete instead of re-paginating the whole campaign. Replaces this campaign's
+    prior set — a fresh verify supersedes the last. Best-effort."""
+    cid = str(campaign_id)
+    sb("DELETE", f"verify_bad_leads?campaign_id=eq.{cid}")
+    rows = [{"campaign_id": cid, "lead_id": str(d["lead_id"]), "email": d.get("email"),
+             "replied": bool(d.get("replied")), "removed": False}
+            for d in bad_details if d.get("lead_id") is not None]
+    for i in range(0, len(rows), 500):  # chunk to keep each POST light
+        sb("POST", "verify_bad_leads?on_conflict=campaign_id,lead_id", rows[i:i + 500],
+           prefer="resolution=merge-duplicates,return=minimal")
+
+
+def _pending_bad_leads(campaign_id) -> list:
+    """The campaign's still-in-the-queue bad leads (removed=false, not replied)."""
+    cid = str(campaign_id)
+    rows = sb_get_all(f"verify_bad_leads?campaign_id=eq.{cid}&removed=eq.false"
+                      f"&replied=eq.false&select=lead_id,email,replied")
+    return [{"lead_id": r["lead_id"], "email": r.get("email"), "replied": False}
+            for r in (rows or [])]
+
+
+def _mark_bad_removed(campaign_id, lead_id):
+    sb("PATCH", f"verify_bad_leads?campaign_id=eq.{str(campaign_id)}&lead_id=eq.{lead_id}",
+       {"removed": True, "removed_at": _now_iso()})
+
+
+def _pending_bad_count(campaign_id) -> int:
+    rows = sb("GET", f"verify_bad_leads?campaign_id=eq.{str(campaign_id)}"
+                     f"&removed=eq.false&replied=eq.false&select=lead_id")
+    return len(rows or [])
+
+
 def _delete_bad_leads(job: dict, campaign_id, sl_key: str, dry_run: bool, candidates: list):
     """Shared delete loop used by both the standalone remove job and verify's
     inline auto-remove tail. Reply-guards (skips) anyone Smartlead has
-    categorised an inbound event for. Extends job["progress"]["total"] by the
-    delete count so an auto-remove tail shows up in the same progress bar as
-    the verify pass it followed. Returns (deleted, guarded, failed, removed_emails, cancelled)."""
+    categorised an inbound event for. Marks each lead removed=true in
+    verify_bad_leads as it goes, so an interrupted remove resumes from the
+    still-pending rows. Extends job["progress"]["total"] by the delete count so
+    an auto-remove tail shows up in the same progress bar as the verify pass it
+    followed. Returns (deleted, guarded, failed, removed_emails, cancelled)."""
     guarded = [d for d in candidates if d.get("replied")]
     to_delete = [d for d in candidates if not d.get("replied")]
     with JOBS_LOCK:
@@ -3870,6 +3913,7 @@ def _delete_bad_leads(job: dict, campaign_id, sl_key: str, dry_run: bool, candid
             if ok:
                 deleted.append(d)
                 removed_emails.append(d["email"])
+                _mark_bad_removed(campaign_id, d["lead_id"])  # durable: survives a restart
             else:
                 failed += 1
             time.sleep(0.45)  # ~150 req/min ceiling on the Smartlead delete endpoint
@@ -4105,6 +4149,9 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
         if mode == "mv" and not lm_key:
             counts["listmint_recheck"] = "skipped (LISTMINT_API_KEY not set)"
         VERIFY_RESULTS[str(campaign_id)] = details
+        # Persist the bad leads (id + email) so a later Remove is a direct delete,
+        # never a full-campaign re-fetch (which is slow and restart-prone).
+        _store_bad_leads(campaign_id, [d for d in details if d["verdict"] == "bad"])
         with JOBS_LOCK:
             job["counts"] = {"total": len(targets), **counts, "bad_emails": bad_emails}
 
@@ -4126,7 +4173,10 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
             if not r_cancelled and deleted:
                 VERIFY_RESULTS.pop(str(campaign_id), None)
 
-        bad_remaining = counts.get("bad", 0) - (removal["removed"] if removal else 0)
+        # bad_remaining = the still-removable bad leads on record (unremoved,
+        # not reply-guarded) — read straight from the durable table so it stays
+        # true even after a restart, and reflects failed deletes correctly.
+        bad_remaining = _pending_bad_count(campaign_id)
         _verify_state_upsert(campaign_id, name=job.get("name") or job.get("label"),
                              last_verify_at=datetime.now(timezone.utc).isoformat(),
                              last_counts=job["counts"], bad_remaining=max(0, bad_remaining))
@@ -4150,22 +4200,13 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
 def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
     _job_started(job)
     try:
-        details = VERIFY_RESULTS.get(str(campaign_id))
-        note = None
-        if details is None:
-            # No in-memory session result (fresh process, or never verified
-            # this session) — rebuild candidates from the durable ledger
-            # rather than refusing. bad = anything recorded 'bad' in the
-            # last _VERIFY_TTL_DAYS for this lead's email.
-            leads = _fetch_all_smartlead_leads(campaign_id, sl_key)
-            targets = [ld for ld in leads if not ld["contacted"]]
-            cache = _cached_verdicts([ld["email"] for ld in targets])
-            details = [{"lead_id": ld["lead_id"], "email": ld["email"],
-                       "verdict": (cache.get(ld["email"].lower()) or {}).get("verdict") or "unknown",
-                       "replied": ld["replied"]} for ld in targets]
-            if not any(d["verdict"] == "bad" for d in details):
-                note = "no confirmed-bad leads on record for this campaign"
-        candidates = [d for d in details if d["verdict"] == "bad"]
+        # Candidates come straight from the durable verify_bad_leads table — the
+        # bad leads a prior verify already found and stored, with their lead_ids.
+        # No full-campaign re-fetch (that was slow enough to get interrupted on a
+        # big campaign). An interrupted remove just re-reads the still-pending
+        # rows next time, so it resumes naturally.
+        candidates = _pending_bad_leads(campaign_id)
+        note = None if candidates else "no confirmed-bad leads on record for this campaign"
         deleted, guarded, failed, removed_emails, cancelled = _delete_bad_leads(
             job, campaign_id, sl_key, dry_run, candidates)
         # dry_run: "deleted" reports what WOULD be removed (nothing actually was) -
@@ -4203,7 +4244,7 @@ def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
                 merged_counts = {**(prev.get("last_counts") or {}), "removed": len(deleted),
                                  "guarded": len(guarded), "failed_deletes": failed}
                 _verify_state_upsert(campaign_id, name=prev.get("name"),
-                                     bad_remaining=max(0, len(candidates) - len(deleted)),
+                                     bad_remaining=_pending_bad_count(campaign_id),
                                      last_counts=merged_counts)
         _job_finished(job, "done")
     except Exception as e:  # noqa: BLE001
@@ -4257,10 +4298,17 @@ def api_verify_remove(p: dict):
     campaign_id = p.get("campaign_id")
     if not campaign_id:
         return {"error": "missing_campaign_id"}, 400
-    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
     dry_run = bool(p.get("dry_run"))
-    job = _new_job("remove_bad", f"Remove bad leads: campaign {campaign_id}", campaign_id,
-                  dry_run=dry_run)
+    # Dedup: a double-click (or a second tab) must not spawn a second remove job
+    # for the same campaign — the queue would run them back to back, the second
+    # finding everything already gone. A real dry-run preview is exempt.
+    if not dry_run and _campaign_has_active_job(campaign_id):
+        return {"error": "already_active",
+                "message": "This campaign already has a task running — wait for it to finish."}, 409
+    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    name = (p.get("name") or "").strip() or None
+    label = f"Remove bad leads: {name or ('campaign ' + str(campaign_id))}"
+    job = _new_job("remove_bad", label, campaign_id, dry_run=dry_run)
     _enqueue_job(_remove_job_worker, job, (job, campaign_id, sl_key, dry_run))
     return {"job_id": job["id"]}, 202
 
