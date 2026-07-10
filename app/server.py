@@ -7438,9 +7438,50 @@ ROUTES = {
 # POST /api/deliverability/_audit/refresh only when it's stale/missing. All other
 # /api/deliverability/* calls (inboxes, domain-health, actions…) still stream
 # through the plain _proxy_deliverability() forwarder.
-_DELIV_AUDIT = {"blob": None, "ts": 0.0, "running": False, "error": None}
+_DELIV_AUDIT = {"blob": None, "ts": 0.0, "running": False, "error": None, "restore_tried": False}
 _DELIV_AUDIT_LOCK = threading.Lock()
 _DELIV_AUDIT_TTL_S = 3600  # serve a cached audit up to 1h old before auto-refreshing
+
+
+def _deliv_audit_persist(blob):
+    """Best-effort: mirror the finished audit blob to Supabase so it survives
+    process restarts. Deploys restart the process and wiped the in-memory
+    cache 8+ times on 2026-07-10 alone (two sessions shipping), each time
+    costing a ~5-min re-audit and a 'no live data' page. sb() is already
+    best-effort + retry-once, so an outage can never break the audit path."""
+    from datetime import datetime, timezone
+    try:
+        sb("POST", "deliverability_audit_cache?on_conflict=id",
+           {"id": "audit", "blob": blob, "ts": datetime.now(timezone.utc).isoformat()},
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001
+        print(f"[deliv] WARNING audit persist failed: {e}", file=sys.stderr)
+
+
+def _deliv_audit_restore():
+    """One attempt per process lifetime: if the in-memory cache is empty (fresh
+    process), pull the last persisted blob so the page has real data instantly
+    instead of a 'no live data' gap until a ~5-min audit completes. Stale-ness
+    still applies — the normal TTL logic decides whether to refresh."""
+    with _DELIV_AUDIT_LOCK:
+        if _DELIV_AUDIT["restore_tried"] or _DELIV_AUDIT["blob"] is not None or _deliv_mock_on():
+            return
+        _DELIV_AUDIT["restore_tried"] = True
+    from datetime import datetime
+    try:
+        rows = sb("GET", "deliverability_audit_cache?id=eq.audit&select=blob,ts", prefer="return=representation")
+        if rows and isinstance(rows, list) and rows[0].get("blob"):
+            ts = rows[0].get("ts") or ""
+            try:
+                epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except Exception:  # noqa: BLE001
+                epoch = 0.0
+            with _DELIV_AUDIT_LOCK:
+                if _DELIV_AUDIT["blob"] is None:  # a live run may have landed meanwhile
+                    _DELIV_AUDIT.update(blob=rows[0]["blob"], ts=epoch)
+            print(f"[deliv] audit blob restored from Supabase (stored {ts})", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[deliv] WARNING audit restore failed: {e}", file=sys.stderr)
 
 
 def _deliv_mock_on() -> bool:  # DELIV_MOCK
@@ -7498,6 +7539,7 @@ def _deliv_audit_run_bg():
         _deliv_fix_resting_due((blob or {}).get("domainHealth"))
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
+        _deliv_audit_persist(blob)  # survives the next deploy/restart
         _snapshot_from_blob(blob)  # daily fleet-count row for the trends header
     except Exception as e:  # noqa: BLE001 — record the failure for the UI; never crash the thread
         with _DELIV_AUDIT_LOCK:
@@ -7507,6 +7549,7 @@ def _deliv_audit_run_bg():
 def _deliv_audit_start(force=False):
     """Kick a background refresh unless one's already running (or cache is fresh
     and not forced). Returns a small state dict for the caller."""
+    _deliv_audit_restore()  # fresh process: recover the last persisted blob first
     with _DELIV_AUDIT_LOCK:
         if _DELIV_AUDIT["running"]:
             return {"started": False, "running": True}
@@ -8262,6 +8305,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/deliverability/_audit":
             # Cached live-audit blob (instant). The tab polls this while a
             # background run is in flight; it triggers the run via the refresh POST.
+            _deliv_audit_restore()  # fresh process: serve the persisted blob instantly
             with _DELIV_AUDIT_LOCK:
                 b, ts, running, err = (_DELIV_AUDIT["blob"], _DELIV_AUDIT["ts"],
                                        _DELIV_AUDIT["running"], _DELIV_AUDIT["error"])
