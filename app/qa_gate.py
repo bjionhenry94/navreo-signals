@@ -122,6 +122,7 @@ def normalise_run(run):
 
 def resolve(d, decisions):
     """Map decisions onto flags. Returns (state_by_flag_id, dropped_emails, fixed_lookup)."""
+    d = normalise_run(d)
     dropped = {x["email"] for x in decisions if x["action"] == "dropped"}
     fixed = {(x["email"], x["field"]): x for x in decisions if x["action"] == "fixed"}
     ov = {x["id"]: x for x in decisions if x["action"] == "overridden"}
@@ -143,6 +144,7 @@ def resolve(d, decisions):
 
 def working_rows(d, decisions):
     """The corrected upload list: drops removed, fixes applied."""
+    d = normalise_run(d)
     dropped = {x["email"] for x in decisions if x["action"] == "dropped"}
     fixes = [x for x in decisions if x["action"] == "fixed"]
     rows = [dict(r) for r in d.get("rows", []) if r["email"] not in dropped]
