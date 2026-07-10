@@ -772,7 +772,45 @@
       // live-only aggregates that derive() prefers when A._live is set:
       "blocked", "blockedReal", "blockedSoft", "reasons",
     ];
-    keep.forEach((k) => { if (blob[k] != null) A[k] = blob[k]; });
+    // Silent-mock-leak fix: a keep-field the blob does NOT carry used to
+    // survive as mock demo rows and present as real findings (e.g. a
+    // fabricated "14 signature issues" card naming mailboxes that don't
+    // exist in the workspace). Now the blob value wins; anything the blob
+    // omits is emptied to a same-shaped zero value and recorded in
+    // A._liveMissing so the to-do/tile layer claims nothing for it — neither
+    // "N issues" nor "all clear". Exceptions: sigTemplates is fix-modal
+    // config (not a finding) and date is cosmetic, so the mock fallback
+    // stays; reminders/history/acks/delisting are session/user data, not
+    // audit findings, so they carry over from the previous live S.A instead
+    // of being wiped on every blob application.
+    const mockOk = { sigTemplates: true, date: true };
+    const carryOver = { reminders: true, history: true, acks: true, delisting: true };
+    function emptyLike(v) {
+      if (Array.isArray(v)) return [];
+      if (typeof v === "number") return 0;
+      if (typeof v === "string") return "";
+      if (v && typeof v === "object") { const o = {}; Object.keys(v).forEach((k2) => { o[k2] = emptyLike(v[k2]); }); return o; }
+      return v;
+    }
+    A._liveMissing = [];
+    const prevLive = (S.A && S.A._live) ? S.A : null;
+    keep.forEach((k) => {
+      if (blob[k] != null) { A[k] = blob[k]; return; }
+      if (mockOk[k]) return;
+      if (carryOver[k]) {
+        if (prevLive) { A[k] = prevLive[k]; return; }
+        if (k === "reminders" && Array.isArray(DATA.liveReminders)) { A[k] = DATA.liveReminders; return; }
+        A[k] = emptyLike(A[k]);
+        return;
+      }
+      A[k] = emptyLike(A[k]);
+      A._liveMissing.push(k);
+    });
+    // Live-only aggregates absent from the mock base: default to explicit
+    // zeros so derive() never falls back to recomputing them from the mock
+    // inboxRows (which would resurrect fabricated blocked counts).
+    ["blocked", "blockedReal", "blockedSoft"].forEach((k) => { if (A[k] == null) A[k] = 0; });
+    if (!A.reasons || typeof A.reasons !== "object") A.reasons = {};
     // blacklist[] → blacklistRows[]: the live rows omit url/advice/cleared that
     // renderBlacklistRow expects, so synthesize them (Object.assign target-first
     // so any real backend field of the same name wins).
@@ -782,6 +820,9 @@
         advice: (b.ageDays != null && b.ageDays < 30) ? "REPLACE (young domain)" : "PAUSE + FIX",
         cleared: false,
       }, b));
+    } else {
+      A.blacklistRows = [];
+      A._liveMissing.push("blacklist");
     }
     // highbCamps[] → campaignsFlagged[] (drives the verify to-do + tile count).
     if (Array.isArray(blob.highbCamps)) {
@@ -790,6 +831,9 @@
         url: c.url || ("https://app.smartlead.ai/app/campaign/" + c.id + "/analytics"),
         bounce_pct: c.bounce_pct, sent: c.sent,
       }));
+    } else {
+      A.campaignsFlagged = [];
+      A._liveMissing.push("highbCamps");
     }
     // Per-reminder health isn't in the /run blob — an empty map keeps
     // renderReminderRow's `S.A.remHealth[r.id]` lookups returning undefined
@@ -831,7 +875,10 @@
     if (isLive()) {
       // Cheap live wins first: reminders paint before the cached/pending audit resolves.
       apiGet("reminders", { timeout: 20000 }).then((rem) => {
-        if (Array.isArray(rem)) { S.A.reminders = rem; saveState(); paintPage(); }
+        // DATA.liveReminders: kept so a blob application (mapRunBlob) that
+        // rebuilds S.A can restore the live reminders even when the blob
+        // itself doesn't carry them.
+        if (Array.isArray(rem)) { DATA.liveReminders = rem; S.A.reminders = rem; saveState(); paintPage(); }
       }).catch(() => {});
       if (S.A && S.A._live) {
         const age = Date.now() - (S.A._liveLoadedAt || 0);
@@ -2128,9 +2175,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      "✓ handled" chip, distinct from a manually-acked item), or null if the
      category fundamentally doesn't apply. Counts are read straight off S/D on
      every call, so the numbers can never go stale between actions. */
+  // True when the live audit blob didn't carry the data behind `k` (see
+  // mapRunBlob's _liveMissing) — the category then returns null: no issue
+  // claimed, but no false "all clear" either. Always false in sample mode,
+  // where the mock demo data is intentionally shown under the sample banner.
+  function liveMissing(k) {
+    return !!(S.A && S.A._live && Array.isArray(S.A._liveMissing) && S.A._liveMissing.indexOf(k) !== -1);
+  }
   function buildTodoItem(kind, D) {
     switch (kind) {
       case "blacklist": {
+        if (liveMissing("blacklist")) return null; // not measured by the live audit — claim nothing
         const total = S.A.blacklistRows.length; if (!total) return null;
         const actionable = S.A.blacklistRows.filter((r) => !r.cleared && (r.rested || 0) < r.mailboxes).length;
         if (!actionable) return { key: "blacklist", level: "red", count: 0, resolved: true, text: total + " domain(s) were on SURBL / Spamhaus blocklists — all now paused or cleared." };
@@ -2150,6 +2205,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           blacklistRows: S.A.blacklistRows };
       }
       case "blocked": {
+        if (liveMissing("blocked")) return null; // not measured by the live audit — claim nothing
         const n = D.blockedReal;
         if (!n) return { key: "blocked-real", level: "red", count: 0, resolved: true, text: "No mailboxes blocked by receiving providers right now." };
         return { key: "blocked-real", level: "red", count: n, short: "mailboxes blocked by providers", text: n + " mailbox(es) blocked by receiving providers (real blocks, not warmup noise)" + (D.blockedSoft ? " · +" + D.blockedSoft + " soft (no action)" : "") + ".", action: "Escalate to Hypertide with the domain list and blocked reasons.", hypertide: true };
@@ -2161,21 +2217,25 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // retired domains). recomputeTodos' existing red→yellow→note sort makes
       // the tiers also the display order.
       case "verify": {
+        if (liveMissing("highbCamps")) return null; // not measured by the live audit — claim nothing
         const n = D.uncleanedVerifyCamps.length;
         if (!n) return { key: "verify-campaigns", level: "yellow", count: 0, resolved: true, text: "All flagged campaigns have been re-verified and cleaned." };
         return { key: "verify-campaigns", level: "yellow", count: n, short: "low-reply campaigns need lead verification", text: n + " campaign(s) below 1% reply with elevated bounce — leads likely need re-verifying.", action: "Verify the remaining not-yet-contacted prospects on each (ListMint, or MillionVerifier → ListMint), then remove the confirmed-undeliverable ones.", verifyCamps: D.uncleanedVerifyCamps };
       }
       case "signatures": {
+        if (liveMissing("signature")) return null; // not measured by the live audit — claim nothing
         const n = D.signatureCount;
         if (!n) return { key: "signatures", level: "note", count: 0, resolved: true, text: "No signature issues — every mailbox has a matching signature." };
         return { key: "signatures", level: "note", count: n, text: n + " mailbox(es) missing a signature or with a name mismatch (" + S.A.signature.missing.length + " missing · " + S.A.signature.mismatch.length + " mismatch).", action: "Apply a signature to every OAuth mailbox missing one, or fix the mismatch.", sigCsv: true };
       }
       case "new-unprocessed": {
+        if (liveMissing("lifecycle")) return null; // not measured by the live audit — claim nothing
         const n = D.newCount;
         if (!n) return { key: "new-unprocessed", level: "note", count: 0, resolved: true, text: "No new mailboxes waiting to be tagged or added to a campaign." };
         return { key: "new-unprocessed", level: "note", count: n, text: n + " new mailbox(es) untagged or not yet in a campaign.", action: "Tag them and/or add the ones not yet assigned to a campaign.", newCsv: true };
       }
       case "warmup-notwarming": {
+        if (liveMissing("warmupConfig")) return null; // not measured by the live audit — claim nothing
         const n = S.A.warmupConfig.notWarming.length, w = S.A.warmupConfig.wrongSettings.length;
         if (!n && !w) return { key: "warmup-notwarming", level: "note", count: 0, resolved: true, text: "No warmup-configuration issues — every mailbox is warming correctly." };
         const bits = []; if (n) bits.push(n + " mailbox(es) with warmup off"); if (w) bits.push(w + " with wrong settings");
@@ -2187,6 +2247,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         return { key: "reminder-due", level: "note", count: n, text: n + " restore reminder(s) due today or overdue.", action: "Check warm-up health and either add back to a campaign or extend the reminder.", reminderDue: true };
       }
       case "retired-domains": {
+        if (liveMissing("lifecycle")) return null; // not measured by the live audit — claim nothing
         const n = D.retiredCount;
         if (!n) return { key: "retired-domains", level: "note", count: 0, resolved: true, text: "No fully-dead retired domains right now." };
         return { key: "retired-domains", level: "note", count: n, text: n + " fully-dead domain(s) with every mailbox retired.", action: "Remove these from Smartlead — they're not recoverable.", retiredCsv: true };
@@ -2197,6 +2258,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // (null/resolved when clean, an active card with a reused fix-action
       // flag when not) so recomputeTodos()/renderTodo() need no special-casing.
       case "smtp-imap": {
+        if (liveMissing("smtp") && liveMissing("imap")) return null; // not measured by the live audit — claim nothing
         const n = (S.A.smtp || 0) + (S.A.imap || 0);
         if (!n) return { key: "smtp-imap", level: "yellow", count: 0, resolved: true, text: "No SMTP/IMAP auth or sync errors right now." };
         // SMTP auth failures mean mailboxes silently not sending (red tier);
@@ -2207,6 +2269,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           _openManager: true };
       }
       case "auth-records": {
+        if (liveMissing("spfMiss") && liveMissing("dkimMiss") && liveMissing("dmarcMiss")) return null; // not measured — claim nothing
         const n = (S.A.spfMiss || 0) + (S.A.dkimMiss || 0) + (S.A.dmarcMiss || 0);
         // Panel fix #3 (DMARC posture): zero enforcement anywhere — every
         // domain with a DMARC record sits at p=none — is a genuine
@@ -2224,6 +2287,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           _openFleetTech: true };
       }
       case "sending-deviation": {
+        if (liveMissing("sendingDeviation")) return null; // not measured by the live audit — claim nothing
         const over = (S.A.sendingDeviation && S.A.sendingDeviation.over) || [];
         const under = (S.A.sendingDeviation && S.A.sendingDeviation.under) || [];
         const n = over.length + under.length;
@@ -2929,25 +2993,37 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         tile("Emails sent", fmtN(A.sent), "last 7 days across all campaigns", ""),
         replyTrendTile(A),
         bounceTrendTile(),
-        tile("Blacklisted domains", A.blacklistRows.length, A.blacklistRows.length ? "Spamhaus DBL / SURBL" : "clean", sevOf(A.blacklistRows.length === 0, false), A.blacklistRows.length ? "blacklist" : null, A.blacklistRows.length ? { act: "open-blacklist", label: "Manage ↓" } : null),
+        liveMissing("blacklist")
+          ? tile("Blacklisted domains", "—", "not measured by the live audit", "")
+          : tile("Blacklisted domains", A.blacklistRows.length, A.blacklistRows.length ? "Spamhaus DBL / SURBL" : "clean", sevOf(A.blacklistRows.length === 0, false), A.blacklistRows.length ? "blacklist" : null, A.blacklistRows.length ? { act: "open-blacklist", label: "Manage ↓" } : null),
         // Defect 5: this used to read the static seed value A.campLow, which
         // never moved even after a campaign got verified+cleaned — while the
         // to-do's "verify" card counts the exact same campaigns live off
         // D.uncleanedVerifyCamps. Read off the same derived value so the two
         // can never disagree, before OR after cleaning a campaign.
-        tile("Campaigns < 1% reply", D.uncleanedVerifyCamps.length + " of " + A.active, A.highb + " high-bounce", sevOf(D.uncleanedVerifyCamps.length === 0, true), null, null, "listed in Today's to-do with one-click verify"),
+        liveMissing("highbCamps")
+          ? tile("Campaigns < 1% reply", "—", "not measured by the live audit", "")
+          : tile("Campaigns < 1% reply", D.uncleanedVerifyCamps.length + " of " + A.active, A.highb + " high-bounce", sevOf(D.uncleanedVerifyCamps.length === 0, true), null, null, "listed in Today's to-do with one-click verify"),
         // Fix #6: this note used to say "warmup noise" — an incidental mention of
         // the word "warmup" that made the greedy JARGON_DICT resting/warmup entry
         // misfire "Sending paused while reputation recovers" under this totally
         // unrelated tile. Reworded (and the dictionary regex tightened) so neither
         // depends on the other to stay correct.
-        tile("Blocked (real)", D.blockedReal, D.blockedSoft ? "+" + D.blockedSoft + " soft bounces (no action needed)" : "hosting blocks → Hypertide", sevOf(D.blockedReal === 0, D.blockedReal < 20), D.blockedTotal ? "blocked" : null),
+        liveMissing("blocked")
+          ? tile("Blocked (real)", "—", "not measured by the live audit", "")
+          : tile("Blocked (real)", D.blockedReal, D.blockedSoft ? "+" + D.blockedSoft + " soft bounces (no action needed)" : "hosting blocks → Hypertide", sevOf(D.blockedReal === 0, D.blockedReal < 20), D.blockedTotal ? "blocked" : null),
       ],
       F: [
         warmupTile(D),
-        tile("New unprocessed", D.newCount, D.newCount + " new/untagged mailbox(es)", sevOf(D.newCount === 0, true), D.newCount ? "new-mailboxes" : null, D.newCount ? { act: "open-process-new", label: "Process…" } : null),
-        tile("Signature issues", D.signatureCount, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch", sevOf(D.signatureCount === 0, true), "signature", D.signatureCount ? { act: "open-sig-fix", label: "Fix…" } : null, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch"),
-        tile("Retired domains", D.retiredCount, D.retiredCount ? "all mailboxes dead → remove" : "none", sevOf(D.retiredCount === 0, false), D.retiredCount ? "retired" : null),
+        liveMissing("lifecycle")
+          ? tile("New unprocessed", "—", "not measured by the live audit", "")
+          : tile("New unprocessed", D.newCount, D.newCount + " new/untagged mailbox(es)", sevOf(D.newCount === 0, true), D.newCount ? "new-mailboxes" : null, D.newCount ? { act: "open-process-new", label: "Process…" } : null),
+        liveMissing("signature")
+          ? tile("Signature issues", "—", "not measured by the live audit", "")
+          : tile("Signature issues", D.signatureCount, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch", sevOf(D.signatureCount === 0, true), "signature", D.signatureCount ? { act: "open-sig-fix", label: "Fix…" } : null, A.signature.missing.length + " missing · " + A.signature.mismatch.length + " name-mismatch"),
+        liveMissing("lifecycle")
+          ? tile("Retired domains", "—", "not measured by the live audit", "")
+          : tile("Retired domains", D.retiredCount, D.retiredCount ? "all mailboxes dead → remove" : "none", sevOf(D.retiredCount === 0, false), D.retiredCount ? "retired" : null),
       ],
     };
     let html = `<div class="dlv-fleet-group"><div class="dlv-fleet-glabel">${groups.D}</div><div class="dlv-stat-grid">${tilesByGroup.D.join("")}</div></div>`;
@@ -3008,13 +3084,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // label (glossLabel, 8th arg), where the concept's full definition is
     // still one click away.
     const tiles = [
-      tile("SMTP / IMAP fails", A.smtp + " / " + A.imap, "auth / sync errors", sevOf(A.smtp === 0, A.smtp < 10), null, null, null, glossify("SMTP / IMAP fails")),
+      liveMissing("smtp") && liveMissing("imap")
+        ? tile("SMTP / IMAP fails", "—", "not measured by the live audit", "", null, null, null, glossify("SMTP / IMAP fails"))
+        : tile("SMTP / IMAP fails", A.smtp + " / " + A.imap, "auth / sync errors", sevOf(A.smtp === 0, A.smtp < 10), null, null, null, glossify("SMTP / IMAP fails")),
       // Hint renamed from "sending-domain auth" to spell out the record order
       // (SPF / DKIM / DMARC) so it maps 1:1 onto the "0 / 0 / 1" headline
       // instead of a reader having to guess which number is which record.
-      tile("Missing SPF/DKIM/DMARC", A.spfMiss + " / " + A.dkimMiss + " / " + A.dmarcMiss, "SPF / DKIM / DMARC missing", sevOf(A.spfMiss + A.dkimMiss + A.dmarcMiss === 0, true), null, null, null, glossify("Missing SPF/DKIM/DMARC")),
-      tile("Nameserver issues", A.noNS, "drift / broken zones", sevOf(A.noNS === 0, true), null, null, null, glossify("Nameserver issues")),
-      tile("DMARC enforcing", A.quarantine + " / " + A.reject, "quarantine / reject · " + A.none + " none of " + dmarcSum, "", null, null, null, glossify("DMARC enforcing")),
+      liveMissing("spfMiss") && liveMissing("dkimMiss") && liveMissing("dmarcMiss")
+        ? tile("Missing SPF/DKIM/DMARC", "—", "not measured by the live audit", "", null, null, null, glossify("Missing SPF/DKIM/DMARC"))
+        : tile("Missing SPF/DKIM/DMARC", A.spfMiss + " / " + A.dkimMiss + " / " + A.dmarcMiss, "SPF / DKIM / DMARC missing", sevOf(A.spfMiss + A.dkimMiss + A.dmarcMiss === 0, true), null, null, null, glossify("Missing SPF/DKIM/DMARC")),
+      liveMissing("noNS")
+        ? tile("Nameserver issues", "—", "not measured by the live audit", "", null, null, null, glossify("Nameserver issues"))
+        : tile("Nameserver issues", A.noNS, "drift / broken zones", sevOf(A.noNS === 0, true), null, null, null, glossify("Nameserver issues")),
+      liveMissing("quarantine") && liveMissing("reject")
+        ? tile("DMARC enforcing", "—", "not measured by the live audit", "", null, null, null, glossify("DMARC enforcing"))
+        : tile("DMARC enforcing", A.quarantine + " / " + A.reject, "quarantine / reject · " + A.none + " none of " + dmarcSum, "", null, null, null, glossify("DMARC enforcing")),
     ].join("");
     const open = (S.ui && S.ui.techOpen != null) ? S.ui.techOpen : F.anyInfraIssue;
     const summary = F.authIssueDomains + " domain(s) missing auth records · " + F.nsIssues + " nameserver issue(s)";

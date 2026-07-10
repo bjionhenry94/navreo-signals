@@ -72,6 +72,7 @@ _DEFAULT_SCENARIO = {
     "fail_emails": [],         # addresses whose writes land in fails[]
     "slow_ms": 0,              # artificial per-call latency
     "audit_run_secs": 3,       # simulated /run duration
+    "strip_blob_fields": [],   # blob keys run_audit_blob() drops — tests the tab's "not measured" path
 }
 
 
@@ -177,7 +178,7 @@ def control(action: str, payload: dict) -> dict:
                 _STATE.clear()
                 _STATE.update(_pristine_state())
             else:
-                for k in ("stale_snapshot", "rate429_next", "fail_emails", "slow_ms", "audit_run_secs"):
+                for k in ("stale_snapshot", "rate429_next", "fail_emails", "slow_ms", "audit_run_secs", "strip_blob_fields"):
                     if k in payload:
                         _STATE["scenario"][k] = payload[k]
                 if payload.get("stale_snapshot") is True:
@@ -572,6 +573,8 @@ def run_audit_blob() -> dict:
             "blocked": 0, "blockedReal": 0, "blockedSoft": 0, "reasons": {},
             "blacklist": [], "highbCamps": [],
         }
+        for k in (_STATE["scenario"].get("strip_blob_fields") or []):
+            blob.pop(k, None)
         return blob
 
 
