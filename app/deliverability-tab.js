@@ -194,315 +194,56 @@
      1. MOCK data — shaped like the real audit blob captured in
         scratchpad/audit-dashboard/*.json, trimmed to demo scale.
      ============================================================ */
-  const BATCHES = ["June 2026", "Hypertide (Odd - 2026)", "Amplifyy v1", "Arnic - Temporary", "sender:Bjion Henry", "Navreo Maildoso", "Thunderbird-July", "Client Trial (A)"];
-
-  const DOMAIN_POOL = [
-    "weamplifyy.info", "arnicbiz.biz", "navreoops.info", "surgeamplifyy.info", "navreoscale.info",
-    "navreogotomarket.biz", "navreostrategy.org", "salesnavreo.info", "navreostrategy.xyz", "gtmnavreo.org",
-    "theamplifyylab.info", "navreopipelineengine.info", "gtmnavreo.info", "reachalign.net", "geteasysales.com",
-    "navreo.biz", "saleswithnavreo.info", "navreoleads.info", "navreopipeline.info", "navreoconversion.digital",
-    "navreogotomarket.info", "getnavreo.biz", "gtmwithnavreo.xyz", "gtmnavreo.com",
-  ];
-
-  function buildDomainHealthRows() {
-    // 24 domains: 9 flagged for warmup (reply < cutoff), 3 watch, 2 Maildoso, 10 keep-active.
-    const spec = [
-      ["weamplifyy.info", 624, 472, 2, 0.42, 0, 32, 6.78, false, ["Amplifyy - Hypertide", "Amplifyy v1"]],
-      ["arnicbiz.biz", 900, 717, 4, 0.56, 0, 13, 1.81, false, ["Arnic - Temporary"]],
-      ["navreoops.info", 624, 495, 3, 0.61, 0, 5, 1.01, false, ["June 2026"]],
-      ["surgeamplifyy.info", 624, 473, 3, 0.63, 0, 30, 6.13, false, ["Amplifyy v1"]],
-      ["navreoscale.info", 624, 464, 3, 0.65, 0, 6, 1.29, false, ["June 2026", "Hypertide (Odd - 2026)"]],
-      ["navreogotomarket.biz", 700, 512, 3, 0.68, 0, 8, 1.42, false, ["Client Trial (A)"]],
-      ["navreostrategy.org", 610, 470, 3, 0.72, 0, 4, 0.85, false, ["June 2026"]],
-      ["salesnavreo.info", 590, 455, 3, 0.75, 0, 5, 1.02, false, ["sender:Bjion Henry"]],
-      ["navreostrategy.xyz", 540, 401, 3, 0.78, 0, 3, 0.62, false, ["Hypertide (Odd - 2026)"]],
-      ["gtmnavreo.org", 560, 430, 5, 0.9, 0, 4, 0.71, false, ["June 2026"]],
-      ["theamplifyylab.info", 610, 460, 6, 0.95, 1, 5, 0.9, false, ["Amplifyy v1"]],
-      ["navreopipelineengine.info", 520, 402, 5, 0.98, 0, 3, 0.6, false, ["Arnic - Temporary"]],
-      ["gtmnavreo.info", 890, 660, 12, 1.35, 2, 4, 0.5, true, ["Navreo Maildoso"]],
-      ["reachalign.net", 780, 590, 13, 1.67, 3, 3, 0.4, true, ["Navreo Maildoso"]],
-      ["geteasysales.com", 1020, 780, 18, 1.76, 4, 6, 0.6, false, ["Client Trial (A)"]],
-      ["navreo.biz", 1500, 1120, 27, 1.8, 5, 9, 0.6, false, ["June 2026", "sender:Bjion Henry"]],
-      ["saleswithnavreo.info", 640, 480, 12, 1.88, 2, 5, 0.8, false, ["Hypertide (Odd - 2026)"]],
-      ["navreoleads.info", 300, 220, 6, 2.0, 1, 2, 0.7, false, ["Thunderbird-July"]],
-      ["navreopipeline.info", 260, 190, 5, 1.92, 1, 2, 0.8, false, ["Thunderbird-July"]],
-      ["navreoconversion.digital", 980, 740, 21, 2.14, 4, 7, 0.7, false, ["Client Trial (A)"]],
-      ["navreogotomarket.info", 210, 150, 4, 1.9, 0, 1, 0.5, false, ["June 2026"]],
-      ["getnavreo.biz", 640, 490, 14, 2.19, 3, 3, 0.5, false, ["Arnic - Temporary"]],
-      ["gtmwithnavreo.xyz", 1100, 830, 24, 2.18, 4, 6, 0.5, false, ["sender:Bjion Henry"]],
-      ["gtmnavreo.com", 720, 540, 16, 2.22, 3, 3, 0.4, false, ["Hypertide (Odd - 2026)"]],
-    ];
-    return spec.map(([domain, sent, lead, replied, reply_rate, positive, bounced, bounce_rate, maildoso, batches]) => ({
-      domain, sent, lead, replied, reply_rate, positive,
-      positive_rate: Math.round((positive / Math.max(1, lead)) * 10000) / 100,
-      bounced, bounce_rate, maildoso, batches,
-    }));
-  }
-
+  // Flags a REAL domain-health row for the rotation view (live logic — used
+  // by derive() and the domain-health CSV exports).
   function dhFlag(d, minSent, cutoff) {
     if (d.maildoso) return "maildoso";
     if (d.sent < minSent) return "ok";
     return d.reply_rate < cutoff ? "warmup" : (d.reply_rate < 1 ? "watch" : "ok");
   }
 
-  function buildInboxRows() {
-    const rows = [];
-    let id = 90000001;
-    const mk = (email, domain, batch, extra) => rows.push(Object.assign({
-      id: id++, email, domain, provider: "OAuth/Outlook", maildoso: false, tags: [batch],
-      cap: 20, warmup_status: "ACTIVE", kind: "ok", reason_category: "", reason: "",
-      rested: false, restedAt: null,
-    }, extra));
-
-    // 5 reconnect (connection failed)
-    mk("j.henry@sending.ac", "sending.ac", "sender:Bjion Henry", { kind: "reconnect", warmup_status: "none", reason_category: "auth failed", reason: "IMAP login failed — password changed at provider", cap: 0 });
-    mk("b.dormer@thunderbirdadvisory.info", "thunderbirdadvisory.info", "Thunderbird-July", { kind: "reconnect", warmup_status: "none", reason_category: "smtp timeout", reason: "SMTP connection timed out repeatedly", cap: 0 });
-    mk("k.dormer@navreo.biz", "navreo.biz", "June 2026", { kind: "reconnect", warmup_status: "none", reason_category: "auth failed", reason: "OAuth token revoked", cap: 0 });
-    mk("r.arnic@arnicbiz.biz", "arnicbiz.biz", "Arnic - Temporary", { kind: "reconnect", warmup_status: "none", reason_category: "smtp timeout", reason: "SMTP connection refused", cap: 0 });
-    mk("s.hypertide@saleswithnavreo.info", "saleswithnavreo.info", "Hypertide (Odd - 2026)", { kind: "reconnect", warmup_status: "none", reason_category: "auth failed", reason: "IMAP login failed", cap: 0 });
-
-    // 14 warmup-off (drives warmupConfig.notWarming too — same rows referenced there)
-    const woSpec = [
-      ["hb-henry-h@navreoops.info", "navreoops.info", "June 2026"],
-      ["hb-henry@navreoops.info", "navreoops.info", "June 2026"],
-      ["bb-henry-h@navreoops.info", "navreoops.info", "June 2026"],
-      ["a.dormer@surgeamplifyy.info", "surgeamplifyy.info", "Amplifyy v1"],
-      ["b.dormer@surgeamplifyy.info", "surgeamplifyy.info", "Amplifyy v1"],
-      ["c.dormer@theamplifyylab.info", "theamplifyylab.info", "Amplifyy v1"],
-      ["jacki_a@arnicbiz.biz", "arnicbiz.biz", "Arnic - Temporary"],
-      ["jacki_b@arnicbiz.biz", "arnicbiz.biz", "Arnic - Temporary"],
-      ["m.h@getnavreo.biz", "getnavreo.biz", "Arnic - Temporary"],
-      ["p.k@navreoleads.info", "navreoleads.info", "Thunderbird-July"],
-      ["q.k@navreopipeline.info", "navreopipeline.info", "Thunderbird-July"],
-      ["z.b@gtmnavreo.org", "gtmnavreo.org", "June 2026"],
-      ["y.b@gtmnavreo.com", "gtmnavreo.com", "Hypertide (Odd - 2026)"],
-      ["x.dep@geteasysales.com", "geteasysales.com", "Client Trial (A)"],
-    ];
-    const woRows = woSpec.map(([email, domain, batch], i) => ({
-      id: id++, email, domain, provider: "OAuth/Outlook", maildoso: false, tags: [batch],
-      cap: 15, warmup_status: "INACTIVE", kind: "warmupoff", reason_category: "", reason: "Warmup toggled off — no activity in 7d",
-      rested: false, restedAt: null, created: addDays(todayISO(), -(20 + i * 2)), status: "off", batch,
-    }));
-    woRows.forEach((r) => rows.push(r));
-
-    // 10 blocked (real hosting/complaint blocks + soft warmup noise) — also feeds "reasons" breakdown
-    const blSpec = [
-      ["r.krs@heygroutsonline.info", "heygroutsonline.info", "June 2026", "soft", "Address not found — recipient mailbox doesn't exist"],
-      ["r.krs@getgroutsonline.info", "getgroutsonline.info", "June 2026", "soft", "Message not delivered — greylisted, will retry"],
-      ["jacki_a@arnicoutreach.info", "arnicoutreach.info", "Arnic - Temporary", "soft", "Message not delivered — temporary DNS failure"],
-      ["m.p@navreostrategy.xyz", "navreostrategy.xyz", "Hypertide (Odd - 2026)", "soft", "Deferred — 4.7.0 temporary throttling"],
-      ["a.w@theamplifyylab.info", "theamplifyylab.info", "Amplifyy v1", "hosting block", "550 5.7.1 blocked by recipient policy (Proofpoint)"],
-      ["b.w@getnavreo.biz", "getnavreo.biz", "Arnic - Temporary", "hosting block", "550 5.7.606 Access denied, banned sending IP (Outlook)"],
-      ["c.d@navreoconversion.digital", "navreoconversion.digital", "Client Trial (A)", "mailbox full", "552 5.2.2 mailbox full"],
-      ["d.e@gtmwithnavreo.xyz", "gtmwithnavreo.xyz", "sender:Bjion Henry", "mailbox full", "452 4.2.2 mailbox over quota"],
-      ["e.f@saleswithnavreo.info", "saleswithnavreo.info", "Hypertide (Odd - 2026)", "spam complaint", "550 5.7.1 message flagged as spam (SNDS)"],
-      ["f.g@navreopipelineengine.info", "navreopipelineengine.info", "Arnic - Temporary", "spam complaint", "550 5.7.1 too many complaints, sender blocked"],
-    ];
-    blSpec.forEach(([email, domain, batch, cat, reason]) => rows.push({
-      id: id++, email, domain, provider: "OAuth/Outlook", maildoso: false, tags: [batch],
-      cap: 0, warmup_status: "none", kind: "blocked", reason_category: cat, reason, rested: false, restedAt: null,
-    }));
-
-    // 31 general rows: sending / in-warmup / rested, spread across the domain pool + batches
-    let di = 0, bi = 0;
-    for (let i = 0; i < 20; i++) { // sending
-      const domain = DOMAIN_POOL[di % DOMAIN_POOL.length]; di++;
-      const batch = BATCHES[bi % BATCHES.length]; bi++;
-      mk(`s${i}@${domain}`, domain, batch, { cap: [15, 20, 25, 35][i % 4], warmup_status: "ACTIVE" });
-    }
-    for (let i = 0; i < 6; i++) { // in warmup (cap 0, not yet promoted — not dashboard-rested)
-      const domain = DOMAIN_POOL[di % DOMAIN_POOL.length]; di++;
-      const batch = BATCHES[bi % BATCHES.length]; bi++;
-      mk(`w${i}@${domain}`, domain, batch, { cap: 0, warmup_status: "ACTIVE" });
-    }
-    for (let i = 0; i < 5; i++) { // rested by the dashboard
-      const domain = DOMAIN_POOL[di % DOMAIN_POOL.length]; di++;
-      const batch = BATCHES[bi % BATCHES.length]; bi++;
-      const due = Date.now() + (i < 2 ? -1 : 1) * (2 + i) * 864e5; // first two already due, rest upcoming
-      mk(`r${i}@${domain}`, domain, batch, { cap: 0, warmup_status: "ACTIVE", rested: true, restedAt: due - 7 * 864e5 });
-    }
-    return { rows, woRows };
-  }
-
+  /* ── NO SAMPLE DATA ────────────────────────────────────────────
+     buildMock() (name kept for its call sites) returns a same-shaped
+     EMPTY dataset: every list empty, every count zero. It is the base
+     mapRunBlob() overlays the live blob onto, and the placeholder
+     before/without live data — so nothing fabricated can ever render
+     as if it were real. The old fake-fleet generator (24 demo domains,
+     fake mailboxes, seeded history) was removed 2026-07-10 at the
+     owner's request: no fallbacks to sample data, anywhere. ── */
   function buildMock() {
-    // Built fresh on every call (never shared/reused) so "Run Live Audit" and any other
-    // reset genuinely starts over instead of replaying a previous run's mutations.
-    const _built = buildInboxRows();
-    const domainHealthRows = buildDomainHealthRows();
-    const resting = {};
-    const restingDue = {};
-    // 6 of the 24 domains are already resting (dashboard-paused); 2 due now, 4 upcoming.
-    const restingDomains = ["weamplifyy.info", "arnicbiz.biz", "navreoops.info", "surgeamplifyy.info", "navreoscale.info", "navreogotomarket.biz"];
-    restingDomains.forEach((d, i) => {
-      const mailboxesOnDomain = _built.rows.filter((r) => r.domain === d).length || 3;
-      resting[d] = Math.max(1, mailboxesOnDomain);
-      restingDue[d] = Date.now() + (i < 2 ? -1 : 1) * (1 + i) * 864e5;
-    });
-
+    const today = todayISO();
     return {
-      date: "2026-07-08",
-      inboxes: 8674,
-      domains: 158,
-      active: 62,
-      sent: 8197,
-      reply_pct: 1.24,
-      bounce_pct: 1.8,
-      replyTrend: { wkRate: 1.24, prevRate: 1.62, drop: true },
-      campLow: 4,
-      highb: 2,
-      spfMiss: 0, dkimMiss: 0, dmarcMiss: 1,
-      noNS: 0,
-      quarantine: 94, reject: 42, none: 22,
-      warmupResting: Object.keys(resting).length,
-      warmupDue: Object.entries(restingDue).filter(([, ts]) => ts <= Date.now()).length,
-      smtp: 3, imap: 1,
-      inactiveNote: "incl. external Maildoso (~600 by design)",
-      inactiveRows: [
-        { email: "hb-henry-h@meetingsnavreo.info", domain: "meetingsnavreo.info", smtp_host: "(Azure/Outlook)", smtp_ok: true, reputation: "99%", error: "DSN: mailbox disabled by admin (Maildoso, by design)" },
-        { email: "hb-henry@meetingsnavreo.info", domain: "meetingsnavreo.info", smtp_host: "(Azure/Outlook)", smtp_ok: true, reputation: "100%", error: "DSN: mailbox disabled by admin (Maildoso, by design)" },
-        { email: "bb-henry-h@meetingsnavreo.info", domain: "meetingsnavreo.info", smtp_host: "(Azure/Outlook)", smtp_ok: true, reputation: "99%", error: "DSN: mailbox disabled by admin (Maildoso, by design)" },
-        { email: "hq@bookednavreo.info", domain: "bookednavreo.info", smtp_host: "(Azure/Outlook)", smtp_ok: true, reputation: "98%", error: "DSN: mailbox disabled by admin (Maildoso, by design)" },
-        { email: "sales@navreohub.info", domain: "navreohub.info", smtp_host: "(Azure/Outlook)", smtp_ok: true, reputation: "97%", error: "DSN: mailbox disabled by admin (Maildoso, by design)" },
-        { email: "hello@launchwithnavreo.digital", domain: "launchwithnavreo.digital", smtp_host: "(Azure/Outlook)", smtp_ok: true, reputation: "96%", error: "DSN: mailbox disabled by admin (Maildoso, by design)" },
-        { email: "team@getnavreogrowth.org", domain: "getnavreogrowth.org", smtp_host: "(Azure/Outlook)", smtp_ok: false, reputation: "61%", error: "Repeated auth failures — reputation dropping, real issue" },
-        { email: "ops@navreoconnect.info", domain: "navreoconnect.info", smtp_host: "(Azure/Outlook)", smtp_ok: false, reputation: "58%", error: "SMTP disabled after abuse report — real issue" },
-      ],
-      lifecycle: {
-        newUnprocessed: [
-          { email: "a.new@navreohub.info", domain: "navreohub.info", tagged: false, inCampaign: false, created: addDays(todayISO(), -1) },
-          { email: "b.new@bookednavreo.info", domain: "bookednavreo.info", tagged: false, inCampaign: false, created: addDays(todayISO(), -1) },
-          { email: "c.new@launchwithnavreo.digital", domain: "launchwithnavreo.digital", tagged: true, inCampaign: false, created: addDays(todayISO(), -2) },
-          { email: "d.new@getnavreogrowth.org", domain: "getnavreogrowth.org", tagged: false, inCampaign: true, created: addDays(todayISO(), -2) },
-          { email: "e.new@navreoconnect.info", domain: "navreoconnect.info", tagged: false, inCampaign: false, created: addDays(todayISO(), -3) },
-          { email: "f.new@thenavreoagency.info", domain: "thenavreoagency.info", tagged: false, inCampaign: false, created: addDays(todayISO(), -3) },
-          { email: "g.new@navreocampaign.info", domain: "navreocampaign.info", tagged: true, inCampaign: false, created: addDays(todayISO(), -4) },
-          { email: "h.new@theamplifyyteam.info", domain: "theamplifyyteam.info", tagged: false, inCampaign: false, created: addDays(todayISO(), -4) },
-          { email: "i.new@runamplifyy.info", domain: "runamplifyy.info", tagged: false, inCampaign: true, created: addDays(todayISO(), -5) },
-        ],
-        untagged: [],
-        retired: [{ domain: "oldnavreotest.info", mailboxes: 3 }],
-      },
-      warmupConfig: {
-        notWarming: _built.woRows,
-        wrongSettings: [
-          { email: "p.w@navreostrategy.org", domain: "navreostrategy.org", issue: "reply-rate threshold too low (12%)" },
-          { email: "q.w@salesnavreo.info", domain: "salesnavreo.info", issue: "per-day cap set to 60 (fleet standard is 35)" },
-          { email: "r.w@gtmnavreo.org", domain: "gtmnavreo.org", issue: "ramp-up disabled" },
-          { email: "s.w@navreopipelineengine.info", domain: "navreopipelineengine.info", issue: "per-day cap set to 60 (fleet standard is 35)" },
-          { email: "t.w@theamplifyylab.info", domain: "theamplifyylab.info", issue: "reply-rate threshold too low (10%)" },
-          { email: "u.w@geteasysales.com", domain: "geteasysales.com", issue: "ramp-up disabled" },
-          { email: "v.w@navreo.biz", domain: "navreo.biz", issue: "per-day cap set to 55 (fleet standard is 35)" },
-          { email: "w.w@gtmwithnavreo.xyz", domain: "gtmwithnavreo.xyz", issue: "reply-rate threshold too low (15%)" },
-        ],
-        standard: "38/35",
-      },
-      signature: {
-        missing: [
-          { email: "hb-henry-h@navreoops.info", domain: "navreoops.info", batch: "June 2026", from_name: "Bjion Henry", created: addDays(todayISO(), -6) },
-          { email: "a.dormer@surgeamplifyy.info", domain: "surgeamplifyy.info", batch: "Amplifyy v1", from_name: "Kevin Dormer", created: addDays(todayISO(), -6) },
-          { email: "jacki_a@arnicbiz.biz", domain: "arnicbiz.biz", batch: "Arnic - Temporary", from_name: "Jacki Arnic", created: addDays(todayISO(), -7) },
-          { email: "m.h@getnavreo.biz", domain: "getnavreo.biz", batch: "Arnic - Temporary", from_name: "Jacki Arnic", created: addDays(todayISO(), -7) },
-          { email: "p.k@navreoleads.info", domain: "navreoleads.info", batch: "Thunderbird-July", from_name: "Priya Kapoor", created: addDays(todayISO(), -8) },
-          { email: "z.b@gtmnavreo.org", domain: "gtmnavreo.org", batch: "June 2026", from_name: "Bjion Henry", created: addDays(todayISO(), -9) },
-          { email: "y.b@gtmnavreo.com", domain: "gtmnavreo.com", batch: "Hypertide (Odd - 2026)", from_name: "Bjion Henry", created: addDays(todayISO(), -9) },
-          { email: "x.dep@geteasysales.com", domain: "geteasysales.com", batch: "Client Trial (A)", from_name: "Kevin Dormer", created: addDays(todayISO(), -10) },
-          { email: "b.dormer@thunderbirdadvisory.info", domain: "thunderbirdadvisory.info", batch: "Thunderbird-July", from_name: "Kevin Dormer", created: addDays(todayISO(), -10) },
-        ],
-        mismatch: [
-          { email: "hb-henry@navreoops.info", domain: "navreoops.info", batch: "June 2026", from_name: "Bjion Henry", issue: "signature says 'Bjion H.' — mismatched from_name", created: addDays(todayISO(), -11) },
-          { email: "bb-henry-h@navreoops.info", domain: "navreoops.info", batch: "June 2026", from_name: "Bjion Henry", issue: "signature says 'Team Navreo'", created: addDays(todayISO(), -11) },
-          { email: "b.dormer@surgeamplifyy.info", domain: "surgeamplifyy.info", batch: "Amplifyy v1", from_name: "Kevin Dormer", issue: "signature says 'K. Dormer'", created: addDays(todayISO(), -12) },
-          { email: "jacki_b@arnicbiz.biz", domain: "arnicbiz.biz", batch: "Arnic - Temporary", from_name: "Jacki Arnic", issue: "signature says 'J. Arnic — Arnic Growth'", created: addDays(todayISO(), -12) },
-          { email: "c.dormer@theamplifyylab.info", domain: "theamplifyylab.info", batch: "Amplifyy v1", from_name: "Kevin Dormer", issue: "signature blank first line", created: addDays(todayISO(), -13) },
-        ],
-      },
-      sendingDeviation: {
-        over: [
-          { email: "s0@navreo.biz", domain: "navreo.biz", batch: "June 2026", cap: 60, baseline: 25, direction: "over" },
-          { email: "s4@navreoscale.info", domain: "navreoscale.info", batch: "June 2026", cap: 55, baseline: 20, direction: "over" },
-          { email: "s8@gtmnavreo.org", domain: "gtmnavreo.org", batch: "Hypertide (Odd - 2026)", cap: 50, baseline: 20, direction: "over" },
-          { email: "s12@navreo.biz", domain: "navreo.biz", batch: "sender:Bjion Henry", cap: 45, baseline: 20, direction: "over" },
-        ],
-        under: [
-          { email: "s2@navreoops.info", domain: "navreoops.info", batch: "Amplifyy v1", cap: 5, baseline: 20, direction: "under" },
-          { email: "s6@salesnavreo.info", domain: "salesnavreo.info", batch: "Arnic - Temporary", cap: 3, baseline: 20, direction: "under" },
-          { email: "s10@getnavreo.biz", domain: "getnavreo.biz", batch: "Navreo Maildoso", cap: 2, baseline: 20, direction: "under" },
-        ],
-      },
-      batchStats: BATCHES.map((b, i) => ({
-        batch: b,
-        mailboxes: [1050, 3844, 1493, 1417, 300, 304, 18, 519][i],
-        domains: [22, 46, 19, 17, 5, 6, 2, 8][i],
-        sending: [720, 2610, 980, 940, 210, 180, 12, 360][i],
-        warmup: [280, 1050, 420, 400, 80, 110, 5, 140][i],
-        dead: [3, 8, 2, 4, 0, 1, 0, 1][i],
-        blocked: [1, 4, 3, 1, 0, 0, 0, 0][i],
-        blacklisted: [1, 1, 1, 1, 0, 0, 0, 0][i],
-        sent: [61200, 224500, 88900, 79800, 15100, 16400, 900, 33200][i],
-        reply_rate: [0.94, 1.42, 0.61, 0.88, 1.71, 1.05, 2.4, 1.18][i],
-        bounce_rate: [1.6, 1.3, 2.9, 1.9, 0.9, 1.1, 0.5, 1.4][i],
-        positive_rate: [0.21, 0.34, 0.12, 0.19, 0.4, 0.25, 0.6, 0.28][i],
-      })),
-      reminders: [
-        { id: "r1", domains: ["launchwithnavreo.digital"], note: "", restoredDate: "2026-07-01", dueDate: "2026-07-15", done: false, ts: 1782911944439 },
-        { id: "r2", domains: ["bookednavreo.info", "navreohub.info"], note: "batch restore", restoredDate: "2026-06-28", dueDate: "2026-07-12", done: false, ts: 1782500000000 },
-        { id: "r3", domains: ["arnicbiz.biz"], note: "", restoredDate: "2026-06-20", dueDate: "2026-07-04", done: false, ts: 1781800000000 },
-      ],
-      remHealth: {
-        r1: { total: 2, warming: 2, failed: 0, dead: 0, reasons: {} },
-        r2: { total: 5, warming: 3, failed: 2, dead: 0, reasons: { off: 2 } },
-        r3: { total: 3, warming: 1, failed: 2, dead: 0, reasons: { off: 1, blocked: 1 } },
-      },
-      history: [
-        { date: "2026-07-07", action: "reenable", count: 18, failed: 1, scope: "Amplifyy v1" },
-        { date: "2026-07-07", action: "notion_sync", count: 12, scope: "changed" },
-        { date: "2026-07-06", action: "warmup_pause", mailboxes: 22, domains: 3, scope: "reply-rate rotation" },
-        { date: "2026-07-05", action: "reconnect", count: 4 },
-        { date: "2026-07-05", action: "signatures", count: 31, failed: 0, scope: "Arnic - Temporary" },
-        { date: "2026-07-04", action: "warmup_resume", mailboxes: 9 },
-        { date: "2026-07-03", action: "process_new", count: 6, scope: "tagged + added to campaign" },
-        { date: "2026-07-02", name: "Amplifyy - Not on Amazon (Hard)", campaign: 3409745, removed: 214, guarded: 6, before: 4210, after: 3996, total: 4210 },
-        { date: "2026-07-01", action: "notion_sync", count: 9, scope: "changed" },
-        { date: "2026-06-30", action: "reenable", count: 27, failed: 0, scope: "June 2026" },
-      ],
+      date: today,
+      inboxes: 0, domains: 0, active: 0, sent: 0, reply_pct: 0, bounce_pct: 0,
+      replyTrend: { wkRate: 0, prevRate: 0, drop: false },
+      campLow: 0, highb: 0,
+      spfMiss: 0, dkimMiss: 0, dmarcMiss: 0, noNS: 0,
+      quarantine: 0, reject: 0, none: 0,
+      warmupResting: 0, warmupDue: 0,
+      smtp: 0, imap: 0,
+      inactiveNote: "",
+      inactiveRows: [],
+      lifecycle: { newUnprocessed: [], untagged: [], retired: [] },
+      warmupConfig: { notWarming: [], wrongSettings: [], standard: "" },
+      signature: { missing: [], mismatch: [] },
+      sendingDeviation: { over: [], under: [] },
+      batchStats: [],
+      reminders: [],
+      remHealth: {},
+      history: [],
       acks: [],
       delisting: [],
-      blacklistCleared: 1,
-      blacklistRows: [
-        { domain: "heygroutsonline.info", url: "https://mxtoolbox.com/domain/heygroutsonline.info/blacklist", lists: "Spamhaus DBL", advice: "PAUSE + FIX", batch: "June 2026", tags: ["dash-rest-2"], mailboxes: 9, rested: 9, restedDue: Date.now() + 4 * 864e5, cleared: false },
-        { domain: "getgroutsonline.info", url: "https://mxtoolbox.com/domain/getgroutsonline.info/blacklist", lists: "SURBL", advice: "PAUSE + FIX", batch: "June 2026", tags: [], mailboxes: 6, rested: 0, restedDue: null, cleared: false },
-        { domain: "arnicoutreach.info", url: "https://mxtoolbox.com/domain/arnicoutreach.info/blacklist", lists: "Spamhaus DBL, SURBL", advice: "REPLACE (young domain)", batch: "Arnic - Temporary", tags: [], mailboxes: 12, rested: 12, restedDue: Date.now() - 1 * 864e5, cleared: false },
-        { domain: "navreocampaign.info", url: "https://mxtoolbox.com/domain/navreocampaign.info/blacklist", lists: "SURBL", advice: "PAUSE + FIX", batch: "June 2026", tags: ["dash-rest-15"], mailboxes: 5, rested: 0, restedDue: null, cleared: false },
-        { domain: "weamplifyy.info", url: "https://mxtoolbox.com/domain/weamplifyy.info/blacklist", lists: "Spamhaus DBL", advice: "CLEARED — reactivate", batch: "Amplifyy - Hypertide", tags: [], mailboxes: 8, rested: 8, restedDue: Date.now() + 2 * 864e5, cleared: true },
-        { domain: "thunderbirdadvisory.info", url: "https://mxtoolbox.com/domain/thunderbirdadvisory.info/blacklist", lists: "SURBL", advice: "PAUSE + FIX", batch: "Thunderbird-July", tags: [], mailboxes: 3, rested: 0, restedDue: null, cleared: false },
-      ],
-      campaignsFlagged: [
-        { id: 3409745, name: "Amplifyy - Hiring Signal - Not on Amazon (Hard)", url: "https://app.smartlead.ai/app/campaign/3409745/analytics", bounce_pct: 4.2, sent: 2140 },
-        { id: 3488224, name: "Navreo - Commercial Roofing", url: "https://app.smartlead.ai/app/campaign/3488224/analytics", bounce_pct: 3.1, sent: 1870 },
-        { id: 3506763, name: "Arnic - Sales Leaders", url: "https://app.smartlead.ai/app/campaign/3506763/analytics", bounce_pct: 5.6, sent: 990 },
-        { id: 3550274, name: "Navreo - YC Startups", url: "https://app.smartlead.ai/app/campaign/3550274/analytics", bounce_pct: 2.9, sent: 1420 },
-      ],
-      domainHealth: {
-        start: "2026-07-01", end: "2026-07-08", minSent: 500, cutoff: 0.8,
-        rows: domainHealthRows, resting, restingDue,
-      },
-      inboxRows: _built.rows,
+      blacklistCleared: 0,
+      blacklistRows: [],
+      campaignsFlagged: [],
+      domainHealth: { start: addDays(today, -7), end: today, minSent: 500, cutoff: 0.8, rows: [], resting: {}, restingDue: {} },
+      inboxRows: [],
       sigTemplates: { navreo: "Best,\n{{name}}\nNavreo Growth Team", arnic: "Cheers,\n{{name}}\nArnic", amplifyy: "Thanks,\n{{name}}\nAmplifyy Team", _all: "Best,\n{{name}}" },
     };
   }
 
-  const CAMPAIGNS = [
-    { id: 3409745, name: "Amplifyy - Hiring Signal - Not on Amazon (Hard)" },
-    { id: 3409812, name: "Amplifyy - Hiring Signal - Not on Amazon (Soft)" },
-    { id: 3488224, name: "Navreo - Commercial Roofing" },
-    { id: 3487932, name: "Navreo - CRE" },
-    { id: 3488466, name: "Navreo - MSP" },
-    { id: 3506763, name: "Arnic - Sales Leaders" },
-    { id: 3506833, name: "Arnic - CEO Outreach" },
-    { id: 3477409, name: "Navreo - SaaS Overlap" },
-    { id: 3550274, name: "Navreo - YC Startups" },
-    { id: 3550324, name: "Arnic - YC Startups" },
-  ];
+  // Campaign pickers populate from the live API only — no demo roster.
+  const CAMPAIGNS = [];
 
   /* ============================================================
      2. State — mutable S, mirrored to sessionStorage
@@ -555,6 +296,10 @@
   function normalizeState(s) {
     if (!s || typeof s !== "object") return freshState();
     if (!s.A || typeof s.A !== "object") { const fresh = freshState(); s.A = fresh.A; }
+    // One-time purge: sessions persisted before 2026-07-10 may carry the old
+    // fake sample fleet. Anything non-live gets replaced with the empty base
+    // so stored demo data can never repaint as if real.
+    if (s.A && !s.A._live) { const fresh = freshState(); s.A = fresh.A; }
     if (!s.ui || typeof s.ui !== "object") s.ui = {};
     if (!Array.isArray(s.campaigns)) s.campaigns = deepClone(CAMPAIGNS);
     const isPlainObj = (x) => x != null && typeof x === "object" && !Array.isArray(x);
@@ -634,7 +379,7 @@
   // value-only card", never a thrown error or a blocked paint.
   function loadTrends() {
     if (DATA.trends.status === "loading" || DATA.trends.status === "ready") return;
-    if (!isLive()) { DATA.trends.series = synthTrendSeries(); DATA.trends.status = "ready"; return; }
+    if (!isLive()) { DATA.trends.series = null; DATA.trends.status = "error"; return; } // no live backend → no trend claims (never synthesized)
     DATA.trends.status = "loading";
     fetch("/api/deliverability-trends?days=30")
       .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
@@ -648,32 +393,6 @@
       })
       .catch(() => { DATA.trends.status = "error"; paintPage(); });
   }
-  // Sample-mode stand-in for the /api/deliverability-trends response — same
-  // shape (days/sent/reply_pct/bounce_pct/issues, oldest→newest), weekends
-  // nulled out on the pct series and zeroed on sent (mirrors the real
-  // endpoint), issues left entirely null (the real series only ever accrues
-  // forward from the day this shipped — nothing to synthesize retroactively).
-  function synthTrendSeries() {
-    const days = [], sent = [], reply_pct = [], bounce_pct = [], issues = [];
-    const today = new Date();
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(today.getTime() - i * 864e5);
-      days.push(d.toISOString().slice(0, 10));
-      const dow = d.getDay();
-      const weekend = dow === 0 || dow === 6;
-      if (weekend) { sent.push(0); reply_pct.push(null); bounce_pct.push(null); }
-      else {
-        sent.push(Math.max(0, Math.round(7800 + Math.sin(i / 3) * 600 + (Math.random() - 0.5) * 500)));
-        reply_pct.push(+(1.15 + Math.sin(i / 5) * 0.25 + (Math.random() - 0.5) * 0.12).toFixed(2));
-        // gentle upward drift toward/past the 2% limit over the most recent days —
-        // makes the "drift obvious" spec requirement demoable in sample mode.
-        bounce_pct.push(+Math.max(0.3, 1.7 + Math.cos(i / 4) * 0.35 + (i < 6 ? (6 - i) * 0.12 : 0)).toFixed(2));
-      }
-      issues.push(null);
-    }
-    return { days, sent, reply_pct, bounce_pct, issues };
-  }
-
   // Typed fetch error so callers can distinguish 503 (backend unconfigured)
   // from 502 (upstream error) from a raw network/timeout failure.
   // kind ∈ "unconfigured" | "upstream" | "network" | "http".
@@ -4047,7 +3766,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // sample/mock fallback (backend unconfigured, unreachable, or failSample).
     if (isLive() && !DATA.audit.failSample)
       return `<div class="dlv-footer">Deliverability audit · real data${DATA.audit.ageSec != null ? " · updated " + auditAgeLabel(DATA.audit.ageSec) : ""}</div>`;
-    return `<div class="dlv-footer">Deliverability audit · demo mode — mock data</div>`;
+    return `<div class="dlv-footer">Deliverability audit · no live data yet — nothing shown is sample data</div>`;
   }
 
   /* ============================================================
@@ -4248,8 +3967,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // (above the header) so it's the first thing the owner sees in either state.
   function renderDataBanner() {
     if (DATA.mode === "sample" && !DATA.sampleDismissed) {
-      return `<div class="dlv-data-banner sample" id="dlv-data-banner">
-        <span class="dlv-data-banner-txt">Showing <b>sample data</b> — the live deliverability backend isn't configured yet.` +
+      return `<div class="dlv-data-banner err" id="dlv-data-banner">
+        <span class="dlv-data-banner-txt"><b>No live data.</b> The deliverability backend isn't reachable from this server, so nothing is shown — this page never substitutes sample figures.` +
         glossMark("The navreo-signals server needs the DELIV_AUDIT_AUTH env var set so its /api/deliverability proxy can reach the live audit backend.") +
         `</span>
         <button class="dlv-data-banner-x" data-act="dismiss-sample-banner" title="Dismiss">&times;</button>
@@ -4259,7 +3978,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // sample figures while manager/domains/reminders stay live underneath.
     if (isLive() && DATA.audit.failSample) {
       return `<div class="dlv-data-banner err" id="dlv-data-banner">
-        <span class="dlv-data-banner-txt">Live audit unavailable (${esc(DATA.audit.error || "error")}). Showing sample figures for the summary — mailbox, domain &amp; reminder data below is live.</span>
+        <span class="dlv-data-banner-txt">Live audit unavailable (${esc(DATA.audit.error || "error")}). Summary counts are empty until it recovers — nothing here is ever sample data; mailbox, domain &amp; reminder data below stays live.</span>
         <button class="btn sm dlv-btn-caution" data-act="retry-audit" style="margin-left:8px">Retry</button>
       </div>`;
     }
@@ -4268,7 +3987,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return `<div class="dlv-data-banner running" id="dlv-data-banner">
         <span class="dlv-data-banner-txt">Still running the live audit — this is taking longer than the usual ~4 min.</span>
         <button class="btn sm" data-act="audit-keep-waiting" style="margin-left:8px">Keep waiting</button>
-        <button class="btn sm dlv-btn-caution" data-act="audit-use-sample" style="margin-left:8px">Use sample summary</button>
+        <button class="btn sm dlv-btn-caution" data-act="retry-audit" style="margin-left:8px">Restart the audit</button>
       </div>`;
     }
     if (isLive() && DATA.audit.polling) {
@@ -5558,7 +5277,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (window.NavreoJobs && typeof window.NavreoJobs.ping === "function") { try { window.NavreoJobs.ping(); } catch (e) {} }
   }
   async function verifyCampaignAction(id, mode, btn) {
-    if (!isLive()) { toast("Live backend not connected — verification unavailable in sample mode.", "err"); return; }
+    if (!isLive()) { toast("Live backend not connected — verification needs live data.", "err"); return; }
     const done = btn.dataset.done;
     const camp = S.A.campaignsFlagged.find((c) => String(c.id) === String(id));
     // Real full-list count from /api/campaign-lead-counts when it has landed;
@@ -5695,7 +5414,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     refreshVerifyStatus([id]);
   }
   async function removeBadAction(id, btn) {
-    if (!isLive()) { toast("Live backend not connected — verification unavailable in sample mode.", "err"); return; }
+    if (!isLive()) { toast("Live backend not connected — verification needs live data.", "err"); return; }
     const count = Number(btn.dataset.count || 0);
     const ok = await dlvConfirm("Delete " + count + " bad leads from this campaign?\n\n• Any lead that replied is auto-kept (reply-guard)\n• This is permanent — there is no backup\n\nProceed?", { title: "Remove bad leads", danger: true, yesLabel: "Delete " + count });
     if (!ok) return;
@@ -6924,7 +6643,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "retry-audit") { runAct(act, () => forceAuditRefresh()); return; }
     // Poll-cap (~6min) choices (req 2).
     if (act === "audit-keep-waiting") { runAct(act, () => { DATA.audit.timedOut = false; DATA.audit.pollStart = Date.now(); startAuditPoll(); paintPage(); }); return; }
-    if (act === "audit-use-sample") { runAct(act, () => { stopAuditPoll(); enterAuditFailSample("timed out"); paintPage(); }); return; }
     // Defect H: the "or undo later from Recent actions ↓" hint line inside an
     // undo toast — scrolls to (and opens) the Recent-actions fold. Recent
     // actions stayed in Overview (it wasn't one of the 3 moved sections), but
