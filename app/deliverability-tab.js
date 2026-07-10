@@ -2601,12 +2601,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const n = values.length;
     const x = (i) => PADX + (i / (n - 1)) * (W - PADX * 2);
     const y = (v) => H - PADY - ((v - lo) / (hi - lo)) * (H - PADY * 2);
-    let path = "", drawing = false, lastPt = null;
+    // Null points (zero-send weekends, missing snapshot days) don't break the
+    // line — the path connects straight across the gap, keeping every point at
+    // its true day position. Broken segments read as a glitch, not a trend.
+    let path = "", lastPt = null;
     values.forEach((v, i) => {
-      if (v == null) { drawing = false; return; }
+      if (v == null) return;
       const px = x(i), py = y(v);
-      path += (drawing ? "L" : "M") + px.toFixed(1) + "," + py.toFixed(1) + " ";
-      drawing = true;
+      path += (lastPt ? "L" : "M") + px.toFixed(1) + "," + py.toFixed(1) + " ";
       lastPt = { x: px, y: py };
     });
     if (!path || !lastPt) return "";
