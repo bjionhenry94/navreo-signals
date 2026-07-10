@@ -609,7 +609,15 @@
       await apiGet("campaigns", { timeout: 20000 }); // config probe (light)
       DATA.mode = "live";
     } catch (e) {
-      DATA.mode = "sample"; // 503 unconfigured OR network/upstream → sample
+      // One transient failure (server cold start, mid-deploy restart) must not
+      // lock the whole session into no-data mode — retry once before settling.
+      try {
+        await new Promise((r) => setTimeout(r, 2500));
+        await apiGet("campaigns", { timeout: 20000 });
+        DATA.mode = "live";
+      } catch (e2) {
+        DATA.mode = "sample"; // backend unconfigured OR unreachable → no-data mode
+      }
     }
     DATA.probed = true;
     DATA.booting = false;
@@ -2198,6 +2206,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const redInProgress = D.activeTodo.filter((x) => x.level === "red" && snap[x.key] != null && Number(x.count) < Number(snap[x.key])).length;
     if (red > 0) return { status: "URGENT", dot: "r", red, yellow, note, redInProgress };
     if (yellow > 0) return { status: "WATCH", dot: "a", red, yellow, note, redInProgress: 0 };
+    // No live audit has ever loaded (zeroed placeholder page): claiming
+    // HEALTHY would be a lie built on zeros — say NO DATA instead.
+    if (!S.A._live) return { status: "NO DATA", dot: "a", red, yellow, note, redInProgress: 0 };
     return { status: "HEALTHY", dot: "g", red, yellow, note, redInProgress: 0 };
   }
 
@@ -2336,6 +2347,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (st.yellow > 0) bits.push(st.yellow + " thing" + (st.yellow === 1 ? "" : "s") + " to review");
       if (repliesDown) bits.push("replies trending down");
       phrase = "Mostly healthy — " + (bits.join(" and ") || "a few things to review") + ". No fires, but worth a look today.";
+    } else if (!S.A._live) {
+      sev = "a";
+      phrase = "No live data yet — the numbers below are zeroed placeholders, not results. They fill in when the first audit loads.";
     } else {
       sev = "g";
       phrase = "Healthy sending — nothing urgent today. The numbers below are for reference.";
@@ -3971,6 +3985,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <span class="dlv-data-banner-txt"><b>No live data.</b> The deliverability backend isn't reachable from this server, so nothing is shown — this page never substitutes sample figures.` +
         glossMark("The navreo-signals server needs the DELIV_AUDIT_AUTH env var set so its /api/deliverability proxy can reach the live audit backend.") +
         `</span>
+        <button class="btn sm dlv-btn-caution" data-act="retry-connection" style="margin-left:8px">Retry connection</button>
         <button class="dlv-data-banner-x" data-act="dismiss-sample-banner" title="Dismiss">&times;</button>
       </div>`;
     }
@@ -6121,19 +6136,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       forceAuditRefresh().finally(() => { delete btn.dataset.busy; });
       return;
     }
-    // Sample mode: no live backend to hit — just rebuild the mock snapshot.
-    const ok = await dlvConfirm("Reset the sample data?\n\nThe live deliverability backend isn't configured, so this only rebuilds the demo snapshot and clears every action you've taken this session (marked-done items, pauses, signatures, tags…).\n\nNot reversible.", { title: "Reset sample data", danger: true, yesLabel: "Reset" });
+    // No-data mode: there is no sample data to reset any more. Explain, then
+    // try to reconnect — a transient boot-probe failure (mid-deploy hit) is the
+    // usual cause, so a successful re-probe drops straight into the live flow.
+    const ok = await dlvConfirm("Can't run the audit — the live backend wasn't reachable when this page loaded (this can happen right after a deploy or restart).\n\nRetry the connection now?", { title: "Backend not connected", yesLabel: "Retry connection" });
     if (!ok) return;
-    btn.dataset.busy = "1"; btn.disabled = true;
-    const orig = btn.innerHTML;
-    btn.innerHTML = '<span class="dlv-spinner"></span> Resetting…';
-    await new Promise((r) => setTimeout(r, 600));
-    resetState();
-    clearDoneStubs(); // fix #1: stubs describe pre-reset state — drop them
-    UI.mgr.sel = new Set();
-    delete btn.dataset.busy;
-    paintPage();
-    toast("Sample data reset", "ok");
+    DATA.probed = false; DATA.mode = null; DATA.sampleDismissed = false;
+    toast("Reconnecting…", "ok");
+    await bootData();
+    if (isLive()) { runLiveAudit(); return; } // connected — run the real flow
+    toast("Still can't reach the backend — check the server's DELIV_AUDIT_AUTH / network and try again.", "err");
   }
   function copyForClaude() { openCtxModal(); }
   async function copyCtx(btn) {
@@ -6637,6 +6649,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "scroll-todo") { runAct(act, () => openFoldlessScroll("dlv-todo-anchor")); return; }
     // Stage-A data-source banner dismiss buttons.
     if (act === "dismiss-sample-banner") { runAct(act, () => { DATA.sampleDismissed = true; paintPage(); }); return; }
+    if (act === "retry-connection") { runAct(act, () => { DATA.probed = false; DATA.mode = null; DATA.sampleDismissed = false; toast("Reconnecting…", "ok"); bootData(); }); return; }
     // Graceful-failure Retry (req 1d) — same non-destructive kick as the poll
     // path, no confirm (unlike ⚠ Run Live Audit, retrying isn't destructive:
     // there's no live snapshot yet to wipe).
