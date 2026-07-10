@@ -281,6 +281,8 @@ def render(d, decisions=None, live=False, api_base="", list_id=None):
     cards = ""
     for k, v in d["results"].items():
         fl = [(i, f) for i, f in enumerate(d["flags"]) if f["check"] == k]
+        if not fl:
+            continue  # clean checks live in the sticky strip's ticks — no empty card
         seen_fixpair = set()
         clickable = 0
         rows_html = ""
@@ -349,8 +351,6 @@ def render(d, decisions=None, live=False, api_base="", list_id=None):
             body = (f"<table class='tbl flagtbl' data-check='{esc(k)}'>"
                     f"<tr><th style='width:110px'>Status</th><th>Prospect &amp; issue</th></tr>{rows_html}</table>"
                     f"<div class='pager' data-check='{esc(k)}'></div>")
-        else:
-            body = "<div class='empty'>No issues found.</div>"
         hint = (" Rule of thumb: same offer, or contacted in the last 90 days → drop; "
                 "approve only for a genuinely new offer.") if k == "recontact" else (
                 " Tip: icebreaker gaps can be auto-filled by the icebreaker skill — "
