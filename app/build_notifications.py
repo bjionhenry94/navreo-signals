@@ -208,6 +208,33 @@ CLIENT_CONTEXT = {
     },
 }
 
+# Campaign-level ICP overrides (2026-07-10 prompt-accuracy audit): the
+# client-level persona above is a default only. Campaigns that target a
+# different vertical or title get their real ICP here, keyed by Smartlead
+# campaign id. Checked before falling back to CLIENT_CONTEXT["persona"].
+CAMPAIGN_ICP_OVERRIDES = {
+    # Navreo - vertical-specific campaigns
+    "3317530": "Owners/CEOs and sales leaders at SEO and GEO (generative engine optimisation) agencies.",
+    "3487932": "Sales and business development leaders at commercial real estate firms.",
+    "3488224": "Owners and sales leaders at commercial roofing contractors.",
+    "3488466": "Owners/CEOs and sales leaders at managed service providers (MSPs).",
+    "3507283": "Owners and sales leaders at B2B distributors.",
+    "3274582": "Owners and sales leaders at ITAD (IT asset disposition) and asset surplus companies.",
+    "3507270": "Owners and sales leaders at manufacturers.",
+    "3507262": "Owners and sales leaders at wholesalers.",
+    "3576107": "Owners/CEOs at consulting, marketing, and PR agencies.",
+    # Navreo - CEO-targeted campaigns (title differs from the default persona)
+    "3285033": "CEOs at agencies and consultancies (Clay-sourced list).",
+    "3451852": "CEOs at agencies and consultancies (Clay-sourced list).",
+    "3285011": "CEOs at SaaS software companies (Clay-sourced list).",
+    "3550274": "Founders/CEOs at YC startups (early stage, typically under 50 employees).",
+    # Arnic - campaigns that target a different title than the default persona
+    "3464920": "CEOs and founders at SaaS companies (Latka-sourced list).",
+    "3506833": "CEOs and founders at SaaS companies (Latka-sourced list).",
+    "3401559": "Sales enablement leaders at SaaS companies.",
+    "3550324": "Founders at YC startups (early stage, typically under 100 employees).",
+}
+
 SCOPE_BLOCK = (
     "SCOPE - DATA AND DRAFTING ONLY, DO NOT BUILD:\n"
     "This task is for pulling data, mapping the TAM, and drafting copy or angles only. "
@@ -869,6 +896,7 @@ def build_claude_prompt(action_type: str, ctx: dict) -> str:
     client = ctx["client"]
     cinfo = CLIENT_CONTEXT.get(client, CLIENT_CONTEXT["Unknown"])
     name, cid = ctx["name"], ctx["cid"]
+    persona = CAMPAIGN_ICP_OVERRIDES.get(str(cid), cinfo["persona"])
     sent, positives = ctx["sent"], ctx["positives"]
     comp = ctx["completion_pct"]
     comp_txt = f"{comp:.0f}% complete" if comp is not None else "completion unknown"
@@ -884,7 +912,7 @@ def build_claude_prompt(action_type: str, ctx: dict) -> str:
             f"URL: {url}\n"
             f"CLIENT: {client}\n"
             f"STATUS: {status} Reply rate {ctx['reply_rate']:.2f}% (under the 1% floor).\n"
-            f"INTENDED ICP: {cinfo['persona']}\n\n"
+            f"INTENDED ICP: {persona}\n\n"
             "TASK: Pull the enrolled leads, classify every title by function, and report "
             "on-ICP vs off-ICP with what is leaking in. An off-ICP list explains a sub-1% "
             "reply rate on its own; a clean on-target list points at deliverability instead "
@@ -914,7 +942,7 @@ def build_claude_prompt(action_type: str, ctx: dict) -> str:
         "kill_threshold_pivot": (
             f"TASK: This campaign has hit the kill threshold ({sent:,}+ sends, ratio "
             f"{ratio_txt(sent, positives)}). The current mechanism is not converting. Ideate 3-5 "
-            f"fresh mechanisms for this ICP ({cinfo['persona']}): different hook, offer framing, "
+            f"fresh mechanisms for this ICP ({persona}): different hook, offer framing, "
             "signal, or CTA style. Not just new variants of the same angle. CSM decision "
             "required before anything changes; do not act autonomously."),
     }
@@ -925,7 +953,7 @@ def build_claude_prompt(action_type: str, ctx: dict) -> str:
         f"BRIEFING: {briefings[action_type]}\n\n"
         f"CLIENT: {client}\n"
         f"OFFER: {cinfo['offer']}\n"
-        f"PERSONA: {cinfo['persona']}\n\n"
+        f"PERSONA: {persona}\n\n"
         f"ACTIVE CAMPAIGN: {name}\n"
         f"URL: {url}\n"
         f"STATUS: {status}\n\n"
@@ -1283,8 +1311,18 @@ def build_section7(campaign_actions: list[tuple[dict, list[dict]]]) -> list[dict
         if not actions:
             continue
         tier = min((a["tier"] for a in actions), key=lambda t: TIER_ORDER[t])
-        primary = next(a for at in ACTION_PRECEDENCE
-                       for a in actions if a["action_type"] == at)
+        ordered = [a for at in ACTION_PRECEDENCE
+                   for a in actions if a["action_type"] == at]
+        primary = ordered[0]
+        # Early-stage campaign with a healthy overall reply rate: rewriting
+        # copy at <25% completion is premature (positives may not have
+        # accumulated yet). Demote replace_variants to the next action when
+        # one exists; keep it if it is the only call.
+        if (primary["action_type"] == "replace_variants"
+                and (ctx.get("reply_rate") or 0) >= 1.0
+                and (ctx.get("completion_pct") if ctx.get("completion_pct") is not None else 100) < 25
+                and len(ordered) > 1):
+            primary = ordered[1]
         bullets = "\n".join(f"- {a['bullet']}" for a in actions)
         header = (f"{ctx['name']} - {ctx['client']} | {ctx['sent']:,} sent, "
                   f"{ctx['positives']} pos, "
