@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS optimiser_notifications (
   -- app/build_notifications.py for the exact shape. Null on every row outside
   -- Section 7 and on rows written before this column existed.
   variants jsonb,
+  -- v5 (2026-07-10): Impact Score - the digest's sort key. Expected remaining
+  -- positives (runway x lead rate, benchmark 1 per 2,000 sends) multiplied by
+  -- a performance multiplier (meetings 2x, positives 0.5x). Null when the
+  -- campaign's lead count was unavailable. impact_reason is the plain-English
+  -- one-liner on the card; meetings is the campaign-level booked-meeting count
+  -- feeding the multiplier. See compute_impact() in app/build_notifications.py.
+  impact_score numeric,
+  impact_reason text,
+  meetings int,
   -- 'resolved' (v3, 2026-07-08): auto-set by build_notifications.py's
   -- retirement pass when a 'new' finding's key is no longer emitted by the
   -- latest run (never applied to acknowledged/actioned/dismissed rows, which
@@ -86,6 +95,10 @@ ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS reply_rate numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS replied int;
 -- v4 (2026-07-10): structured variants table for Section 7's Why-expander.
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS variants jsonb;
+-- v5 (2026-07-10): Impact Score columns (see compute_impact in build_notifications.py).
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS impact_score numeric;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS impact_reason text;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS meetings int;
 ALTER TABLE optimiser_notifications DROP CONSTRAINT IF EXISTS optimiser_notifications_finding_type_check;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_finding_type_check
   CHECK (finding_type in ('needs_optimisation','performing','lifecycle','variant_call','low_reply_flag','distribution_flag','recommended_action','all_clear'));

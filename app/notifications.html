@@ -229,6 +229,19 @@
    worry was a converting variant getting buried inside a pause/replace
    verdict. */
 .ab-bestvar { font-size: 12px; color: var(--ink-3); margin: 4px 0 0; }
+/* Impact Score line: the "why is this ranked here" one-liner under the
+   verdict. The pill carries the number; the reason is plain English so a
+   strategist never needs the formula to trust the order. */
+.ab-impact { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); }
+.impact-pill { border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 9px; font-weight: 700; font-size: 11.5px; color: var(--ink); white-space: nowrap; }
+/* "Work on these first": the top-5 highest-impact cards render eagerly;
+   everything below sits in a one-line-per-campaign summary list with the full
+   cards behind an expander, so the default view is 5 cards, not 60. */
+.work-first-h { font-size: 13.5px; font-weight: 700; margin: 14px 0 8px; }
+.lowimpact-h { font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin: 18px 0 6px; }
+.lowimpact-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.lowimpact-list li { padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.li-score { font-weight: 700; color: var(--ink); margin-right: 6px; }
 .ab-why { margin-top: 10px; }
 .ab-why summary { cursor: pointer; font-size: 12px; color: var(--orange-700); font-weight: 600; list-style: none; }
 .ab-why summary::-webkit-details-marker { display: none; }
@@ -360,7 +373,9 @@ tr.var-winner td.var-flagcell { color: var(--green); }
       <b>Section 1</b> lists campaigns needing optimisation, worst
       <span class="jg" title="Total emails sent divided by positive replies: lower is better.">sent-per-positive</span>
       first (zero-positive campaigns at the very top). <b>Section 7</b> is what to do about it,
-      High priority first, largest campaigns first within each tier.
+      ordered by <span class="jg" title="Expected leads still winnable in the campaign's remaining contacts (benchmark: 1 positive per ~2,000 sends), weighted up when it's already booking meetings or getting positives. A near-finished campaign scores low no matter how well it did.">Impact Score</span>:
+      the campaigns where action today buys the most future leads sit at the top,
+      nearly-drained campaigns at the bottom regardless of history.
     </div>
     <nav id="sectionNav" class="section-nav" aria-label="Jump to report section">
       <button type="button" class="nav-chip" data-nav-section="1" title="Campaigns Needing Optimisation">1</button>
@@ -1235,6 +1250,9 @@ function actionBlockHTML(n) {
       <div class="ab-verdict">${esc(verdictLine(n))}</div>
       ${fixSplitTagHTML(n)}
     </div>
+    ${(n.impact_score != null || n.impact_reason)
+      ? `<div class="ab-impact">${n.impact_score != null ? `<span class="impact-pill" title="Expected leads still winnable here, weighted up when the campaign is already booking meetings or getting positives. Higher = more worth your time.">Impact ${esc(String(n.impact_score))}</span>` : ""}<span>${esc(n.impact_reason || "")}</span></div>`
+      : ""}
     ${bestVariantHTML(n)}
     <div class="action-row">
       ${showPause ? `<button type="button" class="btn sm danger" data-act="pause" data-id="${esc(String(n.id))}">Pause campaign</button>` : ""}
@@ -1307,34 +1325,47 @@ function triageStripHTML(allRows) {
    campaign?), so spell out plainly that they only move this row's own
    status, never Smartlead itself. */
 const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark actioned = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself. Actioned and dismissed cards leave this list - pick a status in the filter above to see them again.</div>`;
+/* One line per lower-impact campaign: score, name, verdict. This IS the
+   collapsed view of everything below the top 5 — the full cards live behind
+   the expander underneath the list. */
+function lowImpactLineHTML(n) {
+  const score = n.impact_score != null ? `Impact ${n.impact_score}` : "Not scored";
+  return `<li><span class="li-score">${esc(score)}</span>${campaignLink(n.campaign_name, n.smartlead_url)} &mdash; ${esc(verdictLine(n))}</li>`;
+}
 function section7(rows) {
   const stripHTML = triageStripHTML(rows);
   // Filtering happens here, AFTER counts are computed from the full `rows`
   // above, so the chip counts never change when a chip is clicked — only
-  // which blocks flow into the High/Medium/Low tiering below does.
+  // which blocks flow into the top-5/rest split below does.
   const filtered = section7ActionTypeFilter === "all"
     ? rows : rows.filter((n) => n.action_type === section7ActionTypeFilter);
   const explainersHTML = sharedExplainersHTML(filtered);
-  const sorted = [...filtered].sort((a, b) => (a.block_number ?? 9999) - (b.block_number ?? 9999));
-  const high = sorted.filter((n) => n.priority === "High");
-  const medium = sorted.filter((n) => n.priority === "Medium");
-  const low = sorted.filter((n) => n.priority !== "High" && n.priority !== "Medium");
-  // When a triage chip narrows the row set, the Medium/Low tiers may hold
-  // every remaining match (e.g. "Fix split" is mostly Medium) — leaving them
-  // behind a collapsed expander would show 0 cards plus a "Show N" button,
-  // hiding the very rows the chip was clicked to see. So while a filter is
-  // active, render High/Medium/Low all eager (still chunked for weight) and
-  // skip tierExpanderHTML/tierExpandState entirely; unfiltered draws keep the
-  // existing High-eager, Medium/Low-lazy behaviour untouched.
-  const filterActive = section7ActionTypeFilter !== "all";
-  return stripHTML + AB_LEGEND_HTML + explainersHTML
-    + chunkedHTML("7-high", high, (rs) => rs.map(actionBlockHTML).join(""))
-    + (filterActive
-      ? chunkedHTML("7-medium", medium, (rs) => rs.map(actionBlockHTML).join(""))
-      : tierExpanderHTML("7-medium", "Medium", medium))
-    + (filterActive
-      ? chunkedHTML("7-low", low, (rs) => rs.map(actionBlockHTML).join(""))
-      : tierExpanderHTML("7-low", "Low", low));
+  // Impact Score ordering (built by build_notifications.py): expected
+  // remaining positives x performance multiplier, meetings above positives.
+  // block_number encodes the same order server-side; the explicit sort keeps
+  // rows written before impact_score existed in a sane order too.
+  const sorted = [...filtered].sort((a, b) =>
+    ((b.impact_score ?? -1) - (a.impact_score ?? -1))
+    || ((a.block_number ?? 9999) - (b.block_number ?? 9999)));
+  // When a triage chip narrows the row set, the rows the chip was clicked to
+  // see may all sit below the top 5 — leaving them behind a collapsed
+  // expander would hide them. So while a filter is active, render everything
+  // eager (still chunked for weight); unfiltered draws get the top-5 split.
+  if (section7ActionTypeFilter !== "all") {
+    return stripHTML + AB_LEGEND_HTML + explainersHTML
+      + chunkedHTML("7-filtered", sorted, (rs) => rs.map(actionBlockHTML).join(""));
+  }
+  const top = sorted.slice(0, 5);
+  const rest = sorted.slice(5);
+  const topHTML = top.length
+    ? `<div class="work-first"><div class="work-first-h">Work on these first &mdash; the biggest wins still on the table</div>${top.map(actionBlockHTML).join("")}</div>`
+    : "";
+  const restHTML = rest.length
+    ? `<div class="lowimpact-h">${rest.length} lower-impact action${rest.length === 1 ? "" : "s"} &mdash; less data left to win, in descending order</div>`
+      + `<ul class="lowimpact-list">${rest.map(lowImpactLineHTML).join("")}</ul>`
+      + tierExpanderHTML("7-rest", "lower-impact", rest)
+    : "";
+  return stripHTML + AB_LEGEND_HTML + explainersHTML + topHTML + restHTML;
 }
 /* Toggle a Section 7 tier expander in place (fix #5's click wiring) — builds
    the tier's DOM lazily on first open, same pattern as setSectionExpanded. */

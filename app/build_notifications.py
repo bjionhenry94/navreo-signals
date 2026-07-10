@@ -43,8 +43,9 @@ Report logic (the skill file is the spec):
     800+ sends per variant / kill threshold (15,000+ sent AND ratio >= 2,500,
     action_type=kill_threshold_pivot) / both variants failing
     (replace_variants). Medium = scale winner, disable loser, distribution
-    bug, reply rate under 1%. Low = lifecycle only. Ordered High > Medium >
-    Low, within tier by sent desc.
+    bug, reply rate under 1%. Low = lifecycle only. Ordered by Impact Score
+    descending (expected remaining positives x performance multiplier - see
+    compute_impact); tier survives as a badge and tiebreaker only.
   - claude_prompt: Section 7 rows of type replace_variants / scale_winner /
     disable_loser / kill_threshold_pivot / run_list_audit carry a pre-made
     Claude Code prompt (STATIC string assembly, no LLM calls) following the
@@ -114,6 +115,11 @@ JUDGE_MIN_SENT = 800     # monitor phase below this
 PERFORMING_RATIO = 1500  # sent/pos at or under this = performing
 KILL_MIN_SENT = 15000
 KILL_RATIO = 2500
+POSITIVE_YIELD = 2000    # benchmark sends per positive (observed range 1,500-2,500)
+EMAILS_PER_LEAD = 2      # same assumption as the completion formula: sent / (leads x 2)
+LOW_RUNWAY_FLOOR = 2     # expected remaining positives below this = drained:
+                         # the performance multiplier is ignored, history can
+                         # never rescue a campaign with nothing left to win
 
 POSITIVE_CATEGORIES = {"Interested", "Call Booked", "Meeting Request", "Information Request"}
 # Meetings are a SUBSET of positives (both categories are also in
@@ -296,17 +302,23 @@ def sl_get(endpoint: str, params: dict | None = None):
     params = dict(params or {})
     params["api_key"] = KEYS["SMARTLEAD_API_KEY"]
     url = f"{SMARTLEAD_BASE}{endpoint}?{urllib.parse.urlencode(params)}"
-    for attempt in (1, 2):
+    for attempt in (1, 2, 3):
         try:
             time.sleep(RATE_SLEEP)
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=60, context=SSL_CTX) as resp:
                 return json.loads(resp.read().decode())
         except Exception as e:  # noqa: BLE001
-            if attempt == 2:
+            if attempt == 3:
                 print(f"  ! GET {endpoint} failed: {e}")
                 return None
-            time.sleep(3)
+            # 429 = the 200/min window is saturated (other syncs share it) -
+            # a 3s nap lands straight back in the same window, so sit out a
+            # meaningful chunk of the minute instead. A missed fetch zeroes a
+            # campaign's data for the whole run AND mass-resolves its rows via
+            # the retirement pass, so patience here is cheap by comparison.
+            is_429 = isinstance(e, urllib.error.HTTPError) and e.code == 429
+            time.sleep(25 if is_429 else 3)
     return None
 
 
@@ -407,6 +419,9 @@ ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS completion_pct nume
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS reply_rate numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS replied int;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS variants jsonb;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS impact_score numeric;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS impact_reason text;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS meetings int;
 ALTER TABLE optimiser_notifications DROP CONSTRAINT IF EXISTS optimiser_notifications_finding_type_check;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_finding_type_check
   CHECK (finding_type in ('needs_optimisation','performing','lifecycle','variant_call','low_reply_flag','distribution_flag','recommended_action','all_clear'));
@@ -481,7 +496,8 @@ def ensure_table() -> bool:
         return True
     # Verify the columns are already there (migration may have run before)
     probe = sb("GET", f"{TABLE}?select=section,block_number,action_type,api_safe,"
-                      f"smartlead_url,claude_prompt,completion_pct,reply_rate,variants&limit=1")
+                      f"smartlead_url,claude_prompt,completion_pct,reply_rate,variants,"
+                      f"impact_score,impact_reason,meetings&limit=1")
     if isinstance(probe, list):
         print("  Management API unavailable but v2 columns already present - continuing.")
         return True
@@ -716,6 +732,48 @@ def ratio_txt(sent: int, positives: int) -> str:
     return f"{r:,.0f}" if r is not None else "inf"
 
 
+def compute_impact(sent: int, positives: int, meetings: int,
+                   total_leads: int) -> tuple[float | None, str]:
+    """Impact Score = expected remaining positives x performance multiplier.
+
+    Remaining runway is the base: a campaign that is nearly out of leads can
+    never rank high, no matter how good its history reads. Performance only
+    multiplies the runway - meetings outrank positives (2x vs 0.5x per unit).
+    A campaign whose own observed positive rate beats the 1-per-2,000-sends
+    benchmark earns its own rate for the forecast.
+
+    Returns (score, plain-English reason). Score is None when total_leads is
+    unknown (sorts last); the reason always explains itself without jargon."""
+    if not total_leads:
+        return None, "Lead count unavailable, so remaining impact can't be scored."
+    remaining_sends = max(total_leads * EMAILS_PER_LEAD - sent, 0)
+    remaining_leads = max(total_leads - sent // EMAILS_PER_LEAD, 0)
+    own_rate = positives / sent if sent else 0.0
+    rate = own_rate if own_rate > 1.0 / POSITIVE_YIELD else 1.0 / POSITIVE_YIELD
+    expected = remaining_sends * rate
+    mult = 1 + 2 * meetings + 0.5 * positives
+    if expected < LOW_RUNWAY_FLOOR:
+        mult = 1  # drained campaign: past results can't rescue it (guardrail)
+    score = round(expected * mult, 1)
+    if expected < LOW_RUNWAY_FLOOR:
+        reason = (f"Only ~{expected:.1f} more leads left in the tank "
+                  f"({remaining_leads:,} contacts remaining) - low impact even "
+                  "with its track record.")
+    else:
+        if meetings > 0:
+            tail = (f" on a campaign already booking meetings "
+                    f"({meetings} so far)")
+        elif own_rate > 1.0 / POSITIVE_YIELD:
+            tail = " on a campaign beating the usual lead rate"
+        elif positives > 0:
+            tail = " at the usual lead rate"
+        else:
+            tail = " if the copy starts converting at the usual lead rate"
+        reason = (f"~{expected:.0f} more leads likely here - "
+                  f"{remaining_leads:,} contacts left{tail}.")
+    return score, reason
+
+
 def is_failing(sent: int, positives: int) -> bool:
     """REPLACE rule: 800+ sent with 0 positives, or < 1 positive per 800."""
     return sent >= JUDGE_MIN_SENT and (positives == 0 or positives * 800 < sent)
@@ -906,6 +964,11 @@ def row_base(ctx: dict) -> dict:
         # reject mixed-key chunks (PGRST102), so non-section-7 rows send
         # variants explicitly as null rather than omitting the key
         "variants": None,
+        # Impact Score (see compute_impact): the digest's sort key everywhere.
+        # Null when total_leads was unavailable - such rows sort last.
+        "impact_score": ctx.get("impact_score"),
+        "impact_reason": ctx.get("impact_reason"),
+        "meetings": ctx.get("meetings"),
     }
 
 
@@ -1212,8 +1275,9 @@ PROMPTED_ACTIONS = {"replace_variants", "scale_winner", "disable_loser",
 
 def build_section7(campaign_actions: list[tuple[dict, list[dict]]]) -> list[dict]:
     """One recommended_action row per campaign with any action; block_number
-    assigned sequentially across the section after ordering High > Medium >
-    Low, within tier by sent desc."""
+    assigned sequentially across the section after ordering by Impact Score
+    descending (see compute_impact) - severity tier survives as a badge and
+    as the tiebreaker (then sent desc), never as the primary sort key."""
     blocks = []
     for ctx, actions in campaign_actions:
         if not actions:
@@ -1230,7 +1294,11 @@ def build_section7(campaign_actions: list[tuple[dict, list[dict]]]) -> list[dict
         prompt = (build_claude_prompt(primary["action_type"], ctx)
                   if primary["action_type"] in PROMPTED_ACTIONS else None)
         blocks.append((tier, ctx, primary["action_type"], header + bullets, prompt))
-    blocks.sort(key=lambda b: (TIER_ORDER[b[0]], -b[1]["sent"]))
+    # Impact Score first (None = unknown lead count, sorts last); tier and
+    # sent only break ties so the old ordering survives as a fallback.
+    blocks.sort(key=lambda b: (-(b[1].get("impact_score")
+                                 if b[1].get("impact_score") is not None else -1),
+                               TIER_ORDER[b[0]], -b[1]["sent"]))
     rows = []
     for n, (tier, ctx, a_type, detail, prompt) in enumerate(blocks, 1):
         rows.append({**row_base(ctx), "finding_type": "recommended_action", "section": 7,
@@ -1378,7 +1446,20 @@ def main() -> int:
             "completion_pct": None, "total_leads": 0,
             "variant_stats": {}, "variant_index": {},
         }
+        # total_leads is fetched for EVERY active campaign (one limit=1 GET),
+        # including sub-threshold ones, because the Impact Score needs the
+        # remaining-runway denominator even for young campaigns - they are
+        # exactly the ones that should surface when big campaigns drain.
+        total_leads = fetch_total_leads(c["id"])
+        ctx["total_leads"] = total_leads
+        if total_leads > 0:
+            ctx["completion_pct"] = round(sent / (total_leads * 2) * 100, 1)
         if sent < REPORT_MIN_SENT:
+            # variant statistics (the meetings source) aren't pulled below the
+            # reporting threshold - meetings default to 0 for these rows.
+            ctx["meetings"] = 0
+            ctx["impact_score"], ctx["impact_reason"] = compute_impact(
+                sent, positives, 0, total_leads)
             all_clear += 1
             all_rows.append({**row_base(ctx), "finding_type": "all_clear", "section": 0,
                              "priority": "Low", "title": "All clear",
@@ -1388,13 +1469,13 @@ def main() -> int:
                              "suggested_action": None, "action_type": "none"})
             continue
         in_report += 1
-        total_leads = fetch_total_leads(c["id"])
-        ctx["total_leads"] = total_leads
-        if total_leads > 0:
-            ctx["completion_pct"] = round(sent / (total_leads * 2) * 100, 1)
         ctx["variant_index"] = fetch_sequences(c["id"])
         ctx["variant_stats"] = fetch_variant_stats(c["id"])
         reconcile_positives(ctx["variant_stats"], positives)
+        ctx["meetings"] = sum(a.get("meetings", 0)
+                              for a in ctx["variant_stats"].values())
+        ctx["impact_score"], ctx["impact_reason"] = compute_impact(
+            sent, positives, ctx["meetings"], total_leads)
         ctx["variants_list"] = build_variants_list(ctx)
         rows, actions = build_campaign_findings(ctx)
         all_rows.extend(rows)
