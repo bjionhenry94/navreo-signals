@@ -7976,7 +7976,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not row:
                 return self._json({"error": "run not found"}, 404)
             html = qa_gate.render(row["run"], row.get("decisions") or [], live=True,
-                                  api_base=f"/api/qa-gate/{parts[1]}")
+                                  api_base=f"/api/qa-gate/{parts[1]}",
+                                  list_id=row.get("list_id"))
             data = html.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

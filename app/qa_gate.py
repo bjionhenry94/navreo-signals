@@ -169,7 +169,7 @@ def gate_state(d, decisions):
     return "CLEARED WITH OVERRIDES" if any(x["action"] == "overridden" for x in decisions) else "CLEARED"
 
 
-def render(d, decisions=None, live=False, api_base=""):
+def render(d, decisions=None, live=False, api_base="", list_id=None):
     d = normalise_run(d)
     decisions = decisions or []
     state, dropped, _ = resolve(d, decisions)
@@ -203,15 +203,21 @@ def render(d, decisions=None, live=False, api_base=""):
 
     cid = str(d["campaign"]["id"])
     sl_url = f"https://app.smartlead.ai/app/email-campaign/{cid}/analytics" if cid.isdigit() else None
-    sl_link = (f" <a href='{sl_url}' target='_blank' style='font-size:12px'>View in Smartlead →</a>"
-               if sl_url else "")
+    list_id = list_id or d.get("list_id")
+    links = ""
+    if sl_url:
+        links += f"<a class='btn sm' href='{sl_url}' target='_blank'>View in Smartlead</a>"
+    if list_id:
+        links += (f"<a class='btn sm' href='/app/lists.html#{esc(list_id)}' "
+                  f"target='_blank'>View list</a>")
+    links_html = f"<div class='uplinks'>{links}</div>" if links else ""
     uploaded = next((x for x in decisions if x.get("action") == "upload"), None)
     if uploaded:
         up_html = ("<span class='pill a'><span class='dot'></span>Force-uploaded ⚠ · "
                    f"{esc(uploaded.get('by') or '')}</span>" if uploaded["mode"] == "forced" else
                    "<span class='pill g'><span class='dot'></span>Upload approved ✓ · "
                    f"{esc(uploaded.get('by') or '')}</span>")
-        up_html = f"<div class='upwrap'>{up_html}{sl_link}</div>"
+        up_html = f"<div class='upwrap'>{up_html}{links_html}</div>"
     elif live:
         up_html = """
       <div class="upwrap">
@@ -226,9 +232,11 @@ def render(d, decisions=None, live=False, api_base=""):
             <span>bypass the gate — only if the gate itself is broken</span></button>
         </div>
         <div class="upmsg small" id="upmsg"></div>
+        __LINKS__
       </div>"""
+        up_html = up_html.replace("__LINKS__", links_html)
     else:
-        up_html = ""
+        up_html = f"<div class='upwrap'>{links_html}</div>" if links else ""
 
     aud = d.get("list_audit")
     aud_html = ""
@@ -578,6 +586,8 @@ table.tbl { width:100%; border-collapse:collapse; font-size:13px; }
 .upopt b { display:block; font-size:13px; color:var(--ink); font-weight:600; }
 .upopt span { display:block; font-size:11.5px; color:var(--ink-3); margin-top:2px; }
 .upmsg { color:var(--red); max-width:280px; margin-top:6px; }
+.uplinks { display:flex; gap:8px; margin-top:8px; justify-content:flex-end; }
+a.btn { text-decoration:none; }
 .attention { outline:2px solid var(--orange); outline-offset:2px; transition:outline 0.3s; }
 .audscore { text-align:right; }
 .audscore .num-hero { margin:2px 0; }
