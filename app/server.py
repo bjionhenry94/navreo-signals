@@ -3302,7 +3302,11 @@ def _job_get(jid: str) -> dict | None:
     return rows[0] if rows else None
 
 
-_MAX_AUTO_RESUMES_PER_BOOT = 25  # guard against a resume storm on a crash-loop boot
+# (the old _MAX_AUTO_RESUMES_PER_BOOT cap died with auto-resume itself — see
+# _jobs_recover_orphans: recovery now only MARKS orphans, never re-enqueues.)
+_JOB_CREATE_LOCK = threading.Lock()  # spans has-active-job check + job creation
+                                     # so two rapid clicks can't both pass the
+                                     # check before either job registers (TOCTOU)
 
 
 def _is_mock_job_row(r: dict) -> bool:
@@ -3338,27 +3342,60 @@ def _jobs_recover_orphans():
     so a local/dev server can never mark or disturb production's live jobs, and
     vice-versa. Rows with no owner (legacy) are only reclaimed by the render
     instance, never by a local box."""
+    _sweep_orphan_jobs(grace_s=180)
+
+
+_JOB_STALE_S = 600  # a live worker heartbeats app_jobs every chunk (~35s); 10min silent = dead
+
+
+def _sweep_orphan_jobs(grace_s: int):
+    """Mark this service's dead in-flight app_jobs rows 'interrupted'.
+
+    Two protections against marking a job whose worker is actually ALIVE:
+    - `grace_s`: only touch rows whose updated_at is older than the grace window.
+      During a rolling deploy the OLD instance shares our owner string and its
+      workers heartbeat updated_at every chunk — a fresh row is likely theirs,
+      still alive. (Reviewer finding: without this, boot recovery could mark a
+      live job interrupted and let Resume start a duplicate concurrent worker.)
+    - in-memory check: never touch a job id THIS process is actively running.
+    """
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace_s)).isoformat()
     try:
-        stuck = sb("GET", "app_jobs?status=in.(running,queued)&select=id,owner")
-    except Exception:  # noqa: BLE001 — recovery is best-effort; never block boot
+        from urllib.parse import quote
+        stuck = sb("GET", "app_jobs?status=in.(running,queued)"
+                          f"&updated_at=lt.{quote(cutoff, safe='')}&select=id,owner")
+    except Exception:  # noqa: BLE001 — best-effort; never block boot or the sweeper
         return
+    with JOBS_LOCK:
+        live_here = {jid for jid, j in JOBS.items() if j.get("status") in ("queued", "running")}
     for r in (stuck or []):
         owner = r.get("owner")
-        # Reclaim this service's own orphans, plus legacy no-owner rows when we
-        # are the Render service (never when we're a local/dev box — that's the
-        # whole point of the guard). This lets a new deploy clean up the previous
-        # incarnation's in-flight jobs while a local server stays hands-off.
         mine = (owner == _SERVER_INSTANCE) or (owner is None and _ON_RENDER)
-        if not mine:
-            continue  # another instance owns this job — leave it strictly alone
+        if not mine or r["id"] in live_here:
+            continue  # another instance's job, or genuinely running right here
         try:
             sb("PATCH", f"app_jobs?id=eq.{r['id']}",
                {"status": "interrupted",
                 "error": "Interrupted by a server restart — click Resume to continue "
                          "(already-checked emails are cached, so it picks up where it left off).",
                 "finished_at": _now_iso()})
-        except Exception:  # noqa: BLE001 — one bad row must not stop the rest of recovery
+        except Exception:  # noqa: BLE001 — one bad row must not stop the rest
             continue
+
+
+def _job_zombie_sweeper():
+    """Boot recovery only runs once, so a job created on a DYING deploy-overlap
+    instance AFTER the new instance booted becomes a permanent fake-'running'
+    row (observed live 2026-07-10: job started on the old instance at 06:00,
+    old instance killed 06:07, row stuck 'running' forever). Sweep every 5min
+    for own-owner rows silent past _JOB_STALE_S that aren't running here."""
+    while True:
+        time.sleep(300)
+        try:
+            _sweep_orphan_jobs(grace_s=_JOB_STALE_S)
+        except Exception:  # noqa: BLE001 — the sweeper must never die
+            pass
 
 
 def _now_iso():
@@ -3412,20 +3449,24 @@ def resume_job(jid: str):
         return {"error": "not_interrupted",
                 "message": "This task isn't interrupted — nothing to resume."}, 409
     campaign_id = job.get("campaign_id")
-    if _campaign_has_active_job(campaign_id):
-        return {"error": "already_active",
-                "message": "This campaign already has a task running — no need to resume."}, 409
     sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
-    if job.get("kind") == "remove_bad":
-        # A remove resumes by re-reading the still-pending bad leads from the
-        # durable table — fast, no re-fetch.
-        new_job = _new_job("remove_bad", job.get("label") or f"Remove bad leads: campaign {campaign_id}",
-                           campaign_id, dry_run=False)
-        _enqueue_job(_remove_job_worker, new_job, (new_job, campaign_id, sl_key, False))
-    else:
-        # Manual resume gets a fresh budget; the empty-targets path guarantees it
-        # still can't loop forever on a campaign with nothing left to check.
-        new_job = _reenqueue_verify(job, 0)
+    # _JOB_CREATE_LOCK spans the has-active check AND job creation: two rapid
+    # Resume clicks would otherwise both pass the check before either job
+    # registers (TOCTOU) and race duplicate workers on the same campaign.
+    with _JOB_CREATE_LOCK:
+        if _campaign_has_active_job(campaign_id):
+            return {"error": "already_active",
+                    "message": "This campaign already has a task running — no need to resume."}, 409
+        if job.get("kind") == "remove_bad":
+            # A remove resumes by re-reading the still-pending bad leads from the
+            # durable table — fast, no re-fetch.
+            new_job = _new_job("remove_bad", job.get("label") or f"Remove bad leads: campaign {campaign_id}",
+                               campaign_id, dry_run=False)
+            _enqueue_job(_remove_job_worker, new_job, (new_job, campaign_id, sl_key, False))
+        else:
+            # Manual resume gets a fresh budget; the empty-targets path guarantees it
+            # still can't loop forever on a campaign with nothing left to check.
+            new_job = _reenqueue_verify(job, 0)
     try:
         log_activity("/api/jobs/resume",
                      payload={"campaign_id": campaign_id, "old_job_id": jid,
@@ -3656,11 +3697,17 @@ def _smartlead_get_retry(url: str, attempts: int = 5) -> dict:
                     wait = 0
                 time.sleep(min(max(wait, 3 * attempt), 30))
                 continue
-            # a JSON error body is still useful to the caller; mirror http_json
+            # Non-retriable (or retries exhausted): RAISE, never return the error
+            # body as if it were a page. Returning it made a bad API key or a
+            # deleted campaign look like "no leads" — the verify job then reported
+            # a clean 'done' instead of failing (reviewer finding). Keep the
+            # body's message in the exception so the job error is actionable.
             try:
-                return json.loads(e.read().decode())
+                detail = json.loads(e.read().decode()).get("message")
             except Exception:  # noqa: BLE001
-                raise
+                detail = None
+            raise RuntimeError(f"Smartlead HTTP {e.code}"
+                               + (f": {str(detail)[:150]}" if detail else f": {e.reason}")) from e
         except Exception as e:  # noqa: BLE001 — transient network: one more try
             last = e
             if attempt < attempts:
@@ -3849,9 +3896,43 @@ def _pending_bad_leads(campaign_id) -> list:
     """The campaign's still-in-the-queue bad leads (removed=false, not replied)."""
     cid = str(campaign_id)
     rows = sb_get_all(f"verify_bad_leads?campaign_id=eq.{cid}&removed=eq.false"
-                      f"&replied=eq.false&select=lead_id,email,replied")
-    return [{"lead_id": r["lead_id"], "email": r.get("email"), "replied": False}
+                      f"&replied=eq.false&select=lead_id,email,replied,found_at")
+    return [{"lead_id": r["lead_id"], "email": r.get("email"), "replied": False,
+             "found_at": r.get("found_at")}
             for r in (rows or [])]
+
+
+_REPLY_RECHECK_AFTER_S = 1800  # stored replied-flags older than 30min get re-checked
+
+
+def _refresh_reply_guard(campaign_id, candidates: list, sl_key: str) -> list:
+    """The stored replied-flag is a snapshot from verify time; someone can reply
+    AFTER that and must never be deleted (reviewer finding). When the snapshot is
+    older than 30min, re-fetch the campaign's live lead statuses and drop (and
+    durably re-mark) any candidate who has replied since. Fresh snapshots — e.g.
+    an auto-remove running seconds after its own verify — skip the refetch."""
+    from datetime import datetime, timezone
+    if not candidates:
+        return candidates
+    def age_s(iso):
+        try:
+            s = str(iso).replace(" ", "T")
+            dt = datetime.fromisoformat(s if "+" in s or s.endswith("Z") else s + "+00:00")
+            return (datetime.now(timezone.utc) - dt).total_seconds()
+        except Exception:  # noqa: BLE001 — unparseable timestamp = treat as stale
+            return _REPLY_RECHECK_AFTER_S + 1
+    if all(age_s(c.get("found_at")) < _REPLY_RECHECK_AFTER_S for c in candidates):
+        return candidates
+    leads = _fetch_all_smartlead_leads(campaign_id, sl_key)
+    replied_now = {str(l["lead_id"]) for l in leads if l.get("replied")}
+    kept = []
+    for c in candidates:
+        if str(c["lead_id"]) in replied_now:
+            sb("PATCH", f"verify_bad_leads?campaign_id=eq.{str(campaign_id)}"
+                        f"&lead_id=eq.{c['lead_id']}", {"replied": True})
+        else:
+            kept.append(c)
+    return kept
 
 
 def _mark_bad_removed(campaign_id, lead_id):
@@ -4206,6 +4287,11 @@ def _remove_job_worker(job: dict, campaign_id, sl_key: str, dry_run: bool):
         # big campaign). An interrupted remove just re-reads the still-pending
         # rows next time, so it resumes naturally.
         candidates = _pending_bad_leads(campaign_id)
+        if not dry_run:
+            # A reply may have landed since the verify snapshot — never delete a
+            # replier. Fresh snapshots (<30min) skip the refetch, so the fast
+            # path stays fast; stale ones pay one live status pass.
+            candidates = _refresh_reply_guard(campaign_id, candidates, sl_key)
         note = None if candidates else "no confirmed-bad leads on record for this campaign"
         deleted, guarded, failed, removed_emails, cancelled = _delete_bad_leads(
             job, campaign_id, sl_key, dry_run, candidates)
@@ -4275,6 +4361,13 @@ def api_verify_campaign(p: dict):
             return {"error": "listmint_not_configured",
                     "message": "LISTMINT_API_KEY isn't set on this server - add it to "
                                "~/.navreo-keys.env locally or as a Render env var."}, 503
+    if mock and not str(campaign_id).upper().startswith("MOCK"):
+        # A mock run writes fabricated counts to verify_campaign_state for its
+        # campaign_id — pointing it at a REAL campaign would clobber that
+        # campaign's genuine verify status with fake data (reviewer finding).
+        return {"error": "mock_requires_fake_id",
+                "message": "Mock verifications must use a campaign_id starting with "
+                           "\"MOCK\" so they can't overwrite a real campaign's records."}, 400
     sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
     dry_run = bool(p.get("dry_run"))
     auto_remove = bool(p.get("auto_remove"))
@@ -4286,11 +4379,20 @@ def api_verify_campaign(p: dict):
         label += " + auto-remove"
     if mock:
         label = "[TEST] " + label
-    job = _new_job("verify", label, campaign_id, mode, dry_run,
-                   auto_remove=auto_remove, mock=mock)
-    job["name"] = name
-    _enqueue_job(_verify_job_worker, job,
-                 (job, campaign_id, mode, mv_key, lm_key, sl_key))
+    # Same TOCTOU-safe pattern as resume/remove: check-and-create under one lock
+    # so a double-click can't start two verifies of the same campaign. (Today the
+    # single-worker queue would serialise them, but the second run would still
+    # re-spend on anything the first hadn't cached yet — and the guard becomes
+    # load-bearing the day _JOB_WORKERS is bumped.)
+    with _JOB_CREATE_LOCK:
+        if not dry_run and not mock and _campaign_has_active_job(campaign_id):
+            return {"error": "already_active",
+                    "message": "This campaign already has a task running — wait for it to finish."}, 409
+        job = _new_job("verify", label, campaign_id, mode, dry_run,
+                       auto_remove=auto_remove, mock=mock)
+        job["name"] = name
+        _enqueue_job(_verify_job_worker, job,
+                     (job, campaign_id, mode, mv_key, lm_key, sl_key))
     return {"job_id": job["id"]}, 202
 
 
@@ -4299,17 +4401,17 @@ def api_verify_remove(p: dict):
     if not campaign_id:
         return {"error": "missing_campaign_id"}, 400
     dry_run = bool(p.get("dry_run"))
-    # Dedup: a double-click (or a second tab) must not spawn a second remove job
-    # for the same campaign — the queue would run them back to back, the second
-    # finding everything already gone. A real dry-run preview is exempt.
-    if not dry_run and _campaign_has_active_job(campaign_id):
-        return {"error": "already_active",
-                "message": "This campaign already has a task running — wait for it to finish."}, 409
     sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
     name = (p.get("name") or "").strip() or None
     label = f"Remove bad leads: {name or ('campaign ' + str(campaign_id))}"
-    job = _new_job("remove_bad", label, campaign_id, dry_run=dry_run)
-    _enqueue_job(_remove_job_worker, job, (job, campaign_id, sl_key, dry_run))
+    # Dedup under _JOB_CREATE_LOCK (TOCTOU-safe): a double-click must not spawn
+    # a second remove job for the same campaign. Dry-run previews are exempt.
+    with _JOB_CREATE_LOCK:
+        if not dry_run and _campaign_has_active_job(campaign_id):
+            return {"error": "already_active",
+                    "message": "This campaign already has a task running — wait for it to finish."}, 409
+        job = _new_job("remove_bad", label, campaign_id, dry_run=dry_run)
+        _enqueue_job(_remove_job_worker, job, (job, campaign_id, sl_key, dry_run))
     return {"job_id": job["id"]}, 202
 
 
@@ -7991,11 +8093,26 @@ class Handler(SimpleHTTPRequestHandler):
             jid = path[len("/api/jobs/"):-len("/cancel")]
             with JOBS_LOCK:
                 job = JOBS.get(jid)
-                if not job:
-                    return self._json({"error": "not_found"}, 404)
-                if job["status"] not in ("queued", "running"):
-                    return self._json({"error": "not_cancellable"}, 409)
-                job["cancel_requested"] = True
+                if job:
+                    if job["status"] not in ("queued", "running"):
+                        return self._json({"error": "not_cancellable"}, 409)
+                    job["cancel_requested"] = True
+                    log_activity(path, action="cancel", entity="job", entity_id=jid)
+                    return self._json({"ok": True})
+            # Not in this process's memory: the sidebar may be showing a durable
+            # app_jobs row (e.g. a zombie from a dead instance). There's no live
+            # worker to signal, so "cancelling" it = marking it interrupted —
+            # otherwise the Cancel button silently 404s (reviewer finding).
+            row = _job_get(jid)
+            if not row:
+                return self._json({"error": "not_found"}, 404)
+            if row.get("status") not in ("queued", "running"):
+                return self._json({"error": "not_cancellable"}, 409)
+            sb("PATCH", f"app_jobs?id=eq.{jid}",
+               {"status": "interrupted",
+                "error": "Cancelled — this task had no live worker (server restarted). "
+                         "Click Resume if you want it to continue.",
+                "finished_at": _now_iso()})
             log_activity(path, action="cancel", entity="job", entity_id=jid)
             return self._json({"ok": True})
         if path.startswith("/api/jobs/") and path.endswith("/resume"):
@@ -8180,13 +8297,12 @@ if __name__ == "__main__":
     print(f"Serving {PROJECT_DIR} + /api on http://{host}:{port}")
     threading.Thread(target=_boot_warmup, daemon=True).start()
     # Serialise verify/remove jobs so multiple ListMint runs don't blow its rate
-    # limit — extra jobs wait in `queued` until a worker frees. Dispatcher
-    # threads MUST be up before recovery runs below, since an auto-resumed
-    # verify job is re-enqueued onto _JOB_QUEUE and needs a consumer.
+    # limit — extra jobs wait in `queued` until a worker frees.
     for _ in range(_JOB_WORKERS):
         threading.Thread(target=_job_dispatcher, daemon=True).start()
-    # Any job left 'running'/'queued' in app_jobs belonged to the process we're
-    # replacing — its worker thread is gone. verify jobs get auto-resumed
-    # (re-enqueued); everything else is marked interrupted.
+    # Mark dead in-flight jobs 'interrupted' (never re-run — the user resumes on
+    # demand): once at boot with a short grace window, then a 5-minute sweeper
+    # for zombies born during deploy overlap after this boot's pass ran.
     threading.Thread(target=_jobs_recover_orphans, daemon=True).start()
+    threading.Thread(target=_job_zombie_sweeper, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

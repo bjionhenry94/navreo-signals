@@ -1239,6 +1239,9 @@ details.dlv-fold:not([open])>*:not(summary){display:none}
    and the campaign name stay full-strength for legibility. */
 .dlv-vcamp-busy{opacity:.85}
 .dlv-vcamp-busy .dlv-vbtns button[disabled]{opacity:.4;cursor:default;pointer-events:none}
+/* While a job runs for this campaign, the stale result box's buttons (e.g. an
+   older "Remove N bad") are locked too — clicking them would just 409. */
+.dlv-vcamp-busy .dlv-vresult button{opacity:.4;cursor:default;pointer-events:none}
 .dlv-vcamp-busy .dlv-vrun{color:var(--orange-700);font-weight:500}
 .dlv-vcamp a{font-weight:600;color:var(--ink);text-decoration:none} .dlv-vcamp a:hover{color:var(--orange-700)}
 .dlv-vmeta{font-size:11.5px;color:var(--ink-3)}
@@ -4798,6 +4801,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Real verifier counts: good/catch-all/unknown are all kept (none of them
     // is a confirmed bounce); only `bad` is offered up for removal below.
     return `<div class="dlv-vbox">
+      ${v.detail ? `<div class="dlv-plain">${esc(v.detail)}</div>` : ""}
       <div class="dlv-vrow"><b>${v.total}</b> leads &nbsp;·&nbsp; ${v.tool} good <b>${v.good}</b> &nbsp;·&nbsp; catch-all <b>${v.catch_all}</b> &nbsp;·&nbsp; unknown <b>${v.unknown}</b> &nbsp;·&nbsp; bad <b>${v.bad}</b></div>
       <div class="dlv-plain">Catch-all: domain accepts any address — risky but not confirmed-bad, so it's kept. Unknown: the verifier couldn't confirm either way, so it's kept too.</div>
       ${v.listmint_recheck ? `<div class="dlv-plain" style="opacity:.75">${esc(v.listmint_recheck)}</div>` : ""}
@@ -4879,6 +4883,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // Already-contacted leads the job deliberately skipped — verification
       // only ever targets not-yet-contacted (STARTED) leads.
       contacted_skipped: c.contacted_skipped != null ? Number(c.contacted_skipped) : 0,
+      // backend's plain-English reason when there was nothing to do (e.g. "no
+      // not-yet-contacted leads to verify") — without it a 0-checked result
+      // box reads as broken instead of explained.
+      detail: typeof c.detail === "string" ? c.detail : null,
     };
   }
   // Shared "what just happened" line for toasts + result boxes — reframes
@@ -5049,7 +5057,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const resp = await fetch("/api/verify-remove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaign_id: id }),
+        body: JSON.stringify({ campaign_id: id, name: (camp && camp.name) || undefined }),
       });
       const j = await resp.json().catch(() => ({}));
       if (resp.status === 409) { fail((j && j.message) || "Run a verification first, then remove."); return; }

@@ -340,16 +340,25 @@ function setupChartTooltip(wrap) {
       return "stopped before finishing";
     }
     if (!c || typeof c !== "object") return "";
+    // "Nothing to do" jobs carry the reason in counts.detail — show it instead
+    // of a confusing all-zero line.
+    if (c.detail) return jEsc(c.detail);
     const kind = String(job.kind || "").toLowerCase();
     if (kind.includes("verify")) {
       const checked = c.checked ?? c.total ?? "–";
       const good = c.good ?? "–", ca = c.catch_all ?? c.catchAll ?? "–", unk = c.unknown ?? "–", bad = c.bad ?? "–";
-      return `${jEsc(checked)} checked · ${jEsc(good)} good / ${jEsc(ca)} catch-all / ${jEsc(unk)} unknown / ${jEsc(bad)} bad`;
+      let line = `${jEsc(checked)} checked · ${jEsc(good)} good / ${jEsc(ca)} catch-all / ${jEsc(unk)} unknown / ${jEsc(bad)} bad`;
+      if (c.removed != null) line += ` · removed ${jEsc(c.removed)}`;
+      return line;
     }
     if (kind.includes("remove")) {
-      const removed = c.removed ?? "–";
-      const kept = c.kept ?? c.kept_replied ?? "–";
-      return `${jEsc(removed)} removed · ${jEsc(kept)} kept (replied)`;
+      // Backend emits {requested, deleted, guarded, failed} for remove jobs.
+      const removed = c.deleted ?? "–";
+      const kept = c.guarded ?? 0;
+      let line = `${jEsc(removed)} removed`;
+      if (kept) line += ` · ${jEsc(kept)} kept (replied)`;
+      if (c.failed) line += ` · ${jEsc(c.failed)} failed`;
+      return line;
     }
     const parts = Object.keys(c).slice(0, 6).map((k) => `${jEsc(k)}: ${jEsc(c[k])}`);
     return parts.join(" · ");
