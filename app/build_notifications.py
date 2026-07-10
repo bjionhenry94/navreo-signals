@@ -116,6 +116,14 @@ KILL_MIN_SENT = 15000
 KILL_RATIO = 2500
 
 POSITIVE_CATEGORIES = {"Interested", "Call Booked", "Meeting Request", "Information Request"}
+# Meetings are a SUBSET of positives (both categories are also in
+# POSITIVE_CATEGORIES above) - counted separately for Section 7's structured
+# variants table so a CSM can see "how many of these positives were a booked
+# meeting" per variant. Never counted as extra on top of positives; capped at
+# each bucket's own positives count after reconcile_positives runs (see
+# reconcile_positives' docstring - the same "never exceed the campaign-level
+# count" rule applies one level down).
+MEETING_CATEGORIES = {"Call Booked", "Meeting Request"}
 
 TABLE = "optimiser_notifications"
 APP_DIR = Path(__file__).resolve().parent
@@ -398,6 +406,7 @@ ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS claude_prompt text;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS completion_pct numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS reply_rate numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS replied int;
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS variants jsonb;
 ALTER TABLE optimiser_notifications DROP CONSTRAINT IF EXISTS optimiser_notifications_finding_type_check;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_finding_type_check
   CHECK (finding_type in ('needs_optimisation','performing','lifecycle','variant_call','low_reply_flag','distribution_flag','recommended_action','all_clear'));
@@ -472,7 +481,7 @@ def ensure_table() -> bool:
         return True
     # Verify the columns are already there (migration may have run before)
     probe = sb("GET", f"{TABLE}?select=section,block_number,action_type,api_safe,"
-                      f"smartlead_url,claude_prompt,completion_pct,reply_rate&limit=1")
+                      f"smartlead_url,claude_prompt,completion_pct,reply_rate,variants&limit=1")
     if isinstance(probe, list):
         print("  Management API unavailable but v2 columns already present - continuing.")
         return True
@@ -574,6 +583,8 @@ def fetch_variant_stats(campaign_id) -> dict:
     replies_by_key: dict = {}
     best_positive: dict = {}  # email -> (reply_time, key)  for deduped positives
     anon_positives: dict = {}  # key -> count for positive rows with no email
+    best_meeting: dict = {}  # email -> (reply_time, key)  for deduped meetings
+    anon_meetings: dict = {}  # key -> count for meeting rows with no email
     offset, total = 0, None
     while offset < STATS_MAX_ROWS:
         page = sl_get(f"/campaigns/{campaign_id}/statistics",
@@ -588,17 +599,24 @@ def fetch_variant_stats(campaign_id) -> dict:
             if r.get("reply_time"):
                 replies_by_key[key] = replies_by_key.get(key, 0) + 1
             cat = r.get("lead_category") or r.get("category")
+            email = r.get("lead_email") or (
+                (r.get("lead") or {}).get("email") if isinstance(r.get("lead"), dict)
+                else r.get("email"))
+            rt = str(r.get("reply_time") or "")
             if cat in POSITIVE_CATEGORIES:  # exact equality via set membership
-                email = r.get("lead_email") or (
-                    (r.get("lead") or {}).get("email") if isinstance(r.get("lead"), dict)
-                    else r.get("email"))
-                rt = str(r.get("reply_time") or "")
                 if email:
                     prev = best_positive.get(email)
                     if prev is None or rt > prev[0]:
                         best_positive[email] = (rt, key)
                 else:
                     anon_positives[key] = anon_positives.get(key, 0) + 1
+            if cat in MEETING_CATEGORIES:  # same dedup mechanics, narrower category set
+                if email:
+                    prev = best_meeting.get(email)
+                    if prev is None or rt > prev[0]:
+                        best_meeting[email] = (rt, key)
+                else:
+                    anon_meetings[key] = anon_meetings.get(key, 0) + 1
         if not rows:
             break
         offset += len(rows)
@@ -608,19 +626,29 @@ def fetch_variant_stats(campaign_id) -> dict:
             break
     agg: dict = {}
     for key, sent in sent_by_key.items():
-        agg[key] = {"sent": sent, "positives": 0, "replies": replies_by_key.get(key, 0)}
+        agg[key] = {"sent": sent, "positives": 0, "replies": replies_by_key.get(key, 0), "meetings": 0}
     for _rt, key in best_positive.values():
-        agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0})
+        agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["positives"] += 1
     for key, n in anon_positives.items():
-        agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0})
+        agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["positives"] += n
+    for _rt, key in best_meeting.values():
+        agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
+        agg[key]["meetings"] += 1
+    for key, n in anon_meetings.items():
+        agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
+        agg[key]["meetings"] += n
     return agg
 
 
 def reconcile_positives(agg: dict, campaign_positives: int) -> None:
     """Variant-level positives must never exceed the campaign-level count
-    (skill data-accuracy rule). Trim from the largest buckets if needed."""
+    (skill data-accuracy rule). Trim from the largest buckets if needed.
+    Meetings are a subset of positives (MEETING_CATEGORIES ⊂
+    POSITIVE_CATEGORIES) so once positives are trimmed, cap each bucket's
+    meetings at its own (possibly-just-trimmed) positives count too - a
+    meeting can never outnumber the positives it's counted within."""
     total = sum(a["positives"] for a in agg.values())
     while total > campaign_positives and total > 0:
         worst = max(agg.values(), key=lambda a: a["positives"])
@@ -628,6 +656,9 @@ def reconcile_positives(agg: dict, campaign_positives: int) -> None:
             break
         worst["positives"] -= 1
         total -= 1
+    for a in agg.values():
+        if a.get("meetings", 0) > a["positives"]:
+            a["meetings"] = a["positives"]
 
 
 # -- client mapping ----------------------------------------------------------
@@ -692,6 +723,75 @@ def is_failing(sent: int, positives: int) -> bool:
 
 def is_performing_variant(sent: int, positives: int) -> bool:
     return positives > 0 and sent / positives <= PERFORMING_RATIO
+
+
+def build_variants_list(ctx: dict) -> list[dict]:
+    """Structured per-variant breakdown for Section 7's Why-expander table -
+    one entry per key in variant_stats, INCLUDING the synthetic "__email2__"
+    bucket and 0%-distribution variants (unlike build_campaign_findings'
+    `judged` list, nothing here is filtered by the 800-send monitor
+    threshold - a CSM should see every variant that has ANY sends). Unknown
+    variant ids (no sequences meta - can't attribute an angle/label) are
+    skipped, same rule as build_campaign_findings' judged-variant loop.
+    Sorted by email step then variant label so the UI table reads top to
+    bottom in sequence order."""
+    variant_stats, variant_index = ctx["variant_stats"], ctx["variant_index"]
+    out: list[dict] = []
+    for key, stats in variant_stats.items():
+        sent, positives = stats.get("sent", 0), stats.get("positives", 0)
+        meetings, replies = stats.get("meetings", 0), stats.get("replies", 0)
+        if key == "__email2__":
+            # No variant_index meta for the synthetic Email 2 bucket, so
+            # zero_distribution/disabled (both meta-derived) never apply -
+            # but failing/winner only need sent/positives, so they still can.
+            e2_flags = []
+            if is_failing(sent, positives):
+                e2_flags.append("failing")
+            elif is_performing_variant(sent, positives):
+                e2_flags.append("winner")
+            out.append({"email": 2, "variant": None, "distribution_pct": None,
+                        "sent": sent, "replies": replies, "positives": positives,
+                        "meetings": meetings, "angle": None, "flags": e2_flags})
+            continue
+        meta = variant_index.get(key)
+        if not meta:
+            continue
+        flags = []
+        dist = meta["distribution_pct"]
+        # null distribution means Smartlead didn't report a split, NOT 0% -
+        # only an explicit 0 counts. 0 with no sends = split never configured
+        # (Bug A); 0 with past sends = variant was turned off later.
+        if dist == 0 and sent == 0:
+            flags.append("zero_distribution")
+        if meta["is_deleted"] or (dist == 0 and sent > 0):
+            flags.append("disabled")
+        # failing wins over winner - the two ratio rules overlap between
+        # 800 and 1,500 sent/pos, and showing both would contradict itself
+        if is_failing(sent, positives):
+            flags.append("failing")
+        elif is_performing_variant(sent, positives):
+            flags.append("winner")
+        out.append({"email": meta["seq_number"], "variant": meta["label"],
+                    "distribution_pct": dist, "sent": sent, "replies": replies,
+                    "positives": positives, "meetings": meetings, "angle": meta["angle"],
+                    "flags": flags})
+    # variants with ZERO sends never appear in /statistics at all, so the
+    # stats loop above misses them - but a 0%-split 0-send variant is exactly
+    # the Bug A case the table exists to surface. Add them from sequences meta.
+    for key, meta in variant_index.items():
+        if key in variant_stats:
+            continue
+        flags = []
+        if meta["distribution_pct"] == 0:
+            flags.append("zero_distribution")
+        if meta["is_deleted"]:
+            flags.append("disabled")
+        out.append({"email": meta["seq_number"], "variant": meta["label"],
+                    "distribution_pct": meta["distribution_pct"], "sent": 0,
+                    "replies": 0, "positives": 0, "meetings": 0,
+                    "angle": meta["angle"], "flags": flags})
+    out.sort(key=lambda v: (v["email"] if v["email"] is not None else 0, v["variant"] or ""))
+    return out
 
 
 # -- claude_prompt assembly (STATIC, no LLM calls) ---------------------------
@@ -802,6 +902,10 @@ def row_base(ctx: dict) -> dict:
         "completion_pct": ctx["completion_pct"], "reply_rate": ctx["reply_rate"],
         "api_safe": False, "block_number": None, "claude_prompt": None,
         "action_type": None,
+        # every row must carry the same key set - PostgREST bulk upserts
+        # reject mixed-key chunks (PGRST102), so non-section-7 rows send
+        # variants explicitly as null rather than omitting the key
+        "variants": None,
     }
 
 
@@ -1135,7 +1239,8 @@ def build_section7(campaign_actions: list[tuple[dict, list[dict]]]) -> list[dict
                      "suggested_action": a_type.replace("_", " "),
                      "action_type": a_type,
                      "api_safe": a_type in ("pause_campaign", "kill_threshold_pivot"),
-                     "block_number": n, "claude_prompt": prompt})
+                     "block_number": n, "claude_prompt": prompt,
+                     "variants": ctx.get("variants_list")})
     return rows
 
 
@@ -1290,6 +1395,7 @@ def main() -> int:
         ctx["variant_index"] = fetch_sequences(c["id"])
         ctx["variant_stats"] = fetch_variant_stats(c["id"])
         reconcile_positives(ctx["variant_stats"], positives)
+        ctx["variants_list"] = build_variants_list(ctx)
         rows, actions = build_campaign_findings(ctx)
         all_rows.extend(rows)
         campaign_actions.append((ctx, actions))

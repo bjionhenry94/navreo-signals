@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS optimiser_notifications (
   sent_pos_ratio numeric,
   completion_pct numeric,
   reply_rate numeric,
+  -- Section 7 only (v4): structured per-variant breakdown for the "Why?"
+  -- expander's side-by-side table. One object per variant key (including the
+  -- synthetic Email 2 bucket) - see build_section7_variants() in
+  -- app/build_notifications.py for the exact shape. Null on every row outside
+  -- Section 7 and on rows written before this column existed.
+  variants jsonb,
   -- 'resolved' (v3, 2026-07-08): auto-set by build_notifications.py's
   -- retirement pass when a 'new' finding's key is no longer emitted by the
   -- latest run (never applied to acknowledged/actioned/dismissed rows, which
@@ -78,6 +84,8 @@ ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS claude_prompt text;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS completion_pct numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS reply_rate numeric;
 ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS replied int;
+-- v4 (2026-07-10): structured variants table for Section 7's Why-expander.
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS variants jsonb;
 ALTER TABLE optimiser_notifications DROP CONSTRAINT IF EXISTS optimiser_notifications_finding_type_check;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_finding_type_check
   CHECK (finding_type in ('needs_optimisation','performing','lifecycle','variant_call','low_reply_flag','distribution_flag','recommended_action','all_clear'));

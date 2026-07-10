@@ -215,6 +215,62 @@
 .tier-body.hidden { display: none; }
 .tier-body { margin-top: 10px; }
 
+/* One-line verdict cards: the collapsed card is head + verdict + buttons,
+   everything else (the old wall of bullets, plus the new variant table)
+   lives behind the "Why?" expander below it. */
+.ab-verdict { font-size: 13.5px; font-weight: 700; margin: 8px 0 0; line-height: 1.4; }
+/* fix-split cross-tag row: verdict text + the amber "also: fix split" pill
+   share one flex line so the tag reads as an addendum to the verdict, not a
+   competing headline. */
+.ab-verdict-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; }
+.ab-verdict-row .ab-verdict { margin: 8px 0 0; }
+.ab-fixsplit-tag { font-size: 11px; font-weight: 600; cursor: help; }
+/* Best-variant note: visible without expanding "Why?" — the panel's exact
+   worry was a converting variant getting buried inside a pause/replace
+   verdict. */
+.ab-bestvar { font-size: 12px; color: var(--ink-3); margin: 4px 0 0; }
+.ab-why { margin-top: 10px; }
+.ab-why summary { cursor: pointer; font-size: 12px; color: var(--orange-700); font-weight: 600; list-style: none; }
+.ab-why summary::-webkit-details-marker { display: none; }
+.ab-why summary::before { content: "▸ "; font-size: 10px; }
+.ab-why[open] summary::before { content: "▾ "; }
+.ab-why-body { margin-top: 8px; }
+.shared-explainer-link { font-size: 12px; color: var(--orange-700); text-decoration: none; margin-left: 4px; white-space: nowrap; }
+.shared-explainer-link:hover { text-decoration: underline; }
+
+/* Section 7 shared explainers — the two boilerplate paragraphs (kill
+   threshold, Bug A distribution) that used to repeat verbatim on every card
+   now live here ONCE, rendered above the blocks, linked to from each card's
+   Why-expander instead of re-printed per card. */
+.shared-explainers { margin: 0 0 14px; }
+.shared-explainer { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 8px; background: var(--bg-sunken); font-size: 12.5px; }
+.shared-explainer summary { cursor: pointer; font-weight: 600; list-style: none; }
+.shared-explainer summary::-webkit-details-marker { display: none; }
+.shared-explainer summary::before { content: "▸ "; font-size: 10px; }
+.shared-explainer[open] summary::before { content: "▾ "; }
+.shared-explainer p { margin: 8px 0 0; color: var(--ink-2); line-height: 1.55; }
+
+/* Section 7 variant breakdown table (inside the Why-expander) */
+table.var-tbl { min-width: 480px; }
+table.var-tbl td, table.var-tbl th { white-space: nowrap; }
+table.var-tbl .var-angle { white-space: normal; max-width: 320px; }
+tr.var-zero { background: var(--amber-bg); }
+tr.var-disabled { opacity: 0.55; text-decoration: line-through; }
+tr.var-failing td.var-flagcell { color: var(--red); }
+tr.var-winner td.var-flagcell { color: var(--green); }
+.var-note { font-size: 12px; color: var(--ink-3); margin: 6px 0 0; }
+
+/* Triage summary strip — one chip per action_type in Section 7, plus "All".
+   Clicking filters which blocks render; counts are always full totals. */
+.triage-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.triage-chip {
+  border: 1px solid var(--line-2); background: var(--card); border-radius: 999px;
+  padding: 5px 12px; font-size: 12px; font-weight: 600; color: var(--ink-2); cursor: pointer;
+}
+.triage-chip:hover { background: var(--bg-sunken); }
+.triage-chip.active { background: var(--ink); color: var(--cream); border-color: var(--ink); }
+.ab-legend { margin: 0 0 12px; }
+
 /* Rollup count-system fix (#6): when a status/priority filter is active, the
    top rollup (always full-client totals, never re-scoped by the filter) is
    greyed out and explicitly labelled, so it can never be read as agreeing OR
@@ -407,7 +463,64 @@ const ACTION_TYPE_LABEL = {
   run_list_audit: "list quality needs auditing",
   upload_leads: "running low on leads",
   nearing_completion: "nearing completion",
-  none: "flagged for review",
+};
+/* One-line, imperative verdict shown at the top of every collapsed Section 7
+   card — what to do, not why. The full "why" (bullets + variant table) moves
+   into the ab-why expander below it. Fixed strings, ≤12 words each, per the
+   ship brief. Fallback: ACTION_TYPE_LABEL, then the first bullet line. */
+const VERDICT_LINE = {
+  kill_threshold_pivot: "Pause, kill threshold hit, this mechanism isn't converting",
+  upload_leads: "Upload more leads, campaign is nearly complete",
+  nearing_completion: "Nearing completion, decide the next batch now",
+  replace_variants: "Replace the failing variants, 0 positives past 800 sends",
+  scale_winner: "Scale the winning variant, add one challenger",
+  disable_loser: "Disable the losing variant, add one challenger",
+  fix_distribution: "Fix the traffic split, a variant is getting 0%",
+  run_list_audit: "Run a list audit, reply rate under 1%",
+};
+/* Campaign-specific tail appended (or, for replace_variants, substituted) onto
+   the fixed VERDICT_LINE strings above, per the strategist-panel "canned
+   verdict" fix — every card should carry its own numbers, not just a template
+   string shared with every other card of the same action_type. Falls back to
+   the plain VERDICT_LINE/ACTION_TYPE_LABEL text whenever the row is missing
+   the field it needs (no fabricated numbers). */
+function verdictLine(n) {
+  const type = n.action_type;
+  const base = VERDICT_LINE[type] || ACTION_TYPE_LABEL[type]
+    || parseActionBullets(n.detail)[0] || "Review this campaign";
+  if (type === "kill_threshold_pivot") {
+    if (n.positive > 0 && Number.isFinite(n.sent_pos_ratio)) {
+      return `${base}, ${fmt(Math.round(n.sent_pos_ratio))} sends per positive`;
+    }
+    return `${base}, 0 positives on ${fmt(n.sent)} sends`;
+  }
+  if (type === "replace_variants") {
+    const variants = parsedVariants(n);
+    const failing = variants ? variants.filter((v) => (v.flags || []).includes("failing")).length : 0;
+    if (failing > 0) {
+      return `Replace ${failing} failing variant${failing === 1 ? "" : "s"}, winners stay live`;
+    }
+    return base;
+  }
+  if (type === "run_list_audit") {
+    return Number.isFinite(n.reply_rate) ? `${base}, reply rate ${n.reply_rate.toFixed(2)}%` : base;
+  }
+  if (type === "upload_leads" || type === "nearing_completion") {
+    return Number.isFinite(n.completion_pct) ? `${base}, ${n.completion_pct.toFixed(0)}% complete` : base;
+  }
+  return base;
+}
+/* Short chip labels for the Section 7 triage strip — same action_type set
+   Section 7 rows ever carry (build_notifications.py's ACTION_PRECEDENCE). */
+const TRIAGE_CHIP_LABEL = {
+  kill_threshold_pivot: "Pivot",
+  replace_variants: "Replace variants",
+  scale_winner: "Scale winner",
+  disable_loser: "Disable loser",
+  fix_distribution: "Fix split",
+  run_list_audit: "List audit",
+  upload_leads: "Upload leads",
+  nearing_completion: "Nearing completion",
 };
 let all = [];                 // every row from the last successful fetch
 let loadState = "loading";    // "loading" | "ok" | "error"
@@ -647,6 +760,73 @@ function parseBugType(detail) {
 function parseActionBullets(detail) {
   return (detail || "").split("\n").filter((l) => l.trim().startsWith("- ")).map((l) => l.trim().slice(2).trim());
 }
+
+/* ══ Section 7 boilerplate dedup ══
+   Two paragraphs repeat verbatim across most cards — the kill-threshold
+   pivot explanation (build_claude_prompt/build_campaign_findings' kill
+   action bullet) and the Bug A distribution explanation (the fix_distribution
+   action bullet). Neither the campaign-specific numbers/variant names nor the
+   generic explanation are ever deleted: the head (numbers) stays on the card,
+   the tail (boilerplate) moves into a shared explainer rendered once per
+   page, linked to from the card. No information loss, just no repetition. */
+const SHARED_EXPLAINERS = {
+  kill: {
+    label: "Kill threshold pivot",
+    text: "This ICP likely is not working. Recommend a pivot (new ICP, adjusted targeting, or different channel). Pausing the campaign is the only API-safe act, the pivot itself is CSM ideation, await CSM decision, do not act autonomously. Consider running /lilly-strategy to ideate replacement angles.",
+  },
+  bugA: {
+    label: "Bug A: distribution never configured",
+    text: "0% distribution with 0 sends means the traffic split was never configured for this variant in the Smartlead UI (as opposed to being intentionally disabled). Fix: set the correct traffic split in the Smartlead UI so every intended variant has a non-zero share.",
+  },
+};
+const KILL_BOILERPLATE_RE = /^(Kill threshold reached \([^)]+\)\.)\s*(.*)$/s;
+const BUGA_BOILERPLATE_RE = /^(Bug A on Email \d+ Var [^:]+:\s*0% distribution,\s*0 sends)\s*-\s*(.*)$/s;
+/* Renders one bullet, swapping the generic tail for a "→ shared explainer"
+   link when it matches one of the two boilerplate paragraphs above. Returns
+   {html, explainerKey} so the caller can track which shared explainers this
+   card actually used (explainerKey is null for an ordinary bullet). */
+function renderBullet(bullet) {
+  const killMatch = KILL_BOILERPLATE_RE.exec(bullet);
+  if (killMatch) {
+    return { html: `${esc(killMatch[1])} <a href="#shared-explainer-kill" class="shared-explainer-link" data-explainer-jump="kill">&rarr; shared explainer</a>`, explainerKey: "kill" };
+  }
+  const bugAMatch = BUGA_BOILERPLATE_RE.exec(bullet);
+  if (bugAMatch) {
+    return { html: `${esc(bugAMatch[1])} <a href="#shared-explainer-bugA" class="shared-explainer-link" data-explainer-jump="bugA">&rarr; shared explainer</a>`, explainerKey: "bugA" };
+  }
+  return { html: linkifyLillyStrategy(esc(bullet)), explainerKey: null };
+}
+/* One collapsible block per shared explainer actually referenced by any
+   block in the CURRENTLY RENDERED (i.e. not filtered/collapsed-out) set of
+   Section 7 rows — rendered once, above the blocks, per the ship brief. */
+/* A campaign "has" the Bug A distribution bug (for the live count line below)
+   when any of its parsedVariants() carries the zero_distribution flag —
+   same flag variantsTableHTML() shades amber, computed client-side from the
+   rows Section 7 is CURRENTLY rendering. */
+function hasZeroDistributionVariant(n) {
+  const variants = parsedVariants(n);
+  return !!variants && variants.some((v) => (v.flags || []).includes("zero_distribution"));
+}
+function sharedExplainersHTML(rows) {
+  const used = new Set();
+  rows.forEach((n) => parseActionBullets(n.detail).forEach((b) => {
+    if (KILL_BOILERPLATE_RE.test(b)) used.add("kill");
+    if (BUGA_BOILERPLATE_RE.test(b)) used.add("bugA");
+  }));
+  if (!used.size) return "";
+  const blocks = [...used].map((key) => {
+    const ex = SHARED_EXPLAINERS[key];
+    const extra = key === "bugA"
+      ? ` Affects ${fmt(rows.filter(hasZeroDistributionVariant).length)} of the campaigns below.`
+      : "";
+    return `<details class="shared-explainer" id="shared-explainer-${key}">
+      <summary>${esc(ex.label)}</summary>
+      <p>${esc(ex.text + extra)}</p>
+    </details>`;
+  }).join("");
+  return `<div class="shared-explainers">${blocks}</div>`;
+}
+
 function sentPosCell(n) {
   if (Number.isFinite(n.sent_pos_ratio)) return fmt(n.sent_pos_ratio);
   return `<span class="jg" title="Zero positive replies recorded for this campaign — the ratio is undefined.">∞</span>`;
@@ -934,12 +1114,107 @@ function section6(rows) {
 const CLAUDE_PROMPT_ACTION_TYPES = new Set([
   "replace_variants", "scale_winner", "disable_loser", "kill_threshold_pivot", "run_list_audit",
 ]);
+/* n.variants should already be a real array (the jsonb column decodes
+   straight through res.json()), but this tolerates it arriving as a
+   JSON-encoded string too (e.g. a double-encoded payload from some future
+   intermediate hop) rather than silently treating a row that actually has a
+   breakdown as if it had none. Returns null (never throws) when there's
+   nothing usable. Shared by variantsTableHTML and actionBlockHTML's showWhy
+   check so the two never disagree about whether a row "has" variants. */
+function parsedVariants(n) {
+  let variants = n.variants;
+  if (typeof variants === "string") {
+    try { variants = JSON.parse(variants); } catch { variants = null; }
+  }
+  return Array.isArray(variants) ? variants : null;
+}
+/* Section 7 variant side-by-side table (inside the Why-expander). Renders
+   even when the card has no bullets, as long as n.variants exists. A row
+   older than the `variants` column (null/absent) gets a single honest line
+   instead of fabricated numbers — see the ship brief. */
+function variantsTableHTML(n) {
+  const variants = parsedVariants(n);
+  if (!variants) {
+    return `<div class="var-note">Variant breakdown available after the next optimiser run.</div>`;
+  }
+  if (!variants.length) return "";
+  const rows = variants.map((v) => {
+    const flags = v.flags || [];
+    const rowCls = ["var-row"];
+    if (flags.includes("zero_distribution")) rowCls.push("var-zero");
+    if (flags.includes("disabled")) rowCls.push("var-disabled");
+    if (flags.includes("failing")) rowCls.push("var-failing");
+    if (flags.includes("winner")) rowCls.push("var-winner");
+    const splitCell = Number.isFinite(v.distribution_pct)
+      ? (flags.includes("zero_distribution")
+          ? `<span class="jg" title="0% traffic, split never configured">${v.distribution_pct}%</span>`
+          : `${v.distribution_pct}%`)
+      : "–";
+    const meetings = (v.meetings === null || v.meetings === undefined) ? "–" : fmt(v.meetings);
+    return `<tr class="${rowCls.join(" ")}">
+      <td>Email ${esc(String(v.email ?? "?"))}</td>
+      <td>${esc(v.variant || "–")}</td>
+      <td class="var-flagcell">${splitCell}</td>
+      <td>${fmt(v.sent)}</td>
+      <td>${fmt(v.replies)}</td>
+      <td>${fmt(v.positives)}</td>
+      <td>${meetings}</td>
+      <td class="var-angle">${esc(v.angle || "–")}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="table-scroll"><table class="tbl var-tbl">
+    <thead><tr><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th>Split %</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+/* fix-split cross-tag: the strategist panel's exact worry was a variant with
+   an unconfigured 0% split sitting on a card whose action_type is something
+   OTHER than fix_distribution (e.g. a kill_threshold_pivot card whose ratios
+   are quietly under-representing an angle that never got traffic) — those
+   never surfaced the "you also have a Bug A here" fact anywhere. Only fires
+   when the card ISN'T already the fix_distribution card for that bug. */
+function fixSplitTagHTML(n) {
+  if (n.action_type === "fix_distribution") return "";
+  if (!hasZeroDistributionVariant(n)) return "";
+  return `<span class="pill a ab-fixsplit-tag" title="One or more variants have a 0% split that was never configured - the ratios above may under-represent those angles">also: fix split</span>`;
+}
+
+/* Best-variant note: the panel's exact worry was a converting variant getting
+   buried inside a campaign-level "pause"/"replace" verdict — this surfaces
+   the strongest individual variant WITHOUT requiring the CSM to expand
+   "Why?" first. Only shown on the two action_types where the verdict acts on
+   the whole campaign/whole variant set rather than one already-identified
+   variant, and only when at least one variant actually converted. */
+function bestVariantHTML(n) {
+  if (n.action_type !== "kill_threshold_pivot" && n.action_type !== "replace_variants") return "";
+  const variants = parsedVariants(n);
+  if (!variants) return "";
+  const converting = variants.filter((v) => (v.positives || 0) > 0);
+  if (!converting.length) return "";
+  const best = [...converting].sort((a, b) => {
+    if ((b.positives || 0) !== (a.positives || 0)) return (b.positives || 0) - (a.positives || 0);
+    if ((b.meetings || 0) !== (a.meetings || 0)) return (b.meetings || 0) - (a.meetings || 0);
+    return (b.replies || 0) - (a.replies || 0);
+  })[0];
+  const meetingsPart = (best.meetings || 0) > 0
+    ? `, ${fmt(best.meetings)} meeting${best.meetings === 1 ? "" : "s"}`
+    : "";
+  // Email 2 buckets have no A/B label (variant null) - "Var –" reads broken, so drop the Var part
+  const varPart = best.variant ? ` Var ${esc(best.variant)}` : "";
+  return `<div class="ab-bestvar">Best variant: Email ${esc(String(best.email ?? "?"))}${varPart}, `
+    + `${fmt(best.positives)} positive${best.positives === 1 ? "" : "s"}${meetingsPart} - worth preserving this angle</div>`;
+}
+
 function actionBlockHTML(n) {
   const bullets = parseActionBullets(n.detail);
   const cls = ["action-block"];
   if (isRetiredStatus(n.status)) cls.push("dismissed");
   const showPause = !!n.api_safe;
   const showCopy = CLAUDE_PROMPT_ACTION_TYPES.has(n.action_type);
+  const rendered = bullets.map(renderBullet);
+  const reasonCount = bullets.length;
+  const whyBody = `${reasonCount ? `<ul class="action-list">${rendered.map((r) => `<li>${r.html}</li>`).join("")}</ul>` : ""}${variantsTableHTML(n)}`;
+  const showWhy = reasonCount > 0 || !!parsedVariants(n);
   return `<div class="${cls.join(" ")}" id="ab-${esc(String(n.id))}" data-id="${esc(String(n.id))}">
     <div class="ab-head">
       <div class="ab-title">
@@ -951,7 +1226,11 @@ function actionBlockHTML(n) {
         <span class="ab-status">${statusPillN(n.status)}</span>
       </div>
     </div>
-    ${bullets.length ? `<ul class="action-list">${bullets.map((b) => `<li>${linkifyLillyStrategy(esc(b))}</li>`).join("")}</ul>` : ""}
+    <div class="ab-verdict-row">
+      <div class="ab-verdict">${esc(verdictLine(n))}</div>
+      ${fixSplitTagHTML(n)}
+    </div>
+    ${bestVariantHTML(n)}
     <div class="action-row">
       ${showPause ? `<button type="button" class="btn sm danger" data-act="pause" data-id="${esc(String(n.id))}">Pause campaign</button>` : ""}
       ${showCopy ? `<button type="button" class="btn sm" data-act="copy-prompt" data-id="${esc(String(n.id))}">Copy Claude prompt</button>` : ""}
@@ -960,6 +1239,7 @@ function actionBlockHTML(n) {
       ${actionBtn(n, "actioned", "Mark actioned", "Actioned")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
+    ${showWhy ? `<details class="ab-why"><summary>Why? (${reasonCount} reason${reasonCount === 1 ? "" : "s"})</summary><div class="ab-why-body">${whyBody}</div></details>` : ""}
   </div>`;
 }
 
@@ -999,14 +1279,57 @@ function tierExpanderHTML(tierKey, tierLabel, rows) {
     <div class="tier-body${expanded ? "" : " hidden"}" data-tier-body="${tierKey}" data-rendered="${expanded ? "1" : "0"}">${bodyHTML}</div>
   </div>`;
 }
+/* Triage strip: one chip per action_type present in Section 7, plus "All".
+   Counts are always built from the FULL (unfiltered-by-triage) row set
+   passed in, so they never move when a chip is clicked — only which blocks
+   render below changes. Module-level filter state so a chip click survives
+   the next draw() (same pattern as tierExpandState/sectionExpandState). */
+let section7ActionTypeFilter = "all";
+function triageStripHTML(allRows) {
+  const counts = new Map();
+  allRows.forEach((n) => counts.set(n.action_type, (counts.get(n.action_type) || 0) + 1));
+  const present = Object.keys(TRIAGE_CHIP_LABEL).filter((t) => counts.has(t));
+  const chip = (type, label, count, active) =>
+    `<button type="button" class="triage-chip${active ? " active" : ""}" data-triage-chip="${esc(type)}">${esc(label)} &middot;${fmt(count)}</button>`;
+  return `<div class="triage-strip">
+    ${chip("all", "All", allRows.length, section7ActionTypeFilter === "all")}
+    ${present.map((t) => chip(t, TRIAGE_CHIP_LABEL[t], counts.get(t), section7ActionTypeFilter === t)).join("")}
+  </div>`;
+}
+/* Status-lifecycle legend: one muted line, rendered once above the cards, per
+   the strategist panel's ask — Acknowledge/Mark actioned/Dismiss read as
+   ambiguous the first time a CSM sees them (do they touch the live
+   campaign?), so spell out plainly that they only move this row's own
+   status, never Smartlead itself. */
+const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark actioned = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself.</div>`;
 function section7(rows) {
-  const sorted = [...rows].sort((a, b) => (a.block_number ?? 9999) - (b.block_number ?? 9999));
+  const stripHTML = triageStripHTML(rows);
+  // Filtering happens here, AFTER counts are computed from the full `rows`
+  // above, so the chip counts never change when a chip is clicked — only
+  // which blocks flow into the High/Medium/Low tiering below does.
+  const filtered = section7ActionTypeFilter === "all"
+    ? rows : rows.filter((n) => n.action_type === section7ActionTypeFilter);
+  const explainersHTML = sharedExplainersHTML(filtered);
+  const sorted = [...filtered].sort((a, b) => (a.block_number ?? 9999) - (b.block_number ?? 9999));
   const high = sorted.filter((n) => n.priority === "High");
   const medium = sorted.filter((n) => n.priority === "Medium");
   const low = sorted.filter((n) => n.priority !== "High" && n.priority !== "Medium");
-  return chunkedHTML("7-high", high, (rs) => rs.map(actionBlockHTML).join(""))
-    + tierExpanderHTML("7-medium", "Medium", medium)
-    + tierExpanderHTML("7-low", "Low", low);
+  // When a triage chip narrows the row set, the Medium/Low tiers may hold
+  // every remaining match (e.g. "Fix split" is mostly Medium) — leaving them
+  // behind a collapsed expander would show 0 cards plus a "Show N" button,
+  // hiding the very rows the chip was clicked to see. So while a filter is
+  // active, render High/Medium/Low all eager (still chunked for weight) and
+  // skip tierExpanderHTML/tierExpandState entirely; unfiltered draws keep the
+  // existing High-eager, Medium/Low-lazy behaviour untouched.
+  const filterActive = section7ActionTypeFilter !== "all";
+  return stripHTML + AB_LEGEND_HTML + explainersHTML
+    + chunkedHTML("7-high", high, (rs) => rs.map(actionBlockHTML).join(""))
+    + (filterActive
+      ? chunkedHTML("7-medium", medium, (rs) => rs.map(actionBlockHTML).join(""))
+      : tierExpanderHTML("7-medium", "Medium", medium))
+    + (filterActive
+      ? chunkedHTML("7-low", low, (rs) => rs.map(actionBlockHTML).join(""))
+      : tierExpanderHTML("7-low", "Low", low));
 }
 /* Toggle a Section 7 tier expander in place (fix #5's click wiring) — builds
    the tier's DOM lazily on first open, same pattern as setSectionExpanded. */
@@ -1361,6 +1684,21 @@ document.getElementById("list").addEventListener("click", async (e) => {
     const label = tierKey === "7-medium" ? "Medium" : "Low";
     setTierExpanded(tierKey, label, !tierExpandState.get(tierKey));
     return;
+  }
+
+  const triageChip = e.target.closest("[data-triage-chip]");
+  if (triageChip) {
+    section7ActionTypeFilter = triageChip.dataset.triageChip;
+    draw();
+    return;
+  }
+
+  const explainerJump = e.target.closest("[data-explainer-jump]");
+  if (explainerJump) {
+    // The shared explainer lives above the blocks as a <details> — just open
+    // it and let the native #hash navigation (href on the link) scroll to it.
+    const target = document.getElementById(`shared-explainer-${explainerJump.dataset.explainerJump}`);
+    if (target) target.open = true;
   }
 
   const jumpEl = e.target.closest("[data-jump-block]");
