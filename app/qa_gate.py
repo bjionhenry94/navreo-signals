@@ -242,10 +242,15 @@ def render(d, decisions=None, live=False, api_base="", list_id=None):
     aud = d.get("list_audit")
     aud_html = ""
     if aud:
-        acol = "#195C3F" if aud["score"] >= 70 else ("#6B4A00" if aud["score"] >= 50 else "#861E10")
+        score = aud["score"]
+        grade = ("A" if score >= 90 else "B" if score >= 75 else
+                 "C" if score >= 60 else "D" if score >= 40 else "F")
+        acol = ("#195C3F" if grade in ("A", "B") else
+                "#6B4A00" if grade in ("C", "D") else "#861E10")
         aud_html = (f"<div class='audscore'><div class='eyebrow'>List quality</div>"
-                    f"<div class='num-hero' style='color:{acol}'>{aud['score']}</div>"
-                    f"<div class='small muted'>{aud['on_icp']} of {aud['sampled']} sampled on-ICP</div></div>")
+                    f"<div class='num-hero' style='color:{acol}'>{grade}</div>"
+                    f"<div class='small muted'>{score}% on-ICP · {aud['on_icp']} of "
+                    f"{aud['sampled']} sampled</div></div>")
 
     # sticky routine checklist: auto ticks per check + manual confirmations
     ck_auto = "".join(
