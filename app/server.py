@@ -7414,10 +7414,15 @@ def _mailbox_sync_bg():
         return  # a prior sweep is still running — skip this one
     try:
         import sync_mailboxes  # lazy: circular-safe (module imports server)
-        sync_mailboxes.main()
+        try:
+            sync_mailboxes.main()
+            code = 0
+        except SystemExit as se:  # main() ends via sys.exit(); 0 = verified success
+            code = int(se.code or 0)
         sb("POST", "app_activity_log",
            {"actor": "cron", "endpoint": "/api/cron/mailbox-sync",
-            "action": "mailbox_sync_done", "entity": "mailboxes"})
+            "action": "mailbox_sync_done" if code == 0 else "mailbox_sync_failed",
+            "entity": "mailboxes", "payload": {"exit": code}})
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[mailbox-sync] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",
