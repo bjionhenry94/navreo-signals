@@ -4764,7 +4764,19 @@ def push_prospect(pr: dict, dest: dict, client_id=None) -> dict:
         # can't know the route -> fail loudly, never mis-route to HeyReach
         tools["smartlead"] = {"ok": False, "message": f"email lookup failed: {email_error}"}
     elif email:
-        if not sl:
+        if not sl and hr:
+            # HeyReach-only destination (e.g. engagement/Trigify campaigns): email is
+            # bonus enrichment, not a routing key — send to HeyReach directly.
+            if done.get(f"heyreach:{hr}"):
+                tools["heyreach"] = {"ok": True, "message": "already sent"}
+            else:
+                try:
+                    tools["heyreach"] = push_to_heyreach(pr, hr)
+                except Exception as e:  # noqa: BLE001
+                    tools["heyreach"] = {"ok": False, "message": str(e)[:150]}
+                if tools["heyreach"]["ok"]:
+                    done[f"heyreach:{hr}"] = True
+        elif not sl:
             tools["smartlead"] = {"ok": False, "message": "email found but no Smartlead campaign set"}
         elif done.get(f"smartlead:{sl}"):
             tools["smartlead"] = {"ok": True, "message": "already sent"}
@@ -5410,7 +5422,7 @@ ENG_ICE_PLAIN = "Your work at {{company}} caught my eye, and so I thought I'd re
 
 ENG_BACKFILL_DAYS = 15
 ENG_COMMENTS_PER_POST = 30
-ENG_STAGE_PER_RUN = 40  # engagers enriched+staged per source per run (credit bound)
+ENG_STAGE_PER_RUN = 200  # engagers enriched+staged per source per run (credit bound)
 # Trigify calls are network-bound (~2.5s each) and independent, so they run
 # concurrently. Kept modest: these are someone else's rate limits, not ours.
 ENG_LIST_WORKERS = 10     # saved-search listings (was 47 x 2.8s = 131s serially)
@@ -5817,7 +5829,7 @@ THEIRSTACK_JOBS_PER_PULL = int(os.environ.get("THEIRSTACK_JOBS_PER_PULL", "1000"
 # evenly between them. Self-adjusting: add a 5th source and each gets a fifth.
 # A source may override with its own `leads_per_day`; unset means "take an even
 # share". Credits follow leads at roughly 2.35 credits per lead.
-SIGNAL_DAILY_LEADS = int(os.environ.get("SIGNAL_DAILY_LEADS", "160"))
+SIGNAL_DAILY_LEADS = int(os.environ.get("SIGNAL_DAILY_LEADS", "400"))
 # Companies enriched per lead, worst case. AI-ARK/Prospeo bill per person; measured
 # yield is ~45% of companies producing a verified-email DM, so ~2 companies per lead.
 COMPANIES_PER_LEAD_HEADROOM = int(os.environ.get("SIGNAL_COMPANIES_PER_LEAD", "4"))
