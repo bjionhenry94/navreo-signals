@@ -708,7 +708,30 @@
     if (ct.indexOf("application/json") === -1) return resp.text(); // CSV etc.
     return resp.json();
   }
-  function apiGet(path, opts) { return apiFetch(path, Object.assign({ method: "GET" }, opts)); }
+  /* GET traffic shaping — the audit backend fans every call out to Smartlead
+     (hard 200 req/min cap), so unthrottled bursts (boot, filter changes) made
+     it 429/502. Two rules, GETs only (mutations must never wait in a queue):
+     1. COALESCE — concurrent GETs for the identical path share one request.
+     2. LIMIT — at most 2 backend GETs in flight; the rest queue FIFO. */
+  const GETQ = { inflight: new Map(), waiting: [], active: 0, MAX: 2 };
+  function _getqNext() {
+    while (GETQ.active < GETQ.MAX && GETQ.waiting.length) {
+      const job = GETQ.waiting.shift();
+      GETQ.active++;
+      apiFetch(job.path, Object.assign({ method: "GET" }, job.opts))
+        .then(job.resolve, job.reject)
+        .finally(() => { GETQ.active--; GETQ.inflight.delete(job.path); _getqNext(); });
+    }
+  }
+  function apiGet(path, opts) {
+    if (GETQ.inflight.has(path)) return GETQ.inflight.get(path);
+    const p = new Promise((resolve, reject) => {
+      GETQ.waiting.push({ path, opts, resolve, reject });
+      _getqNext();
+    });
+    GETQ.inflight.set(path, p);
+    return p;
+  }
   function apiPost(path, body, opts) { return apiFetch(path, Object.assign({ method: "POST", body: body || {} }, opts)); }
 
   /* ============================================================
@@ -922,8 +945,11 @@
     DATA.mode = "live";
     if (S.ui) delete S.ui.redSnapshot; // re-baseline partial-progress math to live
     saveState();
-    // Invalidate the per-panel live caches so they re-fetch against the new run.
-    DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
+    // Invalidate the per-panel live caches so they re-fetch against the new
+    // run — but KEEP rows/counts/batches (with rowsKey marking what they
+    // belong to) so the manager table revalidates behind the scenes instead of
+    // blanking to a spinner mid-session every time a fresh blob lands.
+    DATA.mgr.key = null;
     DATA.dh.key = null; DATA.dh.done = false;
     DATA.audit.loading = false; DATA.audit.error = null; DATA.audit.failSample = false;
     DATA.audit.sampleApplied = false; DATA.audit.timedOut = false; DATA.audit.ageSec = ageSec;
@@ -941,9 +967,15 @@
   // the owner did in this fallback state.
   function enterAuditFailSample(message) {
     stopAuditPoll();
-    DATA.audit.loading = false; DATA.audit.error = message; DATA.audit.failSample = true;
+    DATA.audit.loading = false; DATA.audit.error = message;
     DATA.audit.timedOut = false;
-    if (!S.A || S.A._live || !DATA.audit.sampleApplied) {
+    // Never swap REAL data off the screen for the fake sample roster: if a live
+    // blob is already painted, keep it (age-labelled, error recorded) — a
+    // backend hiccup shouldn't make every number on the page change. Sample
+    // fallback only fires when there was never live data to show.
+    if (S.A && S.A._live) { DATA.audit.failSample = false; return; }
+    DATA.audit.failSample = true;
+    if (!S.A || !DATA.audit.sampleApplied) {
       S.A = buildMock();
       S.A.date = todayISO();
       DATA.audit.sampleApplied = true;
@@ -1031,11 +1063,20 @@
   function ensureMgrLive() {
     const key = mgrLiveKey();
     if (DATA.mgr.key === key && DATA.mgr.rows) return true;
-    if (DATA.mgr.loading && DATA.mgr.pendingKey === key) return false;
+    // Stale-while-revalidate: a fresh audit blob nulls DATA.mgr.key (data may
+    // have moved) but keeps rows + rowsKey. When the kept rows are for the SAME
+    // view/batch the user is looking at, keep showing them while the refetch
+    // runs instead of blanking the table to a spinner mid-session.
+    const staleOk = !!(DATA.mgr.rows && DATA.mgr.rowsKey === key);
+    if (DATA.mgr.loading && DATA.mgr.pendingKey === key) return staleOk;
     DATA.mgr.loading = true; DATA.mgr.error = false; DATA.mgr.pendingKey = key;
     const q = "inboxes?view=" + encodeURIComponent(UI.mgr.view) + "&batch=" + encodeURIComponent(UI.mgr.batch || "");
     apiGet(q, { timeout: 90000 }).then((r) => {
-      DATA.mgr.key = key; DATA.mgr.pendingKey = null; DATA.mgr.loading = false; DATA.mgr.error = false;
+      // Latest-wins: if the user changed view/batch while this was in flight,
+      // a newer request owns the panel — drop this response instead of letting
+      // the slower/older one overwrite it ("data keeps changing" bug).
+      if (DATA.mgr.pendingKey !== key) return;
+      DATA.mgr.key = key; DATA.mgr.rowsKey = key; DATA.mgr.pendingKey = null; DATA.mgr.loading = false; DATA.mgr.error = false;
       DATA.mgr.rows = (r && Array.isArray(r.rows)) ? r.rows : [];
       DATA.mgr.counts = (r && r.counts) || null;
       DATA.mgr.batches = (r && Array.isArray(r.batches)) ? r.batches : null;
@@ -1052,10 +1093,14 @@
       }
       if (dlvSubtab === "manager") paintPage(); // refresh selector counts + rows
     }).catch(() => {
-      DATA.mgr.pendingKey = null; DATA.mgr.loading = false; DATA.mgr.error = true;
+      if (DATA.mgr.pendingKey !== key) return; // superseded — a newer request owns the panel
+      DATA.mgr.pendingKey = null; DATA.mgr.loading = false;
+      // A failed refresh with same-key rows still on screen isn't a blank-out:
+      // keep the stale rows visible rather than swapping them for an error row.
+      DATA.mgr.error = !staleOk;
       if (dlvSubtab === "manager") paintManagerRows();
     });
-    return false;
+    return staleOk;
   }
 
   // ── Domain view live fetch: GET /domain-health?start&end&minSent&cutoff ──
@@ -1076,6 +1121,10 @@
       "&end=" + encodeURIComponent(S.A.domainHealth.end || "") +
       "&minSent=" + encodeURIComponent(c.minSent) + "&cutoff=" + encodeURIComponent(c.cutoff);
     apiGet(q, { timeout: 120000 }).then((r) => {
+      // Latest-wins: the owner changed the window/min-sent/cutoff while this
+      // was in flight — a newer request owns the table; never let an older
+      // (slower) response overwrite it or be persisted via saveState().
+      if (DATA.dh.pendingKey !== key) return;
       if (r && Array.isArray(r.rows)) {
         S.A.domainHealth = Object.assign({}, S.A.domainHealth, {
           rows: r.rows, resting: r.resting || {}, restingDue: r.restingDue || {},
@@ -1089,6 +1138,7 @@
       DATA.dh.key = key; DATA.dh.pendingKey = null; DATA.dh.done = true; DATA.dh.loading = false;
       if (dlvSubtab === "manager" && UI.mgr.view === "domain") paintPage();
     }).catch(() => {
+      if (DATA.dh.pendingKey !== key) return; // superseded — a newer request owns the table
       DATA.dh.pendingKey = null; DATA.dh.loading = false; DATA.dh.error = true; DATA.dh.done = true; DATA.dh.key = key;
     });
   }
@@ -3670,7 +3720,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const rows = mgrVisibleMailboxRows() || [];
     const selectable = UI.mgr.view !== "blocked";
     const cnt = $id("dlv-mgr-count");
-    if (cnt) cnt.textContent = rows.length + " shown" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "");
+    // Stale-while-revalidate hint: rows on screen are from the previous audit
+    // pass while a same-view refetch runs — say so instead of blanking them.
+    const refreshing = isLive() && DATA.mgr.loading && DATA.mgr.key !== mgrLiveKey();
+    if (cnt) cnt.textContent = rows.length + " shown" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + (refreshing ? " · refreshing…" : "");
     const bw = $id("dlv-mgr-bulk");
     if (bw) {
       const n = UI.mgr.sel.size;
@@ -3993,7 +4046,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Footer must tell the truth about the data source: live blob vs the
     // sample/mock fallback (backend unconfigured, unreachable, or failSample).
     if (isLive() && !DATA.audit.failSample)
-      return `<div class="dlv-footer">Deliverability audit · live data${DATA.audit.ageSec != null ? " · as of " + auditAgeLabel(DATA.audit.ageSec) : ""}</div>`;
+      return `<div class="dlv-footer">Deliverability audit · real data${DATA.audit.ageSec != null ? " · updated " + auditAgeLabel(DATA.audit.ageSec) : ""}</div>`;
     return `<div class="dlv-footer">Deliverability audit · demo mode — mock data</div>`;
   }
 
@@ -7053,8 +7106,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "mgr-view") { UI.mgr.view = t.value; UI.mgr.sel = new Set(); UI.mgr.search = ""; paintPage(); return; }
     if (act === "mgr-domfilter") { UI.mgr.domFilter = t.value; UI.mgr._domFilterUserSet = true; paintManagerRows(); return; }
     if (act === "mgr-batch") { UI.mgr.batch = t.value; UI.mgr.sel = new Set(); paintManagerRows(); return; }
-    if (act === "mgr-dh-start") { S.A.domainHealth.start = t.value; saveState(); paintManagerRows(); return; }
-    if (act === "mgr-dh-end") { S.A.domainHealth.end = t.value; saveState(); paintManagerRows(); return; }
+    if (act === "mgr-dh-start") { S.A.domainHealth.start = t.value; saveState(); dhDebouncedPaint(); return; }
+    if (act === "mgr-dh-end") { S.A.domainHealth.end = t.value; saveState(); dhDebouncedPaint(); return; }
     if (act === "mgr-select-all") {
       // Selects exactly the rows on screen — the same live-aware, filtered
       // row-set paintMailboxRows() renders (this used to rebuild rows from the
@@ -7131,10 +7184,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       reportActionError(act, err);
     }
   }
+  // Domain-health window/min-sent/cutoff are SERVER-affecting params: every
+  // change fires a backend query. Debounce the repaint (which triggers the
+  // fetch) so typing "500" queries once for 500 — not for 5, then 50, then 500.
+  let _dhDebounce = null;
+  function dhDebouncedPaint() {
+    if (_dhDebounce) clearTimeout(_dhDebounce);
+    _dhDebounce = setTimeout(() => { _dhDebounce = null; paintManagerRows(); }, 600);
+  }
   function dispatchDlvInput(t, act) {
     if (act === "mgr-search") { UI.mgr.search = t.value; paintManagerRows(); return; }
-    if (act === "mgr-dh-minsent") { UI.dh.minSent = Number(t.value) || 500; paintManagerRows(); return; }
-    if (act === "mgr-dh-cutoff") { UI.dh.cutoff = Number(t.value) || 0.8; paintManagerRows(); return; }
+    if (act === "mgr-dh-minsent") { UI.dh.minSent = Number(t.value) || 500; dhDebouncedPaint(); return; }
+    if (act === "mgr-dh-cutoff") { UI.dh.cutoff = Number(t.value) || 0.8; dhDebouncedPaint(); return; }
     if (act === "rem-date-input") { updateRemDateHint(t.value); return; }
     // Item 5a: typing in the domains field clears the inline "type a domain
     // first" error state as soon as it's no longer true.
