@@ -1202,8 +1202,8 @@ function variantsTableHTML(n) {
       ? "0% split, never configured (Bug A)"
       : "Disabled in Smartlead - no longer receiving traffic";
     const statusCell = off
-      ? `<span class="var-status var-status-off jg" title="${esc(offWhy)}">○ Off</span>`
-      : `<span class="var-status var-status-on jg" title="Live - currently receiving traffic">● Online</span>`;
+      ? `<span class="var-status var-status-off jg" title="${esc(offWhy)}">○ Inactive</span>`
+      : `<span class="var-status var-status-on jg" title="Live - currently receiving traffic">● Active</span>`;
     const rowTitle = recommendKill
       ? "Recommendation: get rid of this variant - 800+ sends without earning its keep"
       : (flags.includes("winner") ? "Recommendation: keep - this variant is converting" : "");
