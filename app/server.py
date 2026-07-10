@@ -7439,6 +7439,25 @@ def _deliv_mock_on() -> bool:  # DELIV_MOCK
     return os.environ.get("DELIV_MOCK") == "1"
 
 
+_DELIV_REST_DAYS_MS = 7 * 86400 * 1000
+
+
+def _deliv_fix_resting_due(dh):
+    """The audit backend's `restingDue` map holds the timestamp a domain was
+    PUT to rest (pause moment, ms) — not when the rest ends. The dashboard
+    renders the value as a due-back date, so a freshly-rested domain flipped
+    to "due now" as soon as a domain-health refetch replaced the client's
+    local 7-day clock (verified live 2026-07-10: all 83 values sat in the
+    past, each equal to its own pause moment). Shift every value to
+    rested_at + 7 days on the way through, so all clients see the 7-day
+    pause the warm-up dialog promises. If the backend ever starts sending
+    real end dates, drop this shift."""
+    if isinstance(dh, dict) and isinstance(dh.get("restingDue"), dict):
+        dh["restingDue"] = {k: v + _DELIV_REST_DAYS_MS
+                            for k, v in dh["restingDue"].items()
+                            if isinstance(v, (int, float))}
+
+
 def _deliv_audit_run_bg():
     """Fire the ~4-min live audit against the backend once; store blob or error."""
     if _deliv_mock_on():  # DELIV_MOCK — fake a short "run", then store a fresh mock blob
@@ -7464,6 +7483,7 @@ def _deliv_audit_run_bg():
         # refreshes forever — give the run real headroom.
         with urllib.request.urlopen(req, timeout=600, context=SSL_CTX) as resp:
             blob = json.loads(resp.read())
+        _deliv_fix_resting_due((blob or {}).get("domainHealth"))
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
         _snapshot_from_blob(blob)  # daily fleet-count row for the trends header
@@ -7844,6 +7864,16 @@ class Handler(SimpleHTTPRequestHandler):
             status = e.code
         except Exception as e:  # noqa: BLE001 — network/timeout: surface upstream failure as 502
             return self._json({"error": "deliverability_upstream_error", "message": str(e)[:300]}, 502)
+        # restingDue arrives as the pause moment, not the due-back date — shift
+        # it to +7d before it reaches any client (see _deliv_fix_resting_due).
+        _rest_path = self.path[len("/api/deliverability/"):].split("?")[0].strip("/")
+        if method == "GET" and status == 200 and _rest_path == "domain-health":
+            try:
+                obj = json.loads(data)
+                _deliv_fix_resting_due(obj)
+                data = json.dumps(obj).encode()
+            except (ValueError, UnicodeDecodeError):
+                pass  # non-JSON upstream reply — forward untouched
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store")
