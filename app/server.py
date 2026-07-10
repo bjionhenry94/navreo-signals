@@ -7937,6 +7937,13 @@ class Handler(SimpleHTTPRequestHandler):
         return rows[0] if isinstance(rows, list) and rows else None
 
     def _qa_gate_get(self, path):
+        try:
+            return self._qa_gate_get_inner(path)
+        except Exception as e:  # noqa: BLE001 — a bad run must 500, never kill the connection (Render shows that as 502)
+            print(f"[qa-gate] GET {path} crashed: {type(e).__name__}: {e}", file=sys.stderr)
+            return self._json({"error": f"qa-gate render failed: {type(e).__name__}"}, 500)
+
+    def _qa_gate_get_inner(self, path):
         import qa_gate
         from urllib.parse import parse_qs, urlparse
         parts = path.strip("/").split("/")
@@ -7995,6 +8002,13 @@ class Handler(SimpleHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     def _qa_gate_post(self, path):
+        try:
+            return self._qa_gate_post_inner(path)
+        except Exception as e:  # noqa: BLE001
+            print(f"[qa-gate] POST {path} crashed: {type(e).__name__}: {e}", file=sys.stderr)
+            return self._json({"error": f"qa-gate action failed: {type(e).__name__}"}, 500)
+
+    def _qa_gate_post_inner(self, path):
         import qa_gate, datetime
         length = int(self.headers.get("Content-Length") or 0)
         if length > 8_000_000:

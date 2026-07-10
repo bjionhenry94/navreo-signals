@@ -83,6 +83,43 @@ def humanise(f):
     return d, None
 
 
+def normalise_run(run):
+    """Make any reasonably-shaped gate run renderable. Skills assemble run JSON
+    with drifting shapes (top-level campaign_id vs campaign{}, results without
+    detail text); the page must degrade gracefully, never 502."""
+    run = dict(run or {})
+    camp = run.get("campaign") if isinstance(run.get("campaign"), dict) else {}
+    camp = dict(camp)
+    if not camp.get("id"):
+        camp["id"] = run.get("campaign_id") or "?"
+    if not camp.get("name"):
+        camp["name"] = run.get("campaign_name") or f"Campaign {camp['id']}"
+    run["campaign"] = camp
+    run["run_at"] = str(run.get("run_at") or "")
+    res = {}
+    for k, v in (run.get("results") or {}).items():
+        v = dict(v) if isinstance(v, dict) else {"status": str(v)}
+        st = str(v.get("status") or "FAIL").upper()
+        v["status"] = st if st in ("PASS", "FAIL", "OVERRIDDEN", "RESOLVED") else             ("PASS" if st in ("OK", "GREEN") else "FAIL")
+        v.setdefault("detail", "")
+        res[k] = v
+    run["results"] = res
+    flags = []
+    for f in (run.get("flags") or []):
+        f = dict(f) if isinstance(f, dict) else {}
+        f.setdefault("check", next(iter(res), "schema"))
+        f.setdefault("email", "?")
+        f.setdefault("field", "")
+        f["detail"] = str(f.get("detail") or "")
+        flags.append(f)
+    run["flags"] = flags
+    run["rows"] = run.get("rows") or []
+    run["checklist"] = run.get("checklist") or []
+    if not isinstance(run.get("rows_in"), int):
+        run["rows_in"] = len(run["rows"])
+    return run
+
+
 def resolve(d, decisions):
     """Map decisions onto flags. Returns (state_by_flag_id, dropped_emails, fixed_lookup)."""
     dropped = {x["email"] for x in decisions if x["action"] == "dropped"}
@@ -117,8 +154,10 @@ def working_rows(d, decisions):
 
 
 def gate_state(d, decisions):
+    d = normalise_run(d)
     state, _, _ = resolve(d, decisions)
-    open_fail = any(st == "open" and d["results"][d["flags"][i]["check"]]["status"] == "FAIL"
+    open_fail = any(st == "open" and
+                    d["results"].get(d["flags"][i]["check"], {}).get("status", "FAIL") == "FAIL"
                     for i, (st, _) in state.items())
     if open_fail:
         return "BLOCKED"
@@ -129,6 +168,7 @@ def gate_state(d, decisions):
 
 
 def render(d, decisions=None, live=False, api_base=""):
+    d = normalise_run(d)
     decisions = decisions or []
     state, dropped, _ = resolve(d, decisions)
     stamp = d["run_at"][:19].replace(":", "-")
@@ -566,6 +606,7 @@ def _now():
 def apply_action(run, decisions, action, body):
     """Apply one review action. Returns (http_status, payload_dict, new_decisions).
     new_decisions is None when nothing changed (error paths)."""
+    run = normalise_run(run)
     dec = list(decisions or [])
     flags = run["flags"]
     by = (body.get("by") or "").strip()
