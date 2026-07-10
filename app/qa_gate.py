@@ -201,13 +201,17 @@ def render(d, decisions=None, live=False, api_base=""):
         gate_line += " ⚠ 0 leads remain — clearing this gate uploads nothing."
     confirmed = {x["item"]: x for x in decisions if x["action"] == "confirmed"}
 
+    cid = str(d["campaign"]["id"])
+    sl_url = f"https://app.smartlead.ai/app/email-campaign/{cid}/analytics" if cid.isdigit() else None
+    sl_link = (f" <a href='{sl_url}' target='_blank' style='font-size:12px'>View in Smartlead →</a>"
+               if sl_url else "")
     uploaded = next((x for x in decisions if x.get("action") == "upload"), None)
     if uploaded:
         up_html = ("<span class='pill a'><span class='dot'></span>Force-uploaded ⚠ · "
                    f"{esc(uploaded.get('by') or '')}</span>" if uploaded["mode"] == "forced" else
                    "<span class='pill g'><span class='dot'></span>Upload approved ✓ · "
                    f"{esc(uploaded.get('by') or '')}</span>")
-        up_html = f"<div class='upwrap'>{up_html}</div>"
+        up_html = f"<div class='upwrap'>{up_html}{sl_link}</div>"
     elif live:
         up_html = """
       <div class="upwrap">
@@ -484,7 +488,7 @@ if (upBtn) {
       {aud_html}
       <div class="pagehead-far">
         {up_html}
-        <div class="freshness">Run <b>{esc(d['run_at'][:19])} UTC</b><br>Campaign <b>{esc(d['campaign']['id'])}</b></div>
+        <div class="freshness">Run <b>{esc(d['run_at'][:19])} UTC</b><br>Campaign <b>{f"<a href='{sl_url}' target='_blank'>{esc(cid)}</a>" if sl_url else esc(cid)}</b></div>
       </div>
     </div>
   </div>
