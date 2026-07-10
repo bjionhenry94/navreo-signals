@@ -747,6 +747,7 @@
   // and Domain-health tables reconcile from the backend instead of only
   // trusting local optimistic state.
   function invalidateMgrDh() {
+    invalidateDormant();
     DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
     DATA.dh.key = null; DATA.dh.done = false;
   }
@@ -2252,6 +2253,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           action: "Catch it before it crosses 3% and burns domains — check Performance by batch for the batches driving it.",
           _openBatch: true };
       }
+      case "dormant-noreminder": {
+        if (!isLive()) return null; // sample data can't make this claim
+        const rows = dormantRows();
+        if (!rows) { ensureDormantLive(); return null; } // still loading — claim nothing yet
+        const n = rows.length;
+        if (!n) return { key: "dormant-noreminder", level: "red", count: 0, resolved: true, text: "Every warmup-off mailbox is either Maildoso-managed or covered by a restore reminder." };
+        const doms = [...new Set(rows.map((r) => r.domain))];
+        return { key: "dormant-noreminder", level: "red", count: n, short: "dormant mailboxes — warmup off, no reminder",
+          text: n + " mailbox(es) on " + doms.length + " domain(s) have warmup OFF and no restore reminder — sitting dormant: not sending, not warming, just losing time. Domains: " + doms.slice(0, 6).join(", ") + (doms.length > 6 ? " +" + (doms.length - 6) + " more" : "") + ".",
+          action: "Either re-enable warmup (manager → Warmup off view) or add a restore reminder so they come back on a schedule.",
+          _openManager: true };
+      }
       default: return null;
     }
   }
@@ -2260,8 +2273,33 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      the single source of truth for counts/text/resolved-status so nothing can
      go stale after an action (fix: to-do items used to only refresh on
      "Mark done"; now every mutating action feeds straight back in here). */
+
+  /* ── Dormant guard: warmup-off mailboxes that are NOT Maildoso-managed
+     (Maildoso warms externally — warmup off there is intentional) and NOT
+     covered by an open restore reminder. Nothing is warming these and nothing
+     will remind anyone to bring them back — they sit dormant, losing time.
+     Rows fetched live once per load; the reminder join re-runs every paint so
+     adding a reminder clears the flag immediately. ── */
+  const DORMANT = { rows: null, loading: false, error: false };
+  function invalidateDormant() { DORMANT.rows = null; DORMANT.error = false; }
+  function ensureDormantLive() {
+    if (!isLive() || DORMANT.rows || DORMANT.loading || DORMANT.error) return;
+    DORMANT.loading = true;
+    apiFetch("inboxes?view=warmupoff&batch=", { timeout: 120000 }).then((r) => {
+      DORMANT.loading = false;
+      DORMANT.rows = (r && Array.isArray(r.rows)) ? r.rows : [];
+      paintPage();
+    }).catch(() => { DORMANT.loading = false; DORMANT.error = true; });
+  }
+  function dormantRows() {
+    if (!DORMANT.rows) return null;
+    const covered = new Set();
+    (S.A.reminders || []).forEach((r) => { if (!r.done) (r.domains || []).forEach((d) => covered.add(String(d).toLowerCase())); });
+    return DORMANT.rows.filter((r) => !r.maildoso && !covered.has(String(r.domain || "").toLowerCase()));
+  }
+
   function recomputeTodos(D) {
-    const kinds = ["blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "reminder-due", "retired-domains", "smtp-imap", "auth-records", "sending-deviation", "trend-drift"];
+    const kinds = ["dormant-noreminder", "blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "reminder-due", "retired-domains", "smtp-imap", "auth-records", "sending-deviation", "trend-drift"];
     let raw = kinds.map((k) => buildTodoItem(k, D)).filter(Boolean);
 
     // Dynamic: domains flagged for warm-up rotation that aren't resting yet.
