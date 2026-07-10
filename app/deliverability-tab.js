@@ -2140,6 +2140,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     apiFetch("inboxes?view=warmupoff&batch=", { timeout: 120000 }).then((r) => {
       DORMANT.loading = false;
       DORMANT.rows = (r && Array.isArray(r.rows)) ? r.rows : [];
+      // Free side-effect: this response carries the fleet-wide, view-independent
+      // mailbox counts + batch list — seed the manager with them so its view
+      // selector shows real numbers even before any mailbox view is opened.
+      if (r && r.counts && !(DATA.mgr && DATA.mgr.counts)) { DATA.mgr.counts = r.counts; }
+      if (r && Array.isArray(r.batches) && !(DATA.mgr && DATA.mgr.batches)) { DATA.mgr.batches = r.batches; }
       paintPage();
     }).catch(() => { DORMANT.loading = false; DORMANT.error = true; });
   }
@@ -3509,9 +3514,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     let rows = D.dhRows.slice();
     rows.sort((a, b) => (a.flag === "warmup" ? 0 : 1) - (b.flag === "warmup" ? 0 : 1) || a.reply_rate - b.reply_rate || b.sent - a.sent);
     const f = UI.mgr.domFilter;
+    if (f === "resting") {
+      const have = new Set(rows.map((d) => d.domain));
+      Object.keys(resting).forEach((dom) => {
+        if ((resting[dom] || 0) > 0 && !have.has(dom))
+          rows = rows.concat([{ domain: dom, sent: 0, lead: 0, replied: 0, reply_rate: 0, positive: 0, positive_rate: 0, bounced: 0, bounce_rate: 0, maildoso: false, batches: [], flag: "ok" }]);
+      });
+    }
     rows = rows.filter((d) => {
       if (f === "warmup") return d.flag === "warmup";
-      if (f === "resting") return (resting[d.domain] || 0) > 0 && d.sent >= minSent && d.reply_rate < cutoff;
+      if (f === "resting") return (resting[d.domain] || 0) > 0; // resting domains send ~nothing — a volume gate here hid every one of them
       if (f === "maildoso") return d.flag === "maildoso";
       if (f === "keep") return d.sent >= minSent && d.flag !== "warmup" && d.flag !== "maildoso";
       return true;
@@ -3523,7 +3535,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const recovered = D.recovered;
     window._dlvRecovered = recovered;
     const cnt = $id("dlv-mgr-count");
-    if (f === "resting") cnt.innerHTML = rows.length + " still resting (sent ≥" + minSent + " · reply &lt;" + cutoff + "%)" + (recovered.length ? ` · <b style="color:var(--green)">${recovered.length} recovered — ready to reactivate</b>` : "");
+    if (f === "resting") cnt.innerHTML = rows.length + " resting — paused by the dashboard, due-date tracked" + (recovered.length ? ` · <b style="color:var(--green)">${recovered.length} recovered — ready to reactivate</b>` : "");
     else cnt.textContent = rows.length + " shown · " + D.flaggedActionable + " to warm up" + (D.restingCount ? " · " + D.restingCount + " resting fleet-wide" : "");
     const bulk = $id("dlv-mgr-bulk");
     if (bulk) {
