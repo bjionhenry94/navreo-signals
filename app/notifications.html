@@ -274,13 +274,21 @@ table.var-tbl .var-angle { white-space: normal; max-width: 320px;
    column ends up wrapping 8+ lines tall - let this table scroll instead */
 .table-scroll table.var-tbl { min-width: 820px; }
 tr.var-zero { background: var(--amber-bg); }
-tr.var-disabled { opacity: 0.55; text-decoration: line-through; }
+/* strikethrough = the RECOMMENDATION ("get rid of this variant"), never the
+   actual on/off state - that lives in the Status column. Already-off rows
+   are only muted; there is nothing left to recommend about them. */
+tr.var-kill { text-decoration: line-through; text-decoration-color: var(--red); }
+tr.var-kill td { color: var(--red); }
+tr.var-off { opacity: 0.55; }
 .var-status { font-size: 12px; white-space: nowrap; }
 .var-status-on { color: var(--green); }
 .var-status-off { color: var(--ink-3); }
 /* the status word itself must stay readable on struck-through rows */
-tr.var-disabled .var-status { text-decoration: none; display: inline-block; }
+tr.var-kill .var-status { text-decoration: none; display: inline-block; }
+tr.var-kill .var-status-on { color: var(--green); }
 tr.var-failing td.var-flagcell { color: var(--red); }
+.var-key { margin-top: 4px; }
+.var-key s { text-decoration-color: var(--red); }
 tr.var-winner td.var-flagcell { color: var(--green); }
 .var-note { font-size: 12px; color: var(--ink-3); margin: 6px 0 0; }
 
@@ -1172,9 +1180,17 @@ function variantsTableHTML(n) {
   const rows = variants.map((v) => {
     const flags = v.flags || [];
     const rowCls = ["var-row"];
+    // Two separate signals per row (user correction 2026-07-10): the Status
+    // column is the ACTUAL state (Online/Off in Smartlead), the strikethrough
+    // is the RECOMMENDATION - "get rid of this variant". So only a variant
+    // that is failing AND still live gets struck through; a variant that is
+    // already off is just muted, there is nothing left to recommend about it.
+    const off = flags.includes("disabled") || flags.includes("zero_distribution");
+    const recommendKill = flags.includes("failing") && !off;
     if (flags.includes("zero_distribution")) rowCls.push("var-zero");
-    if (flags.includes("disabled")) rowCls.push("var-disabled");
-    if (flags.includes("failing")) rowCls.push("var-failing");
+    if (off) rowCls.push("var-off");
+    if (recommendKill) rowCls.push("var-kill");
+    else if (flags.includes("failing")) rowCls.push("var-failing");
     if (flags.includes("winner")) rowCls.push("var-winner");
     const splitCell = Number.isFinite(v.distribution_pct)
       ? (flags.includes("zero_distribution")
@@ -1182,18 +1198,16 @@ function variantsTableHTML(n) {
           : `${v.distribution_pct}%`)
       : "–";
     const meetings = (v.meetings === null || v.meetings === undefined) ? "–" : fmt(v.meetings);
-    // Online = still receiving traffic. Off covers both ways a variant stops:
-    // disabled in Smartlead (deleted, or split turned to 0 after sending) and
-    // a split that was never configured (Bug A). The strikethrough alone was
-    // too subtle to read across a long table.
-    const off = flags.includes("disabled") || flags.includes("zero_distribution");
     const offWhy = flags.includes("zero_distribution")
       ? "0% split, never configured (Bug A)"
       : "Disabled in Smartlead - no longer receiving traffic";
     const statusCell = off
       ? `<span class="var-status var-status-off jg" title="${esc(offWhy)}">○ Off</span>`
       : `<span class="var-status var-status-on jg" title="Live - currently receiving traffic">● Online</span>`;
-    return `<tr class="${rowCls.join(" ")}">
+    const rowTitle = recommendKill
+      ? "Recommendation: get rid of this variant - 800+ sends without earning its keep"
+      : (flags.includes("winner") ? "Recommendation: keep - this variant is converting" : "");
+    return `<tr class="${rowCls.join(" ")}"${rowTitle ? ` title="${esc(rowTitle)}"` : ""}>
       <td>Email ${esc(String(v.email ?? "?"))}</td>
       <td>${esc(v.variant || "–")}</td>
       <td>${statusCell}</td>
@@ -1205,9 +1219,14 @@ function variantsTableHTML(n) {
       <td class="var-angle">${esc(v.angle || "–")}</td>
     </tr>`;
   }).join("");
+  const anyKill = variants.some((v) => (v.flags || []).includes("failing")
+    && !(v.flags || []).includes("disabled") && !(v.flags || []).includes("zero_distribution"));
+  const keyLine = anyKill
+    ? `<div class="var-key small muted"><s>Struck through</s> = our recommendation to get rid of that variant. Status shows what is actually live right now.</div>`
+    : "";
   return `<div class="table-scroll"><table class="tbl var-tbl">
     <thead><tr><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th><span class="jg" title="Whether this variant is still receiving traffic in Smartlead.">Status</span></th><th>Split %</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th></tr></thead>
-    <tbody>${rows}</tbody></table></div>`;
+    <tbody>${rows}</tbody></table></div>${keyLine}`;
 }
 
 /* fix-split cross-tag: the strategist panel's exact worry was a variant with
