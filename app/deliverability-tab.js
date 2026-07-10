@@ -3425,6 +3425,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   function renderFooter() {
+    // Footer must tell the truth about the data source: live blob vs the
+    // sample/mock fallback (backend unconfigured, unreachable, or failSample).
+    if (isLive() && !DATA.audit.failSample)
+      return `<div class="dlv-footer">Deliverability audit · live data${DATA.audit.ageSec != null ? " · as of " + auditAgeLabel(DATA.audit.ageSec) : ""}</div>`;
     return `<div class="dlv-footer">Deliverability audit · demo mode — mock data</div>`;
   }
 
