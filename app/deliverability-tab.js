@@ -1473,7 +1473,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-kpi-sub{font-size:11.5px;color:var(--ink-3);margin-top:2px}
 .dlv-kpi-accrue{opacity:.8}
 .dlv-kpi-spark{margin-top:8px;line-height:0}
+.dlv-kpi-spark[data-spark]{cursor:crosshair}
 .dlv-kpi-spark .dlv-spark{width:100%;height:48px;display:block}
+.dlv-spark-tip{position:fixed;z-index:400;display:none;pointer-events:none;background:var(--ink);color:var(--paper,#fff);font-size:11.5px;font-weight:600;padding:4px 8px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.18);white-space:nowrap}
 .dlv-kpi-deltarow{display:flex;align-items:center;gap:8px;margin-top:6px}
 .dlv-kpi-delta{font-size:11.5px;font-weight:600}
 .dlv-kpi-delta.g{color:var(--green)}
@@ -2686,7 +2688,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const A = S.A;
     const series = (DATA.trends.status === "ready") ? DATA.trends.series : null;
     const field = KPI_KEY[metric];
-    let value = null, delta = null, sub = "", sparkline = "";
+    let value = null, delta = null, sub = "", sparkline = "", sparkData = "";
     // Panel fix #1 (numbers contradiction): the BIG number is ALWAYS the audit
     // blob's own figure (A.reply_pct / A.bounce_pct / A.sent÷7) — the exact
     // same values the verdict, Fleet-details grid and Copy-for-Claude context
@@ -2730,6 +2732,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (nonNull.length >= 7) {
         const raw = metric === "sent" ? series.sent.map((v) => (v ? v : null)) : series[field];
         sparkline = sparklineSVG(raw, { threshold: metric === "reply" ? 1 : (metric === "bounce" ? 2 : null), endpointColor: sevColor(sev) });
+        // Day-by-day hover tooltip data — the delegated mousemove handler
+        // (sparkTipMove) maps cursor x back to a day through this attribute.
+        sparkData = esc(JSON.stringify({ m: metric, d: series.days, v: raw }));
       } else if (metric === "issues") {
         sub += ` <span class="dlv-kpi-accrue">— trend accrues daily</span>`;
       }
@@ -2741,7 +2746,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-kpi-lab">${esc(label)}</div>
       <div class="dlv-kpi-value">${fmtKpiValue(metric, value)}</div>
       <div class="dlv-kpi-sub">${sub}</div>
-      ${sparkline ? `<div class="dlv-kpi-spark">${sparkline}</div>` : ""}
+      ${sparkline ? `<div class="dlv-kpi-spark"${sparkData ? ` data-spark="${sparkData}"` : ""}>${sparkline}</div>` : ""}
       <div class="dlv-kpi-deltarow">${deltaChip(metric, delta)}${trendNote}</div>
     </div>`;
   }
@@ -6470,6 +6475,63 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Escape has to actually do it — it's named as one of the three ways out
     // (×, Cancel, Escape) but nothing wired it up before.
     document.addEventListener("keydown", onDlvKeydown);
+    // KPI sparkline day-by-day tooltip. mouseleave doesn't bubble, so one
+    // mousemove listener owns both show and hide (cheap: a single closest()
+    // when no spark is hovered).
+    document.addEventListener("mousemove", sparkTipMove);
+  }
+
+  /* KPI sparkline hover tooltip — one shared node, day resolved from cursor x
+     via the data-spark attribute (same PADX/point spacing as sparklineSVG). */
+  let _sparkTip = null, _sparkTipIdx = -1, _sparkTipEl = null;
+  const _MONS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function sparkTipHide() {
+    if (_sparkTip) _sparkTip.style.display = "none";
+    _sparkTipIdx = -1; _sparkTipEl = null;
+  }
+  function sparkTipMove(e) {
+    const wrap = e.target && e.target.closest ? e.target.closest(".dlv-kpi-spark[data-spark]") : null;
+    if (!wrap) { if (_sparkTipEl) sparkTipHide(); return; }
+    let data;
+    try { data = JSON.parse(wrap.dataset.spark); } catch (err) { return; }
+    const n = (data.d || []).length;
+    if (!n || n !== (data.v || []).length) return;
+    // Cursor x → day index, mirroring sparklineSVG's PADX=5-of-300 inset after
+    // the viewBox stretches to the wrapper's real width.
+    const r = wrap.getBoundingClientRect();
+    const padPx = (5 / 300) * r.width;
+    const frac = (e.clientX - r.left - padPx) / Math.max(1, r.width - padPx * 2);
+    let idx = Math.round(Math.min(1, Math.max(0, frac)) * (n - 1));
+    // Snap to the nearest day that actually has a value (nulls = zero-send
+    // weekends / snapshot gaps — never show a tooltip claiming a number there).
+    if (data.v[idx] == null) {
+      let best = -1;
+      for (let o = 1; o < n && best < 0; o++) {
+        if (idx - o >= 0 && data.v[idx - o] != null) best = idx - o;
+        else if (idx + o < n && data.v[idx + o] != null) best = idx + o;
+      }
+      if (best < 0) return;
+      idx = best;
+    }
+    if (!_sparkTip) {
+      _sparkTip = document.createElement("div");
+      _sparkTip.className = "dlv-spark-tip";
+      document.body.appendChild(_sparkTip);
+    }
+    if (idx !== _sparkTipIdx || _sparkTipEl !== wrap) {
+      _sparkTipIdx = idx; _sparkTipEl = wrap;
+      const iso = String(data.d[idx]);
+      const day = iso.length >= 10 ? _MONS[Number(iso.slice(5, 7)) - 1] + " " + Number(iso.slice(8, 10)) : iso;
+      const v = data.v[idx];
+      const val = (data.m === "reply" || data.m === "bounce") ? Number(v).toFixed(2) + "%"
+        : (data.m === "sent" ? fmtN(Number(v)) + " sent" : fmtN(Number(v)) + " issue" + (Number(v) === 1 ? "" : "s"));
+      _sparkTip.textContent = day + " · " + val;
+    }
+    _sparkTip.style.display = "block";
+    // Above the cursor, clamped to the viewport so it never clips at the edges.
+    const tw = _sparkTip.offsetWidth;
+    _sparkTip.style.left = Math.min(window.innerWidth - tw - 6, Math.max(6, e.clientX - tw / 2)) + "px";
+    _sparkTip.style.top = (e.clientY - _sparkTip.offsetHeight - 10) + "px";
   }
 
   function onDlvKeydown(e) {
