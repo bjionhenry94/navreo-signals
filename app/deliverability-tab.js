@@ -3594,7 +3594,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       let cand = strictCand; if (cand.length < 2) cand = bs.filter((b) => b.sent > 0);
       if (cand.length >= 2) {
         const byReply = [...cand].sort((a, b) => b.reply_rate - a.reply_rate);
-        const best = byReply[0], worst = byReply[byReply.length - 1];
+        // A batch bouncing at/over the 2% burn threshold can't be "Best" no
+        // matter its reply rate (seen live: 2.02%-bounce batch crowned Best
+        // over a 1.73%-reply / 0.45%-bounce one). Best = highest reply among
+        // sub-2%-bounce candidates (fall back to pure reply if none qualify);
+        // Worst = the over-threshold bouncer when one exists, else lowest reply.
+        const healthy = byReply.filter((b) => b.bounce_rate < 2);
+        const best = healthy[0] || byReply[0];
+        const burners = [...cand].filter((b) => b.bounce_rate >= 2).sort((a, b) => b.bounce_rate - a.bounce_rate);
+        const worst = (burners[0] && burners[0] !== best) ? burners[0] : byReply[byReply.length - 1];
         // Fix #8a: only claim the ≥1,000-sent qualifier when that's actually the
         // filter in effect — the low-volume fallback below (used when fewer than
         // 2 batches clear 1,000 sent) would make the claim false otherwise.
@@ -3604,7 +3612,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const floor = cand === strictCand ? "(≥1,000 sent)" : "(any sends — too few clear 1,000)";
         summary = `<div class="dlv-bt-summary">
           <span class="dlv-bt-sum best">▲ Best ${floor}${glossMark(BATCH_DEF)}: <b>${esc(best.batch)}</b> — ${best.reply_rate}% reply · ${best.bounce_rate}% bounce · last 7 days</span>
-          <span class="dlv-bt-sum worst">▼ Worst ${floor}${glossMark(BATCH_DEF)}: <b>${esc(worst.batch)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce · last 7 days</span>
+          <span class="dlv-bt-sum worst">▼ Worst ${floor}${glossMark(BATCH_DEF)}: <b>${esc(worst.batch)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce${worst.bounce_rate >= 2 ? " (over the 2% limit)" : ""} · last 7 days</span>
         </div>`;
       }
       body = renderBatchRows(bs);
