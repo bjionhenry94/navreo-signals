@@ -4681,10 +4681,34 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   const _verifyStatus = Object.create(null);
+  // Hydrate from the last session's snapshot so the FIRST paint already knows
+  // which campaigns are ignored/cleaned — without this the to-do list flashes
+  // every flagged campaign for a few seconds, then visibly collapses when the
+  // async /api/verify-status fetch lands (user-reported "shows 8, then reduces
+  // to reality"). The async fetch still runs and reconciles + repaints, so a
+  // stale snapshot (e.g. un-ignored from another device) self-corrects fast.
+  const _VS_CACHE_KEY = "dlv_verify_status_v1";
+  try {
+    const cached = JSON.parse(localStorage.getItem(_VS_CACHE_KEY) || "null");
+    if (cached && cached.status && Date.now() - (cached.ts || 0) < 7 * 86400e3) {
+      Object.entries(cached.status).forEach(([k, v]) => { _verifyStatus[k] = v; });
+    }
+  } catch (e) { /* corrupt cache = cold start, no harm */ }
+  function _saveVerifyStatusCache() {
+    try {
+      const status = {};
+      Object.entries(_verifyStatus).forEach(([k, v]) => { if (v) status[k] = v; });
+      localStorage.setItem(_VS_CACHE_KEY, JSON.stringify({ ts: Date.now(), status }));
+    } catch (e) { /* quota/private mode — cache is an optimisation only */ }
+  }
   let _verifyStatusInFlight = false;
+  let _verifyStatusFreshened = false; // one forced refetch per page load, so the
+                                      // localStorage-hydrated snapshot can't go
+                                      // permanently stale (hydrated ids would
+                                      // otherwise never re-qualify as "needed")
   async function fillVerifyStatus() {
     const ids = [...new Set((S.A.campaignsFlagged || []).map((c) => String(c.id)))];
-    const need = ids.filter((id) => !(id in _verifyStatus));
+    const need = _verifyStatusFreshened ? ids.filter((id) => !(id in _verifyStatus)) : ids;
     if (!need.length || _verifyStatusInFlight) return;
     _verifyStatusInFlight = true;
     let gotData = false;
@@ -4693,9 +4717,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const j = r.ok ? await r.json() : {};
       const status = (j && j.status) || {};
       need.forEach((id) => {
+        // On the freshen pass, detect real changes vs the hydrated snapshot so
+        // we only repaint when the server actually disagrees with the cache.
+        const before = JSON.stringify(_verifyStatus[id] || null);
         _verifyStatus[id] = status[id] || null;
-        if (status[id]) gotData = true;
+        if (JSON.stringify(_verifyStatus[id]) !== before) gotData = true;
       });
+      _verifyStatusFreshened = true;
+      _saveVerifyStatusCache();
     } catch (e) {
       // Leave unfetched ids as null so we don't hammer the endpoint every
       // paint — rows just fall back to session-only state until the next
@@ -4722,6 +4751,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const j = r.ok ? await r.json() : {};
       const status = (j && j.status) || {};
       ids.forEach((id) => { _verifyStatus[id] = status[id] || _verifyStatus[id] || null; });
+      _saveVerifyStatusCache(); // keep the first-paint snapshot current
     } catch (e) { /* keep whatever we had; not worth surfacing an error for a background refresh */ }
     paintPage();
   }
