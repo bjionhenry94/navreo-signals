@@ -7475,6 +7475,98 @@ _DELIV_AUDIT_LOCK = threading.Lock()
 _DELIV_AUDIT_TTL_S = 3600  # serve a cached audit up to 1h old before auto-refreshing
 
 
+def _deliv_fix_batch_stats(blob):
+    """Replace batchStats' sent/reply/bounce with sweep-delta truth.
+
+    The audit backend derives per-batch Sent(7d)/Reply%/Bounce% from its
+    domain-health row set, which is hard-capped at ~59 domains — verified live
+    2026-07-10: batch sends summed to 18,765 while the fleet sent 85,292 in the
+    same window (78% unattributed), and the navreo maildoso pool showed "—"
+    while actually sending ~600/day across 38 small domains that never crack
+    the top-59. Mailbox/warmup/blacklist columns are accurate; only the
+    performance columns lie.
+
+    Correction: per-mailbox deltas between the two most recent daily sweeps
+    within the last 8 days (mailbox_stats_daily.sent_30d/replies_30d/
+    bounces_30d are trailing-30d counters, so newest-minus-oldest ≈ sends in
+    that gap; sends aging out of the 30d window can only UNDER-count, never
+    invent). Pools are keyed person+provider, matched to the backend's batch
+    names, which embed the same person slug + provider suffix. Skips silently
+    (backend numbers kept) when fewer than 2 sweeps exist or Supabase is down.
+    Stamps blob["batchWindowDays"] so the UI can label the real window."""
+    try:
+        from datetime import date, timedelta
+        if not isinstance(blob, dict) or not isinstance(blob.get("batchStats"), list):
+            return
+        cutoff = (date.today() - timedelta(days=8)).isoformat()
+        dates = sb("GET", f"mailbox_stats_daily?select=stat_date&stat_date=gte.{cutoff}"
+                          "&order=stat_date.desc&limit=1", prefer="return=representation")
+        if not dates:
+            return
+        newest = dates[0]["stat_date"]
+        older = sb("GET", f"mailbox_stats_daily?select=stat_date&stat_date=gte.{cutoff}"
+                          f"&stat_date=lt.{newest}&order=stat_date.asc&limit=1",
+                   prefer="return=representation")
+        if not older:
+            return  # only one sweep so far — no delta window yet
+        base = older[0]["stat_date"]
+        stats = sb_get_all("mailbox_stats_daily?select=smartlead_id,stat_date,sent_30d,replies_30d,bounces_30d"
+                           f"&stat_date=in.({base},{newest})")
+        boxes = sb_get_all("mailboxes?select=smartlead_id,from_name,smtp_host,tags")
+        if not stats or not boxes:
+            return
+        def pool_of(m):
+            person = (m.get("from_name") or "?").strip().lower().replace(" ", "-")
+            blobtags = str(m.get("tags") or "").lower()
+            host = (m.get("smtp_host") or "").lower()
+            if "maildoso" in host or "maildoso" in blobtags:
+                prov = "maildoso"
+            elif "boomerang" in blobtags:
+                prov = "boomerang"
+            else:
+                prov = ""
+            return person, prov
+        pools = {m["smartlead_id"]: pool_of(m) for m in boxes}
+        per_box = {}
+        for s in stats:
+            row = per_box.setdefault(s["smartlead_id"], {})
+            row[s["stat_date"]] = s
+        agg = {}
+        for sid, by_date in per_box.items():
+            a, b = by_date.get(base), by_date.get(newest)
+            if not a or not b or sid not in pools:
+                continue
+            key = pools[sid]
+            d = agg.setdefault(key, {"sent": 0, "replies": 0, "bounces": 0})
+            d["sent"] += max(0, (b.get("sent_30d") or 0) - (a.get("sent_30d") or 0))
+            d["replies"] += max(0, (b.get("replies_30d") or 0) - (a.get("replies_30d") or 0))
+            d["bounces"] += max(0, (b.get("bounces_30d") or 0) - (a.get("bounces_30d") or 0))
+        from datetime import datetime as _dt
+        window_days = ( _dt.fromisoformat(newest) - _dt.fromisoformat(base) ).days or 1
+        fixed = 0
+        for row in blob["batchStats"]:
+            name = str(row.get("batch") or "").lower()
+            if name == "(no batch)":
+                continue
+            prov = "maildoso" if name.endswith("maildoso") else ("boomerang" if name.endswith("boomerang") else "")
+            match = None
+            for (person, p2), vals in agg.items():
+                if p2 == prov and person and person in name:
+                    match = vals
+                    break
+            if match is None:
+                continue
+            row["sent"] = match["sent"]
+            row["reply_rate"] = round(100.0 * match["replies"] / match["sent"], 2) if match["sent"] else 0
+            row["bounce_rate"] = round(100.0 * match["bounces"] / match["sent"], 2) if match["sent"] else 0
+            fixed += 1
+        blob["batchWindowDays"] = window_days
+        print(f"[deliv] batchStats corrected from sweep deltas ({base}->{newest}, "
+              f"{window_days}d window, {fixed} batches)", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — correction is best-effort, never break the audit
+        print(f"[deliv] WARNING batchStats correction failed: {e}", file=sys.stderr)
+
+
 def _deliv_audit_persist(blob):
     """Best-effort: mirror the finished audit blob to Supabase so it survives
     process restarts. Deploys restart the process and wiped the in-memory
@@ -7569,6 +7661,7 @@ def _deliv_audit_run_bg():
         with urllib.request.urlopen(req, timeout=600, context=SSL_CTX) as resp:
             blob = json.loads(resp.read())
         _deliv_fix_resting_due((blob or {}).get("domainHealth"))
+        _deliv_fix_batch_stats(blob)  # replace top-59-domain batch metrics with sweep-delta truth
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
         _deliv_audit_persist(blob)  # survives the next deploy/restart

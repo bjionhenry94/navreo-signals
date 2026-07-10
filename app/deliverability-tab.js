@@ -506,6 +506,7 @@
     // Fields whose live shape already matches what the renderers read off S.A.
     const keep = [
       "date", "inboxes", "domains", "active", "sent", "reply_pct", "bounce_pct",
+      "batchWindowDays",
       "replyTrend", "campLow", "highb", "blacklistCleared", "spfMiss", "dkimMiss",
       "dmarcMiss", "noNS", "quarantine", "reject", "none", "smtp", "imap", "inactive",
       "warmupResting", "warmupDue", "lifecycle", "warmupConfig", "signature",
@@ -3611,8 +3612,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // end where it read as fine print detached from the verdict.
         const floor = cand === strictCand ? "(≥1,000 sent)" : "(any sends — too few clear 1,000)";
         summary = `<div class="dlv-bt-summary">
-          <span class="dlv-bt-sum best">▲ Best ${floor}${glossMark(BATCH_DEF)}: <b>${esc(best.batch)}</b> — ${best.reply_rate}% reply · ${best.bounce_rate}% bounce · last 7 days</span>
-          <span class="dlv-bt-sum worst">▼ Worst ${floor}${glossMark(BATCH_DEF)}: <b>${esc(worst.batch)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce${worst.bounce_rate >= 2 ? " (over the 2% limit)" : ""} · last 7 days</span>
+          <span class="dlv-bt-sum best">▲ Best ${floor}${glossMark(BATCH_DEF)}: <b>${esc(best.batch)}</b> — ${best.reply_rate}% reply · ${best.bounce_rate}% bounce · last ${S.A.batchWindowDays || 7} days</span>
+          <span class="dlv-bt-sum worst">▼ Worst ${floor}${glossMark(BATCH_DEF)}: <b>${esc(worst.batch)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce${worst.bounce_rate >= 2 ? " (over the 2% limit)" : ""} · last ${S.A.batchWindowDays || 7} days</span>
         </div>`;
       }
       body = renderBatchRows(bs);
@@ -3634,7 +3635,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const issues = b.dead + b.blocked;
       return `<tr><td class="dlv-bt-name">${esc(b.batch)}</td><td>${b.mailboxes}</td><td>${b.sending}</td><td>${b.warmup}</td><td>${b.sent ? fmtN(b.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${blk}</td><td>${issues ? `<span class="dlv-bt-y">${issues}</span>` : `<span class="dlv-bt-mut">0</span>`}</td></tr>`;
     }).join("");
-    return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Batch</th><th>Mailboxes</th><th>Sending</th><th>Warmup</th><th>Sent (7d)</th><th>Reply&nbsp;%</th><th>Bounce&nbsp;%</th><th>Blacklist</th><th>Issues</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+    const w = S.A.batchWindowDays; // set when sent/reply/bounce were rebuilt from sweep deltas
+    const wLabel = w ? (w === 7 ? "7d" : w + "d") : "7d";
+    return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Batch</th><th>Mailboxes</th><th>Sending</th><th>Warmup</th><th>Sent (${wLabel})</th><th>Reply&nbsp;%</th><th>Bounce&nbsp;%</th><th>Blacklist</th><th>Issues</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
       <div class="dlv-mb-count" style="margin-top:10px">Reply / Bounce are volume-weighted over the last 7 days. "Issues" = dead + blocked. <a class="dlv-dl" data-act="view-data" data-file="batch-stats">View batch performance</a></div>`;
   }
 
