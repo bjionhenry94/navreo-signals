@@ -994,12 +994,14 @@
       DATA.mgr.batches = (r && Array.isArray(r.batches)) ? r.batches : null;
       DATA.mgr.total = r ? r.total : null;
       DATA.mgr.truncated = !!(r && r.truncated);
-      // Live rows just landed — drop selections referencing emails not in them
+      // Live rows just landed — drop selections referencing rows not in them
       // (e.g. sample-roster phantoms selected before live data loaded), so a
-      // bulk action can never fire against mailboxes that don't exist.
+      // bulk action can never fire against mailboxes that don't exist. Keyed
+      // by mgrRowKey (id, email fallback) — selection keys are NOT emails, so
+      // an email-based prune here would wipe every valid selection instead.
       if (UI.mgr.sel && UI.mgr.sel.size) {
-        const have = new Set(DATA.mgr.rows.map((x) => x.email));
-        UI.mgr.sel = new Set([...UI.mgr.sel].filter((e) => have.has(e)));
+        const have = new Set(DATA.mgr.rows.map(mgrRowKey));
+        UI.mgr.sel = new Set([...UI.mgr.sel].filter((k) => have.has(k)));
       }
       if (dlvSubtab === "manager") paintPage(); // refresh selector counts + rows
     }).catch(() => {
@@ -3422,6 +3424,34 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
   }
 
+  // A mailbox row's stable selection key, always a string: live rows key by
+  // their Smartlead account id, sample rows by a local int, and a payload
+  // carrying no id at all falls back to the email — so Set membership never
+  // breaks on a number-vs-string or sample-vs-live id mismatch.
+  function mgrRowKey(r) { return String(r.id != null ? r.id : r.email); }
+
+  // THE one place the manager's visible mailbox row-set is computed: live rows
+  // from DATA.mgr (null while a fetch is still in flight), sample rows from
+  // mgrRowsForView(), then the same batch + search filters the table paints
+  // with. paintMailboxRows() and the select-all handler both read this, so
+  // "select all" acts on exactly the rows on screen. (Select-all previously
+  // rebuilt rows from the sample dataset even in live mode, so it selected
+  // sample ids the live table didn't contain — a phantom "16 selected" over
+  // 610 shown rows, with none of the visible checkboxes ticking.)
+  function mgrVisibleMailboxRows(opts) {
+    let rows;
+    if (isLive()) {
+      if (!(DATA.mgr.key === mgrLiveKey() && DATA.mgr.rows)) return null;
+      rows = DATA.mgr.rows.slice();
+    } else {
+      rows = mgrRowsForView(fullDerive());
+    }
+    if (UI.mgr.batch) rows = rows.filter((r) => (r.tags || []).includes(UI.mgr.batch));
+    const q = (opts && opts.ignoreSearch) ? "" : (UI.mgr.search || "").trim().toLowerCase();
+    if (q) rows = rows.filter((r) => (r.email || "").toLowerCase().includes(q) || (r.domain || "").toLowerCase().includes(q));
+    return rows;
+  }
+
   /* Defaults the domain-filter dropdown to "Needs warm-up" whenever the domain
      view is entered while there are actionable flagged domains, instead of
      always landing on "resting" (which buried the discoverability of warm-up
@@ -3536,26 +3566,24 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function paintMailboxRows() {
     const body = $id("dlv-mgr-body");
     if (!body) return;
-    let rows;
-    if (isLive()) {
-      // Live: rows for this view+batch come from GET /inboxes (endpoint already
-      // filters by view & batch; search stays a client-side filter below).
-      if (!ensureMgrLive()) {
-        body.innerHTML = DATA.mgr.error
-          ? `<tr><td colspan="8" class="dlv-empty">Couldn't load live mailboxes — <a class="dlv-dl" data-act="mgr-refresh">retry</a>.</td></tr>`
-          : `<tr><td colspan="8" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading live mailboxes…</td></tr>`;
-        const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
-        const cnt0 = $id("dlv-mgr-count"); if (cnt0) cnt0.textContent = DATA.mgr.error ? "load failed" : "loading…";
-        return;
-      }
-      rows = (DATA.mgr.rows || []).slice();
-    } else {
-      const D = fullDerive();
-      rows = mgrRowsForView(D);
+    // Live: rows for this view+batch come from GET /inboxes (endpoint already
+    // filters by view & batch; search stays a client-side filter).
+    if (isLive() && !ensureMgrLive()) {
+      body.innerHTML = DATA.mgr.error
+        ? `<tr><td colspan="8" class="dlv-empty">Couldn't load live mailboxes — <a class="dlv-dl" data-act="mgr-refresh">retry</a>.</td></tr>`
+        : `<tr><td colspan="8" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading live mailboxes…</td></tr>`;
+      const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
+      const cnt0 = $id("dlv-mgr-count"); if (cnt0) cnt0.textContent = DATA.mgr.error ? "load failed" : "loading…";
+      return;
     }
-    const q = (UI.mgr.search || "").trim().toLowerCase();
-    if (q) rows = rows.filter((r) => (r.email || "").toLowerCase().includes(q) || (r.domain || "").toLowerCase().includes(q));
-    if (UI.mgr.batch) rows = rows.filter((r) => (r.tags || []).includes(UI.mgr.batch));
+    // Prune the selection against the CURRENT view+batch row-set (ignoring the
+    // search box, so narrowing a search never drops what's already ticked):
+    // after a live refetch or dataset swap, stale keys would otherwise linger
+    // and inflate the "N selected" / bulk-button counts with rows that no
+    // longer exist on screen.
+    const inView = new Set((mgrVisibleMailboxRows({ ignoreSearch: true }) || []).map(mgrRowKey));
+    if (UI.mgr.sel.size) UI.mgr.sel = new Set([...UI.mgr.sel].filter((k) => inView.has(k)));
+    const rows = mgrVisibleMailboxRows() || [];
     const selectable = UI.mgr.view !== "blocked";
     const cnt = $id("dlv-mgr-count");
     if (cnt) cnt.textContent = rows.length + " shown" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "");
@@ -3568,7 +3596,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       else bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-warmup">Put in warmup (${n})</button><button class="btn sm primary" ${n ? "" : "disabled"} data-act="bulk-restore">Restore sending (${n})</button>`;
     }
     body.innerHTML = rows.map((r) => {
-      const ck = selectable ? `<td class="ck"><input type="checkbox" ${UI.mgr.sel.has(r.id) ? "checked" : ""} data-act="mgr-row-select" data-id="${r.id}"></td>` : `<td class="ck"></td>`;
+      const key = mgrRowKey(r);
+      const ck = selectable ? `<td class="ck"><input type="checkbox" ${UI.mgr.sel.has(key) ? "checked" : ""} data-act="mgr-row-select" data-id="${esc(key)}"></td>` : `<td class="ck"></td>`;
       const capCell = r.cap === 0 ? `<span class="dlv-tag inactive">0 · warmup</span>` : `<b>${r.cap}</b>/day`;
       const rested = r.rested ? ` <span class="dlv-tag md">rested</span>` : "";
       let dueCell = `<span class="dlv-mb-dom">—</span>`;
@@ -3581,10 +3610,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (r.maildoso) st += ` <span class="dlv-tag md">Maildoso</span>`;
       let action;
       if (r.kind === "blocked") action = `<span class="dlv-mb-dom">${esc(r.reason_category || "hosting")} → Hypertide</span>`;
-      else if (r.kind === "reconnect") action = `<button class="btn sm" data-act="reconnect-one" data-id="${r.id}">Reconnect</button>`;
-      else if (r.kind === "warmupoff") action = `<button class="btn sm" data-act="reenable-one" data-id="${r.id}">Re-enable</button>`;
+      else if (r.kind === "reconnect") action = `<button class="btn sm" data-act="reconnect-one" data-id="${esc(key)}">Reconnect</button>`;
+      else if (r.kind === "warmupoff") action = `<button class="btn sm" data-act="reenable-one" data-id="${esc(key)}">Re-enable</button>`;
       else action = "";
-      return `<tr id="dlv-mb-${r.id}">${ck}
+      return `<tr id="dlv-mb-${esc(key)}">${ck}
         <td><div class="dlv-mb-email">${esc(r.email)}</div><div class="dlv-mb-dom">${esc(r.domain)}</div></td>
         <td><div class="dlv-mb-dom">${(r.tags || []).slice(0, 2).join(" · ")}</div></td>
         <td style="text-align:right">${capCell}${rested}</td>
@@ -3595,7 +3624,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       </tr>`;
     }).join("") || `<tr><td colspan="8" class="dlv-empty">No mailboxes in this view</td></tr>`;
     const selAll = document.querySelector('[data-act="mgr-select-all"]');
-    if (selAll) { const ids = rows.map((r) => r.id); selAll.checked = selectable && ids.length > 0 && ids.every((id) => UI.mgr.sel.has(id)); selAll.style.visibility = selectable ? "visible" : "hidden"; }
+    if (selAll) { const keys = rows.map(mgrRowKey); selAll.checked = selectable && keys.length > 0 && keys.every((k) => UI.mgr.sel.has(k)); selAll.style.visibility = selectable ? "visible" : "hidden"; }
   }
 
   function paintDomainRows() {
@@ -6033,43 +6062,63 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      28. Mailbox per-row + bulk actions
      ============================================================ */
-  async function reconnectOne(id, btn) {
-    const r = S.A.inboxRows.find((x) => x.id === id);
-    if (!r) return;
+  // Both per-row actions take the row's selection KEY (mgrRowKey — a string).
+  // The local sample mirror (S.A.inboxRows) may not contain a live row at all,
+  // so in live mode the API call must NOT be gated on finding it there — only
+  // the optimistic local mutation is (a live refetch reconciles regardless).
+  function mgrLocalRow(key) {
+    return S.A.inboxRows.find((x) => mgrRowKey(x) === key || x.email === key) || null;
+  }
+  async function reconnectOne(key, btn) {
+    key = String(key);
+    const r = mgrLocalRow(key);
     if (isLive()) {
       let j;
-      try { j = await liveAction("reconnect?id=" + encodeURIComponent(id), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
+      try { j = await liveAction("reconnect?id=" + encodeURIComponent(key), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
       catch (e) { toast("Reconnect failed", "err"); return; }
       if (!j || j.ok === false) { toast("Failed: " + ((j && j.message) || "error"), "err"); return; }
       invalidateMgrDh();
-    }
-    r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; r.reason = ""; r.reason_category = "";
+    } else if (!r) return;
+    if (r) { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; r.reason = ""; r.reason_category = ""; }
+    UI.mgr.sel.delete(key);
     logAction({action: "reconnect", count: 1 });
     saveState();
     toast("Reconnect queued", "ok");
     paintPage();
   }
-  async function reenableOne(id, btn) {
-    const r = S.A.inboxRows.find((x) => x.id === id);
-    if (!r) return;
+  async function reenableOne(key, btn) {
+    key = String(key);
+    const r = mgrLocalRow(key);
+    let liveRow = null;
     if (isLive()) {
+      liveRow = (DATA.mgr.rows || []).find((x) => mgrRowKey(x) === key) || null;
       let j;
-      try { j = await liveAction("reenable?id=" + encodeURIComponent(id), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
+      try { j = await liveAction("reenable?id=" + encodeURIComponent(key), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
       catch (e) { toast("Re-enable failed", "err"); return; }
       if (!j || j.ok === false) { toast("Failed: " + ((j && j.message) || "error"), "err"); return; }
       invalidateMgrDh();
-    }
-    r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15;
-    S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => x.email !== r.email);
+    } else if (!r) return;
+    if (r) { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; }
+    const email = (r && r.email) || (liveRow && liveRow.email);
+    if (email) S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => x.email !== email);
+    UI.mgr.sel.delete(key);
     logAction({action: "reenable", count: 1, failed: 0 });
     saveState();
     toast("Warmup re-enabled", "ok");
     paintPage();
   }
   async function bulkAction(kind, btn) {
-    const ids = [...UI.mgr.sel];
+    const ids = [...UI.mgr.sel]; // string row keys (mgrRowKey)
     if (!ids.length) return;
-    const rows = S.A.inboxRows.filter((r) => ids.includes(r.id));
+    const idSet = new Set(ids);
+    // Optimistic local mutation targets: the sample mirror rows that match the
+    // selection. In live mode some (or all) selected rows won't exist there —
+    // the API call below still acts on every selected id, and invalidateMgrDh()
+    // refetches the truth; also resolve emails via the live row cache so
+    // email-keyed bookkeeping (notWarming) stays correct either way.
+    const rows = S.A.inboxRows.filter((r) => idSet.has(mgrRowKey(r)) || idSet.has(r.email));
+    const liveRows = isLive() ? (DATA.mgr.rows || []).filter((r) => idSet.has(mgrRowKey(r))) : [];
+    const selEmails = new Set([...rows, ...liveRows].map((r) => r.email).filter(Boolean));
     const confirms = {
       reconnect: "Reconnect " + ids.length + " selected mailbox(es)? Smartlead re-attempts the connection.",
       reenable: "Re-enable warmup on " + ids.length + " selected mailbox(es)?",
@@ -6090,13 +6139,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       catch (e) { toast("Request failed", "err"); return; }
       if (j && j.error) { toast(j.error, "err"); return; }
       if (kind === "reconnect") { n = j.count || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect", "ok"); }
-      else if (kind === "reenable") { n = j.ok || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !ids.includes((S.A.inboxRows.find((y) => y.email === x.email) || {}).id)); logAction({action: "reenable", count: n, failed: j.failed || 0 }); toast("Re-enabled " + n + (j.failed ? " · " + j.failed + " failed" : ""), "ok"); }
+      else if (kind === "reenable") { n = j.ok || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !selEmails.has(x.email)); logAction({action: "reenable", count: n, failed: j.failed || 0 }); toast("Re-enabled " + n + (j.failed ? " · " + j.failed + " failed" : ""), "ok"); }
       else if (kind === "warmup") { n = j.paused || 0; rows.forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; } }); logAction({action: "warmup_pause", mailboxes: n, domains: new Set(rows.map((r) => r.domain)).size }); toast("Put " + n + " into warmup" + (j.skipped ? " (" + j.skipped + " already 0)" : ""), "ok"); }
       else if (kind === "restore") { n = j.resumed || 0; rows.forEach((r) => { if (r.rested || r._savedCap != null) { r.cap = r._savedCap != null ? r._savedCap : 20; delete r._savedCap; r.rested = false; r.restedAt = null; } }); logAction({action: "warmup_resume", mailboxes: n }); toast("Restored " + n + (j.skipped ? " · " + j.skipped + " skipped (not dashboard-rested)" : ""), "ok"); }
       invalidateMgrDh();
     } else {
       if (kind === "reconnect") { rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; n++; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect", "ok"); }
-      else if (kind === "reenable") { rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; n++; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !ids.includes((S.A.inboxRows.find((y) => y.email === x.email) || {}).id)); logAction({action: "reenable", count: n, failed: 0 }); toast("Re-enabled warmup on " + n + " mailbox(es)", "ok"); }
+      else if (kind === "reenable") { rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; n++; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !selEmails.has(x.email)); logAction({action: "reenable", count: n, failed: 0 }); toast("Re-enabled warmup on " + n + " mailbox(es)", "ok"); }
       else if (kind === "warmup") { const doms = new Set(); rows.forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; n++; doms.add(r.domain); } }); logAction({action: "warmup_pause", mailboxes: n, domains: doms.size }); toast("Paused sending on " + n + " mailbox(es) across " + doms.size + " domain(s) — resting 7 days", "ok"); }
       else if (kind === "restore") { rows.forEach((r) => { if (r.rested || r._savedCap != null) { r.cap = r._savedCap != null ? r._savedCap : 20; delete r._savedCap; r.rested = false; r.restedAt = null; n++; } }); logAction({action: "warmup_resume", mailboxes: n }); toast("Restored " + n + " mailbox(es) to sending", "ok"); }
     }
@@ -6892,8 +6941,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "domain-bulk-flagged") { runAct(act, () => domainBulkFlagged(t)); return; }
     if (act === "domain-reactivate-all") { runAct(act, () => domainReactivateAll(t)); return; }
     if (act === "domain-reactivate-recovered") { runAct(act, () => domainReactivateRecovered(t)); return; }
-    if (act === "reconnect-one") { runAct(act, () => reconnectOne(Number(t.dataset.id), t)); return; }
-    if (act === "reenable-one") { runAct(act, () => reenableOne(Number(t.dataset.id), t)); return; }
+    if (act === "reconnect-one") { runAct(act, () => reconnectOne(String(t.dataset.id), t)); return; }
+    if (act === "reenable-one") { runAct(act, () => reenableOne(String(t.dataset.id), t)); return; }
     if (act === "bulk-reconnect") { runAct(act, () => bulkAction("reconnect", t)); return; }
     if (act === "bulk-reenable") { runAct(act, () => bulkAction("reenable", t)); return; }
     if (act === "bulk-warmup") { runAct(act, () => bulkAction("warmup", t)); return; }
@@ -6923,14 +6972,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "mgr-dh-start") { S.A.domainHealth.start = t.value; saveState(); paintManagerRows(); return; }
     if (act === "mgr-dh-end") { S.A.domainHealth.end = t.value; saveState(); paintManagerRows(); return; }
     if (act === "mgr-select-all") {
-      const D = fullDerive(); let rows = mgrRowsForView(D);
-      const q = (UI.mgr.search || "").trim().toLowerCase();
-      if (q) rows = rows.filter((r) => (r.email || "").toLowerCase().includes(q) || (r.domain || "").toLowerCase().includes(q));
-      if (t.checked) rows.forEach((r) => UI.mgr.sel.add(r.id)); else rows.forEach((r) => UI.mgr.sel.delete(r.id));
+      // Selects exactly the rows on screen — the same live-aware, filtered
+      // row-set paintMailboxRows() renders (this used to rebuild rows from the
+      // sample dataset, so in live mode it ticked ids the table didn't show).
+      const rows = mgrVisibleMailboxRows() || [];
+      if (t.checked) rows.forEach((r) => UI.mgr.sel.add(mgrRowKey(r))); else rows.forEach((r) => UI.mgr.sel.delete(mgrRowKey(r)));
       paintManagerRows();
       return;
     }
-    if (act === "mgr-row-select") { const id = Number(t.dataset.id); if (t.checked) UI.mgr.sel.add(id); else UI.mgr.sel.delete(id); paintManagerRows(); return; }
+    if (act === "mgr-row-select") { const id = String(t.dataset.id); if (t.checked) UI.mgr.sel.add(id); else UI.mgr.sel.delete(id); paintManagerRows(); return; }
     if (act === "sig-batch-change") { sigOnBatchChange(); return; }
     if (act === "sig-row-select") {
       const em = t.dataset.email;

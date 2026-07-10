@@ -270,6 +270,15 @@ def handle_proxy(method: str, rest: str, body: bytes | None):
             return _inboxes(q)
         if path == "domain-health" and method == "GET":
             return _domain_health(q)
+        if path == "reenable" and method == "POST":
+            return _reenable(q, single=("id" in q))
+        if path == "reconnect" and method == "POST":
+            n = len(_rows_for_ids(q))
+            return (200, {"ok": True}) if "id" in q else (200, {"count": n})
+        if path == "capacity-pause" and method == "POST":
+            return _capacity(q, pause=True)
+        if path == "capacity-resume" and method == "POST":
+            return _capacity(q, pause=False)
         if path == "reply-caps" and method == "POST":
             mode = q.get("mode")
             if mode == "preview":
@@ -356,6 +365,59 @@ def _fix_warmup(q: dict):
     return 200, {"attempted": len(targets), "ok": ok, "failed": failed, "fails": fails}
 
 
+# ── manager actions: reenable / reconnect / capacity pause+resume ────────
+# The UI sends `?id=<one>` (per-row buttons) or `?ids=<csv>` (bulk). Keys are
+# usually the numeric email_account_id but may fall back to the email when a
+# row payload carried no id — accept both.
+
+def _rows_for_ids(q: dict) -> list:
+    toks = {t for t in (q.get("ids") or q.get("id") or "").split(",") if t}
+    return [r for r in _STATE["fleet"].values()
+            if str(r["email_account_id"]) in toks or r["email"] in toks]
+
+
+def _reenable(q: dict, single: bool):
+    rows = _rows_for_ids(q)
+    fail_set = set(_STATE["scenario"].get("fail_emails") or [])
+    ok, failed = 0, 0
+    for r in rows:
+        if r["email"] in fail_set:
+            failed += 1
+            continue
+        if r["warmup_state"] == "off":
+            r["warmup_state"] = "ok"
+            r["cap"] = max(r["cap"], 15)
+        ok += 1
+    if single:
+        # Single-row endpoint shape: {ok:false,message} on failure, {ok:true} on success.
+        if not rows:
+            return 200, {"ok": False, "message": "mailbox not found (mock)"}
+        if failed:
+            return 200, {"ok": False, "message": "warmup enable rejected (mock)"}
+        return 200, {"ok": True}
+    return 200, {"ok": ok, "failed": failed}
+
+
+def _capacity(q: dict, pause: bool):
+    rows = _rows_for_ids(q)
+    n, skipped = 0, 0
+    for r in rows:
+        if pause:
+            if r["cap"] > 0:
+                r["_saved_cap"] = r["cap"]
+                r["cap"] = 0
+                n += 1
+            else:
+                skipped += 1
+        else:
+            if r.get("_saved_cap"):
+                r["cap"] = r.pop("_saved_cap")
+                n += 1
+            else:
+                skipped += 1
+    return 200, ({"paused": n, "skipped": skipped} if pause else {"resumed": n, "skipped": skipped})
+
+
 def _inboxes(q: dict):
     view = q.get("view") or "all"
     batch = q.get("batch") or ""
@@ -363,27 +425,48 @@ def _inboxes(q: dict):
     if batch:
         rows = [r for r in rows if batch in (r["batch"], r["brand"])]
 
+    # kind mirrors the real backend's row taxonomy (the mock fleet has no
+    # blocked/reconnect rows); the view filter mirrors the UI's own
+    # mgrRowsForView() predicates so live-mode views and sample-mode views
+    # slice the fleet identically.
     def kind_of(r):
-        if r["warmup_state"] == "off":
-            return "warmupoff"
-        if r["warmup_state"] == "wrong":
-            return "sending"
-        return "ok" if r["sig_state"] == "ok" else "sending"
+        return "warmupoff" if r["warmup_state"] == "off" else "ok"
 
-    if view != "all" and view != "domain":
-        rows = [r for r in rows if kind_of(r) == view]
+    def in_view(r):
+        k = kind_of(r)
+        if view == "warmupoff":
+            return k == "warmupoff"
+        if view == "inwarmup":
+            return k == "ok" and r["cap"] == 0
+        if view == "sending":
+            return k == "ok" and r["cap"] > 0
+        if view in ("reconnect", "blocked", "rested"):
+            return False
+        return True  # all / domain
+
+    rows = [r for r in rows if in_view(r)]
+    # id + tags are load-bearing for the UI: the manager table keys every
+    # checkbox / per-row action off `id` and re-applies its batch filter on
+    # `tags` client-side — rows without them can't be selected or acted on.
     out_rows = [{
-        "email": r["email"], "domain": r["domain"], "provider": "mock",
+        "id": r["email_account_id"], "email": r["email"], "domain": r["domain"], "provider": "mock",
         "kind": kind_of(r), "warmup_status": "ACTIVE" if r["warmup_state"] != "off" else "INACTIVE",
         "reason_category": r["warmup_issue"] or "", "cap": r["cap"], "reason": r["sig_issue"] or r["warmup_issue"] or "",
+        "tags": [r["batch"]], "maildoso": False, "rested": False, "restedAt": None,
     } for r in rows]
+    fleet = list(_STATE["fleet"].values())
     counts = {
-        "reconnect": 0, "warmupoff": sum(1 for r in _STATE["fleet"].values() if r["warmup_state"] == "off"),
-        "blocked": 0, "inwarmup": 0, "rested": 0,
-        "sending": sum(1 for r in _STATE["fleet"].values() if r["warmup_state"] != "off"),
-        "total": len(_STATE["fleet"]),
+        "reconnect": 0, "warmupoff": sum(1 for r in fleet if r["warmup_state"] == "off"),
+        "blocked": 0,
+        "inwarmup": sum(1 for r in fleet if r["warmup_state"] != "off" and r["cap"] == 0),
+        "rested": 0,
+        "sending": sum(1 for r in fleet if r["warmup_state"] != "off" and r["cap"] > 0),
+        "total": len(fleet),
     }
-    return 200, {"rows": out_rows, "counts": counts, "batches": list(_BATCH_LABEL.values()),
+    # The UI's batch dropdown reads {name, count} objects, not bare strings.
+    batches = [{"name": label, "count": sum(1 for r in fleet if r["batch"] == label)}
+               for label in _BATCH_LABEL.values()]
+    return 200, {"rows": out_rows, "counts": counts, "batches": batches,
                 "total": len(out_rows), "truncated": False}
 
 
@@ -393,10 +476,16 @@ def _domain_health(q: dict):
         dr = [r for r in _STATE["fleet"].values() if r["domain"] == d]
         sent = len(dr) * 120
         replied = max(1, len(dr) // 4)
+        positive = max(0, replied // 3)
         rows.append({
             "domain": d, "sent": sent, "lead": sent, "replied": replied,
-            "reply_rate": round(100.0 * replied / max(sent, 1), 2), "positive": max(0, replied // 3),
+            "reply_rate": round(100.0 * replied / max(sent, 1), 2), "positive": positive,
+            # positive_rate + batches are read unguarded by the UI's domain
+            # table (d.positive_rate.toFixed) — omitting them crashes the
+            # manager tab's default view.
+            "positive_rate": round(100.0 * positive / max(sent, 1), 2),
             "bounce_rate": 1.5,
+            "batches": sorted({r["batch"] for r in dr}),
         })
     return 200, {"rows": rows, "resting": {}, "restingDue": {},
                 "start": q.get("start") or _days_ago(7), "end": q.get("end") or _today(),
