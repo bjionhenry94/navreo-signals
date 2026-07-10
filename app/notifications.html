@@ -677,6 +677,11 @@ function matchesActiveClient(n) {
 
 function passesFilters(n) {
   if (filters.status !== "all" && n.status !== filters.status) return false;
+  // Section 7 is a work queue: once a card is actioned (or dismissed/resolved)
+  // it leaves the default view instead of lingering as a done card. Picking an
+  // explicit status in the dropdown still shows them, so nothing is lost.
+  if (filters.status === "all" && n.section === 7
+      && (n.status === "actioned" || isRetiredStatus(n.status))) return false;
   if (filters.priority !== "all" && n.priority !== filters.priority) return false;
   if (!matchesActiveClient(n)) return false;
   return true;
@@ -1301,7 +1306,7 @@ function triageStripHTML(allRows) {
    ambiguous the first time a CSM sees them (do they touch the live
    campaign?), so spell out plainly that they only move this row's own
    status, never Smartlead itself. */
-const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark actioned = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself.</div>`;
+const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark actioned = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself. Actioned and dismissed cards leave this list - pick a status in the filter above to see them again.</div>`;
 function section7(rows) {
   const stripHTML = triageStripHTML(rows);
   // Filtering happens here, AFTER counts are computed from the full `rows`
@@ -1800,7 +1805,18 @@ function applyRowPatch(n) {
   updateSummary();
   const ab = document.getElementById(`ab-${CSS.escape(String(n.id))}`);
   if (ab) {
-    if (!passesFilters(n)) { ab.remove(); bumpSectionCount(7, -1); return; }
+    if (!passesFilters(n)) {
+      ab.remove();
+      bumpSectionCount(7, -1);
+      // keep the triage chip counts honest - they were computed at draw()
+      // time from the pre-removal row set
+      const strip = document.querySelector(".triage-strip");
+      if (strip) {
+        const s7 = all.filter((r) => r.section === 7 && passesFilters(r));
+        strip.outerHTML = triageStripHTML(s7);
+      }
+      return;
+    }
     const tmp = document.createElement("div");
     tmp.innerHTML = actionBlockHTML(n).trim();
     ab.replaceWith(tmp.firstElementChild);
