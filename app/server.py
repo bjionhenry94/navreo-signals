@@ -3843,16 +3843,34 @@ def _delete_bad_leads(job: dict, campaign_id, sl_key: str, dry_run: bool, candid
         if cancelled:
             break
         if not dry_run:
-            try:
-                url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads/"
-                       f"{d['lead_id']}?api_key={sl_key}")
-                req = urllib.request.Request(url, method="DELETE",
-                                             headers={"User-Agent": UA})
-                with urllib.request.urlopen(req, timeout=20, context=SSL_CTX):
-                    pass
+            # Retry the delete on a transient Smartlead error (429/5xx/timeout)
+            # before giving up — without this, a brief hiccup permanently strands
+            # a confirmed-bad lead in the campaign as a `failed_delete` the user
+            # then has to notice and manually retry.
+            url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads/"
+                   f"{d['lead_id']}?api_key={sl_key}")
+            ok = False
+            for attempt in (1, 2, 3):
+                try:
+                    req = urllib.request.Request(url, method="DELETE",
+                                                 headers={"User-Agent": UA})
+                    with urllib.request.urlopen(req, timeout=20, context=SSL_CTX):
+                        pass
+                    ok = True
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+                        time.sleep(1.5 * attempt)
+                        continue
+                    break  # 4xx (already gone / bad id) — don't hammer it
+                except Exception:  # noqa: BLE001 — network/timeout: back off and retry
+                    if attempt < 3:
+                        time.sleep(1.5 * attempt)
+                        continue
+            if ok:
                 deleted.append(d)
                 removed_emails.append(d["email"])
-            except Exception:  # noqa: BLE001 — one bad delete shouldn't kill the batch
+            else:
                 failed += 1
             time.sleep(0.45)  # ~150 req/min ceiling on the Smartlead delete endpoint
         else:

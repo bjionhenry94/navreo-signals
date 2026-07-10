@@ -4751,6 +4751,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const cachedSeg = counts.cached ? " · " + fmtN(counts.cached) + " from cache" : "";
     const removedSeg = counts.removed != null ? " · removed " + fmtN(counts.removed) + (counts.guarded ? " (kept " + fmtN(counts.guarded) + " replied)" : "") : "";
     const age = verifyAgeLabel(status.last_verify_at);
+    const failedDeletes = Number(counts.failed_deletes || 0);
     const summary = "Verified" + (age ? " " + esc(age) : "") + " · " + fmtN(total) + " checked" + (segs.length ? " · " + segs.join(" / ") : "") + cachedSeg + removedSeg;
     const badRemaining = status.bad_remaining != null ? Number(status.bad_remaining) : bad;
     if (!badRemaining) {
@@ -4759,9 +4760,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-vrow dlv-vkeep">✓ Clean — no bad leads remaining.</div>
       </div>`;
     }
+    // Explain WHY leads remain so the count isn't confusing after a big removal.
+    // A remainder equal to failed_deletes means the delete call to Smartlead
+    // errored on those (retryable) — NOT that they were kept because they replied.
+    const dueToFailed = failedDeletes > 0 && failedDeletes >= badRemaining;
+    const why = dueToFailed
+      ? `<div class="dlv-plain">These ${badRemaining} are confirmed-bad leads whose removal failed last time (a Smartlead hiccup during delete) — clicking below retries them.</div>`
+      : `<div class="dlv-plain">${badRemaining} confirmed-bad lead(s) still in the campaign. Anyone who replied is kept automatically and never counted here.</div>`;
+    const btnLabel = dueToFailed ? `Retry removing ${badRemaining} bad` : `Remove ${badRemaining} bad`;
     return `<div class="dlv-vbox">
       <div class="dlv-vrow">${summary}</div>
-      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${badRemaining}">Remove ${badRemaining} bad — no-reply only (replies auto-kept)</button></div>
+      ${why}
+      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${badRemaining}">${btnLabel}</button></div>
     </div>`;
   }
   const _verifyState = {}; // campId -> last verify result (legacy in-memory mirror; source of truth is S.ui.verifyResults)
@@ -4793,7 +4803,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ${v.listmint_recheck ? `<div class="dlv-plain" style="opacity:.75">${esc(v.listmint_recheck)}</div>` : ""}
       <div class="dlv-vrow dlv-vkeep">✓ Keep (good + catch-all + unknown): <b>${v.keep}</b></div>
       <div class="dlv-vrow dlv-vremove">Bad (confirmed invalid): <b>${v.remove}</b>${v.remove ? ` &nbsp; <a class="dlv-dl" data-act="verify-view" data-id="${esc(id)}">View bad (${v.remove})</a>` : ""}</div>
-      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}"${v.remove ? "" : " disabled"}>Remove bad — no-reply only (${v.remove} flagged, replies auto-kept)</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ ignore this campaign</a></div>
+      <div class="dlv-vrow"><button class="btn sm danger" data-act="remove-bad" data-id="${esc(id)}" data-count="${v.remove}"${v.remove ? "" : " disabled"}>Remove ${v.remove} bad</button> &nbsp; <a class="dlv-dl" data-act="verify-dismiss" data-id="${esc(id)}">✕ ignore this campaign</a></div>
       <div class="dlv-plain">Reply-guard: anyone who replied is automatically kept, never deleted.</div>
       ${dlvDisclose(dlvConsequences(
         "The selected leads leave the campaign. This is permanent (no backup) — reply-guarded leads are always kept.",
