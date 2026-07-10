@@ -2194,7 +2194,8 @@ NOTIFICATIONS_SLIM_SELECT = (
     "id,campaign_id,campaign_name,client,client_id,finding_type,section,"
     "block_number,priority,title,detail,suggested_action,action_type,"
     "api_safe,smartlead_url,sent,positive,replied,sent_pos_ratio,"
-    "completion_pct,reply_rate,status,created_at,actioned_at,variants"
+    "completion_pct,reply_rate,status,created_at,actioned_at,variants,"
+    "impact_score,impact_reason,meetings"
 )
 
 
@@ -7465,6 +7466,7 @@ def _deliv_audit_run_bg():
             blob = json.loads(resp.read())
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
+        _snapshot_from_blob(blob)  # daily fleet-count row for the trends header
     except Exception as e:  # noqa: BLE001 — record the failure for the UI; never crash the thread
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(running=False, error=str(e)[:300])
@@ -7482,6 +7484,107 @@ def _deliv_audit_start(force=False):
         _DELIV_AUDIT.update(running=True, error=None)
     threading.Thread(target=_deliv_audit_run_bg, daemon=True).start()
     return {"started": True, "running": True}
+
+
+# ── Deliverability trends (30-day health series for the glance header) ──────
+# Per-day sent / reply% / bounce% comes straight from Smartlead's day-wise
+# analytics (backfills instantly); fleet counts Smartlead can't backfill
+# (smtp/imap fails, real blocks, auth misses, blacklists) accrue one row per
+# day in deliverability_daily_snapshots, written on every successful audit
+# refresh — same writer, no extra cron.
+import datetime as _dtmod
+
+_DELIV_TRENDS = {"data": None, "ts": 0.0, "days": 0}
+_DELIV_TRENDS_LOCK = threading.Lock()
+_DELIV_TRENDS_TTL_S = 3600
+
+
+def _snapshot_from_blob(blob: dict):
+    """Upsert today's fleet-count snapshot from a fresh audit blob. Best-effort:
+    a Supabase outage must never fail the audit refresh that carries it."""
+    try:
+        row = {
+            "snapshot_date": _dtmod.date.today().isoformat(),
+            "smtp_fails": int(blob.get("smtp") or 0),
+            "imap_fails": int(blob.get("imap") or 0),
+            "blocked_real": int(blob.get("blockedReal") or 0),
+            "spf_miss": int(blob.get("spfMiss") or 0),
+            "dkim_miss": int(blob.get("dkimMiss") or 0),
+            "dmarc_miss": int(blob.get("dmarcMiss") or 0),
+            "blacklisted": len(blob.get("blacklist") or []),
+            "inboxes": blob.get("inboxes"), "domains": blob.get("domains"),
+            "updated_at": _dtmod.datetime.utcnow().isoformat() + "Z",
+        }
+        sb("POST", "deliverability_daily_snapshots?on_conflict=snapshot_date", row,
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001
+        print(f"[trends] snapshot write failed: {e}", file=sys.stderr)
+
+
+def _deliv_trends_build(days: int) -> dict:
+    """Fetch + shape the per-day series. Raises on Smartlead failure — the
+    caller keeps serving the previous cached copy in that case."""
+    end = _dtmod.date.today()
+    start = end - _dtmod.timedelta(days=days - 1)
+    url = (f"{SMARTLEAD_BASE}/analytics/day-wise-overall-stats"
+           f"?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}"
+           f"&start_date={start.isoformat()}&end_date={end.isoformat()}")
+    data = http_json("GET", url, {}, timeout=30)
+    raw = ((data or {}).get("data") or {}).get("day_wise_stats") or []
+    # Smartlead dates come back as "10 Jun" (no year) — key on (day, month);
+    # a ≤90-day window can't contain the same day+month twice.
+    months = {m: i + 1 for i, m in enumerate(
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+    by_daymonth = {}
+    for r in raw:
+        try:
+            d, mon = str(r.get("date", "")).split()
+            m = r.get("email_engagement_metrics") or {}
+            by_daymonth[(int(d), months.get(mon[:3], 0))] = m
+        except (ValueError, AttributeError):
+            continue
+    # Snapshot rows for the same window (issues series — may be sparse at first).
+    snaps = sb("GET", ("deliverability_daily_snapshots"
+                       f"?snapshot_date=gte.{start.isoformat()}&order=snapshot_date.asc")) or []
+    snap_by_date = {s.get("snapshot_date"): s for s in snaps if isinstance(s, dict)}
+    days_out, sent, reply_pct, bounce_pct, issues = [], [], [], [], []
+    cur = start
+    while cur <= end:
+        m = by_daymonth.get((cur.day, cur.month)) or {}
+        s = int(m.get("sent") or 0)
+        days_out.append(cur.isoformat())
+        sent.append(s)
+        reply_pct.append(round(int(m.get("replied") or 0) * 100.0 / s, 2) if s else None)
+        bounce_pct.append(round(int(m.get("bounced") or 0) * 100.0 / s, 2) if s else None)
+        sn = snap_by_date.get(cur.isoformat())
+        issues.append(None if sn is None else
+                      int(sn.get("smtp_fails") or 0) + int(sn.get("imap_fails") or 0)
+                      + int(sn.get("blocked_real") or 0) + int(sn.get("spf_miss") or 0)
+                      + int(sn.get("dkim_miss") or 0) + int(sn.get("dmarc_miss") or 0)
+                      + int(sn.get("blacklisted") or 0))
+        cur += _dtmod.timedelta(days=1)
+    return {"series": {"days": days_out, "sent": sent, "reply_pct": reply_pct,
+                       "bounce_pct": bounce_pct, "issues": issues},
+            "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
+
+
+def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
+    days = max(7, min(90, days))
+    with _DELIV_TRENDS_LOCK:
+        fresh = (_DELIV_TRENDS["data"] is not None and _DELIV_TRENDS["days"] == days
+                 and (time.time() - _DELIV_TRENDS["ts"]) < _DELIV_TRENDS_TTL_S)
+        if fresh:
+            return _DELIV_TRENDS["data"], 200
+    try:
+        data = _deliv_trends_build(days)
+    except Exception as e:  # noqa: BLE001 — serve stale over erroring if we have one
+        with _DELIV_TRENDS_LOCK:
+            if _DELIV_TRENDS["data"] is not None and _DELIV_TRENDS["days"] == days:
+                return _DELIV_TRENDS["data"], 200
+        return {"error": "trends_unavailable", "message": str(e)[:200]}, 502
+    with _DELIV_TRENDS_LOCK:
+        _DELIV_TRENDS.update(data=data, ts=time.time(), days=days)
+    return data, 200
 
 
 # ── Login gate ──────────────────────────────────────────────────────────────
@@ -7988,6 +8091,15 @@ class Handler(SimpleHTTPRequestHandler):
                                "error": err, "configured": True if _deliv_mock_on() else bool(
                                    (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":")),
                                "stale": bool(b is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
+        if path == "/api/deliverability-trends":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                days = int((q.get("days") or ["30"])[0])
+            except ValueError:
+                days = 30
+            body, status = deliv_trends_get(days)
+            return self._json(body, status)
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("GET")
         if path == "/api/lists":

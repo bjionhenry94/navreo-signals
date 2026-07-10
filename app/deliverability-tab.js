@@ -616,11 +616,63 @@
       sampleApplied: false, // guards against re-wiping the fallback mock on every retry tick
       postRefreshCleanup: false, // "Run Live Audit" button asked for the done-stub/selection wipe once the NEXT blob lands
     },
+    // Task A: 30-day trend series for the health-header sparklines — fetched
+    // once per page load (GET /api/deliverability-trends), cached here, and
+    // re-painted in place once it lands. status: idle | loading | ready | error.
+    trends: { status: "idle", series: null, asof: null },
   };
   function isLive() { return DATA.mode === "live"; }
   const AUDIT_POLL_MS = 10000;         // GET /_audit poll interval while a run is in flight
   const AUDIT_POLL_CAP_MS = 6 * 60 * 1000; // give up waiting after ~6 minutes
   const AUDIT_CLIENT_STALE_MS = 5 * 60 * 1000; // re-poll a cached live S.A after 5 min in-session
+
+  // Task A: idempotent kick-off for the 30-day trend series behind the health
+  // header's sparklines. Live mode hits the real endpoint once and repaints
+  // when it lands; sample mode synthesizes a plausible series locally so the
+  // header still demos. Any failure (network/non-200/malformed body) settles
+  // into status "error" — renderHealthHeader() reads that as "no sparkline,
+  // value-only card", never a thrown error or a blocked paint.
+  function loadTrends() {
+    if (DATA.trends.status === "loading" || DATA.trends.status === "ready") return;
+    if (!isLive()) { DATA.trends.series = synthTrendSeries(); DATA.trends.status = "ready"; return; }
+    DATA.trends.status = "loading";
+    fetch("/api/deliverability-trends?days=30")
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((j) => {
+        const s = j && j.series;
+        if (!s || !Array.isArray(s.days) || !s.days.length) throw new Error("empty series");
+        DATA.trends.series = s;
+        DATA.trends.asof = j.asof || null;
+        DATA.trends.status = "ready";
+        paintPage();
+      })
+      .catch(() => { DATA.trends.status = "error"; paintPage(); });
+  }
+  // Sample-mode stand-in for the /api/deliverability-trends response — same
+  // shape (days/sent/reply_pct/bounce_pct/issues, oldest→newest), weekends
+  // nulled out on the pct series and zeroed on sent (mirrors the real
+  // endpoint), issues left entirely null (the real series only ever accrues
+  // forward from the day this shipped — nothing to synthesize retroactively).
+  function synthTrendSeries() {
+    const days = [], sent = [], reply_pct = [], bounce_pct = [], issues = [];
+    const today = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(today.getTime() - i * 864e5);
+      days.push(d.toISOString().slice(0, 10));
+      const dow = d.getDay();
+      const weekend = dow === 0 || dow === 6;
+      if (weekend) { sent.push(0); reply_pct.push(null); bounce_pct.push(null); }
+      else {
+        sent.push(Math.max(0, Math.round(7800 + Math.sin(i / 3) * 600 + (Math.random() - 0.5) * 500)));
+        reply_pct.push(+(1.15 + Math.sin(i / 5) * 0.25 + (Math.random() - 0.5) * 0.12).toFixed(2));
+        // gentle upward drift toward/past the 2% limit over the most recent days —
+        // makes the "drift obvious" spec requirement demoable in sample mode.
+        bounce_pct.push(+Math.max(0.3, 1.7 + Math.cos(i / 4) * 0.35 + (i < 6 ? (6 - i) * 0.12 : 0)).toFixed(2));
+      }
+      issues.push(null);
+    }
+    return { days, sent, reply_pct, bounce_pct, issues };
+  }
 
   // Typed fetch error so callers can distinguish 503 (backend unconfigured)
   // from 502 (upstream error) from a raw network/timeout failure.
@@ -1194,7 +1246,10 @@
    solid red number badge, so "do this first" pops at a glance. Yellow rows
    drop to a soft amber bar + pastel badge; notes go neutral — same severity
    encoding, quieter voice (GTME panel consensus). */
-.dlv-ai.red{border-left-color:var(--red)} .dlv-ai.yellow{border-left-color:var(--amber-line)} .dlv-ai.note{border-left-color:var(--line-2)} .dlv-ai.done{opacity:.65}
+/* Severity tiers (persona-2 fix): red = fleet-burning (tinted fill so it reads
+   from across the room), amber = degradation (solid amber accent), note =
+   quiet housekeeping. Colour-as-severity per house convention. */
+.dlv-ai.red{border-left-color:var(--red);background:var(--red-bg);border-color:var(--red-line)} .dlv-ai.yellow{border-left-color:var(--amber)} .dlv-ai.note{border-left-color:var(--line-2)} .dlv-ai.done{opacity:.65}
 .dlv-ai-n{flex-shrink:0;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:#fff}
 .dlv-ai-n.red{background:var(--red)} .dlv-ai-n.yellow{background:var(--amber-bg);color:#6B4A00} .dlv-ai-n.note{background:var(--bg-sunken);color:var(--ink-2)}
 .dlv-ai-body{flex:1;min-width:0}
@@ -1202,6 +1257,10 @@
 .dlv-ai-action{font-size:12.5px;color:var(--ink-3);margin-top:5px}
 .dlv-ai-action .arrow{color:var(--orange-700);font-weight:700;margin-right:4px}
 .dlv-ai-btns{display:flex;gap:7px;flex-wrap:wrap;flex-shrink:0;align-self:center}
+/* Task B: quiet single-line note in place of the exception-class to-dos when
+   all 6 are clear — deliberately understated (muted text, no card/border)
+   since it's not carrying the same weight as the "✓ All clear" block above it. */
+.dlv-exc-clear{font-size:12.5px;color:var(--ink-3);margin:0 0 10px}
 .dlv-all-clear{background:var(--green-bg);border:1px solid var(--green-line);border-radius:12px;padding:24px;text-align:center}
 .dlv-all-clear .big{font-size:19px;font-weight:600;color:#195C3F}
 .dlv-all-clear .sub{font-size:12.5px;color:var(--ink-3);margin-top:6px}
@@ -1397,19 +1456,33 @@ label.dlv-sig-trow .dlv-sig-email{flex:1}
 @keyframes dlvFlash{0%{box-shadow:0 0 0 3px var(--orange-700)}70%{box-shadow:0 0 0 3px var(--orange-700)}100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}}
 details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-todo-anchor.dlv-flash{animation:dlvFlash 1.5s ease-out;border-radius:12px}
-.dlv-health-strip{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px}
-/* Round-2 colour discipline (GTME panel consensus): green/amber chips are
-   quiet white cards — a coloured dot carries the state, ink carries the text
-   (same dot+label pattern as the Signals tab's "Running" pill). ONLY the red
-   chip keeps a full tinted fill: a fire must still read from across the room
-   (skeptic panelist's counter-weight). */
-.dlv-health-chip{flex:1 1 220px;min-width:220px;border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:13px;font-weight:500;line-height:1.4;background:var(--card);color:var(--ink-2)}
-.dlv-health-chip.g .dot{background:var(--green)}
-.dlv-health-chip.a .dot{background:var(--amber)}
-.dlv-health-chip.r{border-color:var(--red-line);border-left:4px solid var(--red);color:#861E10;background:var(--red-bg);font-weight:600}
-.dlv-health-chip.r .dot{background:var(--red)}
-.dlv-health-chip[data-act]{cursor:pointer}
-.dlv-health-chip[data-act]:hover{filter:brightness(.96)}
+/* Task A: health header — 4 KPI cards with inline sparklines, replacing the
+   old .dlv-health-strip chip row. Border colour carries severity (green/amber
+   card border, red gets a tinted fill like the old chip row's fire treatment
+   so it still reads from across the room); "Sent/day" never gets a sev class
+   (neutral, per brief). */
+.dlv-kpi-row{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px}
+.dlv-kpi-card{flex:1 1 200px;min-width:180px;border:1px solid var(--line);border-radius:10px;padding:12px 15px;background:var(--card)}
+.dlv-kpi-card.g{border-color:var(--green)}
+.dlv-kpi-card.a{border-color:var(--amber)}
+.dlv-kpi-card.r{border-color:var(--red-line);border-left:4px solid var(--red);background:var(--red-bg)}
+.dlv-kpi-lab{font-size:11.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.dlv-kpi-value{font-size:22px;font-weight:700;color:var(--ink);margin-top:3px}
+.dlv-kpi-card.r .dlv-kpi-value{color:#861E10}
+.dlv-kpi-sub{font-size:11.5px;color:var(--ink-3);margin-top:2px}
+.dlv-kpi-accrue{opacity:.8}
+.dlv-kpi-spark{margin-top:8px;line-height:0}
+.dlv-kpi-spark .dlv-spark{width:100%;height:48px;display:block}
+.dlv-kpi-deltarow{display:flex;align-items:center;gap:8px;margin-top:6px}
+.dlv-kpi-delta{font-size:11.5px;font-weight:600}
+.dlv-kpi-delta.g{color:var(--green)}
+.dlv-kpi-delta.r{color:var(--red)}
+.dlv-kpi-delta.ink{color:var(--ink-3);font-weight:500}
+/* Trend-escalation annotation — explains a card whose colour is driven by the
+   trend layer while the headline blob figure alone would read healthy. */
+.dlv-kpi-trendnote{font-size:11px;font-weight:600;border-radius:6px;padding:1px 7px}
+.dlv-kpi-trendnote.a{color:#6B4A00;background:var(--amber-bg);border:1px solid var(--amber-line)}
+.dlv-kpi-trendnote.r{color:#861E10;background:var(--red-bg);border:1px solid var(--red-line)}
 /* Part C(c): one-glance verdict line — the single leading sentence above the
    chip row that reads out the overall state in plain English for the owner
    persona (who otherwise had to assemble a verdict from 4 separate chips). */
@@ -1498,8 +1571,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv-headic{width:28px;height:28px;border-radius:8px;background:var(--bg-sunken)}
 .dlv-headic .ic8{width:14px;height:14px;color:var(--ink-2)}
 .dlv-verdict .vdot{width:10px;height:10px;border-radius:999px;background:currentColor;flex-shrink:0;margin-top:5px}
-.dlv-health-chip{display:flex;align-items:flex-start;gap:9px}
-.dlv-health-chip .dot{width:8px;height:8px;border-radius:999px;background:currentColor;flex-shrink:0;margin-top:6px}
 /* "Details and who's affected" / "Show technical detail" disclosures: a
    chevron + real padding so a closed one reads as an expandable row, not an
    empty input field. */
@@ -2071,36 +2142,115 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         if (!n) return { key: "blocked-real", level: "red", count: 0, resolved: true, text: "No mailboxes blocked by receiving providers right now." };
         return { key: "blocked-real", level: "red", count: n, short: "mailboxes blocked by providers", text: n + " mailbox(es) blocked by receiving providers (real blocks, not warmup noise)" + (D.blockedSoft ? " · +" + D.blockedSoft + " soft (no action)" : "") + ".", action: "Escalate to Hypertide with the domain list and blocked reasons.", hypertide: true };
       }
+      // Panel fix (persona 2) — severity tiers: red = fleet-burning
+      // (blacklist, real blocks, SMTP fails, trend-drift), yellow =
+      // degradation (campaigns <1%, auth records, sending deviation, IMAP),
+      // note = housekeeping (signatures, tagging, warmup config, reminders,
+      // retired domains). recomputeTodos' existing red→yellow→note sort makes
+      // the tiers also the display order.
       case "verify": {
         const n = D.uncleanedVerifyCamps.length;
-        if (!n) return { key: "verify-campaigns", level: "red", count: 0, resolved: true, text: "All flagged campaigns have been re-verified and cleaned." };
-        return { key: "verify-campaigns", level: "red", count: n, short: "low-reply campaigns need lead verification", text: n + " campaign(s) below 1% reply with elevated bounce — leads likely need re-verifying.", action: "Verify the remaining not-yet-contacted prospects on each (ListMint, or MillionVerifier → ListMint), then remove the confirmed-undeliverable ones.", verifyCamps: D.uncleanedVerifyCamps };
+        if (!n) return { key: "verify-campaigns", level: "yellow", count: 0, resolved: true, text: "All flagged campaigns have been re-verified and cleaned." };
+        return { key: "verify-campaigns", level: "yellow", count: n, short: "low-reply campaigns need lead verification", text: n + " campaign(s) below 1% reply with elevated bounce — leads likely need re-verifying.", action: "Verify the remaining not-yet-contacted prospects on each (ListMint, or MillionVerifier → ListMint), then remove the confirmed-undeliverable ones.", verifyCamps: D.uncleanedVerifyCamps };
       }
       case "signatures": {
         const n = D.signatureCount;
-        if (!n) return { key: "signatures", level: "yellow", count: 0, resolved: true, text: "No signature issues — every mailbox has a matching signature." };
-        return { key: "signatures", level: "yellow", count: n, text: n + " mailbox(es) missing a signature or with a name mismatch (" + S.A.signature.missing.length + " missing · " + S.A.signature.mismatch.length + " mismatch).", action: "Apply a signature to every OAuth mailbox missing one, or fix the mismatch.", sigCsv: true };
+        if (!n) return { key: "signatures", level: "note", count: 0, resolved: true, text: "No signature issues — every mailbox has a matching signature." };
+        return { key: "signatures", level: "note", count: n, text: n + " mailbox(es) missing a signature or with a name mismatch (" + S.A.signature.missing.length + " missing · " + S.A.signature.mismatch.length + " mismatch).", action: "Apply a signature to every OAuth mailbox missing one, or fix the mismatch.", sigCsv: true };
       }
       case "new-unprocessed": {
         const n = D.newCount;
-        if (!n) return { key: "new-unprocessed", level: "yellow", count: 0, resolved: true, text: "No new mailboxes waiting to be tagged or added to a campaign." };
-        return { key: "new-unprocessed", level: "yellow", count: n, text: n + " new mailbox(es) untagged or not yet in a campaign.", action: "Tag them and/or add the ones not yet assigned to a campaign.", newCsv: true };
+        if (!n) return { key: "new-unprocessed", level: "note", count: 0, resolved: true, text: "No new mailboxes waiting to be tagged or added to a campaign." };
+        return { key: "new-unprocessed", level: "note", count: n, text: n + " new mailbox(es) untagged or not yet in a campaign.", action: "Tag them and/or add the ones not yet assigned to a campaign.", newCsv: true };
       }
       case "warmup-notwarming": {
         const n = S.A.warmupConfig.notWarming.length, w = S.A.warmupConfig.wrongSettings.length;
-        if (!n && !w) return { key: "warmup-notwarming", level: "yellow", count: 0, resolved: true, text: "No warmup-configuration issues — every mailbox is warming correctly." };
+        if (!n && !w) return { key: "warmup-notwarming", level: "note", count: 0, resolved: true, text: "No warmup-configuration issues — every mailbox is warming correctly." };
         const bits = []; if (n) bits.push(n + " mailbox(es) with warmup off"); if (w) bits.push(w + " with wrong settings");
-        return { key: "warmup-notwarming", level: "yellow", count: n || w, text: bits.join(" · ") + ".", action: n ? "Enable warmup on all of them with the fleet's standard settings." : "Review and correct their warmup settings.", wcCsv: true };
+        return { key: "warmup-notwarming", level: "note", count: n || w, text: bits.join(" · ") + ".", action: n ? "Enable warmup on all of them with the fleet's standard settings." : "Review and correct their warmup settings.", wcCsv: true };
       }
       case "reminder-due": {
         const n = D.reminderDueCount;
-        if (!n) return { key: "reminder-due", level: "yellow", count: 0, resolved: true, text: "No restore reminders due." };
-        return { key: "reminder-due", level: "yellow", count: n, text: n + " restore reminder(s) due today or overdue.", action: "Check warm-up health and either add back to a campaign or extend the reminder.", reminderDue: true };
+        if (!n) return { key: "reminder-due", level: "note", count: 0, resolved: true, text: "No restore reminders due." };
+        return { key: "reminder-due", level: "note", count: n, text: n + " restore reminder(s) due today or overdue.", action: "Check warm-up health and either add back to a campaign or extend the reminder.", reminderDue: true };
       }
       case "retired-domains": {
         const n = D.retiredCount;
         if (!n) return { key: "retired-domains", level: "note", count: 0, resolved: true, text: "No fully-dead retired domains right now." };
         return { key: "retired-domains", level: "note", count: n, text: n + " fully-dead domain(s) with every mailbox retired.", action: "Remove these from Smartlead — they're not recoverable.", retiredCsv: true };
+      }
+      // Task B: three exception classes that used to only ever surface inside
+      // the (now-folded) Fleet-tiles technical-details grid — never as an
+      // actionable to-do row. Same buildTodoItem() shape as the classes above
+      // (null/resolved when clean, an active card with a reused fix-action
+      // flag when not) so recomputeTodos()/renderTodo() need no special-casing.
+      case "smtp-imap": {
+        const n = (S.A.smtp || 0) + (S.A.imap || 0);
+        if (!n) return { key: "smtp-imap", level: "yellow", count: 0, resolved: true, text: "No SMTP/IMAP auth or sync errors right now." };
+        // SMTP auth failures mean mailboxes silently not sending (red tier);
+        // IMAP-only is a sync degradation, one tier down.
+        return { key: "smtp-imap", level: (S.A.smtp || 0) > 0 ? "red" : "yellow", count: n, short: "SMTP/IMAP auth errors",
+          text: S.A.smtp + " SMTP auth error(s) · " + S.A.imap + " IMAP sync error(s).",
+          action: "Open the manager, switch to the Connection-failed view, and reconnect the affected mailboxes.",
+          _openManager: true };
+      }
+      case "auth-records": {
+        const n = (S.A.spfMiss || 0) + (S.A.dkimMiss || 0) + (S.A.dmarcMiss || 0);
+        // Panel fix #3 (DMARC posture): zero enforcement anywhere — every
+        // domain with a DMARC record sits at p=none — is a genuine
+        // misconfiguration, not a policy choice; it only counts as one when
+        // NO domain enforces. Partial p=none stays quiet.
+        const dmarcSum = (S.A.quarantine || 0) + (S.A.reject || 0);
+        const zeroEnforce = dmarcSum === 0 && (S.A.none || 0) > 0 && (S.A.domains || 0) > 0;
+        if (!n && !zeroEnforce) return { key: "auth-records", level: "yellow", count: 0, resolved: true, text: "SPF, DKIM and DMARC are all in place across the fleet." };
+        const lines = [];
+        if (n) lines.push(S.A.spfMiss + " missing SPF · " + S.A.dkimMiss + " missing DKIM · " + S.A.dmarcMiss + " missing DMARC.");
+        if (zeroEnforce) lines.push("DMARC not enforcing on any domain (all " + S.A.none + " at p=none) — spoofed mail from your domains lands normally.");
+        return { key: "auth-records", level: "yellow", count: n + (zeroEnforce ? 1 : 0), short: zeroEnforce && !n ? "DMARC not enforcing anywhere" : "domains missing SPF/DKIM/DMARC",
+          text: lines.join(" "),
+          action: "Add the missing DNS record(s) on each domain — see Fleet details → Technical details for the per-record counts.",
+          _openFleetTech: true };
+      }
+      case "sending-deviation": {
+        const over = (S.A.sendingDeviation && S.A.sendingDeviation.over) || [];
+        const under = (S.A.sendingDeviation && S.A.sendingDeviation.under) || [];
+        const n = over.length + under.length;
+        if (!n) return { key: "sending-deviation", level: "yellow", count: 0, resolved: true, text: "No mailboxes sending noticeably over or under their batch baseline." };
+        return { key: "sending-deviation", level: "yellow", count: n, short: "mailboxes off their sending baseline",
+          text: over.length + " mailbox(es) sending over their batch baseline · " + under.length + " under.",
+          action: "Review caps by reply rate and rebalance the outliers.",
+          _openCaps: true };
+      }
+      case "trend-drift": {
+        // Panel fix #2: a brewing trend (bounce drifting toward the limit or
+        // replies sliding) never became a to-do — only a delta chip in the
+        // header. Fires off the same trendCurrentAndDelta() figures the KPI
+        // cards' chips show, so the card and the chips can never disagree.
+        // Null series (still loading / failed / <7 points) → no card at all,
+        // not a resolved stub: no trend data means nothing to claim either way.
+        const f = trendDriftFacts();
+        if (!f) return null;
+        const bounceHigh = f.bounceCur != null && f.bounceCur >= 2;
+        const bounceRising = f.bounceDelta != null && f.bounceDelta >= 0.5;
+        const replySliding = f.replyDelta != null && f.replyDelta <= -0.3;
+        if (!bounceHigh && !bounceRising && !replySliding) {
+          return { key: "trend-drift", level: "red", count: 0, resolved: true, text: "No adverse trend — bounce and reply rates are holding steady week over week." };
+        }
+        const bits = [];
+        if (bounceHigh || bounceRising) bits.push("Bounce rate trending up — " + (f.bounceCur != null ? f.bounceCur.toFixed(1) + "%" : "n/a") + (f.bounceDelta != null ? ", ▲" + Math.abs(f.bounceDelta).toFixed(1) + "pt vs last week" : ""));
+        if (replySliding) bits.push("Reply rate sliding — ▼" + Math.abs(f.replyDelta).toFixed(1) + "pt vs last week");
+        // Persona-3 fix: name the drivers. Top 2-3 batches by 7-day bounce from
+        // the blob's own batchStats (the same rows Performance-by-batch reads),
+        // above-fleet-average only — falls back to a neutral pointer when
+        // batchStats is missing/flat so this line can never lie.
+        return { key: "trend-drift", level: "red", count: bits.length, short: "bounce/reply trend drifting",
+          text: bits.join(" · ") + ".",
+          actionLines: [
+            "Catch it before it crosses 3% and burns domains — check Performance by batch for the batches driving it.",
+            "Worst batches: " + worstBounceBatches(),
+          ],
+          action: "Catch it before it crosses 3% and burns domains — check Performance by batch for the batches driving it.",
+          _openBatch: true };
       }
       default: return null;
     }
@@ -2111,7 +2261,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      go stale after an action (fix: to-do items used to only refresh on
      "Mark done"; now every mutating action feeds straight back in here). */
   function recomputeTodos(D) {
-    const kinds = ["blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "reminder-due", "retired-domains"];
+    const kinds = ["blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "reminder-due", "retired-domains", "smtp-imap", "auth-records", "sending-deviation", "trend-drift"];
     let raw = kinds.map((k) => buildTodoItem(k, D)).filter(Boolean);
 
     // Dynamic: domains flagged for warm-up rotation that aren't resting yet.
@@ -2140,8 +2290,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (S.A.noNS === 0) chips.push("Nameserver zones clean — no drift");
     if (S.A.spfMiss === 0 && S.A.dkimMiss === 0) chips.push("SPF & DKIM present across the fleet");
     if (S.A.smtp <= 5) chips.push("SMTP/IMAP auth mostly healthy (" + S.A.smtp + " / " + S.A.imap + " issues)");
-    if (S.A.bounce_pct < 2) chips.push("Bounce rate healthy at " + S.A.bounce_pct + "%");
-    if (S.A.reply_pct >= 1) chips.push("Reply rate at/above the 1% benchmark (" + S.A.reply_pct + "%)");
+    // Panel fix (persona 2): never assert "healthy" for a metric whose trend
+    // layer is in breach — the trend-drift to-do would be saying the opposite
+    // on the same page. trendSev() === "" means no series yet OR trend fine;
+    // either way there's no live contradiction, so the chip may show.
+    if (S.A.bounce_pct < 2 && !trendSev("bounce")) chips.push("Bounce rate healthy at " + S.A.bounce_pct + "%");
+    if (S.A.reply_pct >= 1 && !trendSev("reply")) chips.push("Reply rate at/above the 1% benchmark (" + S.A.reply_pct + "%)");
     if (D.domainHealthCounts.keep > 0) chips.push(D.domainHealthCounts.keep + " domain(s) sending cleanly, no action needed");
     return chips;
   }
@@ -2324,71 +2478,245 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     </div>`;
   }
 
-  /* Health summary strip — the FIRST content below the banner, answering "am I
-     okay?" in 2 seconds for a non-technical reader (fix: the agency-owner
-     persona scored this 7 every round because the top of the page was jargon
-     tiles with no plain-English glance layer). 3-5 chips, every number pulled
-     straight off D/S.A — never a separate calculation from the banner/tiles
-     below it, so the two can never disagree. */
-  function renderHealthStrip(D) {
+  /* ============================================================
+     11b. Health header — 4 KPI cards (reply/bounce/sent/issues) with
+          30-day sparklines, replacing the old chip-based health strip.
+          Every card's CURRENT value/severity is computed straight off
+          D/S.A (or, once loaded, the trend series) so it can never
+          disagree with the banner/to-do counts below it.
+     ============================================================ */
+  // Walks `series[field]` backward from index `endExclusive`, collecting up
+  // to `n` non-null (and, if opts.skipZero, non-zero) points. When
+  // opts.weightField is given, each row also carries that day's weight (used
+  // to turn a run of daily percentages into one sends-weighted average).
+  function collectTrendRows(series, field, endExclusive, n, opts) {
+    opts = opts || {};
+    const arr = series[field], wArr = opts.weightField ? series[opts.weightField] : null;
+    const out = [];
+    for (let i = endExclusive - 1; i >= 0 && out.length < n; i--) {
+      const v = arr[i];
+      if (v == null) continue;
+      if (opts.skipZero && v === 0) continue;
+      const w = wArr ? wArr[i] : null;
+      if (wArr && !w) continue; // no sends that day — can't weight a % by it
+      out.push({ i: i, v: v, w: w });
+    }
+    return out;
+  }
+  function trendWeightedAvg(rows) {
+    if (!rows.length) return null;
+    if (rows[0].w != null) {
+      let num = 0, den = 0;
+      rows.forEach((r) => { num += r.v * r.w; den += r.w; });
+      return den ? num / den : null;
+    }
+    return rows.reduce((s, r) => s + r.v, 0) / rows.length;
+  }
+  // Current 7-point figure + the prior 7-point figure immediately before it
+  // (skipping nulls/zeros the same way), so a delta chip is always "this
+  // trailing window vs the window right before it" — never a fixed calendar
+  // range that a run of weekend nulls would silently shrink or skew.
+  function trendCurrentAndDelta(series, field, opts) {
+    const n = series.days.length;
+    const curRows = collectTrendRows(series, field, n, 7, opts);
+    const cur = trendWeightedAvg(curRows);
+    if (!curRows.length) return { cur: null, delta: null };
+    const priorRows = collectTrendRows(series, field, curRows[curRows.length - 1].i, 7, opts);
+    const prior = trendWeightedAvg(priorRows);
+    return { cur: cur, delta: (cur != null && prior != null) ? cur - prior : null };
+  }
+  // Panel fix #2: shared trend-drift facts for the "trend-drift" to-do card
+  // (buildTodoItem) — null while the async series hasn't landed / failed, so
+  // the card simply doesn't exist until there's real trend data behind it.
+  // loadTrends()'s success path ends in paintPage() → fullDerive() →
+  // recomputeTodos(), so the card appears on the very repaint the series lands.
+  function trendDriftFacts() {
+    if (DATA.trends.status !== "ready" || !DATA.trends.series) return null;
+    const s = DATA.trends.series;
+    const b = trendCurrentAndDelta(s, "bounce_pct", { weightField: "sent" });
+    const r = trendCurrentAndDelta(s, "reply_pct", { weightField: "sent" });
+    if (b.cur == null && b.delta == null && r.delta == null) return null;
+    return { bounceCur: b.cur, bounceDelta: b.delta, replyDelta: r.delta };
+  }
+  // Persona-3 fix: names the top 2-3 batches by 7-day bounce from the blob's
+  // batchStats — the same rows the Performance-by-batch table shows, so the
+  // trend-drift card can point at concrete culprits instead of "go look".
+  // Only batches ABOVE the fleet's sent-weighted average bounce qualify;
+  // missing/flat batchStats (this mock has one uniform batch) degrades to a
+  // neutral pointer so the line never invents a culprit.
+  function worstBounceBatches() {
+    const fallback = "per-batch breakdown in Performance by batch";
+    const bs = (S.A.batchStats || []).filter((b) => b && b.sent > 0 && b.bounce_rate != null);
+    if (bs.length < 2) return fallback;
+    let sentSum = 0, weighted = 0;
+    bs.forEach((b) => { sentSum += b.sent; weighted += b.bounce_rate * b.sent; });
+    const avg = sentSum ? weighted / sentSum : 0;
+    const above = bs.filter((b) => b.bounce_rate > avg + 0.05).sort((a, b) => b.bounce_rate - a.bounce_rate).slice(0, 3);
+    if (!above.length) return fallback; // all-equal / nothing meaningfully above average
+    return above.map((b) => b.batch + " " + b.bounce_rate.toFixed(1) + "%").join(" · ");
+  }
+  function kpiSev(metric, value) {
+    if (value == null) return "";
+    if (metric === "reply") return value >= 1 ? "g" : (value >= 0.8 ? "a" : "r");
+    if (metric === "bounce") return value < 2 ? "g" : (value < 3 ? "a" : "r");
+    if (metric === "issues") return value === 0 ? "g" : ((value >= 3 || (S.A.blacklistRows || []).length > 0) ? "r" : "a");
+    return ""; // "sent" carries no severity — see task brief
+  }
+  // Panel fix (persona 2): the TREND layer's own severity for a metric — the
+  // same thresholds the trend-drift to-do fires on, so a card's colour can
+  // never say "healthy" while that alert is live three lines below it.
+  // Returns "" when there's no series or the trend is fine.
+  function trendSev(metric) {
+    const f = trendDriftFacts();
+    if (!f) return "";
+    if (metric === "bounce") {
+      if (f.bounceCur != null && f.bounceCur >= 3) return "r";
+      if ((f.bounceCur != null && f.bounceCur >= 2) || (f.bounceDelta != null && f.bounceDelta >= 0.5)) return "a";
+      return "";
+    }
+    if (metric === "reply") {
+      if (f.replyDelta != null && f.replyDelta <= -0.3) return "a";
+      return "";
+    }
+    return "";
+  }
+  const _SEV_RANK = { "": 0, g: 0, a: 1, r: 2 };
+  function worseSev(a, b) { return (_SEV_RANK[b] || 0) > (_SEV_RANK[a] || 0) ? b : a; }
+  function sevColor(sev) { return sev === "g" ? "var(--green)" : sev === "a" ? "var(--amber)" : sev === "r" ? "var(--red)" : "var(--ink-3)"; }
+  // Full-card-width inline sparkline (300×48 viewBox stretched to 100% via
+  // preserveAspectRatio="none"; non-scaling-stroke keeps the line a true 2px).
+  // `values` is oldest→newest, may contain null (weekends / no-data days) —
+  // those break the line rather than dropping to zero. `opts.threshold` draws
+  // a dashed reference line at the metric's limit; the endpoint gets a solid
+  // dot in the card's own severity colour. (Panel fix: the original 110×30
+  // thumbnail read as a "grey scribble" — sized up per review.)
+  function sparklineSVG(values, opts) {
+    opts = opts || {};
+    const W = 300, H = 48, PADX = 5, PADY = 7;
+    const nums = values.filter((v) => v != null);
+    if (nums.length < 2) return "";
+    let lo = Math.min.apply(null, nums), hi = Math.max.apply(null, nums);
+    if (opts.threshold != null) { lo = Math.min(lo, opts.threshold); hi = Math.max(hi, opts.threshold); }
+    if (hi === lo) hi = lo + 1;
+    const n = values.length;
+    const x = (i) => PADX + (i / (n - 1)) * (W - PADX * 2);
+    const y = (v) => H - PADY - ((v - lo) / (hi - lo)) * (H - PADY * 2);
+    let path = "", drawing = false, lastPt = null;
+    values.forEach((v, i) => {
+      if (v == null) { drawing = false; return; }
+      const px = x(i), py = y(v);
+      path += (drawing ? "L" : "M") + px.toFixed(1) + "," + py.toFixed(1) + " ";
+      drawing = true;
+      lastPt = { x: px, y: py };
+    });
+    if (!path || !lastPt) return "";
+    const threshLine = opts.threshold != null
+      ? `<line x1="${PADX}" y1="${y(opts.threshold).toFixed(1)}" x2="${(W - PADX).toFixed(1)}" y2="${y(opts.threshold).toFixed(1)}" stroke="var(--line-2)" stroke-width="1.5" stroke-dasharray="5,4" vector-effect="non-scaling-stroke"/>`
+      : "";
+    const dot = `<circle cx="${lastPt.x.toFixed(1)}" cy="${lastPt.y.toFixed(1)}" r="4" fill="${esc(opts.endpointColor || "var(--ink-3)")}"/>`;
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="dlv-spark" aria-hidden="true">${threshLine}<path d="${path.trim()}" fill="none" stroke="var(--ink-3)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>${dot}</svg>`;
+  }
+  function fmtKpiValue(metric, value) {
+    if (value == null || !Number.isFinite(value)) return "—";
+    if (metric === "reply" || metric === "bounce") return value.toFixed(2) + "%";
+    if (metric === "sent") return fmtN(Math.round(value));
+    return String(Math.round(value));
+  }
+  // reply up / bounce down / issues down = good (green); the opposite = bad
+  // (red); "sent" never colours a direction (neutral ink) per the task brief.
+  function deltaChip(metric, delta) {
+    if (delta == null) return "";
+    // Persona-3 fix (flat-value arrow bug): arrow, colour AND the printed
+    // number all derive from the SAME display-precision rounding (0.1pt for
+    // percentage metrics, whole units for sent/issues) — a delta that rounds
+    // to 0.0 always shows the flat "–", never ▲/▼ beside a zero.
+    const rounded = (metric === "sent" || metric === "issues") ? Math.round(delta) : Math.round(delta * 10) / 10;
+    const arrow = rounded > 0 ? "▲" : (rounded < 0 ? "▼" : "–");
+    let cls = "ink";
+    if (metric !== "sent" && rounded !== 0) {
+      const good = metric === "reply" ? rounded > 0 : rounded < 0;
+      cls = good ? "g" : "r";
+    }
+    const abs = Math.abs(rounded);
+    const numTxt = metric === "sent" ? fmtN(abs) : (metric === "issues" ? String(abs) : abs.toFixed(1) + "pt");
+    return `<div class="dlv-kpi-delta ${cls}">${arrow} ${numTxt} vs last week</div>`;
+  }
+  const KPI_KEY = { reply: "reply_pct", bounce: "bounce_pct", sent: "sent", issues: "issues" };
+  function kpiCard(metric, label, D) {
     const A = S.A;
-    const F = computeHealthFacts(D);
-    const chips = [];
-    // 1. Sending health — always shown.
-    // Fix #4c (panels 9-10): "✓ Sending healthy" read as a page-level
-    // all-clear that contradicted the "3 urgent" chip beside it — scope the
-    // claim to the one metric it's actually about (bounce rate).
-    if (F.bounceOk) chips.push({ sev: "g", html: "Bounce rate healthy — " + A.bounce_pct + "%, under the 2% limit" });
-    else chips.push({ sev: F.bounceWarn ? "a" : "r", html: "Bounce rate elevated — " + A.bounce_pct + "% (fleet limit 2%)" });
-    // 2. Reply trend — surfaced ONLY when it's actually declining; a flat/rising
-    // trend has nothing urgent to say here (it's still in "Fleet by the numbers").
-    if (A.replyTrend && A.replyTrend.drop) {
-      chips.push({ sev: "a", html: "Replies trending down — " + A.replyTrend.wkRate + "% this week ▼ vs " + A.replyTrend.prevRate + "% prior 4-wk avg" });
+    const series = (DATA.trends.status === "ready") ? DATA.trends.series : null;
+    const field = KPI_KEY[metric];
+    let value = null, delta = null, sub = "", sparkline = "";
+    // Panel fix #1 (numbers contradiction): the BIG number is ALWAYS the audit
+    // blob's own figure (A.reply_pct / A.bounce_pct / A.sent÷7) — the exact
+    // same values the verdict, Fleet-details grid and Copy-for-Claude context
+    // print, in live AND sample mode, so the page can never disagree with
+    // itself. The trends series only drives the TREND layer (sparkline +
+    // delta chip), whose daily points may legitimately differ from the
+    // headline; the subtitle names both layers so that's unambiguous.
+    if (metric === "reply" || metric === "bounce") {
+      if (series) delta = trendCurrentAndDelta(series, field, { weightField: "sent" }).delta;
+      value = Number(A[field]);
+      sub = "last 7 days · trend: last 30 days";
+    } else if (metric === "sent") {
+      if (series) delta = trendCurrentAndDelta(series, "sent", { skipZero: true }).delta;
+      value = Number(A.sent) / 7;
+      sub = "avg/day, last 7 days · trend: last 30 days";
+    } else { // issues — always the live defensive sum, never off the series
+      // D.blockedReal (the same derived value the "blocked" to-do card and
+      // Fleet-details tile already show) falls back to the raw A.blockedReal
+      // scalar the live /run blob carries — sample/mock S.A has neither set
+      // directly, so this can never silently read as 0 when real blocks exist.
+      const blockedReal = (D && D.blockedReal != null) ? D.blockedReal : Number(A.blockedReal || 0);
+      value = Number(A.smtp || 0) + Number(A.imap || 0) + Number(blockedReal || 0) +
+        Number(A.spfMiss || 0) + Number(A.dkimMiss || 0) + Number(A.dmarcMiss || 0) +
+        (A.blacklistRows || []).length;
+      sub = "SMTP/IMAP · auth · blocks · blacklists";
+      if (series) { const r = trendCurrentAndDelta(series, "issues", {}); delta = r.delta; }
     }
-    // 3. Action needed — reuses computeStatus()'s own red/yellow/note counts
-    // (same numbers the banner above prints), so this can't ever show a
-    // different total than what the to-do list below actually contains.
-    // Defect F fix: this used to say "N things need action today", sitting
-    // right beside the banner's own "N urgent · N to review · N note" — two
-    // different-looking counts a reader has to reconcile. Reworded so the
-    // headline number is explicitly the URGENT (red) count, with the
-    // remaining yellow+note count folded in as a parenthetical instead of
-    // reading like a competing total.
-    if (D.status.red > 0) {
-      // Fix F(ii): this parenthetical used to collapse yellow+note into one
-      // number ("N more to review") while the banner right above spells the
-      // same two counts out separately ("N to review · N note") — same total,
-      // different-looking breakdown, so a reader comparing the two would see
-      // numbers that don't appear to match (e.g. banner "6 to review · 1
-      // note" next to strip chip "(7 more to review)"). Mirror the banner's
-      // own wording exactly so the two can never look inconsistent.
-      let more = "";
-      if (D.status.yellow > 0 && D.status.note > 0) more = " (" + D.status.yellow + " to review · " + D.status.note + " note" + (D.status.note === 1 ? "" : "s") + ")";
-      else if (D.status.yellow > 0) more = " (" + D.status.yellow + " more to review)";
-      else if (D.status.note > 0) more = " (" + D.status.note + " note" + (D.status.note === 1 ? "" : "s") + ")";
-      // Item 5b: name the top fire right in the chip, so "3 urgent" is never
-      // an abstract number — the first red item in the sorted to-do list is by
-      // definition the one this chip scrolls to.
-      const topRed = D.activeTodo.find((x) => x.level === "red");
-      const topTxt = topRed ? " — top: " + esc(topRed.short || topRed.text) : "";
-      // Item 4: "3 urgent" alone can't show partial progress WITHIN a
-      // category (pausing 1 of 3 blacklisted domains doesn't resolve the
-      // "blacklist" category, so the count above doesn't move) — this reads
-      // as "nothing happened" to an owner who just did something. Call out
-      // how many active red items have moved since session start.
-      const prog = D.status.redInProgress > 0 ? " (" + D.status.redInProgress + " in progress)" : "";
-      chips.push({ sev: "r", html: D.status.red + " urgent" + prog + topTxt + " →" + more, act: "scroll-todo" });
-    } else if (D.status.yellow > 0) {
-      chips.push({ sev: "a", html: D.status.yellow + " thing" + (D.status.yellow === 1 ? "" : "s") + " to review today →", act: "scroll-todo" });
+    // Panel fix (persona 2): card colour = the WORSE of the blob-figure
+    // severity and the trend-layer severity, so a green "1.4%" can never sit
+    // above a live "trending up, will burn domains" alert. When the trend
+    // layer is what escalated the card, an inline annotation beside the delta
+    // chip says so — the colour is always explained, never a mystery.
+    const blobSev = kpiSev(metric, value);
+    const tSev = trendSev(metric);
+    const sev = worseSev(blobSev, tSev);
+    const escalated = _SEV_RANK[tSev] > _SEV_RANK[blobSev];
+    // Sparkline only once the series has ≥7 real points for this field —
+    // otherwise the card stays value+delta-only (no fetch/render error either way).
+    if (series) {
+      const nonNull = series[field].filter((v) => (metric === "sent" ? (v != null && v !== 0) : v != null));
+      if (nonNull.length >= 7) {
+        const raw = metric === "sent" ? series.sent.map((v) => (v ? v : null)) : series[field];
+        sparkline = sparklineSVG(raw, { threshold: metric === "reply" ? 1 : (metric === "bounce" ? 2 : null), endpointColor: sevColor(sev) });
+      } else if (metric === "issues") {
+        sub += ` <span class="dlv-kpi-accrue">— trend accrues daily</span>`;
+      }
     }
-    // 4. Authentication — always shown. Fix #8b: lead with the problem count
-    // instead of burying it in an "X of Y" ratio a reader has to do subtraction
-    // on, and say "all N" rather than the more awkward "N of N" when clean.
-    if (F.authIssueDomains === 0) chips.push({ sev: "g", html: "Authentication OK on all " + A.domains + " domains" });
-    else chips.push({ sev: "a", html: "" + F.authIssueDomains + " domain" + (F.authIssueDomains === 1 ? "" : "s") + " missing auth records — " + F.authOkDomains + " of " + A.domains + " OK" });
-    return `<div class="dlv-health-strip">` + chips.map((c) =>
-      `<div class="dlv-health-chip ${c.sev}"${c.act ? ` data-act="${c.act}"` : ""}><span class="dot"></span><span>${c.html}</span></div>`
-    ).join("") + `</div>`;
+    const trendNote = escalated
+      ? `<span class="dlv-kpi-trendnote ${sev}">${metric === "reply" ? "sliding" : "trending up"}</span>`
+      : "";
+    return `<div class="dlv-kpi-card ${sev}">
+      <div class="dlv-kpi-lab">${esc(label)}</div>
+      <div class="dlv-kpi-value">${fmtKpiValue(metric, value)}</div>
+      <div class="dlv-kpi-sub">${sub}</div>
+      ${sparkline ? `<div class="dlv-kpi-spark">${sparkline}</div>` : ""}
+      <div class="dlv-kpi-deltarow">${deltaChip(metric, delta)}${trendNote}</div>
+    </div>`;
+  }
+  // Replaces the old renderHealthStrip() chip row — kicks off loadTrends()
+  // (a no-op once loading/ready) so the very first paint already shows values
+  // and only the sparklines pop in a moment later on live data.
+  function renderHealthHeader(D) {
+    loadTrends();
+    const cards = [
+      kpiCard("reply", "Reply rate", D),
+      kpiCard("bounce", "Bounce rate", D),
+      kpiCard("sent", "Sent / day", D),
+      kpiCard("issues", "Inbox issues", D),
+    ].join("");
+    return `<div class="dlv-kpi-row">${cards}</div>`;
   }
 
   /* ============================================================
@@ -2440,11 +2768,36 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function replyTrendTile(A) {
     const rt = A.replyTrend;
     if (!rt) return tile("Reply trend (wk vs 4-wk)", "—", "", "");
-    const drop = !!rt.drop;
-    const arrow = drop ? "▼" : "▲";
+    // Persona-3 fix (flat-value arrow bug): when the two figures are equal at
+    // the displayed precision, "▲ Up from 1.1%" is a rounding artifact — show
+    // an explicit flat state instead so the arrow never claims a move the
+    // numbers beside it don't show.
+    const flat = Math.round((Number(rt.wkRate) - Number(rt.prevRate)) * 10) === 0;
+    const drop = !flat && !!rt.drop;
+    const arrow = flat ? "→" : (drop ? "▼" : "▲");
     const value = rt.wkRate + "% " + arrow;
-    const extra = (drop ? "Down" : "Up") + " from " + rt.prevRate + "% prior 4-wk avg";
+    const extra = flat ? "Flat vs " + rt.prevRate + "% prior 4-wk avg"
+      : (drop ? "Down" : "Up") + " from " + rt.prevRate + "% prior 4-wk avg";
     return tile("Reply trend (wk vs 4-wk)", value, extra, sevOf(!drop, false), null, null, extra);
+  }
+
+  // Persona-3 fix: the drill-down must corroborate the header — same trailing
+  // 7-day weighted bounce + week-over-week delta the KPI card's trend layer
+  // shows (trendCurrentAndDelta on the same series), same severity thresholds
+  // (trendSev). "—" when the series is short/absent, exactly like the reply
+  // tile's no-data state.
+  function bounceTrendTile() {
+    const label = "Bounce trend (wk vs prior wk)";
+    if (DATA.trends.status !== "ready" || !DATA.trends.series) return tile(label, "—", "", "");
+    const b = trendCurrentAndDelta(DATA.trends.series, "bounce_pct", { weightField: "sent" });
+    if (b.cur == null) return tile(label, "—", "", "");
+    const rounded = b.delta != null ? Math.round(b.delta * 10) / 10 : null;
+    const arrow = rounded == null || rounded === 0 ? "→" : (rounded > 0 ? "▲" : "▼");
+    const value = b.cur.toFixed(1) + "% " + arrow;
+    const extra = rounded == null || rounded === 0 ? "Flat vs prior week"
+      : (rounded > 0 ? "Up " : "Down ") + Math.abs(rounded).toFixed(1) + "pt vs prior week";
+    const tSev = trendSev("bounce"); // "" | "a" | "r" — same escalation the KPI card uses
+    return tile(label, value, extra, tSev === "r" ? "bad" : (tSev === "a" ? "warn" : ""), null, null, extra);
   }
 
   /* Fix #7 / defect E: "Warmup inactive", "Domains to warm up", "Warmup due
@@ -2521,6 +2874,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // number actually is instead.
         tile("Emails sent", fmtN(A.sent), "last 7 days across all campaigns", ""),
         replyTrendTile(A),
+        bounceTrendTile(),
         tile("Blacklisted domains", A.blacklistRows.length, A.blacklistRows.length ? "Spamhaus DBL / SURBL" : "clean", sevOf(A.blacklistRows.length === 0, false), A.blacklistRows.length ? "blacklist" : null, A.blacklistRows.length ? { act: "open-blacklist", label: "Manage ↓" } : null),
         // Defect 5: this used to read the static seed value A.campLow, which
         // never moved even after a campaign got verified+cleaned — while the
@@ -2560,6 +2914,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <a class="dlv-dl" data-act="open-manager">Open manager ↓</a>
     </div>`;
     return `<div class="dlv-section-title">Fleet by the numbers</div>${html}`;
+  }
+
+  /* Task B: "Fleet details" — the full old Fleet-by-the-numbers grid (incl.
+     its nested Technical-details fold), demoted from the default Overview
+     scroll into its own collapsed-by-default fold at the bottom of the page.
+     Every exception it used to be the ONLY place to see (SMTP/IMAP, missing
+     auth records, sending-baseline deviation) now also has its own to-do card
+     (see buildTodoItem's smtp-imap/auth-records/sending-deviation cases) —
+     nothing here is lost, it's just off the default screen. Reuses
+     renderFleetTiles() verbatim; no tile/CSV/fix-link logic duplicated. */
+  function renderFleetDetailsFold(D) {
+    return `<details class="dlv-fold" id="dlv-fold-fleetdetails">
+      <summary>Fleet details<span class="hint">the full numbers grid — SPF/DKIM/DMARC, SMTP/IMAP, warmup, batches…</span></summary>
+      <div class="dlv-fold-body">${renderFleetTiles(D)}</div>
+    </details>`;
   }
 
   /* Technical-details fold — the "Infrastructure & auth" tiles (SMTP/IMAP,
@@ -2807,6 +3176,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (it.key === "signatures") btns.push(`<button class="btn sm primary" data-act="open-sig-fix">Fix signatures…</button>`);
     if (it.key === "new-unprocessed") btns.push(`<button class="btn sm primary" data-act="open-process-new">Process…</button>`);
     if (it.blacklistRows) btns.push(`<button class="btn sm" data-act="open-blacklist">Manage ↓</button>`);
+    // Task B: fix-action deep links for the 3 new exception-class cards, reusing
+    // existing plumbing — open-caps-preview already exists (Manager tab's
+    // "Caps by reply rate" button), and open-fleetdetails-tech composes the
+    // generic openFold() twice (outer Fleet-details fold, then the nested
+    // Technical-details fold it now lives inside) rather than inventing anything new.
+    if (it._openFleetTech) btns.push(`<button class="btn sm" data-act="open-fleetdetails-tech">Fleet details → Technical ↓</button>`);
+    if (it._openCaps) btns.push(`<button class="btn sm" data-act="open-caps-preview">Caps by reply rate…</button>`);
+    if (it._openBatch) btns.push(`<button class="btn sm" data-act="open-batch">Performance by batch ↓</button>`);
     if (it.key) btns.push(`<button class="btn sm" data-act="mark-done" data-key="${it.key}" data-count="${it.count || 0}" title="Mark as actioned">✓ Mark done</button>`);
     const plain = plainLineFor(it.text + " " + (it.action || ""));
     // Item 3: multi-step cards render each numbered step on its own line —
@@ -2826,8 +3203,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     </div>`;
   }
 
+  // Task B: the 7 exception classes the brief calls out by name — campaigns
+  // under 1% reply, SMTP fails, IMAP fails, missing SPF/DKIM/DMARC, blacklisted
+  // domains, real blocks, sending-baseline deviation. When every one of them
+  // is clear, renderTodo() below shows one quiet line instead of a wall of
+  // "✓ handled" chips for exactly these keys (other, non-exception to-dos —
+  // signatures, new-unprocessed, etc. — are unaffected either way).
+  const EXCEPTION_TODO_KEYS = ["blacklist", "blocked-real", "verify-campaigns", "smtp-imap", "auth-records", "sending-deviation", "trend-drift"];
+  function exceptionsAllClear(D) {
+    const raw = D.rawTodo || [];
+    return EXCEPTION_TODO_KEYS.every((k) => {
+      const it = raw.find((x) => x.key === k);
+      return !it || it.resolved; // never raised at all, or raised-and-resolved — both read as "clear"
+    });
+  }
   function renderTodo(D) {
     let html = "";
+    const excClear = exceptionsAllClear(D);
+    if (excClear) {
+      html += `<div class="dlv-exc-clear">All checks clear — SPF/DKIM/DMARC, SMTP/IMAP, blocks, blacklists.</div>`;
+    }
     // Fix #1: items marked done in the last ~12s render a temporary inline
     // stub in the exact slot the card occupied — interleave by walking rawTodo
     // (the canonical order activeTodo is filtered from) so the stub sits where
@@ -2849,8 +3244,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (stubs) html += `<div class="dlv-actions-list" style="margin-bottom:12px">${stubs}</div>`;
       html += `<div class="dlv-all-clear"><div class="big">✓ All clear</div><div class="sub">${(D.doneTodo.length || D.resolvedTodo.length) ? "Everything flagged today has been handled." : "Nothing needs action today — the numbers above are for reference."}</div></div>`;
     }
-    if (D.resolvedTodo.length) {
-      html += `<div class="dlv-todo-resolved-label">Auto-resolved today</div><div class="dlv-good-row">${D.resolvedTodo.map((it) => `<span class="dlv-good-chip dlv-resolved-chip" title="${esc(it.text)}">✓ handled</span>`).join("")}</div>`;
+    // The quiet "All checks clear" line above already covers the 6 exception
+    // keys when they're all resolved — drop those from this chip row so the
+    // same fact isn't stated twice; any other resolved (non-exception) item
+    // still gets its usual "✓ handled" chip here.
+    const resolvedForChips = excClear ? D.resolvedTodo.filter((it) => EXCEPTION_TODO_KEYS.indexOf(it.key) === -1) : D.resolvedTodo;
+    if (resolvedForChips.length) {
+      html += `<div class="dlv-todo-resolved-label">Auto-resolved today</div><div class="dlv-good-row">${resolvedForChips.map((it) => `<span class="dlv-good-chip dlv-resolved-chip" title="${esc(it.text)}">✓ handled</span>`).join("")}</div>`;
     }
     if (D.doneTodo.length) {
       // Defect 3: needs an id so the undo toast's hint (and anything else)
@@ -3705,18 +4105,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   let _activeJobsStarted = false;
 
   // Overview = every section that stayed in the main scroll (order preserved):
-  // coach, verdict, banner, health strip, fleet-by-the-numbers (incl. the
-  // technical-details fold), today's to-do (incl. the Actioned fold), recent
-  // actions. The 3 heavy sections + Restore reminders moved out to their own tabs.
+  // coach, verdict, banner, health header (Task A KPI cards — replaces the old
+  // health strip), today's to-do (incl. the Actioned fold), recent actions,
+  // Fleet details (Task B — the old fleet-by-the-numbers grid, now collapsed
+  // by default at the bottom). The 3 heavy sections + Restore reminders moved
+  // out to their own tabs (pre-existing, unchanged by this pass).
   function renderOverviewPanel(D) {
     return [
       renderCoach(),
       renderVerdict(D),
       renderBanner(D),
-      renderHealthStrip(D),
-      renderFleetTiles(D),
+      renderHealthHeader(D),
       `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
       renderHistoryFold(D),
+      renderFleetDetailsFold(D),
     ].join("");
   }
 
@@ -6300,6 +6702,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Rewired: "Performance by batch" is now its own sub-tab (the Fleet-tiles
     // "▲▼ Best & worst batch ↓" signpost lands here).
     if (act === "open-batch") { runAct(act, () => gotoSubtab("batch", "dlv-fold-batch")); return; }
+    // Task B deep link: the auth-records to-do card's fix-link needs to point
+    // at the Technical-details fold, which now lives nested inside the new
+    // "Fleet details" fold at the bottom of Overview — compose the existing
+    // generic openFold() twice (outer, then the nested one) instead of adding
+    // new fold-opening plumbing. Both cards only render this action while the
+    // card itself is on Overview, so no subtab switch is needed first.
+    if (act === "open-fleetdetails-tech") { runAct(act, () => { openFold("dlv-fold-fleetdetails"); openFold("dlv-fold-tech"); }); return; }
     if (act === "open-warmup-fix") { runAct(act, () => openWarmupFixModal()); return; }
     if (act === "open-sig-fix") { runAct(act, () => openSigFixModal()); return; }
     if (act === "open-process-new") { runAct(act, () => openProcessNewModal()); return; }
