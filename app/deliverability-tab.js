@@ -881,7 +881,10 @@
     const today = todayISO();
     const { minSent, cutoff } = dhCutoffMin();
     const dhRows = A.domainHealth.rows.map((d) => Object.assign({}, d, { flag: dhFlag(d, minSent, cutoff) }));
-    const resting = A.domainHealth.resting || {};
+    const resting = Object.assign({}, A.domainHealth.resting || {});
+    // Backend blobs have shipped resting={} while restingDue carried the real
+    // rested-domain list — heal by union so rested domains can't disappear.
+    Object.keys(A.domainHealth.restingDue || {}).forEach((d) => { if (!(resting[d] > 0)) resting[d] = 1; });
     const flaggedTotal = dhRows.filter((d) => d.flag === "warmup").length;
     const flaggedActionable = dhRows.filter((d) => d.flag === "warmup" && !(resting[d.domain] > 0)).length;
     const restingCount = Object.keys(resting).length;
