@@ -4777,6 +4777,49 @@ def api_verify_dismiss(p: dict):
     return {"ok": True}, 200
 
 
+def _warmup_job_worker(job: dict, op: str, domains: list):
+    """Runs a warm-up pause/resume against the audit backend inside the job
+    queue — so the click shows up in the Tasks panel, survives a page refresh,
+    and a failure carries a real error message instead of vanishing (owner
+    report 2026-07-11: the Warm-up button disappeared with no feedback and no
+    error)."""
+    from urllib.parse import quote
+    _job_started(job)
+    try:
+        rest = f"warmup-{op}?domain=" + quote(",".join(domains), safe="")
+        j = _deliv_backend_json("POST", rest, timeout=170)
+        if isinstance(j, dict) and j.get("error"):
+            _job_finished(job, "failed", str(j["error"])[:300])
+            return
+        key = "paused" if op == "pause" else "resumed"
+        n = int((j or {}).get(key) or 0)
+        counts = {"domains": len(domains), key: n}
+        if isinstance(j, dict) and j.get("failed"):
+            counts["failed"] = j["failed"]
+        with JOBS_LOCK:
+            job["counts"] = counts
+        log_activity("/api/warmup-job", payload={"op": op, "domains": domains[:20], **counts},
+                     actor="deliverability", action="warmup_" + op, entity="domain")
+        _job_finished(job, "done")
+    except Exception as e:  # noqa: BLE001 — the whole point is surfacing the real failure
+        _job_finished(job, "failed", str(e)[:300])
+
+
+def api_warmup_job(p: dict):
+    op = (p.get("op") or "").strip().lower()
+    domains = [str(d).strip() for d in (p.get("domains") or []) if str(d).strip()]
+    if op not in ("pause", "resume"):
+        return {"error": "bad_op", "message": "op must be \"pause\" or \"resume\""}, 400
+    if not domains:
+        return {"error": "missing_domains"}, 400
+    verb = "Warm-up rest" if op == "pause" else "Reactivate"
+    label = f"{verb}: " + ", ".join(domains[:3]) \
+        + (f" +{len(domains) - 3} more" if len(domains) > 3 else "")
+    job = _new_job("warmup_" + op, label, None)
+    _enqueue_job(_warmup_job_worker, job, (job, op, domains))
+    return {"job_id": job["id"]}, 202
+
+
 def _smartlead_json(method: str, path: str, body: dict | None = None, timeout: float = 60,
                     attempts: int = 5):
     """Smartlead call with 429 backoff (honours Retry-After). The 200req/min
@@ -9378,6 +9421,23 @@ class Handler(SimpleHTTPRequestHandler):
                         break
                     except Exception:  # noqa: BLE001 — retry, then "unknown" not a 500
                         continue
+                # Owner request 2026-07-11: "leads to verify" must exclude
+                # emails already verified recently. Emails checked in the last
+                # _VERIFY_TTL_DAYS for this campaign sit in email_verifications
+                # (the overflow tier tags campaign_id) — a verify run would
+                # skip them via its cache, so don't count them as "to verify".
+                if n:
+                    try:
+                        from datetime import datetime, timedelta, timezone
+                        from urllib.parse import quote as _q
+                        _cut = (datetime.now(timezone.utc)
+                                - timedelta(days=_VERIFY_TTL_DAYS)).isoformat()
+                        _vr = sb("GET", f"email_verifications?campaign_id=eq.{_q(str(cid), safe='')}"
+                                        f"&verified_at=gt.{_q(_cut, safe='')}&select=email&limit=10000")
+                        if isinstance(_vr, list):
+                            n = max(0, n - len(_vr))
+                    except Exception:  # noqa: BLE001 — best-effort discount; raw total beats a 500
+                        pass
                 if n is not None:
                     _LEAD_COUNT_CACHE[cid] = (n, time.time())
                 out[cid] = n
@@ -9694,6 +9754,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "invalid_json"}, 400)
             log_activity(path, payload)
             body, status = api_verify_dismiss(payload)
+            return self._json(body, status)
+        if path == "/api/warmup-job":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_warmup_job(payload)
             return self._json(body, status)
         if path == "/api/process-new-selected":
             length = int(self.headers.get("Content-Length") or 0)

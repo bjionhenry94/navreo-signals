@@ -982,6 +982,12 @@
       const st = _verifyStatus[id];
       if (st && st.dismissed) return false;
       if (st && st.last_verify_at && Number(st.bad_remaining || 0) === 0) return false;
+      // Owner request 2026-07-11 ("I could've sworn I've verified these
+      // already"): a campaign verified in the last 7 days never re-flags,
+      // even with bad leads still on record — it lands in the "Ignored &
+      // recently verified" fold instead, where Remove is still one click
+      // away. After 7 days an unremoved-bad campaign flags again.
+      if (st && st.last_verify_at && Date.now() - new Date(st.last_verify_at).getTime() < 7 * 864e5) return false;
       return true;
     });
 
@@ -1045,16 +1051,17 @@
   const DLV_SUBTABS = [
     ["overview", "Overview"],
     ["blacklist", "Blacklisted domains"],
-    ["manager", "Inbox & domain manager"],
     ["batch", "Performance by batch"],
   ];
   let dlvSubtab = "overview";
   function loadSubtab() {
     try {
       const v = sessionStorage.getItem("dlv_subtab");
-      // "Restore reminders" moved inside the manager (owner request
-      // 2026-07-11) — a stored pointer to the old tab lands on its new home.
-      if (v === "reminders") { dlvSubtab = "manager"; UI.mgr.flow = "reminders"; return; }
+      // The Inbox & domain manager moved INTO Overview (owner request
+      // 2026-07-11, just under the KPI header) — stored pointers to its old
+      // tab (and to the even older "reminders" tab) land on Overview.
+      if (v === "reminders") { dlvSubtab = "overview"; UI.mgr.flow = "reminders"; return; }
+      if (v === "manager") { dlvSubtab = "overview"; return; }
       if (v && DLV_SUBTABS.some(([id]) => id === v)) dlvSubtab = v;
     } catch (e) {}
   }
@@ -2160,17 +2167,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           action: "Add the missing DNS record(s) on each domain — see Fleet details → Technical details for the per-record counts.",
           _openFleetTech: true };
       }
-      case "sending-deviation": {
-        if (liveMissing("sendingDeviation")) return null; // not measured by the live audit — claim nothing
-        const over = (S.A.sendingDeviation && S.A.sendingDeviation.over) || [];
-        const under = (S.A.sendingDeviation && S.A.sendingDeviation.under) || [];
-        const n = over.length + under.length;
-        if (!n) return { key: "sending-deviation", level: "yellow", count: 0, resolved: true, text: "No mailboxes sending noticeably over or under their batch baseline." };
-        return { key: "sending-deviation", level: "yellow", count: n, short: "mailboxes off their sending baseline",
-          text: over.length + " mailbox(es) sending over their batch baseline · " + under.length + " under.",
-          action: "Review caps by reply rate and rebalance the outliers.",
-          _openCaps: true };
-      }
+      // ("sending-deviation" — mailboxes over/under their batch baseline — was
+      // removed as a to-do flag 2026-07-11 (owner): the deviation is by design,
+      // so it never warrants an action card. The Fleet-details grid retains the
+      // underlying numbers for reference.)
       case "trend-drift": {
         // Panel fix #2: a brewing trend (bounce drifting toward the limit or
         // replies sliding) never became a to-do — only a delta chip in the
@@ -2214,6 +2214,25 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           action: "Either re-enable warmup (manager → Warmup off view) or add a restore reminder so they come back on a schedule.",
           _openManager: true };
       }
+      case "restore-upcoming": {
+        // Owner request 2026-07-11: mailboxes resting in warm-up must be
+        // visible on the to-do list as reminders BEFORE their due date too —
+        // "restore-due" (recomputeTodos) fires on the day itself; this note
+        // covers the ones still waiting so nothing rests invisibly.
+        const bd = bundleRestDue();
+        const upcoming = bd
+          ? Object.keys(bd).filter((dom) => bd[dom] > Date.now())
+          : Object.keys(D.restingDue || {}).filter(
+            (dom) => (D.resting[dom] || 0) > 0 && D.restingDue[dom] && D.restingDue[dom] > Date.now());
+        if (!upcoming.length) return null; // nothing resting → no reminder needed, not even a stub
+        const dueTs = upcoming.map((dom) => (bd ? bd[dom] : D.restingDue[dom])).filter(Boolean);
+        const soonest = dueTs.length ? new Date(Math.min.apply(null, dueTs)) : null;
+        const soonTxt = soonest ? " — earliest back " + soonest.toISOString().slice(0, 10) : "";
+        return { key: "restore-upcoming", level: "note", count: upcoming.length, _openManager: true, _mgrFlow: "inwarmup",
+          short: "domains resting in warm-up",
+          text: upcoming.length + " domain(s) resting in warm-up, due back over the coming days" + soonTxt + " (" + upcoming.slice(0, 3).join(", ") + (upcoming.length > 3 ? ", …" : "") + ").",
+          action: "Reminder only — they'll flag here again when due. Restore early from the In warm-up view if you need the capacity back now." };
+      }
       default: return null;
     }
   }
@@ -2249,7 +2268,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   function recomputeTodos(D) {
-    const kinds = ["dormant-noreminder", "blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "reminder-due", "retired-domains", "smtp-imap", "auth-records", "sending-deviation", "trend-drift"];
+    const kinds = ["dormant-noreminder", "blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "reminder-due", "retired-domains", "smtp-imap", "auth-records", "trend-drift", "restore-upcoming"];
     let raw = kinds.map((k) => buildTodoItem(k, D)).filter(Boolean);
 
     // Dynamic: domains flagged for warm-up rotation that aren't resting yet.
@@ -2279,6 +2298,31 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       raw.push({ key: "restore-due", level: "yellow", count: dueDoms.length, _openManager: true, _mgrFlow: "inwarmup",
         text: dueDoms.length + " domain(s) are due back from warm-up rest (" + dueDoms.slice(0, 3).join(", ") + (dueDoms.length > 3 ? ", …" : "") + ").",
         action: "Open the In warm-up view and restore them so their capacity comes back online." });
+    }
+
+    // Owner request 2026-07-11: the "Inbox issues" KPI number must always be
+    // explained by Today's to-do. Its contributing cards (blocked, SMTP/IMAP,
+    // auth records, blacklist) normally ARE that explanation — this summary
+    // card fires only when the KPI is non-zero yet none of them is active
+    // (marked done earlier, or that data wasn't measured), so the tile can
+    // never show a number the list stays silent about.
+    const ISSUE_CARD_KEYS = ["blocked-real", "smtp-imap", "auth-records", "blacklist"];
+    const issuesN = issuesTotal(D);
+    const issueCardActive = raw.some((it) => ISSUE_CARD_KEYS.indexOf(it.key) !== -1 && !it.resolved && !isAcked(it));
+    if (issuesN > 0 && !issueCardActive) {
+      const A2 = S.A;
+      const bits = [];
+      const smtpImap = Number(A2.smtp || 0) + Number(A2.imap || 0);
+      const auth = Number(A2.spfMiss || 0) + Number(A2.dkimMiss || 0) + Number(A2.dmarcMiss || 0);
+      const blocked = (D.blockedReal != null) ? D.blockedReal : Number(A2.blockedReal || 0);
+      if (smtpImap) bits.push(smtpImap + " SMTP/IMAP");
+      if (auth) bits.push(auth + " missing auth records");
+      if (blocked) bits.push(blocked + " blocked");
+      if ((A2.blacklistRows || []).length) bits.push(A2.blacklistRows.length + " blacklisted");
+      raw.push({ key: "inbox-issues", level: "yellow", count: issuesN, _openFleetTech: true,
+        short: "inbox issues on the fleet",
+        text: issuesN + " inbox issue(s) on the fleet" + (bits.length ? " — " + bits.join(" · ") : "") + ".",
+        action: "The detail cards were marked done but the counts haven't dropped — undo them from the Actioned fold below, or review Fleet details → Technical details." });
     }
 
     const ord = { red: 0, yellow: 1, note: 2 };
@@ -2658,6 +2702,19 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const numTxt = metric === "sent" ? fmtN(abs) : (metric === "issues" ? String(abs) : abs.toFixed(1) + "pt");
     return `<div class="dlv-kpi-delta ${cls}">${arrow} ${numTxt} vs last week</div>`;
   }
+  // The "Inbox issues" KPI total — ONE shared computation so the KPI card and
+  // the to-do list's inbox-issues summary card can never disagree.
+  // D.blockedReal (the same derived value the "blocked" to-do card and
+  // Fleet-details tile already show) falls back to the raw A.blockedReal
+  // scalar the live /run blob carries — sample/mock S.A has neither set
+  // directly, so this can never silently read as 0 when real blocks exist.
+  function issuesTotal(D) {
+    const A = S.A;
+    const blockedReal = (D && D.blockedReal != null) ? D.blockedReal : Number(A.blockedReal || 0);
+    return Number(A.smtp || 0) + Number(A.imap || 0) + Number(blockedReal || 0) +
+      Number(A.spfMiss || 0) + Number(A.dkimMiss || 0) + Number(A.dmarcMiss || 0) +
+      (A.blacklistRows || []).length;
+  }
   const KPI_KEY = { reply: "reply_pct", bounce: "bounce_pct", sent: "sent", issues: "issues" };
   function kpiCard(metric, label, D) {
     const A = S.A;
@@ -2678,16 +2735,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     } else if (metric === "sent") {
       if (series) delta = trendCurrentAndDelta(series, "sent", { skipZero: true }).delta;
       value = Number(A.sent) / 7;
-      sub = "avg/day, last 7 days · trend: last 30 days";
+      sub = "average daily sends, previous 7 days · trend: last 30 days";
     } else { // issues — always the live defensive sum, never off the series
-      // D.blockedReal (the same derived value the "blocked" to-do card and
-      // Fleet-details tile already show) falls back to the raw A.blockedReal
-      // scalar the live /run blob carries — sample/mock S.A has neither set
-      // directly, so this can never silently read as 0 when real blocks exist.
-      const blockedReal = (D && D.blockedReal != null) ? D.blockedReal : Number(A.blockedReal || 0);
-      value = Number(A.smtp || 0) + Number(A.imap || 0) + Number(blockedReal || 0) +
-        Number(A.spfMiss || 0) + Number(A.dkimMiss || 0) + Number(A.dmarcMiss || 0) +
-        (A.blacklistRows || []).length;
+      value = issuesTotal(D);
       sub = "SMTP/IMAP · auth · blocks · blacklists";
       if (series) { const r = trendCurrentAndDelta(series, "issues", {}); delta = r.delta; }
     }
@@ -2780,45 +2830,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
   function sevOf(ok, warnOk) { return ok ? "" : (warnOk ? "warn" : "bad"); }
 
-  // Reply-trend tile builder — pulled out so the ▼/▲ + delta lives visibly in
-  // BOTH the tile value and its note-turned-visible extra line (fix: the trend
-  // used to only show its delta via the `note` param, which tile() renders
-  // solely as a `title` hover tooltip — a tester scanning tiles with a mouse
-  // never sees a hover-only number, so the reply decline was invisible).
-  function replyTrendTile(A) {
-    const rt = A.replyTrend;
-    if (!rt) return tile("Reply trend (wk vs 4-wk)", "—", "", "");
-    // Persona-3 fix (flat-value arrow bug): when the two figures are equal at
-    // the displayed precision, "▲ Up from 1.1%" is a rounding artifact — show
-    // an explicit flat state instead so the arrow never claims a move the
-    // numbers beside it don't show.
-    const flat = Math.round((Number(rt.wkRate) - Number(rt.prevRate)) * 10) === 0;
-    const drop = !flat && !!rt.drop;
-    const arrow = flat ? "→" : (drop ? "▼" : "▲");
-    const value = rt.wkRate + "% " + arrow;
-    const extra = flat ? "Flat vs " + rt.prevRate + "% prior 4-wk avg"
-      : (drop ? "Down" : "Up") + " from " + rt.prevRate + "% prior 4-wk avg";
-    return tile("Reply trend (wk vs 4-wk)", value, extra, sevOf(!drop, false), null, null, extra);
-  }
-
-  // Persona-3 fix: the drill-down must corroborate the header — same trailing
-  // 7-day weighted bounce + week-over-week delta the KPI card's trend layer
-  // shows (trendCurrentAndDelta on the same series), same severity thresholds
-  // (trendSev). "—" when the series is short/absent, exactly like the reply
-  // tile's no-data state.
-  function bounceTrendTile() {
-    const label = "Bounce trend (wk vs prior wk)";
-    if (DATA.trends.status !== "ready" || !DATA.trends.series) return tile(label, "—", "", "");
-    const b = trendCurrentAndDelta(DATA.trends.series, "bounce_pct", { weightField: "sent" });
-    if (b.cur == null) return tile(label, "—", "", "");
-    const rounded = b.delta != null ? Math.round(b.delta * 10) / 10 : null;
-    const arrow = rounded == null || rounded === 0 ? "→" : (rounded > 0 ? "▲" : "▼");
-    const value = b.cur.toFixed(1) + "% " + arrow;
-    const extra = rounded == null || rounded === 0 ? "Flat vs prior week"
-      : (rounded > 0 ? "Up " : "Down ") + Math.abs(rounded).toFixed(1) + "pt vs prior week";
-    const tSev = trendSev("bounce"); // "" | "a" | "r" — same escalation the KPI card uses
-    return tile(label, value, extra, tSev === "r" ? "bad" : (tSev === "a" ? "warn" : ""), null, null, extra);
-  }
+  // (replyTrendTile/bounceTrendTile removed 2026-07-11 with the Fleet-details
+  // simplification — the KPI header's sparkline cards carry the same trends.)
 
   /* Fix #7 / defect E: "Warmup inactive", "Domains to warm up", "Warmup due
      back" and "New warmup issues" used to be four separate tiles that all fed
@@ -2881,20 +2894,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
   function renderFleetTiles(D) {
     const A = S.A;
-    const replyOk = A.reply_pct >= 1, bounceOk = A.bounce_pct < 2;
-    const dmarcSum = A.quarantine + A.reject + A.none;
     const groups = { D: "Deliverability", F: "Fleet lifecycle" };
+    // Owner request 2026-07-11 ("Fleet details feels overwhelming, some parts
+    // repetition"): the five metric tiles that restated the KPI header (reply
+    // rate, bounce rate, emails sent, both trend tiles) are gone — the header
+    // cards above the fold already show those numbers with sparklines and
+    // deltas. Only the exception tiles the header can't break down remain.
     const tilesByGroup = {
       D: [
-        tile("Reply rate", A.reply_pct + "%", A.reply_pct + "% of " + fmtN(A.sent) + " sent", sevOf(replyOk, A.reply_pct >= 0.8)),
-        tile("Bounce rate", A.bounce_pct + "%", "last 7 days", sevOf(bounceOk, A.bounce_pct < 3)),
-        // Defect E fix: this subtitle used to print the reply count (e.g. "102
-        // replies") under a tile headlined "Emails sent" — describing a
-        // different metric than the one in the number above it. Say what the
-        // number actually is instead.
-        tile("Emails sent", fmtN(A.sent), "last 7 days across all campaigns", ""),
-        replyTrendTile(A),
-        bounceTrendTile(),
         liveMissing("blacklist")
           ? tile("Blacklisted domains", "—", "not measured by the live audit", "")
           : tile("Blacklisted domains", A.blacklistRows.length, A.blacklistRows.length ? "Spamhaus DBL / SURBL" : "clean", sevOf(A.blacklistRows.length === 0, false), A.blacklistRows.length ? "blacklist" : null, A.blacklistRows.length ? { act: "open-blacklist", label: "Manage ↓" } : null),
@@ -2958,7 +2965,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      renderFleetTiles() verbatim; no tile/CSV/fix-link logic duplicated. */
   function renderFleetDetailsFold(D) {
     return `<details class="dlv-fold" id="dlv-fold-fleetdetails">
-      <summary>Fleet details<span class="hint">the full numbers grid — SPF/DKIM/DMARC, SMTP/IMAP, warmup, batches…</span></summary>
+      <summary>Fleet details<span class="hint">blacklists · blocked · warmup · signatures · auth &amp; DNS</span></summary>
       <div class="dlv-fold-body">${renderFleetTiles(D)}</div>
     </details>`;
   }
@@ -3118,26 +3125,36 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ))}
     </div>`;
   }
-  // The "Ignored campaigns" fold — dismissed campaigns get pulled out of the
-  // active verify list entirely (see uncleanedVerifyCamps in derive()) but
-  // still need a way back. Renders one row per ignored campaign with an
-  // Un-ignore button; empty string when nothing is ignored (renderTodoCard
-  // only calls this when the verify card itself is showing).
+  // The "Ignored & recently verified" fold — dismissed campaigns AND ones
+  // verified in the last 7 days get pulled out of the active verify list
+  // (see uncleanedVerifyCamps in derive()) but still need a way back / a
+  // Remove path for leftover bad leads. Empty string when neither set has
+  // members (renderTodoCard only calls this when the verify card shows).
   function renderIgnoredVerifyFold() {
-    const ids = dismissedVerifyCampIds();
-    if (!ids.size) return "";
-    const camps = (S.A.campaignsFlagged || []).filter((c) => ids.has(String(c.id)));
+    const dismissed = dismissedVerifyCampIds();
+    const camps = (S.A.campaignsFlagged || []).filter((c) => {
+      const st = _verifyStatus[String(c.id)];
+      return dismissed.has(String(c.id)) ||
+        (st && st.last_verify_at && Date.now() - new Date(st.last_verify_at).getTime() < 7 * 864e5);
+    });
     if (!camps.length) return "";
     const rows = camps.map((c) => {
-      const st = _verifyStatus[String(c.id)] || {};
+      const cid = String(c.id);
+      const st = _verifyStatus[cid] || {};
       const age = verifyAgeLabel(st.last_verify_at);
+      const badN = Number(st.bad_remaining || 0);
+      const meta = [age ? "verified " + age : "never verified"];
+      if (badN) meta.push(badN + " confirmed-bad still in the campaign");
+      const btns = [];
+      if (badN) btns.push(`<button class="btn sm" data-act="remove-bad" data-id="${c.id}" data-count="${badN}" title="Remove the confirmed-bad leads a prior verify found">Remove ${badN} bad</button>`);
+      if (dismissed.has(cid)) btns.push(`<button class="btn sm" data-act="verify-undismiss" data-id="${c.id}">Un-ignore</button>`);
       return `<div class="dlv-vcamp">
         <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(st.name || c.name)}</a>
-        <span class="dlv-vmeta">${age ? "last verified " + esc(age) : "never verified"}</span>
-        <div class="dlv-vbtns"><button class="btn sm" data-act="verify-undismiss" data-id="${c.id}">Un-ignore</button></div>
+        <span class="dlv-vmeta">${esc(meta.join(" · "))}</span>
+        ${btns.length ? `<div class="dlv-vbtns">${btns.join("")}</div>` : ""}
       </div>`;
     }).join("");
-    return `<details class="dlv-fold" id="dlv-fold-verify-ignored" style="margin-top:8px"><summary>Ignored campaigns<span class="hint">${camps.length} hidden from the verify list</span></summary><div class="dlv-fold-body"><div class="dlv-vcamps">${rows}</div></div></details>`;
+    return `<details class="dlv-fold" id="dlv-fold-verify-ignored" style="margin-top:8px"><summary>Ignored &amp; recently verified<span class="hint">${camps.length} hidden from the verify list — recently verified ones re-flag only if bad leads remain after 7 days</span></summary><div class="dlv-fold-body"><div class="dlv-vcamps">${rows}</div></div></details>`;
   }
 
   function renderTodoCard(it, i, D) {
@@ -3249,7 +3266,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // is clear, renderTodo() below shows one quiet line instead of a wall of
   // "✓ handled" chips for exactly these keys (other, non-exception to-dos —
   // signatures, new-unprocessed, etc. — are unaffected either way).
-  const EXCEPTION_TODO_KEYS = ["blacklist", "blocked-real", "verify-campaigns", "smtp-imap", "auth-records", "sending-deviation", "trend-drift"];
+  const EXCEPTION_TODO_KEYS = ["blacklist", "blocked-real", "verify-campaigns", "smtp-imap", "auth-records", "trend-drift", "inbox-issues"];
   function exceptionsAllClear(D) {
     const raw = D.rawTodo || [];
     return EXCEPTION_TODO_KEYS.every((k) => {
@@ -3284,13 +3301,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (stubs) html += `<div class="dlv-actions-list" style="margin-bottom:12px">${stubs}</div>`;
       html += `<div class="dlv-all-clear"><div class="big">✓ All clear</div><div class="sub">${(D.doneTodo.length || D.resolvedTodo.length) ? "Everything flagged today has been handled." : "Nothing needs action today — the numbers above are for reference."}</div></div>`;
     }
-    // The quiet "All checks clear" line above already covers the 6 exception
-    // keys when they're all resolved — drop those from this chip row so the
-    // same fact isn't stated twice; any other resolved (non-exception) item
-    // still gets its usual "✓ handled" chip here.
-    const resolvedForChips = excClear ? D.resolvedTodo.filter((it) => EXCEPTION_TODO_KEYS.indexOf(it.key) === -1) : D.resolvedTodo;
-    if (resolvedForChips.length) {
-      html += `<div class="dlv-todo-resolved-label">Auto-resolved today</div><div class="dlv-good-row">${resolvedForChips.map((it) => `<span class="dlv-good-chip dlv-resolved-chip" title="${esc(it.text)}">✓ handled</span>`).join("")}</div>`;
+    // (Owner request 2026-07-11: the "Auto-resolved today" row of anonymous
+    // "✓ handled" chips is gone — the good-chips row below already says what's
+    // healthy in words, and resolved items need no extra badge wall.)
+    if (D.goodChips.length) {
+      html += `<div class="dlv-good-row">${D.goodChips.map((g) => `<span class="dlv-good-chip">✓ ${esc(g)}</span>`).join("")}</div>`;
     }
     if (D.doneTodo.length) {
       // Defect 3: needs an id so the undo toast's hint (and anything else)
@@ -3303,9 +3318,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       html += `<details class="dlv-fold" id="dlv-fold-actioned"><summary>Actioned<span class="hint">${D.doneTodo.length} marked done — reappears only if it grows · (undo items you marked done here — any time)</span></summary><div class="dlv-fold-body"><div class="dlv-actions-list">` +
         D.doneTodo.map(renderAckRow).join("") +
         "</div></div></details>";
-    }
-    if (D.goodChips.length) {
-      html += `<div class="dlv-good-row">${D.goodChips.map((g) => `<span class="dlv-good-chip">✓ ${esc(g)}</span>`).join("")}</div>`;
     }
     return html;
   }
@@ -4428,12 +4440,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const foldState = {};
     root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { foldState[d.id] = d.open; });
     const D = fullDerive();
-    // Sub-tab shell: Overview keeps everything except the 3 heavy sections,
-    // which now render as their own always-expanded tab panel instead —
-    // exactly one of the four branches below paints on any given call.
+    // Sub-tab shell: Overview keeps everything (incl. the Inbox & domain
+    // manager, back in the main scroll per owner request 2026-07-11) except
+    // Blacklisted domains and Performance by batch, which render as their own
+    // tab panels — exactly one of the branches below paints on any given call.
     let panel;
     if (dlvSubtab === "blacklist") panel = renderBlacklistPanel(D);
-    else if (dlvSubtab === "manager") panel = renderManagerPanel(D);
     else if (dlvSubtab === "batch") panel = renderBatchPanel();
     else panel = renderOverviewPanel(D);
     root.innerHTML = [
@@ -4444,7 +4456,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       renderFooter(),
     ].join("");
     root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { if (foldState[d.id] != null) d.open = foldState[d.id]; });
-    paintManagerRows(); // no-ops safely (guarded on $id("dlv-mgr-body")) unless the Manager tab is active
+    paintManagerRows(); // no-ops safely (guarded on $id("dlv-mgr-body")) unless the manager panel is in the DOM
     scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
     if (isLive()) fillLeadCounts(); // async; fills the "N leads to verify" spans in place
     if (isLive()) fillVerifyStatus(); // async; server-truth verify state — see 23. Verify pipeline
@@ -4452,18 +4464,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
   let _activeJobsStarted = false;
 
-  // Overview = every section that stayed in the main scroll (order preserved):
-  // coach, verdict, banner, health header (Task A KPI cards — replaces the old
-  // health strip), today's to-do (incl. the Actioned fold), recent actions,
-  // Fleet details (Task B — the old fleet-by-the-numbers grid, now collapsed
-  // by default at the bottom). The 3 heavy sections + Restore reminders moved
-  // out to their own tabs (pre-existing, unchanged by this pass).
+  // Overview = every section in the main scroll (order preserved): coach,
+  // verdict, banner, health header (KPI cards), the Inbox & domain manager
+  // (owner request 2026-07-11: moved back from its own sub-tab to sit right
+  // under the KPI header), today's to-do (incl. the Actioned fold), recent
+  // actions, Fleet details (collapsed by default at the bottom).
   function renderOverviewPanel(D) {
     return [
       renderCoach(),
       renderVerdict(D),
       renderBanner(D),
       renderHealthHeader(D),
+      renderManagerPanel(D),
       `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
       renderHistoryFold(D),
       renderFleetDetailsFold(D),
@@ -6181,28 +6193,64 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      27. Domain-health rotation actions
      ============================================================ */
+  // Warm-up pause/resume now runs as a queued server job (owner report
+  // 2026-07-11: the old 60s synchronous call left the button gone with no
+  // feedback and swallowed failures). The job appears in the Tasks panel the
+  // moment it's queued; the caller polls it in the background and toasts the
+  // real outcome either way. Returns the job_id, or null after showing an
+  // error toast (submit failed — nothing was queued).
+  async function submitWarmupJob(op, domains, btn) {
+    const orig = btn ? btn.innerHTML : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="dlv-spinner" style="width:13px;height:13px"></span>'; }
+    let resp, j = null;
+    try {
+      resp = await fetch("/api/warmup-job", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op, domains }) });
+      try { j = await resp.json(); } catch (e) {}
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+      toast("Warm-up request failed — server unreachable", "err");
+      return null;
+    }
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+    if (!resp.ok || !j || !j.job_id) {
+      toast((j && (j.message || j.error)) || "Warm-up request failed (HTTP " + resp.status + ")", "err");
+      return null;
+    }
+    return j.job_id;
+  }
   async function domainWarmup(domain, btn) {
     const _nb = (bundleData() && bundleData().domainBoxes) || {};
     const _boxN = _nb[(domain || "").toLowerCase()];
     const ok = await dlvConfirm("Move " + domain + " to warmup?\n\n• Sets sending capacity to 0 for " + (_boxN ? "all " + _boxN + " of its mailboxes" : "all its mailboxes") + "\n• Warmup keeps running\n• Current caps are saved so Reactivate restores them\n\nProceed?", { title: "Move to warmup" });
     if (!ok) return;
-    let mailboxes;
     if (isLive()) {
-      let j;
-      try { j = await liveAction("warmup-pause?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
-      catch (e) { toast("Warmup failed", "err"); return; }
-      if (j && j.error) { toast(j.error, "err"); return; }
-      mailboxes = j.paused || 0;
-      S.A.domainHealth.resting[domain] = mailboxes || 1;
+      const jobId = await submitWarmupJob("pause", [domain], btn);
+      if (jobId == null) return;
+      // Optimistic rest state so the row reads "🌙 resting" right away — the
+      // job's outcome (polled below) reconciles or rolls it back.
+      S.A.domainHealth.resting[domain] = _boxN || 1;
       S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
-      invalidateMgrDh();
-    } else {
-      const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
-      mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
-      mailboxes = mbx.length;
-      S.A.domainHealth.resting[domain] = mbx.length || 1;
-      S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
+      logAction({action: "warmup_pause", mailboxes: _boxN || 0, domains: 1, scope: domain });
+      saveState();
+      toast(domain + " queued for warm-up rest — track it in the Tasks panel", "ok");
+      paintPage();
+      pollDlvJob(jobId).then((job) => {
+        if (job.status === "done") {
+          toast(domain + " moved to warm-up — " + ((job.counts && job.counts.paused) || 0) + " mailbox(es) resting, due back in 7d", "ok");
+        } else {
+          delete S.A.domainHealth.resting[domain];
+          delete S.A.domainHealth.restingDue[domain];
+          toast("Warm-up failed for " + domain + ": " + (job.error || job.status), "err");
+        }
+        invalidateMgrDh(); saveState(); paintPage();
+      }).catch(() => { toast("Warm-up status unknown for " + domain + " — check the Tasks panel", "err"); });
+      return;
     }
+    const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
+    mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
+    const mailboxes = mbx.length;
+    S.A.domainHealth.resting[domain] = mbx.length || 1;
+    S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
     logAction({action: "warmup_pause", mailboxes, domains: 1, scope: domain });
     saveState();
     // Part A1 (make the state change unmistakable): name the domain, the count,
@@ -6214,23 +6262,33 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   async function domainReactivate(domain, btn) {
     const ok = await dlvConfirm("Reactivate " + domain + "?\n\nRestores each mailbox to its saved daily cap and resumes sending.\n\nProceed?", { title: "Reactivate domain" });
     if (!ok) return;
-    let resumed;
     if (isLive()) {
-      let j;
-      try { j = await liveAction("warmup-resume?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner" style="width:13px;height:13px"></span>', { timeout: 60000 }); }
-      catch (e) { toast("Reactivate failed", "err"); return; }
-      if (j && j.error) { toast(j.error, "err"); return; }
-      resumed = j.resumed || 0;
+      const jobId = await submitWarmupJob("resume", [domain], btn);
+      if (jobId == null) return;
+      const prevResting = S.A.domainHealth.resting[domain], prevDue = S.A.domainHealth.restingDue[domain];
       delete S.A.domainHealth.resting[domain];
       delete S.A.domainHealth.restingDue[domain];
-      invalidateMgrDh();
-    } else {
-      const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
-      mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
-      resumed = S.A.domainHealth.resting[domain] || mbx.length;
-      delete S.A.domainHealth.resting[domain];
-      delete S.A.domainHealth.restingDue[domain];
+      logAction({action: "warmup_resume", mailboxes: prevResting || 0 });
+      saveState();
+      toast(domain + " queued for reactivation — track it in the Tasks panel", "ok");
+      paintPage();
+      pollDlvJob(jobId).then((job) => {
+        if (job.status === "done") {
+          toast("Reactivated " + domain + " — " + ((job.counts && job.counts.resumed) || 0) + " mailbox(es)", "ok");
+        } else {
+          if (prevResting != null) S.A.domainHealth.resting[domain] = prevResting;
+          if (prevDue != null) S.A.domainHealth.restingDue[domain] = prevDue;
+          toast("Reactivate failed for " + domain + ": " + (job.error || job.status), "err");
+        }
+        invalidateMgrDh(); saveState(); paintPage();
+      }).catch(() => { toast("Reactivate status unknown for " + domain + " — check the Tasks panel", "err"); });
+      return;
     }
+    const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
+    mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
+    const resumed = S.A.domainHealth.resting[domain] || mbx.length;
+    delete S.A.domainHealth.resting[domain];
+    delete S.A.domainHealth.restingDue[domain];
     logAction({action: "warmup_resume", mailboxes: resumed });
     saveState();
     toast("Reactivated " + domain + " — " + resumed + " mailbox(es)", "ok");
@@ -6249,28 +6307,41 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const _list = domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "");
     const ok = await dlvConfirm("Move ALL " + domains.length + " flagged domains to warmup?\n\n  " + _list + "\n\n• Sets sending capacity to 0 for every mailbox on these domains\n• Warmup keeps running; saved caps let you Reactivate later\n\nProceed?", { title: "Move all flagged", yesLabel: "Move " + domains.length });
     if (!ok) return;
-    let paused = 0;
     if (isLive()) {
-      let j;
-      try { j = await liveAction("warmup-pause?domain=" + encodeURIComponent(domains.join(",")), btn, '<span class="dlv-spinner"></span> Pausing… (may take a few min)', { timeout: 180000 }); }
-      catch (e) { toast("Bulk warmup failed", "err"); return; }
-      if (j && j.error) { toast(j.error, "err"); return; }
-      paused = j.paused || 0;
+      // Queued as a background job — the old synchronous call could run 3
+      // minutes with nothing but a busy button (owner report 2026-07-11).
+      const jobId = await submitWarmupJob("pause", domains, btn);
+      if (jobId == null) return;
       domains.forEach((domain) => {
         S.A.domainHealth.resting[domain] = S.A.domainHealth.resting[domain] || 1;
         S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
       });
-      invalidateMgrDh();
-      if (j.failed) toast("Paused " + paused + " · " + j.failed + " failed (rate limit) — click again to finish, it's safe to re-run", "err");
-    } else {
-      domains.forEach((domain) => {
-        const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
-        mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
-        S.A.domainHealth.resting[domain] = mbx.length || 1;
-        S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
-        paused += mbx.length;
-      });
+      logAction({action: "warmup_pause", mailboxes: 0, domains: domains.length, scope: "bulk flagged" });
+      saveState();
+      toast(domains.length + " domain(s) queued for warm-up rest — track it in the Tasks panel", "ok");
+      paintPage();
+      pollDlvJob(jobId).then((job) => {
+        const c = job.counts || {};
+        if (job.status === "done") {
+          let msg = "Moved " + domains.length + " flagged domain(s) to warm-up — " + (c.paused || 0) + " mailbox(es) resting, due back in 7d";
+          if (c.failed) msg += " · " + c.failed + " failed (rate limit) — re-run to finish, it's safe";
+          toast(msg, c.failed ? "err" : "ok");
+        } else {
+          domains.forEach((domain) => { delete S.A.domainHealth.resting[domain]; delete S.A.domainHealth.restingDue[domain]; });
+          toast("Bulk warm-up failed: " + (job.error || job.status), "err");
+        }
+        invalidateMgrDh(); saveState(); paintPage();
+      }).catch(() => { toast("Bulk warm-up status unknown — check the Tasks panel", "err"); });
+      return;
     }
+    let paused = 0;
+    domains.forEach((domain) => {
+      const mbx = S.A.inboxRows.filter((r) => r.domain === domain && r.kind === "ok" && r.cap > 0);
+      mbx.forEach((r) => { r._savedCap = r.cap; r.cap = 0; });
+      S.A.domainHealth.resting[domain] = mbx.length || 1;
+      S.A.domainHealth.restingDue[domain] = Date.now() + 7 * 864e5;
+      paused += mbx.length;
+    });
     logAction({action: "warmup_pause", mailboxes: paused, domains: domains.length, scope: "bulk flagged" });
     saveState();
     toast("Moved " + domains.length + " flagged domain(s) to warm-up — " + paused + " mailbox(es) resting, due back in 7d", "ok");
@@ -6534,7 +6605,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       loadRestorePlan(true);
     }
   }
-
   async function remEnableWarmup(id) {
     const h = S.A.remHealth[id];
     if (!h) return;
@@ -6824,6 +6894,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // into their own sub-tab: switch tabs, repaint, jump to the top of the page
   // (the panel now starts right under the sub-tab bar), then briefly flash its
   // heading so the jump reads as unmistakably as the old openFold() did.
+  // The manager lives on Overview now (owner request 2026-07-11) — deep links
+  // switch back to Overview if needed, then scroll to and flash the panel.
+  function gotoManager() {
+    if (dlvSubtab !== "overview") setSubtab("overview");
+    paintPage();
+    // Instant, synchronous jump — paintPage() builds the panel synchronously,
+    // and a smooth scroll (or a deferred rAF one) gets silently dropped when a
+    // background repaint lands mid-animation or the tab is throttled, leaving
+    // the user parked at the top with no idea the click worked.
+    const el = $id("dlv-fold-manager");
+    if (el) { el.scrollIntoView({ block: "start" }); flashEl(el); }
+  }
   function gotoSubtab(id, flashId) {
     setSubtab(id);
     paintPage();
@@ -7171,24 +7253,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // "needs warm-up" set, then switches to its tab — so a user arriving from
     // "these domains should go into warm-up" lands on exactly that list rather
     // than whatever view/filter was left selected from a previous poke.
-    // Rewired: "Inbox & domain manager" is now its own sub-tab rather than a
-    // fold further down the scroll (blacklist to-do's "advanced rotation"
-    // link, the warm-up to-do's "Open manager ↓", the Warmup tile's fix-link,
-    // and the Fleet-tiles signpost row all land here the same way).
+    // "Inbox & domain manager" lives on Overview (owner request 2026-07-11) —
+    // deep links (blacklist to-do's "advanced rotation" link, the warm-up
+    // to-do's "Open manager ↓", the Warmup tile's fix-link, the Fleet-tiles
+    // signpost row) all scroll to its panel the same way.
     if (act === "open-manager") { runAct(act, () => {
       // Deep links may name the flow they mean (restore-due → "inwarmup");
       // default stays the warm-up work ("floor").
       UI.mgr.flow = (t.dataset.flow && MGR_FLOWS.some(([id]) => id === t.dataset.flow)) ? t.dataset.flow : "floor";
       UI.mgr.search = "";
-      gotoSubtab("manager", "dlv-fold-manager");
+      gotoManager();
     }); return; }
-    // Rewired: "Restore reminders" is now its own sub-tab (the to-do card's
-    // "⏰ Reminders ↓" button lands here) — switch tab, repaint, jump to top,
-    // flash the heading, exactly like the other three moved sections.
+    // "Restore reminders" is the manager's fifth flow chip — same landing.
     if (act === "open-reminders") { runAct(act, () => {
-      // The restore queue lives inside the manager now.
       UI.mgr.flow = "reminders"; UI.mgr.search = "";
-      gotoSubtab("manager", "dlv-fold-manager");
+      gotoManager();
     }); return; }
     // Rewired: "Blacklisted domains" is now its own sub-tab (the to-do card's
     // "Manage ↓" and the Blacklisted-domains tile's fix-link both land here).
@@ -7323,7 +7402,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           .then(() => loadRestorePlan(true)).catch(() => {});
       }
     }); return; }
-
     if (act === "rem-add") { runAct(act, () => remAdd()); return; }
     if (act === "rem-done") { runAct(act, () => remDone(t.dataset.id, false)); return; }
     if (act === "rem-undo") { runAct(act, () => remDone(t.dataset.id, true)); return; }
