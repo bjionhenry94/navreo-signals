@@ -32,6 +32,7 @@ from pathlib import Path
 import certifi
 
 import mock_deliv  # DELIV_MOCK — in-memory fake fleet, only ever called when DELIV_MOCK=1
+import setter  # Setter tab (appointment-setter agents) — configured below, once sb/http_json/log_activity exist
 
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = APP_DIR.parent
@@ -837,6 +838,9 @@ def log_activity(endpoint: str, payload=None, actor: str = "app",
     threading.Thread(target=lambda: sb("POST", "app_activity_log", row,
                                        prefer="return=representation"),
                      daemon=True).start()
+
+
+setter.configure(sb=sb, http_json=http_json, keys=KEYS, log_activity=log_activity)
 
 
 def client_prefill(p: dict) -> dict:
@@ -7765,6 +7769,27 @@ def _mailbox_sync_bg():
         _MAILBOX_SYNC_LOCK.release()
 
 
+_SETTER_POLL_LOCK = threading.Lock()
+
+
+def _setter_poll_bg():
+    if not _SETTER_POLL_LOCK.acquire(blocking=False):
+        return  # a prior sweep is still running — skip this one
+    try:
+        summary = setter.run_poll()
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/setter/poll",
+            "action": "setter_poll_done", "entity": "setter_queue", "payload": summary})
+    except Exception as e:  # noqa: BLE001 — record, never crash the thread
+        print(f"[setter-poll] FAILED: {e}", file=sys.stderr)
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/setter/poll",
+            "action": "setter_poll_failed", "entity": "setter_queue",
+            "payload": {"error": str(e)[:300]}})
+    finally:
+        _SETTER_POLL_LOCK.release()
+
+
 # ── HTTP plumbing ────────────────────────────────────────────────────────
 
 ROUTES = {
@@ -8731,6 +8756,7 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
+                     "/api/setter/poll", "/api/setter/inbound",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 
@@ -9444,6 +9470,12 @@ class Handler(SimpleHTTPRequestHandler):
             if self.command != "HEAD":
                 self.wfile.write(data)
             return
+        if path.startswith("/api/setter/"):
+            fn = setter.GET_ROUTES.get(path)
+            if fn:
+                from urllib.parse import parse_qs, urlparse
+                status, body = fn(parse_qs(urlparse(self.path).query))
+                return self._json(body, status)
         return self._serve_static()
 
     def do_POST(self):
@@ -9476,7 +9508,8 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
-        if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh"):
+        if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
+                   "/api/setter/poll"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
             # and the lock does not nest.
@@ -9488,7 +9521,12 @@ class Handler(SimpleHTTPRequestHandler):
                 srk = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
                 want = hashlib.sha256((srk + ":signal-pull-v1").encode()).hexdigest()[:40] if srk else None
             got = self.headers.get("x-navreo-token")
-            if not want or got != want:
+            # /api/setter/poll doubles as the UI's "Check now" button, which is
+            # session-authed rather than token-authed — accept either.
+            if path == "/api/setter/poll":
+                if not (self._authed_email() or (want and got == want)):
+                    return self._json({"ok": False, "message": "unauthorized"}, 401)
+            elif not want or got != want:
                 return self._json({"ok": False, "message": "unauthorized"}, 401)
             # Fire-and-forget: both jobs run far longer than any HTTP/pg_net
             # timeout, so kick to a background thread and return immediately.
@@ -9508,6 +9546,12 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, actor="cron", action="sync", entity="mailboxes")
                 threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/setter/poll":
+                if _SETTER_POLL_LOCK.locked():
+                    return self._json({"ok": True, "started": False, "busy": True}, 200)
+                log_activity(path, actor="cron", action="poll", entity="setter_queue")
+                threading.Thread(target=_setter_poll_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/heyreach-sync":
                 if _HEYREACH_SYNC_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
@@ -9519,6 +9563,31 @@ class Handler(SimpleHTTPRequestHandler):
             log_activity(path, actor="cron", action="pull", entity="signals_batch")
             threading.Thread(target=_cron_pull_bg, daemon=True).start()
             return self._json({"ok": True, "started": True}, 202)
+        if path == "/api/setter/inbound":
+            # Smartlead campaign webhook (EMAIL_REPLY) — instant Setter intake.
+            # The token travels in the registered webhook URL's query string
+            # (Smartlead can't send custom headers); header accepted too.
+            want = os.environ.get("SIGNAL_PULL_TOKEN") or KEYS.get("SIGNAL_PULL_TOKEN")
+            if not want:
+                import hashlib
+                srk = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+                want = hashlib.sha256((srk + ":signal-pull-v1").encode()).hexdigest()[:40] if srk else None
+            from urllib.parse import parse_qs, urlparse
+            got = (parse_qs(urlparse(self.path).query).get("token") or [""])[0] \
+                or self.headers.get("x-navreo-token")
+            if not want or got != want:
+                return self._json({"ok": False, "message": "unauthorized"}, 401)
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            log_activity(path, actor="webhook", action="inbound", entity="setter_queue")
+            # Processing takes two model calls (~15s); ack the webhook now and
+            # run the pipeline in the background. The poll sweep is the net if
+            # this thread dies mid-flight.
+            threading.Thread(target=setter.handle_inbound, args=(payload,), daemon=True).start()
+            return self._json({"ok": True, "accepted": True}, 202)
         exec_prefix, exec_suffix = "/api/notifications/", "/execute"
         if path.startswith(exec_prefix) and path.endswith(exec_suffix) and \
                 len(path) > len(exec_prefix) + len(exec_suffix):
@@ -9651,6 +9720,16 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(_deliv_bundle_start(force=force))
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("POST")
+        setter_route = setter.POST_ROUTES.get(path)
+        if setter_route:
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            log_activity(path, payload, action=path.rsplit("/", 1)[-1], entity="setter")
+            status, body = setter_route(payload)
+            return self._json(body, status)
         lists_route = LISTS_POST_ROUTES.get(path)
         if lists_route:
             # (status, body) handlers — organisational metadata only; nothing

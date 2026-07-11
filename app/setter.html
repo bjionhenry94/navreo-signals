@@ -1,0 +1,1510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setter · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* == Setter page: inbox-style queue, agent editor, settings, try-it drawer == */
+.err-banner {
+  background: var(--red-bg); border: 1px solid var(--red-line); color: #861E10;
+  border-radius: var(--radius); padding: 12px 16px; font-size: 13px; margin: 14px 0;
+}
+.warn-banner {
+  background: var(--amber-bg); border: 1px solid var(--amber-line); color: #6B4A00;
+  border-radius: 8px; padding: 9px 13px; font-size: 12.5px; margin: 10px 0; line-height: 1.5;
+}
+
+/* ── Slim inline stats row (replaces the 3 big KPI cards) ─────────────── */
+.stats-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 8px 0 16px; flex-wrap: wrap; }
+.stats-inline b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.stats-inline b.amber { color: #6B4A00; }
+.stats-inline .sep { color: var(--line-2); }
+
+/* ── Toolbar row: filters + test toggle + Agents/Settings/Try it + master switch pill ── */
+.setter-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 16px; }
+.setter-toolbar .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.test-toggle { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.setter-toolbar .tb-spacer { flex: 1; }
+.setter-toolbar .tb-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.autopilot-pill { cursor: pointer; border: none; font: 500 11px var(--font-sans); }
+
+/* ── Two-pane inbox shell ──────────────────────────────────────────────── */
+.inbox-shell {
+  display: flex; border: 1px solid var(--line); border-radius: var(--radius);
+  overflow: hidden; height: calc(100vh - 300px); min-height: 460px;
+}
+.inbox-left { width: 340px; flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+.il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.il-search input {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 13px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent; box-sizing: border-box;
+}
+.il-search input:focus { outline: none; box-shadow: var(--focus); }
+.il-search-notes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.il-list { flex: 1; overflow-y: auto; }
+.il-test-note { padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.il-list .empty { padding: 40px 16px; }
+.inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 40px; }
+
+.inbox-item { padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; border-left: 3px solid transparent; }
+.inbox-item:hover { background: var(--bg-sunken); }
+.inbox-item.selected { background: var(--bg-sunken); border-left-color: var(--orange); }
+.ii-line1 { display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.ii-email { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+.ii-snippet { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ii-hold { font-size: 11px; color: #6B4A00; margin-top: 4px; }
+.ii-meta { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.ii-camp { font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+.ii-time { font-size: 11px; color: var(--ink-3); margin-left: auto; }
+
+.mobile-back { display: none; margin-bottom: 12px; }
+@media (max-width: 900px) {
+  .inbox-shell { flex-direction: column; height: auto; min-height: 0; border: none; overflow: visible; }
+  .inbox-left { width: 100%; border-right: none; border: 1px solid var(--line); border-radius: var(--radius); }
+  .inbox-right { padding: 16px 4px 40px; }
+  .inbox-shell:not(.mobile-detail) .inbox-right { display: none; }
+  .inbox-shell.mobile-detail .inbox-left { display: none; }
+  .inbox-shell.mobile-detail .mobile-back { display: inline-flex; }
+}
+
+.back-link { color: var(--ink-3); text-decoration: none; font-size: 13px; align-items: center; gap: 5px; }
+.back-link:hover { color: var(--ink); }
+
+/* ── Detail (right pane) ──────────────────────────────────────────────── */
+.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+.dh-meta { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+.dh-sub { flex-shrink: 0; }
+.qc-sub-chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+
+.qc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.qc-test-chip { background: var(--ink); color: var(--cream); }
+
+.sent-line { font-size: 12.5px; padding: 9px 13px; border-radius: 8px; margin: 10px 0; line-height: 1.5; }
+.sent-line.auto_sent { background: var(--green-bg); color: #195C3F; }
+.sent-line.sent { background: var(--bg-sunken); color: var(--ink-2); }
+
+.thread-details { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; }
+.thread-details summary { padding: 9px 13px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; list-style: none; }
+.thread-details summary::-webkit-details-marker { display: none; }
+.thread-details[open] summary { border-bottom: 1px solid var(--line); }
+.thread-list { padding: 10px 13px; }
+.thread-msg { margin-bottom: 12px; }
+.thread-msg:last-child { margin-bottom: 0; }
+.tm-head { font-size: 12px; margin-bottom: 3px; }
+.tm-body { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+
+.msg-card { margin: 16px 0; }
+.msg-card-lab {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-3); margin-bottom: 7px; display: flex; align-items: center; gap: 8px;
+}
+.qc-reply {
+  font-size: 13px; color: var(--ink-2); background: var(--bg-sunken); border-radius: 8px;
+  padding: 10px 12px; margin: 4px 0; white-space: pre-wrap; line-height: 1.55;
+}
+.qc-reply.collapsed { max-height: 58px; overflow: hidden; }
+.qc-reply-toggle { font-size: 11.5px; color: var(--orange-700); background: none; border: none; cursor: pointer; padding: 0; margin: -4px 0 6px; }
+.qc-draft {
+  border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 14px;
+  font-size: 13px; line-height: 1.65; min-height: 60px; margin-top: 6px;
+}
+.qc-draft:focus { outline: none; box-shadow: var(--focus); }
+.qc-slots { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.qc-slots a { text-decoration: none; }
+.qc-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.detail-err { margin: 10px 0; }
+
+.agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+.agent-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; cursor: pointer; }
+.agent-card:hover { background: var(--bg-sunken); }
+.agent-card .ac-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-card .ac-meta { font-size: 12px; color: var(--ink-3); margin-top: 5px; }
+.agent-card .ac-intake { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
+
+.autopilot-switch {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap; margin-bottom: 20px;
+}
+.autopilot-switch .as-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ── Right-side slide-over drawers (Agents / Settings / Try it) ───────── */
+.slideover-overlay {
+  position: fixed; inset: 0; background: rgba(20, 17, 14, 0.45);
+  display: none; z-index: 150;
+}
+.slideover-overlay.on { display: block; }
+.slideover {
+  position: absolute; top: 0; right: 0; height: 100vh; width: min(520px, 92vw);
+  background: var(--card); box-shadow: -10px 0 30px rgba(20, 17, 14, 0.16);
+  transform: translateX(100%); transition: transform 0.22s ease;
+  display: flex; flex-direction: column;
+}
+.slideover-overlay.on .slideover { transform: translateX(0); }
+.slideover-h { padding: 20px 22px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.slideover-h h3 { font-size: 16.5px; font-weight: 600; font-family: var(--font-sans); }
+.slideover-close { background: none; border: none; cursor: pointer; font-size: 20px; line-height: 1; color: var(--ink-3); padding: 4px 6px; border-radius: 6px; }
+.slideover-close:hover { background: var(--bg-sunken); color: var(--ink); }
+.slideover-body { flex: 1; overflow-y: auto; padding: 18px 22px 28px; }
+
+.drawer { border: 1px solid var(--line); border-radius: var(--radius); }
+.drawer summary { padding: 14px 18px; font-size: 14px; font-weight: 600; cursor: pointer; list-style: none; }
+.drawer summary::-webkit-details-marker { display: none; }
+.drawer[open] summary { border-bottom: 1px solid var(--line); }
+.drawer-body { padding: 16px 18px 20px; }
+
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12px; color: var(--ink-3); font-weight: 500; margin-bottom: 6px; }
+.field .hint { font-size: 11.5px; color: var(--brown-400); margin-top: 5px; line-height: 1.5; }
+.field input[type=text], .field input[type=password], .field input[type=number],
+.field input[type=email], .field textarea, .field select {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 11px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent; box-sizing: border-box;
+}
+.field textarea { min-height: 68px; resize: vertical; }
+.field input:focus, .field textarea:focus, .field select:focus { outline: none; box-shadow: var(--focus); }
+.mode-toggle { display: flex; gap: 8px; }
+.mode-toggle .btn { flex: 1; justify-content: center; }
+.checklist { border: 1px solid var(--line-2); border-radius: 8px; max-height: 170px; overflow-y: auto; padding: 6px; }
+.checklist label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; border-radius: 6px; cursor: pointer; }
+.checklist label:hover { background: var(--bg-sunken); }
+.intent-checks label { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 7px; cursor: pointer; }
+.slider-row { display: flex; align-items: center; gap: 10px; }
+.slider-row input[type=range] { flex: 1; }
+.slider-row .val { font-weight: 600; min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.overlay { position: fixed; inset: 0; background: rgba(20, 17, 14, 0.45); display: none; align-items: center; justify-content: center; z-index: 210; padding: 20px; }
+.overlay.on { display: flex; }
+.modal { background: var(--card); border-radius: 18px; width: 620px; max-width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal-h { padding: 20px 22px 4px; }
+.modal-h h3 { font-size: 16.5px; font-weight: 600; font-family: var(--font-sans); }
+.modal-b { padding: 12px 22px 4px; overflow-y: auto; }
+.modal-f { padding: 14px 22px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 10px; }
+.modal-err { font-size: 12px; color: var(--red); background: var(--red-bg); border: 1px solid var(--red-line); border-radius: 8px; padding: 8px 10px; margin: 4px 0 10px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow">Setter</div>
+        <h1>Appointment Setter</h1>
+        <div class="small muted" style="margin-top:2px">Drafts and sends simple replies for the campaigns you assign. Anything unusual is held for you.</div>
+      </div>
+      <button class="btn primary" id="checkNowBtn" type="button">Check for new replies</button>
+    </div>
+
+    <div id="errBanner" class="err-banner" style="display:none"></div>
+
+    <div class="stats-inline" id="statsInline"></div>
+
+    <div class="setter-toolbar">
+      <div class="filters" id="queueFilters"></div>
+      <label class="test-toggle" id="testToggleWrap" style="display:none">
+        <input type="checkbox" id="showTestChk" checked> Show test items
+      </label>
+      <div class="tb-spacer"></div>
+      <div class="tb-actions">
+        <span class="pill autopilot-pill" id="autopilotPill" title="Open the Agents drawer"></span>
+        <button class="btn" id="openAgentsBtn" type="button">Agents</button>
+        <button class="btn" id="openSettingsBtn" type="button">Settings</button>
+        <button class="btn" id="openTryItBtn" type="button">Try it</button>
+      </div>
+    </div>
+
+    <div class="inbox-shell" id="inboxShell">
+      <div class="inbox-left">
+        <div class="il-search">
+          <input type="text" id="inboxSearch" placeholder="Search name, email, campaign, reply…">
+          <div class="il-search-notes">
+            <span class="small muted">&uarr;&darr; to move between replies</span>
+            <span class="small muted" id="searchAllNote" style="display:none">searching all replies</span>
+          </div>
+        </div>
+        <div class="il-test-note small muted" id="testOnlyNote" style="display:none"></div>
+        <div class="il-list" id="inboxList"></div>
+      </div>
+      <div class="inbox-right" id="inboxRight"></div>
+    </div>
+  </main>
+</div>
+
+<!-- Agents drawer: autopilot master switch + agent cards + editor -->
+<div id="agentsDrawerOverlay" class="slideover-overlay">
+  <div class="slideover">
+    <div class="slideover-h">
+      <h3>Setter agents</h3>
+      <button class="slideover-close" id="agentsDrawerClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="slideover-body">
+      <div class="small muted" style="margin:0 0 16px">Each agent owns a resource link and a set of campaigns. Autopilot agents send simple replies themselves; everything else still comes to you.</div>
+
+      <div class="stat autopilot-switch" id="autopilotSwitchCard">
+        <div>
+          <div class="lab">Autopilot master switch</div>
+          <div class="small muted" id="autopilotSwitchCopy" style="margin-top:4px"></div>
+        </div>
+        <div class="as-controls" id="autopilotSwitchControls"></div>
+      </div>
+      <div class="small muted" id="autopilotSwitchArmedNote" style="display:none;margin:-12px 0 20px"></div>
+
+      <div id="webhookWarnBanner" class="warn-banner" style="display:none"></div>
+
+      <div id="agentsList" class="agents-grid"></div>
+      <button class="btn" id="newAgentBtn" type="button" style="margin-top:14px">+ New agent</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings drawer -->
+<div id="settingsDrawerOverlay" class="slideover-overlay">
+  <div class="slideover">
+    <div class="slideover-h">
+      <h3>Settings</h3>
+      <button class="slideover-close" id="settingsDrawerClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="slideover-body" id="settingsBody"></div>
+  </div>
+</div>
+
+<!-- Try it drawer -->
+<div id="tryItDrawerOverlay" class="slideover-overlay">
+  <div class="slideover">
+    <div class="slideover-h">
+      <h3>Try it</h3>
+      <button class="slideover-close" id="tryItDrawerClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="slideover-body" id="tryItBody"></div>
+  </div>
+</div>
+
+<div id="agentModalOverlay" class="overlay">
+  <div class="modal">
+    <div class="modal-h"><h3 id="agentModalTitle">New agent</h3></div>
+    <div class="modal-b">
+      <div id="agentModalErr" class="modal-err" style="display:none"></div>
+      <div id="agentModalFields"></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger" id="agentDeleteBtn" type="button" style="margin-right:auto;display:none">Delete</button>
+      <button class="btn" id="agentCancelBtn" type="button">Cancel</button>
+      <button class="btn primary" id="agentSaveBtn" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("setter");
+
+/* ── State ─────────────────────────────────────────────── */
+let AGENTS = [];
+let CAMPAIGNS = [];
+let SETTINGS = {};
+let QUEUE_ROWS = [];
+/* every row regardless of the active filter pill - only used to power
+   search-across-all-replies (see visibleInboxRows) so a search never misses
+   a match just because a different pill happens to be selected */
+let ALL_ROWS = [];
+let KPIS = {};
+let currentStatus = "needs_review";
+let campaignMap = {};
+
+let editingAgentId = null;
+let currentAgentMode = "draft_only";
+let currentAgentEnabled = true;
+let selectedCampaignIds = new Set();
+
+/* inbox-specific state */
+let selectedRowId = null;
+let inboxSearchQuery = "";
+/* rowId -> last edited (unsent) draft HTML, so a background refresh never
+   clobbers text the user is mid-way through editing */
+const EDITED_DRAFTS = {};
+
+const FILTER_PILLS = [
+  { key: "needs_review", label: "Needs review" },
+  { key: "auto_sent", label: "Auto-sent" },
+  { key: "sent", label: "Sent" },
+  { key: "no_action", label: "No action" },
+  { key: "dismissed", label: "Dismissed" },
+  { key: "", label: "All" },
+];
+
+const INTENT_LABELS = {
+  send_resource: "Wants the resource",
+  pricing: "Asking about pricing",
+  scheduling: "Wants to book a call",
+  bespoke_request: "Wants custom work",
+  objection_or_question: "Has a question",
+  not_interested: "Not interested",
+  unsubscribe_dnc: "Wants to be removed",
+  ooo: "Out of office",
+  wrong_person: "Wrong person",
+  bounce_or_system: "Bounce or automated message",
+  other: "Other",
+};
+function intentLabel(intent) {
+  if (!intent) return "Not classified yet";
+  return INTENT_LABELS[intent] || esc(intent);
+}
+
+const STATUS_LABELS = {
+  needs_review: "Needs review", auto_sent: "Auto-sent", sent: "Sent",
+  no_action: "No action", dismissed: "Dismissed", error: "Error", new: "New",
+};
+function statusLabel(status) { return STATUS_LABELS[status] || esc(status || ""); }
+function statusPillClass(status) {
+  if (status === "needs_review" || status === "error") return "a";
+  if (status === "auto_sent" || status === "sent") return "g";
+  return "n";
+}
+function leadName(row) {
+  const n = [row.lead_first_name, row.lead_last_name].filter(Boolean).join(" ");
+  return n || row.lead_email || "Unknown lead";
+}
+function truncate(s, n) {
+  s = String(s || "");
+  return s.length > n ? s.slice(0, Math.max(0, n - 1)) + "…" : s;
+}
+function campaignNameFor(row) {
+  return campaignMap[row.smartlead_campaign_id] || (row.smartlead_campaign_id ? `Campaign ${row.smartlead_campaign_id}` : "Unknown campaign");
+}
+
+/* ── Fetch helper (never throws to the caller) ────────────── */
+async function fetchJson(url, opts) {
+  try {
+    const res = await fetch(url, opts);
+    let data = {};
+    try { data = await res.json(); } catch { data = {}; }
+    if (!res.ok) return { ok: false, status: res.status, error: (data && data.error) || `Request failed (${res.status})`, data };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || "Network error" };
+  }
+}
+function showError(msg) {
+  const el = document.getElementById("errBanner");
+  el.textContent = msg;
+  el.style.display = "block";
+}
+function clearError() { document.getElementById("errBanner").style.display = "none"; }
+/* per-row error, surfaced right in the detail pane next to the composer
+   (in addition to the page-level banner above) so a 409 double-send or a
+   regenerate failure is obvious against the reply the user is looking at */
+function showDetailError(msg) {
+  const el = document.getElementById("detailErrBanner");
+  if (!el) return;
+  el.textContent = msg;
+  el.style.display = "block";
+}
+
+/* ── Load ──────────────────────────────────────────────── */
+async function loadAgentsAndCampaigns() {
+  const [agentsRes, campaignsRes] = await Promise.all([
+    fetchJson("/api/setter/agents"),
+    fetchJson("/api/setter/campaigns"),
+  ]);
+  if (agentsRes.ok) {
+    AGENTS = agentsRes.data.agents || [];
+    SETTINGS = agentsRes.data.settings || {};
+  } else {
+    showError("Couldn't load setter agents: " + agentsRes.error);
+    AGENTS = []; SETTINGS = {};
+  }
+  if (campaignsRes.ok) {
+    CAMPAIGNS = Array.isArray(campaignsRes.data) ? campaignsRes.data : (campaignsRes.data.campaigns || []);
+  } else {
+    CAMPAIGNS = [];
+  }
+  campaignMap = {};
+  CAMPAIGNS.forEach((c) => { campaignMap[c.id] = c.name; });
+  renderAutopilotSwitch();
+  renderAgents();
+  renderSettings();
+  renderTryIt();
+}
+
+async function loadQueue() {
+  const params = new URLSearchParams();
+  if (currentStatus) params.set("status", currentStatus);
+  params.set("limit", "200");
+  // fetch the current pill's rows plus an all-statuses copy in parallel - the
+  // all-statuses copy is what search-across-all-replies searches against, so
+  // typing a query never misses a match sitting under a different pill
+  const [res, allRes] = await Promise.all([
+    fetchJson(`/api/setter/queue?${params.toString()}`),
+    fetchJson(`/api/setter/queue?limit=200`),
+  ]);
+  if (res.ok) {
+    QUEUE_ROWS = res.data.rows || [];
+    KPIS = res.data.kpis || {};
+    clearError();
+  } else {
+    showError("Couldn't load the queue: " + res.error);
+    QUEUE_ROWS = []; KPIS = {};
+  }
+  ALL_ROWS = allRes.ok ? (allRes.data.rows || []) : QUEUE_ROWS;
+  renderKpis();
+  renderQueueFilters();
+  renderQueue();
+}
+
+/* ── Slim stats row ────────────────────────────────────── */
+function renderKpis() {
+  const el = document.getElementById("statsInline");
+  const nr = KPIS.needs_review ?? 0;
+  const as = KPIS.auto_sent_today ?? 0;
+  const avg = KPIS.avg_response_mins_7d;
+  const avgTxt = avg == null ? "–" : Math.round(avg) + "m";
+  // The server total counts real leads only. When test rows are on screen,
+  // fold the visible test needs-review rows INTO the headline number (with a
+  // "(N test)" tag) so the number always matches what the eye sees below it.
+  const testNeeds = visibleInboxRows().filter((r) => r.is_test && r.status === "needs_review").length;
+  const shown = nr + testNeeds;
+  const testNote = testNeeds > 0
+    ? ` <span class="muted">(${fmt(testNeeds)} test)</span>` : "";
+  el.innerHTML = `
+    <span>Needs review <b class="${shown > 0 ? "amber" : ""}">${fmt(shown)}</b>${testNote}</span>
+    <span class="sep">·</span>
+    <span>Auto-sent today <b>${fmt(as)}</b></span>
+    <span class="sep">·</span>
+    <span>Avg response <b>${esc(avgTxt)}</b></span>
+  `;
+}
+
+/* ── Queue: filters + two-pane inbox ───────────────────── */
+function renderQueueFilters() {
+  const wrap = document.getElementById("queueFilters");
+  wrap.innerHTML = FILTER_PILLS.map((p) =>
+    `<button type="button" class="chip ${p.key === currentStatus ? "on" : ""}" data-status="${esc(p.key)}">${esc(p.label)}</button>`
+  ).join("");
+  wrap.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    currentStatus = b.getAttribute("data-status");
+    loadQueue();
+  }));
+  const hasTest = QUEUE_ROWS.some((r) => r.is_test);
+  document.getElementById("testToggleWrap").style.display = hasTest ? "flex" : "none";
+}
+
+/* rows shown in the LEFT list: test-toggle + client-side search, newest first
+   (server already orders created_at.desc). A non-empty search ignores the
+   active filter pill and searches every row (ALL_ROWS) instead of just the
+   current pill's rows (QUEUE_ROWS), so a search never misses a match sitting
+   under a different status. An empty search restores the pill's own scope. */
+function visibleInboxRows() {
+  const chk = document.getElementById("showTestChk");
+  const showTest = chk ? chk.checked : true;
+  const q = inboxSearchQuery.trim().toLowerCase();
+  const source = q ? ALL_ROWS : QUEUE_ROWS;
+  let rows = showTest ? source : source.filter((r) => !r.is_test);
+  if (q) {
+    rows = rows.filter((r) => {
+      const hay = [leadName(r), r.lead_email, campaignNameFor(r), r.reply_body]
+        .map((v) => String(v || "").toLowerCase()).join(" ");
+      return hay.includes(q);
+    });
+  }
+  return rows;
+}
+
+function renderQueue() {
+  renderInboxList();
+  const stillThere = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId));
+  renderDetail(stillThere || null);
+}
+
+function renderInboxList() {
+  const el = document.getElementById("inboxList");
+  const rows = visibleInboxRows();
+  const testNoteEl = document.getElementById("testOnlyNote");
+  if (testNoteEl) {
+    const onlyTest = rows.length > 0 && rows.every((r) => r.is_test);
+    testNoteEl.style.display = onlyTest ? "block" : "none";
+    testNoteEl.textContent = onlyTest ? "These are simulated test replies. Real replies will appear here." : "";
+  }
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty">No replies here. New ones will show up after the next check.</div>`;
+    return;
+  }
+  el.innerHTML = rows.map(inboxItemHtml).join("");
+  el.querySelectorAll(".inbox-item").forEach((item) => {
+    item.addEventListener("click", () => selectRow(item.getAttribute("data-id")));
+  });
+}
+
+/* Fix 1 (hold-reason keyword map): each keyword is checked in order against
+   the row's decision_reason; first match wins. Falls back to the first 40
+   chars of the reason after the "Held for review: " marker so a reason we
+   haven't mapped yet still shows something useful instead of nothing. */
+const HOLD_REASON_KEYWORDS = [
+  ["bespoke", "Custom work asked"],
+  ["Calendly is not connected", "Calendly not connected"],
+  ["no Calendly availability", "No free slots"],
+  ["master switch", "Ready, autopilot off"],
+  ["draft only", "Ready, agent on draft mode"],
+  ["timezone", "Timezone unclear"],
+  ["pricing notes", "Pricing not configured"],
+  ["replied before", "Repeat reply"],
+  ["already categorised", "Smartlead flagged it"],
+  ["confident", "AI unsure"],
+  ["nuanced question", "Needs judgement"],
+  ["live opening", "No, but a lead inside"],
+  ["wants to talk today", "Wants a call today"],
+  ["isn't allowed to answer alone", "Outside agent's scope"],
+  ["not the right contact", "Wrong person"],
+];
+function holdReasonLabel(reason, row) {
+  const r = String(reason || "");
+  // "Needs judgement" told the reviewer nothing when two unrelated rows both
+  // carried it - for judgement-call holds, show WHAT the lead actually wants
+  // (the classifier's own one-liner), which is unique per row.
+  if (r.includes("nuanced question") || r.includes("isn't allowed to answer alone")) {
+    const wants = row && row.classification && row.classification.wants;
+    if (wants) return truncate(wants, 42);
+  }
+  for (const [kw, label] of HOLD_REASON_KEYWORDS) {
+    if (r.includes(kw)) return label;
+  }
+  const marker = "Held for review: ";
+  const idx = r.indexOf(marker);
+  const rest = idx >= 0 ? r.slice(idx + marker.length) : r;
+  return truncate(rest, 40);
+}
+
+function inboxItemHtml(row) {
+  const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
+  const snippet = esc(String(row.reply_body || "").trim().replace(/\s+/g, " "));
+  const selected = String(row.id) === String(selectedRowId) ? "selected" : "";
+  const campaignName = campaignNameFor(row);
+  const holdLine = (row.status === "needs_review" && row.decision_reason)
+    ? `<div class="ii-hold">${esc(holdReasonLabel(row.decision_reason, row))}</div>` : "";
+  return `<div class="inbox-item ${selected}" data-id="${esc(row.id)}">
+    <div class="ii-line1">${esc(leadName(row))} ${testChip}</div>
+    <div class="ii-email">${esc(row.lead_email || "")}</div>
+    <div class="ii-snippet">${snippet || "No reply text."}</div>
+    ${holdLine}
+    <div class="ii-meta">
+      <span class="pill ${statusPillClass(row.status)}">${statusLabel(row.status)}</span>
+      <span class="ii-camp" title="${esc(campaignName)}">${esc(truncate(campaignName, 20))}</span>
+      <span class="ii-time">${pulledAgo(row.replied_at)}</span>
+    </div>
+  </div>`;
+}
+
+function selectRow(id) {
+  selectedRowId = id;
+  document.getElementById("inboxShell").classList.add("mobile-detail");
+  document.querySelectorAll(".inbox-item").forEach((item) => {
+    item.classList.toggle("selected", item.getAttribute("data-id") === String(id));
+  });
+  const row = QUEUE_ROWS.find((r) => String(r.id) === String(id));
+  renderDetail(row || null);
+}
+
+function backToInbox() {
+  document.getElementById("inboxShell").classList.remove("mobile-detail");
+}
+
+/* ── Right pane: detail / composer ─────────────────────── */
+function renderDetail(row) {
+  const el = document.getElementById("inboxRight");
+  if (!row) {
+    // No selection: on narrow screens fall back to the list view, never a
+    // full-screen empty pane with the list hidden behind it.
+    selectedRowId = null;
+    document.getElementById("inboxShell").classList.remove("mobile-detail");
+    el.innerHTML = `<div class="empty">Select a reply on the left.</div>`;
+    return;
+  }
+  const cls = row.classification || {};
+  const campaignName = campaignNameFor(row);
+  const tz = row.timezone || cls.timezone_guess || "";
+  const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
+
+  const chips = [];
+  chips.push(`<span class="pill n">${intentLabel(cls.primary_intent)}</span>`);
+  if (cls.confidence != null) chips.push(`<span class="pill n">${Math.round(cls.confidence * 100)}% sure</span>`);
+  chips.push(`<span class="pill n">${tz ? "Timezone: " + esc(tz) : "Timezone unknown"}</span>`);
+
+  let banner = "";
+  if (row.status === "needs_review" && row.decision_reason) {
+    banner = `<div class="warn-banner">${esc(row.decision_reason)}</div>`;
+  } else if (row.status === "error" && row.error) {
+    banner = `<div class="err-banner" style="display:block;margin:10px 0">${esc(row.error)}</div>`;
+  } else if (row.status === "auto_sent" || row.status === "sent") {
+    let mins = null;
+    if (row.sent_at && row.replied_at) {
+      const d = (new Date(row.sent_at) - new Date(row.replied_at)) / 60000;
+      if (!isNaN(d)) mins = Math.max(0, Math.round(d));
+    }
+    const line = row.status === "auto_sent"
+      ? `Sent automatically · ${pulledAgo(row.sent_at)}${mins != null ? ` · ${mins} minutes after their reply` : ""}`
+      : `Sent by you · ${pulledAgo(row.sent_at)}`;
+    banner = `<div class="sent-line ${esc(row.status)}">${line}</div>`;
+  }
+
+  // No-slots guidance: only when the hold is specifically about Calendly
+  // (not connected, no availability, or a load error) - other hold reasons
+  // don't need this hint.
+  let noSlotsHint = "";
+  if (row.status === "needs_review" && row.decision_reason) {
+    const dr = row.decision_reason;
+    if (dr.includes("Calendly is not connected") || dr.includes("no Calendly availability") || dr.includes("couldn't load Calendly")) {
+      noSlotsHint = `<div class="small muted" style="margin:-4px 0 10px">You can still send the draft with the booking link, type in a time you know is free, or free up the calendar and press Regenerate.</div>`;
+    }
+  }
+
+  const showSubChk = row.status === "needs_review" || row.status === "auto_sent" || row.status === "sent";
+  const subChkHtml = showSubChk
+    ? `<label class="qc-sub-chk dh-sub"><input type="checkbox" class="qc-sub" data-id="${esc(row.id)}" ${row.added_to_subsequence ? "checked" : ""}> Added to subsequence</label>`
+    : "";
+
+  el.innerHTML = `
+    <a class="back-link mobile-back" href="#" id="backToInboxLink">&larr; Back to inbox</a>
+    <div class="detail-head">
+      <div>
+        <h2 class="dh-name">${esc(leadName(row))} ${testChip}</h2>
+        <div class="dh-meta">${esc(row.lead_email || "")} · ${esc(campaignName)}</div>
+      </div>
+      ${subChkHtml}
+    </div>
+    <div class="qc-chips">${chips.join("")}</div>
+    <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
+    ${banner}
+    ${noSlotsHint}
+    ${earlierThreadHtml(row)}
+    ${replyCardHtml(row)}
+    <div class="msg-card">
+      <div class="msg-card-lab">Your reply</div>
+      ${composerHtml(row)}
+    </div>
+    ${pricingNotesHtml(row)}
+    ${howDecidedDetailsHtml(row)}
+  `;
+  wireDetailEvents(el, row);
+  reapplyEditedDraft(row.id);
+}
+
+/* Fix 3: inline pricing reference - shown only when this reply's
+   classification includes a pricing intent, so the person reviewing can see
+   exactly what the draft is allowed to quote without opening the agent editor. */
+function pricingNotesHtml(row) {
+  const cls = row.classification || {};
+  const allIntents = cls.all_intents || [];
+  if (!allIntents.includes("pricing")) return "";
+  const agent = AGENTS.find((a) => String(a.id) === String(row.agent_id));
+  const notes = (agent && agent.pricing_notes) || "";
+  return `<details class="thread-details" style="margin-top:14px" open>
+    <summary>Agent's saved pricing notes (what the draft may quote)</summary>
+    <div class="thread-list" style="white-space:pre-wrap">${esc(notes) || "<i>No pricing notes saved for this agent.</i>"}</div>
+  </details>`;
+}
+
+/* Fix 4: "How this was decided" - shared content builder used by both the
+   real inbox detail pane and the Try-it drawer (renderTryItResult), so the
+   two never drift out of sync on what "decided" actually shows. */
+function howDecidedContentHtml(row) {
+  const cls = row.classification || {};
+  const guardrails = row.guardrails || {};
+  const lexHits = Array.isArray(guardrails.lexicon_hits) ? guardrails.lexicon_hits : [];
+  const redFlags = Array.isArray(guardrails.llm_red_flags) ? guardrails.llm_red_flags : [];
+  const tz = row.timezone || cls.timezone_guess || "";
+  const rows = [];
+  rows.push(["Intent", `${esc(intentLabel(cls.primary_intent))}${cls.confidence != null ? ` (${Math.round(cls.confidence * 100)}% sure)` : ""}`]);
+  rows.push(["Decision", `${esc(row.decision || "not decided yet")}${row.decision_reason ? " - " + esc(row.decision_reason) : ""}`]);
+  rows.push(["Lexicon hits", lexHits.length ? esc(lexHits.join(", ")) : "none"]);
+  rows.push(["AI flags", redFlags.length ? esc(redFlags.join(", ")) : "none"]);
+  rows.push(["Timezone", tz ? esc(tz) : "unknown"]);
+  rows.push(["Call slots", esc(slotSituationText(row))]);
+  if (row.category) rows.push(["Smartlead category", esc(row.category)]);
+  return rows.map(([label, val]) => `<div class="small" style="margin-bottom:6px"><b>${esc(label)}:</b> ${val}</div>`).join("");
+}
+function slotSituationText(row) {
+  const slots = row.slots || [];
+  if (slots.length) return `${slots.length} time${slots.length === 1 ? "" : "s"} proposed`;
+  const reason = String(row.decision_reason || "");
+  if (reason.includes("Calendly is not connected")) return "Calendly is not connected";
+  if (reason.includes("no Calendly availability")) return "no free slots inside the working window";
+  if (reason.includes("couldn't load Calendly")) return "couldn't load Calendly availability";
+  return "no call times proposed";
+}
+function howDecidedDetailsHtml(row) {
+  if (!row.classification) return "";
+  return `<details class="thread-details" style="margin-top:14px">
+    <summary>How this was decided</summary>
+    <div class="thread-list">${howDecidedContentHtml(row)}</div>
+  </details>`;
+}
+
+function earlierThreadHtml(row) {
+  // Exclude the reply this row is actually about - matched by message/stats id
+  // first (the reliable key), falling back to an exact time match. A synthetic
+  // or edge-case row without matching ids still degrades safely (shows nothing
+  // extra rather than hiding a real earlier message).
+  const earlier = (row.thread || []).filter((m) => {
+    if (!m) return false;
+    if (row.email_stats_id != null && m.stats_id != null && String(m.stats_id) === String(row.email_stats_id)) return false;
+    if (row.message_id != null && m.message_id != null && String(m.message_id) === String(row.message_id)) return false;
+    return m.time !== row.replied_at;
+  });
+  if (!earlier.length) return "";
+  const items = earlier.map((m) => `
+    <div class="thread-msg">
+      <div class="tm-head"><b>${esc(m.type === "SENT" ? "You" : (m.from_name || leadName(row)))}</b> <span class="muted small">${pulledAgo(m.time)}</span></div>
+      <div class="tm-body">${esc(String(m.body || "").trim()).replace(/\n/g, "<br>") || "No content."}</div>
+    </div>`).join("");
+  return `<details class="thread-details"><summary>Earlier in this thread</summary><div class="thread-list">${items}</div></details>`;
+}
+
+function replyCardHtml(row) {
+  const replyText = String(row.reply_body || "").trim();
+  const isLong = replyText.length > 240;
+  const replyHtml = esc(replyText).replace(/\n/g, "<br>");
+  return `
+    <div class="msg-card">
+      <div class="msg-card-lab">Their reply <span class="muted" style="text-transform:none;font-weight:400">${pulledAgo(row.replied_at)}</span></div>
+      <div class="qc-reply ${isLong ? "collapsed" : ""}" id="reply-${esc(row.id)}">${replyHtml || "<i>No reply text.</i>"}</div>
+      ${isLong ? `<button type="button" class="qc-reply-toggle" data-id="${esc(row.id)}">Show more</button>` : ""}
+    </div>`;
+}
+
+function composerHtml(row) {
+  if (row.status === "needs_review" || (row.status === "no_action" && row.draft_body)) {
+    const slotsHtml = (row.slots || []).map((s) =>
+      `<a class="pill o" href="${esc(s.link || "#")}" target="_blank" rel="noopener">${esc(s.label || s.iso || "Proposed time")}</a>`
+    ).join("");
+    return `
+      <div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>
+      ${slotsHtml ? `<div class="qc-slots">${slotsHtml}</div>` : ""}
+      <div class="qc-actions">
+        <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button">Send reply</button>
+        <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button>
+        <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+      </div>`;
+  }
+  if (row.status === "auto_sent" || row.status === "sent") {
+    return `<div class="qc-draft" style="background:var(--bg-sunken)">${row.sent_body || row.draft_body || ""}</div>`;
+  }
+  if (row.status === "no_action" || row.status === "dismissed") {
+    const label = row.status === "dismissed" ? "Dismissed." : "No action needed.";
+    const cat = row.category ? ` Category: ${esc(row.category)}.` : "";
+    const anywayBtn = row.status === "no_action"
+      ? `<button class="btn qc-draft-anyway" data-id="${esc(row.id)}" type="button" style="margin-top:10px">Draft a reply anyway</button>` : "";
+    return `<div class="small muted">${label}${cat}</div>${anywayBtn}`;
+  }
+  if (row.status === "error") {
+    return `<div class="qc-actions">
+      <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Try again</button>
+      <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+    </div>`;
+  }
+  return "";
+}
+
+function wireDetailEvents(root, row) {
+  const backLink = root.querySelector("#backToInboxLink");
+  if (backLink) backLink.addEventListener("click", (e) => { e.preventDefault(); backToInbox(); });
+
+  root.querySelectorAll(".qc-reply-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-id");
+      const replyEl = document.getElementById("reply-" + id);
+      replyEl.classList.toggle("collapsed");
+      btn.textContent = replyEl.classList.contains("collapsed") ? "Show more" : "Show less";
+    });
+  });
+  root.querySelectorAll(".qc-send").forEach((btn) => btn.addEventListener("click", () => doSend(btn)));
+  root.querySelectorAll(".qc-regen").forEach((btn) => btn.addEventListener("click", () => doRedraft(btn)));
+  root.querySelectorAll(".qc-dismiss").forEach((btn) => btn.addEventListener("click", () => doDismiss(btn)));
+  root.querySelectorAll(".qc-draft-anyway").forEach((btn) => btn.addEventListener("click", () => doDraftAnyway(btn)));
+  root.querySelectorAll(".qc-sub").forEach((chk) => chk.addEventListener("change", () => doSubsequence(chk)));
+
+  const draftEl = root.querySelector(".qc-draft[contenteditable]");
+  if (draftEl) {
+    draftEl.addEventListener("input", () => { EDITED_DRAFTS[row.id] = draftEl.innerHTML; });
+  }
+}
+
+/* re-apply an unsent, user-edited draft after a background refresh rebuilt
+   the whole detail pane (never let a 60s auto-refresh silently overwrite it) */
+function reapplyEditedDraft(rowId) {
+  if (!(rowId in EDITED_DRAFTS)) return;
+  const el = document.querySelector(`.qc-draft[contenteditable][data-id="${CSS.escape(String(rowId))}"]`);
+  if (el) el.innerHTML = EDITED_DRAFTS[rowId];
+}
+
+let sendGuardArmedId = null;
+async function doSend(btn) {
+  const id = btn.getAttribute("data-id");
+  const draftEl = document.querySelector(`.qc-draft[contenteditable][data-id="${CSS.escape(String(id))}"]`);
+  // Guard rails for hand-edited drafts: silently fix em dashes (house rule),
+  // and if the edit removed the resource link the original draft carried,
+  // ask once before sending without it.
+  if (draftEl && draftEl.innerHTML.includes("—")) {
+    draftEl.innerHTML = draftEl.innerHTML.split("—").join(", ");
+    if (EDITED_DRAFTS[id] !== undefined) EDITED_DRAFTS[id] = draftEl.innerHTML;
+  }
+  const row = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
+              ALL_ROWS.find((r) => String(r.id) === String(id));
+  const agent = row ? AGENTS.find((a) => String(a.id) === String(row.agent_id)) : null;
+  const link = agent && agent.resource_link;
+  const linkWasThere = link && row && (row.draft_body || "").includes(link);
+  if (draftEl && linkWasThere && !draftEl.innerHTML.includes(link) && sendGuardArmedId !== id) {
+    sendGuardArmedId = id;
+    showDetailError("The resource link is no longer in this draft. Click Send reply again to send without it.");
+    setTimeout(() => { if (sendGuardArmedId === id) sendGuardArmedId = null; }, 6000);
+    return;
+  }
+  sendGuardArmedId = null;
+  const restore = busyBtn(btn, "Sending…");
+  if (!restore) return;
+  const payload = { id: Number(id), action: "send" };
+  if (draftEl) payload.body_override = draftEl.innerHTML;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  restore();
+  if (!res.ok) {
+    showError("Couldn't send the reply: " + res.error);
+    showDetailError("Couldn't send the reply: " + res.error);
+    return;
+  }
+  clearError();
+  delete EDITED_DRAFTS[id];
+  protoNote("Reply sent");
+  loadQueue();
+}
+
+async function doRedraft(btn) {
+  const restore = busyBtn(btn, "Regenerating…");
+  if (!restore) return;
+  const id = btn.getAttribute("data-id");
+  const res = await fetchJson("/api/setter/queue/redraft", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id) }),
+  });
+  restore();
+  if (!res.ok) {
+    showError("Couldn't regenerate the draft: " + res.error);
+    showDetailError("Couldn't regenerate the draft: " + res.error);
+    return;
+  }
+  clearError();
+  delete EDITED_DRAFTS[id];
+  loadQueue();
+}
+
+/* no_action rows have no draft yet - same redraft endpoint builds one, then
+   the row re-renders with the composer (draftComposerHtml fires once
+   row.draft_body is present, regardless of status staying "no_action") */
+async function doDraftAnyway(btn) {
+  const restore = busyBtn(btn, "Drafting…");
+  if (!restore) return;
+  const id = btn.getAttribute("data-id");
+  const res = await fetchJson("/api/setter/queue/redraft", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id) }),
+  });
+  restore();
+  if (!res.ok) {
+    showError("Couldn't draft a reply: " + res.error);
+    showDetailError("Couldn't draft a reply: " + res.error);
+    return;
+  }
+  clearError();
+  delete EDITED_DRAFTS[id];
+  loadQueue();
+}
+
+async function doDismiss(btn) {
+  const restore = busyBtn(btn, "Dismissing…");
+  if (!restore) return;
+  const id = btn.getAttribute("data-id");
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id), action: "dismiss" }),
+  });
+  restore();
+  if (!res.ok) {
+    showError("Couldn't dismiss: " + res.error);
+    showDetailError("Couldn't dismiss: " + res.error);
+    return;
+  }
+  clearError();
+  delete EDITED_DRAFTS[id];
+  loadQueue();
+}
+
+async function doSubsequence(chk) {
+  chk.disabled = true;
+  const id = chk.getAttribute("data-id");
+  const checked = chk.checked;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id), action: "subsequence", checked }),
+  });
+  chk.disabled = false;
+  if (!res.ok) { showError("Couldn't update the subsequence flag: " + res.error); chk.checked = !checked; }
+  else { clearError(); protoNote("Saved"); }
+}
+
+document.getElementById("checkNowBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("checkNowBtn");
+  const restore = busyBtn(btn, "Checking…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/poll", { method: "POST" });
+  if (!res.ok) { restore(); showError("Couldn't check for new replies: " + res.error); return; }
+  if (res.data && res.data.busy) protoNote("Already checking, hang on…");
+  clearError();
+  setTimeout(async () => { await loadQueue(); restore(); protoNote("Checked for new replies"); }, 2500);
+});
+
+document.getElementById("showTestChk").addEventListener("change", () => { renderQueue(); renderKpis(); });
+document.getElementById("inboxSearch").addEventListener("input", (e) => {
+  inboxSearchQuery = e.target.value || "";
+  const note = document.getElementById("searchAllNote");
+  if (note) note.style.display = inboxSearchQuery.trim() ? "inline" : "none";
+  renderInboxList();
+  renderKpis();
+});
+
+/* ── Keyboard nav: ArrowUp/ArrowDown and j/k move the selection ────────── */
+function scrollSelectedIntoView() {
+  const el = document.querySelector(".inbox-item.selected");
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+document.addEventListener("keydown", (e) => {
+  const isUp = e.key === "ArrowUp" || e.key === "k" || e.key === "K";
+  const isDown = e.key === "ArrowDown" || e.key === "j" || e.key === "J";
+  if (!isUp && !isDown) return;
+  const active = document.activeElement;
+  if (active) {
+    const tag = active.tagName;
+    if (active.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  }
+  const overlaysOpen = ["agentsDrawerOverlay", "settingsDrawerOverlay", "tryItDrawerOverlay", "agentModalOverlay"]
+    .some((id) => { const o = document.getElementById(id); return o && o.classList.contains("on"); });
+  if (overlaysOpen) return;
+  const rows = visibleInboxRows();
+  if (!rows.length) return;
+  e.preventDefault();
+  let idx = rows.findIndex((r) => String(r.id) === String(selectedRowId));
+  let nextIdx = idx === -1 ? 0 : idx + (isDown ? 1 : -1);
+  nextIdx = Math.max(0, Math.min(rows.length - 1, nextIdx));
+  selectRow(rows[nextIdx].id);
+  scrollSelectedIntoView();
+});
+
+/* Gentle auto-refresh so a new reply shows up without touching anything:
+   every 60s, only while the tab is visible, and never while the user is
+   editing a draft (that would clobber their in-progress text). The current
+   selection is re-applied by id, and an edited-but-unsent draft is restored
+   after the detail pane rebuilds (see reapplyEditedDraft). */
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  const active = document.activeElement;
+  if (active && (active.isContentEditable || active.tagName === "TEXTAREA" || active.tagName === "INPUT")) return;
+  loadQueue();
+}, 60000);
+
+/* ── Slide-over drawers ────────────────────────────────── */
+function openDrawer(id) { document.getElementById(id).classList.add("on"); }
+function closeDrawer(id) { document.getElementById(id).classList.remove("on"); }
+
+document.getElementById("openAgentsBtn").addEventListener("click", () => openDrawer("agentsDrawerOverlay"));
+document.getElementById("autopilotPill").addEventListener("click", () => openDrawer("agentsDrawerOverlay"));
+document.getElementById("agentsDrawerClose").addEventListener("click", () => closeDrawer("agentsDrawerOverlay"));
+document.getElementById("agentsDrawerOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "agentsDrawerOverlay") closeDrawer("agentsDrawerOverlay");
+});
+
+document.getElementById("openSettingsBtn").addEventListener("click", () => openDrawer("settingsDrawerOverlay"));
+document.getElementById("settingsDrawerClose").addEventListener("click", () => closeDrawer("settingsDrawerOverlay"));
+document.getElementById("settingsDrawerOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "settingsDrawerOverlay") closeDrawer("settingsDrawerOverlay");
+});
+
+document.getElementById("openTryItBtn").addEventListener("click", () => openDrawer("tryItDrawerOverlay"));
+document.getElementById("tryItDrawerClose").addEventListener("click", () => closeDrawer("tryItDrawerOverlay"));
+document.getElementById("tryItDrawerOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "tryItDrawerOverlay") closeDrawer("tryItDrawerOverlay");
+});
+
+/* ── Autopilot master switch ───────────────────────────── */
+let autopilotArmed = false;
+let autopilotArmTimer = null;
+
+function renderAutopilotSwitch() {
+  const copyEl = document.getElementById("autopilotSwitchCopy");
+  const controlsEl = document.getElementById("autopilotSwitchControls");
+  const pillEl = document.getElementById("autopilotPill");
+  if (!copyEl || !controlsEl) return;
+  const on = !!SETTINGS.autopilot_enabled;
+  copyEl.textContent = on
+    ? "Autopilot agents send simple replies themselves."
+    : "All replies become drafts for you.";
+  const pillClass = on ? "g" : "a";
+  const pillLabel = on ? "ON" : "OFF";
+  let btnLabel = on ? "Turn off" : "Turn on";
+  let btnClass = on ? "" : "primary";
+  if (!on && autopilotArmed) { btnLabel = "Are you sure? Turn on"; btnClass = "danger"; }
+  controlsEl.innerHTML = `
+    <span class="pill ${pillClass}">${pillLabel}</span>
+    <button class="btn ${btnClass}" id="autopilotToggleBtn" type="button">${esc(btnLabel)}</button>
+  `;
+  document.getElementById("autopilotToggleBtn").addEventListener("click", onAutopilotToggleClick);
+  if (pillEl) {
+    pillEl.className = `pill autopilot-pill ${pillClass}`;
+    pillEl.textContent = `Autopilot ${pillLabel}`;
+  }
+  const armedNoteEl = document.getElementById("autopilotSwitchArmedNote");
+  if (armedNoteEl) {
+    if (!on && autopilotArmed) {
+      armedNoteEl.textContent = autopilotScopeNote();
+      armedNoteEl.style.display = "block";
+    } else {
+      armedNoteEl.style.display = "none";
+    }
+  }
+}
+
+/* Fix 8: what flipping the master switch on would actually do, computed
+   from the agents already loaded for the drawer (mode=autopilot and
+   enabled), so the armed confirmation isn't just a generic warning. */
+function autopilotScopeNote() {
+  const autoAgents = AGENTS.filter((a) => a.mode === "autopilot" && a.enabled !== false);
+  const campaignIds = new Set();
+  autoAgents.forEach((a) => (a.campaign_ids || []).forEach((c) => campaignIds.add(String(c))));
+  return `${autoAgents.length} agent${autoAgents.length === 1 ? "" : "s"} in Autopilot mode across `
+    + `${campaignIds.size} campaign${campaignIds.size === 1 ? "" : "s"} would start sending simple replies.`;
+}
+
+function onAutopilotToggleClick() {
+  const on = !!SETTINGS.autopilot_enabled;
+  if (on) {
+    // Turning off is the safe direction - no confirmation step needed.
+    setAutopilotEnabled(false);
+    return;
+  }
+  if (!autopilotArmed) {
+    // First click just arms the button; a second click within a few seconds
+    // is what actually flips the switch, so a stray click can't turn on
+    // autopilot by accident.
+    autopilotArmed = true;
+    renderAutopilotSwitch();
+    clearTimeout(autopilotArmTimer);
+    autopilotArmTimer = setTimeout(() => { autopilotArmed = false; renderAutopilotSwitch(); }, 4000);
+    return;
+  }
+  clearTimeout(autopilotArmTimer);
+  autopilotArmed = false;
+  setAutopilotEnabled(true);
+}
+
+async function setAutopilotEnabled(enabled) {
+  const btn = document.getElementById("autopilotToggleBtn");
+  const restore = btn ? busyBtn(btn, enabled ? "Turning on…" : "Turning off…") : null;
+  if (btn && !restore) return;
+  const res = await fetchJson("/api/setter/settings/save", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autopilot_enabled: enabled }),
+  });
+  if (restore) restore();
+  if (!res.ok) { showError("Couldn't update the autopilot master switch: " + res.error); return; }
+  clearError();
+  SETTINGS.autopilot_enabled = !!(res.data && res.data.autopilot_enabled);
+  renderAutopilotSwitch();
+  protoNote(SETTINGS.autopilot_enabled ? "Autopilot turned on" : "Autopilot turned off");
+}
+
+/* ── Agents ────────────────────────────────────────────── */
+function agentModeLabel(agent) { return agent.mode === "autopilot" ? "Autopilot" : "Draft only"; }
+
+function liveIntakeLine(agent) {
+  const cids = (agent.campaign_ids || []).map((c) => String(c));
+  const webhooks = SETTINGS.webhooks || {};
+  const live = cids.filter((c) => Object.prototype.hasOwnProperty.call(webhooks, c)).length;
+  return `Instant alerts on ${live} of ${cids.length} campaign${cids.length === 1 ? "" : "s"} · the 5-minute check covers the rest`;
+}
+
+/* Fix 8: first two campaign names (truncated) instead of a bare count, full
+   list in the title tooltip - campaign names come from CAMPAIGNS/campaignMap,
+   already fetched for the campaign picker. */
+function agentCampaignNamesLine(agent) {
+  const ids = agent.campaign_ids || [];
+  if (!ids.length) return "No campaigns assigned";
+  const names = ids.map((id) => campaignMap[id] || `Campaign ${id}`);
+  const shown = names.slice(0, 2).map((n) => truncate(n, 24)).join(", ");
+  return names.length > 2 ? `${shown}, +${names.length - 2} more` : shown;
+}
+
+function renderAgents() {
+  const el = document.getElementById("agentsList");
+  if (!AGENTS.length) {
+    el.innerHTML = `<div class="empty">No agents yet. Add one to start drafting replies for a campaign.</div>`;
+    return;
+  }
+  el.innerHTML = AGENTS.map((a) => {
+    const ids = a.campaign_ids || [];
+    const namesFull = ids.map((id) => campaignMap[id] || `Campaign ${id}`).join(", ") || "No campaigns assigned";
+    return `
+    <div class="agent-card" data-id="${esc(a.id)}">
+      <div class="ac-name">${esc(a.name || "Untitled agent")} <span class="pill ${a.mode === "autopilot" ? "g" : "n"}">${agentModeLabel(a)}</span></div>
+      <div class="ac-meta" title="${esc(namesFull)}">${esc(agentCampaignNamesLine(a))} · ${esc(a.resource_name || "No resource set yet")}</div>
+      <div class="ac-intake">${esc(liveIntakeLine(a))}</div>
+    </div>`;
+  }).join("");
+  el.querySelectorAll(".agent-card").forEach((card) => card.addEventListener("click", () => openAgentModal(card.getAttribute("data-id"))));
+}
+
+function agentFormHtml(agent) {
+  currentAgentMode = agent.mode === "autopilot" ? "autopilot" : "draft_only";
+  currentAgentEnabled = agent.enabled !== false;
+  const allowed = new Set(agent.allowed_intents || []);
+  const conf = agent.confidence_threshold != null ? Math.round(agent.confidence_threshold * 100) : 90;
+  const voice = (agent.voice_examples || []).join("\n");
+  return `
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="agName" value="${esc(agent.name || "")}" placeholder="e.g. Clay migration setter">
+    </div>
+    <div class="field">
+      <label>Mode</label>
+      <div class="mode-toggle">
+        <button type="button" class="btn ${currentAgentMode === "draft_only" ? "primary" : ""}" id="agModeDraft" data-mode="draft_only">Draft only</button>
+        <button type="button" class="btn ${currentAgentMode === "autopilot" ? "primary" : ""}" id="agModeAuto" data-mode="autopilot">Autopilot</button>
+      </div>
+      <div class="hint">Autopilot sends simple replies itself. Everything unusual still comes to you.</div>
+      <div class="hint">Nothing sends itself until the master switch is on.</div>
+    </div>
+    <div class="field">
+      <label>Campaigns</label>
+      <input type="text" id="agCampaignSearch" placeholder="Search campaigns…">
+      <div class="checklist" id="agCampaignList" style="margin-top:8px"></div>
+    </div>
+    <div class="field">
+      <label>Resource name</label>
+      <input type="text" id="agResourceName" value="${esc(agent.resource_name || "")}" placeholder="e.g. Clay to Claude transition breakdown">
+    </div>
+    <div class="field">
+      <label>Resource link</label>
+      <input type="text" id="agResourceLink" value="${esc(agent.resource_link || "")}" placeholder="https://…">
+    </div>
+    <div class="field">
+      <label>Resource description</label>
+      <textarea id="agResourceDesc" placeholder="1-2 lines: what it is and the value line used to pitch the call">${esc(agent.resource_description || "")}</textarea>
+    </div>
+    <div class="field">
+      <label>Pricing notes</label>
+      <textarea id="agPricingNotes" placeholder="Paste your exact pricing text here">${esc(agent.pricing_notes || "")}</textarea>
+      <div class="hint">Only answers priced questions with exactly what you write here. Leave empty to always hold pricing questions for review.</div>
+    </div>
+    <div class="field">
+      <label>What this agent can answer on its own</label>
+      <div class="intent-checks">
+        <label><input type="checkbox" id="agIntentSend" ${allowed.has("send_resource") ? "checked" : ""}> Send the resource</label>
+        <label><input type="checkbox" id="agIntentPricing" ${allowed.has("pricing") ? "checked" : ""}> Answer pricing</label>
+        <label><input type="checkbox" id="agIntentScheduling" ${allowed.has("scheduling") ? "checked" : ""}> Suggest call times</label>
+      </div>
+    </div>
+    <div class="field">
+      <label>How sure it is</label>
+      <div class="slider-row">
+        <input type="range" id="agConfidence" min="70" max="99" value="${conf}">
+        <span class="val" id="agConfidenceVal">${conf}%</span>
+      </div>
+      <div class="hint">Below this confidence, replies wait for you.</div>
+    </div>
+    <div class="field">
+      <label>Booking link</label>
+      <input type="text" id="agBookingLink" value="${esc(agent.booking_link || "https://www.navreo.ai/book-a-call")}">
+    </div>
+    <div class="field">
+      <label>Calendly event URL</label>
+      <input type="text" id="agCalendlyEventUrl" value="${esc(agent.calendly_event_url || "")}" placeholder="https://calendly.com/…">
+    </div>
+    <div class="field">
+      <label>Voice examples</label>
+      <textarea id="agVoiceExamples" style="min-height:110px" placeholder="One example reply per line">${esc(voice)}</textarea>
+    </div>
+    <div class="field">
+      <label>Extra instructions (optional)</label>
+      <textarea id="agExtraInstructions" placeholder="Anything else this agent should know">${esc(agent.extra_instructions || "")}</textarea>
+    </div>
+  `;
+}
+
+function renderCampaignChecklist() {
+  const searchEl = document.getElementById("agCampaignSearch");
+  const search = (searchEl ? searchEl.value : "").toLowerCase().trim();
+  const list = document.getElementById("agCampaignList");
+  if (!list) return;
+  const filtered = CAMPAIGNS.filter((c) => !search || String(c.name || "").toLowerCase().includes(search) || String(c.id).includes(search));
+  if (!filtered.length) {
+    list.innerHTML = `<div class="small muted" style="padding:6px">No campaigns found.</div>`;
+    return;
+  }
+  list.innerHTML = filtered.map((c) =>
+    `<label><input type="checkbox" class="ag-camp-chk" value="${c.id}" ${selectedCampaignIds.has(String(c.id)) ? "checked" : ""}> ${esc(c.name || "Campaign " + c.id)} <span class="muted small">#${c.id}</span></label>`
+  ).join("");
+}
+
+function wireAgentModalEvents() {
+  document.getElementById("agModeDraft").addEventListener("click", () => setAgentMode("draft_only"));
+  document.getElementById("agModeAuto").addEventListener("click", () => setAgentMode("autopilot"));
+  document.getElementById("agCampaignSearch").addEventListener("input", renderCampaignChecklist);
+  document.getElementById("agCampaignList").addEventListener("change", (e) => {
+    if (!e.target.classList.contains("ag-camp-chk")) return;
+    if (e.target.checked) selectedCampaignIds.add(e.target.value);
+    else selectedCampaignIds.delete(e.target.value);
+  });
+  const conf = document.getElementById("agConfidence");
+  conf.addEventListener("input", () => { document.getElementById("agConfidenceVal").textContent = conf.value + "%"; });
+}
+
+function setAgentMode(mode) {
+  currentAgentMode = mode;
+  document.getElementById("agModeDraft").classList.toggle("primary", mode === "draft_only");
+  document.getElementById("agModeAuto").classList.toggle("primary", mode === "autopilot");
+}
+
+function openAgentModal(id) {
+  const agent = id ? (AGENTS.find((a) => String(a.id) === String(id)) || {}) : {};
+  editingAgentId = id || null;
+  selectedCampaignIds = new Set((agent.campaign_ids || []).map((x) => String(x)));
+  document.getElementById("agentModalTitle").textContent = id ? "Edit agent" : "New agent";
+  document.getElementById("agentDeleteBtn").style.display = id ? "" : "none";
+  document.getElementById("agentModalErr").style.display = "none";
+  document.getElementById("agentModalFields").innerHTML = agentFormHtml(agent);
+  renderCampaignChecklist();
+  wireAgentModalEvents();
+  document.getElementById("agentModalOverlay").classList.add("on");
+}
+function closeAgentModal() { document.getElementById("agentModalOverlay").classList.remove("on"); }
+function showAgentModalErr(msg) {
+  const el = document.getElementById("agentModalErr");
+  el.textContent = msg; el.style.display = "block";
+}
+
+document.getElementById("newAgentBtn").addEventListener("click", () => openAgentModal(null));
+document.getElementById("agentCancelBtn").addEventListener("click", closeAgentModal);
+document.getElementById("agentModalOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "agentModalOverlay") closeAgentModal();
+});
+
+let agentSaveArmed = false;
+document.getElementById("agentSaveBtn").addEventListener("click", async () => {
+  const name = document.getElementById("agName").value.trim();
+  if (!name) { showAgentModalErr("Give the agent a name."); return; }
+  // Switching an agent INTO Autopilot mode gets the same deliberate two-click
+  // treatment as the master switch - one stray click must never take an agent
+  // live (it matters whenever the master switch is already on).
+  const wasAutopilot = editingAgentId
+    ? ((AGENTS.find((a) => String(a.id) === String(editingAgentId)) || {}).mode === "autopilot")
+    : false;
+  if (currentAgentMode === "autopilot" && !wasAutopilot && !agentSaveArmed) {
+    agentSaveArmed = true;
+    const btn0 = document.getElementById("agentSaveBtn");
+    btn0.textContent = "Are you sure? This agent may send replies itself. Save";
+    btn0.classList.add("danger");
+    setTimeout(() => {
+      agentSaveArmed = false;
+      btn0.textContent = "Save";
+      btn0.classList.remove("danger");
+    }, 5000);
+    return;
+  }
+  agentSaveArmed = false;
+  const allowed_intents = [];
+  if (document.getElementById("agIntentSend").checked) allowed_intents.push("send_resource");
+  if (document.getElementById("agIntentPricing").checked) allowed_intents.push("pricing");
+  if (document.getElementById("agIntentScheduling").checked) allowed_intents.push("scheduling");
+  const voice_examples = document.getElementById("agVoiceExamples").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const doc = {
+    name,
+    mode: currentAgentMode,
+    enabled: currentAgentEnabled,
+    campaign_ids: Array.from(selectedCampaignIds).map(Number).filter((n) => !isNaN(n)),
+    resource_name: document.getElementById("agResourceName").value.trim(),
+    resource_link: document.getElementById("agResourceLink").value.trim(),
+    resource_description: document.getElementById("agResourceDesc").value.trim(),
+    pricing_notes: document.getElementById("agPricingNotes").value,
+    allowed_intents,
+    confidence_threshold: Number(document.getElementById("agConfidence").value) / 100,
+    booking_link: document.getElementById("agBookingLink").value.trim(),
+    calendly_event_url: document.getElementById("agCalendlyEventUrl").value.trim(),
+    voice_examples,
+    extra_instructions: document.getElementById("agExtraInstructions").value.trim(),
+  };
+  if (editingAgentId) doc.id = editingAgentId;
+  const btn = document.getElementById("agentSaveBtn");
+  const restore = busyBtn(btn, "Saving…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/agents/save", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ doc }),
+  });
+  restore();
+  if (!res.ok) { showAgentModalErr("Couldn't save this agent: " + res.error); return; }
+  closeAgentModal();
+  protoNote("Agent saved");
+  showWebhookWarnings(res.data && res.data.webhooks);
+  await loadAgentsAndCampaigns();
+  await loadQueue();
+});
+
+function showWebhookWarnings(webhooks) {
+  const el = document.getElementById("webhookWarnBanner");
+  if (!el) return;
+  const failed = (Array.isArray(webhooks) ? webhooks : []).filter((w) => w && w.ok === false);
+  if (!failed.length) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.innerHTML = failed.map((w) =>
+    `Live intake could not be switched on for campaign ${esc(w.campaign_id)}. Replies still arrive on the 5 minute check.`
+  ).join("<br>");
+  el.style.display = "block";
+}
+
+document.getElementById("agentDeleteBtn").addEventListener("click", async () => {
+  if (!editingAgentId) return;
+  const btn = document.getElementById("agentDeleteBtn");
+  const restore = busyBtn(btn, "Deleting…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/agents/delete", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editingAgentId }),
+  });
+  restore();
+  if (!res.ok) { showAgentModalErr("Couldn't delete this agent: " + res.error); return; }
+  closeAgentModal();
+  protoNote("Agent deleted");
+  await loadAgentsAndCampaigns();
+});
+
+/* ── Settings ──────────────────────────────────────────── */
+function renderSettings() {
+  const el = document.getElementById("settingsBody");
+  const connected = !!SETTINGS.calendly_connected;
+  el.innerHTML = `
+    <div class="field">
+      <label>Calendly personal access token</label>
+      <input type="password" id="stCalendlyToken" placeholder="Paste your Calendly personal access token" autocomplete="off">
+      <div class="hint">${connected ? "Connected." : "Not connected yet."} The token is never shown again once saved. Leave this blank to keep the current one.</div>
+    </div>
+    <div class="field" style="display:flex;gap:14px">
+      <div style="flex:1">
+        <label>Work day starts (hour, 24h)</label>
+        <input type="number" id="stWorkStart" min="0" max="23" value="${SETTINGS.work_start != null ? SETTINGS.work_start : 9}">
+      </div>
+      <div style="flex:1">
+        <label>Work day ends (hour, 24h)</label>
+        <input type="number" id="stWorkEnd" min="0" max="23" value="${SETTINGS.work_end != null ? SETTINGS.work_end : 17}">
+      </div>
+    </div>
+    <div class="field">
+      <label>How many working days ahead to offer call times</label>
+      <input type="number" id="stHorizonDays" min="1" max="30" value="${SETTINGS.horizon_working_days != null ? SETTINGS.horizon_working_days : 5}">
+    </div>
+    <div id="settingsErr" class="modal-err" style="display:none"></div>
+    <button class="btn primary" id="settingsSaveBtn" type="button">Save settings</button>
+  `;
+  document.getElementById("settingsSaveBtn").addEventListener("click", saveSettings);
+}
+
+async function saveSettings() {
+  const payload = {
+    work_start: Number(document.getElementById("stWorkStart").value),
+    work_end: Number(document.getElementById("stWorkEnd").value),
+    horizon_working_days: Number(document.getElementById("stHorizonDays").value),
+  };
+  const token = document.getElementById("stCalendlyToken").value.trim();
+  if (token) payload.calendly_token = token;
+  const btn = document.getElementById("settingsSaveBtn");
+  const restore = busyBtn(btn, "Saving…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/settings/save", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  restore();
+  const errEl = document.getElementById("settingsErr");
+  if (!res.ok) { errEl.textContent = "Couldn't save settings: " + res.error; errEl.style.display = "block"; return; }
+  errEl.style.display = "none";
+  protoNote("Settings saved");
+  await loadAgentsAndCampaigns();
+}
+
+/* ── Try it ────────────────────────────────────────────── */
+function renderTryIt() {
+  const el = document.getElementById("tryItBody");
+  el.innerHTML = `
+    <div class="small muted" style="margin-bottom:12px">Simulate an inbound reply. Nothing is ever sent.</div>
+    <div class="field">
+      <label>Campaign</label>
+      <select id="tiCampaign">
+        <option value="">Select a campaign…</option>
+        ${CAMPAIGNS.map((c) => `<option value="${c.id}">${esc(c.name || "Campaign " + c.id)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field" style="display:flex;gap:14px">
+      <div style="flex:1"><label>First name</label><input type="text" id="tiFirstName" placeholder="Jamie"></div>
+      <div style="flex:1"><label>Email</label><input type="text" id="tiEmail" value="test@example.com"></div>
+    </div>
+    <div class="field"><label>Company domain (optional)</label><input type="text" id="tiDomain" placeholder="example.com"></div>
+    <div class="field"><label>Message</label><textarea id="tiBody" style="min-height:90px" placeholder="e.g. Sure, send it over!"></textarea></div>
+    <button class="btn primary" id="tiRunBtn" type="button">Run test</button>
+    <div id="tiResult" style="margin-top:16px"></div>
+  `;
+  document.getElementById("tiRunBtn").addEventListener("click", runTryIt);
+}
+
+async function runTryIt() {
+  const resultEl = document.getElementById("tiResult");
+  const campaign_id = Number(document.getElementById("tiCampaign").value);
+  if (!campaign_id) { resultEl.innerHTML = `<div class="err-banner" style="display:block">Pick a campaign first.</div>`; return; }
+  const payload = {
+    campaign_id,
+    email: document.getElementById("tiEmail").value.trim() || "test@example.com",
+    first_name: document.getElementById("tiFirstName").value.trim(),
+    company_domain: document.getElementById("tiDomain").value.trim(),
+    body: document.getElementById("tiBody").value,
+  };
+  const btn = document.getElementById("tiRunBtn");
+  const restore = busyBtn(btn, "Running…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/test/inject", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  restore();
+  if (!res.ok) { resultEl.innerHTML = `<div class="err-banner" style="display:block">${esc(res.error || "Something went wrong")}</div>`; return; }
+  resultEl.innerHTML = renderTryItResult(res.data.row || res.data);
+  loadQueue();
+}
+
+/* Rendered with the same building blocks as the inbox detail pane (chips,
+   decision banner, "your reply" card) so a simulated reply looks like the
+   real thing - just without the row id the Send/Regenerate/Dismiss actions
+   need, since a Try-it row is never persisted to the queue. */
+function renderTryItResult(row) {
+  const cls = row.classification || {};
+  // Shared with the real inbox detail pane's "How this was decided" (see
+  // howDecidedContentHtml) so a simulated reply is explained the same way a
+  // real one is - no separate logic to keep in sync.
+  const decidedHtml = row.classification ? howDecidedContentHtml(row) : "";
+  const chips = [`<span class="pill n">${intentLabel(cls.primary_intent)}</span>`];
+  if (cls.confidence != null) chips.push(`<span class="pill n">${Math.round(cls.confidence * 100)}% sure</span>`);
+  chips.push(`<span class="pill ${row.decision === "auto_send" ? "g" : (row.decision === "review" ? "a" : "n")}">${esc(row.decision || row.status || "")}</span>`);
+  return `
+    <div class="msg-card" style="border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin:0">
+      <div class="qc-chips">${chips.join("")}</div>
+      ${row.decision_reason ? `<div class="warn-banner">${esc(row.decision_reason)}</div>` : ""}
+      ${decidedHtml ? `<div style="margin:10px 0"><div class="small muted" style="margin-bottom:6px">How this was decided</div>${decidedHtml}</div>` : ""}
+      <div class="msg-card-lab" style="margin-top:10px">Your reply</div>
+      ${row.draft_body ? `<div class="qc-draft">${row.draft_body}</div>` : `<div class="small muted">No draft was generated for this reply.</div>`}
+    </div>`;
+}
+
+/* ── Boot ──────────────────────────────────────────────── */
+(async function init() {
+  await loadAgentsAndCampaigns();
+  await loadQueue();
+})();
+</script>
+</body>
+</html>

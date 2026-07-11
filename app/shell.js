@@ -10,6 +10,7 @@ const ICONS = {
   campaigns: ic8("send", "lg"),
   lists: ic8("data", "lg"),
   deliverability: ic8("check", "lg"),
+  setter: ic8("reply", "lg"),
   notifications: ic8("bell", "lg"),
 };
 
@@ -18,6 +19,7 @@ const NAV = [
   ["campaigns.html", "campaigns", "Campaigns"],
   ["lists.html", "lists", "Lists"],
   ["deliverability.html", "deliverability", "Deliverability"],
+  ["setter.html", "setter", "Setter"],
   ["notifications.html", "notifications", "Notifications"],
 ];
 
