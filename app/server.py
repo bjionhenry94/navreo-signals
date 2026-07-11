@@ -9730,6 +9730,13 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
             return self._json(body, status)
+        if path == "/api/deliverability/reminders":
+            # Same data the plain proxy would return, but from the 5-min
+            # _restore_reminders cache (invalidated by this app's own
+            # reminder-mutating POSTs) — the boot-path GET stops paying a
+            # 0.4-2.2s live round-trip. Mock mode rides the same helper.
+            rems, _src = _restore_reminders()
+            return self._json(rems if isinstance(rems, list) else [])
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("GET")
         if path == "/api/lists":
