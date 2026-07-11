@@ -365,6 +365,11 @@
     // once per page load (GET /api/deliverability-trends), cached here, and
     // re-painted in place once it lands. status: idle | loading | ready | error.
     trends: { status: "idle", series: null, asof: null },
+    // Restore queue + capacity forecast (GET /api/restore-plan — native
+    // endpoint, NOT the /api/deliverability proxy). The forecast needs a
+    // ~2-min campaign-membership sweep on a cold server, so `computing`
+    // responses re-poll until ready. status: idle | loading | ready | error.
+    plan: { status: "idle", data: null, ts: 0, error: null, pollTimer: null },
   };
   function isLive() { return DATA.mode === "live"; }
   const AUDIT_POLL_MS = 10000;         // GET /_audit poll interval while a run is in flight
@@ -1216,6 +1221,40 @@ table.dlv-bt th:not(:first-child),table.dlv-bt td:not(:first-child){text-align:r
 .dlv-rem-acts{display:flex;gap:7px;align-items:center;flex-shrink:0}
 .dlv-rem-tag{font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:6px;white-space:nowrap}
 .dlv-rem-tag.due{color:#861E10;background:var(--red-bg)} .dlv-rem-tag.wait{color:var(--ink-3);background:#F2F2F0} .dlv-rem-tag.done{color:#195C3F;background:var(--green-bg)}
+/* Restore queue + capacity forecast */
+.dlv-rst-fc{border:1px solid var(--line-2);border-radius:10px;padding:14px 16px;margin-bottom:16px;background:var(--card)}
+.dlv-rst-fc-head{font-size:13px;margin-bottom:10px}
+.dlv-rst-fc-head b{font-variant-numeric:tabular-nums}
+.dlv-rst-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.dlv-rst-chip{font-size:11.5px;padding:4px 10px;border-radius:8px;background:#F2F2F0;color:var(--ink-2)}
+.dlv-rst-chip b{color:var(--ink);font-variant-numeric:tabular-nums}
+.dlv-rst-tbl-wrap{overflow-x:auto}
+.dlv-rst-tbl{border-collapse:collapse;font-size:11.5px;white-space:nowrap}
+.dlv-rst-tbl th,.dlv-rst-tbl td{padding:4px 8px;text-align:right;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--line-2)}
+.dlv-rst-tbl th:first-child,.dlv-rst-tbl td:first-child{text-align:left;font-weight:600;position:sticky;left:0;background:var(--card)}
+.dlv-rst-tbl th{color:var(--ink-3);font-weight:600}
+.dlv-rst-tbl td.wknd,.dlv-rst-tbl th.wknd{color:var(--ink-3);background:#FAFAF8}
+.dlv-rst-tbl td.step{color:#195C3F;background:var(--green-bg);font-weight:700}
+.dlv-rst-cap{font-size:11.5px;color:var(--ink-3);margin-top:8px}
+.dlv-rst-badge{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;white-space:nowrap}
+.dlv-rst-badge.bl{color:#861E10;background:var(--red-bg)}
+.dlv-rst-badge.auto{color:var(--ink-3);background:#F2F2F0}
+.dlv-rst-badge.client{color:#1D4E89;background:#E8F0FA}
+.dlv-rst-capline{font-size:12px;color:var(--ink-2);margin-top:4px}
+.dlv-rst-capline b{color:var(--ink);font-variant-numeric:tabular-nums}
+.dlv-rst-overlay{position:fixed;inset:0;background:rgba(20,20,18,.45);z-index:220;display:flex;align-items:center;justify-content:center;padding:24px}
+.dlv-rst-box{background:var(--card);border-radius:12px;max-width:640px;width:100%;max-height:86vh;overflow-y:auto;padding:20px 22px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.dlv-rst-box h3{font-size:15px;margin:0 0 10px}
+.dlv-rst-mbx{max-height:180px;overflow-y:auto;border:1px solid var(--line-2);border-radius:8px;padding:8px 12px;margin:10px 0;font-size:11.5px;column-width:220px}
+.dlv-rst-mbx div{display:flex;justify-content:space-between;gap:10px;break-inside:avoid}
+.dlv-rst-mbx span{color:var(--ink-3);font-variant-numeric:tabular-nums}
+.dlv-rst-camps{margin:10px 0;max-height:220px;overflow-y:auto}
+.dlv-rst-camps label{display:flex;gap:8px;align-items:baseline;padding:5px 2px;font-size:12.5px;cursor:pointer}
+.dlv-rst-camps label span{color:var(--ink-3);font-size:11px}
+.dlv-rst-warn{border-left:3px solid var(--amber,#B8860B);background:#FBF6E9;padding:8px 12px;border-radius:0 8px 8px 0;font-size:12px;margin:10px 0}
+.dlv-rst-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}
+.dlv-rst-res{font-size:12.5px;margin:8px 0}
+.dlv-rst-res .err{color:var(--red)}
 .dlv-dl-row{display:flex;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
 .dlv-dl-row:last-child{border-bottom:none}
 .dlv-dl-row.done{opacity:.55}
@@ -3694,38 +3733,241 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-rem-acts">${status}${r.done ? `<button class="btn sm" data-act="rem-undo" data-id="${r.id}">↩ Undo</button>` : `<button class="btn sm primary" data-act="rem-done" data-id="${r.id}">✓ Mark added</button>`}<button class="btn sm" data-act="rem-remove" data-id="${r.id}" title="Delete this reminder">Remove</button></div>
     </div>`;
   }
-  // Formerly a collapsible <details class="dlv-fold"> inside the Overview
-  // scroll — now its own always-visible "Restore reminders" tab panel (dropped
-  // the <details> wrapper, kept everything else: the add-reminder form, empty-
-  // domain inline validation, live "will be due" preview, and per-reminder rows
-  // with warm-up health line + enable-warmup / mark-added / undo / remove).
+  // Rebuilt 2026-07-11 as a restore QUEUE: entries ranked by due date (never
+  // insertion order), auto-detected resting domains merged in server-side, a
+  // per-client capacity forecast strip on top, and a "Restore to sending"
+  // action that actually returns a domain to day-to-day sending (audit-service
+  // warmup-resume + Smartlead campaign attach) instead of just flagging it.
+  // Data: GET /api/restore-plan (native endpoint — not the /api/deliverability
+  // proxy). Non-live/demo mode keeps the old local rows, now due-date-sorted.
+  function loadRestorePlan(force) {
+    // Deliberately NOT gated on isLive(): /api/restore-plan is served by THIS
+    // server from real sources (Supabase mailboxes + cached audit blob +
+    // Smartlead sweep) and works even when the audit proxy is unconfigured.
+    // A fetch failure degrades to the local-reminder fallback with an honest
+    // error strip — never sample figures.
+    if (DATA.plan.status === "loading") return;
+    if (!force && DATA.plan.data && Date.now() - DATA.plan.ts < 60000) return;
+    DATA.plan.status = "loading";
+    fetch("/api/restore-plan").then((r) => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then((j) => {
+      DATA.plan = Object.assign(DATA.plan, { status: "ready", data: j, ts: Date.now(), error: null });
+      // Forecast needs a ~2-min campaign-membership sweep on a cold server —
+      // keep polling (bounded by the server's own sweep lock) until ready.
+      if (j && j.forecast && j.forecast.status === "computing") {
+        clearTimeout(DATA.plan.pollTimer);
+        DATA.plan.pollTimer = setTimeout(() => loadRestorePlan(true), 8000);
+      }
+      paintPage();
+    }).catch((e) => {
+      DATA.plan = Object.assign(DATA.plan, { status: "error", error: String(e && e.message || e) });
+      paintPage();
+    });
+  }
+  function renderRestoreForecast(f, entries) {
+    if (!f) return "";
+    if (f.status === "computing") {
+      return `<div class="dlv-rst-fc"><div class="dlv-rst-fc-head"><span class="dlv-spinner"></span> Computing campaign membership (one pass over every active campaign, ~2 min) — the queue below is already live.</div></div>`;
+    }
+    if (f.status !== "ready") {
+      return f.error ? `<div class="dlv-rst-fc"><div class="dlv-rst-fc-head">Capacity forecast unavailable — ${esc(f.error)}</div></div>` : "";
+    }
+    const pend = entries.filter((e) => !e.done);
+    const parkedBlocked = pend.filter((e) => e.blacklisted).reduce((a, e) => a + (e.parked_capacity || 0), 0);
+    const blockedDoms = pend.filter((e) => e.blacklisted).length;
+    const boxes = pend.reduce((a, e) => a + (e.mailboxes || 0), 0);
+    const parkedFree = Object.values(f.parked_now || {}).reduce((a, b) => a + b, 0);
+    const chips = (f.clients || []).map((c) => {
+      const now = (f.sending_now || {})[c] || 0;
+      const end = f.days.length ? (f.days[f.days.length - 1].byClient[c] || {}).projected || now : now;
+      return `<span class="dlv-rst-chip">${esc(c)}: <b>${fmtN(now)}</b>/day${end > now ? ` → <b>${fmtN(end)}</b> by ${esc(f.days[f.days.length - 1].date.slice(5))}` : ""}</span>`;
+    }).join("");
+    let rows = (f.clients || []).map((c) => {
+      let prev = null;
+      const cells = f.days.map((d) => {
+        const v = (d.byClient[c] || {}).projected || 0;
+        const cls = [(d.weekend ? "wknd" : ""), (prev != null && v > prev ? "step" : "")].filter(Boolean).join(" ");
+        prev = v;
+        return `<td class="${cls}">${fmtN(v)}</td>`;
+      }).join("");
+      return `<tr><td>${esc(c)}</td>${cells}</tr>`;
+    }).join("");
+    let prevT = null;
+    rows += `<tr><td>Total</td>${f.days.map((d) => {
+      const cls = [(d.weekend ? "wknd" : ""), (prevT != null && d.total > prevT ? "step" : "")].filter(Boolean).join(" ");
+      prevT = d.total;
+      return `<td class="${cls}"><b>${fmtN(d.total)}</b></td>`;
+    }).join("")}</tr>`;
+    const head = f.days.map((d) => `<th class="${d.weekend ? "wknd" : ""}">${esc(d.weekday)}<br>${esc(d.date.slice(5))}</th>`).join("");
+    // Plain-English caption: name the first upcoming step-up, if any.
+    let caption = "No capacity is due back inside the next 14 days.";
+    let prevTot = null;
+    for (const d of f.days) {
+      if (prevTot != null && d.total > prevTot) {
+        caption = `On ${esc(d.weekday)} ${esc(d.date)} you're back to ~${fmtN(d.total)}/day (+${fmtN(d.total - prevTot)}).`;
+        break;
+      }
+      prevTot = d.total;
+    }
+    const blockedNote = parkedBlocked ? ` <span style="color:var(--red)">${fmtN(parkedBlocked)}/day across ${blockedDoms} domain(s) is blocked by blacklists — it returns only after delisting and is NOT in the projection.</span>` : "";
+    return `<div class="dlv-rst-fc">
+      <div class="dlv-rst-fc-head">In warm-up / resting now: <b>${pend.length}</b> entr${pend.length === 1 ? "y" : "ies"} · <b>${fmtN(boxes)}</b> mailboxes · <b>${fmtN(parkedFree + parkedBlocked)}</b>/day parked${blockedNote}</div>
+      <div class="dlv-rst-chips">${chips}</div>
+      <div class="dlv-rst-tbl-wrap"><table class="dlv-rst-tbl"><thead><tr><th>Projected /day</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="dlv-rst-cap">${caption} Figures are summed Smartlead daily caps of mailboxes in active campaigns; a step-up lands on an entry's due date. Sweep ${f.sweep_age_sec != null ? Math.round(f.sweep_age_sec / 60) + " min old" : ""}.${f.zero_cap_note ? " " + fmtN(f.zero_cap_note) + " mailbox(es) hold caps inside the audit service and add on top when restored." : ""}</div>
+    </div>`;
+  }
+  function renderRestoreRow(e) {
+    const badges = [];
+    if (e.blacklisted) badges.push(`<span class="dlv-rst-badge bl" title="This domain is on a public blocklist — restoring is blocked until it is delisted (see the Blacklist tab)">blacklisted</span>`);
+    if (e.source === "auto") badges.push(`<span class="dlv-rst-badge auto" title="Detected from live resting state — nobody typed this in">detected resting</span>`);
+    badges.push(`<span class="dlv-rst-badge client">${esc(e.client || "—")}</span>`);
+    const status = e.overdue ? `<span class="dlv-rem-tag due">DUE now</span>` : `<span class="dlv-rem-tag wait">in ${e.days_left}d</span>`;
+    const h = e.source === "reminder" ? S.A.remHealth[e.id] : null;
+    let healthLine = "";
+    if (h) {
+      const enableable = h.reasons.off || 0;
+      let s = `<b>${h.total}</b> mailboxes · <span style="color:var(--green)">${h.warming} warming</span>`;
+      if (h.failed) s += ` · <span style="color:var(--red);font-weight:700">${h.failed} not warming</span>` + (enableable ? ` <button class="btn sm" style="padding:4px 9px;font-size:11px" data-act="rem-enable-warmup" data-id="${e.id}">Enable warmup (${enableable})</button>` : "");
+      if (h.dead) s += ` · <span style="color:var(--ink-3)">${h.dead} dead (needs reconnect)</span>`;
+      healthLine = `<div class="dlv-rem-health">${s}</div>`;
+    }
+    const attached = e.attached_boxes != null && e.attached_boxes > 0
+      ? ` · <span style="color:var(--green)">${e.attached_boxes} of ${e.mailboxes} already in campaigns</span>` : "";
+    const capLine = `<div class="dlv-rst-capline"><b>${e.mailboxes}</b> mailbox(es) · <b>+${fmtN(e.parked_capacity || 0)}</b>/day when restored${e.zero_cap_boxes ? ` · ${e.zero_cap_boxes} cap(s) held by the audit service` : ""}${attached}</div>`;
+    const restoreBtn = e.blacklisted
+      ? `<button class="btn sm" disabled title="Blocked: still on a blocklist — delist first (Blacklist tab)">Restore to sending</button>`
+      : `<button class="btn sm primary" data-act="rst-restore" data-id="${esc(e.id)}">Restore to sending</button>`;
+    const secondary = e.source === "reminder"
+      ? `<button class="btn sm" data-act="rem-done" data-id="${esc(e.id)}" title="Bookkeeping only — tick it off without touching Smartlead (use when it was restored outside this app)">✓ Mark added</button><button class="btn sm" data-act="rem-remove" data-id="${esc(e.id)}" title="Delete this reminder">Remove</button>`
+      : "";
+    return `<div class="dlv-rem-row">
+      <div class="dlv-rem-main">
+        <div class="dlv-rem-doms">${esc((e.domains || []).join(", "))} ${badges.join(" ")}</div>
+        <div class="dlv-rem-meta">restored ${esc(e.restoredDate || "?")} · due <b>${esc(e.dueDate || "?")}</b></div>
+        ${capLine}
+        ${healthLine}
+      </div>
+      <div class="dlv-rem-acts">${status}${restoreBtn}${secondary}</div>
+    </div>`;
+  }
   function renderRemindersPanel(D) {
     const rem = S.A.reminders || [];
-    const pending = rem.filter((r) => !r.done);
-    const dueN = pending.filter((r) => r.dueDate <= todayISO()).length;
-    // Defect 6c: the hint used to only count reminders ("N pending"), leaving
-    // a reader to guess how many domains that actually covers (one reminder
-    // can bundle several domains — see r2's two). Count both, straight off
-    // the same rows the panel lists below.
-    const domainSet = new Set();
-    rem.forEach((r) => (r.domains || []).forEach((d) => domainSet.add(d)));
-    const hintBits = [rem.length + " reminder" + (rem.length === 1 ? "" : "s"), domainSet.size + " domain" + (domainSet.size === 1 ? "" : "s")];
-    if (dueN) hintBits.push(dueN + " due");
-    const list = rem.length ? rem.map(renderReminderRow).join("") : `<div class="dlv-mb-count" style="padding:10px 0">No reminders yet.</div>`;
+    loadRestorePlan();
+    const plan = DATA.plan;
+    let entries;
+    if (plan && plan.data && Array.isArray(plan.data.reminders)) {
+      entries = plan.data.reminders;
+    } else {
+      // demo mode / plan still loading: old local rows, due-date-sorted
+      entries = rem.filter((r) => !r.done)
+        .map((r) => Object.assign({}, r, { source: "reminder", client: "—", mailboxes: (S.A.remHealth[r.id] || {}).total || 0,
+                                           parked_capacity: 0, zero_cap_boxes: 0, blacklisted: false,
+                                           overdue: r.dueDate <= todayISO(), days_left: daysUntil(r.dueDate), attached_boxes: null }))
+        .sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
+    }
+    const overdueN = entries.filter((e) => e.overdue).length;
+    const parked = entries.reduce((a, e) => a + (e.parked_capacity || 0), 0);
+    const hintBits = [entries.length + " pending"];
+    if (overdueN) hintBits.push(overdueN + " due now");
+    if (parked) hintBits.push(fmtN(parked) + "/day parked");
+    const loading = plan && plan.status === "loading" && !plan.data;
+    const planErr = plan && plan.status === "error"
+      ? `<div class="dlv-rst-warn">Live restore data unavailable (${esc(plan.error || "error")}) — showing local reminders only. <a class="dlv-dl" data-act="rst-retry">Retry</a></div>` : "";
+    const list = loading
+      ? `<div class="dlv-mb-count" style="padding:10px 0"><span class="dlv-spinner"></span> Loading the restore queue…</div>`
+      : (entries.length ? entries.map(renderRestoreRow).join("") : `<div class="dlv-mb-count" style="padding:10px 0">Nothing is resting or in warm-up recovery right now.</div>`);
+    const doneRows = rem.filter((r) => r.done);
+    const doneFold = doneRows.length
+      ? `<details class="dlv-fold" style="margin-top:14px"><summary>Completed<span class="hint">${doneRows.length} restored / added back</span></summary><div class="dlv-fold-body">${doneRows.map(renderReminderRow).join("")}</div></details>` : "";
+    const forecast = plan && plan.data ? renderRestoreForecast(plan.data.forecast, entries) : "";
     return `<div class="dlv-subtab-panel" id="dlv-fold-reminders">
-      <div class="dlv-subtab-head">${headIc("bell")}Restore reminders<span class="hint">${hintBits.join(" · ")}</span></div>
+      <div class="dlv-subtab-head">${headIc("bell")}Restore queue<span class="hint">${hintBits.join(" · ")}</span></div>
       <div class="dlv-fold-body">
-        <label class="dlv-field-label" for="dlv-rem-date">Date the domain was rested/restored <span class="dlv-field-hint">(due date = +14 days)</span></label>
+        ${planErr}
+        ${forecast}
+        ${list}
+        ${doneFold}
+        <div style="margin-top:18px;border-top:1px solid var(--line-2);padding-top:14px">
+        <label class="dlv-field-label" for="dlv-rem-date">Add a manual reminder — date the domain was rested/restored <span class="dlv-field-hint">(due date = +14 days; domains resting via this dashboard appear above automatically)</span></label>
         <div class="dlv-rem-add">
           <input class="dlv-input" type="text" id="dlv-rem-doms" placeholder="domains — e.g. getnavreogrowth.org, arnicbiz.biz" data-act="rem-doms-input">
           <input class="dlv-input" style="width:auto" type="date" id="dlv-rem-date" value="${todayISO()}" data-act="rem-date-input">
           <button class="btn primary" data-act="rem-add">+ Add 14-day reminder</button>
         </div>
         <div class="dlv-rem-err" id="dlv-rem-err">Type at least one domain first</div>
-        <div class="dlv-mb-count" id="dlv-rem-hint" style="margin:-6px 0 14px">Will be due ${esc(addDays(todayISO(), 14))}</div>
-        ${list}
+        <div class="dlv-mb-count" id="dlv-rem-hint" style="margin:-6px 0 4px">Will be due ${esc(addDays(todayISO(), 14))}</div>
+        </div>
       </div>
     </div>`;
+  }
+  // ── Restore-to-sending modal (self-contained; buttons wired directly) ──
+  function rstModalClose() { const m = $id("dlv-rst-modal"); if (m) m.remove(); }
+  function rstModalShow(html) {
+    rstModalClose();
+    const w = document.createElement("div");
+    w.id = "dlv-rst-modal"; w.className = "dlv-rst-overlay";
+    w.innerHTML = `<div class="dlv-rst-box">${html}</div>`;
+    w.addEventListener("click", (ev) => { if (ev.target === w) rstModalClose(); });
+    document.body.appendChild(w);
+    return w;
+  }
+  async function rstOpenRestore(id) {
+    let j;
+    try {
+      j = await fetch("/api/restore-live", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ id, dry_run: true }) }).then((r) => r.json());
+    } catch (e) { toast("Could not prepare the restore — " + e, "err"); return; }
+    if (!j || j.ok === false) { toast((j && j.message) || "Could not prepare the restore", "err"); return; }
+    const boxes = j.plans.reduce((a, p) => a + p.mailboxes, 0);
+    const cap = j.plans.reduce((a, p) => a + p.capacity, 0);
+    const zero = j.plans.reduce((a, p) => a + p.zero_cap_boxes, 0);
+    const mbxList = j.plans.map((p) => p.accounts.map((a) => `<div>${esc(a.email)}<span>${a.cap}/day</span></div>`).join("")).join("");
+    const camps = (j.suggestions || []).map((s, i) =>
+      `<label><input type="checkbox" class="dlv-rst-cid" value="${s.id}" ${i === 0 ? "checked" : ""}> ${esc(s.name)} <span>· already home to ${fmtN(s.attached_accounts)} of this client's mailboxes</span></label>`).join("");
+    const campBlock = camps
+      ? `<div style="font-weight:600;font-size:12.5px;margin-top:12px">Restore into which campaign(s)?</div><div class="dlv-rst-camps">${camps}</div>`
+      : `<div class="dlv-rst-warn">No campaign suggestions yet — the campaign-membership sweep is still running. Close this and try again in a minute.</div>`;
+    const earlyBlock = j.early
+      ? `<div class="dlv-rst-warn">This entry is <b>not due yet</b> (due ${esc((j.entry || {}).dueDate || "?")}). Restoring early cuts the warm-up period short.<br><label style="display:flex;gap:6px;margin-top:6px;cursor:pointer"><input type="checkbox" id="dlv-rst-early"> Restore before the due date anyway</label></div>` : "";
+    const w = rstModalShow(`
+      <h3>Restore to sending — ${esc(j.client || "")}</h3>
+      <div class="dlv-rst-res">This will resume <b>${esc(j.plans.map((p) => p.domain).join(", "))}</b>: clear its rested state, restore parked caps, and attach <b>${boxes}</b> mailbox(es) (<b>+${fmtN(cap)}</b>/day${zero ? `, plus ${zero} cap(s) held by the audit service` : ""}) to the campaigns you pick below. Reversible from the Manager tab.</div>
+      <div class="dlv-rst-mbx">${mbxList}</div>
+      ${campBlock}
+      ${earlyBlock}
+      <div class="dlv-rst-foot">
+        <button class="btn sm" id="dlv-rst-cancel">Cancel</button>
+        <button class="btn sm primary" id="dlv-rst-go" ${camps ? "" : "disabled"}>Restore ${boxes} mailbox(es)</button>
+      </div>`);
+    w.querySelector("#dlv-rst-cancel").addEventListener("click", rstModalClose);
+    w.querySelector("#dlv-rst-go").addEventListener("click", async () => {
+      const cids = Array.from(w.querySelectorAll(".dlv-rst-cid:checked")).map((el) => parseInt(el.value, 10));
+      if (!cids.length) { toast("Pick at least one campaign", "err"); return; }
+      if (j.early && !(w.querySelector("#dlv-rst-early") || {}).checked) { toast("Tick the early-restore confirmation first", "err"); return; }
+      const go = w.querySelector("#dlv-rst-go");
+      go.disabled = true; go.innerHTML = `<span class="dlv-spinner"></span> Restoring…`;
+      let res;
+      try {
+        res = await fetch("/api/restore-live", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                 body: JSON.stringify({ id, campaign_ids: cids, force_early: !!j.early }) }).then((r) => r.json());
+      } catch (e) { go.disabled = false; go.textContent = "Retry"; toast("Restore failed — " + e, "err"); return; }
+      const lines = (res.results || []).map((r) => {
+        const errs = (r.errors || []).map((x) => `<div class="err">${esc(x)}</div>`).join("");
+        return `<div class="dlv-rst-res"><b>${esc(r.domain)}</b> — rested state cleared (${r.resumed != null ? r.resumed : "?"} resumed) · <b>${r.verified_attached != null ? r.verified_attached : "?"}</b> mailbox(es) verified in campaign${errs}</div>`;
+      }).join("");
+      w.querySelector(".dlv-rst-box").innerHTML = `
+        <h3>${res.ok ? "Restored to sending" : "Restore finished with errors"}</h3>
+        ${lines}
+        <div class="dlv-rst-res">${res.ok ? `+${fmtN(res.capacity_restored || 0)}/day is back in rotation.` : "Fix the errors above and re-run — nothing is silently retried."}${res.reminder_done === false ? ` <span class="err">(the reminder could not be ticked off — mark it added manually)</span>` : ""}</div>
+        <div class="dlv-rst-foot"><button class="btn sm primary" id="dlv-rst-done">Close</button></div>`;
+      w.querySelector("#dlv-rst-done").addEventListener("click", rstModalClose);
+      logAction({ action: "restore_live", domains: (res.results || []).length, mailboxes: boxes, capacity: res.capacity_restored || 0, scope: j.plans.map((p) => p.domain).join(", ") });
+      if (isLive()) { apiGet("reminders", { timeout: 20000 }).then((rem2) => { if (Array.isArray(rem2)) { S.A.reminders = rem2; saveState(); } }).catch(() => {}); }
+      loadRestorePlan(true);
+    });
   }
 
   /* ============================================================
@@ -3753,6 +3995,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       reply_caps: () => `${h.date} — Set caps by reply rate — <b>${h.count}</b> mailbox(es)`,
       slack_post: () => `${h.date} — Posted the deliverability summary to #team-hangout`,
       reminder_add: () => `${h.date} — Added restore reminder — <b>${h.count}</b> domain(s)${h.scope ? " · " + esc(h.scope) : ""}`,
+      restore_live: () => `${h.date} — Restored to sending — <b>${h.mailboxes}</b> mailbox(es) · +${fmtN(h.capacity || 0)}/day${h.scope ? " · " + esc(h.scope) : ""}`,
       reminder_done: () => `✓ ${h.date} — Reminder marked added back${h.scope ? " · " + esc(h.scope) : ""}`,
       reminder_undo: () => `↩ ${h.date} — Reminder restored to pending${h.scope ? " · " + esc(h.scope) : ""}`,
       reminder_removed: () => `${h.date} — Removed restore reminder${h.scope ? " · " + esc(h.scope) : ""}`,
@@ -6864,6 +7107,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "bulk-reenable") { runAct(act, () => bulkAction("reenable", t)); return; }
     if (act === "bulk-warmup") { runAct(act, () => bulkAction("warmup", t)); return; }
     if (act === "bulk-restore") { runAct(act, () => bulkAction("restore", t)); return; }
+    if (act === "rst-restore") { runAct(act, () => rstOpenRestore(t.dataset.id)); return; }
+    if (act === "rst-retry") { runAct(act, () => loadRestorePlan(true)); return; }
     if (act === "rem-add") { runAct(act, () => remAdd()); return; }
     if (act === "rem-done") { runAct(act, () => remDone(t.dataset.id, false)); return; }
     if (act === "rem-undo") { runAct(act, () => remDone(t.dataset.id, true)); return; }

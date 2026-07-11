@@ -8119,6 +8119,387 @@ def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
     return data, 200
 
 
+# ── Restore queue + warm-up capacity forecast ────────────────────────────────
+# Powers the deliverability page's rebuilt "Restore reminders" tab:
+#   GET  /api/restore-plan  — pending restore entries ranked by due date +
+#                             per-client 14-day sending-capacity forecast
+#   POST /api/restore-live  — one-click return-to-sending: audit-service
+#                             warmup-resume + Smartlead campaign attach +
+#                             reminder-done + app_activity_log row
+# Design facts proven live 2026-07-11:
+#   - "Rested" domains come in two shapes: cap-zeroed (saved cap held INSIDE
+#     the audit service; its warmup-resume restores it) and warm-up-recovery
+#     (caps already live, e.g. Outlook 2/day, but ZERO campaign attachment —
+#     attachment is the real sending gate). Restore = warmup-resume + attach.
+#   - Smartlead's account list carries no campaign membership; the only truth
+#     is GET /campaigns/{id}/email-accounts per ACTIVE campaign (~110 calls),
+#     so membership is swept in a background thread and cached below.
+#   - No client_id is populated anywhere on accounts (the mailboxes table's
+#     campaign_count/client_id columns are all-zero/null) — client is inferred
+#     from domain + batch tags by keyword, most-specific first, navreo last.
+
+_RESTORE_SWEEP = {"data": None, "ts": 0.0, "running": False, "error": None}
+_RESTORE_SWEEP_LOCK = threading.Lock()
+_RESTORE_SWEEP_TTL_S = 30 * 60
+_RESTORE_MBX = {"data": None, "ts": 0.0}
+_RESTORE_MBX_TTL_S = 15 * 60
+_RESTORE_FORECAST_DAYS = 14
+
+_RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags carry it)
+    ("amplif", "Amplifyy"), ("arnic", "Arnic"), ("qwintiq", "Qwintiq"),
+    ("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
+    ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang"),
+    ("navreo", "Navreo"),
+)
+
+
+def _restore_client_of(domain: str, tags=None) -> str:
+    for hay in ((domain or "").lower(), " ".join(str(t) for t in (tags or [])).lower()):
+        for kw, label in _RESTORE_CLIENT_KEYWORDS:
+            if kw in hay:
+                return label
+    return "Other"
+
+
+def _deliv_backend_json(method: str, rest: str, timeout: float = 60):
+    """Server-to-server call to the standalone audit service — same target as
+    _proxy_deliverability, minus the HTTP-handler plumbing. Raises on
+    missing config so callers can fall back to the cached blob."""
+    if _deliv_mock_on():  # DELIV_MOCK — fake fleet, zero network
+        status, obj = mock_deliv.handle_proxy(method, rest, b"")
+        if status >= 400:
+            raise RuntimeError(f"mock deliv {rest} -> {status}")
+        return obj
+    import base64
+    auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
+    if ":" not in auth:
+        raise RuntimeError("deliverability backend unconfigured (DELIV_AUDIT_AUTH)")
+    return http_json(method, "https://navreo-email-deliverability-audit.onrender.com/api/" + rest,
+                     {"Authorization": "Basic " + base64.b64encode(auth.encode()).decode()},
+                     body={} if method == "POST" else None, timeout=timeout)
+
+
+def _restore_blob() -> dict:
+    _deliv_audit_restore()
+    with _DELIV_AUDIT_LOCK:
+        return _DELIV_AUDIT["blob"] or {}
+
+
+def _restore_mailboxes():
+    """domain -> {accounts:[{id,email,cap}], cap_sum, zero_cap, tags, maildoso}
+    from the Supabase `mailboxes` snapshot (daily sweep). Cached 15 min."""
+    now = time.time()
+    if _RESTORE_MBX["data"] is not None and now - _RESTORE_MBX["ts"] < _RESTORE_MBX_TTL_S:
+        return _RESTORE_MBX["data"]
+    rows = sb_get_all("mailboxes?select=smartlead_id,email,domain,tags,message_per_day,smtp_host")
+    if rows is None:
+        return _RESTORE_MBX["data"]  # Supabase outage: stale beats none
+    out = {}
+    for r in rows:
+        dom = (r.get("domain") or "").lower()
+        if not dom:
+            continue
+        m = out.setdefault(dom, {"accounts": [], "cap_sum": 0, "zero_cap": 0,
+                                 "tags": set(), "maildoso": False})
+        cap = r.get("message_per_day") or 0
+        m["accounts"].append({"id": r.get("smartlead_id"), "email": r.get("email"), "cap": cap})
+        m["cap_sum"] += cap
+        if not cap:
+            m["zero_cap"] += 1
+        for t in (r.get("tags") or []):
+            m["tags"].add(str(t))
+        if "maildoso" in ((r.get("smtp_host") or "") + " ".join(m["tags"])).lower():
+            m["maildoso"] = True
+    for m in out.values():
+        m["tags"] = sorted(m["tags"])
+    _RESTORE_MBX.update(data=out, ts=now)
+    return out
+
+
+def _restore_sweep_run_bg():
+    """Campaign-membership sweep: which accounts sit in which ACTIVE campaigns.
+    ~1 call per active campaign, throttled well under the 200/min cap."""
+    try:
+        camps = _smartlead_json("GET", "/campaigns") or []
+        active = [c for c in camps if c.get("status") == "ACTIVE"]
+        att = {}   # email(lower) -> {"cap": n, "camps": [ids]}
+        for c in active:
+            rows = _smartlead_json("GET", f"/campaigns/{c['id']}/email-accounts", timeout=120)
+            for a in rows if isinstance(rows, list) else []:
+                e = (a.get("from_email") or "").lower()
+                if not e:
+                    continue
+                rec = att.setdefault(e, {"cap": a.get("message_per_day") or 0, "camps": []})
+                rec["camps"].append(c["id"])
+            time.sleep(0.35)
+        data = {"accounts": att,
+                "campaigns": {str(c["id"]): (c.get("name") or "").strip() for c in active}}
+        with _RESTORE_SWEEP_LOCK:
+            _RESTORE_SWEEP.update(data=data, ts=time.time(), running=False, error=None)
+    except Exception as e:  # noqa: BLE001 — record, never crash the thread
+        print(f"[restore-sweep] FAILED: {e}", file=sys.stderr)
+        with _RESTORE_SWEEP_LOCK:
+            _RESTORE_SWEEP.update(running=False, error=str(e)[:300])
+
+
+def _restore_sweep_start(force: bool = False):
+    with _RESTORE_SWEEP_LOCK:
+        if _RESTORE_SWEEP["running"]:
+            return {"started": False, "running": True}
+        fresh = _RESTORE_SWEEP["data"] is not None and \
+            (time.time() - _RESTORE_SWEEP["ts"]) < _RESTORE_SWEEP_TTL_S
+        if fresh and not force:
+            return {"started": False, "running": False, "fresh": True}
+        _RESTORE_SWEEP.update(running=True, error=None)
+    threading.Thread(target=_restore_sweep_run_bg, daemon=True).start()
+    return {"started": True, "running": True}
+
+
+def _restore_reminders():
+    """Live reminders from the audit service, cached-blob fallback. Returns
+    (reminders, source) — source is 'live' or 'cached'."""
+    try:
+        rems = _deliv_backend_json("GET", "reminders")
+        if isinstance(rems, list):
+            return rems, "live"
+    except Exception as e:  # noqa: BLE001 — unconfigured/down: blob still serves
+        print(f"[restore-plan] live reminders unavailable: {e}", file=sys.stderr)
+    return (_restore_blob().get("reminders") or []), "cached"
+
+
+def _restore_entries():
+    """The merged, enriched, due-date-sorted queue. Also returns lookup maps
+    reused by restore-live (blacklist rows, mailbox aggregates)."""
+    from datetime import date, datetime, timezone
+    rems, rem_src = _restore_reminders()
+    blob = _restore_blob()
+    mbx = _restore_mailboxes() or {}
+    bl_doms = {(b.get("domain") or "").lower()
+               for b in (blob.get("blacklist") or []) if isinstance(b, dict)}
+    pending = [r for r in rems if not r.get("done")]
+    covered = {d.lower() for r in rems for d in (r.get("domains") or [])}
+
+    def iso(ms):
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat()
+
+    entries = []
+    for r in pending:
+        entries.append({"id": r.get("id"), "domains": r.get("domains") or [],
+                        "restoredDate": r.get("restoredDate"), "dueDate": r.get("dueDate"),
+                        "source": "reminder"})
+    # auto entries: domains the dashboard has resting right now with no reminder
+    # row at all (done or pending) — restingDue holds the PAUSE moment (ms);
+    # +7d is the same shift _deliv_fix_resting_due applies on the proxy path.
+    resting = ((blob.get("domainHealth") or {}).get("restingDue") or {})
+    for dom, ts in sorted(resting.items()):
+        if not isinstance(ts, (int, float)) or dom.lower() in covered:
+            continue
+        entries.append({"id": "auto-" + dom.lower(), "domains": [dom],
+                        "restoredDate": iso(ts), "dueDate": iso(ts + _DELIV_REST_DAYS_MS),
+                        "source": "auto"})
+    today = date.today()
+    sweep = None
+    with _RESTORE_SWEEP_LOCK:
+        if _RESTORE_SWEEP["data"] is not None:
+            sweep = _RESTORE_SWEEP["data"]
+    for e in entries:
+        boxes = cap = zero = attached = 0
+        tags, maildoso = [], False
+        for d in e["domains"]:
+            m = mbx.get(d.lower())
+            if not m:
+                continue
+            boxes += len(m["accounts"])
+            cap += m["cap_sum"]
+            zero += m["zero_cap"]
+            tags += m["tags"]
+            maildoso = maildoso or m["maildoso"]
+            if sweep:
+                attached += sum(1 for a in m["accounts"]
+                                if (a.get("email") or "").lower() in sweep["accounts"])
+        e.update(mailboxes=boxes, parked_capacity=cap, zero_cap_boxes=zero,
+                 maildoso=maildoso,
+                 client=_restore_client_of(e["domains"][0] if e["domains"] else "", tags),
+                 blacklisted=any(d.lower() in bl_doms for d in e["domains"]),
+                 attached_boxes=(attached if sweep else None))
+        try:
+            due = date.fromisoformat(e.get("dueDate") or "")
+            e["days_left"] = (due - today).days
+            e["overdue"] = e["days_left"] <= 0
+        except ValueError:
+            e["days_left"], e["overdue"] = None, False
+    entries.sort(key=lambda x: (x.get("dueDate") or "9999-99-99", -(x.get("parked_capacity") or 0)))
+    return entries, rem_src, mbx, bl_doms
+
+
+def _restore_forecast(entries, mbx):
+    """Per-client daily projection for the next N days. sending_now = summed
+    caps of accounts attached to >=1 ACTIVE campaign (from the sweep — the
+    only real membership source); returning = parked caps of entries whose
+    due date has passed by that day. Real caps only, never estimates."""
+    from datetime import date, timedelta
+    sweep = None
+    with _RESTORE_SWEEP_LOCK:
+        if _RESTORE_SWEEP["data"] is not None:
+            sweep = _RESTORE_SWEEP["data"]
+        err = _RESTORE_SWEEP["error"]
+    if sweep is None:
+        st = _restore_sweep_start()
+        return {"status": "computing", "running": st.get("running", True), "error": err}
+    _restore_sweep_start()  # kick a background refresh when stale; serve current data now
+    dom_client = {d: _restore_client_of(d, m["tags"]) for d, m in (mbx or {}).items()}
+    sending_now = {}
+    for email, rec in sweep["accounts"].items():
+        dom = email.rpartition("@")[2]
+        c = dom_client.get(dom) or _restore_client_of(dom)
+        sending_now[c] = sending_now.get(c, 0) + (rec.get("cap") or 0)
+    pend = [e for e in entries if not e.get("blacklisted")]
+    parked_now = {}
+    for e in pend:
+        parked_now[e["client"]] = parked_now.get(e["client"], 0) + (e.get("parked_capacity") or 0)
+    clients = sorted(set(sending_now) | set(parked_now),
+                     key=lambda c: -(sending_now.get(c, 0) + parked_now.get(c, 0)))
+    today = date.today()
+    days = []
+    for i in range(_RESTORE_FORECAST_DAYS):
+        d = today + timedelta(days=i)
+        iso = d.isoformat()
+        by_client = {}
+        for c in clients:
+            ret = sum((e.get("parked_capacity") or 0) for e in pend
+                      if e["client"] == c and (e.get("dueDate") or "9999") <= iso)
+            by_client[c] = {"projected": sending_now.get(c, 0) + ret, "returning": ret}
+        days.append({"date": iso, "weekday": d.strftime("%a"), "weekend": d.weekday() >= 5,
+                     "byClient": by_client,
+                     "total": sum(v["projected"] for v in by_client.values())})
+    return {"status": "ready", "clients": clients, "sending_now": sending_now,
+            "parked_now": parked_now, "days": days,
+            "sweep_age_sec": round(time.time() - _RESTORE_SWEEP["ts"]),
+            "zero_cap_note": sum(e.get("zero_cap_boxes") or 0 for e in pend)}
+
+
+def api_restore_plan():
+    entries, rem_src, mbx, _bl = _restore_entries()
+    forecast = _restore_forecast(entries, mbx)
+    return {"reminders": entries, "forecast": forecast, "reminder_source": rem_src}, 200
+
+
+def api_restore_live(p: dict):
+    """Body {id?, domains?, campaign_ids?, dry_run?, force_early?}. dry_run
+    returns the exact per-mailbox plan + campaign suggestions and mutates
+    NOTHING. Real run: audit-service warmup-resume per domain, Smartlead
+    campaign attach (chunks of 100, per proven process-new path), verified
+    re-fetch, reminder-done, one activity-log row. Per-domain errors are
+    reported individually — never rolled up as ok."""
+    from urllib.parse import quote
+    entries, _src, mbx, bl_doms = _restore_entries()
+    rid = (p.get("id") or "").strip()
+    entry = next((e for e in entries if e["id"] == rid), None) if rid else None
+    domains = [d.strip().lower() for d in
+               ((entry or {}).get("domains") or p.get("domains") or []) if d and d.strip()]
+    if not domains:
+        return {"ok": False, "error": "no_domains",
+                "message": "No domains to restore — pass id or domains."}, 400
+    blocked = [d for d in domains if d in bl_doms]
+    if blocked:
+        return {"ok": False, "error": "blacklisted",
+                "message": "Refusing to restore blacklisted domain(s): "
+                           + ", ".join(blocked) + ". Delist first."}, 409
+    plans = []
+    for d in domains:
+        m = (mbx or {}).get(d) or {"accounts": [], "cap_sum": 0, "zero_cap": 0, "tags": [], "maildoso": False}
+        plans.append({"domain": d, "mailboxes": len(m["accounts"]),
+                      "capacity": m["cap_sum"], "zero_cap_boxes": m["zero_cap"],
+                      "maildoso": m["maildoso"],
+                      "accounts": [{"id": a["id"], "email": a["email"], "cap": a["cap"]}
+                                   for a in m["accounts"]]})
+    early = bool(entry and not entry.get("overdue"))
+    client = (entry or {}).get("client") or _restore_client_of(domains[0])
+    # campaign suggestions: where this client's accounts already sit, biggest first
+    suggestions, sweep = [], None
+    with _RESTORE_SWEEP_LOCK:
+        if _RESTORE_SWEEP["data"] is not None:
+            sweep = _RESTORE_SWEEP["data"]
+    if sweep:
+        counts = {}
+        dom_client = {dd: _restore_client_of(dd, mm["tags"]) for dd, mm in (mbx or {}).items()}
+        for email, rec in sweep["accounts"].items():
+            if (dom_client.get(email.rpartition("@")[2]) or "") != client:
+                continue
+            for cid in rec["camps"]:
+                counts[cid] = counts.get(cid, 0) + 1
+        suggestions = [{"id": cid, "name": sweep["campaigns"].get(str(cid), str(cid)),
+                        "attached_accounts": n}
+                       for cid, n in sorted(counts.items(), key=lambda kv: -kv[1])[:12]]
+    if p.get("dry_run"):
+        return {"ok": True, "dry_run": True, "client": client, "early": early,
+                "plans": plans, "suggestions": suggestions,
+                "entry": {k: entry.get(k) for k in ("id", "dueDate", "source", "attached_boxes")} if entry else None}, 200
+    if early and not p.get("force_early"):
+        return {"ok": False, "error": "before_due",
+                "message": f"Due {entry.get('dueDate')} — not due yet. "
+                           "Re-send with force_early to restore anyway."}, 409
+    try:
+        camp_ids = [int(x) for x in (p.get("campaign_ids") or [])]
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "bad_campaign_ids"}, 400
+    if not camp_ids:
+        return {"ok": False, "error": "no_campaigns",
+                "message": "Pick at least one campaign to restore into."}, 400
+    results = []
+    for pl in plans:
+        r = {"domain": pl["domain"], "resumed": None, "attached_requested": 0,
+             "verified_attached": None, "errors": []}
+        try:  # 1. audit service clears rested state + restores any zeroed caps
+            wr = _deliv_backend_json("POST", "warmup-resume?domain=" + quote(pl["domain"]), timeout=90)
+            r["resumed"] = (wr or {}).get("resumed") or (wr or {}).get("reactivated") or 0
+        except Exception as e:  # noqa: BLE001
+            r["errors"].append("warmup-resume: " + str(e)[:160])
+        ids = [a["id"] for a in pl["accounts"] if a.get("id")]
+        for cid in camp_ids:  # 2. attach to the chosen campaigns
+            try:
+                for i in range(0, len(ids), 100):
+                    _smartlead_json("POST", f"/campaigns/{cid}/email-accounts",
+                                    {"email_account_ids": ids[i:i + 100]})
+                r["attached_requested"] += len(ids)
+            except Exception as e:  # noqa: BLE001
+                r["errors"].append(f"attach {cid}: " + str(e)[:160])
+        results.append(r)
+    # 3. verify against Smartlead (one re-fetch per chosen campaign)
+    try:
+        present = set()
+        for cid in camp_ids:
+            rows = _smartlead_json("GET", f"/campaigns/{cid}/email-accounts", timeout=120)
+            present.update(a.get("id") for a in rows if isinstance(rows, list))
+        for pl, r in zip(plans, results):
+            r["verified_attached"] = sum(1 for a in pl["accounts"] if a.get("id") in present)
+    except Exception as e:  # noqa: BLE001
+        for r in results:
+            r["errors"].append("verify: " + str(e)[:160])
+    done_ok = None
+    if entry and entry.get("source") == "reminder":  # 4. tick the reminder off
+        try:
+            _deliv_backend_json("POST", "reminder-done?id=" + quote(str(entry["id"])))
+            done_ok = True
+        except Exception as e:  # noqa: BLE001
+            done_ok = False
+            results and results[0]["errors"].append("reminder-done: " + str(e)[:160])
+    with _RESTORE_SWEEP_LOCK:  # force the next plan/forecast to re-sweep
+        _RESTORE_SWEEP["ts"] = 0.0
+    total_cap = sum(pl["capacity"] for pl in plans)
+    log_activity("/api/restore-live",
+                 {"domains": domains, "campaign_ids": camp_ids,
+                  "mailboxes": sum(pl["mailboxes"] for pl in plans),
+                  "caps_restored_total": total_cap,
+                  "resumed": sum(r["resumed"] or 0 for r in results),
+                  "errors": [e for r in results for e in r["errors"]]},
+                 action="restore_live", entity="deliverability",
+                 entity_id=",".join(domains)[:120])
+    ok = not any(r["errors"] for r in results)
+    return {"ok": ok, "results": results, "reminder_done": done_ok,
+            "client": client, "capacity_restored": total_cap}, 200
+
+
 # ── Login gate ──────────────────────────────────────────────────────────────
 # Every page and API endpoint on this host requires a Navreo login — an
 # email+password user in Supabase Auth on the same project that already backs
@@ -8780,6 +9161,9 @@ class Handler(SimpleHTTPRequestHandler):
                 days = 30
             body, status = deliv_trends_get(days)
             return self._json(body, status)
+        if path == "/api/restore-plan":
+            body, status = api_restore_plan()
+            return self._json(body, status)
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("GET")
         if path == "/api/lists":
@@ -8992,6 +9376,16 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "invalid_json"}, 400)
             log_activity(path, payload)
             body, status = api_process_new_selected(payload)
+            return self._json(body, status)
+        if path == "/api/restore-live":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            if not payload.get("dry_run"):  # ledger: real restores only, not previews
+                log_activity(path, payload)
+            body, status = api_restore_live(payload)
             return self._json(body, status)
         if path == "/api/deliverability/_mock/scenario":  # DELIV_MOCK — mock-only, 404 outside mock mode
             if not _deliv_mock_on():
