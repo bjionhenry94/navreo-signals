@@ -8078,6 +8078,11 @@ def _deliv_bundle_restore():
     try:
         rows = sb("GET", "deliverability_audit_cache?id=eq.bundle&select=blob,ts", prefer="return=representation")
         if rows and isinstance(rows, list) and rows[0].get("blob"):
+            # Belt-and-braces vs the mock-poisoning incident: refuse any
+            # persisted bundle stamped mock, whatever wrote it.
+            if isinstance(rows[0]["blob"], dict) and rows[0]["blob"].get("mock"):
+                print("[deliv] ignoring mock-stamped bundle in Supabase", file=sys.stderr)
+                return
             ts = rows[0].get("ts") or ""
             try:
                 epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
@@ -8100,7 +8105,8 @@ def _deliv_bundle_run_bg():
     blob_dh = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {})
     min_sent = blob_dh.get("minSent", 500)
     cutoff = blob_dh.get("cutoff", 0.8)
-    out = {"views": {}, "dh": {}, "errors": {}, "minSent": min_sent, "cutoff": cutoff}
+    out = {"views": {}, "dh": {}, "errors": {}, "minSent": min_sent, "cutoff": cutoff,
+           "mock": _deliv_mock_on()}
     for v in _DELIV_BUNDLE_VIEWS:
         try:
             out["views"][v] = _deliv_backend_get(f"inboxes?view={v}&batch=")
@@ -8142,7 +8148,10 @@ def _deliv_bundle_run_bg():
             _DELIV_BUNDLE.update(data=out, ts=time.time(), running=False, error=err)
         else:
             _DELIV_BUNDLE.update(running=False, error=err or "empty bundle")
-    if ok:
+    # NEVER persist a mock-mode bundle: the Supabase cache row is shared with
+    # production, and a local DELIV_MOCK=1 run writing here served fake
+    # domains to the live manager (caught on the 2026-07-11 live verify).
+    if ok and not _deliv_mock_on():
         _deliv_bundle_persist(out)
 
 
