@@ -7973,8 +7973,10 @@ def _deliv_audit_run_bg():
         secs = mock_deliv.scenario_get("audit_run_secs", 3) or 3
         time.sleep(secs)
         blob = mock_deliv.run_audit_blob()
+        _deliv_fix_resting_due((blob or {}).get("domainHealth"))  # same shift as the live path
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
+        _deliv_bundle_start(force=True)  # mock bundle rides the same refresh as prod
         return
     import base64, urllib.error  # noqa: F401 — urllib.error referenced via except below
     auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
@@ -7998,6 +8000,7 @@ def _deliv_audit_run_bg():
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
         _deliv_audit_persist(blob)  # survives the next deploy/restart
         _snapshot_from_blob(blob)  # daily fleet-count row for the trends header
+        _deliv_bundle_start(force=True)  # keep manager views/windows coherent with the fresh blob
     except Exception as e:  # noqa: BLE001 — record the failure for the UI; never crash the thread
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(running=False, error=str(e)[:300])
@@ -8015,6 +8018,146 @@ def _deliv_audit_start(force=False):
             return {"started": False, "running": False, "fresh": True}
         _DELIV_AUDIT.update(running=True, error=None)
     threading.Thread(target=_deliv_audit_run_bg, daemon=True).start()
+    return {"started": True, "running": True}
+
+
+# ── Live deliverability BUNDLE cache (manager views + domain-health windows) ──
+# The manager's per-view GET /inboxes and per-window GET /domain-health each
+# round-trip the audit backend live (45s / 87s measured on prod 2026-07-11,
+# worse while the ~4-min sweep runs) — that is what made sub-tab clicks look
+# dead for minutes. Same medicine as _DELIV_AUDIT: pull everything the manager
+# can show ONCE in a background thread, serve it from cache instantly, refresh
+# behind the scenes. Re-pulled after every successful audit run (so blob and
+# bundle stay coherent) and covered by the hourly /api/cron/audit-refresh kick.
+# Views deliberately exclude "sending"/"all": the backend truncates at 2,000
+# rows with no pagination (probed live: limit/offset are ignored; batch tags
+# overlap so partitioning can't reach the 7,997-box fleet either) and the
+# four manager flows only need the small actionable views.
+_DELIV_BUNDLE_VIEWS = ("warmupoff", "inwarmup", "rested", "reconnect", "blocked")
+_DELIV_BUNDLE_WINDOWS = (7, 14, 30)
+_DELIV_BUNDLE = {"data": None, "ts": 0.0, "running": False, "error": None, "restore_tried": False}
+_DELIV_BUNDLE_LOCK = threading.Lock()
+
+
+def _deliv_backend_get(rest: str, timeout: int = 240):
+    """Authed GET against the audit backend (or the mock fleet under
+    DELIV_MOCK=1) from a background thread — the request-handler proxy can't
+    be used off-request. Returns the parsed JSON body or raises."""
+    if _deliv_mock_on():
+        status, obj = mock_deliv.handle_proxy("GET", rest, None)
+        if status != 200:
+            raise RuntimeError(f"mock {rest} -> {status}")
+        return obj
+    import base64
+    auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
+    if ":" not in auth:
+        raise RuntimeError("unconfigured")
+    req = urllib.request.Request(
+        "https://navreo-email-deliverability-audit.onrender.com/api/" + rest, method="GET")
+    req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
+    with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
+        return json.loads(resp.read())
+
+
+def _deliv_bundle_persist(data):
+    from datetime import datetime, timezone
+    try:
+        sb("POST", "deliverability_audit_cache?on_conflict=id",
+           {"id": "bundle", "blob": data, "ts": datetime.now(timezone.utc).isoformat()},
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001
+        print(f"[deliv] WARNING bundle persist failed: {e}", file=sys.stderr)
+
+
+def _deliv_bundle_restore():
+    with _DELIV_BUNDLE_LOCK:
+        if _DELIV_BUNDLE["restore_tried"] or _DELIV_BUNDLE["data"] is not None or _deliv_mock_on():
+            return
+        _DELIV_BUNDLE["restore_tried"] = True
+    from datetime import datetime
+    try:
+        rows = sb("GET", "deliverability_audit_cache?id=eq.bundle&select=blob,ts", prefer="return=representation")
+        if rows and isinstance(rows, list) and rows[0].get("blob"):
+            ts = rows[0].get("ts") or ""
+            try:
+                epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except Exception:  # noqa: BLE001
+                epoch = 0.0
+            with _DELIV_BUNDLE_LOCK:
+                if _DELIV_BUNDLE["data"] is None:
+                    _DELIV_BUNDLE.update(data=rows[0]["blob"], ts=epoch)
+            print(f"[deliv] bundle restored from Supabase (stored {ts})", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[deliv] WARNING bundle restore failed: {e}", file=sys.stderr)
+
+
+def _deliv_bundle_run_bg():
+    """Pull the manager's five actionable views + three domain-health windows
+    from the backend, sequentially (its Smartlead budget is shared with the
+    sweep — parallel fan-out is what used to starve it). Partial results are
+    kept: one failed pull records its error but never voids the others."""
+    from datetime import date, timedelta
+    blob_dh = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {})
+    min_sent = blob_dh.get("minSent", 500)
+    cutoff = blob_dh.get("cutoff", 0.8)
+    out = {"views": {}, "dh": {}, "errors": {}, "minSent": min_sent, "cutoff": cutoff}
+    for v in _DELIV_BUNDLE_VIEWS:
+        try:
+            out["views"][v] = _deliv_backend_get(f"inboxes?view={v}&batch=")
+        except Exception as e:  # noqa: BLE001
+            out["errors"][v] = str(e)[:200]
+    today = date.today()
+    for days in _DELIV_BUNDLE_WINDOWS:
+        try:
+            dh = _deliv_backend_get(
+                "domain-health?start=%s&end=%s&minSent=%s&cutoff=%s"
+                % ((today - timedelta(days=days)).isoformat(), today.isoformat(), min_sent, cutoff))
+            _deliv_fix_resting_due(dh)  # same pause-moment -> due-back shift as the blob path
+            out["dh"][str(days)] = dh
+        except Exception as e:  # noqa: BLE001
+            out["errors"]["dh" + str(days)] = str(e)[:200]
+    # Per-domain mailbox counts, so the floor view can show the blast radius
+    # of "Warm up domain" BEFORE the click. The backend's inboxes endpoint
+    # truncates at 2,000 rows, so live counts come from the Supabase mailboxes
+    # mirror (full fleet, daily-synced); mock mode counts its own fake fleet.
+    try:
+        boxes = {}
+        if _deliv_mock_on():
+            for r in (_deliv_backend_get("inboxes?view=all&batch=").get("rows") or []):
+                d = (r.get("domain") or "").lower()
+                if d:
+                    boxes[d] = boxes.get(d, 0) + 1
+        else:
+            for r in sb_get_all("mailboxes?select=domain") or []:
+                d = (r.get("domain") or "").lower()
+                if d:
+                    boxes[d] = boxes.get(d, 0) + 1
+        out["domainBoxes"] = boxes
+    except Exception as e:  # noqa: BLE001
+        out["errors"]["domainBoxes"] = str(e)[:200]
+    ok = bool(out["views"]) or bool(out["dh"])
+    err = json.dumps(out["errors"])[:300] if out["errors"] else None
+    with _DELIV_BUNDLE_LOCK:
+        if ok:
+            _DELIV_BUNDLE.update(data=out, ts=time.time(), running=False, error=err)
+        else:
+            _DELIV_BUNDLE.update(running=False, error=err or "empty bundle")
+    if ok:
+        _deliv_bundle_persist(out)
+
+
+def _deliv_bundle_start(force=False):
+    """Kick a background bundle refresh unless one's already running (or the
+    cache is fresh and not forced). Mirrors _deliv_audit_start."""
+    _deliv_bundle_restore()
+    with _DELIV_BUNDLE_LOCK:
+        if _DELIV_BUNDLE["running"]:
+            return {"started": False, "running": True}
+        fresh = _DELIV_BUNDLE["data"] is not None and (time.time() - _DELIV_BUNDLE["ts"]) < _DELIV_AUDIT_TTL_S
+        if fresh and not force:
+            return {"started": False, "running": False, "fresh": True}
+        _DELIV_BUNDLE.update(running=True, error=None)
+    threading.Thread(target=_deliv_bundle_run_bg, daemon=True).start()
     return {"started": True, "running": True}
 
 
@@ -9152,6 +9295,21 @@ class Handler(SimpleHTTPRequestHandler):
                                "error": err, "configured": True if _deliv_mock_on() else bool(
                                    (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":")),
                                "stale": bool(b is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
+        if path == "/api/deliverability/_bundle":
+            # Cached manager views + domain-health windows (instant). Serving a
+            # stale bundle beats serving none — the kick below refreshes it in
+            # the background and the client polls while `running`.
+            _deliv_bundle_restore()
+            st = _deliv_bundle_start(force=False)  # no-ops while fresh
+            with _DELIV_BUNDLE_LOCK:
+                d, ts, running, err = (_DELIV_BUNDLE["data"], _DELIV_BUNDLE["ts"],
+                                       _DELIV_BUNDLE["running"], _DELIV_BUNDLE["error"])
+            age = (time.time() - ts) if ts else None
+            return self._json({"bundle": d, "ts": ts, "ageSec": age,
+                               "running": running or bool(st.get("started")), "error": err,
+                               "configured": True if _deliv_mock_on() else bool(
+                                   (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":")),
+                               "stale": bool(d is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
         if path == "/api/deliverability-trends":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -9274,7 +9432,8 @@ class Handler(SimpleHTTPRequestHandler):
                 # the same refresh on a schedule; _deliv_audit_start(force=False)
                 # no-ops while the cached blob is inside its 1h TTL.
                 st = _deliv_audit_start(force=False)
-                return self._json({"ok": True, **st}, 202 if st.get("started") else 200)
+                stb = _deliv_bundle_start(force=False)  # manager views/windows age on the same clock
+                return self._json({"ok": True, **st, "bundle": stb}, 202 if st.get("started") else 200)
             if path == "/api/cron/mailbox-sync":
                 if _MAILBOX_SYNC_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
@@ -9413,6 +9572,15 @@ class Handler(SimpleHTTPRequestHandler):
             log_activity(path, {"force": force}, action="audit_refresh",
                          entity="deliverability")
             return self._json(_deliv_audit_start(force=force))
+        if path == "/api/deliverability/_bundle/refresh":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                force = bool(json.loads(self.rfile.read(length).decode() or "{}").get("force", True)) if length else True
+            except ValueError:
+                force = True
+            log_activity(path, {"force": force}, action="bundle_refresh",
+                         entity="deliverability")
+            return self._json(_deliv_bundle_start(force=force))
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("POST")
         lists_route = LISTS_POST_ROUTES.get(path)

@@ -131,6 +131,39 @@ def _pristine_fleet() -> dict:
             "warmup_state": warmup_state, "warmup_issue": warmup_issue, "cap": cap,
             "email_account_id": 1000 + i, "tag_ids": tag_ids,
         }
+
+    # ── Manager-rebuild test cases (2026-07-11): two dashboard-rested domains
+    # (one past its due-back date, one due next week), and one domain of
+    # failed connections — so the In warm-up / Needs reconnect flows and the
+    # Overview restore-due flag can be exercised on dummy data.
+    now_ms = int(time.time() * 1000)
+    _REST_DOMS = [("resting-due-mock.test", 8), ("resting-next-mock.test", 2)]
+    for j, (dom, days_back) in enumerate(_REST_DOMS):
+        for k in range(4):
+            email = f"rest{j}{k}@{dom}"
+            fleet[email] = {
+                "email": email, "domain": dom, "brand": "navreo",
+                "batch": "Navreo Mock", "from_name": "Bjion Henry",
+                "created": _days_ago(30), "tagged": True, "inCampaign": True,
+                "campaign_id": _CAMPAIGN_IDS[0],
+                "sig_state": "ok", "sig_issue": None,
+                "warmup_state": "ok", "warmup_issue": None, "cap": 0,
+                "email_account_id": 2000 + j * 10 + k, "tag_ids": {1},
+                "rested": True, "restedAt": now_ms - days_back * 86400000,
+            }
+    _CONN_REASONS = ["SMTP auth failed", "IMAP connection refused", "OAuth token expired"]
+    for k in range(3):
+        email = f"broken{k}@reconn-mock.test"
+        fleet[email] = {
+            "email": email, "domain": "reconn-mock.test", "brand": "arnic",
+            "batch": "Arnic Mock", "from_name": "Jacki Arnic",
+            "created": _days_ago(20), "tagged": True, "inCampaign": True,
+            "campaign_id": _CAMPAIGN_IDS[2],
+            "sig_state": "ok", "sig_issue": None,
+            "warmup_state": "ok", "warmup_issue": None, "cap": 35,
+            "email_account_id": 2100 + k, "tag_ids": {2},
+            "conn_failed": True, "conn_reason": _CONN_REASONS[k],
+        }
     return fleet
 
 
@@ -280,6 +313,10 @@ def handle_proxy(method: str, rest: str, body: bytes | None):
             return _capacity(q, pause=True)
         if path == "capacity-resume" and method == "POST":
             return _capacity(q, pause=False)
+        if path == "warmup-pause" and method == "POST":
+            return _domain_warmup(q, pause=True)
+        if path == "warmup-resume" and method == "POST":
+            return _domain_warmup(q, pause=False)
         if path == "reply-caps" and method == "POST":
             mode = q.get("mode")
             if mode == "preview":
@@ -419,6 +456,34 @@ def _capacity(q: dict, pause: bool):
     return 200, ({"paused": n, "skipped": skipped} if pause else {"resumed": n, "skipped": skipped})
 
 
+def _domain_warmup(q: dict, pause: bool):
+    """Domain-scoped warm-up rest / restore — mirrors the real backend's
+    warmup-pause / warmup-resume (?domain=a.com[,b.com]): pause saves each
+    sending mailbox's cap and zeroes it (marking the row rested with the
+    pause moment); resume restores saved caps and clears the rest."""
+    doms = [d for d in (q.get("domain") or "").split(",") if d]
+    n = 0
+    now_ms = int(time.time() * 1000)
+    for r in _STATE["fleet"].values():
+        if r["domain"] not in doms or r.get("conn_failed") or r["warmup_state"] == "off":
+            continue
+        if pause:
+            if r["cap"] > 0 or not r.get("rested"):
+                if r["cap"] > 0:
+                    r["_saved_cap"] = r["cap"]
+                r["cap"] = 0
+                r["rested"] = True
+                r["restedAt"] = now_ms
+                n += 1
+        else:
+            if r.get("rested") or r.get("_saved_cap"):
+                r["cap"] = r.pop("_saved_cap", 35)
+                r["rested"] = False
+                r["restedAt"] = None
+                n += 1
+    return 200, ({"paused": n} if pause else {"resumed": n})
+
+
 def _inboxes(q: dict):
     view = q.get("view") or "all"
     batch = q.get("batch") or ""
@@ -427,21 +492,26 @@ def _inboxes(q: dict):
         rows = [r for r in rows if batch in (r["batch"], r["brand"])]
 
     # kind mirrors the real backend's row taxonomy (the mock fleet has no
-    # blocked/reconnect rows); the view filter mirrors the UI's own
-    # mgrRowsForView() predicates so live-mode views and sample-mode views
-    # slice the fleet identically.
+    # blocked rows); the view filter mirrors the UI's own flow predicates so
+    # live-mode views and sample-mode views slice the fleet identically.
     def kind_of(r):
+        if r.get("conn_failed"):
+            return "reconnect"
         return "warmupoff" if r["warmup_state"] == "off" else "ok"
 
     def in_view(r):
         k = kind_of(r)
         if view == "warmupoff":
             return k == "warmupoff"
+        if view == "reconnect":
+            return k == "reconnect"
         if view == "inwarmup":
-            return k == "ok" and r["cap"] == 0
+            return k == "ok" and r["cap"] == 0 and not r.get("rested")
+        if view == "rested":
+            return k == "ok" and bool(r.get("rested"))
         if view == "sending":
             return k == "ok" and r["cap"] > 0
-        if view in ("reconnect", "blocked", "rested"):
+        if view == "blocked":
             return False
         return True  # all / domain
 
@@ -452,16 +522,19 @@ def _inboxes(q: dict):
     out_rows = [{
         "id": r["email_account_id"], "email": r["email"], "domain": r["domain"], "provider": "mock",
         "kind": kind_of(r), "warmup_status": "ACTIVE" if r["warmup_state"] != "off" else "INACTIVE",
-        "reason_category": r["warmup_issue"] or "", "cap": r["cap"], "reason": r["sig_issue"] or r["warmup_issue"] or "",
-        "tags": [r["batch"]], "maildoso": False, "rested": False, "restedAt": None,
+        "reason_category": r.get("conn_reason") or r["warmup_issue"] or "",
+        "cap": r["cap"], "reason": r.get("conn_reason") or r["sig_issue"] or r["warmup_issue"] or "",
+        "tags": [r["batch"]], "maildoso": False,
+        "rested": bool(r.get("rested")), "restedAt": r.get("restedAt"),
     } for r in rows]
     fleet = list(_STATE["fleet"].values())
     counts = {
-        "reconnect": 0, "warmupoff": sum(1 for r in fleet if r["warmup_state"] == "off"),
+        "reconnect": sum(1 for r in fleet if r.get("conn_failed")),
+        "warmupoff": sum(1 for r in fleet if r["warmup_state"] == "off"),
         "blocked": 0,
-        "inwarmup": sum(1 for r in fleet if r["warmup_state"] != "off" and r["cap"] == 0),
-        "rested": 0,
-        "sending": sum(1 for r in fleet if r["warmup_state"] != "off" and r["cap"] > 0),
+        "inwarmup": sum(1 for r in fleet if not r.get("conn_failed") and r["warmup_state"] != "off" and r["cap"] == 0 and not r.get("rested")),
+        "rested": sum(1 for r in fleet if r.get("rested")),
+        "sending": sum(1 for r in fleet if not r.get("conn_failed") and r["warmup_state"] != "off" and r["cap"] > 0),
         "total": len(fleet),
     }
     # The UI's batch dropdown reads {name, count} objects, not bare strings.
@@ -473,10 +546,24 @@ def _inboxes(q: dict):
 
 def _domain_health(q: dict):
     rows = []
-    for d in DOMAINS:
-        dr = [r for r in _STATE["fleet"].values() if r["domain"] == d]
-        sent = len(dr) * 120
-        replied = max(1, len(dr) // 4)
+    fleet = list(_STATE["fleet"].values())
+    all_doms = sorted({r["domain"] for r in fleet})
+    resting, resting_due = {}, {}
+    for d in all_doms:
+        dr = [r for r in fleet if r["domain"] == d]
+        rested = [r for r in dr if r.get("rested")]
+        if rested:
+            resting[d] = len(rested)
+            # Pause moment (ms) — server.py's _deliv_fix_resting_due shifts
+            # this to pause+7d on the way through, same as the real backend.
+            resting_due[d] = min(r["restedAt"] for r in rested)
+        # One deliberately healthy domain (reply rate above the floor) and
+        # near-zero volume on resting/broken domains, so the floor view shows
+        # a real mix instead of flagging the whole roster.
+        healthy = d == "amplifyy-mock-2.test"
+        idle = bool(rested) or all(r.get("conn_failed") for r in dr)
+        sent = len(dr) * (2 if idle else 120)
+        replied = (sent // 40) if healthy else (0 if idle else max(1, len(dr) // 4))
         positive = max(0, replied // 3)
         rows.append({
             "domain": d, "sent": sent, "lead": sent, "replied": replied,
@@ -488,7 +575,7 @@ def _domain_health(q: dict):
             "bounce_rate": 1.5,
             "batches": sorted({r["batch"] for r in dr}),
         })
-    return 200, {"rows": rows, "resting": {}, "restingDue": {},
+    return 200, {"rows": rows, "resting": resting, "restingDue": resting_due,
                 "start": q.get("start") or _days_ago(7), "end": q.get("end") or _today(),
                 "minSent": int(q.get("minSent") or 500), "cutoff": float(q.get("cutoff") or 0.8)}
 

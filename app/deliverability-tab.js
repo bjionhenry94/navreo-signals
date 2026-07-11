@@ -347,6 +347,13 @@
     mgr: { key: null, pendingKey: null, loading: false, error: false, rows: null, counts: null, batches: null, total: null, truncated: false },
     // Domain-health live cache — keyed by window+minSent+cutoff.
     dh: { key: null, pendingKey: null, loading: false, error: false, done: false },
+    // Server-cached manager bundle (five actionable views + 7/14/30d domain
+    // health) — GET /_bundle serves it in ms; the server refreshes it in the
+    // background alongside the audit blob. This replaces the per-view
+    // GET /inboxes and per-window GET /domain-health round-trips (45-90s
+    // each, measured live 2026-07-11) that made sub-tab clicks look dead.
+    // status: idle | loading | ready | error.
+    bundle: { status: "idle", data: null, ageSec: null, error: null, pollTimer: null, pollStart: null },
     // Stage B: cached-blob + poll state for GET/_audit + POST /_audit/refresh
     // (replaces the old synchronous POST /run — see loadAudit()/startAuditPoll()).
     audit: {
@@ -495,8 +502,14 @@
   // trusting local optimistic state.
   function invalidateMgrDh() {
     invalidateDormant();
-    DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
+    DATA.mgr.key = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
     DATA.dh.key = null; DATA.dh.done = false;
+    // The bundle is a server-side cache: a state-changing action means it no
+    // longer reflects Smartlead truth, so ask the server for a silent re-pull.
+    // Optimistic local state (S.A.domainHealth.resting etc.) keeps the UI
+    // correct in the meantime; the refreshed bundle reconciles it when it
+    // lands. Debounced so a bulk action's N calls kick one refresh.
+    scheduleBundleRefresh();
   }
 
   // Map the live /run blob onto a complete S.A. Base = a fresh mock A so any
@@ -607,6 +620,7 @@
         } else if (!DATA.audit.loading && !DATA.audit.polling) {
           loadAudit();
         }
+        loadBundle(); // idempotent — no-ops while loading/polling or already ready
       }
       return;
     }
@@ -650,6 +664,7 @@
       } else {
         loadAudit();
       }
+      loadBundle(); // manager views + dh windows, served from the server cache
     } else {
       paintPage(); // surface the sample-data banner
     }
@@ -805,92 +820,87 @@
     paintPage();
   }
 
-  // ── Manager live fetch: mailbox views via GET /inboxes?view=&batch= ──
-  function mgrLiveKey() { return "mbx|" + UI.mgr.view + "|" + (UI.mgr.batch || ""); }
-  // Returns true when DATA.mgr holds rows for the current view/batch; otherwise
-  // kicks a fetch (idempotent per key) and returns false so the caller paints a
-  // loading/error state. Search stays a client-side filter on the cached rows.
-  function ensureMgrLive() {
-    const key = mgrLiveKey();
-    if (DATA.mgr.key === key && DATA.mgr.rows) return true;
-    // Stale-while-revalidate: a fresh audit blob nulls DATA.mgr.key (data may
-    // have moved) but keeps rows + rowsKey. When the kept rows are for the SAME
-    // view/batch the user is looking at, keep showing them while the refetch
-    // runs instead of blanking the table to a spinner mid-session.
-    const staleOk = !!(DATA.mgr.rows && DATA.mgr.rowsKey === key);
-    if (DATA.mgr.loading && DATA.mgr.pendingKey === key) return staleOk;
-    DATA.mgr.loading = true; DATA.mgr.error = false; DATA.mgr.pendingKey = key;
-    const q = "inboxes?view=" + encodeURIComponent(UI.mgr.view) + "&batch=" + encodeURIComponent(UI.mgr.batch || "");
-    apiGet(q, { timeout: 90000 }).then((r) => {
-      // Latest-wins: if the user changed view/batch while this was in flight,
-      // a newer request owns the panel — drop this response instead of letting
-      // the slower/older one overwrite it ("data keeps changing" bug).
-      if (DATA.mgr.pendingKey !== key) return;
-      DATA.mgr.key = key; DATA.mgr.rowsKey = key; DATA.mgr.pendingKey = null; DATA.mgr.loading = false; DATA.mgr.error = false;
-      DATA.mgr.rows = (r && Array.isArray(r.rows)) ? r.rows : [];
-      DATA.mgr.counts = (r && r.counts) || null;
-      DATA.mgr.batches = (r && Array.isArray(r.batches)) ? r.batches : null;
-      DATA.mgr.total = r ? r.total : null;
-      DATA.mgr.truncated = !!(r && r.truncated);
-      // Live rows just landed — drop selections referencing rows not in them
-      // (e.g. sample-roster phantoms selected before live data loaded), so a
-      // bulk action can never fire against mailboxes that don't exist. Keyed
-      // by mgrRowKey (id, email fallback) — selection keys are NOT emails, so
-      // an email-based prune here would wipe every valid selection instead.
+  // ── Manager bundle: server-cached views + domain-health windows ──────────
+  // GET /_bundle answers from the app server's cache in milliseconds; the
+  // server refreshes it in the background (same triggers as the audit blob).
+  // This replaced ensureMgrLive()/ensureDhLive(), whose per-view /inboxes and
+  // per-window /domain-health calls round-tripped the audit backend live
+  // (45s/87s measured on prod 2026-07-11) and made the manager look dead.
+  const BUNDLE_POLL_MS = 10000;
+  const BUNDLE_POLL_CAP_MS = 8 * 60 * 1000;
+  function bundleData() { return DATA.bundle.data; }
+  function stopBundlePoll() {
+    if (DATA.bundle.pollTimer) { clearInterval(DATA.bundle.pollTimer); DATA.bundle.pollTimer = null; }
+  }
+  function handleBundleResult(r) {
+    r = r || {};
+    if (r.bundle) {
+      DATA.bundle.data = r.bundle;
+      DATA.bundle.ageSec = r.ageSec;
+      DATA.bundle.error = r.error || null;
+      DATA.bundle.status = "ready";
+      // Compat shim: fullDerive() and the campaign panel read live inbox
+      // counts/batches off DATA.mgr — feed them from any bundled view's
+      // response (the backend returns fleet-wide counts on every view).
+      const views = r.bundle.views || {};
+      const first = Object.keys(views).map((k) => views[k]).find((v) => v && v.counts);
+      if (first) { DATA.mgr.counts = first.counts; DATA.mgr.batches = Array.isArray(first.batches) ? first.batches : DATA.mgr.batches; }
+      // Prune selections referencing mailboxes no longer in any bundled view.
       if (UI.mgr.sel && UI.mgr.sel.size) {
-        const have = new Set(DATA.mgr.rows.map(mgrRowKey));
+        const have = new Set();
+        Object.keys(views).forEach((k) => ((views[k] || {}).rows || []).forEach((row) => have.add(mgrRowKey(row))));
         UI.mgr.sel = new Set([...UI.mgr.sel].filter((k) => have.has(k)));
       }
-      if (dlvSubtab === "manager") paintPage(); // refresh selector counts + rows
-    }).catch(() => {
-      if (DATA.mgr.pendingKey !== key) return; // superseded — a newer request owns the panel
-      DATA.mgr.pendingKey = null; DATA.mgr.loading = false;
-      // A failed refresh with same-key rows still on screen isn't a blank-out:
-      // keep the stale rows visible rather than swapping them for an error row.
-      DATA.mgr.error = !staleOk;
-      if (dlvSubtab === "manager") paintManagerRows();
-    });
-    return staleOk;
+      if (!r.running) stopBundlePoll();
+      paintPage();
+      return;
+    }
+    if (r.running) { startBundlePoll(); return; }
+    DATA.bundle.status = DATA.bundle.data ? "ready" : "error";
+    DATA.bundle.error = r.error || (r.configured === false ? "unconfigured" : null);
+    stopBundlePoll();
+    paintPage();
   }
-
-  // ── Domain view live fetch: GET /domain-health?start&end&minSent&cutoff ──
-  // The /run blob already ships a live domainHealth, so the domain table has
-  // live rows on first open with NO gate; this refetch keeps it in sync when the
-  // owner changes the window/min-sent/cutoff controls (server-affecting params).
-  function dhLiveKey() {
-    const c = dhCutoffMin();
-    return "dh|" + (S.A.domainHealth.start || "") + "|" + (S.A.domainHealth.end || "") + "|" + c.minSent + "|" + c.cutoff;
-  }
-  function ensureDhLive() {
-    const key = dhLiveKey();
-    if (DATA.dh.key === key && DATA.dh.done) return;
-    if (DATA.dh.loading && DATA.dh.pendingKey === key) return;
-    DATA.dh.loading = true; DATA.dh.error = false; DATA.dh.pendingKey = key;
-    const c = dhCutoffMin();
-    const q = "domain-health?start=" + encodeURIComponent(S.A.domainHealth.start || "") +
-      "&end=" + encodeURIComponent(S.A.domainHealth.end || "") +
-      "&minSent=" + encodeURIComponent(c.minSent) + "&cutoff=" + encodeURIComponent(c.cutoff);
-    apiGet(q, { timeout: 120000 }).then((r) => {
-      // Latest-wins: the owner changed the window/min-sent/cutoff while this
-      // was in flight — a newer request owns the table; never let an older
-      // (slower) response overwrite it or be persisted via saveState().
-      if (DATA.dh.pendingKey !== key) return;
-      if (r && Array.isArray(r.rows)) {
-        S.A.domainHealth = Object.assign({}, S.A.domainHealth, {
-          rows: r.rows, resting: r.resting || {}, restingDue: r.restingDue || {},
-          start: r.start || S.A.domainHealth.start, end: r.end || S.A.domainHealth.end,
-          minSent: r.minSent != null ? r.minSent : S.A.domainHealth.minSent,
-          cutoff: r.cutoff != null ? r.cutoff : S.A.domainHealth.cutoff,
-          counts: r.counts || S.A.domainHealth.counts,
-        });
-        saveState();
+  function startBundlePoll() {
+    if (!DATA.bundle.pollStart) DATA.bundle.pollStart = Date.now();
+    if (DATA.bundle.pollTimer) return;
+    DATA.bundle.pollTimer = setInterval(() => {
+      if (Date.now() - DATA.bundle.pollStart > BUNDLE_POLL_CAP_MS) {
+        stopBundlePoll();
+        if (DATA.bundle.status !== "ready") { DATA.bundle.status = "error"; DATA.bundle.error = "timed out"; paintPage(); }
+        return;
       }
-      DATA.dh.key = key; DATA.dh.pendingKey = null; DATA.dh.done = true; DATA.dh.loading = false;
-      if (dlvSubtab === "manager" && UI.mgr.view === "domain") paintPage();
-    }).catch(() => {
-      if (DATA.dh.pendingKey !== key) return; // superseded — a newer request owns the table
-      DATA.dh.pendingKey = null; DATA.dh.loading = false; DATA.dh.error = true; DATA.dh.done = true; DATA.dh.key = key;
-    });
+      fetch("/api/deliverability/_bundle").then((x) => x.json())
+        .then(handleBundleResult).catch(() => { /* transient — next tick retries */ });
+    }, BUNDLE_POLL_MS);
+  }
+  function loadBundle() {
+    if (DATA.bundle.status === "loading" || DATA.bundle.pollTimer) return;
+    if (!isLive()) return; // sample mode derives rows from the mock roster
+    DATA.bundle.status = DATA.bundle.data ? DATA.bundle.status : "loading";
+    DATA.bundle.pollStart = null;
+    fetch("/api/deliverability/_bundle").then((r) => r.json())
+      .then(handleBundleResult)
+      .catch(() => { DATA.bundle.status = DATA.bundle.data ? "ready" : "error"; DATA.bundle.error = "network error"; paintPage(); });
+  }
+  // One silent server-side re-pull after mutating actions (debounced so a
+  // bulk run of N mailbox actions kicks a single refresh, ~2s after the last).
+  let _bundleRefreshTimer = null;
+  function scheduleBundleRefresh() {
+    if (!isLive()) return;
+    if (_bundleRefreshTimer) clearTimeout(_bundleRefreshTimer);
+    _bundleRefreshTimer = setTimeout(() => {
+      _bundleRefreshTimer = null;
+      apiPost("_bundle/refresh", { force: true }, { timeout: 20000 })
+        .then(() => { DATA.bundle.pollStart = null; startBundlePoll(); })
+        .catch(() => {});
+    }, 2000);
+  }
+  function forceBundleRefresh() {
+    apiPost("_bundle/refresh", { force: true }, { timeout: 20000 }).catch(() => {});
+    DATA.bundle.pollStart = null;
+    startBundlePoll();
+    paintManagerRows();
   }
 
   /* ============================================================
@@ -1014,7 +1024,12 @@
      4. Ephemeral UI state (not persisted — resets on reload)
      ============================================================ */
   const UI = {
-    mgr: { view: "domain", batch: "", search: "", sel: new Set(), domFilter: "resting" },
+    // flow: which of the manager's four jobs is on screen — "floor" (domains
+    // below the reply floor -> warm up), "notwarming" (warmup off), "inwarmup"
+    // (resting/warming, due-date tracked), "reconnect" (failed connections).
+    // windowDays: the floor flow's reporting window preset (7/14/30).
+    // open: expanded domain groups (keyed by domain).
+    mgr: { flow: "floor", windowDays: 7, search: "", sel: new Set(), open: new Set() },
     dh: { minSent: null, cutoff: null, start: null, end: null },
     sig: { batch: "", search: "", sel: new Set(), rows: [] },
     pn: { search: "", sel: new Set(), rows: [] },
@@ -1340,6 +1355,25 @@ label.dlv-sig-trow .dlv-sig-email{flex:1}
    "N missing · N mismatch", etc.) stay compact instead of reading as body copy. */
 .dlv-stat-plain{font-size:11.5px;color:var(--brown-400);margin-top:4px;line-height:1.3}
 .dlv-mb-cap{font-size:10.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;align-self:center}
+/* Manager rebuild (2026-07-11): four one-click flow chips replace the 8-view
+   selector; domain group rows expand to their mailboxes; min-sent/floor sit
+   behind a small "Advanced" disclosure. Colour carries severity as ever. */
+.dlv-flowchips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.dlv-flowchip{font-family:var(--font-sans);font-size:13px;font-weight:600;padding:8px 14px;border:1px solid var(--line-2);border-radius:9px;background:var(--card);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.dlv-flowchip:hover{border-color:var(--ink-3)}
+.dlv-flowchip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.dlv-flowchip-n{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--bg-sunken);color:var(--ink-2)}
+.dlv-flowchip.on .dlv-flowchip-n{background:rgba(255,255,255,.18);color:#fff}
+.dlv-flowchip.warn:not(.on) .dlv-flowchip-n{background:var(--red-bg);color:#861E10}
+.dlv-dom-row td{background:var(--bg-sunken);font-weight:500}
+.dlv-sub-row td{border-bottom-color:var(--line)}
+.dlv-sub-email{padding-left:26px;font-weight:400;color:var(--ink-2)}
+.dlv-dom-caret{background:transparent;border:0;color:var(--ink-3);cursor:pointer;font-size:12px;padding:0 6px 0 0;display:inline-block;transition:transform .15s;transform-origin:40% 50%}
+.dlv-dom-caret.open{transform:rotate(90deg)}
+.dlv-mgr-adv{display:inline-flex;align-items:center;gap:7px}
+.dlv-mgr-adv summary{font-size:11.5px;color:var(--ink-3);font-weight:600;cursor:pointer;list-style:none;padding:6px 4px;text-transform:uppercase;letter-spacing:.04em}
+.dlv-mgr-adv summary::-webkit-details-marker{display:none}
+.dlv-mgr-adv[open] summary{color:var(--ink)}
 .dlv-todo-resolved-label{font-size:11px;color:var(--ink-3);font-weight:600;margin-top:14px;margin-bottom:-2px}
 .dlv-resolved-chip{opacity:.9}
 .dlv-signpost-row{display:flex;flex-wrap:wrap;gap:16px;margin-top:10px}
@@ -2196,18 +2230,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   const DORMANT = { rows: null, loading: false, error: false };
   function invalidateDormant() { DORMANT.rows = null; DORMANT.error = false; }
   function ensureDormantLive() {
-    if (!isLive() || DORMANT.rows || DORMANT.loading || DORMANT.error) return;
-    DORMANT.loading = true;
-    apiFetch("inboxes?view=warmupoff&batch=", { timeout: 120000 }).then((r) => {
-      DORMANT.loading = false;
-      DORMANT.rows = (r && Array.isArray(r.rows)) ? r.rows : [];
-      // Free side-effect: this response carries the fleet-wide, view-independent
-      // mailbox counts + batch list — seed the manager with them so its view
-      // selector shows real numbers even before any mailbox view is opened.
-      if (r && r.counts && !(DATA.mgr && DATA.mgr.counts)) { DATA.mgr.counts = r.counts; }
-      if (r && Array.isArray(r.batches) && !(DATA.mgr && DATA.mgr.batches)) { DATA.mgr.batches = r.batches; }
-      paintPage();
-    }).catch(() => { DORMANT.loading = false; DORMANT.error = true; });
+    if (!isLive() || DORMANT.rows) return;
+    // The warmup-off roster now rides the server bundle (loaded at boot) —
+    // no dedicated backend fetch. Seeds whenever the bundle is present; a
+    // paint after the bundle lands re-runs this and fills the rows in.
+    const b = bundleData();
+    if (b && b.views && b.views.warmupoff && Array.isArray(b.views.warmupoff.rows)) {
+      DORMANT.rows = b.views.warmupoff.rows;
+    }
   }
   function dormantRows() {
     if (!DORMANT.rows) return null;
@@ -2231,6 +2261,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       } else {
         raw.push({ key: "warmup-rotation", level: "yellow", count: 0, resolved: true, text: D.flaggedTotal + " flagged domain(s) have all been moved to warm-up." });
       }
+    }
+
+    // Dynamic: warm-up rests that have reached their due-back date — the
+    // Overview flag for the manager's In warm-up flow, so a rest never
+    // quietly overstays. Deep-links straight into that flow.
+    const dueDoms = Object.keys(D.restingDue || {}).filter(
+      (dom) => (D.resting[dom] || 0) > 0 && D.restingDue[dom] && D.restingDue[dom] <= Date.now());
+    if (dueDoms.length) {
+      raw.push({ key: "restore-due", level: "yellow", count: dueDoms.length, _openManager: true, _mgrFlow: "inwarmup",
+        text: dueDoms.length + " domain(s) are due back from warm-up rest (" + dueDoms.slice(0, 3).join(", ") + (dueDoms.length > 3 ? ", …" : "") + ").",
+        action: "Open the In warm-up view and restore them so their capacity comes back online." });
     }
 
     const ord = { red: 0, yellow: 1, note: 2 };
@@ -3162,7 +3203,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         (D ? `<div class="det-block" style="margin-top:14px"><div class="h">The exact email that gets drafted</div><div class="mono">${esc(buildHypertideEmail(D))}</div></div>` : "")
       ));
     }
-    if (it._openManager) btns.push(`<button class="btn sm" data-act="open-manager">Open manager ↓</button>`);
+    if (it._openManager) btns.push(`<button class="btn sm" data-act="open-manager"${it._mgrFlow ? ` data-flow="${esc(it._mgrFlow)}"` : ""}>${it._mgrFlow === "inwarmup" ? "Open In warm-up ↓" : "Open manager ↓"}</button>`);
     if (it.reminderDue) btns.push(`<button class="btn sm" data-act="open-reminders">Reminders ↓</button>`);
     if (it.key === "warmup-notwarming" && it.count > 0) btns.push(`<button class="btn sm primary" data-act="open-warmup-fix">Enable warmup on all</button>`);
     if (it.key === "signatures") btns.push(`<button class="btn sm primary" data-act="open-sig-fix">Fix signatures…</button>`);
@@ -3345,22 +3386,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   /* ============================================================
-     15. Inbox & domain manager — 8-view selector, shared search +
-         batch dropdown, per-row + bulk actions, caps-by-reply-rate.
+     15. Inbox & domain manager — four one-click flows at DOMAIN
+         level (mailboxes grouped + expandable), 7/14/30d window
+         presets, thresholds behind an "advanced" disclosure.
      ============================================================ */
-  function mgrRowsForView(D) {
-    const A = S.A;
-    switch (UI.mgr.view) {
-      case "reconnect": return A.inboxRows.filter((r) => r.kind === "reconnect");
-      case "warmupoff": return A.inboxRows.filter((r) => r.kind === "warmupoff");
-      case "blocked": return A.inboxRows.filter((r) => r.kind === "blocked");
-      case "inwarmup": return A.inboxRows.filter((r) => r.kind === "ok" && r.cap === 0 && !r.rested);
-      case "rested": return A.inboxRows.filter((r) => r.kind === "ok" && r.rested);
-      case "sending": return A.inboxRows.filter((r) => r.kind === "ok" && r.cap > 0);
-      case "all": return A.inboxRows.slice();
-      default: return [];
-    }
-  }
+  const MGR_FLOWS = [
+    ["floor", "Below reply floor"],
+    ["notwarming", "Not warming"],
+    ["inwarmup", "In warm-up"],
+    ["reconnect", "Needs reconnect"],
+  ];
 
   // A mailbox row's stable selection key, always a string: live rows key by
   // their Smartlead account id, sample rows by a local int, and a payload
@@ -3368,104 +3403,169 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // breaks on a number-vs-string or sample-vs-live id mismatch.
   function mgrRowKey(r) { return String(r.id != null ? r.id : r.email); }
 
-  // THE one place the manager's visible mailbox row-set is computed: live rows
-  // from DATA.mgr (null while a fetch is still in flight), sample rows from
-  // mgrRowsForView(), then the same batch + search filters the table paints
-  // with. paintMailboxRows() and the select-all handler both read this, so
-  // "select all" acts on exactly the rows on screen. (Select-all previously
-  // rebuilt rows from the sample dataset even in live mode, so it selected
-  // sample ids the live table didn't contain — a phantom "16 selected" over
-  // 610 shown rows, with none of the visible checkboxes ticking.)
-  function mgrVisibleMailboxRows(opts) {
-    let rows;
+  // Mailbox rows for a mailbox-backed flow. Live rows come from the server's
+  // bundle cache (null while it's still loading — the painter shows a
+  // skeleton); sample mode derives them from the mock roster as before.
+  function rowsForFlow(flow) {
     if (isLive()) {
-      if (!(DATA.mgr.key === mgrLiveKey() && DATA.mgr.rows)) return null;
-      rows = DATA.mgr.rows.slice();
-    } else {
-      rows = mgrRowsForView(fullDerive());
+      const b = bundleData();
+      if (!b || !b.views) return null;
+      const v = (name) => (((b.views[name] || {}).rows) || []);
+      if (flow === "notwarming") return b.views.warmupoff ? v("warmupoff") : null;
+      if (flow === "reconnect") return b.views.reconnect ? v("reconnect") : null;
+      if (flow === "inwarmup") {
+        if (!b.views.inwarmup && !b.views.rested) return null;
+        const seen = new Set(), out = [];
+        v("inwarmup").concat(v("rested")).forEach((r) => {
+          const k = mgrRowKey(r);
+          if (!seen.has(k)) { seen.add(k); out.push(r); }
+        });
+        return out;
+      }
+      return [];
     }
-    if (UI.mgr.batch) rows = rows.filter((r) => (r.tags || []).includes(UI.mgr.batch));
+    const A = S.A;
+    if (flow === "notwarming") return A.inboxRows.filter((r) => r.kind === "warmupoff");
+    if (flow === "reconnect") return A.inboxRows.filter((r) => r.kind === "reconnect");
+    if (flow === "inwarmup") return A.inboxRows.filter((r) => r.kind === "ok" && (r.cap === 0 || r.rested));
+    return [];
+  }
+
+  // Whether the current flow's live view arrived truncated by the backend's
+  // 2,000-row cap — surfaced in the count line so a partial roster never
+  // silently reads as "everything".
+  function flowTruncated(flow) {
+    const b = bundleData();
+    if (!isLive() || !b || !b.views) return false;
+    const names = flow === "notwarming" ? ["warmupoff"] : flow === "reconnect" ? ["reconnect"] : flow === "inwarmup" ? ["inwarmup", "rested"] : [];
+    return names.some((n) => b.views[n] && b.views[n].truncated);
+  }
+
+  // THE one place the manager's visible mailbox row-set is computed — the
+  // painter and the select-all handler both read this, so "select all" acts
+  // on exactly the rows on screen.
+  function mgrVisibleMailboxRows(opts) {
+    let rows = rowsForFlow(UI.mgr.flow);
+    if (rows == null) return null;
+    rows = rows.slice();
     const q = (opts && opts.ignoreSearch) ? "" : (UI.mgr.search || "").trim().toLowerCase();
     if (q) rows = rows.filter((r) => (r.email || "").toLowerCase().includes(q) || (r.domain || "").toLowerCase().includes(q));
     return rows;
   }
 
-  /* Defaults the domain-filter dropdown to "Needs warm-up" whenever the domain
-     view is entered while there are actionable flagged domains, instead of
-     always landing on "resting" (which buried the discoverability of warm-up
-     work). Respects a manual pick — see the mgr-domfilter change handler,
-     which sets UI.mgr._domFilterUserSet so we never fight the user. */
-  function autoDefaultDomFilter(D) {
-    if (UI.mgr.view !== "domain" || UI.mgr._domFilterUserSet) return;
-    UI.mgr.domFilter = D.flaggedActionable > 0 ? "warmup" : "resting";
+  // Hard rule (maildoso-warmup-external): Maildoso-fleet inboxes warm
+  // externally and Smartlead warmup must NEVER be re-enabled on them from
+  // here — so in the Not warming flow they are not selectable at all (no row
+  // checkbox, skipped by select-all and the domain checkbox). The fix modal's
+  // own warning stays as the second net.
+  function mgrRowSelectable(r) {
+    return !(UI.mgr.flow === "notwarming" && r.maildoso);
   }
 
-  // Formerly a collapsible <details class="dlv-fold"> — now its own always-
-  // visible "Inbox & domain manager" tab panel (dropped the <details> wrapper,
-  // kept everything else: intro line, 8-view selector, filters, table, CSV).
-  function renderManagerPanel(D) {
-    autoDefaultDomFilter(D);
-    const isD = UI.mgr.view === "domain";
-    const mc = D.inboxCounts;
-    const dc = D.domainHealthCounts;
-    const batches = isD ? D.dhBatches : D.inboxBatches;
-    const viewSel = `<select class="dlv-select" style="width:auto" data-act="mgr-view">
-      <option value="domain" ${isD ? "selected" : ""}>Domain reply-rate · rotation (${D.flaggedActionable} flagged)</option>
-      <option value="reconnect" ${UI.mgr.view === "reconnect" ? "selected" : ""}>Connection failed · reconnect (${mc.reconnect})</option>
-      <option value="warmupoff" ${UI.mgr.view === "warmupoff" ? "selected" : ""}>Warmup off · re-enable (${mc.warmupoff})</option>
-      <option value="blocked" ${UI.mgr.view === "blocked" ? "selected" : ""}>Blocked → Hypertide (${mc.blocked})</option>
-      <option value="inwarmup" ${UI.mgr.view === "inwarmup" ? "selected" : ""}>In warmup · 0/day (${mc.inwarmup})</option>
-      <option value="rested" ${UI.mgr.view === "rested" ? "selected" : ""}>Rested by dashboard · due tracking (${mc.rested})</option>
-      <option value="sending" ${UI.mgr.view === "sending" ? "selected" : ""}>Sending · &gt;0/day (${mc.sending})</option>
-      <option value="all" ${UI.mgr.view === "all" ? "selected" : ""}>All mailboxes (${mc.total})</option>
-    </select>`;
-    const domFilter = isD ? `<select class="dlv-select" style="width:auto" data-act="mgr-domfilter">
-      <option value="resting" ${UI.mgr.domFilter === "resting" ? "selected" : ""}>Warmed up by dashboard (${dc.resting})</option>
-      <option value="warmup" ${UI.mgr.domFilter === "warmup" ? "selected" : ""}>Needs warm-up · flagged (${dc.flagged})</option>
-      <option value="maildoso" ${UI.mgr.domFilter === "maildoso" ? "selected" : ""}>Maildoso (by design)</option>
-      <option value="keep" ${UI.mgr.domFilter === "keep" ? "selected" : ""}>Keep active</option>
-      <option value="all" ${UI.mgr.domFilter === "all" ? "selected" : ""}>All domains</option>
-    </select>` : "";
-    const batchSel = `<select class="dlv-select" style="width:auto" data-act="mgr-batch"><option value="">All batches</option>${batches.map((b) => `<option value="${esc(b.name)}" ${UI.mgr.batch === b.name ? "selected" : ""}>${esc(b.name)} (${b.count})</option>`).join("")}</select>`;
+  // Domain-health rows for the selected window preset. The audit blob ships
+  // the 7-day default, so that window always paints instantly; 14/30 come
+  // from the server bundle (null while it loads → skeleton, never a refetch
+  // on the click path).
+  function dhSource() {
+    const days = UI.mgr.windowDays || 7;
+    const b = bundleData();
+    const w = b && b.dh && b.dh[String(days)];
+    if (w && Array.isArray(w.rows)) return { rows: w.rows, start: w.start, end: w.end };
+    if (days === 7 || !isLive()) return { rows: S.A.domainHealth.rows, start: S.A.domainHealth.start, end: S.A.domainHealth.end };
+    return null;
+  }
+
+  // The floor flow's row-set: current-window rows flagged below the reply
+  // floor (same dhFlag maths as always), actionable ones first. Resting
+  // domains live in the In warm-up flow, not here.
+  function floorRows(D) {
+    const src = dhSource();
+    if (!src) return null;
     const { minSent, cutoff } = dhCutoffMin();
-    // Item 4: every control in this filter row now carries a visible label —
-    // "Window:" alone left the two bare date inputs and the numeric cutoffs
-    // for the reader to decode ("from/to" what? under what?).
-    const domCtrl = isD ? `<div class="dlv-mb-bar" style="margin-bottom:8px">
-        <span class="dlv-mb-count">Window: from</span>
-        <input class="dlv-input" style="width:auto" type="date" value="${S.A.domainHealth.start}" data-act="mgr-dh-start" title="Start of the reporting window">
-        <span class="dlv-mb-count">to</span>
-        <input class="dlv-input" style="width:auto" type="date" value="${S.A.domainHealth.end}" data-act="mgr-dh-end" title="End of the reporting window">
+    return src.rows
+      .map((d) => Object.assign({}, d, { flag: dhFlag(d, minSent, cutoff) }))
+      .filter((d) => d.flag === "warmup" && !((D.resting[d.domain] || 0) > 0))
+      .sort((a, b) => a.reply_rate - b.reply_rate || b.sent - a.sent);
+  }
+
+  // Chip counts for the four flows (null = still loading).
+  function mgrFlowCounts(D) {
+    const fl = floorRows(D);
+    const nw = rowsForFlow("notwarming");
+    const iw = rowsForFlow("inwarmup");
+    const rc = rowsForFlow("reconnect");
+    const doms = (rows) => rows == null ? null : new Set(rows.map((r) => r.domain)).size;
+    return {
+      floor: fl == null ? null : fl.length,
+      notwarming: doms(nw),
+      inwarmup: doms(iw),
+      reconnect: doms(rc),
+    };
+  }
+
+  // Rebuilt 2026-07-11: rows are DOMAINS (mailboxes grouped + expandable),
+  // the from/to pickers became a Last 7/14/30 days preset, min-sent + the
+  // reply floor moved behind a small "advanced" disclosure (same flagging
+  // maths, same defaults), and the 8-view selector became four one-click
+  // flows. All data reads come from the audit blob + the server bundle —
+  // nothing on the click path round-trips the audit backend any more.
+  function renderManagerPanel(D) {
+    const flow = UI.mgr.flow;
+    const counts = mgrFlowCounts(D);
+    // Tooltips pre-empt the "Not warming vs In warm-up" mix-up: near-opposite
+    // states with similar names, so each chip says what its state MEANS.
+    const CHIP_TIPS = {
+      floor: "Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest",
+      notwarming: "Mailboxes with warmup switched OFF — nothing is rebuilding their reputation (Maildoso warms externally, by design)",
+      inwarmup: "Resting or warming on purpose, due-date tracked — restore when due",
+      reconnect: "Mailboxes whose connection failed — silently sending nothing until reconnected",
+    };
+    const chip = (id, label) => {
+      const n = counts[id];
+      const badge = n == null ? `<span class="dlv-spinner ink" style="width:10px;height:10px"></span>` : String(n);
+      return `<button class="dlv-flowchip ${flow === id ? "on" : ""} ${id === "floor" && n ? "warn" : ""}" data-act="mgr-flow" data-flow="${id}" role="tab" aria-selected="${flow === id}" title="${esc(CHIP_TIPS[id] || "")}">${label} <span class="dlv-flowchip-n">${badge}</span></button>`;
+    };
+    const chips = `<div class="dlv-flowchips" role="tablist">${MGR_FLOWS.map(([id, label]) => chip(id, label)).join("")}</div>`;
+    const { minSent, cutoff } = dhCutoffMin();
+    const src = dhSource();
+    const winSel = flow === "floor" ? `<span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" data-act="mgr-window" title="Reporting window the reply floor is judged over">
+        ${[7, 14, 30].map((d) => `<option value="${d}" ${(UI.mgr.windowDays || 7) === d ? "selected" : ""}>Last ${d} days</option>`).join("")}
+      </select>` : "";
+    // Min-sent + the reply floor keep working exactly as before, but they are
+    // background defaults now — out of the toolbar, behind one disclosure.
+    const adv = flow === "floor" ? `<details class="dlv-mgr-adv"><summary>Advanced</summary>
         <span class="dlv-mb-count">min sent</span><input class="dlv-input" style="width:78px" type="number" value="${minSent}" data-act="mgr-dh-minsent" title="Only judge domains with at least this many sends in the window">
         <span class="dlv-mb-count">flag if reply % under</span><input class="dlv-input" style="width:70px" type="number" step="0.1" value="${cutoff}" data-act="mgr-dh-cutoff" title="Domains replying below this rate get flagged for warm-up">${glossMark("Only domains with at least 'min sent' emails in the window are judged; any of them replying under the cutoff % gets flagged for warm-up rest.")}
-      </div>` : "";
-    const head = isD
-      ? `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th>`
-      : `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Mailbox</th><th>Batch</th><th style="text-align:right">Cap/day</th><th style="text-align:right">Due back</th><th>Warmup / status</th><th>Issue</th><th style="text-align:right">Action</th>`;
-    const foot = isD
-      ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">View warmup list</a> &nbsp; <a class="dlv-dl" data-act="view-data" data-file="domain-health">View full table</a></div>`
-      : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">View problem mailboxes</a></div>`;
-    // Family 5 disclosure: reconnect (bulk-reconnect / reconnect-one) — shown
-    // only while the reconnect view is active, using the real reconnect rows.
-    const reconnectRows = (S.A.inboxRows || []).filter((r) => r.kind === "reconnect");
-    const reconnectDisclose = UI.mgr.view === "reconnect" ? dlvDisclose(
-      dlvConsequences(
-        "The failed connections retry now. Reconnected inboxes resume sending on their existing schedules.",
-        "These inboxes stay disconnected and silently send nothing, so your real volume sits below what campaigns report."
-      ) +
-      dlvAffTable(["Mailbox", "Domain", "Failure reason"], reconnectRows.map((r) => [esc(r.email), esc(r.domain), esc(r.reason || r.reason_category || "")]), dlvAffLabel("inboxes", reconnectRows.length)) +
-      dlvTechFold([["Failure reasons", reconnectRows.map((r) => r.email + ": " + (r.reason_category || "") + (r.reason ? " - " + r.reason : "")).join("\n")]])
-    ) : "";
-    // Family 6 disclosure: domain reactivation / caps restore (domain-reactivate,
-    // domain-reactivate-all, domain-reactivate-recovered, bulk-reenable,
-    // caps-apply, bulk-restore) — shown in the domain view, where the
-    // "resting → reactivate" rows this family acts on actually live.
-    let reactivateDisclose = "";
-    if (isD) {
+      </details>` : "";
+    const heads = {
+      floor: `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th>`,
+      notwarming: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Domain / mailbox</th><th>Batch</th><th>Warmup</th><th style="text-align:right">Action</th>`,
+      inwarmup: `<th>Domain / mailbox</th><th style="text-align:right">Mailboxes</th><th style="text-align:right">Due back</th><th>Status</th><th style="text-align:right">Action</th>`,
+      reconnect: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Domain / mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>`,
+    };
+    const intro = {
+      floor: "Domains replying under the floor over the selected window. One click rests ALL of a domain's mailboxes (caps saved for restore). Changes confirm before applying.",
+      notwarming: "Current state (not window-based): mailboxes with warmup switched off, grouped by domain. Maildoso-managed inboxes warm externally — an inactive status there is by design.",
+      inwarmup: "Current state (not window-based): everything resting or warming, grouped by domain, with when it's due back. Restore reactivates a domain's mailboxes at their saved caps.",
+      reconnect: "Current state (not window-based): mailboxes whose connection failed, grouped by domain. Reconnect retries them; they resume on their existing schedules.",
+    };
+    // Consequence disclosures stay with the flows whose actions they explain.
+    let disclose = "";
+    if (flow === "reconnect") {
+      const reconnectRows = rowsForFlow("reconnect") || [];
+      disclose = dlvDisclose(
+        dlvConsequences(
+          "The failed connections retry now. Reconnected inboxes resume sending on their existing schedules.",
+          "These inboxes stay disconnected and silently send nothing, so your real volume sits below what campaigns report."
+        ) +
+        dlvAffTable(["Mailbox", "Domain", "Failure reason"], reconnectRows.map((r) => [esc(r.email), esc(r.domain), esc(r.reason || r.reason_category || "")]), dlvAffLabel("inboxes", reconnectRows.length)) +
+        dlvTechFold([["Failure reasons", reconnectRows.map((r) => r.email + ": " + (r.reason_category || "") + (r.reason ? " - " + r.reason : "")).join("\n")]])
+      );
+    } else if (flow === "inwarmup" || flow === "floor") {
       const restingDomains = Object.keys(D.resting || {}).filter((dom) => (D.resting[dom] || 0) > 0);
       const affRows = restingDomains.map((dom) => [esc(dom), esc((D.resting[dom] || 0) + " mailboxes"), esc((D.restingDue && D.restingDue[dom]) ? new Date(D.restingDue[dom]).toISOString().slice(0, 10) : "n/a")]);
       const savedCapLines = (S.A.inboxRows || []).filter((r) => r._savedCap != null).map((r) => r.email + ": saved cap " + r._savedCap + "/day").join("\n");
-      reactivateDisclose = dlvDisclose(
+      disclose = dlvDisclose(
         dlvConsequences(
           "Sending resumes on the selected domain(s) with their saved caps restored, so volume ramps back safely instead of jumping.",
           "The domain(s) stay paused and their capacity stays offline. Fine if you are resting them deliberately, wasted volume if not."
@@ -3474,22 +3574,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         dlvTechFold([["Saved caps", savedCapLines]])
       );
     }
+    const foot = flow === "floor"
+      ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">View warmup list</a> &nbsp; <a class="dlv-dl" data-act="view-data" data-file="domain-health">View full table</a></div>`
+      : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">View problem mailboxes</a></div>`;
+    const winNote = flow === "floor" && src ? `<span class="dlv-mb-count">${esc(src.start || "")} → ${esc(src.end || "")}</span>` : "";
     return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
-      <div class="dlv-subtab-head">${headIc("mail")}Inbox &amp; domain manager<span class="hint">${D.flaggedActionable ? D.flaggedActionable + " domain(s) need warm-up →" : ""} pause · reactivate · reconnect</span></div>
+      <div class="dlv-subtab-head">${headIc("mail")}Inbox &amp; domain manager<span class="hint">${counts.floor ? counts.floor + " domain(s) need warm-up →" : ""} warm up · restore · reconnect</span></div>
       <div class="dlv-fold-body">
-        <div class="dlv-plain" style="margin:-2px 0 12px">Rotate tired domains into warm-up rest, reconnect failed mailboxes, and adjust daily sending caps. Changes confirm before applying.</div>
-        ${domCtrl}
-        ${reconnectDisclose}
-        ${reactivateDisclose}
+        <div class="dlv-plain" style="margin:-2px 0 12px" id="dlv-mgr-intro">${intro[flow]}</div>
+        ${chips}
+        ${disclose}
         <div class="dlv-mb-bar">
-          <span class="dlv-mb-cap">View</span>${viewSel}${isD ? `<span class="dlv-mb-cap">Show</span>` : ""}${domFilter}${batchSel}
-          <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search ${isD ? "domain" : "email or domain"}…" value="${esc(UI.mgr.search)}" data-act="mgr-search">
-          <button class="btn sm" data-act="mgr-refresh" title="Re-pull the current view from Smartlead">↻ Refresh</button>
-          ${isD ? `<button class="btn sm primary" data-act="open-caps-preview" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>${glossMark("Sets each mailbox's daily send limit based on how well its domain is replying.")}` : ""}
+          ${winSel}${winNote}
+          <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search domain or mailbox…" value="${esc(UI.mgr.search)}" data-act="mgr-search">
+          <button class="btn sm" data-act="mgr-refresh" title="Re-pull manager data from Smartlead in the background">↻ Refresh</button>
+          ${flow === "floor" ? `<button class="btn sm primary" data-act="open-caps-preview" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>${glossMark("Sets each mailbox's daily send limit based on how well its domain is replying.")}` : ""}
+          ${adv}
           <span class="dlv-mb-count" id="dlv-mgr-count"></span>
           <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"></span>
         </div>
-        <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr>${head}</tr></thead><tbody id="dlv-mgr-body"></tbody></table></div></div>
+        <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr>${heads[flow]}</tr></thead><tbody id="dlv-mgr-body"></tbody></table></div></div>
         ${foot}
       </div>
     </div>`;
@@ -3498,142 +3602,186 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function paintManagerRows() {
     const body = $id("dlv-mgr-body");
     if (!body) return;
-    if (UI.mgr.view === "domain") paintDomainRows(); else paintMailboxRows();
+    if (UI.mgr.flow === "floor") paintFloorRows(); else paintGroupedRows();
   }
 
-  function paintMailboxRows() {
+  // Freshness/refreshing suffix for the count line — the bundle refreshes in
+  // the background; the table never blanks while it does.
+  function mgrFreshNote() {
+    if (!isLive()) return "";
+    if (DATA.bundle.pollTimer) return " · refreshing…";
+    return "";
+  }
+
+  // "Below reply floor" — domain rows straight from the windowed
+  // domain-health set. One button per domain rests ALL its mailboxes.
+  function paintFloorRows() {
     const body = $id("dlv-mgr-body");
     if (!body) return;
-    // Live: rows for this view+batch come from GET /inboxes (endpoint already
-    // filters by view & batch; search stays a client-side filter).
-    if (isLive() && !ensureMgrLive()) {
-      body.innerHTML = DATA.mgr.error
-        ? `<tr><td colspan="8" class="dlv-empty">Couldn't load live mailboxes — <a class="dlv-dl" data-act="mgr-refresh">retry</a>.</td></tr>`
-        : `<tr><td colspan="8" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading live mailboxes…</td></tr>`;
+    const D = fullDerive();
+    const { cutoff } = dhCutoffMin();
+    const resting = D.resting, restingDue = D.restingDue;
+    let rows = floorRows(D);
+    const cnt = $id("dlv-mgr-count");
+    if (rows == null) {
+      body.innerHTML = `<tr><td colspan="7" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading the ${UI.mgr.windowDays}-day window…</td></tr>`;
+      if (cnt) cnt.textContent = "loading…";
       const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
-      const cnt0 = $id("dlv-mgr-count"); if (cnt0) cnt0.textContent = DATA.mgr.error ? "load failed" : "loading…";
       return;
     }
-    // Prune the selection against the CURRENT view+batch row-set (ignoring the
-    // search box, so narrowing a search never drops what's already ticked):
-    // after a live refetch or dataset swap, stale keys would otherwise linger
-    // and inflate the "N selected" / bulk-button counts with rows that no
-    // longer exist on screen.
-    const inView = new Set((mgrVisibleMailboxRows({ ignoreSearch: true }) || []).map(mgrRowKey));
-    if (UI.mgr.sel.size) UI.mgr.sel = new Set([...UI.mgr.sel].filter((k) => inView.has(k)));
-    const rows = mgrVisibleMailboxRows() || [];
-    const selectable = UI.mgr.view !== "blocked";
-    const cnt = $id("dlv-mgr-count");
-    // Stale-while-revalidate hint: rows on screen are from the previous audit
-    // pass while a same-view refetch runs — say so instead of blanking them.
-    const refreshing = isLive() && DATA.mgr.loading && DATA.mgr.key !== mgrLiveKey();
-    if (cnt) cnt.textContent = rows.length + " shown" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + (refreshing ? " · refreshing…" : "");
-    const bw = $id("dlv-mgr-bulk");
-    if (bw) {
-      const n = UI.mgr.sel.size;
-      if (UI.mgr.view === "reconnect") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reconnect">Reconnect (${n})</button>`;
-      else if (UI.mgr.view === "warmupoff") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reenable">Re-enable (${n})</button>`;
-      else if (UI.mgr.view === "blocked") bw.innerHTML = "";
-      else bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-warmup">Put in warmup (${n})</button><button class="btn sm primary" ${n ? "" : "disabled"} data-act="bulk-restore">Restore sending (${n})</button>`;
-    }
-    body.innerHTML = rows.map((r) => {
-      const key = mgrRowKey(r);
-      const ck = selectable ? `<td class="ck"><input type="checkbox" ${UI.mgr.sel.has(key) ? "checked" : ""} data-act="mgr-row-select" data-id="${esc(key)}"></td>` : `<td class="ck"></td>`;
-      const capCell = r.cap === 0 ? `<span class="dlv-tag inactive">0 · warmup</span>` : `<b>${r.cap}</b>/day`;
-      const rested = r.rested ? ` <span class="dlv-tag md">rested</span>` : "";
-      let dueCell = `<span class="dlv-mb-dom">—</span>`;
-      if (r.restedAt) { const left = (r.restedAt + 7 * 864e5) - Date.now(); if (left <= 0) dueCell = `<span class="dlv-tag blocked">due now</span>`; else { const dl = Math.ceil(left / 864e5); dueCell = `<span class="${dl <= 2 ? "dlv-tag inactive" : "dlv-mb-dom"}">in ${dl}d</span>`; } }
-      let st;
-      if (r.kind === "blocked") st = `<span class="dlv-tag blocked">blocked</span>`;
-      else if (r.kind === "reconnect") st = `<span class="dlv-tag blocked">${esc(r.reason_category || "conn fail")}</span>`;
-      else if (r.kind === "warmupoff") st = `<span class="dlv-tag inactive">warmup off</span>`;
-      else st = esc(r.warmup_status);
-      if (r.maildoso) st += ` <span class="dlv-tag md">Maildoso</span>`;
-      let action;
-      if (r.kind === "blocked") action = `<span class="dlv-mb-dom">${esc(r.reason_category || "hosting")} → Hypertide</span>`;
-      else if (r.kind === "reconnect") action = `<button class="btn sm" data-act="reconnect-one" data-id="${esc(key)}">Reconnect</button>`;
-      else if (r.kind === "warmupoff") action = `<button class="btn sm" data-act="reenable-one" data-id="${esc(key)}">Re-enable</button>`;
-      else action = "";
-      return `<tr id="dlv-mb-${esc(key)}">${ck}
-        <td><div class="dlv-mb-email">${esc(r.email)}</div><div class="dlv-mb-dom">${esc(r.domain)}</div></td>
-        <td><div class="dlv-mb-dom">${(r.tags || []).slice(0, 2).join(" · ")}</div></td>
-        <td style="text-align:right">${capCell}${rested}</td>
-        <td style="text-align:right">${dueCell}</td>
-        <td>${st}</td>
-        <td><div class="dlv-mb-reason" title="${esc(r.reason)}">${glossify(r.reason || "")}</div></td>
-        <td style="text-align:right">${action}</td>
-      </tr>`;
-    }).join("") || `<tr><td colspan="8" class="dlv-empty">No mailboxes in this view</td></tr>`;
-    const selAll = document.querySelector('[data-act="mgr-select-all"]');
-    if (selAll) { const keys = rows.map(mgrRowKey); selAll.checked = selectable && keys.length > 0 && keys.every((k) => UI.mgr.sel.has(k)); selAll.style.visibility = selectable ? "visible" : "hidden"; }
-  }
-
-  function paintDomainRows() {
-    const body = $id("dlv-mgr-body");
-    // Live: the /run blob already seeded a live domainHealth, so render current
-    // rows immediately; ensureDhLive() refetches (non-blocking) only when the
-    // window / min-sent / cutoff controls change the query key, then repaints.
-    if (isLive()) ensureDhLive();
-    const D = fullDerive();
-    const { minSent, cutoff } = dhCutoffMin();
-    const resting = D.resting, restingDue = D.restingDue;
-    let rows = D.dhRows.slice();
-    rows.sort((a, b) => (a.flag === "warmup" ? 0 : 1) - (b.flag === "warmup" ? 0 : 1) || a.reply_rate - b.reply_rate || b.sent - a.sent);
-    const f = UI.mgr.domFilter;
-    if (f === "resting") {
-      const have = new Set(rows.map((d) => d.domain));
-      Object.keys(resting).forEach((dom) => {
-        if ((resting[dom] || 0) > 0 && !have.has(dom))
-          rows = rows.concat([{ domain: dom, sent: 0, lead: 0, replied: 0, reply_rate: 0, positive: 0, positive_rate: 0, bounced: 0, bounce_rate: 0, maildoso: false, batches: [], flag: "ok" }]);
-      });
-    }
-    rows = rows.filter((d) => {
-      if (f === "warmup") return d.flag === "warmup";
-      if (f === "resting") return (resting[d.domain] || 0) > 0; // resting domains send ~nothing — a volume gate here hid every one of them
-      if (f === "maildoso") return d.flag === "maildoso";
-      if (f === "keep") return d.sent >= minSent && d.flag !== "warmup" && d.flag !== "maildoso";
-      return true;
-    });
-    if (f === "resting") rows.sort((a, b) => (restingDue[a.domain] || 0) - (restingDue[b.domain] || 0));
     const q = (UI.mgr.search || "").trim().toLowerCase();
     if (q) rows = rows.filter((d) => d.domain.toLowerCase().includes(q));
-    if (UI.mgr.batch) rows = rows.filter((d) => (d.batches || []).includes(UI.mgr.batch));
     const recovered = D.recovered;
     window._dlvRecovered = recovered;
-    const cnt = $id("dlv-mgr-count");
-    if (f === "resting") cnt.innerHTML = rows.length + " resting — paused by the dashboard, due-date tracked" + (recovered.length ? ` · <b style="color:var(--green)">${recovered.length} recovered — ready to reactivate</b>` : "");
-    else cnt.textContent = rows.length + " shown · " + D.flaggedActionable + " to warm up" + (D.restingCount ? " · " + D.restingCount + " resting fleet-wide" : "");
+    // The count line names the exact verdict maths — floor %, min-sent gate,
+    // window — so the number that produced the flags is never hidden away.
+    const { minSent } = dhCutoffMin();
+    if (cnt) cnt.textContent = rows.length + " below the " + cutoff + "% floor · min " + minSent + " sent · last " + (UI.mgr.windowDays || 7) + " days" + (D.restingCount ? " · " + D.restingCount + " resting fleet-wide" : "") + mgrFreshNote();
     const bulk = $id("dlv-mgr-bulk");
     if (bulk) {
       let b = "";
-      if (f === "resting" && recovered.length) b += `<button class="btn sm" style="background:var(--green);color:#fff;border-color:var(--green)" data-act="domain-reactivate-recovered">Reactivate recovered (${recovered.length})</button>`;
-      if (D.flaggedActionable) b += `<button class="btn sm" data-act="domain-bulk-flagged">Move all flagged (${D.flaggedActionable})</button>`;
-      if (D.restingCount) b += `<button class="btn sm primary" data-act="domain-reactivate-all">Reactivate all (${D.restingCount})</button>`;
+      if (rows.length > 1) b += `<button class="btn sm" data-act="domain-bulk-flagged">Warm up all (${rows.length})</button>`;
+      if (recovered.length) b += `<button class="btn sm" style="background:var(--green);color:#fff;border-color:var(--green)" data-act="domain-reactivate-recovered">Reactivate recovered (${recovered.length})</button>`;
       bulk.innerHTML = b;
     }
     const isRec = (d) => d.sent > 0 && d.reply_rate >= cutoff;
+    // Blast radius up front: how many mailboxes "Warm up domain" would rest,
+    // from the bundle's fleet-wide per-domain counts (Supabase mirror).
+    const nb = (bundleData() && bundleData().domainBoxes) || {};
     body.innerHTML = rows.map((d) => {
       const rr = d.reply_rate.toFixed(2) + "%";
       const brHot = d.bounce_rate >= 3 ? ' style="color:var(--red);font-weight:700"' : "";
-      const rrCol = d.flag === "warmup" ? "color:var(--red);font-weight:700" : (d.reply_rate >= 1 ? "color:var(--green);font-weight:700" : "");
       const restN = resting[d.domain] || 0;
+      const boxN = nb[(d.domain || "").toLowerCase()];
       let action;
       if (restN > 0) {
         const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive">resting (${restN})</span>${blDueChip(restingDue[d.domain])}`;
         action = pill + ` <button class="btn sm" data-act="domain-reactivate" data-domain="${esc(d.domain)}">Reactivate</button>`;
-      } else if (d.flag === "maildoso") action = `<span class="dlv-tag md">Maildoso · warming</span>`;
-      else if (d.flag === "warmup") action = `<button class="btn sm" data-act="domain-warmup" data-domain="${esc(d.domain)}">Warm up</button>`;
-      else if (d.flag === "watch") action = `<span class="dlv-tag inactive">watch</span>`;
-      else action = `<span class="dlv-tag ok">keep</span>`;
-      return `<tr><td><div class="dlv-mb-email">${esc(d.domain)}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
+      } else action = `<button class="btn sm" data-act="domain-warmup" data-domain="${esc(d.domain)}"${boxN ? ` title="Rests all ${boxN} mailboxes on ${esc(d.domain)}"` : ""}>Warm up domain</button>`;
+      return `<tr><td><div class="dlv-mb-email">${esc(d.domain)}${boxN ? ` <span class="dlv-mb-dom">· ${boxN} mbx</span>` : ""}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
         <td style="text-align:right">${d.sent}</td>
         <td style="text-align:right">${d.lead}</td>
-        <td style="text-align:right;${rrCol}">${rr} <span class="dlv-mb-dom">(${d.replied})</span></td>
+        <td style="text-align:right;color:var(--red);font-weight:700">${rr} <span class="dlv-mb-dom">(${d.replied})</span></td>
         <td style="text-align:right">${d.positive_rate.toFixed(2)}%</td>
         <td style="text-align:right"${brHot}>${d.bounce_rate.toFixed(2)}%</td>
         <td style="text-align:right">${action}</td>
       </tr>`;
-    }).join("") || `<tr><td colspan="7" class="dlv-empty">No domains in this view</td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="dlv-empty">✓ No domains below the ${cutoff}% reply floor in the last ${UI.mgr.windowDays} days</td></tr>`;
+  }
+
+  // Shared painter for the three mailbox-backed flows — rows grouped by
+  // DOMAIN, expandable to the individual mailboxes underneath.
+  function paintGroupedRows() {
+    const body = $id("dlv-mgr-body");
+    if (!body) return;
+    const flow = UI.mgr.flow;
+    const cols = flow === "inwarmup" ? 5 : flow === "reconnect" ? 4 : 5;
+    const cnt = $id("dlv-mgr-count");
+    const all = mgrVisibleMailboxRows();
+    if (all == null) {
+      body.innerHTML = `<tr><td colspan="${cols}" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading manager data…</td></tr>`;
+      if (cnt) cnt.textContent = "loading…";
+      const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
+      return;
+    }
+    // Compat: the bulk handlers resolve selected keys to live rows via
+    // DATA.mgr.rows — keep it pointing at the current flow's full row-set.
+    DATA.mgr.rows = rowsForFlow(flow) || [];
+    // Prune selection to rows in this flow (ignoring search, so narrowing a
+    // search never drops what's already ticked).
+    const inView = new Set((mgrVisibleMailboxRows({ ignoreSearch: true }) || []).map(mgrRowKey));
+    if (UI.mgr.sel.size) UI.mgr.sel = new Set([...UI.mgr.sel].filter((k) => inView.has(k)));
+    const D = fullDerive();
+    const resting = D.resting, restingDue = D.restingDue;
+    // Group by domain.
+    const groups = new Map();
+    all.forEach((r) => {
+      const g = groups.get(r.domain);
+      if (g) g.push(r); else groups.set(r.domain, [r]);
+    });
+    const domDue = (dom, rows) => {
+      if (restingDue[dom]) return restingDue[dom];
+      const ts = rows.map((r) => r.restedAt ? r.restedAt + 7 * 864e5 : null).filter(Boolean);
+      return ts.length ? Math.min(...ts) : null;
+    };
+    let doms = [...groups.keys()];
+    const isMd = (dom) => groups.get(dom).some((r) => r.maildoso);
+    if (flow === "inwarmup") doms.sort((a, b) => (domDue(a, groups.get(a)) || Infinity) - (domDue(b, groups.get(b)) || Infinity));
+    // Maildoso-by-design groups sink to the bottom of Not warming — the
+    // actionable problems come first, the expected-external ones last.
+    else if (flow === "notwarming") doms.sort((a, b) => (isMd(a) ? 1 : 0) - (isMd(b) ? 1 : 0) || groups.get(b).length - groups.get(a).length || a.localeCompare(b));
+    else doms.sort((a, b) => groups.get(b).length - groups.get(a).length || a.localeCompare(b));
+    const selectable = flow !== "inwarmup";
+    const truncNote = flowTruncated(flow) ? " · first 2,000 mailboxes shown" : "";
+    if (cnt) cnt.textContent = doms.length + " domain(s) · " + all.length + " mailbox(es)" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + truncNote + mgrFreshNote();
+    const bw = $id("dlv-mgr-bulk");
+    if (bw) {
+      const n = UI.mgr.sel.size;
+      if (flow === "reconnect") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reconnect">Reconnect (${n})</button>`;
+      else if (flow === "notwarming") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reenable">Re-enable (${n})</button>`;
+      else {
+        // Mirrors the Overview "due back" flag: whenever anything is due,
+        // one button restores all of it (each domain named in the confirm).
+        const dueN = doms.filter((dom) => { const t = domDue(dom, groups.get(dom)); return t && t <= Date.now(); }).length;
+        bw.innerHTML = dueN ? `<button class="btn sm primary" data-act="domain-restore-due">Restore all due (${dueN})</button>` : "";
+      }
+    }
+    const html = doms.map((dom) => {
+      const rows = groups.get(dom);
+      const keys = rows.map(mgrRowKey);
+      const open = UI.mgr.open.has(dom) || !!(UI.mgr.search || "").trim();
+      const caret = `<button class="dlv-dom-caret ${open ? "open" : ""}" data-act="mgr-dom-toggle" data-domain="${esc(dom)}" title="${open ? "Collapse" : "Show"} mailboxes" aria-expanded="${open}">▸</button>`;
+      const selRows = rows.filter(mgrRowSelectable);
+      const selKeys = selRows.map(mgrRowKey);
+      const allSel = selKeys.length > 0 && selKeys.every((k) => UI.mgr.sel.has(k));
+      const ck = selectable ? `<td class="ck">${selKeys.length ? `<input type="checkbox" ${allSel ? "checked" : ""} data-act="mgr-dom-select" data-domain="${esc(dom)}" title="Select all ${selKeys.length} mailboxes on ${esc(dom)}">` : ""}</td>` : "";
+      const maildoso = rows.some((r) => r.maildoso);
+      const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${rows.length} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}</div></td>`;
+      let mid = "", action = "";
+      if (flow === "notwarming") {
+        const batches = [...new Set(rows.flatMap((r) => r.tags || []))].slice(0, 3);
+        mid = `<td><div class="dlv-mb-dom">${batches.join(" · ")}</div></td><td><span class="dlv-tag inactive">warmup off</span>${maildoso ? ` <span class="dlv-mb-dom">external — by design</span>` : ""}</td>`;
+        action = maildoso ? `<span class="dlv-mb-dom">no action</span>` : `<button class="btn sm" data-act="open-warmup-fix">Re-enable…</button>`;
+      } else if (flow === "inwarmup") {
+        const due = domDue(dom, rows);
+        const restedN = rows.filter((r) => r.rested).length;
+        const restStart = rows.map((r) => r.restedAt).filter(Boolean).sort()[0];
+        const dueTitle = restStart ? ` title="Rest started ${new Date(restStart).toISOString().slice(0, 10)}; due back = rest start + 7 days"` : "";
+        mid = `<td style="text-align:right">${rows.length}</td><td style="text-align:right"${dueTitle}>${due ? blDueChip(due) : `<span class="dlv-mb-dom">—</span>`}</td>
+          <td>${restedN ? `<span class="dlv-tag inactive">rested (${restedN})</span>` : ""}${rows.length - restedN ? ` <span class="dlv-tag md">warming (${rows.length - restedN})</span>` : ""}</td>`;
+        action = (resting[dom] || 0) > 0 || restedN > 0
+          ? `<button class="btn sm primary" data-act="domain-reactivate" data-domain="${esc(dom)}">Restore</button>`
+          : `<span class="dlv-mb-dom">warming</span>`;
+      } else { // reconnect
+        const reasons = [...new Set(rows.map((r) => r.reason_category || "conn fail"))].slice(0, 2);
+        mid = `<td><span class="dlv-tag blocked">${esc(reasons.join(" · "))}</span></td>`;
+        action = `<button class="btn sm" data-act="mgr-dom-reconnect" data-domain="${esc(dom)}">Reconnect all</button>`;
+      }
+      const domRow = `<tr class="dlv-dom-row">${ck}${name}${mid}<td style="text-align:right">${action}</td></tr>`;
+      if (!open) return domRow;
+      const sub = rows.map((r) => {
+        const key = mgrRowKey(r);
+        const sck = selectable ? `<td class="ck">${mgrRowSelectable(r) ? `<input type="checkbox" ${UI.mgr.sel.has(key) ? "checked" : ""} data-act="mgr-row-select" data-id="${esc(key)}">` : ""}</td>` : "";
+        let smid = "", sact = "";
+        if (flow === "notwarming") {
+          smid = `<td><div class="dlv-mb-dom">${(r.tags || []).slice(0, 2).join(" · ")}</div></td><td><span class="dlv-mb-dom">${esc(r.warmup_status || "INACTIVE")}</span></td>`;
+          sact = r.maildoso ? "" : `<button class="btn sm" data-act="reenable-one" data-id="${esc(key)}">Re-enable</button>`;
+        } else if (flow === "inwarmup") {
+          let dueCell = `<span class="dlv-mb-dom">—</span>`;
+          if (r.restedAt) { const left = (r.restedAt + 7 * 864e5) - Date.now(); dueCell = left <= 0 ? `<span class="dlv-tag blocked">due now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`; }
+          smid = `<td style="text-align:right"><span class="dlv-mb-dom">${r.cap === 0 ? "0/day" : r.cap + "/day"}</span></td><td style="text-align:right">${dueCell}</td><td><span class="dlv-mb-dom">${r.rested ? "rested" : esc(r.warmup_status || "warming")}</span></td>`;
+          sact = "";
+        } else {
+          smid = `<td><div class="dlv-mb-reason" title="${esc(r.reason)}">${glossify(r.reason || r.reason_category || "")}</div></td>`;
+          sact = `<button class="btn sm" data-act="reconnect-one" data-id="${esc(key)}">Reconnect</button>`;
+        }
+        return `<tr class="dlv-sub-row" id="dlv-mb-${esc(key)}">${sck}<td><div class="dlv-mb-email dlv-sub-email">${esc(r.email)}</div></td>${smid}<td style="text-align:right">${sact}</td></tr>`;
+      }).join("");
+      return domRow + sub;
+    }).join("");
+    body.innerHTML = html || `<tr><td colspan="${cols}" class="dlv-empty">✓ Nothing needs attention in this view</td></tr>`;
+    const selAll = document.querySelector('[data-act="mgr-select-all"]');
+    if (selAll) { const keys = all.filter(mgrRowSelectable).map(mgrRowKey); selAll.checked = selectable && keys.length > 0 && keys.every((k) => UI.mgr.sel.has(k)); selAll.style.visibility = selectable ? "visible" : "hidden"; }
   }
 
   /* ============================================================
@@ -6078,7 +6226,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
      27. Domain-health rotation actions
      ============================================================ */
   async function domainWarmup(domain, btn) {
-    const ok = await dlvConfirm("Move " + domain + " to warmup?\n\n• Sets sending capacity to 0 for all its mailboxes\n• Warmup keeps running\n• Current caps are saved so Reactivate restores them\n\nProceed?", { title: "Move to warmup" });
+    const _nb = (bundleData() && bundleData().domainBoxes) || {};
+    const _boxN = _nb[(domain || "").toLowerCase()];
+    const ok = await dlvConfirm("Move " + domain + " to warmup?\n\n• Sets sending capacity to 0 for " + (_boxN ? "all " + _boxN + " of its mailboxes" : "all its mailboxes") + "\n• Warmup keeps running\n• Current caps are saved so Reactivate restores them\n\nProceed?", { title: "Move to warmup" });
     if (!ok) return;
     let mailboxes;
     if (isLive()) {
@@ -6132,10 +6282,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
   async function domainBulkFlagged(btn) {
     const D = fullDerive();
-    const { minSent, cutoff } = dhCutoffMin();
-    const domains = D.dhRows.filter((d) => d.flag === "warmup" && !(D.resting[d.domain] > 0)).map((d) => d.domain);
+    // Acts on exactly the row-set the floor table shows — the flagged domains
+    // of the SELECTED window preset AND the current search filter, so the
+    // button's count and the action's blast radius can never disagree.
+    let _fr = floorRows(D) || [];
+    const _q = (UI.mgr.search || "").trim().toLowerCase();
+    if (_q) _fr = _fr.filter((d) => d.domain.toLowerCase().includes(_q));
+    const domains = _fr.map((d) => d.domain);
     if (!domains.length) { toast("No flagged domains", "err"); return; }
-    const ok = await dlvConfirm("Move ALL " + domains.length + " flagged domains to warmup?\n\n• Sets sending capacity to 0 for every mailbox on these domains\n• Warmup keeps running; saved caps let you Reactivate later\n\nProceed?", { title: "Move all flagged", yesLabel: "Move " + domains.length });
+    const _list = domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "");
+    const ok = await dlvConfirm("Move ALL " + domains.length + " flagged domains to warmup?\n\n  " + _list + "\n\n• Sets sending capacity to 0 for every mailbox on these domains\n• Warmup keeps running; saved caps let you Reactivate later\n\nProceed?", { title: "Move all flagged", yesLabel: "Move " + domains.length });
     if (!ok) return;
     let paused = 0;
     if (isLive()) {
@@ -6164,6 +6320,49 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     toast("Moved " + domains.length + " flagged domain(s) to warm-up — " + paused + " mailbox(es) resting, due back in 7d", "ok");
     paintPage();
   }
+  // "Restore all due" — the In warm-up flow's bulk: reactivates exactly the
+  // domains whose due-back date has arrived, naming each one in the confirm.
+  async function domainRestoreDue(btn) {
+    const D = fullDerive();
+    const now = Date.now();
+    const domains = Object.keys(D.resting).filter((dom) => (D.resting[dom] || 0) > 0 && D.restingDue[dom] && D.restingDue[dom] <= now);
+    if (!domains.length) { toast("Nothing due for restore", "err"); return; }
+    const ok = await dlvConfirm("Restore the " + domains.length + " domain(s) due back from warm-up?\n\n  " + domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "") + "\n\nRestores each mailbox to its saved daily cap and resumes sending.\n\nProceed?", { title: "Restore all due", yesLabel: "Restore " + domains.length });
+    if (!ok) return;
+    let resumed = 0;
+    if (isLive()) {
+      // Same per-domain warmup-resume call the row-level Restore uses — no
+      // assumptions about CSV support on the backend; failures name the domain.
+      const orig = btn ? btn.innerHTML : null;
+      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="dlv-spinner"></span> Restoring…'; }
+      const failed = [];
+      for (const domain of domains) {
+        try {
+          const j = await apiPost("warmup-resume?domain=" + encodeURIComponent(domain), null, { timeout: 60000 });
+          if (j && j.error) { failed.push(domain); continue; }
+          resumed += (j && j.resumed) || 0;
+          delete S.A.domainHealth.resting[domain];
+          delete S.A.domainHealth.restingDue[domain];
+        } catch (e) { failed.push(domain); }
+      }
+      if (btn) { btn.disabled = false; if (orig != null) btn.innerHTML = orig; }
+      invalidateMgrDh();
+      if (failed.length) toast("Restore failed for " + failed.join(", ") + " — safe to retry", "err");
+    } else {
+      domains.forEach((domain) => {
+        const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
+        mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
+        resumed += S.A.domainHealth.resting[domain] || mbx.length;
+        delete S.A.domainHealth.resting[domain];
+        delete S.A.domainHealth.restingDue[domain];
+      });
+    }
+    logAction({ action: "warmup_resume", mailboxes: resumed, domains: domains.length, scope: "due restore" });
+    saveState();
+    toast("Restored " + resumed + " mailbox(es) across " + domains.length + " domain(s)", "ok");
+    paintPage();
+  }
+
   async function domainReactivateAll(btn) {
     const D = fullDerive();
     const domains = Object.keys(D.resting);
@@ -7005,9 +7204,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // link, the warm-up to-do's "Open manager ↓", the Warmup tile's fix-link,
     // and the Fleet-tiles signpost row all land here the same way).
     if (act === "open-manager") { runAct(act, () => {
-      UI.mgr.view = "domain";
-      UI.mgr.domFilter = "warmup";
-      UI.mgr._domFilterUserSet = true; // honour this deliberate reset over autoDefault
+      // Deep links may name the flow they mean (restore-due → "inwarmup");
+      // default stays the warm-up work ("floor").
+      UI.mgr.flow = (t.dataset.flow && MGR_FLOWS.some(([id]) => id === t.dataset.flow)) ? t.dataset.flow : "floor";
+      UI.mgr.search = "";
       gotoSubtab("manager", "dlv-fold-manager");
     }); return; }
     // Rewired: "Restore reminders" is now its own sub-tab (the to-do card's
@@ -7086,18 +7286,38 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "dl-toggle") { runAct(act, () => delistToggle(t.dataset.domain, t.dataset.done === "1")); return; }
     if (act === "mgr-refresh") { runAct(act, () => {
       if (isLive()) {
-        // Drop the per-panel live caches so the current view re-pulls fresh.
-        DATA.mgr.key = null; DATA.mgr.rows = null; DATA.mgr.counts = null; DATA.mgr.batches = null;
-        DATA.dh.key = null; DATA.dh.done = false;
-        toast("Re-pulling live from Smartlead…", "");
-        paintPage();
+        // Kick a server-side bundle re-pull; the table keeps showing the
+        // current rows (with a "refreshing…" note) until fresh ones land.
+        toast("Re-pulling live from Smartlead in the background…", "");
+        forceBundleRefresh();
       } else {
         toast("Refreshed (mock) from Smartlead", "ok");
         paintPage();
       }
     }); return; }
+    // Flow chips — pure re-render off cached data, never a fetch.
+    if (act === "mgr-flow") { runAct(act, () => {
+      const id = t.dataset.flow;
+      if (!MGR_FLOWS.some(([f]) => f === id) || UI.mgr.flow === id) return;
+      UI.mgr.flow = id; UI.mgr.sel = new Set(); UI.mgr.open = new Set();
+      paintPage();
+    }); return; }
+    if (act === "mgr-dom-toggle") { runAct(act, () => {
+      const dom = t.dataset.domain;
+      if (UI.mgr.open.has(dom)) UI.mgr.open.delete(dom); else UI.mgr.open.add(dom);
+      paintManagerRows();
+    }); return; }
+    // "Reconnect all" on a domain group = select its mailboxes, then the same
+    // bulk-reconnect path (confirm modal included) the toolbar button uses.
+    if (act === "mgr-dom-reconnect") { runAct(act, () => {
+      const dom = t.dataset.domain;
+      (rowsForFlow("reconnect") || []).filter((r) => r.domain === dom).forEach((r) => UI.mgr.sel.add(mgrRowKey(r)));
+      paintManagerRows();
+      bulkAction("reconnect", t);
+    }); return; }
     if (act === "domain-warmup") { runAct(act, () => domainWarmup(t.dataset.domain, t)); return; }
     if (act === "domain-reactivate") { runAct(act, () => domainReactivate(t.dataset.domain, t)); return; }
+    if (act === "domain-restore-due") { runAct(act, () => domainRestoreDue(t)); return; }
     if (act === "domain-bulk-flagged") { runAct(act, () => domainBulkFlagged(t)); return; }
     if (act === "domain-reactivate-all") { runAct(act, () => domainReactivateAll(t)); return; }
     if (act === "domain-reactivate-recovered") { runAct(act, () => domainReactivateRecovered(t)); return; }
@@ -7128,16 +7348,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
   }
   function dispatchDlvChange(t, act) {
-    if (act === "mgr-view") { UI.mgr.view = t.value; UI.mgr.sel = new Set(); UI.mgr.search = ""; paintPage(); return; }
-    if (act === "mgr-domfilter") { UI.mgr.domFilter = t.value; UI.mgr._domFilterUserSet = true; paintManagerRows(); return; }
-    if (act === "mgr-batch") { UI.mgr.batch = t.value; UI.mgr.sel = new Set(); paintManagerRows(); return; }
-    if (act === "mgr-dh-start") { S.A.domainHealth.start = t.value; saveState(); dhDebouncedPaint(); return; }
-    if (act === "mgr-dh-end") { S.A.domainHealth.end = t.value; saveState(); dhDebouncedPaint(); return; }
+    // Window preset (Last 7/14/30 days) — a pure re-render off the cached
+    // bundle; nothing on this click path talks to the backend.
+    if (act === "mgr-window") { UI.mgr.windowDays = Number(t.value) || 7; paintManagerRows(); return; }
+    if (act === "mgr-dom-select") {
+      const dom = t.dataset.domain;
+      const rows = (rowsForFlow(UI.mgr.flow) || []).filter((r) => r.domain === dom && mgrRowSelectable(r));
+      if (t.checked) rows.forEach((r) => UI.mgr.sel.add(mgrRowKey(r))); else rows.forEach((r) => UI.mgr.sel.delete(mgrRowKey(r)));
+      paintManagerRows();
+      return;
+    }
     if (act === "mgr-select-all") {
       // Selects exactly the rows on screen — the same live-aware, filtered
-      // row-set paintMailboxRows() renders (this used to rebuild rows from the
-      // sample dataset, so in live mode it ticked ids the table didn't show).
-      const rows = mgrVisibleMailboxRows() || [];
+      // row-set the painter renders — minus rows the hard rules exclude
+      // (Maildoso in Not warming).
+      const rows = (mgrVisibleMailboxRows() || []).filter(mgrRowSelectable);
       if (t.checked) rows.forEach((r) => UI.mgr.sel.add(mgrRowKey(r))); else rows.forEach((r) => UI.mgr.sel.delete(mgrRowKey(r)));
       paintManagerRows();
       return;
