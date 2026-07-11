@@ -625,12 +625,20 @@
       return;
     }
     DATA.booting = true;
-    // Fast first paint: the cached-audit GET is served from the app server's
-    // memory/Supabase in milliseconds, while the campaigns probe round-trips
-    // to the audit backend (seconds, plus a retry path). Fire the audit read
-    // NOW instead of gating the page's data on the probe — its own response
-    // carries `configured`, so it safely resolves live/no-data by itself.
+    // Fast first paint: the cached-audit and cached-bundle GETs are served
+    // from the app server's memory/Supabase in milliseconds, while the
+    // campaigns probe round-trips to the audit backend (seconds, plus a
+    // retry path). Fire ALL the data reads NOW instead of gating them on the
+    // probe — each response carries `configured`, so each safely resolves
+    // live/no-data by itself; the probe only settles DATA.mode.
     loadAudit();
+    loadBundle(true); // force past the isLive() gate — mode isn't probed yet
+    apiGet("reminders", { timeout: 20000 }).then((rem) => {
+      // DATA.liveReminders: kept so a blob application (mapRunBlob) that
+      // rebuilds S.A can restore the live reminders even when the blob
+      // itself doesn't carry them.
+      if (Array.isArray(rem) && S.A) { DATA.liveReminders = rem; S.A.reminders = rem; saveState(); paintPage(); }
+    }).catch(() => {});
     try {
       await apiGet("campaigns", { timeout: 20000 }); // config probe (light)
       DATA.mode = "live";
@@ -651,20 +659,15 @@
     DATA.booting = false;
     try { sessionStorage.setItem("dlv_data_mode", DATA.mode); } catch (e) {}
     if (isLive()) {
-      // Cheap live wins first: reminders paint before the cached/pending audit resolves.
-      apiGet("reminders", { timeout: 20000 }).then((rem) => {
-        // DATA.liveReminders: kept so a blob application (mapRunBlob) that
-        // rebuilds S.A can restore the live reminders even when the blob
-        // itself doesn't carry them.
-        if (Array.isArray(rem)) { DATA.liveReminders = rem; S.A.reminders = rem; saveState(); paintPage(); }
-      }).catch(() => {});
+      // reminders/audit/bundle are already in flight from the pre-probe
+      // block above; these calls are idempotent no-op guards / repaints.
       if (S.A && S.A._live) {
         const age = Date.now() - (S.A._liveLoadedAt || 0);
         if (age > AUDIT_CLIENT_STALE_MS) loadAudit(); else paintPage();
       } else {
         loadAudit();
       }
-      loadBundle(); // manager views + dh windows, served from the server cache
+      loadBundle(); // no-ops while the pre-probe fetch is still loading
     } else {
       paintPage(); // surface the sample-data banner
     }
@@ -851,7 +854,10 @@
         Object.keys(views).forEach((k) => ((views[k] || {}).rows || []).forEach((row) => have.add(mgrRowKey(row))));
         UI.mgr.sel = new Set([...UI.mgr.sel].filter((k) => have.has(k)));
       }
-      if (!r.running) stopBundlePoll();
+      // A user landing INSIDE a refresh window must keep polling until the
+      // fresh bundle lands (this used to paint the stale copy and stop —
+      // fresh data never arrived in-session).
+      if (r.running) startBundlePoll(); else stopBundlePoll();
       paintPage();
       return;
     }
@@ -874,9 +880,11 @@
         .then(handleBundleResult).catch(() => { /* transient — next tick retries */ });
     }, BUNDLE_POLL_MS);
   }
-  function loadBundle() {
+  function loadBundle(force) {
     if (DATA.bundle.status === "loading" || DATA.bundle.pollTimer) return;
-    if (!isLive()) return; // sample mode derives rows from the mock roster
+    if (!force && !isLive()) return; // sample mode derives rows from the mock roster
+    // (force: boot fires this BEFORE the mode probe settles — the response's
+    // own `configured` field routes unconfigured servers to the error state)
     DATA.bundle.status = DATA.bundle.data ? DATA.bundle.status : "loading";
     DATA.bundle.pollStart = null;
     fetch("/api/deliverability/_bundle").then((r) => r.json())

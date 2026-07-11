@@ -731,6 +731,28 @@ def sb(method: str, path: str, body=None, prefer: str = "", headers: dict | None
     return None
 
 
+def sb_count(path: str):
+    """Row count for `path` via PostgREST's count header — transfers ~100B
+    instead of the rows. Returns int or None on any failure."""
+    url = KEYS.get("SUPABASE_URL")
+    key = KEYS.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        return None
+    req = urllib.request.Request(f"{url}/rest/v1/{path}", method="GET")
+    req.add_header("apikey", key)
+    req.add_header("Authorization", f"Bearer {key}")
+    req.add_header("Prefer", "count=exact")
+    req.add_header("Range", "0-0")
+    try:
+        with urllib.request.urlopen(req, timeout=_SB_TIMEOUT_S, context=SSL_CTX) as resp:
+            cr = resp.headers.get("Content-Range") or ""  # e.g. "0-0/1234" or "*/0"
+        total = cr.rpartition("/")[2]
+        return int(total) if total.isdigit() else None
+    except Exception as e:  # noqa: BLE001 — best-effort, callers treat None as unknown
+        print(f"[sb] WARNING count {path.split('?', 1)[0]} failed: {e}", file=sys.stderr)
+        return None
+
+
 def sb_get_all(path: str, page_size: int = 1000):
     """GET every row for `path`, paginating past PostgREST's default ~1000-row
     cap via the Range header. Stops once a page comes back shorter than
@@ -3549,7 +3571,18 @@ from collections import OrderedDict as _OrderedDict
 JOBS: "_OrderedDict[str, dict]" = _OrderedDict()
 JOBS_LOCK = threading.Lock()
 VERIFY_RESULTS: dict = {}  # campaign_id (str) -> lead-level verify detail, this-session only
-_LEAD_COUNT_CACHE: dict = {}  # campaign_id (str) -> (total_leads, fetched_at); 10-min TTL
+_LEAD_COUNT_CACHE: dict = {}  # campaign_id (str) -> (total_leads, fetched_at); 1h TTL (see handler)
+_TAG_NAMES_SWR: dict = {"names": None, "ts": 0.0}  # Smartlead tag names; 1h TTL, stale-on-error
+
+
+def _warm_tag_names():
+    """Prime _TAG_NAMES_SWR (boot warmup) — same fetch as the handler."""
+    if _TAG_NAMES_SWR["names"] is not None and (time.time() - _TAG_NAMES_SWR["ts"]) < 3600:
+        return
+    tags = _smartlead_json("GET", "/email-accounts/tags") or []
+    _TAG_NAMES_SWR.update(names=sorted({(t.get("name") or "").strip() for t in tags
+                                        if isinstance(t, dict)} - {""}, key=str.lower),
+                          ts=time.time())
 _JOBS_CAP = 200
 
 
@@ -7589,6 +7622,9 @@ def _cron_pull_bg():
         cron_pull_all()
     finally:
         _CRON_LOCK.release()
+        # the pull writes leads/sources — invalidate the UI read caches NOW
+        # (at completion), not at kick time when nothing had changed yet
+        _clear_ui_caches()
 
 
 # ── HeyReach daily snapshot (pg_cron → pg_net → POST /api/cron/heyreach-sync) ─
@@ -7872,7 +7908,7 @@ ROUTES = {
 # through the plain _proxy_deliverability() forwarder.
 _DELIV_AUDIT = {"blob": None, "ts": 0.0, "running": False, "error": None, "restore_tried": False}
 _DELIV_AUDIT_LOCK = threading.Lock()
-_DELIV_AUDIT_TTL_S = 3600  # serve a cached audit up to 1h old before auto-refreshing
+_DELIV_AUDIT_TTL_S = 7200  # 2h refresh cadence (owner spec 2026-07-11); hourly cron tick no-ops while fresh
 
 
 def _deliv_fix_batch_stats(blob):
@@ -7982,6 +8018,24 @@ def _deliv_audit_persist(blob):
         print(f"[deliv] WARNING audit persist failed: {e}", file=sys.stderr)
 
 
+def _deliv_iso_epoch(ts: str) -> float:
+    """Epoch seconds for a Supabase ISO timestamp, tolerant of fractional-
+    second widths fromisoformat rejects on Python <3.11 (e.g. '.31426'). A
+    silent 0.0 here made a restored bundle look infinitely stale — the
+    freshness check then re-kicked a refresh on every GET."""
+    from datetime import datetime
+    s = (ts or "").replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(s).timestamp()
+    except ValueError:
+        import re
+        try:
+            s = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], s)
+            return datetime.fromisoformat(s).timestamp()
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+
 def _deliv_audit_restore():
     """One attempt per process lifetime: if the in-memory cache is empty (fresh
     process), pull the last persisted blob so the page has real data instantly
@@ -7990,16 +8044,20 @@ def _deliv_audit_restore():
     with _DELIV_AUDIT_LOCK:
         if _DELIV_AUDIT["restore_tried"] or _DELIV_AUDIT["blob"] is not None or _deliv_mock_on():
             return
-        _DELIV_AUDIT["restore_tried"] = True
+        # a FAILED restore must not consume the one shot (a Supabase blip at
+        # boot used to mean an empty page until the next full audit) — retry
+        # on later requests, but at most every 30s
+        if time.time() - _DELIV_AUDIT.get("restore_last_try", 0.0) < 30:
+            return
+        _DELIV_AUDIT["restore_last_try"] = time.time()
     from datetime import datetime
     try:
         rows = sb("GET", "deliverability_audit_cache?id=eq.audit&select=blob,ts", prefer="return=representation")
+        with _DELIV_AUDIT_LOCK:  # definitive read (row present or absent) — stop retrying
+            _DELIV_AUDIT["restore_tried"] = True
         if rows and isinstance(rows, list) and rows[0].get("blob"):
             ts = rows[0].get("ts") or ""
-            try:
-                epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-            except Exception:  # noqa: BLE001
-                epoch = 0.0
+            epoch = _deliv_iso_epoch(ts)
             with _DELIV_AUDIT_LOCK:
                 if _DELIV_AUDIT["blob"] is None:  # a live run may have landed meanwhile
                     _DELIV_AUDIT.update(blob=rows[0]["blob"], ts=epoch)
@@ -8038,13 +8096,17 @@ def _deliv_fix_resting_due(dh):
 def _deliv_audit_run_bg():
     """Fire the ~4-min live audit against the backend once; store blob or error."""
     if _deliv_mock_on():  # DELIV_MOCK — fake a short "run", then store a fresh mock blob
-        secs = mock_deliv.scenario_get("audit_run_secs", 3) or 3
-        time.sleep(secs)
-        blob = mock_deliv.run_audit_blob()
-        _deliv_fix_resting_due((blob or {}).get("domainHealth"))  # same shift as the live path
-        with _DELIV_AUDIT_LOCK:
-            _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
-        _deliv_bundle_start(force=True)  # mock bundle rides the same refresh as prod
+        try:
+            secs = mock_deliv.scenario_get("audit_run_secs", 3) or 3
+            time.sleep(secs)
+            blob = mock_deliv.run_audit_blob()
+            _deliv_fix_resting_due((blob or {}).get("domainHealth"))  # same shift as the live path
+            with _DELIV_AUDIT_LOCK:
+                _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
+            _deliv_bundle_start(force=True)  # mock bundle rides the same refresh as prod
+        except Exception as e:  # noqa: BLE001 — running=True must never outlive the thread
+            with _DELIV_AUDIT_LOCK:
+                _DELIV_AUDIT.update(running=False, error=str(e)[:300])
         return
     import base64, urllib.error  # noqa: F401 — urllib.error referenced via except below
     auth = os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""
@@ -8052,11 +8114,11 @@ def _deliv_audit_run_bg():
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(running=False, error="unconfigured")
         return
-    req = urllib.request.Request(
-        "https://navreo-email-deliverability-audit.onrender.com/api/run", data=b"", method="POST")
-    req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
-    req.add_header("Content-Type", "application/json")
     try:
+        req = urllib.request.Request(
+            "https://navreo-email-deliverability-audit.onrender.com/api/run", data=b"", method="POST")
+        req.add_header("Authorization", "Basic " + base64.b64encode(auth.encode()).decode())
+        req.add_header("Content-Type", "application/json")
         # 2026-07-09: full audits started overrunning the old 330s cap (Smartlead
         # slows under load), leaving the cache blob-less and the UI stuck kicking
         # refreshes forever — give the run real headroom.
@@ -8141,10 +8203,15 @@ def _deliv_bundle_restore():
     with _DELIV_BUNDLE_LOCK:
         if _DELIV_BUNDLE["restore_tried"] or _DELIV_BUNDLE["data"] is not None or _deliv_mock_on():
             return
-        _DELIV_BUNDLE["restore_tried"] = True
+        # failed restores retry (see _deliv_audit_restore) — capped at every 30s
+        if time.time() - _DELIV_BUNDLE.get("restore_last_try", 0.0) < 30:
+            return
+        _DELIV_BUNDLE["restore_last_try"] = time.time()
     from datetime import datetime
     try:
         rows = sb("GET", "deliverability_audit_cache?id=eq.bundle&select=blob,ts", prefer="return=representation")
+        with _DELIV_BUNDLE_LOCK:  # definitive read — stop retrying
+            _DELIV_BUNDLE["restore_tried"] = True
         if rows and isinstance(rows, list) and rows[0].get("blob"):
             # Belt-and-braces vs the mock-poisoning incident: refuse any
             # persisted bundle stamped mock, whatever wrote it.
@@ -8152,10 +8219,7 @@ def _deliv_bundle_restore():
                 print("[deliv] ignoring mock-stamped bundle in Supabase", file=sys.stderr)
                 return
             ts = rows[0].get("ts") or ""
-            try:
-                epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-            except Exception:  # noqa: BLE001
-                epoch = 0.0
+            epoch = _deliv_iso_epoch(ts)
             with _DELIV_BUNDLE_LOCK:
                 if _DELIV_BUNDLE["data"] is None:
                     _DELIV_BUNDLE.update(data=rows[0]["blob"], ts=epoch)
@@ -8186,9 +8250,11 @@ def _deliv_resting_ledger_sync(rested_doms, allow_delete=True):
             for d in new],
            prefer="resolution=ignore-duplicates,return=minimal")
     if allow_delete:
-        gone = sorted(d for d in have if d not in rested_doms)
+        gone = _safe_domains(sorted(d for d in have if d not in rested_doms))
         for i in range(0, len(gone), 80):
             sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)" % ",".join(gone[i:i + 80]))
+    if new or (allow_delete and gone):
+        _restore_plan_invalidate()  # ledger changed — restore-plan must re-read
     due = {}
     now_ms = int(time.time() * 1000)
     for d in rested_doms:
@@ -8204,6 +8270,17 @@ def _deliv_resting_ledger_sync(rested_doms, allow_delete=True):
 
 
 def _deliv_bundle_run_bg():
+    """Thread entry — any escape from the inner run must still clear running,
+    or the 2h refresh silently wedges forever (same pattern as
+    _restore_sweep_run_bg)."""
+    try:
+        _deliv_bundle_run_bg_inner()
+    except Exception as e:  # noqa: BLE001 — running=True must never outlive the thread
+        with _DELIV_BUNDLE_LOCK:
+            _DELIV_BUNDLE.update(running=False, error=str(e)[:300])
+
+
+def _deliv_bundle_run_bg_inner():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
     sweep — parallel fan-out is what used to starve it). Partial results are
@@ -8265,9 +8342,30 @@ def _deliv_bundle_run_bg():
             blob_resting = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {}).get("resting") or {}
             rested_doms |= {str(d).lower() for d in blob_resting}
             truncated = bool((out["views"].get("rested") or {}).get("truncated"))
-            out["restDue"] = _deliv_resting_ledger_sync(rested_doms, allow_delete=not truncated)
+            # A FAILED rested pull ("rested" absent from views) must never look
+            # like "no domains resting" — that path mass-deleted the ledger and
+            # reset every domain's rest clock on one flaky backend refresh.
+            out["restDue"] = _deliv_resting_ledger_sync(
+                rested_doms, allow_delete=("rested" in out["views"]) and not truncated)
     except Exception as e:  # noqa: BLE001
         out["errors"]["restDue"] = str(e)[:200]
+    # A partial refresh must not clobber keys the last complete bundle had:
+    # carry forward every view/window that ERRORED this sweep (keyed on error
+    # presence, never on emptiness, so a legitimately-emptied view is not
+    # resurrected). Mock/live bundles never merge into each other.
+    if out["errors"]:
+        with _DELIV_BUNDLE_LOCK:
+            prev = _DELIV_BUNDLE["data"] if isinstance(_DELIV_BUNDLE["data"], dict) else None
+        if prev and bool(prev.get("mock")) == bool(out.get("mock")):
+            for v in _DELIV_BUNDLE_VIEWS:
+                if v in out["errors"] and v in (prev.get("views") or {}):
+                    out["views"][v] = prev["views"][v]
+            for dkey in (str(d) for d in _DELIV_BUNDLE_WINDOWS):
+                if ("dh" + dkey) in out["errors"] and dkey in (prev.get("dh") or {}):
+                    out["dh"][dkey] = prev["dh"][dkey]
+            for k in ("domainBoxes", "restDue"):
+                if k in out["errors"] and k in prev:
+                    out[k] = prev[k]
     ok = bool(out["views"]) or bool(out["dh"])
     err = json.dumps(out["errors"])[:300] if out["errors"] else None
     with _DELIV_BUNDLE_LOCK:
@@ -8286,13 +8384,21 @@ def _deliv_bundle_start(force=False):
     """Kick a background bundle refresh unless one's already running (or the
     cache is fresh and not forced). Mirrors _deliv_audit_start."""
     _deliv_bundle_restore()
+    if not force and not _deliv_mock_on() and \
+            ":" not in (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or ""):
+        return {"started": False, "running": False, "configured": False}
     with _DELIV_BUNDLE_LOCK:
         if _DELIV_BUNDLE["running"]:
             return {"started": False, "running": True}
         fresh = _DELIV_BUNDLE["data"] is not None and (time.time() - _DELIV_BUNDLE["ts"]) < _DELIV_AUDIT_TTL_S
         if fresh and not force:
             return {"started": False, "running": False, "fresh": True}
-        _DELIV_BUNDLE.update(running=True, error=None)
+        # outage cooldown: after a FAILED attempt, unforced kicks (every 10s
+        # poll tick hits this) wait 60s before spawning another doomed thread
+        if not force and _DELIV_BUNDLE["error"] and \
+                (time.time() - _DELIV_BUNDLE.get("last_attempt", 0.0)) < 60:
+            return {"started": False, "running": False, "error": _DELIV_BUNDLE["error"]}
+        _DELIV_BUNDLE.update(running=True, error=None, last_attempt=time.time())
     threading.Thread(target=_deliv_bundle_run_bg, daemon=True).start()
     return {"started": True, "running": True}
 
@@ -8305,9 +8411,10 @@ def _deliv_bundle_start(force=False):
 # refresh — same writer, no extra cron.
 import datetime as _dtmod
 
-_DELIV_TRENDS = {"data": None, "ts": 0.0, "days": 0}
+_DELIV_TRENDS = {}  # days -> {"data":…, "ts":…} so 7/14/30 toggles stop evicting each other
 _DELIV_TRENDS_LOCK = threading.Lock()
-_DELIV_TRENDS_TTL_S = 3600
+_DELIV_TRENDS_BUILDING = set()  # days values with a build in flight (dedupe concurrent firsts)
+_DELIV_TRENDS_TTL_S = 7200  # same 2h clock as the audit/bundle caches
 
 
 def _snapshot_from_blob(blob: dict):
@@ -8382,19 +8489,27 @@ def _deliv_trends_build(days: int) -> dict:
 def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
     days = max(7, min(90, days))
     with _DELIV_TRENDS_LOCK:
-        fresh = (_DELIV_TRENDS["data"] is not None and _DELIV_TRENDS["days"] == days
-                 and (time.time() - _DELIV_TRENDS["ts"]) < _DELIV_TRENDS_TTL_S)
-        if fresh:
-            return _DELIV_TRENDS["data"], 200
+        ent = _DELIV_TRENDS.get(days)
+        if ent and (time.time() - ent["ts"]) < _DELIV_TRENDS_TTL_S:
+            return ent["data"], 200
+        if days in _DELIV_TRENDS_BUILDING:
+            # a concurrent request is already building this window — serve the
+            # stale copy if one exists rather than duplicating the Smartlead call
+            if ent:
+                return ent["data"], 200
+        _DELIV_TRENDS_BUILDING.add(days)
     try:
         data = _deliv_trends_build(days)
     except Exception as e:  # noqa: BLE001 — serve stale over erroring if we have one
         with _DELIV_TRENDS_LOCK:
-            if _DELIV_TRENDS["data"] is not None and _DELIV_TRENDS["days"] == days:
-                return _DELIV_TRENDS["data"], 200
+            _DELIV_TRENDS_BUILDING.discard(days)
+            ent = _DELIV_TRENDS.get(days)
+            if ent:
+                return ent["data"], 200
         return {"error": "trends_unavailable", "message": str(e)[:200]}, 502
     with _DELIV_TRENDS_LOCK:
-        _DELIV_TRENDS.update(data=data, ts=time.time(), days=days)
+        _DELIV_TRENDS_BUILDING.discard(days)
+        _DELIV_TRENDS[days] = {"data": data, "ts": time.time()}
     return data, 200
 
 
@@ -8422,6 +8537,28 @@ _RESTORE_SWEEP_LOCK = threading.Lock()
 _RESTORE_SWEEP_TTL_S = 30 * 60
 _RESTORE_MBX = {"data": None, "ts": 0.0}
 _RESTORE_MBX_TTL_S = 15 * 60
+# GET /api/restore-plan used to round-trip the audit backend (reminders) and
+# Supabase (ledger) on EVERY request — the page's slowest data call (~1.0s,
+# 60s-timeout hazard). Both inputs only change via this app's own POSTs
+# (restore-live, restore-dismiss) or the bundle refresh, all of which
+# invalidate below — so a short TTL cache is safe and drops it to ~ms.
+_RESTORE_REM_SWR = {"rems": None, "src": None, "ts": 0.0}
+_RESTORE_LEDGER_SWR = {"rows": None, "ts": 0.0}
+_RESTORE_PLAN_TTL_S = 300
+
+
+def _restore_plan_invalidate():
+    _RESTORE_REM_SWR.update(rems=None, src=None, ts=0.0)
+    _RESTORE_LEDGER_SWR.update(rows=None, ts=0.0)
+
+
+_DOMAIN_RE = __import__("re").compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def _safe_domains(doms):
+    """Strict-hostname filter for values that get joined into PostgREST in.()
+    filters — anything else could smuggle filter syntax into the query."""
+    return [d for d in doms if isinstance(d, str) and len(d) < 254 and _DOMAIN_RE.match(d)]
 _RESTORE_FORECAST_DAYS = 14
 
 _RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags carry it)
@@ -8536,13 +8673,21 @@ def _restore_sweep_start(force: bool = False):
 
 def _restore_reminders():
     """Live reminders from the audit service, cached-blob fallback. Returns
-    (reminders, source) — source is 'live' or 'cached'."""
+    (reminders, source) — source is 'live' or 'cached'. TTL-cached (5 min,
+    invalidated by this app's own reminder-mutating POSTs) so every
+    /api/restore-plan GET stops paying a live backend round-trip."""
+    if _RESTORE_REM_SWR["rems"] is not None and \
+            (time.time() - _RESTORE_REM_SWR["ts"]) < _RESTORE_PLAN_TTL_S:
+        return _RESTORE_REM_SWR["rems"], _RESTORE_REM_SWR["src"]
     try:
         rems = _deliv_backend_json("GET", "reminders")
         if isinstance(rems, list):
+            _RESTORE_REM_SWR.update(rems=rems, src="live", ts=time.time())
             return rems, "live"
-    except Exception as e:  # noqa: BLE001 — unconfigured/down: blob still serves
+    except Exception as e:  # noqa: BLE001 — unconfigured/down: stale cache, then blob
         print(f"[restore-plan] live reminders unavailable: {e}", file=sys.stderr)
+        if _RESTORE_REM_SWR["rems"] is not None:
+            return _RESTORE_REM_SWR["rems"], _RESTORE_REM_SWR["src"]
     return (_restore_blob().get("reminders") or []), "cached"
 
 
@@ -8578,10 +8723,15 @@ def _restore_entries():
     # dismissal dies with the ledger row when the domain stops resting.
     ledger = []
     if not _deliv_mock_on():
-        try:
-            ledger = sb_get_all("deliverability_resting_ledger?select=domain,first_rested_at,dismissed") or []
-        except Exception as e:  # noqa: BLE001 — fall through to the blob path
-            print(f"[restore-plan] ledger unavailable: {e}", file=sys.stderr)
+        if _RESTORE_LEDGER_SWR["rows"] is not None and \
+                (time.time() - _RESTORE_LEDGER_SWR["ts"]) < _RESTORE_PLAN_TTL_S:
+            ledger = _RESTORE_LEDGER_SWR["rows"]
+        else:
+            try:
+                ledger = sb_get_all("deliverability_resting_ledger?select=domain,first_rested_at,dismissed") or []
+                _RESTORE_LEDGER_SWR.update(rows=ledger, ts=time.time())
+            except Exception as e:  # noqa: BLE001 — fall through to the blob path
+                print(f"[restore-plan] ledger unavailable: {e}", file=sys.stderr)
     if ledger:
         from datetime import timedelta
         for row in sorted(ledger, key=lambda r: str(r.get("domain") or "")):
@@ -8796,6 +8946,7 @@ def api_restore_live(p: dict):
             results and results[0]["errors"].append("reminder-done: " + str(e)[:160])
     with _RESTORE_SWEEP_LOCK:  # force the next plan/forecast to re-sweep
         _RESTORE_SWEEP["ts"] = 0.0
+    _restore_plan_invalidate()  # reminders/ledger just mutated — re-read on next GET
     total_cap = sum(pl["capacity"] for pl in plans)
     log_activity("/api/restore-live",
                  {"domains": domains, "campaign_ids": camp_ids,
@@ -8946,6 +9097,41 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # GET /_audit (~518KB) and /_bundle (~1.8MB) used to re-json.dumps +
+    # re-gzip(level 6) their whole cache blob on EVERY request — including the
+    # 10s poll ticks while a refresh runs. Memoize the serialized bytes per
+    # endpoint (entry replaced atomically as one tuple) and 304 unchanged
+    # polls via ETag. The etag folds in ts/running/error, so any state change
+    # busts it; ageSec inside a memoized body is at most 30s stale, which the
+    # UI only uses for a freshness label.
+    _DELIV_RESP_MEMO = {"audit": {}, "bundle": {}}
+    _STATIC_GZ_MEMO = {}  # fs_path -> ((mtime, size), gz_bytes) — see _serve_static
+
+    def _json_deliv(self, key, etag, build):
+        import gzip
+        if self._if_none_match_hit(etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
+        memo = Handler._DELIV_RESP_MEMO[key]
+        ent = memo.get("entry")
+        if not ent or ent[0] != etag or (time.time() - ent[3]) > 30:
+            raw = json.dumps(build()).encode()
+            ent = (etag, raw, gzip.compress(raw, 6), time.time())
+            memo["entry"] = ent
+        gz = self._accepts_gzip() and len(ent[1]) >= 512
+        body = ent[2] if gz else ent[1]
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("ETag", etag)
+        if gz:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     # Static text assets (HTML/CSS/JS/SVG) are shipped uncompressed by the stdlib
     # handler; gzip them here. Binary assets (fonts, images), 404s, ranges and
     # conditional requests fall through to SimpleHTTPRequestHandler untouched.
@@ -9008,7 +9194,23 @@ class Handler(SimpleHTTPRequestHandler):
         if etag:
             self.send_header("ETag", etag)
         if use_gzip:
-            send_body = gzip.compress(body, 6)
+            # memoized per (path, mtime, size): the 489KB deliverability-tab.js
+            # was re-compressed on every cache-missing GET; the files only
+            # change on deploy, which changes mtime and busts the entry
+            try:
+                st = os.stat(fs_path)
+                st_key = (st.st_mtime, st.st_size)
+            except OSError:
+                st_key = None
+            memo = Handler._STATIC_GZ_MEMO.get(fs_path)
+            if memo and st_key and memo[0] == st_key:
+                send_body = memo[1]
+            else:
+                send_body = gzip.compress(body, 6)
+                if st_key:
+                    if len(Handler._STATIC_GZ_MEMO) > 64:  # tiny fleet of assets; hard cap
+                        Handler._STATIC_GZ_MEMO.clear()
+                    Handler._STATIC_GZ_MEMO[fs_path] = (st_key, send_body)
             self.send_header("Content-Encoding", "gzip")
             self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(send_body)))
@@ -9404,19 +9606,26 @@ class Handler(SimpleHTTPRequestHandler):
                    .split(",") if s.strip()][:25]
             sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
             out = {}
+            budget_t0 = time.time()  # hard handler budget: a Smartlead brown-out
+            # must not hold a UI repaint (and a server thread) for minutes —
+            # unfinished ids return null; the UI already renders "unknown" and
+            # a later repaint retries against the warm cache.
             for cid in ids:
                 cached = _LEAD_COUNT_CACHE.get(cid)
                 if cached and time.time() - cached[1] < 3600:
                     out[cid] = cached[0]
                     continue
+                if time.time() - budget_t0 > 8:
+                    out[cid] = None
+                    continue
                 n = None
-                for attempt, backoff in enumerate((0, 3, 8)):
+                for attempt, backoff in enumerate((0, 2)):
                     if backoff:
                         time.sleep(backoff)
                     try:
                         page = http_json("GET", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads"
                                                 f"?api_key={sl_key}&offset=0&limit=1", {},
-                                         timeout=30)
+                                         timeout=10)
                         n = int((page or {}).get("total_leads") or 0)
                         break
                     except Exception:  # noqa: BLE001 — retry, then "unknown" not a 500
@@ -9432,10 +9641,10 @@ class Handler(SimpleHTTPRequestHandler):
                         from urllib.parse import quote as _q
                         _cut = (datetime.now(timezone.utc)
                                 - timedelta(days=_VERIFY_TTL_DAYS)).isoformat()
-                        _vr = sb("GET", f"email_verifications?campaign_id=eq.{_q(str(cid), safe='')}"
-                                        f"&verified_at=gt.{_q(_cut, safe='')}&select=email&limit=10000")
-                        if isinstance(_vr, list):
-                            n = max(0, n - len(_vr))
+                        _vc = sb_count(f"email_verifications?campaign_id=eq.{_q(str(cid), safe='')}"
+                                       f"&verified_at=gt.{_q(_cut, safe='')}&select=email")
+                        if _vc is not None:
+                            n = max(0, n - _vc)
                     except Exception:  # noqa: BLE001 — best-effort discount; raw total beats a 500
                         pass
                 if n is not None:
@@ -9451,11 +9660,19 @@ class Handler(SimpleHTTPRequestHandler):
             # Existing Smartlead tag names for the Process-new modal's tag
             # autocomplete — a typo there silently creates a brand-new tag
             # object (which the API can't delete), so offer the real names.
+            # 1h TTL cache (tags change rarely, autocomplete tolerates lag);
+            # stale-on-error beats the old 502 during Smartlead 429s.
+            if _TAG_NAMES_SWR["names"] is not None and \
+                    (time.time() - _TAG_NAMES_SWR["ts"]) < 3600:
+                return self._json({"ok": True, "names": _TAG_NAMES_SWR["names"]})
             try:
                 tags = _smartlead_json("GET", "/email-accounts/tags") or []
                 names = sorted({(t.get("name") or "").strip() for t in tags
                                 if isinstance(t, dict)} - {""}, key=str.lower)
+                _TAG_NAMES_SWR.update(names=names, ts=time.time())
             except Exception as e:  # noqa: BLE001 — autocomplete is best-effort
+                if _TAG_NAMES_SWR["names"] is not None:
+                    return self._json({"ok": True, "names": _TAG_NAMES_SWR["names"], "stale": True})
                 return self._json({"ok": False, "message": str(e)[:200]}, 502)
             return self._json({"ok": True, "names": names})
         if path.startswith("/api/jobs/"):
@@ -9476,10 +9693,13 @@ class Handler(SimpleHTTPRequestHandler):
                 b, ts, running, err = (_DELIV_AUDIT["blob"], _DELIV_AUDIT["ts"],
                                        _DELIV_AUDIT["running"], _DELIV_AUDIT["error"])
             age = (time.time() - ts) if ts else None
-            return self._json({"blob": b, "ts": ts, "ageSec": age, "running": running,
-                               "error": err, "configured": True if _deliv_mock_on() else bool(
-                                   (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":")),
-                               "stale": bool(b is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
+            configured = True if _deliv_mock_on() else bool(
+                (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":"))
+            stale = bool(b is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)
+            etag = f'"dlv-a-{ts:.0f}-{int(bool(running))}-{int(bool(err))}-{int(configured)}-{int(stale)}"'
+            return self._json_deliv("audit", etag, lambda: {
+                "blob": b, "ts": ts, "ageSec": age, "running": running,
+                "error": err, "configured": configured, "stale": stale})
         if path == "/api/deliverability/_bundle":
             # Cached manager views + domain-health windows (instant). Serving a
             # stale bundle beats serving none — the kick below refreshes it in
@@ -9490,11 +9710,14 @@ class Handler(SimpleHTTPRequestHandler):
                 d, ts, running, err = (_DELIV_BUNDLE["data"], _DELIV_BUNDLE["ts"],
                                        _DELIV_BUNDLE["running"], _DELIV_BUNDLE["error"])
             age = (time.time() - ts) if ts else None
-            return self._json({"bundle": d, "ts": ts, "ageSec": age,
-                               "running": running or bool(st.get("started")), "error": err,
-                               "configured": True if _deliv_mock_on() else bool(
-                                   (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":")),
-                               "stale": bool(d is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)})
+            running = running or bool(st.get("started"))
+            configured = True if _deliv_mock_on() else bool(
+                (os.environ.get("DELIV_AUDIT_AUTH") or KEYS.get("DELIV_AUDIT_AUTH") or "").count(":"))
+            stale = bool(d is not None and age is not None and age >= _DELIV_AUDIT_TTL_S)
+            etag = f'"dlv-b-{ts:.0f}-{int(bool(running))}-{int(bool(err))}-{int(configured)}-{int(stale)}"'
+            return self._json_deliv("bundle", etag, lambda: {
+                "bundle": d, "ts": ts, "ageSec": age, "running": running,
+                "error": err, "configured": configured, "stale": stale})
         if path == "/api/deliverability-trends":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -9569,9 +9792,22 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(body, status)
         return self._serve_static()
 
+    # POSTs that mutate NOTHING the UI caches read at request time — pure
+    # kick/poll/login endpoints. Clearing on these defeated every SWR cache
+    # each time a cron tick or refresh-kick landed (i.e. constantly), forcing
+    # cold Supabase reads on the next page load for no correctness gain. The
+    # cron pull's background job re-clears on COMPLETION (when data actually
+    # changed) — see _cron_pull_bg.
+    _CLEAR_CACHE_EXEMPT_POST = {
+        "/api/auth/login", "/api/cron/pull-all", "/api/cron/heyreach-sync",
+        "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
+        "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
+    }
+
     def do_POST(self):
-        _clear_ui_caches()  # G2: every POST may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
+        if path not in self._CLEAR_CACHE_EXEMPT_POST:
+            _clear_ui_caches()  # G2: every other POST may mutate — never let a stale cached GET follow it
         if path == "/api/auth/login":
             length = int(self.headers.get("Content-Length") or 0)
             if length > 4096:
@@ -9790,7 +10026,7 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
-            doms = [str(d).lower() for d in (payload.get("domains") or []) if d]
+            doms = _safe_domains([str(d).lower() for d in (payload.get("domains") or []) if d])
             if not doms:
                 return self._json({"ok": False, "message": "no domains"}, 400)
             log_activity(path, payload, action="restore_dismiss", entity="resting_ledger")
@@ -9799,6 +10035,7 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 sb("PATCH", "deliverability_resting_ledger?domain=in.(%s)" % ",".join(doms),
                    {"dismissed": True}, prefer="return=minimal")
+            _restore_plan_invalidate()  # next restore-plan GET re-reads the ledger
             return self._json({"ok": True, "dismissed": len(doms)})
         if path == "/api/deliverability/_mock/scenario":  # DELIV_MOCK — mock-only, 404 outside mock mode
             if not _deliv_mock_on():
@@ -9945,6 +10182,24 @@ def _boot_warmup():
             api_leads_batch(",".join(live))
     except Exception as e:  # noqa: BLE001
         print(f"[warmup] leads sweep failed: {e}")
+    # Deliverability page caches: restore the persisted audit/bundle blobs
+    # into memory and prime the small live caches, so the FIRST page load
+    # after a deploy serves warm (<1s) instead of paying per-request restores
+    # and live round-trips. All idempotent/locked; failures leave the lazy
+    # in-handler paths as fallback.
+    for name, fn in (
+        ("deliv-audit-restore", _deliv_audit_restore),
+        ("deliv-bundle-restore", _deliv_bundle_restore),
+        ("deliv-trends", lambda: deliv_trends_get(30)),
+        ("restore-mailboxes", _restore_mailboxes),
+        ("restore-sweep", _restore_sweep_start),
+        ("restore-reminders", _restore_reminders),
+        ("tag-names", _warm_tag_names),
+    ):
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            print(f"[warmup] {name} failed: {e}")
     print(f"[warmup] complete in {time.time() - t0:.1f}s")
 
 
