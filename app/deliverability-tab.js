@@ -606,6 +606,12 @@
       return;
     }
     DATA.booting = true;
+    // Fast first paint: the cached-audit GET is served from the app server's
+    // memory/Supabase in milliseconds, while the campaigns probe round-trips
+    // to the audit backend (seconds, plus a retry path). Fire the audit read
+    // NOW instead of gating the page's data on the probe — its own response
+    // carries `configured`, so it safely resolves live/no-data by itself.
+    loadAudit();
     try {
       await apiGet("campaigns", { timeout: 20000 }); // config probe (light)
       DATA.mode = "live";
@@ -617,7 +623,9 @@
         await apiGet("campaigns", { timeout: 20000 });
         DATA.mode = "live";
       } catch (e2) {
-        DATA.mode = "sample"; // backend unconfigured OR unreachable → no-data mode
+        // The parallel audit read may have already proven the backend live —
+        // a flaky campaigns probe must not clobber that back to no-data.
+        if (DATA.mode !== "live") DATA.mode = "sample";
       }
     }
     DATA.probed = true;
@@ -651,6 +659,15 @@
   // handleAuditResult() is the single place that reads a /_audit response and
   // decides what happens next, whether it came from the initial GET or from a
   // poll tick — see the branches inlined below.
+  // Age of the on-screen audit RIGHT NOW (ageSec was captured when the blob
+  // was applied; add the time elapsed since so an open tab's label keeps
+  // advancing instead of freezing at its last-paint value).
+  function auditAgeNow() {
+    const base = Number(DATA.audit.ageSec) || 0;
+    const since = S.A && S.A._liveLoadedAt ? (Date.now() - S.A._liveLoadedAt) / 1000 : 0;
+    return base + Math.max(0, since);
+  }
+
   function auditAgeLabel(ageSec) {
     const n = Number(ageSec);
     if (!Number.isFinite(n) || n < 0) return "just now";
@@ -1274,6 +1291,7 @@ label.dlv-sig-trow .dlv-sig-email{flex:1}
 .dlv-data-banner.err{background:var(--red-50,#fdeceb);border-color:var(--red-200,#f0bcb7);color:var(--ink-2)}
 .dlv-data-banner-x{background:transparent;border:0;color:var(--ink-3);font-size:20px;line-height:1;cursor:pointer;padding:0 4px}
 .dlv-data-banner-x:hover{color:var(--ink)}
+.dlv-lastpull{color:var(--ink-3);font-size:12px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
 .dlv-footer{margin-top:30px;color:var(--ink-3);font-size:11.5px;text-align:center}
 .dlv-confirm-body{font-size:13.5px;color:var(--ink-2);white-space:pre-wrap;line-height:1.55}
 #dlv-confirm-overlay{z-index:260}
@@ -2297,6 +2315,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <button class="btn sm" data-act="sync-notion">Sync to Notion</button>
         <button class="btn sm" data-act="send-slack">Send to Slack</button>
         <span class="dlv-hdr-sep" aria-hidden="true"></span>
+        <span class="dlv-lastpull" title="When the numbers on this page were last pulled from Smartlead. Refreshes hourly in the background and on Run Live Audit.">${
+          isLive() && S.A._live
+            ? (DATA.audit.polling ? '<span class="dlv-spinner ink" style="width:11px;height:11px"></span> pulling now…' : "Last pull: " + auditAgeLabel(auditAgeNow()))
+            : "No pull yet"
+        }</span>
         <button class="btn dlv-btn-caution" data-act="run-audit" id="dlv-run-btn" title="Destructive — wipes every action taken this session and pulls a fresh snapshot.">${ic8("error")} Run Live Audit</button>
       </div>
     </div>`;
@@ -3805,7 +3828,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Footer must tell the truth about the data source: live blob vs the
     // sample/mock fallback (backend unconfigured, unreachable, or failSample).
     if (isLive() && !DATA.audit.failSample)
-      return `<div class="dlv-footer">Deliverability audit · real data${DATA.audit.ageSec != null ? " · updated " + auditAgeLabel(DATA.audit.ageSec) : ""}</div>`;
+      return `<div class="dlv-footer">Deliverability audit · real data${DATA.audit.ageSec != null ? " · updated " + auditAgeLabel(auditAgeNow()) : ""}</div>`;
     return `<div class="dlv-footer">Deliverability audit · no live data yet — nothing shown is sample data</div>`;
   }
 
