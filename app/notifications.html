@@ -347,10 +347,6 @@ tr.var-winner td.var-flagcell { color: var(--green); }
       <div>
         <div class="eyebrow">Notifications</div>
         <h1>Campaign Optimisation Priority Report</h1>
-        <!-- Scope-mismatch fix: this report covers every Smartlead campaign for the client
-             (~30-40, most never built as a Signal campaign in this tool) - say that plainly so
-             a much bigger number here than on Campaigns doesn't read as broken data. -->
-        <div class="small muted" id="scopeLine" style="margin-top:2px"></div>
       </div>
       <div id="summary" class="freshness"></div>
     </div>
@@ -387,23 +383,13 @@ tr.var-winner td.var-flagcell { color: var(--green); }
         <button class="btn sm" id="refreshBtn" type="button">Refresh</button>
       </div>
     </div>
-    <div class="rank-explainer">
-      This mirrors the lilly-optimiser Priority Report: 7 sections, actionable ones first.
-      <b>Section 1</b> lists campaigns needing optimisation, worst
-      <span class="jg" title="Total emails sent divided by positive replies: lower is better.">sent-per-positive</span>
-      first (zero-positive campaigns at the very top). <b>Section 7</b> is what to do about it,
-      ordered by <span class="jg" title="Expected leads still winnable in the campaign's remaining contacts (benchmark: 1 positive per ~2,000 sends), weighted up when it's already booking meetings or getting positives. A near-finished campaign scores low no matter how well it did.">Impact Score</span>:
-      the campaigns where action today buys the most future leads sit at the top,
-      nearly-drained campaigns at the bottom regardless of history.
-    </div>
     <nav id="sectionNav" class="section-nav" aria-label="Jump to report section">
       <button type="button" class="nav-chip" data-nav-section="1" title="Campaigns Needing Optimisation">1</button>
       <button type="button" class="nav-chip" data-nav-section="2" title="Performing Campaigns">2</button>
       <button type="button" class="nav-chip" data-nav-section="3" title="Campaign Lifecycle">3</button>
-      <button type="button" class="nav-chip" data-nav-section="4" title="Variant Analysis">4</button>
-      <button type="button" class="nav-chip" data-nav-section="5" title="Low Reply Rate Flags">5</button>
-      <button type="button" class="nav-chip" data-nav-section="6" title="Variant Distribution Flags">6</button>
-      <button type="button" class="nav-chip" data-nav-section="7" title="Recommended Actions">7</button>
+      <button type="button" class="nav-chip" data-nav-section="5" title="Low Reply Rate Flags">4</button>
+      <button type="button" class="nav-chip" data-nav-section="6" title="Variant Distribution Flags">5</button>
+      <button type="button" class="nav-chip" data-nav-section="7" title="Recommended Actions">6</button>
       <button type="button" class="nav-chip" data-nav-section="8" title="All clear">&check;</button>
     </nav>
     <div id="list"></div>
@@ -628,13 +614,16 @@ let sectionNavObserver = null;
 const CHUNK_SIZE = 40;
 const chunkRenderers = new Map();   // key -> { rows, bodyFn(rowsSubset) }
 const chunkShowAll = new Map();     // key -> true once "Show more" was clicked
-function chunkedHTML(key, rows, bodyFn) {
-  if (rows.length <= CHUNK_SIZE) { chunkRenderers.delete(key); return bodyFn(rows); }
+/* `limit` is the number of rows shown before the "Show N more" button (default
+   CHUNK_SIZE — a perf cap). Table sections 1-4 pass limit=5 so only the top 5
+   rows show by default and the rest load on click (the "Load more" ask). */
+function chunkedHTML(key, rows, bodyFn, limit = CHUNK_SIZE) {
+  if (rows.length <= limit) { chunkRenderers.delete(key); return bodyFn(rows); }
   chunkRenderers.set(key, { rows, bodyFn });
-  const revealed = chunkShowAll.get(key) ? rows.length : CHUNK_SIZE;
+  const revealed = chunkShowAll.get(key) ? rows.length : limit;
   const remaining = rows.length - revealed;
   const btn = remaining > 0
-    ? `<button type="button" class="btn sm chunk-more" data-show-more="${esc(key)}">Show ${fmt(remaining)} more</button>`
+    ? `<button type="button" class="btn sm chunk-more" data-show-more="${esc(key)}">Load ${fmt(remaining)} more</button>`
     : "";
   return `<div data-chunk-body="${esc(key)}">${bodyFn(rows.slice(0, revealed))}</div>${btn}`;
 }
@@ -1001,6 +990,10 @@ function section1(rows, blockMap) {
 
 function section2(rows, blockMap) {
   const sorted = [...rows].sort((a, b) => (a.sent_pos_ratio ?? 0) - (b.sent_pos_ratio ?? 0));
+  // These campaigns are already performing, so they don't need an
+  // Acknowledge / Dismiss lifecycle — there's nothing to triage. What's
+  // useful here is the outcome, so the status column is replaced by a
+  // Meetings column (campaign-level booked-meeting count, meetings int).
   const body = sorted.map((n, i) => `
     <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
       <td>${i + 1}</td>
@@ -1008,10 +1001,10 @@ function section2(rows, blockMap) {
       <td>${fmt(n.sent)}</td>
       <td>${fmt(n.positive)}</td>
       <td>${sentPosCell(n)}</td>
-      <td class="actions-td">${rowActionsHTML(n)}</td>
+      <td>${Number.isFinite(n.meetings) ? fmt(n.meetings) : "–"}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th class="actions-th">Status</th></tr></thead>
+    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th><span class="jg" title="Meetings booked from this campaign so far.">Meetings</span></th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }
 
@@ -1035,67 +1028,83 @@ function section3(rows) {
     <tbody>${body}</tbody></table></div>`;
 }
 
-function section4(rows, ctxMap) {
+/* Variant Analysis is no longer its own section — its findings are folded
+   into Recommended Actions (Section 7) in the same action-block card format.
+   These module-level vars are set each draw() so section7() can render the
+   merged group on both the eager pass and a lazy re-expand. */
+let variantAnalysisRows = [];
+let variantAnalysisCtx = new Map();
+
+/* A short label for a variant-analysis finding, used as the card's lead-in
+   (mirrors the "N. Campaign" lead-in on a normal recommended-action card). */
+function variantFindingLabel(n) {
+  if (n.title === "Whole offer failing") return "Whole offer failing";
+  const p = parseVariantTitle(n.title);
+  if (p.email) return `Variant call: Email ${p.email}${p.variant ? ` Var ${p.variant}` : ""}`;
+  return "Variant call";
+}
+
+/* One variant-analysis finding as a Recommended-Actions-style card: same
+   .action-block shell, verdict line, Recommended line, and the same
+   Acknowledge / Mark actioned / Dismiss buttons (via actionBtn) as a real
+   recommended action — so the two read identically. */
+function variantFindingCardHTML(n) {
+  const ctx = contextFor(variantAnalysisCtx, n);
+  const cls = ["action-block", "va-card"];
+  if (isRetiredStatus(n.status)) cls.push("dismissed");
+  const completion = Number.isFinite(ctx.completion_pct) ? `${ctx.completion_pct.toFixed(1)}` : "–";
+  const angle = parseAngle(n.detail);
+  return `<div class="${cls.join(" ")}" id="row-${esc(String(n.id))}" data-id="${esc(String(n.id))}">
+    <div class="ab-head">
+      <div class="ab-title">
+        <b>${esc(variantFindingLabel(n))}</b> &middot; ${campaignLink(n.campaign_name, ctx.smartlead_url)}
+        <span class="ctx">&middot; <span class="jg" title="Client Success Manager — the Navreo team member who manages this client's account, not the client itself.">CSM</span>: ${esc(ctx.client || "Unassigned")} &middot; ${fmt(ctx.sent)} sent, ${fmt(ctx.positive)} pos, ${completion}% complete</span>
+      </div>
+      <div class="ab-pills"><span class="ab-status">${statusPillN(n.status)}</span></div>
+    </div>
+    <div class="ab-verdict-row"><div class="ab-verdict">${esc(n.detail || "")}</div></div>
+    ${n.suggested_action ? `<div class="ab-impact"><span><b>Recommended:</b> ${esc(n.suggested_action)}</span></div>` : ""}
+    ${angle ? `<div class="ab-impact"><span><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span>: ${esc(angle)}</span></div>` : ""}
+    <div class="action-row">
+      <a class="btn sm" href="${esc(ctx.smartlead_url || n.smartlead_url || "#")}" target="_blank" rel="noopener">Open in Smartlead</a>
+      ${disableVariantBtnHTML(n)}
+      ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
+      ${actionBtn(n, "actioned", "Mark actioned", "Actioned")}
+      ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
+    </div>
+  </div>`;
+}
+
+/* The merged Variant Analysis group appended to the bottom of Recommended
+   Actions. Campaigns are ordered worst-first (same theme as Section 1) and a
+   campaign's whole-offer finding leads its own variant-call findings. */
+function variantAnalysisSectionHTML() {
+  const rows = variantAnalysisRows;
+  if (!rows.length) return "";
   const groups = new Map();
   rows.forEach((n) => {
     const key = String(n.campaign_id);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(n);
   });
-  const list = [...groups.entries()].map(([key, items]) => {
-    const ctx = contextFor(ctxMap, items[0]);
-    return { key, items, ctx };
-  });
-  // Same "worst first" theme as Section 1: campaigns with the worst
-  // campaign-level sent-per-positive ratio (zero positives = worst, sorts
-  // first) lead the Variant Analysis section too.
+  const list = [...groups.entries()].map(([key, items]) => ({ key, items, ctx: contextFor(variantAnalysisCtx, items[0]) }));
   list.sort((a, b) => {
     const az = !(a.ctx.positive > 0), bz = !(b.ctx.positive > 0);
     if (az !== bz) return az ? -1 : 1;
     if (az && bz) return (b.ctx.sent || 0) - (a.ctx.sent || 0);
     return (b.ctx.sent / (b.ctx.positive || 1)) - (a.ctx.sent / (a.ctx.positive || 1));
   });
-  return list.map(({ items, ctx }) => {
-    const first = items[0];
-    const headCompletion = Number.isFinite(ctx.completion_pct) ? `${ctx.completion_pct.toFixed(1)}% complete` : "completion unknown";
-    // fix D: dim the whole campaign-level group (not just its individual
-    // rows) once every finding under it has been dismissed/resolved.
-    const allRetired = items.every((n) => isRetiredStatus(n.status));
-    const headHTML = `<div class="va-head">
-      ${campaignLink(first.campaign_name, ctx.smartlead_url)}
-      <span class="ctx">(${fmt(ctx.sent)} sent, ${fmt(ctx.positive)} pos, ${headCompletion})</span>
-      ${allRetired ? statusPillN("resolved") : ""}
-    </div>`;
-    const wholeOffer = items.find((n) => n.title === "Whole offer failing");
+  const campaignCount = list.length;
+  const cards = list.map(({ items }) => {
+    const wholeOffer = items.filter((n) => n.title === "Whole offer failing");
     const variantRows = items.filter((n) => n.title !== "Whole offer failing");
-    let bodyHTML = "";
-    if (wholeOffer) {
-      bodyHTML += `<div class="callout${isRetiredStatus(wholeOffer.status) ? " dimmed" : ""}" id="row-${esc(String(wholeOffer.id))}">
-        <b>Whole offer failing:</b> ${esc(wholeOffer.detail || "")} <b>Recommended:</b> ${esc(wholeOffer.suggested_action || "")}
-        ${rowActionsHTML(wholeOffer)}
-      </div>`;
-    }
-    if (variantRows.length) {
-      const trs = variantRows.map((n) => {
-        const p = parseVariantTitle(n.title);
-        const angle = parseAngle(n.detail);
-        return `<tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
-          <td>Email ${esc(p.email || "?")}</td>
-          <td><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">${esc(p.variant || "–")}</span></td>
-          <td>${fmt(n.sent)}</td>
-          <td>${fmt(n.positive)}</td>
-          <td>${sentPosCell(n)}</td>
-          <td><span class="jg" title="The persuasion angle or theme this variant's copy uses.">${esc(angle || "–")}</span></td>
-          <td>${esc(n.suggested_action || "–")}</td>
-          <td class="actions-td">${rowActionsHTML(n)}</td>
-        </tr>`;
-      }).join("");
-      bodyHTML += `<div class="table-scroll"><table class="tbl">
-        <thead><tr><th>Email</th><th><span class="jg" title="One specific email copy version (A/B test) within this step of the sequence.">Variant</span></th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span></th><th>Recommendation</th><th class="actions-th">Status</th></tr></thead>
-        <tbody>${trs}</tbody></table></div>`;
-    }
-    return `<div class="va-group${allRetired ? " dimmed" : ""}">${headHTML}${bodyHTML}</div>`;
-  }).join("") + `<div class="fixnote">Need a fresh angle on any campaign above? A CSM can run <span class="jg" title="A command the CSM can run in Claude Code (Claude with Navreo's skills installed) to have it generate new copy angles/mechanisms for a specific campaign.">/lilly-strategy &lt;slug&gt;</span> for <span class="jg" title="CSM ideation - the CSM (not the client) brainstorming new campaign angles, most often by running /lilly-strategy, once existing variants are underperforming.">CSM ideation</span> on new mechanisms or copy angles.</div>`;
+    return [...wholeOffer, ...variantRows].map(variantFindingCardHTML).join("");
+  }).join("");
+  return `<div class="va-merge">
+    <div class="lowimpact-h"><span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> analysis &mdash; ${campaignCount} campaign${campaignCount === 1 ? "" : "s"}, ${rows.length} finding${rows.length === 1 ? "" : "s"}</div>
+    ${cards}
+    <div class="fixnote">Need a fresh angle on any campaign above? A CSM can run <span class="jg" title="A command the CSM can run in Claude Code (Claude with Navreo's skills installed) to have it generate new copy angles/mechanisms for a specific campaign.">/lilly-strategy &lt;slug&gt;</span> for <span class="jg" title="CSM ideation - the CSM (not the client) brainstorming new campaign angles, most often by running /lilly-strategy, once existing variants are underperforming.">CSM ideation</span> on new mechanisms or copy angles.</div>
+  </div>`;
 }
 
 /* fix #7: dynamic-content safety net — if a notification's own detail/
@@ -1108,6 +1117,17 @@ function linkifyLillyStrategy(escapedText) {
     (m) => `<span class="jg" title="A command the CSM can run in Claude Code to ideate new angles for this campaign.">${m}</span>`);
 }
 
+/* Section 5 low-reply-rate rows get a standalone primary action whose one job
+   is to copy a ready-to-run Claude prompt: run a list audit on the flagged
+   campaign and check its copy for spam words. Built client-side (these rows
+   carry no server-side claude_prompt) from the campaign's own name + URL. */
+function auditPromptButtonHTML(n) {
+  return `<button type="button" class="btn sm primary audit-prompt-btn"
+    data-act="copy-audit-prompt"
+    data-campaign="${esc(n.campaign_name || "")}"
+    data-url="${esc(n.smartlead_url || "")}"
+    title="Copy a Claude prompt that runs a list audit and checks the copy for spam words">Copy Claude prompt</button>`;
+}
 function section5(rows) {
   const sorted = [...rows].sort((a, b) => (a.reply_rate ?? 0) - (b.reply_rate ?? 0));
   const body = sorted.map((n) => `
@@ -1117,9 +1137,10 @@ function section5(rows) {
       <td>${Number.isFinite(n.replied) ? fmt(n.replied) : "–"}</td>
       <td>${Number.isFinite(n.reply_rate) ? n.reply_rate.toFixed(2) + "%" : "–"}</td>
       <td class="actions-td">${rowActionsHTML(n)}</td>
+      <td class="audit-td">${auditPromptButtonHTML(n)}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>Campaign</th><th>Sent</th><th>Unique Replies</th><th>Reply Rate</th><th class="actions-th">Status</th></tr></thead>
+    <thead><tr><th>Campaign</th><th>Sent</th><th>Unique Replies</th><th>Reply Rate</th><th class="actions-th">Status</th><th><span class="jg" title="Copy a Claude prompt to run a list audit and spam-word check on this campaign.">List audit</span></th></tr></thead>
     <tbody>${body}</tbody></table></div>
     <div class="fixnote">Recommended next step: run <span class="jg" title="Pulls every lead, classifies each title by function, and reports how much of the list is on-ICP vs off-ICP.">lilly-list-audit</span> on each flagged campaign to confirm the enrolled leads match the intended <span class="jg" title="Ideal Customer Profile — the target buyer persona this campaign is built for.">ICP</span>, and check deliverability (spam placement, sender reputation, warmup) in parallel.</div>`;
 }
@@ -1367,13 +1388,6 @@ function triageStripHTML(allRows) {
    campaign?), so spell out plainly that they only move this row's own
    status, never Smartlead itself. */
 const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark actioned = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself. Actioned and dismissed cards leave this list - pick a status in the filter above to see them again.</div>`;
-/* One line per lower-impact campaign: score, name, verdict. This IS the
-   collapsed view of everything below the top 5 — the full cards live behind
-   the expander underneath the list. */
-function lowImpactLineHTML(n) {
-  const score = n.impact_score != null ? `Impact ${n.impact_score}` : "Not scored";
-  return `<li><span class="li-score">${esc(score)}</span>${campaignLink(n.campaign_name, n.smartlead_url)} &mdash; ${esc(verdictLine(n))}</li>`;
-}
 function section7(rows) {
   const stripHTML = triageStripHTML(rows);
   // Filtering happens here, AFTER counts are computed from the full `rows`
@@ -1395,19 +1409,25 @@ function section7(rows) {
   // eager (still chunked for weight); unfiltered draws get the top-5 split.
   if (section7ActionTypeFilter !== "all") {
     return stripHTML + AB_LEGEND_HTML + explainersHTML
-      + chunkedHTML("7-filtered", sorted, (rs) => rs.map(actionBlockHTML).join(""));
+      + chunkedHTML("7-filtered", sorted, (rs) => rs.map(actionBlockHTML).join(""))
+      + variantAnalysisSectionHTML();
   }
   const top = sorted.slice(0, 5);
   const rest = sorted.slice(5);
   const topHTML = top.length
     ? `<div class="work-first"><div class="work-first-h">Work on these first &mdash; the biggest wins still on the table</div>${top.map(actionBlockHTML).join("")}</div>`
     : "";
+  // Lower-impact actions get the SAME full-card formatting and treatment as
+  // the top recommended actions — just minimised by default. The one-line
+  // summary list is gone; the expander (collapsed on load) reveals the full
+  // action-block cards so the CSM can read and action the data.
   const restHTML = rest.length
     ? `<div class="lowimpact-h">${rest.length} lower-impact action${rest.length === 1 ? "" : "s"} &mdash; less data left to win, in descending order</div>`
-      + `<ul class="lowimpact-list">${rest.map(lowImpactLineHTML).join("")}</ul>`
       + tierExpanderHTML("7-rest", "lower-impact", rest)
     : "";
-  return stripHTML + AB_LEGEND_HTML + explainersHTML + topHTML + restHTML;
+  // Variant analysis sits ABOVE the lower-impact (low-priority) actions — it's
+  // part of the recommended work, not a footnote below the drained campaigns.
+  return stripHTML + AB_LEGEND_HTML + explainersHTML + topHTML + variantAnalysisSectionHTML() + restHTML;
 }
 /* Toggle a Section 7 tier expander in place (fix #5's click wiring) — builds
    the tier's DOM lazily on first open, same pattern as setSectionExpanded. */
@@ -1444,23 +1464,29 @@ function section8(rows) {
    tooltip term in a section title — every call site below passes a static
    string literal, never user data. */
 function reportSection(num, title, rows, bodyFn, opts = {}) {
-  if (!rows.length && !opts.showEmpty) { sectionRenderers.delete(num); return ""; }
+  if (!rows.length && !opts.showEmpty && !opts.forceRender) { sectionRenderers.delete(num); return ""; }
   const expanded = isExpanded(num);
+  // Display number shown in the header/nav is sequential (1,2,3…) and decoupled
+  // from the internal `num` (the data-section id, which stays tied to the
+  // server's section field so filtering/context lookups never break).
+  const displayNum = opts.displayNum ?? num;
+  const chunkLimit = opts.chunkLimit;
   const countLabel = opts.countLabel || `${rows.length} ${rows.length === 1 ? "campaign" : "campaigns"}`;
-  sectionRenderers.set(num, { rows, bodyFn });
+  sectionRenderers.set(num, { rows, bodyFn, forceRender: !!opts.forceRender, chunkLimit });
   // Section 7 does its own chunking internally, per priority tier (see
   // section7()/chunkedHTML("7-high"/...)) — truncating its `rows` here BEFORE
   // bodyFn splits them into High/Medium/Low would cut off arbitrary
   // low-block-number rows instead of respecting tier order, so it opts out
   // of this generic outer chunk and always gets the full row set.
   const bodyHTML = expanded
-    ? (rows.length ? (num === 7 ? bodyFn(rows) : chunkedHTML(`sec-${num}`, rows, bodyFn))
-                    : `<div class="empty">No findings in this section.</div>`)
+    ? ((rows.length || opts.forceRender)
+        ? (num === 7 ? bodyFn(rows) : chunkedHTML(`sec-${num}`, rows, bodyFn, chunkLimit))
+        : `<div class="empty">No findings in this section.</div>`)
     : "";
   return `<div class="rsection${opts.muted ? " muted" : ""}" data-section="${num}">
     <div class="rsection-h${expanded ? " expanded" : ""}" data-toggle-section="${num}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-      <span class="snum">${num}.</span>
+      <span class="snum">${displayNum}${/^\d+$/.test(String(displayNum)) ? "." : ""}</span>
       <span class="stitle">${title}</span>
       <span class="scount">${esc(countLabel)}</span>
     </div>
@@ -1519,21 +1545,12 @@ function freshnessChipHTML() {
 
 function updateSummary() {
   const el = document.getElementById("summary");
-  const scopeEl = document.getElementById("scopeLine");
   const rollupEl = document.getElementById("rollup");
-  if (loadState !== "ok") { el.innerHTML = ""; if (scopeEl) scopeEl.textContent = ""; if (rollupEl) rollupEl.innerHTML = ""; return; }
+  if (loadState !== "ok") { el.innerHTML = ""; if (rollupEl) rollupEl.innerHTML = ""; return; }
   const shown = all.filter(passesFilters);
   const campaignCount = new Set(shown.map((n) => n.campaign_id ?? n.campaign_name)).size;
   el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${all.length}</b> findings</div>` +
     `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
-
-  // `all` is already scoped to the active client server-side (GET /api/notifications?client_id=...),
-  // so it's exactly the set of findings behind Notifications' "N campaigns" - the same number
-  // Campaigns' much shorter Signal-campaigns list gets compared against and looks "broken" next to.
-  if (scopeEl) {
-    const allClientCampaigns = new Set(all.map((n) => n.campaign_id ?? n.campaign_name)).size;
-    scopeEl.textContent = `Covers ALL Smartlead campaigns for the selected client (${allClientCampaigns} campaign${allClientCampaigns === 1 ? "" : "s"}) — including ones not managed as Signal campaigns in this tool.`;
-  }
 
   // Top-line rollup: always computed from the full client-scoped `all` (not the currently
   // chosen status/priority filter) so a 5-minute user gets the true picture at a glance,
@@ -1547,17 +1564,15 @@ function updateSummary() {
   // total campaign count) so the rollup isn't only ever bad news.
   if (rollupEl) {
     const needingAttention = new Set(all.filter((n) => n.section === 1).map((n) => n.campaign_id ?? n.campaign_name)).size;
-    const highPriority = all.filter((n) => n.priority === "High").length;
     // fix E1: N High / N Medium / N Low actions, scoped to open (non-retired)
     // Section 7 findings only, clickable straight to Section 7.
     const openActions = all.filter((n) => n.section === 7 && matchesActiveClient(n) && !isRetiredStatus(n.status));
     const tierCount = (p) => openActions.filter((n) => n.priority === p).length;
-    const clientScoped = all.filter(matchesActiveClient);
-    const allClearCount = clientScoped.filter((n) => n.section === 0).length;
-    const totalCampaigns = new Set(clientScoped.map((n) => n.campaign_id ?? n.campaign_name)).size;
     const filterActive = filters.status !== "all" || filters.priority !== "all" || filters.client !== "all";
     rollupEl.classList.toggle("rollup-filtered", filterActive);
-    rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention &middot; <b>${fmt(highPriority)}</b> high-priority finding${highPriority === 1 ? "" : "s"} &middot; <b>${fmt(all.length)}</b> total finding${all.length === 1 ? "" : "s"} &middot; <b>${fmt(allClearCount)}</b> all-clear &middot; <b>${fmt(totalCampaigns)}</b> total campaign${totalCampaigns === 1 ? "" : "s"}` +
+    // Trimmed to essentials: how many campaigns need attention, the actionable
+    // High/Medium/Low breakdown (click → Recommended Actions), and freshness.
+    rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention` +
       `<div class="rollup-chips"><button type="button" class="rollup-chip" onclick="jumpToSection(7)">${fmt(tierCount("High"))} High / ${fmt(tierCount("Medium"))} Medium / ${fmt(tierCount("Low"))} Low actions</button>` +
       (filterActive ? `<span class="rollup-filter-note"> &middot; totals — clear filter to compare</span>` : "") +
       `</div>` + freshnessChipHTML();
@@ -1588,23 +1603,31 @@ function draw() {
   // destination will exist in the DOM.
   const blockMap = buildCampaignToBlockMap(by(7));
 
+  // Variant Analysis (was its own Section 4) is now folded INTO Recommended
+  // Actions, rendered in the same action-block card format. section7() reads
+  // these module-level vars so the merge survives both the eager render and a
+  // lazy re-expand. See variantAnalysisSectionHTML().
+  variantAnalysisRows = by(4);
+  variantAnalysisCtx = ctxMap;
+  const rec7Count = by(7).length + variantAnalysisRows.length;
+
+  // Sections renumbered sequentially for display (1-6) — the internal data
+  // section ids (1,2,3,5,6,7) stay as-is so filtering/context keep working.
+  // Table sections 1-4 show their top 5 rows with a "Load more" (chunkLimit).
   const html = [
     worstOffenderCallout(by(7)),
-    reportSection(1, "Campaigns Needing Optimisation", by(1), (rows) => section1(rows, blockMap)),
-    reportSection(2, "Performing Campaigns", by(2), (rows) => section2(rows, blockMap)),
-    reportSection(3, "Campaign Lifecycle", by(3), section3),
-    reportSection(4, `<span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> Analysis`, by(4), (rows) => section4(rows, ctxMap), {
-      countLabel: (() => { const c = new Set(by(4).map((n) => n.campaign_id)).size; return `${c} campaign${c === 1 ? "" : "s"}, ${by(4).length} finding${by(4).length === 1 ? "" : "s"}`; })(),
-    }),
-    reportSection(5, "Low Reply Rate Flags - Campaigns with reply rate under 1%", by(5), section5),
-    reportSection(6, `<span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> <span class="jg" title="How evenly Smartlead's traffic split sends across each variant — should be non-zero for every intended variant.">Distribution</span> Flags`, by(6), section6),
-    reportSection(7, "Recommended Actions", by(7), section7, { countLabel: `${by(7).length} action${by(7).length === 1 ? "" : "s"}` }),
+    reportSection(1, "Campaigns Needing Optimisation", by(1), (rows) => section1(rows, blockMap), { displayNum: 1, chunkLimit: 5 }),
+    reportSection(2, "Performing Campaigns", by(2), (rows) => section2(rows, blockMap), { displayNum: 2, chunkLimit: 5 }),
+    reportSection(3, "Campaign Lifecycle", by(3), section3, { displayNum: 3, chunkLimit: 5 }),
+    reportSection(5, "Low Reply Rate Flags - Campaigns with reply rate under 1%", by(5), section5, { displayNum: 4, chunkLimit: 5 }),
+    reportSection(6, `<span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> <span class="jg" title="How evenly Smartlead's traffic split sends across each variant — should be non-zero for every intended variant.">Distribution</span> Flags`, by(6), section6, { displayNum: 5 }),
+    reportSection(7, "Recommended Actions", by(7), section7, { displayNum: 6, countLabel: `${rec7Count} action${rec7Count === 1 ? "" : "s"}`, forceRender: variantAnalysisRows.length > 0 }),
   ].join("");
 
   const clearRows = by(0);
   const clearHTML = reportSection(
     8, `All clear, ${esc(String(clearRows.length))} active campaigns below the 1,500-send report threshold`,
-    clearRows, section8, { muted: true, countLabel: "", showEmpty: true }
+    clearRows, section8, { muted: true, countLabel: "", showEmpty: true, displayNum: "✓" }
   );
 
   root.innerHTML = html + clearHTML;
@@ -1631,8 +1654,8 @@ function setSectionExpanded(num, expanded) {
     if (expanded && body.dataset.rendered !== "1") {
       const renderer = sectionRenderers.get(num);
       if (renderer) {
-        body.innerHTML = renderer.rows.length
-          ? (num === 7 ? renderer.bodyFn(renderer.rows) : chunkedHTML(`sec-${num}`, renderer.rows, renderer.bodyFn))
+        body.innerHTML = (renderer.rows.length || renderer.forceRender)
+          ? (num === 7 ? renderer.bodyFn(renderer.rows) : chunkedHTML(`sec-${num}`, renderer.rows, renderer.bodyFn, renderer.chunkLimit))
           : `<div class="empty">No findings in this section.</div>`;
         body.dataset.rendered = "1";
       }
@@ -1811,6 +1834,13 @@ document.getElementById("list").addEventListener("click", async (e) => {
   if (copyBtn) {
     e.preventDefault();
     await copyClaudePrompt(copyBtn.dataset.id, copyBtn);
+    return;
+  }
+
+  const auditBtn = e.target.closest('[data-act="copy-audit-prompt"]');
+  if (auditBtn) {
+    e.preventDefault();
+    await copyAuditPrompt(auditBtn);
     return;
   }
 
@@ -2081,12 +2111,19 @@ async function copyClaudePrompt(id, btn) {
   }
   restore();
   if (!text) { protoNote("No prompt available for this action"); return; }
+  await writeClipboard(text);
+  flashCopied(btn);
+}
+
+/* Shared clipboard write: Clipboard API with a hidden-textarea fallback for
+   browsers/contexts without navigator.clipboard. */
+async function writeClipboard(text) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(text);
-    } else {
-      throw new Error("no clipboard API");
+      return;
     }
+    throw new Error("no clipboard API");
   } catch {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -2098,9 +2135,34 @@ async function copyClaudePrompt(id, btn) {
     try { document.execCommand("copy"); } catch {}
     document.body.removeChild(ta);
   }
+}
+/* Briefly show "Copied ✓" on a button, then revert to its label. */
+function flashCopied(btn) {
   const originalLabel = btn.textContent;
   btn.textContent = "Copied ✓";
   setTimeout(() => { if (!btn.dataset.busy) btn.textContent = originalLabel; }, 2000);
+}
+
+/* Section 5 standalone action: build the list-audit + spam-word-check Claude
+   prompt from the row's campaign name/URL (carried on the button's data-*),
+   copy it, and flash the button. No network call — the prompt is composed
+   client-side, so it works even on a slim payload. */
+function buildAuditPrompt(campaign, url) {
+  const name = campaign || "this campaign";
+  const lines = [
+    `Run a list audit and spam-word check on the Smartlead campaign "${name}" (flagged for a reply rate under 1%).`,
+    ``,
+    `1. Run /lilly-list-audit on this campaign to confirm the enrolled leads match the intended ICP, and report the on-ICP vs off-ICP split by job function.`,
+    `2. Review every email in the sequence copy for spam-trigger words or phrases that could be hurting deliverability, and list each one with a safer rewrite.`,
+  ];
+  if (url) lines.push(``, `Campaign in Smartlead: ${url}`);
+  return lines.join("\n");
+}
+async function copyAuditPrompt(btn) {
+  if (btn.dataset.busy) return;
+  const text = buildAuditPrompt(btn.dataset.campaign, btn.dataset.url);
+  await writeClipboard(text);
+  flashCopied(btn);
 }
 
 /* --- Success toast w/ Undo (fix #3) ---
