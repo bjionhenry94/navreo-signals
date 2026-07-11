@@ -2678,7 +2678,7 @@ def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
 # browse folders/lists, page rows through the api_list_rows_page RPC (search/
 # filter/sort/pagination all run in the database; Python only proxies) — plus
 # organisational metadata writes on `lists`/`list_folders` (folder create,
-# move, favourite, last-opened stamp). Every handler returns (status, body)
+# move, last-opened stamp). Every handler returns (status, body)
 # for self._json, like execute_notification_action above.
 
 def _lists_sb_error(res) -> str | None:
@@ -2711,7 +2711,7 @@ def api_lists_index() -> tuple:
     folders = sb("GET", "list_folders?select=id,client,name,parent_id"
                         "&order=client.asc,name.asc")
     lists_ = sb("GET", "lists?select=id,name,client,folder_id,source_skill,"
-                       "owner,favourite,access,row_count,created_at,"
+                       "owner,access,row_count,created_at,"
                        "last_opened_at,last_opened_by&order=created_at.desc")
     if not isinstance(folders, list) or not isinstance(lists_, list):
         return 503, _LISTS_DB_DOWN
@@ -2823,7 +2823,7 @@ def lists_create_folder(p: dict) -> tuple:
 
 
 def _lists_patch(list_id, patch: dict) -> tuple:
-    """Shared PATCH-one-list plumbing for move/favourite/touch. Only ever
+    """Shared PATCH-one-list plumbing for move/touch. Only ever
     touches organisational metadata on `lists` — never list_rows."""
     if not list_id:
         return 400, {"ok": False, "message": "list_id is required"}
@@ -2842,10 +2842,6 @@ def _lists_patch(list_id, patch: dict) -> tuple:
 def lists_move(p: dict) -> tuple:
     # folder_id null/absent = unfiled (back under the client root)
     return _lists_patch(p.get("list_id"), {"folder_id": p.get("folder_id") or None})
-
-
-def lists_favourite(p: dict) -> tuple:
-    return _lists_patch(p.get("list_id"), {"favourite": bool(p.get("favourite"))})
 
 
 def lists_touch(p: dict) -> tuple:
@@ -3054,7 +3050,6 @@ LISTS_POST_ROUTES = {
     "/api/lists/folder/rename": lists_folder_rename,
     "/api/lists/folder/delete": lists_folder_delete,
     "/api/lists/move": lists_move,
-    "/api/lists/favourite": lists_favourite,
     "/api/lists/touch": lists_touch,
     "/api/lists/rows/delete": lists_rows_delete,
     "/api/lists/delete": lists_delete,
