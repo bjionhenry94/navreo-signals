@@ -3042,6 +3042,334 @@ def lists_folder_delete(p: dict) -> tuple:
     return 200, {"ok": True}
 
 
+# ── Saved Pulls (resumable list_pulls) ────────────────────────────────────
+# A "Saved Pull" (list_pulls row) freezes a targeting brief plus a cursor so
+# a GTME can take a batch now and come back later for more, from the Lists
+# page, with no memory of how it was built. SAMPLE MODE ONLY here (provider
+# == 'sample'): it draws batches from an existing free list already sitting
+# in list_rows instead of a paid provider. That's a deliberate, narrow
+# exception to the "Lists are WRITTEN by skills, only READ here" hard rule
+# above — the only list_rows writes this endpoint ever issues are appends to
+# an output list it itself owns (named "<pull name> — pulled" and recorded
+# on list_pulls.list_id), never an arbitrary caller-supplied list_id. Real
+# providers (ocean/prospeo/ai_ark) are refused with a 400 — the paid pull
+# engine is a separate, not-yet-built piece of work.
+
+def api_list_pulls_index() -> tuple:
+    """GET /api/list_pulls — every Saved Pull, newest first. Retained for
+    completeness; the UI no longer uses it (a Saved Pull is discovered by
+    opening its backing list, via api_list_pull_for_list below)."""
+    rows = sb("GET", "list_pulls?select=id,name,client,provider,total_tam,"
+                     "pulled_count,tranche_size,status,cursor,credit_ledger,"
+                     "brief_md,filter_json,list_id&order=created_at.desc")
+    if not isinstance(rows, list):
+        return 503, _LISTS_DB_DOWN
+    return 200, {"pulls": rows}
+
+
+def api_list_pull_for_list(q: dict) -> tuple:
+    """GET /api/list_pulls/for_list?id=<list_id> — the single Saved Pull whose
+    backing list is <list_id>, or {"pull": null} if the list isn't a Saved
+    Pull. Powers the resume panel that docks onto an opened list's grid."""
+    from urllib.parse import quote
+    lid = (q.get("id") or [""])[0].strip()
+    if not lid:
+        return 400, {"ok": False, "message": "id is required"}
+    rows = sb("GET", f"list_pulls?list_id=eq.{quote(lid, safe='')}&select=id,name,"
+                     "provider,total_tam,pulled_count,tranche_size,status,cursor,"
+                     "credit_ledger,brief_md&limit=1")
+    if not isinstance(rows, list):
+        return 503, _LISTS_DB_DOWN
+    return 200, {"pull": rows[0] if rows else None}
+
+
+def api_list_pull_campaigns(q: dict) -> tuple:
+    """GET /api/list_pulls/campaigns?pull_id=<id> — the campaigns this pull's
+    leads were pushed into, aggregated by campaign (total leads + last date),
+    newest first. Powers the "Campaigns" subsection of the resume panel."""
+    from urllib.parse import quote
+    pull_id = (q.get("pull_id") or [""])[0].strip()
+    if not pull_id:
+        return 400, {"ok": False, "message": "pull_id is required"}
+    rows = sb("GET", f"list_pull_campaigns?pull_id=eq.{quote(pull_id, safe='')}"
+                     "&select=campaign_id,campaign_name,rows,at&order=at.desc")
+    if not isinstance(rows, list):
+        return 503, _LISTS_DB_DOWN
+    # Aggregate by campaign in Python (PostgREST can't group+order this shape
+    # without a view); key on campaign_id when present, else the name.
+    agg: dict = {}
+    order: list = []
+    for r in rows:
+        key = r.get("campaign_id") or r.get("campaign_name") or ""
+        if key not in agg:
+            agg[key] = {"campaign_id": r.get("campaign_id"),
+                        "campaign_name": r.get("campaign_name"),
+                        "total": 0, "last_at": r.get("at")}
+            order.append(key)
+        agg[key]["total"] += r.get("rows") or 0
+        if (r.get("at") or "") > (agg[key]["last_at"] or ""):
+            agg[key]["last_at"] = r.get("at")
+    # `rows` already came back newest-first, so first-seen order preserves it.
+    return 200, {"campaigns": [agg[k] for k in order]}
+
+
+def api_list_pulls_by_campaign(q: dict) -> tuple:
+    """GET /api/list_pulls/by_campaign?campaign_id=<id>|campaign_name=<name> —
+    reverse lookup: the pull/list rows whose leads filled a given campaign.
+    No dedicated UI yet, but the linkage is queryable."""
+    from urllib.parse import quote
+    cid = (q.get("campaign_id") or [""])[0].strip()
+    cname = (q.get("campaign_name") or [""])[0].strip()
+    if not cid and not cname:
+        return 400, {"ok": False, "message": "campaign_id or campaign_name is required"}
+    filt = (f"campaign_id=eq.{quote(cid, safe='')}" if cid
+            else f"campaign_name=eq.{quote(cname, safe='')}")
+    rows = sb("GET", f"list_pull_campaigns?{filt}"
+                     "&select=pull_id,list_id,campaign_id,campaign_name,rows,at"
+                     "&order=at.desc")
+    if not isinstance(rows, list):
+        return 503, _LISTS_DB_DOWN
+    return 200, {"links": rows}
+
+
+def api_list_pulls_push_summary(q: dict) -> tuple:
+    """GET /api/list_pulls/push_summary[?list_id=<id>] — where each list's
+    leads have been pushed, aggregated list_id -> platform -> campaigns. ONE
+    aggregated fetch powers both the All-Files "Pushed to" column (no
+    list_id param = every list) and the grid header's destination chips +
+    popover (list_id param = just that list)."""
+    from urllib.parse import quote
+    lid = (q.get("list_id") or [""])[0].strip()
+    path = ("list_pull_campaigns?select=list_id,platform,campaign_id,"
+            "campaign_name,rows,at&order=at.desc")
+    if lid:
+        path += f"&list_id=eq.{quote(lid, safe='')}"
+    rows = sb_get_all(path)
+    if rows is None:
+        return 503, _LISTS_DB_DOWN
+    # list_id -> platform -> campaign -> {total, last_at}; rows arrive
+    # newest-first, so first-seen order keeps campaigns newest-first too.
+    summary: dict = {}
+    for r in rows:
+        list_id = r.get("list_id")
+        if not list_id:
+            continue
+        platform = (r.get("platform") or "smartlead").lower()
+        plat = summary.setdefault(list_id, {}).setdefault(
+            platform, {"total": 0, "campaigns": {}, "order": []})
+        key = r.get("campaign_id") or r.get("campaign_name") or ""
+        camp = plat["campaigns"].get(key)
+        if camp is None:
+            camp = plat["campaigns"][key] = {
+                "campaign_id": r.get("campaign_id"),
+                "campaign_name": r.get("campaign_name"),
+                "total": 0, "last_at": r.get("at")}
+            plat["order"].append(key)
+        camp["total"] += r.get("rows") or 0
+        if (r.get("at") or "") > (camp["last_at"] or ""):
+            camp["last_at"] = r.get("at")
+        plat["total"] += r.get("rows") or 0
+    out = {list_id: [{"platform": platform, "total": plat["total"],
+                      "campaigns": [plat["campaigns"][k] for k in plat["order"]]}
+                     for platform, plat in plats.items()]
+           for list_id, plats in summary.items()}
+    return 200, {"summary": out}
+
+
+_PULL_LOCK_TTL_S = 120  # a locked_by held longer than this is treated as abandoned
+_PULL_ROW_CHUNK = 500   # matches list_upload.py's BATCH_SIZE
+
+
+def _pull_lock_is_stale(locked_at_raw) -> bool:
+    """True when a held lock is older than _PULL_LOCK_TTL_S (or unparsable —
+    fail open rather than bricking a pull on a timestamp format surprise)."""
+    from datetime import datetime, timezone
+    if not locked_at_raw:
+        return True
+    try:
+        locked_at = datetime.fromisoformat(str(locked_at_raw).replace("Z", "+00:00"))
+        if locked_at.tzinfo is None:
+            locked_at = locked_at.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - locked_at).total_seconds() > _PULL_LOCK_TTL_S
+    except ValueError:
+        return True
+
+
+def _pull_append_rows(list_id: str, start_row_num: int, columns: list, data_rows: list) -> int:
+    """Append `data_rows` (list of {col: val} dicts) to list_rows for
+    `list_id`, continuing row_num from start_row_num. Chunked like
+    list_upload.py._insert_rows; the only place in server.py that writes
+    list_rows (see the Saved Pulls note above)."""
+    inserted = 0
+    for i in range(0, len(data_rows), _PULL_ROW_CHUNK):
+        batch = data_rows[i:i + _PULL_ROW_CHUNK]
+        payload = [{"list_id": list_id, "row_num": start_row_num + i + offset,
+                    "data": {col: row.get(col) for col in columns}}
+                   for offset, row in enumerate(batch)]
+        sb("POST", "list_rows", payload)
+        inserted += len(batch)
+    return inserted
+
+
+def list_pulls_pull(p: dict) -> tuple:
+    """POST /api/list_pulls/pull {id, size?} — take the next batch for a
+    SAMPLE-mode Saved Pull. See the Saved Pulls note above for scope."""
+    from datetime import datetime, timezone
+    from urllib.parse import quote
+
+    pull_id = str(p.get("id") or "").strip()
+    if not pull_id:
+        return 400, {"ok": False, "message": "id is required"}
+
+    rows = sb("GET", f"list_pulls?id=eq.{quote(pull_id, safe='')}")
+    if rows is None:
+        return 503, _LISTS_DB_DOWN
+    if not isinstance(rows, list) or not rows:
+        return 404, {"ok": False, "message": "Saved pull not found"}
+    pull = rows[0]
+
+    if pull.get("provider") != "sample":
+        return 400, {"ok": False, "message": "only sample pulls can be pulled from the tool"}
+
+    if pull.get("locked_by") and not _pull_lock_is_stale(pull.get("locked_at")):
+        return 409, {"ok": False, "message": "a pull is already running"}
+
+    now = datetime.now(timezone.utc)
+    sb("PATCH", f"list_pulls?id=eq.{pull_id}",
+       {"locked_by": "tool", "locked_at": now.isoformat()})
+    try:
+        total_tam = pull.get("total_tam") or 0
+        pulled_count = pull.get("pulled_count") or 0
+        remaining = total_tam - pulled_count
+        if remaining <= 0:
+            return 200, {"ok": True, "done": True, "message": "all pulled"}
+
+        try:
+            size = int(p.get("size")) if p.get("size") else None
+        except (TypeError, ValueError):
+            size = None
+        take = min(size or pull.get("tranche_size") or 500, remaining)
+        if take <= 0:
+            return 400, {"ok": False, "message": "size must be a positive number"}
+
+        source_list_id = (pull.get("filter_json") or {}).get("sample_source_list_id")
+        if not source_list_id:
+            return 400, {"ok": False, "message": "this sample pull has no source list configured"}
+
+        cursor = pull.get("cursor") or {}
+        offset = int(cursor.get("offset") or 0)
+
+        src_rows = sb("GET", f"list_rows?list_id=eq.{quote(source_list_id, safe='')}"
+                             "&order=row_num.asc&select=row_num,data",
+                      headers={"Range-Unit": "items", "Range": f"{offset}-{offset + take - 1}"})
+        if not isinstance(src_rows, list):
+            return 503, _LISTS_DB_DOWN
+        if not src_rows:  # end of the source pool — advance nothing further
+            return 200, {"ok": True, "done": True, "message": "all pulled"}
+        # src_rows may be shorter than `take` at the tail of the source pool —
+        # inserted (below) is always len(src_rows), so offset/pulled_count only
+        # ever advance by what was actually fetched.
+
+        # Batches append to the pull's OWN backing list (list_pulls.list_id) —
+        # the list that appears in the file browser. Under the current model
+        # both existing pulls are pre-linked; the create-and-link path below
+        # only fires for a future pull whose backing list was never made.
+        client = pull.get("client")
+        out_list_id = pull.get("list_id")
+        columns = None  # set below — either the backing list's, or fresh from this batch
+
+        if out_list_id:
+            existing = sb("GET", f"lists?id=eq.{out_list_id}&select=id,columns")
+            if isinstance(existing, list) and existing:
+                columns = existing[0].get("columns") or []
+            else:
+                out_list_id = None  # stale link — recreate and re-link below
+
+        if not out_list_id:
+            # No backing list yet — create one and link it. Columns are fixed
+            # here from the first row's own key order and never recomputed on
+            # later batches (a later batch with a slightly different key set
+            # must not reshuffle/drop the list's established column schema).
+            columns = list((src_rows[0].get("data") or {}).keys())
+            created = sb("POST", "lists", {
+                "name": pull.get("name"), "client": client, "folder_id": None,
+                "source_skill": "signals-list-resume",
+                "brief_context": pull.get("brief_md"),
+                "row_count": 0, "columns": columns,
+            }, prefer="return=representation")
+            if not isinstance(created, list) or not created:
+                return 502, {"ok": False, "message": "couldn't create the output list"}
+            out_list_id = created[0]["id"]
+
+        # A pre-created backing list starts with no columns — set them from the
+        # first batch so the grid has headers (fixed once, as above).
+        if not columns:
+            columns = list((src_rows[0].get("data") or {}).keys())
+            sb("PATCH", f"lists?id=eq.{out_list_id}", {"columns": columns})
+
+        max_row_num = 0
+        cur_max = sb("GET", f"list_rows?list_id=eq.{out_list_id}"
+                            "&select=row_num&order=row_num.desc&limit=1")
+        if isinstance(cur_max, list) and cur_max:
+            max_row_num = cur_max[0].get("row_num") or 0
+
+        data_rows = [r.get("data") or {} for r in src_rows]
+        inserted = _pull_append_rows(out_list_id, max_row_num + 1, columns, data_rows)
+
+        sb("PATCH", f"lists?id=eq.{out_list_id}", {"row_count": max_row_num + inserted})
+
+        # Optional campaign provenance: if the caller named a campaign for
+        # this batch, stamp it on the ledger entry AND record a row in
+        # list_pull_campaigns (the general list -> sending-platform provenance
+        # table — any list can carry these, not just Saved Pulls). SAMPLE mode
+        # records the linkage only — it never pushes to the platform; the real
+        # prospeo flow will do the actual push later.
+        campaign_name = str(p.get("campaign_name") or "").strip()
+        campaign_id = str(p.get("campaign_id") or "").strip()
+        platform = str(p.get("platform") or "smartlead").strip().lower()
+        if platform not in ("smartlead", "heyreach"):
+            platform = "smartlead"
+
+        new_pulled = pulled_count + inserted
+        new_offset = offset + inserted
+        ledger = pull.get("credit_ledger")
+        ledger = list(ledger) if isinstance(ledger, list) else []
+        entry = {"batch": len(ledger) + 1, "rows": inserted, "credits": 0,
+                 "at": now.isoformat(), "output_list_id": out_list_id}
+        if campaign_name or campaign_id:
+            entry["campaign_name"] = campaign_name or None
+            entry["campaign_id"] = campaign_id or None
+        ledger.append(entry)
+        new_status = "exhausted" if new_pulled >= total_tam else "active"
+
+        sb("PATCH", f"list_pulls?id=eq.{pull_id}", {
+            "list_id": out_list_id,
+            "cursor": {"offset": new_offset},
+            "pulled_count": new_pulled,
+            "version": (pull.get("version") or 0) + 1,
+            "last_pulled_at": now.isoformat(),
+            "last_pulled_by": "tool",
+            "credit_ledger": ledger,
+            "status": new_status,
+        })
+
+        if campaign_name or campaign_id:
+            sb("POST", "list_pull_campaigns", {
+                "pull_id": pull_id, "list_id": out_list_id,
+                "campaign_id": campaign_id or None,
+                "campaign_name": campaign_name or None,
+                "platform": platform,
+                "rows": inserted, "at": now.isoformat(),
+            })
+
+        return 200, {"ok": True, "taken": inserted, "pulled_count": new_pulled,
+                     "total": total_tam, "remaining": max(0, total_tam - new_pulled),
+                     "output_list_id": out_list_id, "batches": len(ledger),
+                     "campaign_name": campaign_name or None}
+    finally:
+        sb("PATCH", f"list_pulls?id=eq.{pull_id}", {"locked_by": None, "locked_at": None})
+
+
 # POST /api/lists/* dispatch — kept OUT of ROUTES because these handlers
 # return (status, body) so validation/trigger failures answer with real 4xx
 # codes (ROUTES handlers always answer 200). do_POST checks this map first.
@@ -3053,6 +3381,7 @@ LISTS_POST_ROUTES = {
     "/api/lists/touch": lists_touch,
     "/api/lists/rows/delete": lists_rows_delete,
     "/api/lists/delete": lists_delete,
+    "/api/list_pulls/pull": list_pulls_pull,
 }
 
 
@@ -8455,6 +8784,29 @@ class Handler(SimpleHTTPRequestHandler):
             return self._proxy_deliverability("GET")
         if path == "/api/lists":
             status, body = api_lists_index()
+            return self._json(body, status)
+        if path == "/api/list_pulls":
+            status, body = api_list_pulls_index()
+            return self._json(body, status)
+        if path == "/api/list_pulls/for_list":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            status, body = api_list_pull_for_list(q)
+            return self._json(body, status)
+        if path == "/api/list_pulls/campaigns":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            status, body = api_list_pull_campaigns(q)
+            return self._json(body, status)
+        if path == "/api/list_pulls/by_campaign":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            status, body = api_list_pulls_by_campaign(q)
+            return self._json(body, status)
+        if path == "/api/list_pulls/push_summary":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            status, body = api_list_pulls_push_summary(q)
             return self._json(body, status)
         if path == "/api/lists/rows":
             from urllib.parse import parse_qs, urlparse

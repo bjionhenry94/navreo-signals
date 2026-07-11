@@ -54,7 +54,7 @@ table.lists-tbl col.c-client { width: 15%; }
 table.lists-tbl col.c-created { width: 14%; }
 table.lists-tbl col.c-opened { width: 16%; }
 table.lists-tbl col.c-owner { width: 9%; }
-table.lists-tbl col.c-access { width: 8%; }
+table.lists-tbl col.c-pushed { width: 8%; }
 table.lists-tbl col.c-menu { width: 32px; }
 .lists-tbl td, .lists-tbl th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lists-tbl tr.row-folder td { font-weight: 500; }
@@ -226,6 +226,73 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
 .sortpop .dirtoggle button.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
 .sortpop .sortactions { display: flex; justify-content: space-between; margin-top: 12px; }
 
+/* ── Resume panel (collapsible, docked right on a Saved Pull's grid) ──────── */
+.pull-panel { position: fixed; top: 92px; right: 0; z-index: 45; display: flex; align-items: flex-start; }
+.pp-tab {
+  align-self: flex-start; margin-top: 6px;
+  background: var(--orange); color: var(--cream); border: none; cursor: pointer;
+  border-radius: 9px 0 0 9px; padding: 12px 8px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  box-shadow: -2px 0 10px rgba(20,17,14,.12);
+}
+.pp-tab:hover { background: var(--orange-600); }
+.pp-tab .pp-chev { display: inline-flex; width: 14px; height: 14px; }
+.pp-tab .pp-tablbl { writing-mode: vertical-rl; font: 600 12px var(--font-sans); letter-spacing: .06em; }
+.pp-body { width: 0; overflow: hidden; transition: width .22s ease; background: var(--card); }
+.pull-panel.open .pp-body {
+  width: min(360px, 90vw);
+  border-left: 1px solid var(--line); border-radius: 12px 0 0 12px;
+  box-shadow: -10px 0 30px rgba(20,17,14,.14);
+}
+.pp-inner { width: min(360px, 90vw); box-sizing: border-box; padding: 16px 18px; overflow-y: auto; max-height: calc(100vh - 108px); }
+.pp-lab { font-size: 11px; color: var(--ink-3); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 8px; }
+.pp-lab:first-child { margin-top: 0; }
+.pp-brief { max-height: 180px; overflow-y: auto; padding-right: 4px; }
+.pp-brief p, .pp-brief li { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+.pp-progtext { font-size: 12.5px; color: var(--ink-2); margin: 7px 0 12px; }
+.pp-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.pp-field label { font-size: 11px; color: var(--ink-3); font-weight: 500; }
+.pp-hist { max-height: 150px; overflow-y: auto; }
+.pp-histrow { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--ink-2); padding: 5px 0; border-bottom: 1px solid var(--line); }
+.pp-histrow:last-child { border-bottom: none; }
+.pp-muted { font-size: 12px; color: var(--ink-3); }
+.pp-selrow { display: flex; gap: 8px; }
+.pp-selrow .pp-field { flex: 1; min-width: 0; }
+.pp-platsel {
+  width: 100%; border: 1px solid var(--line-2); border-radius: var(--ctrl-radius);
+  height: var(--ctrl-h); padding: 0 8px; font: 400 13px var(--font-sans);
+  color: var(--ink); background: transparent; box-sizing: border-box;
+}
+.pp-platsel:focus { outline: none; box-shadow: var(--focus); }
+
+/* ── destination provenance (list -> platform) marks + chips ─────────────
+   real platform logos — the same local icons/ assets the Signals section
+   uses (campaigns.html), never an external fetch. Chips stay quiet —
+   summary first, detail on click. */
+.pf-logo { width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; display: inline-block; vertical-align: -3px; }
+.push-chip {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 8px 2px 3px;
+  font: 500 11px var(--font-sans); color: var(--ink-2); background: transparent;
+}
+.push-chip:hover { background: var(--bg-sunken); }
+/* All-Files "Pushed to" strip: logo + truncated campaign name per entry,
+   swiping horizontally INSIDE the existing column width — no scrollbar
+   chrome, no column widening. */
+.push-strip {
+  display: flex; align-items: center; gap: 8px; max-width: 100%;
+  overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
+}
+.push-strip::-webkit-scrollbar { display: none; }
+.push-ent { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 11px; color: var(--ink-2); }
+.push-ent .pe-nm { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.push-strip .push-chip { flex-shrink: 0; padding: 2px 8px; }
+.push-pop { min-width: 240px; }
+.push-pop .pu-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--ink-2); padding: 6px 8px; border-radius: 7px; }
+.push-pop .pu-row:hover { background: var(--bg-sunken); }
+.push-pop .pu-nm { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.push-pop .pu-meta { color: var(--ink-3); white-space: nowrap; }
+
 /* ── New folder / move modal ──────────────────────────── */
 .overlay { position: fixed; inset: 0; background: rgba(20,17,14,0.45); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
 .overlay.on { display: flex; }
@@ -266,12 +333,12 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
         <table class="tbl lists-tbl">
           <colgroup>
             <col class="c-name"><col class="c-client"><col class="c-created">
-            <col class="c-opened"><col class="c-owner"><col class="c-access"><col class="c-menu">
+            <col class="c-opened"><col class="c-owner"><col class="c-pushed"><col class="c-menu">
           </colgroup>
           <thead>
             <tr>
               <th>Name</th><th>Clients</th><th>Created at</th>
-              <th>Last opened</th><th>Owner</th><th>Access</th><th>Actions</th>
+              <th>Last opened</th><th>Owner</th><th>Pushed to</th><th>Actions</th>
             </tr>
           </thead>
           <tbody id="filesBody"></tbody>
@@ -281,13 +348,22 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
 
     <!-- ═══ VIEW 2: GRID VIEWER ═══ -->
     <div id="view-grid" style="display:none">
+      <!-- collapsible resume panel, docked on the right; only shown when the
+           opened list is a Saved Pull. Collapsed by default (slim "Pull" tab). -->
+      <div id="pullPanel" class="pull-panel" style="display:none">
+        <button class="pp-tab" id="pullPanelTab" title="Add leads from this pool">
+          <span class="pp-chev" id="pullPanelChev"></span><span class="pp-tablbl" id="pullPanelTabLbl">Add leads</span>
+        </button>
+        <div class="pp-body"><div class="pp-inner" id="pullPanelInner"></div></div>
+      </div>
       <div class="gridheader">
         <div class="gh-left">
-          <a class="back-link" href="lists.html">&larr; All files</a>
+          <a class="back-link" href="lists.html" id="gridBackLink">&larr; All files</a>
           <span class="gh-sep">/</span>
           <h1 id="gridName">–</h1>
           <span class="chip" id="gridClientChip" style="cursor:default"></span>
           <span class="muted gh-rows" id="gridCountChip"></span>
+          <span id="gridPushChips" style="display:inline-flex;gap:6px;align-items:center"></span>
         </div>
         <div class="gh-right">
           <button class="btn" id="downloadBtn" title="Download the current view as CSV">
@@ -486,6 +562,306 @@ async function loadListsIndex(force) {
   return LISTS_DATA;
 }
 
+/* ═══════════════════════════ Saved pulls (resumable list_pulls) ═══════════════════════════ */
+/* Model: a Saved Pull IS a list. There's no global catalog — you discover a
+   pull by opening its backing list, at which point a collapsible resume panel
+   docks onto the right of the grid. openGrid() calls maybeShowPullPanel() for
+   every list; it renders only when that list is a Saved Pull. */
+
+let CURRENT_PULL = null;     // the list_pulls row backing the open list, or null
+let pullPanelOpen = false;   // collapse state (collapsed by default per open)
+
+const svgPullChevL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><path d="M15 6l-6 6 6 6"/></svg>`;
+const svgPullChevR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><path d="M9 6l6 6-6 6"/></svg>`;
+
+function hidePullPanel() {
+  CURRENT_PULL = null;
+  pullPanelOpen = false;
+  const panel = document.getElementById("pullPanel");
+  if (panel) { panel.style.display = "none"; panel.classList.remove("open"); }
+}
+
+function setPullPanelOpen(open) {
+  pullPanelOpen = open;
+  const panel = document.getElementById("pullPanel");
+  const chev = document.getElementById("pullPanelChev");
+  if (panel) panel.classList.toggle("open", open);
+  if (chev) chev.innerHTML = open ? svgPullChevR : svgPullChevL; // ›=close, ‹=open
+}
+
+/* Called for every opened list. Fetches the Saved-Pull row for this list_id;
+   if there is one, shows the collapsed panel, else hides it (normal list). */
+async function maybeShowPullPanel(listId) {
+  hidePullPanel();
+  let pull = null;
+  try {
+    const r = await fetch(`/api/list_pulls/for_list?id=${encodeURIComponent(listId)}`, { cache: "no-store" });
+    const j = await r.json().catch(() => null);
+    pull = j && j.pull ? j.pull : null;
+  } catch { pull = null; }
+  if (!pull) return;
+  CURRENT_PULL = pull;
+  const panel = document.getElementById("pullPanel");
+  panel.style.display = "flex";
+  setPullPanelOpen(false); // collapsed by default; the slim tab stays visible
+  renderPullPanel(pull);
+}
+
+const pullPanelTabEl = document.getElementById("pullPanelTab");
+if (pullPanelTabEl) pullPanelTabEl.onclick = () => setPullPanelOpen(!pullPanelOpen);
+
+function pullIsExhausted(pull) {
+  const total = pull.total_tam || 0;
+  const remaining = total - (pull.pulled_count || 0);
+  return pull.status === "exhausted" || remaining <= 0;
+}
+
+function renderPullPanel(pull) {
+  const total = pull.total_tam || 0;
+  const pulledN = pull.pulled_count || 0;
+  const remaining = Math.max(0, total - pulledN);
+  const pct = total ? Math.min(100, Math.round((pulledN / total) * 100)) : 0;
+  const defaultSize = remaining > 0 ? Math.max(1, Math.min(pull.tranche_size || 500, remaining)) : 0;
+  const done = pullIsExhausted(pull);
+  const ledger = Array.isArray(pull.credit_ledger) ? pull.credit_ledger : [];
+  const histHtml = ledger.length
+    ? ledger.slice().reverse().map((b) => `
+        <div class="pp-histrow">
+          <span>Batch ${fmt(b.batch)}</span><span>${fmt(b.rows)} rows</span><span class="pp-muted">0 credits</span>
+        </div>`).join("")
+    : `<div class="pp-muted">No batches added yet</div>`;
+
+  // state-aware tab: "Add leads" while the pool has leads left, "✓ All added" once exhausted
+  const tabLbl = document.getElementById("pullPanelTabLbl");
+  if (tabLbl) tabLbl.textContent = done ? "✓ All added" : "Add leads";
+
+  document.getElementById("pullPanelInner").innerHTML = `
+    <div class="pp-lab">Brief</div>
+    <div class="pp-brief">${formatBriefMd(pull.brief_md)}</div>
+
+    <div class="pp-lab">Progress</div>
+    <div class="bar-track"><div class="bar-fill g" style="width:${pct}%"></div></div>
+    <div class="pp-progtext">${fmt(pulledN)} of ${fmt(total)} pool pulled &middot; ${pct}% &middot; ${fmt(remaining)} left</div>
+
+    <div class="pp-field">
+      <label for="ppSize">Batch size</label>
+      <input type="number" id="ppSize" class="numinput" style="width:110px" min="1" max="${remaining || 0}" value="${defaultSize}" ${done ? "disabled" : ""}>
+    </div>
+    <div class="pp-selrow">
+      <div class="pp-field">
+        <label for="ppCampaign">Campaign (optional)</label>
+        <input type="text" id="ppCampaign" class="numinput" style="width:100%;font-family:var(--font-sans)" placeholder="e.g. Exporters Q3" ${done ? "disabled" : ""}>
+      </div>
+      <div class="pp-field" style="flex:0 0 118px">
+        <label for="ppPlatform">Platform</label>
+        <select id="ppPlatform" class="pp-platsel" ${done ? "disabled" : ""}>
+          <option value="smartlead" selected>Smartlead</option>
+          <option value="heyreach">HeyReach</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn primary sm" id="ppPullBtn" style="width:100%;justify-content:center" ${done ? "disabled" : ""}>${done ? "All added" : "Add next batch"}</button>
+
+    <div class="pp-lab">Batch history</div>
+    <div class="pp-hist">${histHtml}</div>`;
+
+  const btn = document.getElementById("ppPullBtn");
+  if (btn) btn.onclick = () => pullNextBatch(pull.id);
+}
+
+async function pullNextBatch(pullId) {
+  const btn = document.getElementById("ppPullBtn");
+  const sizeEl = document.getElementById("ppSize");
+  const campEl = document.getElementById("ppCampaign");
+  const platEl = document.getElementById("ppPlatform");
+  const size = sizeEl ? (parseInt(sizeEl.value, 10) || undefined) : undefined;
+  const campaign_name = campEl ? (campEl.value || "").trim() : "";
+  const restore = busyBtn(btn, "Adding…");
+  if (!restore) return;
+  try {
+    const body = { id: pullId, size };
+    if (campaign_name) {
+      body.campaign_name = campaign_name;
+      body.platform = platEl ? platEl.value : "smartlead";
+    }
+    const r = await fetch("/api/list_pulls/pull", { method: "POST", body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't add the next batch");
+    protoNote(j.done ? "All leads already added" : `Added ${fmt(j.taken || 0)} leads in this batch`);
+    // refresh the panel (progress + history) and the grid rows.
+    // grid.id is this pull's backing list id — re-query by it (for_list doesn't
+    // echo list_id back, so CURRENT_PULL can't supply it).
+    try {
+      const pr = await fetch(`/api/list_pulls/for_list?id=${encodeURIComponent(grid.id || "")}`, { cache: "no-store" });
+      const pj = await pr.json().catch(() => null);
+      if (pj && pj.pull) { CURRENT_PULL = pj.pull; renderPullPanel(pj.pull); }
+    } catch { /* panel refresh is best-effort */ }
+    // The very first batch gives a previously-empty list its columns. The grid
+    // cached an empty visible-column set when it opened at 0 rows, which would
+    // now hide every new column — reset it so the fresh columns all show.
+    if (grid.id) { grid.visible = null; await fetchGridRows(); }
+    loadListsIndex(true); // the backing list's row_count just changed
+    if (campaign_name) {
+      await loadPushSummary(true); // a new destination row exists
+      renderGridPushChips(grid.id);
+    }
+  } catch (e) {
+    protoNote(e.message || "Couldn't reach the server — try again", { ms: 4200 });
+  } finally {
+    restore();
+  }
+}
+
+/* ── destination provenance: where each list's leads were pushed ──────────
+   One aggregated fetch (/api/list_pulls/push_summary) powers BOTH the
+   All-Files "Pushed to" column and the grid header's chips — never one
+   request per row. Summary first, detail (campaign list) only on click. */
+
+let PUSH_SUMMARY = null; // { "<list_id>": [{platform, total, campaigns:[...]}] }
+
+const PLATFORM_META = {
+  smartlead: { icon: "icons/smartlead.png", name: "Smartlead" },
+  heyreach:  { icon: "icons/heyreach.png", name: "HeyReach" },
+};
+
+/* Real platform logo (same local assets campaigns.html uses) — 16px, rounded,
+   alt/title carry the platform name so the mark is legible without the logo. */
+function platformBadge(platform) {
+  const m = PLATFORM_META[platform] || { icon: "icons/smartlead.png", name: platform };
+  return `<img class="pf-logo" src="${esc4attr(m.icon)}" alt="${esc4attr(m.name)}" title="${esc4attr(m.name)}">`;
+}
+
+async function loadPushSummary(force) {
+  if (PUSH_SUMMARY && !force) return PUSH_SUMMARY;
+  try {
+    const r = await fetch("/api/list_pulls/push_summary", { cache: "no-store" });
+    const j = await r.json().catch(() => null);
+    PUSH_SUMMARY = (j && j.summary) ? j.summary : {};
+  } catch { PUSH_SUMMARY = PUSH_SUMMARY || {}; }
+  return PUSH_SUMMARY;
+}
+
+/* Every campaign this list was pushed to, flattened across platforms and
+   ordered oldest -> newest (reads as the push history, left to right). */
+function pushCampaignsFlat(listId) {
+  const entries = (PUSH_SUMMARY || {})[listId] || [];
+  const flat = [];
+  entries.forEach((e) => (e.campaigns || []).forEach((c) => flat.push({ platform: e.platform, ...c })));
+  flat.sort((a, b) => String(a.last_at || "").localeCompare(String(b.last_at || "")));
+  return flat;
+}
+
+const PUSH_STRIP_DOM_CAP = 10; // entries rendered; beyond this a "+N more" chip opens the popover
+
+/* All-Files cell: horizontally-swipable strip of logo + truncated campaign
+   name (inside the column width — never widens it), or a muted dash. */
+function pushMarksHtml(listId) {
+  const flat = pushCampaignsFlat(listId);
+  if (!flat.length) return `<span class="muted">—</span>`;
+  const shown = flat.slice(0, PUSH_STRIP_DOM_CAP);
+  const extra = flat.length - shown.length;
+  const ents = shown.map((c) => {
+    const label = c.campaign_name || c.campaign_id || "—";
+    return `<span class="push-ent">${platformBadge(c.platform)}<span class="pe-nm" title="${esc4attr(label)}">${esc(label)}</span></span>`;
+  });
+  if (extra > 0) {
+    ents.push(`<button class="push-chip" data-popover-trigger title="Show all campaigns" onclick="openPushMore(event,'${esc(listId)}')">+${extra} more</button>`);
+  }
+  return `<span class="push-strip">${ents.join("")}</span>`;
+}
+
+/* "+N more" chip in a directory row: pop the full per-platform breakdown. */
+function openPushMore(ev, listId) {
+  ev.stopPropagation();
+  ev.preventDefault();
+  closeAnyPopover();
+  const entries = (PUSH_SUMMARY || {})[listId] || [];
+  if (entries.length) openPushPopover(ev.currentTarget, entries);
+}
+
+/* Grid-header chips: one small chip per platform — badge + campaign name
+   (or ×N when several). Click opens a popover with that platform's
+   campaigns (name · leads · last date). Nothing rendered if never pushed. */
+function renderGridPushChips(listId) {
+  const wrap = document.getElementById("gridPushChips");
+  if (!wrap) return;
+  const entries = (PUSH_SUMMARY || {})[listId];
+  if (!entries || !entries.length) { wrap.innerHTML = ""; return; }
+  wrap.innerHTML = entries.map((e, i) => {
+    const camps = e.campaigns || [];
+    const label = camps.length === 1
+      ? esc(camps[0].campaign_name || camps[0].campaign_id || "1 campaign")
+      : `×${camps.length}`;
+    const m = PLATFORM_META[e.platform] || { name: e.platform };
+    return `<button class="push-chip" data-plat-idx="${i}" data-popover-trigger title="Pushed to ${esc4attr(m.name)} — click for detail">${platformBadge(e.platform)}<span>${label}</span></button>`;
+  }).join("");
+  wrap.querySelectorAll(".push-chip").forEach((chip) => {
+    chip.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      closeAnyPopover();
+      const entry = entries[parseInt(chip.getAttribute("data-plat-idx"), 10)];
+      if (!entry) return;
+      openPushPopover(chip, [entry]);
+    });
+  });
+}
+
+/* Campaign-detail popover. `sections` = [{platform, campaigns}] — the header
+   chips pass one platform's section, the "+N more" chip passes all of them. */
+function openPushPopover(anchor, sections) {
+  const pop = document.createElement("div");
+  pop.className = "popover push-pop";
+  pop.innerHTML = (sections || []).map((entry) => {
+    const m = PLATFORM_META[entry.platform] || { name: entry.platform };
+    return `<div class="p-lab" style="display:flex;align-items:center;gap:6px">${platformBadge(entry.platform)}${esc(m.name)} campaigns</div>` +
+      (entry.campaigns || []).map((c) => `
+        <div class="pu-row">
+          <span class="pu-nm" title="${esc4attr(c.campaign_name || c.campaign_id || "campaign")}">${esc(c.campaign_name || c.campaign_id || "—")}</span>
+          <span class="pu-meta">${fmt(c.total)} leads &middot; ${c.last_at ? esc(String(c.last_at).slice(0, 10)) : "–"}</span>
+        </div>`).join("");
+  }).join("");
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+  pop.style.left = (window.scrollX + r.left) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) pop.style.left = (window.scrollX + window.innerWidth - pr.width - 8) + "px";
+  });
+}
+
+/* Very small Markdown-ish formatter for brief_md: headings ("## ") and
+   bullets ("- "/"* ") render as real elements, **bold** survives, everything
+   else is a plain paragraph. Not a full Markdown parser — brief_md is
+   authored by skills in a known, simple shape, so this is deliberately thin. */
+function formatBriefMd(md) {
+  if (!md) return `<span class="muted">No brief for this pull yet.</span>`;
+  const boldify = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  const lines = String(md).split(/\r?\n/);
+  let html = "", inList = false;
+  lines.forEach((raw) => {
+    const l = raw.trim();
+    if (!l) { if (inList) { html += "</ul>"; inList = false; } return; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) {
+      if (inList) { html += "</ul>"; inList = false; }
+      const size = h[1].length <= 2 ? "14.5px" : "13px";
+      html += `<div style="font-weight:600;font-size:${size};color:var(--ink);margin:10px 0 4px">${boldify(h[2])}</div>`;
+      return;
+    }
+    const b = /^[-*]\s+(.*)$/.exec(l);
+    if (b) {
+      if (!inList) { html += "<ul style='margin:4px 0 8px 18px;padding:0'>"; inList = true; }
+      html += `<li>${boldify(b[1])}</li>`;
+      return;
+    }
+    if (inList) { html += "</ul>"; inList = false; }
+    html += `<p style="margin:0 0 8px">${boldify(l)}</p>`;
+  });
+  if (inList) html += "</ul>";
+  return html;
+}
+
 /* ═══════════════════════════ VIEW 1: file browser ═══════════════════════════ */
 
 function clientNames(data) {
@@ -545,7 +921,7 @@ function renderFileBrowser() {
       <td>${fmtShortDate(l.created_at)}</td>
       <td>${l.last_opened_at ? `${pulledAgo(l.last_opened_at)}${l.last_opened_by ? ` <span class="muted small">by ${esc(l.last_opened_by)}</span>` : ""}` : "–"}</td>
       <td>${esc(l.owner || "–")}</td>
-      <td>${esc(l.access || "–")}</td>
+      <td>${pushMarksHtml(l.id)}</td>
       <td><button class="kebab-btn" data-popover-trigger title="Options" onclick="openRowMenu(event,'${esc(l.id)}')">${svgKebab}</button></td>
     </tr>`;
 
@@ -574,7 +950,7 @@ function renderFileBrowser() {
       <td>–</td>
       <td>${created ? fmtShortDate(created) : "–"}</td>
       <td>${opened ? `${pulledAgo(opened.at)}${opened.by ? ` <span class="muted small">by ${esc(opened.by)}</span>` : ""}` : "–"}</td>
-      <td>–</td><td>–</td><td>${kebab}</td>
+      <td>–</td><td><span class="muted">—</span></td><td>${kebab}</td>
     </tr>`, isOpen };
   };
 
@@ -863,6 +1239,30 @@ function linkifyCell(raw) {
   return esc(s);
 }
 
+/* Breadcrumb goes back ONE step, not to the top: a list opened from inside a
+   folder returns to THAT folder's view (label = folder name); an unfiled /
+   client-root list returns to the root All-Files view. The list's own
+   folder_id is the single source of truth — no history stack. */
+function updateGridBackLink(listId) {
+  const a = document.getElementById("gridBackLink");
+  if (!a) return;
+  const l = ((LISTS_DATA || {}).lists || []).find((x) => x.id === listId);
+  const folder = l && l.folder_id
+    ? ((LISTS_DATA || {}).folders || []).find((f) => f.id === l.folder_id)
+    : null;
+  a.textContent = `← ${folder && folder.name ? folder.name : "All files"}`;
+  a.onclick = (e) => {
+    e.preventDefault();
+    if (l) {
+      // expand the path down to where the list lives, so the files view
+      // reopens showing its folder rather than a fully-collapsed tree
+      openFolders.add(`client:${l.client}`);
+      if (folder) openFolders.add(folder.id);
+    }
+    if (location.hash) location.hash = ""; else route();
+  };
+}
+
 async function openGrid(listId) {
   grid.id = listId; grid.meta = null; grid.columns = []; grid.visible = null;
   grid.sort = ""; grid.dir = ""; grid.filters = {}; grid.search = ""; grid.offset = 0; grid.limit = 500;
@@ -883,9 +1283,15 @@ async function openGrid(listId) {
   updateFilterBtnLabel();
   updateSortBtnLabel();
   updateSelectBar();
+  document.getElementById("gridPushChips").innerHTML = "";
+  updateGridBackLink(listId);
   // fire-and-forget touch
   fetch("/api/lists/touch", { method: "POST", body: JSON.stringify({ list_id: listId, by: "Bjion" }) }).catch(() => {});
   await fetchGridRows();
+  // if this list is a Saved Pull, dock the collapsible resume panel (else hide it)
+  maybeShowPullPanel(listId);
+  // destination chips next to the title (any list can carry pushes)
+  loadPushSummary().then(() => renderGridPushChips(listId));
 }
 
 /* ── table-region loading overlay: only appears if the fetch runs past
@@ -1612,17 +2018,20 @@ function route() {
   if (hash) {
     document.getElementById("view-files").style.display = "none";
     document.getElementById("view-grid").style.display = "block";
-    openGrid(hash);
+    openGrid(hash); // openGrid docks/hides the resume panel based on the list
   } else {
     document.getElementById("view-grid").style.display = "none";
     document.getElementById("view-files").style.display = "block";
+    hidePullPanel();
     renderFileBrowser();
   }
 }
 window.addEventListener("hashchange", route);
 
 (async () => {
-  await loadListsIndex();
+  // lists index + push summary in parallel — ONE aggregated summary fetch
+  // backs every "Pushed to" cell, never a request per row.
+  await Promise.all([loadListsIndex(), loadPushSummary()]);
   route();
 })();
 </script>
