@@ -1616,9 +1616,12 @@ def ensure_webhooks(agent: dict) -> list:
                 changed = True
                 results.append({"campaign_id": cid, "ok": True, "already": True})
                 continue
+            # NOTE: no "categories" key - Smartlead 400s on an empty list
+            # ("categories does not contain 1 required value(s)"); omitting it
+            # means "all categories", which is what we want here.
             resp = _sl_post(f"/campaigns/{cid}/webhooks", {
                 "id": None, "name": "Navreo Setter", "webhook_url": hook_url,
-                "event_types": ["EMAIL_REPLY"], "categories": [],
+                "event_types": ["EMAIL_REPLY"],
             })
             after = _sl_get(f"/campaigns/{cid}/webhooks")
             after = after if isinstance(after, list) else []
