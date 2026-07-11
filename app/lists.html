@@ -69,6 +69,13 @@ table.lists-tbl col.c-menu { width: 32px; }
 .ic-sheet { color: var(--ink-3); }
 a.sheet-link { color: var(--ink); text-decoration: none; }
 a.sheet-link:hover { color: var(--orange-700); text-decoration: underline; }
+/* drag a list into a folder: rows lift slightly while dragging; the hovered
+   folder row lights up while it can accept the drop */
+.lists-tbl tr.row-sheet[draggable] { cursor: grab; }
+.lists-tbl tr.row-sheet[draggable]:active { cursor: grabbing; }
+.lists-tbl tr.row-sheet.dragging td { opacity: .45; }
+.lists-tbl tr.row-folder.drop-hover td { background: var(--orange-100);
+  box-shadow: inset 0 1.5px 0 var(--orange), inset 0 -1.5px 0 var(--orange); }
 .kebab-btn { background: none; border: none; cursor: pointer; padding: 3px; border-radius: 6px; color: var(--ink-3); display: inline-flex; }
 .kebab-btn:hover { background: var(--bg-sunken); color: var(--ink-2); }
 .popover { position: absolute; z-index: 60; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(20,17,14,.14); min-width: 200px; padding: 6px; }
@@ -909,11 +916,11 @@ function renderFileBrowser() {
   const rows = [];
 
   const sheetRow = (l, depth) => `
-    <tr class="row-sheet" data-list-row="${esc(l.id)}">
+    <tr class="row-sheet" data-list-row="${esc(l.id)}" draggable="true">
       <td>
         <div class="row-name" style="padding-left:${depth * 22}px">
           <span class="ic-sheet indent">${svgSheet}</span>
-          <a class="sheet-link lbl" href="#${esc(l.id)}" title="${esc(l.name)}">${esc(l.name)}</a>
+          <a class="sheet-link lbl" href="#${esc(l.id)}" title="${esc(l.name)}" draggable="false">${esc(l.name)}</a>
           <span class="rc">${fmt(l.row_count)} rows</span>
         </div>
       </td>
@@ -938,8 +945,10 @@ function renderFileBrowser() {
       if (l.created_at && (!created || l.created_at > created)) created = l.created_at;
       if (l.last_opened_at && (!opened || l.last_opened_at > opened.at)) opened = { at: l.last_opened_at, by: l.last_opened_by };
     });
+    // drop target for list drags: a real sub-folder, or the client root (unfiled)
+    const dropKey = folderObj ? `folder:${folderObj.id}` : `root:${label}`;
     return { html: `
-    <tr class="row-folder" data-folder-key="${esc(key)}">
+    <tr class="row-folder" data-folder-key="${esc(key)}" data-drop-key="${esc(dropKey)}">
       <td>
         <div class="row-name" style="padding-left:${depth * 22}px">
           <span class="chev ${isOpen ? "open" : ""}" onclick="toggleFolder('${esc(key)}')">${svgChevron}</span>
@@ -984,6 +993,89 @@ function toggleFolder(key) {
   if (openFolders.has(key)) openFolders.delete(key); else openFolders.add(key);
   renderFileBrowser();
 }
+
+/* ── drag a list row into a folder (or a client root = unfiled) ──────────────
+   Same POST /api/lists/move the "Move to folder…" modal uses. Lists only —
+   folder rows never drag; drops are same-client (a move can't change the
+   list's client column). Optimistic: the row lands immediately, and is put
+   back if the API says no. */
+let DRAG_LIST = null; // {id, client, folder_id}
+
+function dragDropTarget(row) {
+  if (!DRAG_LIST || !row) return null;
+  const key = row.getAttribute("data-drop-key") || "";
+  if (key.startsWith("root:")) {
+    const client = key.slice(5);
+    if (client !== DRAG_LIST.client) return null;
+    const root = (LISTS_DATA.folders || []).find((f) => f.client === client && f.name === null);
+    if (!DRAG_LIST.folder_id || (root && DRAG_LIST.folder_id === root.id)) return null; // already unfiled
+    return { folder_id: null, label: client };
+  }
+  if (key.startsWith("folder:")) {
+    const f = (LISTS_DATA.folders || []).find((x) => x.id === key.slice(7));
+    if (!f || f.client !== DRAG_LIST.client) return null;
+    if (DRAG_LIST.folder_id === f.id) return null;
+    return { folder_id: f.id, label: f.name };
+  }
+  return null;
+}
+
+async function moveListByDrag(listId, t) {
+  const l = (LISTS_DATA.lists || []).find((x) => x.id === listId);
+  if (!l) return;
+  const prev = l.folder_id || null;
+  l.folder_id = t.folder_id; // optimistic
+  if (t.folder_id) openFolders.add(t.folder_id); // show the row landing
+  renderFileBrowser();
+  protoNote(`Moved to ${t.label}`);
+  try {
+    const r = await fetch("/api/lists/move", { method: "POST",
+      body: JSON.stringify({ list_id: listId, folder_id: t.folder_id }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't move the list");
+  } catch (err) {
+    l.folder_id = prev; // revert — the move didn't stick
+    renderFileBrowser();
+    protoNote(err.message || "Couldn't reach the server — the list was put back", { ms: 4200 });
+  }
+}
+
+(function wireListDnD() {
+  const body = document.getElementById("filesBody");
+  body.addEventListener("dragstart", (e) => {
+    const row = e.target.closest("[data-list-row]");
+    if (!row) return;
+    const l = (LISTS_DATA && LISTS_DATA.lists || []).find((x) => x.id === row.getAttribute("data-list-row"));
+    if (!l) { e.preventDefault(); return; }
+    DRAG_LIST = { id: l.id, client: l.client, folder_id: l.folder_id || null };
+    row.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", l.id); } catch {}
+  });
+  body.addEventListener("dragend", () => {
+    DRAG_LIST = null;
+    body.querySelectorAll(".dragging, .drop-hover").forEach((x) => x.classList.remove("dragging", "drop-hover"));
+  });
+  body.addEventListener("dragover", (e) => {
+    const row = e.target.closest("[data-drop-key]");
+    body.querySelectorAll(".drop-hover").forEach((x) => { if (x !== row) x.classList.remove("drop-hover"); });
+    if (!row || !dragDropTarget(row)) return;
+    e.preventDefault(); // this folder can take the drop
+    e.dataTransfer.dropEffect = "move";
+    row.classList.add("drop-hover");
+  });
+  body.addEventListener("drop", (e) => {
+    const row = e.target.closest("[data-drop-key]");
+    if (!row) return;
+    const t = dragDropTarget(row);
+    if (!t) return;
+    e.preventDefault();
+    row.classList.remove("drop-hover");
+    const id = DRAG_LIST.id;
+    DRAG_LIST = null;
+    moveListByDrag(id, t);
+  });
+})();
 
 function openRowMenu(ev, listId) {
   ev.stopPropagation();
