@@ -70,9 +70,9 @@ const FALLBACK = {
       act: "Clear those 12 today." },
     { tag: "Timing · conversion", type: "pulse24",
       data: { values: [8,5,3,4,3,9,7,15,14,15,7,6,10,80,60,38,32,26,18,18,16,10,12,6],
-              hotFrom: 13, hotTo: 16, peakLabel: "13:00" },
-      caption: "<b>Half of all positives arrive between 1 and 5pm.</b>",
-      act: "Hold a daily 1pm reply block." },
+              utc: true, hotFrom: 13, hotTo: 16 },
+      caption: "<b>Half of all positives arrive between {{hotStart}} and {{hotEnd}} {{tz}}.</b>",
+      act: "Hold a daily {{hotStart}} {{tz}} reply block." },
     { tag: "Hidden pipeline · conversion", type: "ring",
       data: { num: 209, of: 544 },
       caption: "<b>209 out-of-office replies name a return date.</b> A free follow-up calendar.",
@@ -105,23 +105,36 @@ const R = {
       </div>
     </div>`;
   },
-  pulse24(d) {
-    const max = Math.max(...d.values), W = 560, H = 96, bw = 16, gap = 23;
-    const bars = d.values.map((v, i) => {
+  pulse24(d, w) {
+    /* Data hours are UTC when d.utc — rotate into the browser's local
+       timezone and label times with the zone name (user rule). */
+    const off = d.utc ? Math.round(-new Date().getTimezoneOffset() / 60) : 0;
+    const loc = (h) => ((h + off) % 24 + 24) % 24;           // UTC hour → local hour
+    const vals = new Array(24);
+    d.values.forEach((v, h) => { vals[loc(h)] = v; });
+    const hotSet = new Set(), midSet = new Set();
+    for (let h = d.hotFrom; h <= d.hotTo; h++) hotSet.add(loc(h));
+    for (let h = d.hotTo + 1; h <= d.hotTo + 3; h++) midSet.add(loc(h));
+    const fmtH = (h) => { const x = ((h % 24) + 24) % 24; return (x % 12 || 12) + (x < 12 ? "am" : "pm"); };
+    const tzName = (Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+      .formatToParts(new Date()).find((p) => p.type === "timeZoneName") || {}).value || "";
+    if (w) w.subs = { "{{hotStart}}": fmtH(loc(d.hotFrom)), "{{hotEnd}}": fmtH(loc(d.hotTo) + 1),
+                      "{{peak}}": fmtH(loc(d.hotFrom)), "{{tz}}": tzName };
+    const max = Math.max(...vals), W = 560, H = 96, bw = 16, gap = 23;
+    const bars = vals.map((v, i) => {
       const h = Math.max(2.5, (v / max) * 72), y = 84 - h;
-      const hot = i >= d.hotFrom && i <= d.hotTo;
-      const mid = i >= d.hotTo + 1 && i <= d.hotTo + 3;
-      const fill = hot ? "#FF4D00" : mid ? "#C0B0A0" : "#E8D7C4";
-      const op = hot && v < max * 0.6 ? ' opacity="0.65"' : "";
+      const fill = hotSet.has(i) ? "#FF4D00" : midSet.has(i) ? "#C0B0A0" : "#E8D7C4";
+      const op = hotSet.has(i) && v < max * 0.6 ? ' opacity="0.65"' : "";
       return `<rect x="${2 + i * gap}" y="${y.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" rx="3" fill="${fill}"${op}/>`;
     }).join("");
-    const peakX = 2 + d.values.indexOf(max) * gap + 8;
+    const peakIdx = vals.indexOf(max);
+    const peakX = Math.min(W - 30, Math.max(30, 2 + peakIdx * gap + 8));
     return `<svg viewBox="0 0 ${W} ${H}" width="100%">
       ${bars}
-      <text x="${peakX}" y="8" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" fill="#A83100">${d.peakLabel}</text>
+      <text x="${peakX}" y="8" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" fill="#A83100">${fmtH(peakIdx)} ${tzName}</text>
       <text x="2" y="95" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">MIDNIGHT</text>
       <text x="${2 + 12 * gap}" y="95" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">NOON</text>
-      <text x="${W - 13}" y="95" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">23:00</text>
+      <text x="${W - 13}" y="95" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">11PM</text>
     </svg>`;
   },
   ring(d) {
@@ -163,12 +176,13 @@ function renderToday(payload) {
   document.getElementById("today-date").textContent = payload.date;
   document.getElementById("today-n").textContent = payload.widgets.length;
   document.getElementById("widgets").innerHTML = payload.widgets.map((w) => {
-    const graphic = R[w.type] ? R[w.type](w.data) : "";
-    const cap = `<p class="caption">${w.caption}</p>`;
+    const graphic = R[w.type] ? R[w.type](w.data, w) : "";
+    const sub = (s) => Object.entries(w.subs || {}).reduce((t, [k, v]) => t.split(k).join(v), s);
+    const cap = `<p class="caption">${sub(w.caption)}</p>`;
     return `<div class="w">
       <span class="tag">${w.tag}</span>
       ${w.type === "ring" ? graphic.replace('class="ring-caption"></div>', `class="ring-caption">${cap.replace('class="caption"', 'class="caption" style="margin:0;"')}</div>`) : graphic + cap}
-      <div class="act"><span class="arrow">→</span><span>${w.act}</span></div>
+      <div class="act"><span class="arrow">→</span><span>${sub(w.act)}</span></div>
     </div>`;
   }).join("");
 }
