@@ -549,12 +549,19 @@ function renderFileBrowser() {
       <td><button class="kebab-btn" data-popover-trigger title="Options" onclick="openRowMenu(event,'${esc(l.id)}')">${svgKebab}</button></td>
     </tr>`;
 
-  const folderRow = (key, label, depth, folderObj) => {
+  const folderRow = (key, label, depth, folderObj, sheets) => {
     // folderObj is null for the top-level client grouping row (not a real,
     // renameable/deleteable list_folders record on its own) and the actual
     // folder row for a themed sub-folder — only the latter gets a kebab menu.
+    // Created at / Last opened fold up from the folder's sheets (most recent
+    // wins), so a collapsed folder still shows when something in it moved.
     const isOpen = openFolders.has(key) || !!q;
     const kebab = folderObj ? `<button class="kebab-btn" data-popover-trigger title="Options" onclick="openFolderMenu(event,'${esc(folderObj.id)}')">${svgKebab}</button>` : "";
+    let created = null, opened = null;
+    (sheets || []).forEach((l) => {
+      if (l.created_at && (!created || l.created_at > created)) created = l.created_at;
+      if (l.last_opened_at && (!opened || l.last_opened_at > opened.at)) opened = { at: l.last_opened_at, by: l.last_opened_by };
+    });
     return { html: `
     <tr class="row-folder" data-folder-key="${esc(key)}">
       <td>
@@ -564,7 +571,10 @@ function renderFileBrowser() {
           <span class="lbl">${esc(label)}</span>
         </div>
       </td>
-      <td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td>${kebab}</td>
+      <td>–</td>
+      <td>${created ? fmtShortDate(created) : "–"}</td>
+      <td>${opened ? `${pulledAgo(opened.at)}${opened.by ? ` <span class="muted small">by ${esc(opened.by)}</span>` : ""}` : "–"}</td>
+      <td>–</td><td>–</td><td>${kebab}</td>
     </tr>`, isOpen };
   };
 
@@ -574,7 +584,7 @@ function renderFileBrowser() {
     if (!anyMatch) return;
 
     const rootKey = `client:${grp.client}`;
-    const { html: rootHtml, isOpen: rootOpen } = folderRow(rootKey, grp.client, 0, null);
+    const { html: rootHtml, isOpen: rootOpen } = folderRow(rootKey, grp.client, 0, null, allSheets);
     rows.push(rootHtml);
     if (!rootOpen) return;
 
@@ -584,7 +594,7 @@ function renderFileBrowser() {
       const sheetsHere = sg.sheets.filter((l) => sheetMatches(l, q));
       if (q && !sheetsHere.length) return;
       const subKey = sg.folder.id;
-      const { html: subHtml, isOpen: subOpen } = folderRow(subKey, sg.folder.name, 1, sg.folder);
+      const { html: subHtml, isOpen: subOpen } = folderRow(subKey, sg.folder.name, 1, sg.folder, sg.sheets);
       rows.push(subHtml);
       if (subOpen) sheetsHere.forEach((l) => rows.push(sheetRow(l, 2)));
     });
