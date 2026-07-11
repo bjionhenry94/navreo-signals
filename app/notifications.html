@@ -357,7 +357,7 @@ tr.var-winner td.var-flagcell { color: var(--green); }
           <option value="all">All statuses</option>
           <option value="new">New</option>
           <option value="acknowledged">Acknowledged</option>
-          <option value="actioned">Actioned</option>
+          <option value="actioned">Completed</option>
           <option value="dismissed">Dismissed</option>
           <option value="resolved">Resolved</option>
         </select>
@@ -448,7 +448,7 @@ document.getElementById("rail").outerHTML = renderRail("notifications");
    No full re-render after any action — only the touched DOM node is patched
    in place. */
 
-const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Actioned", dismissed: "Dismissed", resolved: "Resolved" };
+const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Completed", dismissed: "Dismissed", resolved: "Resolved" };
 const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n", resolved: "n" };
 /* One-line tooltip per status, for newcomers hovering a status pill anywhere
    on the page (fix H1) — every status gets one, not just resolved. */
@@ -700,10 +700,11 @@ function matchesActiveClient(n) {
 
 function passesFilters(n) {
   if (filters.status !== "all" && n.status !== filters.status) return false;
-  // Section 7 is a work queue: once a card is actioned (or dismissed/resolved)
-  // it leaves the default view instead of lingering as a done card. Picking an
-  // explicit status in the dropdown still shows them, so nothing is lost.
-  if (filters.status === "all" && n.section === 7
+  // The whole dashboard is a work queue: once a finding is completed (actioned)
+  // or dismissed/resolved it leaves the default view immediately, in EVERY
+  // section — not just Section 7. Picking an explicit status in the dropdown
+  // still shows them, so nothing is lost.
+  if (filters.status === "all"
       && (n.status === "actioned" || isRetiredStatus(n.status))) return false;
   if (filters.priority !== "all" && n.priority !== filters.priority) return false;
   if (!matchesActiveClient(n)) return false;
@@ -891,7 +892,7 @@ function rowActionsHTML(n) {
     ${statusPillN(n.status)}
     <div class="mini-actions">
       ${miniActionBtn(n, "acknowledged", "Ack")}
-      ${miniActionBtn(n, "actioned", "Action")}
+      ${miniActionBtn(n, "actioned", "Mark as completed")}
       ${miniActionBtn(n, "dismissed", "Dismiss")}
       ${disableVariantBtnHTML(n)}
     </div>
@@ -917,7 +918,7 @@ function disableVariantBtnHTML(n) {
    didn't already see on the button face. */
 const STATUS_ACTION_TOOLTIP = {
   acknowledged: "Mark as seen — stays in the queue",
-  actioned: "Mark as done",
+  actioned: "Mark as completed — removes it from the dashboard (undoable)",
   dismissed: "Hide from the queue (undoable)",
 };
 function miniActionBtn(n, target, label) {
@@ -1069,7 +1070,7 @@ function variantFindingCardHTML(n) {
       <a class="btn sm" href="${esc(ctx.smartlead_url || n.smartlead_url || "#")}" target="_blank" rel="noopener">Open in Smartlead</a>
       ${disableVariantBtnHTML(n)}
       ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
-      ${actionBtn(n, "actioned", "Mark actioned", "Actioned")}
+      ${actionBtn(n, "actioned", "Mark as completed", "Completed")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
   </div>`;
@@ -1322,7 +1323,7 @@ function actionBlockHTML(n) {
       ${showCopy ? `<button type="button" class="btn sm" data-act="copy-prompt" data-id="${esc(String(n.id))}">Copy Claude prompt</button>` : ""}
       <a class="btn sm" href="${esc(n.smartlead_url || "#")}" target="_blank" rel="noopener">Open in Smartlead</a>
       ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
-      ${actionBtn(n, "actioned", "Mark actioned", "Actioned")}
+      ${actionBtn(n, "actioned", "Mark as completed", "Completed")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
     ${showWhy ? `<details class="ab-why"><summary>Why? (${reasonCount} reason${reasonCount === 1 ? "" : "s"})</summary><div class="ab-why-body">${whyBody}</div></details>` : ""}
@@ -1387,7 +1388,7 @@ function triageStripHTML(allRows) {
    ambiguous the first time a CSM sees them (do they touch the live
    campaign?), so spell out plainly that they only move this row's own
    status, never Smartlead itself. */
-const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark actioned = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself. Actioned and dismissed cards leave this list - pick a status in the filter above to see them again.</div>`;
+const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark as completed = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself. Completed and dismissed cards leave this list - pick a status in the filter above to see them again.</div>`;
 function section7(rows) {
   const stripHTML = triageStripHTML(rows);
   // Filtering happens here, AFTER counts are computed from the full `rows`
