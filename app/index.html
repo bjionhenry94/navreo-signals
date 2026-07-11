@@ -30,9 +30,15 @@
   letter-spacing:-0.02em; font-variant-numeric:tabular-nums;}
 .w .caption{font-size:15px; color:var(--ink-2); max-width:46ch; margin:16px 0 0; text-wrap:balance;}
 .w .caption b{color:var(--ink); font-weight:600;}
-.w .act{display:flex; align-items:flex-start; gap:10px; margin-top:18px;
-  font-size:14px; font-weight:600; color:var(--ink); max-width:52ch;}
+.w .act{display:flex; align-items:center; gap:10px; margin-top:18px;
+  font-size:14px; font-weight:600; color:var(--ink);}
 .w .act .arrow{color:var(--orange); font-family:var(--font-display); flex:none; line-height:1.4;}
+.copybtn{margin-left:auto; flex:none; font-family:var(--font-mono); font-size:10px;
+  letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-3);
+  background:var(--bg); border:1px solid var(--line-2); border-radius:999px;
+  padding:6px 12px; cursor:pointer;}
+.copybtn:hover{border-color:var(--brown-400); color:var(--ink);}
+.copybtn.done{color:var(--green); border-color:var(--green-line); background:var(--green-bg);}
 .w .row{display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;}
 .w .row .graphic{flex:1; min-width:220px;}
 .today-foot{margin-top:48px; text-align:center; font-size:11.5px; color:var(--brown-400); line-height:1.8;}
@@ -69,24 +75,55 @@ const FALLBACK = {
     { tag: "Unanswered · conversion", type: "fraction",
       data: { num: 48, of: 83, ofLabel: "of 83 positives since 1 July", color: "var(--orange)" },
       caption: "<b>48 warm replies, no answer from us.</b> Twelve asked for a meeting.",
-      act: "Clear those 12 today." },
+      act: "Clear those 12 today.",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding from my Navreo Today dashboard: 48 of 83 positive replies since 1 July have had no answer from us - 12 are meeting requests. Rebuild the list: positive categories in the replies table with no later sent_messages row for the same email. Show every waiting lead (email, campaign, category, days waiting, reply text), prioritise the meeting requests, then draft a short reply for each in my voice (Bjion, Navreo) and stage them so I can approve and send via Smartlead." },
     { tag: "Hidden pipeline · conversion", type: "fraction",
       data: { num: 64, of: 89, ofLabel: "", color: "var(--ink)", small: true },
       caption: "<b>72% of &quot;wrong person&quot; replies name the right one.</b>",
-      act: "New thread: “your colleague suggested I ask you.”" },
+      act: "New thread: \u201cyour colleague suggested I ask you.\u201d",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding: 64 of 89 Wrong Person replies this week point at the right contact. Pull this week's category='Wrong Person' rows from the replies table, extract the referred name/role/email from each body, enrich missing emails via lilly-decision-maker-finder, and prepare a referral campaign where each opener says their colleague suggested I reach out. Show me the full list before creating anything in Smartlead." },
     { tag: "Timing · conversion", type: "pulse24",
       data: { values: [8,5,3,4,3,9,7,15,14,15,7,6,10,80,60,38,32,26,18,18,16,10,12,6],
               utc: true, hotFrom: 13, hotTo: 16 },
       caption: "<b>Half of all positives arrive between {{hotStart}} and {{hotEnd}} {{tz}}.</b>",
-      act: "Hold a daily {{hotStart}} {{tz}} reply block." },
+      act: "Hold a daily {{hotStart}} {{tz}} reply block.",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding: half of our positive replies arrive between {{hotStart}} and {{hotEnd}} {{tz}} (reply-hour histogram of the replies table since 1 June; data is stored UTC). Verify the histogram in my timezone, then set up my daily reply block: a recurring {{hotStart}} {{tz}} calendar hold plus a checklist that pulls that day's unanswered positives from Smartlead so I answer inside the window." },
     { tag: "Hidden pipeline · conversion", type: "ring",
       data: { num: 209, of: 544 },
       caption: "<b>209 out-of-office replies name a return date.</b> A free follow-up calendar.",
-      act: "Queue a touch for the day after each return." },
+      act: "Queue a touch for the day after each return.",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding: 209 of this week's 544 Out Of Office replies contain a return date. Pull category='Out Of Office' replies since 5 July, parse each body for the stated return date, build the follow-up calendar (lead, campaign, return date), and stage day-after welcome-back touches - as a Smartlead subsequence or a dated task list - for my approval." },
     { tag: "Deliverability · risk", type: "barsDanger",
       data: { headline: "4.1%", bars: [4.1, 3.8, 4.0, 3.3, 3.1], danger: 2, book: 1.0, max: 4.5 },
-      caption: "<b>StoreLead lists bounce at 3–4%</b> — double the danger line. They’re burning Amplifyy’s domains.",
-      act: "Verify before send. Pause the Apparel pair." },
+      caption: "<b>StoreLead lists bounce at 3\u20134%</b> \u2014 double the danger line. They\u2019re burning Amplifyy\u2019s domains.",
+      act: "Verify before send. Pause the Apparel pair.",
+      prompt: "Deliverability finding on my Navreo Smartlead workspace: every StoreLead-sourced Amplifyy campaign bounces at 3-4% (Not on Amazon Hard NEW 4.1%, Soft NEW 3.8%, the Apparel pair 3.3-4.0%) versus about 1% for the rest of the book; 2% is the danger line. Verify current bounce rates via the Smartlead API, pause the Apparel pair, run remaining unsent StoreLead leads through lilly-email-verification (MillionVerifier), remove the bad addresses, and report the impact on Amplifyy's sending domains." },
+    { tag: "Left to go cold · conversion", type: "fraction", wide: true,
+      data: { num: 482, of: 482, ofLabel: "said yes, then heard nothing for 14+ days", color: "var(--orange)" },
+      caption: "<b>482 leads replied positively and never heard from us again.</b> All-time, still unsuppressed.",
+      act: "Stage a revival campaign this week.",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding: 482 leads across all time replied positively (Interested / Meeting Request / Information Request / Call Booked) and never received another message - their reply is 14+ days old with no later sent_messages row. Rebuild the list with last-reply date, campaign, and reply text; check suppressions; segment by how they said yes; then design a revival campaign that picks each conversation back up, and stage it in Smartlead for my approval." },
+    { tag: "Sequence depth · conversion", type: "ring",
+      data: { num: 135, of: 350, show: "39%" },
+      caption: "<b>39% of positives come from a follow-up, not the opener.</b>",
+      act: "No campaign ships with fewer than 3 steps.",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding: 39% of positive replies since 1 June (135 of 350) arrived after a follow-up, not email 1 (count sent_messages touches before each lead's first positive reply). Audit every ACTIVE Smartlead campaign's sequence length, list the ones with fewer than 3 steps, and draft the missing follow-up emails in each campaign's existing voice for my approval." },
+    { tag: "Copy fatigue · risk", type: "big",
+      data: { value: "10:1", color: "var(--red)", sub: "nos per yes" },
+      caption: "<b>The Recruitment Claude-Code campaign took 29 nos for 3 yeses this week.</b>",
+      act: "Pause it. Rewrite the offer first.",
+      prompt: "Finding on my Navreo Smartlead workspace: the campaign 'Navreo - Recruitment - Claude Code offer - Soft' produced 29 negative replies (15 Do Not Contact) against only 3 positives this week - roughly ten nos per yes. Pull its sequence copy and this week's reply bodies (lilly-data, Supabase project fnykldftbkrccihdjayl), diagnose why the offer misses - audience, angle, or tone - then pause the campaign and propose a rewritten sequence using the lilly-copywriter framework for my approval." },
+    { tag: "Timing · conversion", type: "bars",
+      data: { items: [{label:"MON",v:73},{label:"TUE",v:70},{label:"WED",v:66},{label:"THU",v:84},{label:"FRI",v:52}],
+              hotIdx: 3, lowIdx: 4, unit: "positives per 1k sends" },
+      caption: "<b>Thursday converts 60% better than Friday.</b> Positives per 1k sends, since 15 June.",
+      act: "Shift Friday volume into Tue\u2013Thu.",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding: since 15 June Thursday produces about 84 positives per 1k sends versus Friday's 52 (sent_messages vs positive replies by weekday - a proxy, since it compares send-day and reply-day distributions independently). Validate it properly by attributing each positive to the send-day of the message it answered; if the pattern holds, rebalance the Smartlead campaign schedules to move Friday volume into Tuesday-Thursday, and show me the schedule diff before applying it." },
+    { tag: "Collisions · deliverability", type: "big",
+      data: { value: "43", color: "var(--ink)", sub: "leads, 2+ campaigns at once" },
+      caption: "<b>43 leads got emails from two of our campaigns in the same fortnight.</b>",
+      act: "Suppress cross-campaign at upload.",
+      prompt: "Use the lilly-data skill (Supabase project fnykldftbkrccihdjayl). Finding: in the last 14 days, 43 leads received emails from two or more of our Smartlead campaigns at once (sent_messages grouped by email with distinct campaign ids). List every collision with both campaign names and dates, pause the duplicate enrollment for each lead in Smartlead, and propose the standing fix - cross-campaign suppression at upload through the lilly-upload-gate - so this cannot recur." },
   ],
 };
 
@@ -147,7 +184,7 @@ const R = {
         <circle cx="60" cy="60" r="50" fill="none" stroke="#FF4D00" stroke-width="11"
           stroke-dasharray="${(C * frac).toFixed(1)} ${(C * (1 - frac)).toFixed(1)}"
           stroke-linecap="round" transform="rotate(-90 60 60)"/>
-        <text x="60" y="68" text-anchor="middle" font-family="Acid Grotesk,DM Sans,sans-serif" font-size="24" fill="#14110E">${d.num}</text>
+        <text x="60" y="68" text-anchor="middle" font-family="Acid Grotesk,DM Sans,sans-serif" font-size="24" fill="#14110E">${d.show || d.num}</text>
       </svg>
       <div style="flex:1; min-width:220px;" class="ring-caption"></div>
     </div>`;
@@ -172,22 +209,63 @@ const R = {
       </div>
     </div>`;
   },
+  big(d) {
+    return `<div class="row" style="align-items:baseline;">
+      <div class="num-xl" style="color:${d.color || "var(--ink)"}">${d.value}</div>
+      ${d.sub ? `<div style="font-family:var(--font-mono); font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--brown-400);">${d.sub}</div>` : ""}
+    </div>`;
+  },
+  bars(d) {
+    const max = Math.max(...d.items.map((x) => x.v)), n = d.items.length;
+    const bw = 34, gap = 56, W = n * gap + 10, H = 110;
+    const bars = d.items.map((x, i) => {
+      const h = (x.v / max) * 70, y = 88 - h;
+      const fill = i === d.hotIdx ? "#FF4D00" : i === d.lowIdx ? "#EFC7BB" : "#C0B0A0";
+      return `<rect x="${8 + i * gap}" y="${y.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" rx="3" fill="${fill}"/>
+        <text x="${8 + i * gap + bw / 2}" y="${(y - 6).toFixed(1)}" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10.5" fill="${i === d.hotIdx ? "#A83100" : "#6B6055"}">${x.v}</text>
+        <text x="${8 + i * gap + bw / 2}" y="104" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">${x.label}</text>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;">${bars}</svg>
+      ${d.unit ? `<div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--brown-400); margin-top:4px;">${d.unit}</div>` : ""}`;
+  },
 };
 
 function renderToday(payload) {
+  window.__today = payload;
   document.getElementById("today-date").textContent = payload.date;
   document.getElementById("today-n").textContent = payload.widgets.length;
-  document.getElementById("widgets").innerHTML = payload.widgets.map((w) => {
+  document.getElementById("widgets").innerHTML = payload.widgets.map((w, i) => {
     const graphic = R[w.type] ? R[w.type](w.data, w) : "";
     const sub = (s) => Object.entries(w.subs || {}).reduce((t, [k, v]) => t.split(k).join(v), s);
     const cap = `<p class="caption">${sub(w.caption)}</p>`;
+    const copy = w.prompt ? `<button class="copybtn" data-i="${i}" title="Copy a ready-made prompt: paste into Claude and it investigates this and fixes it for you">Copy Claude prompt</button>` : "";
     return `<div class="w${w.wide || w.type === "pulse24" ? " wide" : ""}">
       <span class="tag">${w.tag}</span>
       ${w.type === "ring" ? graphic.replace('class="ring-caption"></div>', `class="ring-caption">${cap.replace('class="caption"', 'class="caption" style="margin:0;"')}</div>`) : graphic + cap}
-      <div class="act"><span class="arrow">→</span><span>${sub(w.act)}</span></div>
+      <div class="act"><span class="arrow">→</span><span>${sub(w.act)}</span>${copy}</div>
     </div>`;
   }).join("");
 }
+
+document.getElementById("widgets").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".copybtn");
+  if (!btn) return;
+  const w = (window.__today || {}).widgets?.[btn.dataset.i];
+  if (!w) return;
+  const sub = (s) => Object.entries(w.subs || {}).reduce((t, [k, v]) => t.split(k).join(v), s);
+  const text = sub(w.prompt);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  const old = btn.textContent;
+  btn.textContent = "Copied — paste into Claude";
+  btn.classList.add("done");
+  setTimeout(() => { btn.textContent = old; btn.classList.remove("done"); }, 2200);
+});
 
 (async () => {
   let payload = FALLBACK;
