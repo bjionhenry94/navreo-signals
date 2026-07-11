@@ -3,71 +3,55 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dashboard · Navreo</title>
+<title>Today · Navreo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="navreo.css">
 <style>
-.grid2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; margin-top: 14px; }
-.panel { padding: 18px 20px; }
-.panel h2 { margin-bottom: 2px; }
-.panel .sub { margin-bottom: 14px; }
-.legend { display: flex; gap: 16px; font-size: 11.5px; color: var(--ink-3); margin-bottom: 10px; }
-.legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
-.sigrow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-.sigrow:last-child { border-bottom: none; }
-.sigrow .ic { width: 28px; height: 28px; border-radius: 8px; background: var(--bg-sunken); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.sigrow .ic .ic8 { width: 14px; height: 14px; color: var(--ink-2); }
-.stat { position: relative; }
-.stat .ictile { position: absolute; top: 14px; right: 14px; width: 32px; height: 32px; }
-.stat .ictile .ic8 { width: 16px; height: 16px; }
-.sigrow .t { font-weight: 500; }
-.sigrow .d { font-size: 11.5px; color: var(--ink-3); }
-.attn { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-.attn:last-child { border-bottom: none; }
-.attn .t { font-weight: 500; }
-.attn .d { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
-.toplist td .bar-track { margin-top: 5px; width: 120px; }
+/* ── Today: Google-minimal insight feed ─────────────────── */
+.today{max-width:640px; margin:0 auto; padding:0 8px 120px;}
+.today-top{display:flex; flex-direction:column; align-items:center; text-align:center; padding:72px 0 64px;}
+.today-top .date{font-family:var(--font-mono); font-size:11px; letter-spacing:0.14em;
+  text-transform:uppercase; color:var(--brown-400); margin-bottom:10px;}
+.today-top h1{font-size:26px; margin:0; text-wrap:balance;}
+.today-top .count{margin-top:12px; font-size:13px; color:var(--ink-3);}
+.today-top .count b{color:var(--orange); font-weight:600;}
+
+.w{padding:48px 0; border-top:1px solid var(--line);}
+.w:last-of-type{border-bottom:1px solid var(--line);}
+.w .tag{font-family:var(--font-mono); font-size:10px; letter-spacing:0.16em; text-transform:uppercase;
+  color:var(--brown-400); display:block; margin-bottom:20px;}
+.w .num-xl{font-family:var(--font-display); font-weight:400; font-size:84px; line-height:0.9;
+  letter-spacing:-0.035em; font-variant-numeric:tabular-nums;}
+.w .num-lg{font-family:var(--font-display); font-weight:400; font-size:44px; line-height:1;
+  letter-spacing:-0.02em; font-variant-numeric:tabular-nums;}
+.w .caption{font-size:15px; color:var(--ink-2); max-width:46ch; margin:16px 0 0; text-wrap:balance;}
+.w .caption b{color:var(--ink); font-weight:600;}
+.w .act{display:flex; align-items:flex-start; gap:10px; margin-top:18px;
+  font-size:14px; font-weight:600; color:var(--ink); max-width:52ch;}
+.w .act .arrow{color:var(--orange); font-family:var(--font-display); flex:none; line-height:1.4;}
+.w .row{display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;}
+.w .row .graphic{flex:1; min-width:220px;}
+.today-foot{margin-top:48px; text-align:center; font-size:11.5px; color:var(--brown-400); line-height:1.8;}
+.today-foot .mono{font-size:10px; letter-spacing:0.12em; text-transform:uppercase;}
 </style>
 </head>
 <body>
 <div class="app">
   <div id="rail"></div>
   <main class="main">
-    <div class="pagehead">
-      <div>
-        <div class="eyebrow">Command centre</div>
-        <h1>Welcome back, Bjion.</h1>
+    <div class="today">
+      <div class="today-top">
+        <div class="date" id="today-date"></div>
+        <h1>While you were away, your leads kept talking.</h1>
+        <div class="count"><b id="today-n"></b> <span>things worth acting on today · never the same twice</span></div>
       </div>
-      <div id="fresh"></div>
-    </div>
-
-    <div class="stats" id="stats"></div>
-
-    <div class="card panel">
-      <h2>Activity</h2>
-      <div class="legend" style="margin-top:6px">
-        <span><span class="sw" style="background:var(--ink)"></span>Sent</span>
-        <span><span class="sw" style="background:var(--orange)"></span>Replies (×20)</span>
+      <div id="widgets"></div>
+      <div class="today-foot">
+        <span class="mono">Insight engine · v2</span><br>
+        One number · one line · one action. Tomorrow's are new.
       </div>
-      <div id="chart"></div>
-    </div>
-
-    <div class="grid2">
-      <div class="card panel">
-        <h2>Needs attention</h2>
-        <div id="attention" style="margin-top:8px"></div>
-      </div>
-      <div class="card panel">
-        <h2>Active signals</h2>
-        <div id="signals" style="margin-top:8px"></div>
-      </div>
-    </div>
-
-    <div class="card panel" style="margin-top:14px">
-      <h2>Top campaigns</h2>
-      <table class="tbl toplist" id="toplist" style="margin-top:8px"></table>
     </div>
   </main>
 </div>
@@ -75,82 +59,127 @@
 <script>
 document.getElementById("rail").outerHTML = renderRail("dashboard");
 
-(async () => {
-  const { campaigns, campaign_details, signals, notifications, meta } =
-    await loadData("campaigns", "campaign_details", "signals", "notifications", "meta");
+/* ── Today's insights. A daily job can replace this via /api/insights;
+      the embedded set is the fallback so the page never renders empty. ── */
+const FALLBACK = {
+  date: "Friday 11 July",
+  widgets: [
+    { tag: "Unanswered · conversion", type: "fraction",
+      data: { num: 48, of: 83, ofLabel: "of 83 positives since 1 July", color: "var(--orange)" },
+      caption: "<b>48 warm replies, no answer from us.</b> Twelve asked for a meeting.",
+      act: "Clear those 12 today." },
+    { tag: "Timing · conversion", type: "pulse24",
+      data: { values: [8,5,3,4,3,9,7,15,14,15,7,6,10,80,60,38,32,26,18,18,16,10,12,6],
+              hotFrom: 13, hotTo: 16, peakLabel: "13:00" },
+      caption: "<b>Half of all positives arrive between 1 and 5pm.</b>",
+      act: "Hold a daily 1pm reply block." },
+    { tag: "Hidden pipeline · conversion", type: "ring",
+      data: { num: 209, of: 544 },
+      caption: "<b>209 out-of-office replies name a return date.</b> A free follow-up calendar.",
+      act: "Queue a touch for the day after each return." },
+    { tag: "Hidden pipeline · conversion", type: "fraction",
+      data: { num: 64, of: 89, ofLabel: "", color: "var(--ink)", small: true },
+      caption: "<b>72% of &quot;wrong person&quot; replies name the right one.</b>",
+      act: "New thread: “your colleague suggested I ask you.”" },
+    { tag: "Deliverability · risk", type: "barsDanger",
+      data: { headline: "4.1%", bars: [4.1, 3.8, 4.0, 3.3, 3.1], danger: 2, book: 1.0, max: 4.5 },
+      caption: "<b>StoreLead lists bounce at 3–4%</b> — double the danger line. They’re burning Amplifyy’s domains.",
+      act: "Verify before send. Pause the Apparel pair." },
+  ],
+};
 
-  document.getElementById("fresh").innerHTML = freshnessBlock(meta);
-
-  const active = (campaigns || []).filter((c) => c.status === "ACTIVE");
-  const sum = (arr, f) => arr.reduce((a, c) => a + (f(c) || 0), 0);
-  const sent = sum(active, (c) => c.analytics.sent);
-  const replies = sum(active, (c) => c.analytics.replies);
-  const positives = sum(active, (c) => c.analytics.positives);
-
-  const replyRate = sent ? (100 * replies / sent) : 0;
-  const stats = [
-    ["Active campaigns", fmt(active.length), `of ${fmt((campaigns || []).length)} total`, "campaigns"],
-    ["Emails sent", fmt(sent), "lifetime", "send"],
-    ["Reply rate", replyRate.toFixed(2) + "%", replyRate >= 1 ? "above 1% benchmark" : "below 1% benchmark", "reply"],
-    ["Positive replies", fmt(positives), positives ? `1 per ${fmt(Math.round(sent / positives))} emails` : "-", "thumbsup"],
-  ];
-  document.getElementById("stats").innerHTML = stats.map(([lab, val, hint, icon]) =>
-    `<div class="stat"><div class="ictile">${ic8(icon)}</div><div class="lab">${lab}</div><div class="num-hero">${val}</div><div class="hint">${hint}</div></div>`
-  ).join("");
-
-  /* chart: aggregate daily across detailed campaigns */
-  const byDate = {};
-  Object.values(campaign_details || {}).forEach((d) => (d.daily || []).forEach((r) => {
-    if (!r.date) return;
-    byDate[r.date] = byDate[r.date] || { sent: 0, replies: 0 };
-    byDate[r.date].sent += r.sent;
-    byDate[r.date].replies += r.replies;
-  }));
-  const dates = Object.keys(byDate).sort();
-  if (dates.length) {
-    const label = (d) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-    lineChart(document.getElementById("chart"), [
-      { color: "#14110E", points: dates.map((d) => ({ y: byDate[d].sent, label: label(d) })) },
-      { color: "#FF4D00", points: dates.map((d) => ({ y: byDate[d].replies * 20, label: label(d) })) },
-    ]);
-  } else {
-    document.getElementById("chart").innerHTML = '<div class="empty">No daily data in snapshot</div>';
-  }
-
-  /* needs attention */
-  const notes = (notifications || []).slice(0, 4);
-  document.getElementById("attention").innerHTML = notes.length ? notes.map((n) => `
-    <div class="attn">
-      <span class="pill ${n.priority === "high" ? "r" : n.priority === "medium" ? "a" : "n"}">${n.priority}</span>
-      <div><div class="t">${esc(n.title)}</div><div class="d">${esc(n.campaign)}</div></div>
-    </div>`).join("") : '<div class="empty">Nothing flagged</div>';
-
-  /* signals strip */
-  const sigs = [...(signals?.theirstack_briefs || []), ...(signals?.signal_routines || [])];
-  const sigIcon = { hiring: "briefcase", news: "signal", linkedin: "linkedin", tech_adoption: "data", company_attribute: "search" };
-  document.getElementById("signals").innerHTML = sigs.length ? sigs.map((s) => `
-    <div class="sigrow">
-      <div class="ic">${ic8(sigIcon[s.signal_type] || "signal")}</div>
-      <div style="flex:1">
-        <div class="t">${esc(s.name)}</div>
-        <div class="d">${esc(s.client || "")}</div>
+const R = {
+  fraction(d) {
+    const pct = Math.round(100 * d.num / d.of);
+    const numCls = d.small ? "num-lg" : "num-xl";
+    const denom = d.small ? `<span style="color:var(--brown-400); font-size:24px;"> / ${d.of}</span>` : "";
+    const fill = d.small ? "var(--brown-400)" : d.color;
+    return `<div class="row">
+      <div><div class="${numCls}" style="color:${d.color}">${d.num}${denom}</div></div>
+      <div class="graphic" style="align-self:center;">
+        <svg viewBox="0 0 300 30" width="100%">
+          <rect x="0" y="12" width="300" height="9" rx="4.5" fill="#F0EDE9"/>
+          <rect x="0" y="12" width="${Math.round(3 * pct)}" height="9" rx="4.5" fill="${fill}"/>
+          ${d.ofLabel ? `<text x="298" y="7" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="10" fill="#A89684">${d.ofLabel}</text>` : ""}
+        </svg>
       </div>
-      <span class="pill ${s.schedule_cron ? "g" : "n"}">${s.schedule_cron ? "daily" : "setup"}</span>
-    </div>`).join("") : '<div class="empty">No signals configured</div>';
+    </div>`;
+  },
+  pulse24(d) {
+    const max = Math.max(...d.values), W = 560, H = 96, bw = 16, gap = 23;
+    const bars = d.values.map((v, i) => {
+      const h = Math.max(2.5, (v / max) * 72), y = 84 - h;
+      const hot = i >= d.hotFrom && i <= d.hotTo;
+      const mid = i >= d.hotTo + 1 && i <= d.hotTo + 3;
+      const fill = hot ? "#FF4D00" : mid ? "#C0B0A0" : "#E8D7C4";
+      const op = hot && v < max * 0.6 ? ' opacity="0.65"' : "";
+      return `<rect x="${2 + i * gap}" y="${y.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" rx="3" fill="${fill}"${op}/>`;
+    }).join("");
+    const peakX = 2 + d.values.indexOf(max) * gap + 8;
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%">
+      ${bars}
+      <text x="${peakX}" y="8" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" fill="#A83100">${d.peakLabel}</text>
+      <text x="2" y="95" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">MIDNIGHT</text>
+      <text x="${2 + 12 * gap}" y="95" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">NOON</text>
+      <text x="${W - 13}" y="95" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#C0B0A0">23:00</text>
+    </svg>`;
+  },
+  ring(d) {
+    const C = 2 * Math.PI * 50, frac = d.num / d.of;
+    return `<div class="row" style="align-items:center;">
+      <svg viewBox="0 0 120 120" width="118" height="118" style="flex:none;">
+        <circle cx="60" cy="60" r="50" fill="none" stroke="#F0EDE9" stroke-width="11"/>
+        <circle cx="60" cy="60" r="50" fill="none" stroke="#FF4D00" stroke-width="11"
+          stroke-dasharray="${(C * frac).toFixed(1)} ${(C * (1 - frac)).toFixed(1)}"
+          stroke-linecap="round" transform="rotate(-90 60 60)"/>
+        <text x="60" y="68" text-anchor="middle" font-family="Acid Grotesk,DM Sans,sans-serif" font-size="24" fill="#14110E">${d.num}</text>
+      </svg>
+      <div style="flex:1; min-width:220px;" class="ring-caption"></div>
+    </div>`;
+  },
+  barsDanger(d) {
+    const px = (v) => (v / d.max) * 72;
+    const bars = d.bars.map((v, i) => {
+      const h = px(v);
+      return `<rect x="${8 + i * 40}" y="${(72 - h).toFixed(1)}" width="30" height="${h.toFixed(1)}" rx="3" fill="#C2371F" opacity="${(1 - i * 0.15).toFixed(2)}"/>`;
+    }).join("");
+    const dy = 72 - px(d.danger), bh = px(d.book);
+    return `<div class="row" style="align-items:flex-end;">
+      <div><div class="num-xl" style="color:var(--red)">${d.headline}</div></div>
+      <div class="graphic">
+        <svg viewBox="0 0 300 78" width="100%">
+          <line x1="0" y1="${dy}" x2="300" y2="${dy}" stroke="#C2371F" stroke-width="1" stroke-dasharray="4 4" opacity="0.55"/>
+          <text x="298" y="${dy - 6}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#C2371F">${d.danger}% DANGER LINE</text>
+          ${bars}
+          <rect x="238" y="${(72 - bh).toFixed(1)}" width="30" height="${bh.toFixed(1)}" rx="3" fill="#C0B0A0"/>
+          <text x="253" y="${(72 - bh - 6).toFixed(1)}" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9" fill="#6B6055">BOOK ~${d.book}%</text>
+        </svg>
+      </div>
+    </div>`;
+  },
+};
 
-  /* top campaigns table */
-  const top = [...active].sort((a, b) => (b.analytics.positives || 0) - (a.analytics.positives || 0)).slice(0, 6);
-  const maxPos = Math.max(1, ...top.map((c) => c.analytics.positives || 0));
-  document.getElementById("toplist").innerHTML =
-    `<tr><th>Campaign</th><th>Sent</th><th>Replies</th><th>Positives</th><th></th></tr>` +
-    top.map((c) => `
-      <tr class="click" onclick="location.href='campaigns.html#${c.id}'">
-        <td style="font-weight:500">${esc(c.name)}</td>
-        <td>${fmt(c.analytics.sent)}</td>
-        <td>${fmt(c.analytics.replies)} <span class="muted small">(${pct(c.analytics.replies, c.analytics.sent)})</span></td>
-        <td style="font-weight:600">${fmt(c.analytics.positives)}</td>
-        <td><div class="bar-track"><div class="bar-fill" style="width:${100 * (c.analytics.positives || 0) / maxPos}%"></div></div></td>
-      </tr>`).join("");
+function renderToday(payload) {
+  document.getElementById("today-date").textContent = payload.date;
+  document.getElementById("today-n").textContent = payload.widgets.length;
+  document.getElementById("widgets").innerHTML = payload.widgets.map((w) => {
+    const graphic = R[w.type] ? R[w.type](w.data) : "";
+    const cap = `<p class="caption">${w.caption}</p>`;
+    return `<div class="w">
+      <span class="tag">${w.tag}</span>
+      ${w.type === "ring" ? graphic.replace('class="ring-caption"></div>', `class="ring-caption">${cap.replace('class="caption"', 'class="caption" style="margin:0;"')}</div>`) : graphic + cap}
+      <div class="act"><span class="arrow">→</span><span>${w.act}</span></div>
+    </div>`;
+  }).join("");
+}
+
+(async () => {
+  let payload = FALLBACK;
+  try {
+    const r = await fetch("/api/insights");
+    if (r.ok) { const j = await r.json(); if (j && j.widgets && j.widgets.length) payload = j; }
+  } catch (e) { /* fall back to embedded */ }
+  renderToday(payload);
 })();
 </script>
 </body>
