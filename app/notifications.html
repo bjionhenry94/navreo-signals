@@ -390,7 +390,6 @@ tr.var-winner td.var-flagcell { color: var(--green); }
       <button type="button" class="nav-chip" data-nav-section="5" title="Low Reply Rate Flags">4</button>
       <button type="button" class="nav-chip" data-nav-section="6" title="Variant Distribution Flags">5</button>
       <button type="button" class="nav-chip" data-nav-section="7" title="Recommended Actions">6</button>
-      <button type="button" class="nav-chip" data-nav-section="8" title="All clear">&check;</button>
     </nav>
     <div id="list"></div>
   </main>
@@ -699,6 +698,9 @@ function matchesActiveClient(n) {
 }
 
 function passesFilters(n) {
+  // The "all clear" tail (section 0) is no longer rendered as a section, so it
+  // never counts as a shown finding anywhere.
+  if (n.section === 0) return false;
   if (filters.status !== "all" && n.status !== filters.status) return false;
   // The whole dashboard is a work queue: once a finding is completed (actioned)
   // or dismissed/resolved it leaves the default view immediately, in EVERY
@@ -1450,11 +1452,6 @@ function setTierExpanded(tierKey, tierLabel, expanded) {
   }
 }
 
-function section8(rows) {
-  const names = rows.map((n) => campaignLink(n.campaign_name, n.smartlead_url));
-  return `<div class="va-note">${names.join(", ") || "None"}</div>`;
-}
-
 /* ══ Top-level draw ══ */
 /* fix F: a collapsed section's body is NOT built here — only stashed in
    sectionRenderers so setSectionExpanded() can build it lazily on first
@@ -1549,8 +1546,10 @@ function updateSummary() {
   const rollupEl = document.getElementById("rollup");
   if (loadState !== "ok") { el.innerHTML = ""; if (rollupEl) rollupEl.innerHTML = ""; return; }
   const shown = all.filter(passesFilters);
+  // Total excludes the (no-longer-rendered) all-clear tail so "X of Y" reconciles.
+  const totalFindings = all.filter((n) => n.section !== 0).length;
   const campaignCount = new Set(shown.map((n) => n.campaign_id ?? n.campaign_name)).size;
-  el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${all.length}</b> findings</div>` +
+  el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${totalFindings}</b> findings</div>` +
     `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
 
   // Top-line rollup: always computed from the full client-scoped `all` (not the currently
@@ -1625,13 +1624,7 @@ function draw() {
     reportSection(7, "Recommended Actions", by(7), section7, { displayNum: 6, countLabel: `${rec7Count} action${rec7Count === 1 ? "" : "s"}`, forceRender: variantAnalysisRows.length > 0 }),
   ].join("");
 
-  const clearRows = by(0);
-  const clearHTML = reportSection(
-    8, `All clear, ${esc(String(clearRows.length))} active campaigns below the 1,500-send report threshold`,
-    clearRows, section8, { muted: true, countLabel: "", showEmpty: true, displayNum: "✓" }
-  );
-
-  root.innerHTML = html + clearHTML;
+  root.innerHTML = html;
   setupSectionNavObserver();
 }
 
