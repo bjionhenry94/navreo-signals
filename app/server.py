@@ -7806,7 +7806,7 @@ AUTH_SESSION_DAYS = 30
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login",
-                     "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync",
+                     "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 
@@ -8511,7 +8511,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
-        if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync"):
+        if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
             # and the lock does not nest.
@@ -8529,6 +8529,13 @@ class Handler(SimpleHTTPRequestHandler):
             # timeout, so kick to a background thread and return immediately.
             # Pull summaries land in signal_cron_runs; HeyReach sync summaries
             # in app_activity_log (actor='heyreach_sync').
+            if path == "/api/cron/audit-refresh":
+                # True hourly audit: the client-side top-up only fires while a
+                # page is open, so the snapshot aged 10h+ overnight. This kicks
+                # the same refresh on a schedule; _deliv_audit_start(force=False)
+                # no-ops while the cached blob is inside its 1h TTL.
+                st = _deliv_audit_start(force=False)
+                return self._json({"ok": True, **st}, 202 if st.get("started") else 200)
             if path == "/api/cron/mailbox-sync":
                 if _MAILBOX_SYNC_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
