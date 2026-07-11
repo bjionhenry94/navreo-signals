@@ -336,7 +336,9 @@ tr.var-winner td.var-flagcell { color: var(--green); }
     box-shadow: -6px 0 8px -6px rgba(20, 17, 14, 0.18);
   }
   .rsection.muted .actions-td, .rsection.muted .actions-th { background: var(--bg-sunken); }
-}
+/* "In progress" status pill (acknowledged) — light blue. Its own class so it
+   never touches .pill.a, which is also used by Medium-priority pills. */
+.pill.b { background: #E4EFFC; color: #1F5AA8; }
 </style>
 </head>
 <body>
@@ -356,7 +358,7 @@ tr.var-winner td.var-flagcell { color: var(--green); }
         <select class="sel" id="statusFilter">
           <option value="all">All statuses</option>
           <option value="new">New</option>
-          <option value="acknowledged">Acknowledged</option>
+          <option value="acknowledged">In progress</option>
           <option value="actioned">Completed</option>
           <option value="dismissed">Dismissed</option>
           <option value="resolved">Resolved</option>
@@ -447,8 +449,8 @@ document.getElementById("rail").outerHTML = renderRail("notifications");
    No full re-render after any action — only the touched DOM node is patched
    in place. */
 
-const STATUS_LABEL = { new: "New", acknowledged: "Acknowledged", actioned: "Completed", dismissed: "Dismissed", resolved: "Resolved" };
-const STATUS_PILL_CLASS = { new: "o", acknowledged: "a", actioned: "g", dismissed: "n", resolved: "n" };
+const STATUS_LABEL = { new: "New", acknowledged: "In progress", actioned: "Completed", dismissed: "Dismissed", resolved: "Resolved" };
+const STATUS_PILL_CLASS = { new: "o", acknowledged: "b", actioned: "g", dismissed: "n", resolved: "n" };
 /* One-line tooltip per status, for newcomers hovering a status pill anywhere
    on the page (fix H1) — every status gets one, not just resolved. */
 const STATUS_TOOLTIP = {
@@ -1071,7 +1073,7 @@ function variantFindingCardHTML(n) {
     <div class="action-row">
       <a class="btn sm" href="${esc(ctx.smartlead_url || n.smartlead_url || "#")}" target="_blank" rel="noopener">Open in Smartlead</a>
       ${disableVariantBtnHTML(n)}
-      ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
+      ${actionBtn(n, "acknowledged", "Acknowledge", "In progress")}
       ${actionBtn(n, "actioned", "Mark as completed", "Completed")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
@@ -1324,7 +1326,7 @@ function actionBlockHTML(n) {
       ${showPause ? `<button type="button" class="btn sm danger" data-act="pause" data-id="${esc(String(n.id))}">Pause campaign</button>` : ""}
       ${showCopy ? `<button type="button" class="btn sm" data-act="copy-prompt" data-id="${esc(String(n.id))}">Copy Claude prompt</button>` : ""}
       <a class="btn sm" href="${esc(n.smartlead_url || "#")}" target="_blank" rel="noopener">Open in Smartlead</a>
-      ${actionBtn(n, "acknowledged", "Acknowledge", "Acknowledged")}
+      ${actionBtn(n, "acknowledged", "Acknowledge", "In progress")}
       ${actionBtn(n, "actioned", "Mark as completed", "Completed")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
