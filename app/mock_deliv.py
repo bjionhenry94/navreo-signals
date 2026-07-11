@@ -333,6 +333,14 @@ def handle_proxy(method: str, rest: str, body: bytes | None):
         if path == "reminder" and method == "POST":
             return _reminder_add(q)
         if path == "reminder-done" and method == "POST":
+            # Mirrors the real backend: the reminder is actually marked done
+            # (a no-op stub here made "Mark added" silently un-stick on the
+            # next plan reload, masking real-backend behaviour in tests).
+            rid = q.get("id")
+            undo = str(q.get("undo") or "") in ("1", "true")
+            for r in _STATE["reminders"]:
+                if r.get("id") == rid:
+                    r["done"] = not undo
             return 200, {"ok": True}
         if path == "reminder-enable-warmup" and method == "POST":
             return 200, {"ok": 0, "failed": 0}

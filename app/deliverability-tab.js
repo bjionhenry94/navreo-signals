@@ -3960,13 +3960,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const restoreBtn = e.blacklisted
       ? `<button class="btn sm" disabled title="Blocked: still on a blocklist — delist first (Blacklist tab)">Restore to sending</button>`
       : `<button class="btn sm primary" data-act="rst-restore" data-id="${esc(e.id)}">Restore to sending</button>`;
+    // Every row gets "Mark added" (owner fix 2026-07-11: it existed only on
+    // manual reminders, so detected-resting rows looked broken). Manual rows
+    // tick the reminder off; detected rows dismiss the ledger entry. Both are
+    // bookkeeping only — Smartlead untouched.
     const secondary = e.source === "reminder"
       ? `<button class="btn sm" data-act="rem-done" data-id="${esc(e.id)}" title="Bookkeeping only — tick it off without touching Smartlead (use when it was restored outside this app)">✓ Mark added</button><button class="btn sm" data-act="rem-remove" data-id="${esc(e.id)}" title="Delete this reminder">Remove</button>`
-      : "";
+      : `<button class="btn sm" data-act="rst-dismiss" data-id="${esc(e.id)}" data-domains="${esc((e.domains || []).join(","))}" title="Bookkeeping only — clear it from the queue without touching Smartlead (use when it was handled outside this app)">✓ Mark added</button>`;
     return `<div class="dlv-rem-row">
       <div class="dlv-rem-main">
         <div class="dlv-rem-doms">${esc((e.domains || []).join(", "))} ${badges.join(" ")}</div>
-        <div class="dlv-rem-meta">restored ${esc(e.restoredDate || "?")} · due <b>${esc(e.dueDate || "?")}</b></div>
+        <div class="dlv-rem-meta">resting since ${esc(e.restoredDate || "?")} · due back <b>${esc(e.dueDate || "?")}</b></div>
         ${capLine}
         ${healthLine}
       </div>
@@ -6518,10 +6522,19 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     S.A.reminders = S.A.reminders.map((x) => (x.id === id ? Object.assign({}, x, { done: !undo }) : x));
     logAction({action: undo ? "reminder_undo" : "reminder_done", count: 1, scope: r ? (r.domains || []).join(", ") : "" });
     saveState();
+    // The queue paints from the cached restore plan — drop the entry there
+    // too, or the click looks dead until the next plan poll (owner-reported).
+    if (DATA.plan && DATA.plan.data && Array.isArray(DATA.plan.data.reminders)) {
+      DATA.plan.data.reminders = DATA.plan.data.reminders.filter((x) => x.id !== id);
+    }
     toast(undo ? "Reminder restored to pending" : "Reminder marked added back", "ok");
     paintPage();
-    if (isLive()) { apiPost("reminder-done?id=" + encodeURIComponent(id) + (undo ? "&undo=1" : "")).catch(() => {}); }
+    if (isLive()) {
+      apiPost("reminder-done?id=" + encodeURIComponent(id) + (undo ? "&undo=1" : "")).catch(() => {});
+      loadRestorePlan(true);
+    }
   }
+
   async function remEnableWarmup(id) {
     const h = S.A.remHealth[id];
     if (!h) return;
@@ -6558,10 +6571,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!ok) return;
     S.A.reminders = S.A.reminders.filter((x) => x.id !== id);
     delete S.A.remHealth[id];
+    if (DATA.plan && DATA.plan.data && Array.isArray(DATA.plan.data.reminders)) {
+      DATA.plan.data.reminders = DATA.plan.data.reminders.filter((x) => x.id !== id);
+    }
     logAction({action: "reminder_removed", count: 1, scope: label });
     saveState();
     toast("Reminder removed", "ok");
     paintPage();
+    if (isLive()) loadRestorePlan(true);
   }
 
   /* ============================================================
@@ -7288,6 +7305,25 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "bulk-restore") { runAct(act, () => bulkAction("restore", t)); return; }
     if (act === "rst-restore") { runAct(act, () => rstOpenRestore(t.dataset.id)); return; }
     if (act === "rst-retry") { runAct(act, () => loadRestorePlan(true)); return; }
+    // "Mark added" on a detected-resting row: dismiss its ledger entry —
+    // bookkeeping only. Optimistic removal so the click visibly works.
+    if (act === "rst-dismiss") { runAct(act, () => {
+      const id = t.dataset.id;
+      const domains = (t.dataset.domains || "").split(",").filter(Boolean);
+      if (DATA.plan && DATA.plan.data && Array.isArray(DATA.plan.data.reminders)) {
+        DATA.plan.data.reminders = DATA.plan.data.reminders.filter((x) => x.id !== id);
+      }
+      logAction({ action: "restore_dismissed", count: 1, scope: domains.join(", ") });
+      saveState();
+      toast("Cleared from the queue — Smartlead untouched", "ok");
+      paintPage();
+      if (isLive()) {
+        fetch("/api/restore-dismiss", { method: "POST", headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ domains }) })
+          .then(() => loadRestorePlan(true)).catch(() => {});
+      }
+    }); return; }
+
     if (act === "rem-add") { runAct(act, () => remAdd()); return; }
     if (act === "rem-done") { runAct(act, () => remDone(t.dataset.id, false)); return; }
     if (act === "rem-undo") { runAct(act, () => remDone(t.dataset.id, true)); return; }

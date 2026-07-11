@@ -8503,6 +8503,9 @@ def _restore_reminders():
     return (_restore_blob().get("reminders") or []), "cached"
 
 
+_RESTORE_DISMISS_MOCK = set()  # DELIV_MOCK-only: in-memory stand-in for ledger.dismissed
+
+
 def _restore_entries():
     """The merged, enriched, due-date-sorted queue. Also returns lookup maps
     reused by restore-live (blacklist rows, mailbox aggregates)."""
@@ -8523,16 +8526,44 @@ def _restore_entries():
         entries.append({"id": r.get("id"), "domains": r.get("domains") or [],
                         "restoredDate": r.get("restoredDate"), "dueDate": r.get("dueDate"),
                         "source": "reminder"})
-    # auto entries: domains the dashboard has resting right now with no reminder
-    # row at all (done or pending) — restingDue holds the PAUSE moment (ms);
-    # +7d is the same shift _deliv_fix_resting_due applies on the proxy path.
-    resting = ((blob.get("domainHealth") or {}).get("restingDue") or {})
-    for dom, ts in sorted(resting.items()):
-        if not isinstance(ts, (int, float)) or dom.lower() in covered:
-            continue
-        entries.append({"id": "auto-" + dom.lower(), "domains": [dom],
-                        "restoredDate": iso(ts), "dueDate": iso(ts + _DELIV_REST_DAYS_MS),
-                        "source": "auto"})
+    # auto entries: domains resting right now with no reminder row of their
+    # own. Dates come from the app's rest LEDGER (first time WE saw the domain
+    # rested) — the blob's restingDue is a due date built on backend values
+    # that get re-stamped every sweep, which is what produced future
+    # "restored" dates and doubled dues on the queue (owner-reported bug,
+    # 2026-07-11). Rows the owner dismissed via "Mark added" are skipped; the
+    # dismissal dies with the ledger row when the domain stops resting.
+    ledger = []
+    if not _deliv_mock_on():
+        try:
+            ledger = sb_get_all("deliverability_resting_ledger?select=domain,first_rested_at,dismissed") or []
+        except Exception as e:  # noqa: BLE001 — fall through to the blob path
+            print(f"[restore-plan] ledger unavailable: {e}", file=sys.stderr)
+    if ledger:
+        from datetime import timedelta
+        for row in sorted(ledger, key=lambda r: str(r.get("domain") or "")):
+            dom = str(row.get("domain") or "").lower()
+            if not dom or dom in covered or row.get("dismissed"):
+                continue
+            try:
+                rested = datetime.fromisoformat(str(row["first_rested_at"]).replace("Z", "+00:00")).date()
+            except Exception:  # noqa: BLE001
+                continue
+            entries.append({"id": "auto-" + dom, "domains": [dom],
+                            "restoredDate": rested.isoformat(),
+                            "dueDate": (rested + timedelta(days=7)).isoformat(),
+                            "source": "auto"})
+    else:
+        # No ledger (mock mode / Supabase down): blob restingDue values are
+        # rest+7d due dates — un-shift for the rest date instead of doubling.
+        resting = ((blob.get("domainHealth") or {}).get("restingDue") or {})
+        for dom, ts in sorted(resting.items()):
+            if not isinstance(ts, (int, float)) or dom.lower() in covered \
+                    or dom.lower() in _RESTORE_DISMISS_MOCK:
+                continue
+            entries.append({"id": "auto-" + dom.lower(), "domains": [dom],
+                            "restoredDate": iso(ts - _DELIV_REST_DAYS_MS), "dueDate": iso(ts),
+                            "source": "auto"})
     today = date.today()
     sweep = None
     with _RESTORE_SWEEP_LOCK:
@@ -9683,6 +9714,24 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, payload)
             body, status = api_restore_live(payload)
             return self._json(body, status)
+        if path == "/api/restore-dismiss":
+            # "Mark added" on a detected-resting queue row: bookkeeping only —
+            # hides the row (ledger.dismissed); nothing in Smartlead changes.
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            doms = [str(d).lower() for d in (payload.get("domains") or []) if d]
+            if not doms:
+                return self._json({"ok": False, "message": "no domains"}, 400)
+            log_activity(path, payload, action="restore_dismiss", entity="resting_ledger")
+            if _deliv_mock_on():
+                _RESTORE_DISMISS_MOCK.update(doms)
+            else:
+                sb("PATCH", "deliverability_resting_ledger?domain=in.(%s)" % ",".join(doms),
+                   {"dismissed": True}, prefer="return=minimal")
+            return self._json({"ok": True, "dismissed": len(doms)})
         if path == "/api/deliverability/_mock/scenario":  # DELIV_MOCK — mock-only, 404 outside mock mode
             if not _deliv_mock_on():
                 return self._json({"error": "not_found"}, 404)
