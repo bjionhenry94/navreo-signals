@@ -435,6 +435,17 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
         chosen.append(afternoon)
         used_dates.add(afternoon[0].date())
 
+    # Only one date has availability? Two adjacent times read badly ("11:00 or
+    # 11:30") - prefer a same-day afternoon slot at least 2 hours after the
+    # first pick before falling back to whatever's next.
+    if len(chosen) == 1:
+        first_local = chosen[0][0]
+        for local, utc_dt in candidates:
+            if local.date() == first_local.date() and local.hour >= max(13, first_local.hour + 2) \
+                    and (local, utc_dt) not in chosen:
+                chosen.append((local, utc_dt))
+                break
+
     for local, utc_dt in candidates:
         if len(chosen) >= 2:
             break
@@ -953,10 +964,15 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
             now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
         horizon_days = int(settings.get("horizon_working_days") or 5)
         span_days = max(horizon_days + 4, 7)
-        cursor = now_utc
+        # Calendly rejects a start_time that isn't strictly in the future -
+        # starting at "now" exactly made the first (and usually only) chunk
+        # 400 silently, which read back as "no availability" while real slots
+        # existed. Start a few minutes ahead, and surface chunk errors.
+        cursor = now_utc + _dt.timedelta(minutes=5)
         end_of_range = now_utc + _dt.timedelta(days=span_days)
         avail = []
         chunk_days = 7
+        chunk_errors = []
         while cursor < end_of_range:
             chunk_end = min(cursor + _dt.timedelta(days=chunk_days), end_of_range)
             params = {
@@ -970,7 +986,11 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
                     st = slot.get("start_time")
                     if st:
                         avail.append(st)
+            else:
+                chunk_errors.append(str(data)[:150])
             cursor = chunk_end
+        if chunk_errors and not avail:
+            return "error", [], f"Calendly availability lookup failed: {chunk_errors[0]}"
         if not avail:
             return "none_available", [], ""
         return "ok", avail, ""
