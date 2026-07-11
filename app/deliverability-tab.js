@@ -1047,12 +1047,14 @@
     ["blacklist", "Blacklisted domains"],
     ["manager", "Inbox & domain manager"],
     ["batch", "Performance by batch"],
-    ["reminders", "Restore reminders"],
   ];
   let dlvSubtab = "overview";
   function loadSubtab() {
     try {
       const v = sessionStorage.getItem("dlv_subtab");
+      // "Restore reminders" moved inside the manager (owner request
+      // 2026-07-11) — a stored pointer to the old tab lands on its new home.
+      if (v === "reminders") { dlvSubtab = "manager"; UI.mgr.flow = "reminders"; return; }
       if (v && DLV_SUBTABS.some(([id]) => id === v)) dlvSubtab = v;
     } catch (e) {}
   }
@@ -3400,6 +3402,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     ["notwarming", "Not warming"],
     ["inwarmup", "In warm-up"],
     ["reconnect", "Needs reconnect"],
+    ["reminders", "Restore reminders"],
   ];
 
   // A mailbox row's stable selection key, always a string: live rows key by
@@ -3509,7 +3512,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       .sort((a, b) => a.reply_rate - b.reply_rate || b.sent - a.sent);
   }
 
-  // Chip counts for the four flows (null = still loading).
+  // Pending restore-queue entries, ranked closest-due first. Prefers the live
+  // restore plan; local reminder rows until it lands.
+  function reminderEntries() {
+    const plan = DATA.plan;
+    if (plan && plan.data && Array.isArray(plan.data.reminders)) {
+      return plan.data.reminders.slice().sort((a, b) => String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")));
+    }
+    return (S.A.reminders || []).filter((r) => !r.done)
+      .map((r) => Object.assign({}, r, { source: "reminder", client: "—", mailboxes: (S.A.remHealth[r.id] || {}).total || 0,
+                                         parked_capacity: 0, zero_cap_boxes: 0, blacklisted: false,
+                                         overdue: r.dueDate <= todayISO(), days_left: daysUntil(r.dueDate), attached_boxes: null }))
+      .sort((a, b) => String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")));
+  }
+
+  // Chip counts for the five flows (null = still loading).
   function mgrFlowCounts(D) {
     const fl = floorRows(D);
     const nw = rowsForFlow("notwarming");
@@ -3521,6 +3538,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       notwarming: doms(nw),
       inwarmup: doms(iw),
       reconnect: doms(rc),
+      reminders: reminderEntries().length,
     };
   }
 
@@ -3540,6 +3558,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       notwarming: "Mailboxes with warmup switched OFF — nothing is rebuilding their reputation (Maildoso warms externally, by design)",
       inwarmup: "Resting or warming on purpose, due-date tracked — restore when due",
       reconnect: "Mailboxes whose connection failed — silently sending nothing until reconnected",
+      reminders: "The restore queue — everything waiting to come back, closest due date first",
     };
     const chip = (id, label) => {
       const n = counts[id];
@@ -3547,6 +3566,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return `<button class="dlv-flowchip ${flow === id ? "on" : ""} ${id === "floor" && n ? "warn" : ""}" data-act="mgr-flow" data-flow="${id}" role="tab" aria-selected="${flow === id}" title="${esc(CHIP_TIPS[id] || "")}">${label} <span class="dlv-flowchip-n">${badge}</span></button>`;
     };
     const chips = `<div class="dlv-flowchips" role="tablist">${MGR_FLOWS.map(([id, label]) => chip(id, label)).join("")}</div>`;
+    // Restore reminders (owner request 2026-07-11): a plain ranked queue —
+    // closest due date first, no forecast/visualisations — plus the manual
+    // add-reminder bar. No toolbar, no table shell.
+    if (flow === "reminders") {
+      return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
+        <div class="dlv-subtab-head">${headIc("mail")}Inbox &amp; domain manager<span class="hint">${counts.reminders ? counts.reminders + " waiting to come back" : "restore queue"}</span></div>
+        <div class="dlv-fold-body">
+          ${chips}
+          ${renderRemindersFlowBody()}
+        </div>
+      </div>`;
+    }
     const { minSent, cutoff } = dhCutoffMin();
     const src = dhSource();
     const winSel = flow === "floor" ? `<span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" data-act="mgr-window" title="Reporting window the reply floor is judged over">
@@ -3908,59 +3939,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       paintPage();
     });
   }
-  function renderRestoreForecast(f, entries) {
-    if (!f) return "";
-    if (f.status === "computing") {
-      return `<div class="dlv-rst-fc"><div class="dlv-rst-fc-head"><span class="dlv-spinner"></span> Computing campaign membership (one pass over every active campaign, ~2 min) — the queue below is already live.</div></div>`;
-    }
-    if (f.status !== "ready") {
-      return f.error ? `<div class="dlv-rst-fc"><div class="dlv-rst-fc-head">Capacity forecast unavailable — ${esc(f.error)}</div></div>` : "";
-    }
-    const pend = entries.filter((e) => !e.done);
-    const parkedBlocked = pend.filter((e) => e.blacklisted).reduce((a, e) => a + (e.parked_capacity || 0), 0);
-    const blockedDoms = pend.filter((e) => e.blacklisted).length;
-    const boxes = pend.reduce((a, e) => a + (e.mailboxes || 0), 0);
-    const parkedFree = Object.values(f.parked_now || {}).reduce((a, b) => a + b, 0);
-    const chips = (f.clients || []).map((c) => {
-      const now = (f.sending_now || {})[c] || 0;
-      const end = f.days.length ? (f.days[f.days.length - 1].byClient[c] || {}).projected || now : now;
-      return `<span class="dlv-rst-chip">${esc(c)}: <b>${fmtN(now)}</b>/day${end > now ? ` → <b>${fmtN(end)}</b> by ${esc(f.days[f.days.length - 1].date.slice(5))}` : ""}</span>`;
-    }).join("");
-    let rows = (f.clients || []).map((c) => {
-      let prev = null;
-      const cells = f.days.map((d) => {
-        const v = (d.byClient[c] || {}).projected || 0;
-        const cls = [(d.weekend ? "wknd" : ""), (prev != null && v > prev ? "step" : "")].filter(Boolean).join(" ");
-        prev = v;
-        return `<td class="${cls}">${fmtN(v)}</td>`;
-      }).join("");
-      return `<tr><td>${esc(c)}</td>${cells}</tr>`;
-    }).join("");
-    let prevT = null;
-    rows += `<tr><td>Total</td>${f.days.map((d) => {
-      const cls = [(d.weekend ? "wknd" : ""), (prevT != null && d.total > prevT ? "step" : "")].filter(Boolean).join(" ");
-      prevT = d.total;
-      return `<td class="${cls}"><b>${fmtN(d.total)}</b></td>`;
-    }).join("")}</tr>`;
-    const head = f.days.map((d) => `<th class="${d.weekend ? "wknd" : ""}">${esc(d.weekday)}<br>${esc(d.date.slice(5))}</th>`).join("");
-    // Plain-English caption: name the first upcoming step-up, if any.
-    let caption = "No capacity is due back inside the next 14 days.";
-    let prevTot = null;
-    for (const d of f.days) {
-      if (prevTot != null && d.total > prevTot) {
-        caption = `On ${esc(d.weekday)} ${esc(d.date)} you're back to ~${fmtN(d.total)}/day (+${fmtN(d.total - prevTot)}).`;
-        break;
-      }
-      prevTot = d.total;
-    }
-    const blockedNote = parkedBlocked ? ` <span style="color:var(--red)">${fmtN(parkedBlocked)}/day across ${blockedDoms} domain(s) is blocked by blacklists — it returns only after delisting and is NOT in the projection.</span>` : "";
-    return `<div class="dlv-rst-fc">
-      <div class="dlv-rst-fc-head">In warm-up / resting now: <b>${pend.length}</b> entr${pend.length === 1 ? "y" : "ies"} · <b>${fmtN(boxes)}</b> mailboxes · <b>${fmtN(parkedFree + parkedBlocked)}</b>/day parked${blockedNote}</div>
-      <div class="dlv-rst-chips">${chips}</div>
-      <div class="dlv-rst-tbl-wrap"><table class="dlv-rst-tbl"><thead><tr><th>Projected /day</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="dlv-rst-cap">${caption} Figures are summed Smartlead daily caps of mailboxes in active campaigns; a step-up lands on an entry's due date. Sweep ${f.sweep_age_sec != null ? Math.round(f.sweep_age_sec / 60) + " min old" : ""}.${f.zero_cap_note ? " " + fmtN(f.zero_cap_note) + " mailbox(es) hold caps inside the audit service and add on top when restored." : ""}</div>
-    </div>`;
-  }
   function renderRestoreRow(e) {
     const badges = [];
     if (e.blacklisted) badges.push(`<span class="dlv-rst-badge bl" title="This domain is on a public blocklist — restoring is blocked until it is delisted (see the Blacklist tab)">blacklisted</span>`);
@@ -3995,26 +3973,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div class="dlv-rem-acts">${status}${restoreBtn}${secondary}</div>
     </div>`;
   }
-  function renderRemindersPanel(D) {
+  // The manager's "Restore reminders" flow body (owner request 2026-07-11:
+  // no forecast, no capacity visualisations — just the queue ranked closest
+  // due date first, one-click Restore, and the manual add bar).
+  function renderRemindersFlowBody() {
     const rem = S.A.reminders || [];
     loadRestorePlan();
     const plan = DATA.plan;
-    let entries;
-    if (plan && plan.data && Array.isArray(plan.data.reminders)) {
-      entries = plan.data.reminders;
-    } else {
-      // demo mode / plan still loading: old local rows, due-date-sorted
-      entries = rem.filter((r) => !r.done)
-        .map((r) => Object.assign({}, r, { source: "reminder", client: "—", mailboxes: (S.A.remHealth[r.id] || {}).total || 0,
-                                           parked_capacity: 0, zero_cap_boxes: 0, blacklisted: false,
-                                           overdue: r.dueDate <= todayISO(), days_left: daysUntil(r.dueDate), attached_boxes: null }))
-        .sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
-    }
-    const overdueN = entries.filter((e) => e.overdue).length;
-    const parked = entries.reduce((a, e) => a + (e.parked_capacity || 0), 0);
-    const hintBits = [entries.length + " pending"];
-    if (overdueN) hintBits.push(overdueN + " due now");
-    if (parked) hintBits.push(fmtN(parked) + "/day parked");
+    const entries = reminderEntries();
     const loading = plan && plan.status === "loading" && !plan.data;
     const planErr = plan && plan.status === "error"
       ? `<div class="dlv-rst-warn">Live restore data unavailable (${esc(plan.error || "error")}) — showing local reminders only. <a class="dlv-dl" data-act="rst-retry">Retry</a></div>` : "";
@@ -4024,12 +3990,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const doneRows = rem.filter((r) => r.done);
     const doneFold = doneRows.length
       ? `<details class="dlv-fold" style="margin-top:14px"><summary>Completed<span class="hint">${doneRows.length} restored / added back</span></summary><div class="dlv-fold-body">${doneRows.map(renderReminderRow).join("")}</div></details>` : "";
-    const forecast = plan && plan.data ? renderRestoreForecast(plan.data.forecast, entries) : "";
-    return `<div class="dlv-subtab-panel" id="dlv-fold-reminders">
-      <div class="dlv-subtab-head">${headIc("bell")}Restore queue<span class="hint">${hintBits.join(" · ")}</span></div>
-      <div class="dlv-fold-body">
-        ${planErr}
-        ${forecast}
+    return `${planErr}
         ${list}
         ${doneFold}
         <div style="margin-top:18px;border-top:1px solid var(--line-2);padding-top:14px">
@@ -4041,9 +4002,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         </div>
         <div class="dlv-rem-err" id="dlv-rem-err">Type at least one domain first</div>
         <div class="dlv-mb-count" id="dlv-rem-hint" style="margin:-6px 0 4px">Will be due ${esc(addDays(todayISO(), 14))}</div>
-        </div>
-      </div>
-    </div>`;
+        </div>`;
   }
   // ── Restore-to-sending modal (self-contained; buttons wired directly) ──
   function rstModalClose() { const m = $id("dlv-rst-modal"); if (m) m.remove(); }
@@ -4472,7 +4431,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (dlvSubtab === "blacklist") panel = renderBlacklistPanel(D);
     else if (dlvSubtab === "manager") panel = renderManagerPanel(D);
     else if (dlvSubtab === "batch") panel = renderBatchPanel();
-    else if (dlvSubtab === "reminders") panel = renderRemindersPanel(D);
     else panel = renderOverviewPanel(D);
     root.innerHTML = [
       renderDataBanner(),
@@ -7210,7 +7168,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Rewired: "Restore reminders" is now its own sub-tab (the to-do card's
     // "⏰ Reminders ↓" button lands here) — switch tab, repaint, jump to top,
     // flash the heading, exactly like the other three moved sections.
-    if (act === "open-reminders") { runAct(act, () => gotoSubtab("reminders", "dlv-fold-reminders")); return; }
+    if (act === "open-reminders") { runAct(act, () => {
+      // The restore queue lives inside the manager now.
+      UI.mgr.flow = "reminders"; UI.mgr.search = "";
+      gotoSubtab("manager", "dlv-fold-manager");
+    }); return; }
     // Rewired: "Blacklisted domains" is now its own sub-tab (the to-do card's
     // "Manage ↓" and the Blacklisted-domains tile's fix-link both land here).
     if (act === "open-blacklist") { runAct(act, () => gotoSubtab("blacklist", "dlv-fold-blacklist")); return; }
