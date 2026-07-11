@@ -4830,6 +4830,12 @@ def auto_push_new_leads(src: dict) -> list:
             if pr.get("linkedin"):
                 sb("PATCH", f"signal_leads?source_id=eq.{src['id']}&linkedin_url=eq.{pr['linkedin']}",
                    {"status": "pushed", "pushed_to": pr["pushed_to"]})
+        elif push.get("suppressed"):
+            # Excluded domain/prior contact — stamp once so we never retry this lead.
+            pr["verdict"] = "reject"
+            if pr.get("linkedin"):
+                sb("PATCH", f"signal_leads?source_id=eq.{src['id']}&linkedin_url=eq.{pr['linkedin']}",
+                   {"status": "rejected"})
         out.append({"name": pr.get("name"), "company": pr.get("company"), "email": pr.get("email"),
                     "ok": bool(sent), "tools": {k: v.get("message") for k, v in push["tools"].items()}})
     # the local `prospects` list only holds the LAST pull, so leads pulled on
