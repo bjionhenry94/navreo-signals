@@ -5,9 +5,11 @@ Ports the proven Node script (mailbox-db-sync/scripts/sync-mailboxes.mjs) to
 Python so it can run as a Render Cron Job instead of Windows Task Scheduler
 (no dependency on a machine being logged in).
 
-Pulls EVERY Smartlead mailbox + its 30-day health metrics, transforms each
-into a `mailboxes` snapshot row and a `mailbox_stats_daily` row keyed on
-today's date, and upserts both tables in Supabase via PostgREST
+Pulls EVERY Smartlead mailbox + its 30-day health metrics + its ACTIVE-campaign
+attachment count (per-campaign email-accounts sweep — the list endpoint never
+returns campaign_count), transforms each into a `mailboxes` snapshot row and a
+`mailbox_stats_daily` row keyed on today's date, and upserts both tables in
+Supabase via PostgREST
 (resolution=merge-duplicates). Verifies the write by re-reading both tables'
 counts afterwards.
 
@@ -170,8 +172,76 @@ def pull_metrics(smartlead_key: str, start_date_str: str, end_date_str: str) -> 
     raise RuntimeError("Failed to pull name-wise-health-metrics after 3 attempts")
 
 
+# ---------- pull 3: ACTIVE-campaign attachment counts ----------
+def _get_json_retry(url: str, attempts: int = 3, timeout: int = 120):
+    """GET url expecting a JSON array/object; returns parsed value or None
+    after exhausting retries."""
+    import json as _json
+
+    for attempt in range(1, attempts + 1):
+        try:
+            status, text, _ = _request("GET", url, {"User-Agent": server.UA}, timeout=timeout)
+            if 200 <= status < 300:
+                try:
+                    return _json.loads(text)
+                except ValueError:
+                    log(f"GET attempt={attempt}: invalid JSON, retrying")
+            else:
+                log(f"GET attempt={attempt}: HTTP {status}, retrying")
+        except Exception as e:  # noqa: BLE001 — transport error, retry
+            log(f"GET attempt={attempt}: fetch error ({e}), retrying")
+        if attempt < attempts:
+            time.sleep(PAGE_RETRY_BASE_SEC * attempt)
+    return None
+
+
+def pull_campaign_counts(smartlead_key: str):
+    """Smartlead's /email-accounts/ list endpoint never returns campaign_count
+    (verified 2026-07-11 — the field is simply absent, which left the column at
+    0 across the whole fleet). The only source of truth for campaign membership
+    is GET /campaigns/{id}/email-accounts per ACTIVE campaign — the same sweep
+    server.py's restore path uses live (~1 call per active campaign, throttled
+    well under the 200/min cap).
+
+    Returns {from_email(lower): number of ACTIVE campaigns attached}, or None
+    if the sweep could not complete. On None the caller must OMIT
+    campaign_count from the upsert payload entirely so merge-duplicates
+    preserves the last-known values instead of overwriting them with zeros."""
+    camps = _get_json_retry(f"{SMARTLEAD_BASE}/campaigns?api_key={smartlead_key}", timeout=60)
+    if not isinstance(camps, list):
+        log("Campaign sweep: could not fetch /campaigns list")
+        return None
+    active = [c for c in camps if isinstance(c, dict) and c.get("status") == "ACTIVE"]
+    log(f"Campaign sweep: {len(active)} ACTIVE campaigns (of {len(camps)} total)")
+
+    counts = {}
+    failed = 0
+    for i, c in enumerate(active, 1):
+        rows = _get_json_retry(
+            f"{SMARTLEAD_BASE}/campaigns/{c['id']}/email-accounts?api_key={smartlead_key}")
+        if not isinstance(rows, list):
+            failed += 1
+            log(f"Campaign sweep: campaign {c['id']} failed all attempts "
+                f"({failed} failed so far)")
+        else:
+            for a in rows:
+                email = (a.get("from_email") or "").lower() if isinstance(a, dict) else ""
+                if email:
+                    counts[email] = counts.get(email, 0) + 1
+        if i % 25 == 0:
+            log(f"Campaign sweep: {i}/{len(active)} campaigns swept")
+        time.sleep(0.35)
+
+    if failed:
+        # A partial sweep would write undercounts that look just as authoritative
+        # as real ones — preserve yesterday's values instead.
+        log(f"Campaign sweep: {failed}/{len(active)} campaigns failed — treating sweep as incomplete")
+        return None
+    return counts
+
+
 # ---------- transform ----------
-def transform_mailbox(m: dict, metrics_map: dict, today_str: str, now_iso_str: str):
+def transform_mailbox(m: dict, metrics_map: dict, campaign_counts, today_str: str, now_iso_str: str):
     email = (m.get("from_email") or "").lower()
     domain = email.split("@")[1] if "@" in email else None
     wd = m.get("warmup_details") or {}
@@ -217,10 +287,13 @@ def transform_mailbox(m: dict, metrics_map: dict, today_str: str, now_iso_str: s
         "blocked_reason": blocked_reason,
         "smtp_ok": m.get("is_smtp_success"),
         "imap_ok": m.get("is_imap_success"),
-        "campaign_count": m.get("campaign_count"),
         "client_id": m.get("client_id"),
         "last_synced_at": now_iso_str,
     }
+    if campaign_counts is not None:
+        # Omitted uniformly when the sweep failed: merge-duplicates then leaves
+        # the column's last-known values untouched.
+        mailbox_row["campaign_count"] = campaign_counts.get(email, 0)
 
     stats_row = {
         "smartlead_id": m.get("id"),
@@ -344,12 +417,24 @@ def main():
             if entry and entry.get("from_email"):
                 metrics_map[str(entry["from_email"]).lower()] = entry
 
+        # Pull 3
+        log("Pulling ACTIVE-campaign attachment counts (per-campaign email-accounts sweep) ...")
+        campaign_counts = pull_campaign_counts(smartlead_key)
+        if campaign_counts is None:
+            log("WARNING: campaign sweep incomplete — campaign_count omitted this run, "
+                "last-known values preserved in Supabase")
+        else:
+            attached = sum(1 for v in campaign_counts.values() if v)
+            log(f"Pull 3 complete: {attached} mailboxes attached to >=1 ACTIVE campaign, "
+                f"{sum(campaign_counts.values())} total attachments")
+
         # Transform
         mailbox_rows, stats_rows = [], []
         no_metrics_count = 0
         warmup_statuses_seen = set()
         for m in mailboxes:
-            mailbox_row, stats_row, has_metrics = transform_mailbox(m, metrics_map, today_str, now_iso_str)
+            mailbox_row, stats_row, has_metrics = transform_mailbox(
+                m, metrics_map, campaign_counts, today_str, now_iso_str)
             mailbox_rows.append(mailbox_row)
             stats_rows.append(stats_row)
             if not has_metrics:
