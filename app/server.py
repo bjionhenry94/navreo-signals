@@ -5431,7 +5431,8 @@ ENG_ENRICH_WORKERS = 8    # /profile/enrich (also the credit-bound step)
 
 
 def _activity_urn(post_url: str):
-    mm = re.search(r"activity:(\d+)", post_url or "")
+    # LinkedIn uses both activity:DIGITS (/feed/update/ URLs) and activity-DIGITS (/posts/ URLs)
+    mm = re.search(r"activity[:\-](\d+)", post_url or "")
     return mm.group(1) if mm else None
 
 
@@ -5571,7 +5572,8 @@ def stage_trigify_engagers(src: dict, cfg: dict, days: int = ENG_BACKFILL_DAYS,
         with ThreadPoolExecutor(max_workers=ENG_FETCH_WORKERS) as ex:
             results = list(ex.map(lambda p: _trigify_post_engagers(p["post_urn"], per_post), chunk))
         for post, found in zip(chunk, results):
-            swept.add(post["post_url"])
+            if found:  # only mark swept once comments are confirmed — new posts need re-checks as comments accumulate
+                swept.add(post["post_url"])
             for e in found:
                 key = (post["post_url"], e["linkedin"])
                 if key in seen_pair:
