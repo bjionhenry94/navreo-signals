@@ -3543,37 +3543,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       inwarmup: `<th>Domain / mailbox</th><th style="text-align:right">Mailboxes</th><th style="text-align:right">Due back</th><th>Status</th><th style="text-align:right">Action</th>`,
       reconnect: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Domain / mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>`,
     };
-    const intro = {
-      floor: "Domains replying under the floor over the selected window. One click rests ALL of a domain's mailboxes (caps saved for restore). Changes confirm before applying.",
-      notwarming: "Current state (not window-based): mailboxes with warmup switched off, grouped by domain. Maildoso-managed inboxes warm externally — an inactive status there is by design.",
-      inwarmup: "Current state (not window-based): everything resting or warming, grouped by domain, with when it's due back. Restore reactivates a domain's mailboxes at their saved caps.",
-      reconnect: "Current state (not window-based): mailboxes whose connection failed, grouped by domain. Reconnect retries them; they resume on their existing schedules.",
-    };
-    // Consequence disclosures stay with the flows whose actions they explain.
-    let disclose = "";
-    if (flow === "reconnect") {
-      const reconnectRows = rowsForFlow("reconnect") || [];
-      disclose = dlvDisclose(
-        dlvConsequences(
-          "The failed connections retry now. Reconnected inboxes resume sending on their existing schedules.",
-          "These inboxes stay disconnected and silently send nothing, so your real volume sits below what campaigns report."
-        ) +
-        dlvAffTable(["Mailbox", "Domain", "Failure reason"], reconnectRows.map((r) => [esc(r.email), esc(r.domain), esc(r.reason || r.reason_category || "")]), dlvAffLabel("inboxes", reconnectRows.length)) +
-        dlvTechFold([["Failure reasons", reconnectRows.map((r) => r.email + ": " + (r.reason_category || "") + (r.reason ? " - " + r.reason : "")).join("\n")]])
-      );
-    } else if (flow === "inwarmup" || flow === "floor") {
-      const restingDomains = Object.keys(D.resting || {}).filter((dom) => (D.resting[dom] || 0) > 0);
-      const affRows = restingDomains.map((dom) => [esc(dom), esc((D.resting[dom] || 0) + " mailboxes"), esc((D.restingDue && D.restingDue[dom]) ? new Date(D.restingDue[dom]).toISOString().slice(0, 10) : "n/a")]);
-      const savedCapLines = (S.A.inboxRows || []).filter((r) => r._savedCap != null).map((r) => r.email + ": saved cap " + r._savedCap + "/day").join("\n");
-      disclose = dlvDisclose(
-        dlvConsequences(
-          "Sending resumes on the selected domain(s) with their saved caps restored, so volume ramps back safely instead of jumping.",
-          "The domain(s) stay paused and their capacity stays offline. Fine if you are resting them deliberately, wasted volume if not."
-        ) +
-        (affRows.length ? dlvAffTable(["Domain", "Resting", "Due back"], affRows, dlvAffLabel("domains", affRows.length)) : `<div class="det-block" style="margin-top:14px"><div class="h">Your affected domains</div><div class="consequence">No domains are currently resting. Nothing to reactivate right now.</div></div>`) +
-        dlvTechFold([["Saved caps", savedCapLines]])
-      );
-    }
     const foot = flow === "floor"
       ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health-warmup">View warmup list</a> &nbsp; <a class="dlv-dl" data-act="view-data" data-file="domain-health">View full table</a></div>`
       : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">View problem mailboxes</a></div>`;
@@ -3581,9 +3550,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
       <div class="dlv-subtab-head">${headIc("mail")}Inbox &amp; domain manager<span class="hint">${counts.floor ? counts.floor + " domain(s) need warm-up →" : ""} warm up · restore · reconnect</span></div>
       <div class="dlv-fold-body">
-        <div class="dlv-plain" style="margin:-2px 0 12px" id="dlv-mgr-intro">${intro[flow]}</div>
         ${chips}
-        ${disclose}
         <div class="dlv-mb-bar">
           ${winSel}${winNote}
           <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search domain or mailbox…" value="${esc(UI.mgr.search)}" data-act="mgr-search">
