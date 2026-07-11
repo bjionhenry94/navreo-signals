@@ -8096,6 +8096,45 @@ def _deliv_bundle_restore():
         print(f"[deliv] WARNING bundle restore failed: {e}", file=sys.stderr)
 
 
+def _deliv_resting_ledger_sync(rested_doms, allow_delete=True):
+    """Authoritative due-back dates. The audit backend RE-STAMPS its
+    restedAt/restingDue values on every sweep (verified live 2026-07-11:
+    1,997/2,000 rested mailboxes carried the latest sweep's timestamp), so a
+    +7d shift of its values reads "due in 7d" forever and nothing ever comes
+    due. This ledger records when WE first saw each domain rested and derives
+    due = first_rested_at + 7d. Sync: new rested domains are inserted at now
+    (accurate to one refresh interval); restored domains are deleted so a
+    later re-rest starts a fresh clock (skipped when the rested view arrived
+    truncated — a missing row must not reset a domain's clock).
+    Returns {domain: due_epoch_ms}."""
+    from datetime import datetime, timezone
+    rows = sb_get_all("deliverability_resting_ledger?select=domain,first_rested_at") or []
+    have = {str(r.get("domain") or "").lower(): r for r in rows}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    new = sorted(d for d in rested_doms if d not in have)
+    if new:
+        sb("POST", "deliverability_resting_ledger?on_conflict=domain",
+           [{"domain": d, "first_rested_at": now_iso, "approx": False, "last_seen_at": now_iso}
+            for d in new],
+           prefer="resolution=ignore-duplicates,return=minimal")
+    if allow_delete:
+        gone = sorted(d for d in have if d not in rested_doms)
+        for i in range(0, len(gone), 80):
+            sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)" % ",".join(gone[i:i + 80]))
+    due = {}
+    now_ms = int(time.time() * 1000)
+    for d in rested_doms:
+        fr = (have.get(d) or {}).get("first_rested_at")
+        if fr:
+            try:
+                due[d] = int(datetime.fromisoformat(str(fr).replace("Z", "+00:00")).timestamp() * 1000) + _DELIV_REST_DAYS_MS
+                continue
+            except Exception:  # noqa: BLE001
+                pass
+        due[d] = now_ms + _DELIV_REST_DAYS_MS  # first seen this sweep
+    return due
+
+
 def _deliv_bundle_run_bg():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
@@ -8141,6 +8180,26 @@ def _deliv_bundle_run_bg():
         out["domainBoxes"] = boxes
     except Exception as e:  # noqa: BLE001
         out["errors"]["domainBoxes"] = str(e)[:200]
+    # Due-back dates for every rested domain on display — ledger-derived in
+    # live mode; in mock mode straight from the fake fleet's restedAt (those
+    # ARE true pause moments, unlike the real backend's).
+    try:
+        rested_rows = ((out["views"].get("rested") or {}).get("rows")) or []
+        if _deliv_mock_on():
+            first = {}
+            for r in rested_rows:
+                d, ra = (r.get("domain") or "").lower(), r.get("restedAt")
+                if d and ra:
+                    first[d] = min(first.get(d, ra), ra)
+            out["restDue"] = {d: v + _DELIV_REST_DAYS_MS for d, v in first.items()}
+        else:
+            rested_doms = {(r.get("domain") or "").lower() for r in rested_rows if r.get("domain")}
+            blob_resting = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {}).get("resting") or {}
+            rested_doms |= {str(d).lower() for d in blob_resting}
+            truncated = bool((out["views"].get("rested") or {}).get("truncated"))
+            out["restDue"] = _deliv_resting_ledger_sync(rested_doms, allow_delete=not truncated)
+    except Exception as e:  # noqa: BLE001
+        out["errors"]["restDue"] = str(e)[:200]
     ok = bool(out["views"]) or bool(out["dh"])
     err = json.dumps(out["errors"])[:300] if out["errors"] else None
     with _DELIV_BUNDLE_LOCK:

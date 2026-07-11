@@ -2265,9 +2265,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
     // Dynamic: warm-up rests that have reached their due-back date — the
     // Overview flag for the manager's In warm-up flow, so a rest never
-    // quietly overstays. Deep-links straight into that flow.
-    const dueDoms = Object.keys(D.restingDue || {}).filter(
-      (dom) => (D.resting[dom] || 0) > 0 && D.restingDue[dom] && D.restingDue[dom] <= Date.now());
+    // quietly overstays. Deep-links straight into that flow. Due dates come
+    // from the app's rest ledger (bundle.restDue) — the backend's own values
+    // are re-stamped every sweep and never come due.
+    const _bd = bundleRestDue();
+    const dueDoms = _bd
+      ? Object.keys(_bd).filter((dom) => _bd[dom] <= Date.now())
+      : Object.keys(D.restingDue || {}).filter(
+        (dom) => (D.resting[dom] || 0) > 0 && D.restingDue[dom] && D.restingDue[dom] <= Date.now());
     if (dueDoms.length) {
       raw.push({ key: "restore-due", level: "yellow", count: dueDoms.length, _openManager: true, _mgrFlow: "inwarmup",
         text: dueDoms.length + " domain(s) are due back from warm-up rest (" + dueDoms.slice(0, 3).join(", ") + (dueDoms.length > 3 ? ", …" : "") + ").",
@@ -3462,6 +3467,22 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return !(UI.mgr.flow === "notwarming" && r.maildoso);
   }
 
+  // Ledger-backed due-back dates ({domain: due_ms}) — the ONLY trustworthy
+  // source: the audit backend re-stamps its restedAt/restingDue on every
+  // sweep, so everything read "due in 7d" forever (caught live 2026-07-11).
+  // Falls back to blob values only while the bundle hasn't landed.
+  function bundleRestDue() {
+    const b = bundleData();
+    return (b && b.restDue) || null;
+  }
+  function restDueFor(dom) {
+    const bd = bundleRestDue();
+    if (bd && bd[dom] != null) return bd[dom];
+    if (bd) return null; // ledger present but domain not rested — never trust blob re-stamps
+    const D = fullDerive();
+    return D.restingDue[dom] || null;
+  }
+
   // Domain-health rows for the selected window preset. The audit blob ships
   // the 7-day default, so that window always paints instantly; 14/30 come
   // from the server bundle (null while it loads → skeleton, never a refetch
@@ -3622,7 +3643,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const boxN = nb[(d.domain || "").toLowerCase()];
       let action;
       if (restN > 0) {
-        const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive">resting (${restN})</span>${blDueChip(restingDue[d.domain])}`;
+        const due = restDueFor(d.domain) || restingDue[d.domain];
+        const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive">resting (${restN})</span>${blDueChip(due)}`;
         action = pill + ` <button class="btn sm" data-act="domain-reactivate" data-domain="${esc(d.domain)}">Reactivate</button>`;
       } else action = `<button class="btn sm" data-act="domain-warmup" data-domain="${esc(d.domain)}"${boxN ? ` title="Rests all ${boxN} mailboxes on ${esc(d.domain)}"` : ""}>Warm up domain</button>`;
       return `<tr><td><div class="dlv-mb-email">${esc(d.domain)}${boxN ? ` <span class="dlv-mb-dom">· ${boxN} mbx</span>` : ""}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
@@ -3667,6 +3689,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (g) g.push(r); else groups.set(r.domain, [r]);
     });
     const domDue = (dom, rows) => {
+      const led = restDueFor(dom);
+      if (led) return led;
+      if (bundleRestDue()) return null; // ledger authoritative — backend restedAt is re-stamped every sweep
       if (restingDue[dom]) return restingDue[dom];
       const ts = rows.map((r) => r.restedAt ? r.restedAt + 7 * 864e5 : null).filter(Boolean);
       return ts.length ? Math.min(...ts) : null;
@@ -3712,8 +3737,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       } else if (flow === "inwarmup") {
         const due = domDue(dom, rows);
         const restedN = rows.filter((r) => r.rested).length;
-        const restStart = rows.map((r) => r.restedAt).filter(Boolean).sort()[0];
-        const dueTitle = restStart ? ` title="Rest started ${new Date(restStart).toISOString().slice(0, 10)}; due back = rest start + 7 days"` : "";
+        const dueTitle = due ? ` title="Rest first recorded ${new Date(due - 7 * 864e5).toISOString().slice(0, 10)}; due back = rest start + 7 days"` : "";
         mid = `<td style="text-align:right">${rows.length}</td><td style="text-align:right"${dueTitle}>${due ? blDueChip(due) : `<span class="dlv-mb-dom">—</span>`}</td>
           <td>${restedN ? `<span class="dlv-tag inactive">rested (${restedN})</span>` : ""}${rows.length - restedN ? ` <span class="dlv-tag md">warming (${rows.length - restedN})</span>` : ""}</td>`;
         action = (resting[dom] || 0) > 0 || restedN > 0
@@ -3734,8 +3758,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           smid = `<td><div class="dlv-mb-dom">${(r.tags || []).slice(0, 2).join(" · ")}</div></td><td><span class="dlv-mb-dom">${esc(r.warmup_status || "INACTIVE")}</span></td>`;
           sact = r.maildoso ? "" : `<button class="btn sm" data-act="reenable-one" data-id="${esc(key)}">Re-enable</button>`;
         } else if (flow === "inwarmup") {
+          // Per-box due follows the DOMAIN's ledger date — the backend's
+          // per-mailbox restedAt is re-stamped every sweep and can't be shown.
           let dueCell = `<span class="dlv-mb-dom">—</span>`;
-          if (r.restedAt) { const left = (r.restedAt + 7 * 864e5) - Date.now(); dueCell = left <= 0 ? `<span class="dlv-tag blocked">due now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`; }
+          const rowDue = restDueFor(r.domain) || (bundleRestDue() ? null : (r.restedAt ? r.restedAt + 7 * 864e5 : null));
+          if (rowDue) { const left = rowDue - Date.now(); dueCell = left <= 0 ? `<span class="dlv-tag blocked">due now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`; }
           smid = `<td style="text-align:right"><span class="dlv-mb-dom">${r.cap === 0 ? "0/day" : r.cap + "/day"}</span></td><td style="text-align:right">${dueCell}</td><td><span class="dlv-mb-dom">${r.rested ? "rested" : esc(r.warmup_status || "warming")}</span></td>`;
           sact = "";
         } else {
@@ -6292,7 +6319,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   async function domainRestoreDue(btn) {
     const D = fullDerive();
     const now = Date.now();
-    const domains = Object.keys(D.resting).filter((dom) => (D.resting[dom] || 0) > 0 && D.restingDue[dom] && D.restingDue[dom] <= now);
+    const bd = bundleRestDue();
+    const domains = bd
+      ? Object.keys(bd).filter((dom) => bd[dom] <= now)
+      : Object.keys(D.resting).filter((dom) => (D.resting[dom] || 0) > 0 && D.restingDue[dom] && D.restingDue[dom] <= now);
     if (!domains.length) { toast("Nothing due for restore", "err"); return; }
     const ok = await dlvConfirm("Restore the " + domains.length + " domain(s) due back from warm-up?\n\n  " + domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "") + "\n\nRestores each mailbox to its saved daily cap and resumes sending.\n\nProceed?", { title: "Restore all due", yesLabel: "Restore " + domains.length });
     if (!ok) return;
