@@ -3740,7 +3740,7 @@ def _sweep_orphan_jobs(grace_s: int):
         stuck = sb("GET", "app_jobs?status=in.(running,queued)"
                           f"&updated_at=lt.{quote(cutoff, safe='')}"
                           "&select=id,owner,kind,campaign_id,mode,label,auto_remove,"
-                          "resume_count,auto_resumed")
+                          "resume_count,auto_resumed,max_new")
     except Exception:  # noqa: BLE001 — best-effort; never block boot or the sweeper
         return
     with JOBS_LOCK:
