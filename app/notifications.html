@@ -1032,9 +1032,7 @@ function variantFindingCardHTML(n) {
       </div>
       <div class="ab-pills"><span class="ab-status">${statusPillN(n.status)}</span></div>
     </div>
-    <div class="ab-verdict-row"><div class="ab-verdict">${esc(n.detail || "")}</div></div>
-    ${n.suggested_action ? `<div class="ab-impact"><span><b>Recommended:</b> ${esc(n.suggested_action)}</span></div>` : ""}
-    ${angle ? `<div class="ab-impact"><span><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span>: ${esc(angle)}</span></div>` : ""}
+    <div class="ab-verdict-row"><div class="ab-verdict">${esc(n.suggested_action || (n.detail || "").split(". ")[0] || "Review this variant")}</div></div>
     <div class="action-row">
       <a class="btn sm" href="${esc(ctx.smartlead_url || n.smartlead_url || "#")}" target="_blank" rel="noopener">Open in Smartlead</a>
       ${disableVariantBtnHTML(n)}
@@ -1042,6 +1040,10 @@ function variantFindingCardHTML(n) {
       ${actionBtn(n, "actioned", "Mark as completed", "Completed")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
+    ${(n.detail || angle) ? `<details class="ab-why"><summary>Why?</summary><div class="ab-why-body">
+      ${n.detail ? `<div class="ab-impact"><span>${esc(n.detail)}</span></div>` : ""}
+      ${angle ? `<div class="ab-impact"><span><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span>: ${esc(angle)}</span></div>` : ""}
+    </div></details>` : ""}
   </div>`;
 }
 
@@ -1064,16 +1066,12 @@ function variantAnalysisSectionHTML() {
     if (az && bz) return (b.ctx.sent || 0) - (a.ctx.sent || 0);
     return (b.ctx.sent / (b.ctx.positive || 1)) - (a.ctx.sent / (a.ctx.positive || 1));
   });
-  const campaignCount = list.length;
   const cards = list.map(({ items }) => {
     const wholeOffer = items.filter((n) => n.title === "Whole offer failing");
     const variantRows = items.filter((n) => n.title !== "Whole offer failing");
     return [...wholeOffer, ...variantRows].map(variantFindingCardHTML).join("");
   }).join("");
-  return `<div class="va-merge">
-    <div class="lowimpact-h"><span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> analysis &mdash; ${campaignCount} campaign${campaignCount === 1 ? "" : "s"}, ${rows.length} finding${rows.length === 1 ? "" : "s"}</div>
-    ${cards}
-  </div>`;
+  return `<div class="va-merge">${cards}</div>`;
 }
 
 /* fix #7: dynamic-content safety net — if a notification's own detail/
@@ -1381,8 +1379,9 @@ function section7(rows) {
   }
   const top = sorted.slice(0, 5);
   const rest = sorted.slice(5);
-  const topHTML = top.length
-    ? `<div class="work-first"><div class="work-first-h">Work on these first</div>${top.map(actionBlockHTML).join("")}</div>`
+  const vaHTML = variantAnalysisSectionHTML();
+  const topHTML = (top.length || vaHTML)
+    ? `<div class="work-first"><div class="work-first-h">Work on these first</div>${top.map(actionBlockHTML).join("")}${vaHTML}</div>`
     : "";
   // Lower-impact actions get the SAME full-card formatting and treatment as
   // the top recommended actions — just minimised by default. The one-line
@@ -1392,9 +1391,9 @@ function section7(rows) {
     ? `<div class="lowimpact-h">${rest.length} lower-impact action${rest.length === 1 ? "" : "s"}</div>`
       + tierExpanderHTML("7-rest", "lower-impact", rest)
     : "";
-  // Variant analysis sits ABOVE the lower-impact (low-priority) actions — it's
-  // part of the recommended work, not a footnote below the drained campaigns.
-  return stripHTML + explainersHTML + topHTML + variantAnalysisSectionHTML() + restHTML;
+  // Variant analysis renders INSIDE "Work on these first", after the top-5
+  // impact cards — it's part of the primary work queue, not its own section.
+  return stripHTML + explainersHTML + topHTML + restHTML;
 }
 /* Toggle a Section 7 tier expander in place (fix #5's click wiring) — builds
    the tier's DOM lazily on first open, same pattern as setSectionExpanded. */
