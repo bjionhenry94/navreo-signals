@@ -48,8 +48,39 @@ WORKSPACE = "navreo"
 AGENTS_TABLE = "setter_agents"
 QUEUE_TABLE = "setter_queue"
 SETTINGS_ID = "__settings__"
+GRADING_ID = "__grading__"
 SMARTLEAD_BASE = "https://server.smartlead.ai/api/v1"
 OPENAI_MODEL = "gpt-5-mini"
+
+# Internal search window for Calendly availability, in working days. v2:
+# no longer a settings-drawer field - the slot rule is fixed (earliest
+# qualifying slots inside work hours), so this is just how far ahead the
+# pipeline looks for them.
+HORIZON_WORKING_DAYS = 10
+
+
+def _agent_instructions(agent: dict) -> str:
+    """What this agent may share verbatim - the `instructions` field,
+    falling back to the legacy `pricing_notes` key so agent docs saved
+    before the v2 simplification keep working unchanged."""
+    agent = agent or {}
+    val = str(agent.get("instructions") or "").strip()
+    if val:
+        return val
+    return str(agent.get("pricing_notes") or "")
+
+
+def _booking_link(agent: dict) -> str:
+    """The single Calendly link used when no two-slot answer applies.
+    Derived from calendly_event_url (trailing slash stripped) unless an
+    explicit legacy booking_link is still set on the doc."""
+    agent = agent or {}
+    explicit = str(agent.get("booking_link") or "").strip()
+    if explicit:
+        return explicit
+    calendly = str(agent.get("calendly_event_url") or "").strip()
+    return calendly.rstrip("/") if calendly else ""
+
 
 INTENTS = [
     "send_resource", "pricing", "scheduling", "bespoke_request", "objection_or_question",
@@ -361,10 +392,12 @@ def _parse_iso(s):
 def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
     """avail_iso: raw ISO8601 UTC availability from Calendly. Filters to
     workdays, [work_start, work_end) lead-local hours, within the next
-    horizon_working_days working days, >= 20h out, then picks 2 spread slots
-    (different days; late-morning + mid-afternoon where available). Returns
-    [{iso, label, link}]. link uses settings['_agent'] (calendly_event_url)
-    and settings['_lead'] (first_name/last_name/email)."""
+    HORIZON_WORKING_DAYS working days, >= 20h out. Earliest-slot rule: the
+    first slot offered is simply the earliest qualifying one; the second is
+    the same day at least 2 hours later if one exists, else the next
+    available day's earliest slot. Returns [{iso, label, link}]. link uses
+    settings['_agent'] (calendly_event_url) and settings['_lead']
+    (first_name/last_name/email)."""
     settings = settings or {}
     agent = settings.get("_agent") or {}
     lead = settings.get("_lead") or {}
@@ -377,9 +410,9 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
     try:
         work_start = int(settings.get("work_start", 9))
         work_end = int(settings.get("work_end", 17))
-        horizon_days = int(settings.get("horizon_working_days", 5))
     except (TypeError, ValueError):
-        work_start, work_end, horizon_days = 9, 17, 5
+        work_start, work_end = 9, 17
+    horizon_days = HORIZON_WORKING_DAYS
 
     now_utc = _parse_iso(now_utc) if not isinstance(now_utc, _dt.datetime) else (
         now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
@@ -415,52 +448,21 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
     if not candidates:
         return []
 
-    used_dates = set()
-    chosen = []
-
-    def _take(pred):
+    first = candidates[0]
+    second = None
+    for local, utc_dt in candidates[1:]:
+        if local.date() == first[0].date() and (local - first[0]) >= _dt.timedelta(hours=2):
+            second = (local, utc_dt)
+            break
+    if second is None:
         for local, utc_dt in candidates:
-            if local.date() in used_dates:
-                continue
-            if pred(local):
-                return (local, utc_dt)
-        return None
-
-    morning = _take(lambda l: 10 <= l.hour < 13)
-    if morning:
-        chosen.append(morning)
-        used_dates.add(morning[0].date())
-    afternoon = _take(lambda l: 13 <= l.hour < work_end)
-    if afternoon:
-        chosen.append(afternoon)
-        used_dates.add(afternoon[0].date())
-
-    # Only one date has availability? Two adjacent times read badly ("11:00 or
-    # 11:30") - prefer a same-day afternoon slot at least 2 hours after the
-    # first pick before falling back to whatever's next.
-    if len(chosen) == 1:
-        first_local = chosen[0][0]
-        for local, utc_dt in candidates:
-            if local.date() == first_local.date() and local.hour >= max(13, first_local.hour + 2) \
-                    and (local, utc_dt) not in chosen:
-                chosen.append((local, utc_dt))
+            if local.date() > first[0].date():
+                second = (local, utc_dt)
                 break
 
-    for local, utc_dt in candidates:
-        if len(chosen) >= 2:
-            break
-        if local.date() not in used_dates:
-            chosen.append((local, utc_dt))
-            used_dates.add(local.date())
-    for cand in candidates:
-        if len(chosen) >= 2:
-            break
-        if cand not in chosen:
-            chosen.append(cand)
-
-    chosen.sort(key=lambda x: x[0])
+    chosen = [first] + ([second] if second else [])
     out = []
-    for local, utc_dt in chosen[:2]:
+    for local, utc_dt in chosen:
         local_iso = local.isoformat()
         out.append({"iso": local_iso, "label": _slot_label(local), "link": _slot_link(agent, lead, local_iso)})
     return out
@@ -469,6 +471,8 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
 # ── draft lint ────────────────────────────────────────────────────────────
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_BLOCK_TAG_RE = re.compile(r"<(?:div|p)\b", re.IGNORECASE)
 
 
 def lint_draft(html: str, ctx: dict):
@@ -477,6 +481,15 @@ def lint_draft(html: str, ctx: dict):
     text = html or ""
     if not text.strip():
         return False, "No draft was produced."
+    # Email shape: the draft must read as short block paragraphs (<div>/<p>
+    # separated by <br>), never one run-on line - at least 2 paragraph
+    # separators, counting <br> tags between blocks, or (if the drafter used
+    # no <br> at all) at least 3 block elements (2 gaps between them).
+    br_count = len(_BR_RE.findall(text))
+    block_count = len(_BLOCK_TAG_RE.findall(text))
+    paragraph_seps = br_count if br_count else max(block_count - 1, 0)
+    if paragraph_seps < 2:
+        return False, "The draft isn't formatted like an email yet."
     if "{{" in text:
         return False, "The draft still has an unfilled placeholder."
     if "—" in text:
@@ -497,7 +510,7 @@ def lint_draft(html: str, ctx: dict):
                 return False, "The draft is missing one of the suggested call times."
 
     allowed_text = " ".join([
-        str(ctx.get("pricing_notes") or ""),
+        str(ctx.get("instructions") or ""),
         str(ctx.get("thread_text") or ""),
         " ".join(str(x) for x in (ctx.get("slot_labels") or [])),
         " ".join(str(x) for x in (ctx.get("slot_links") or [])),
@@ -506,7 +519,7 @@ def lint_draft(html: str, ctx: dict):
     plain = _TAG_RE.sub(" ", text)  # strip tags/hrefs - only visible text is scanned
     for run in re.findall(r"\d+", plain):
         if run not in allowed_digits:
-            return False, "The draft invents a number that isn't in the pricing notes, the thread, or the call times."
+            return False, "The draft invents a number that isn't in the instructions, the thread, or the call times."
     return True, ""
 
 
@@ -574,8 +587,8 @@ def decide(classification: dict, agent: dict, ctx: dict):
     if off_intent:
         return "review", _INTENT_REASON.get(off_intent,
                                             "Held for review: the lead is asking for something this agent isn't allowed to answer alone.")
-    if "pricing" in all_intents and not (agent.get("pricing_notes") or "").strip():
-        return "review", "Held for review: no pricing notes are set for this agent, so pricing questions need a person."
+    if "pricing" in all_intents and not _agent_instructions(agent).strip():
+        return "review", "Held for review: no instructions cover pricing, so a person should answer."
 
     # 3. simple ask + confidence
     try:
@@ -608,7 +621,7 @@ def decide(classification: dict, agent: dict, ctx: dict):
     if slot_status != "ok":
         reason_map = {
             "not_configured": "Held for review: Calendly is not connected.",
-            "none_available": "Held for review: no Calendly availability inside the next few working days.",
+            "none_available": "Held for review: no free Calendly slots coming up.",
             "error": "Held for review: couldn't load Calendly availability.",
         }
         return "review", reason_map.get(slot_status, "Held for review: call times aren't ready.")
@@ -654,10 +667,10 @@ CLASSIFY_SYSTEM = """You classify one inbound cold-email reply for an appointmen
 
 Intents (pick exactly one primary_intent; list every intent that genuinely applies in all_intents):
 - send_resource: the lead wants more info, wants the resource, or gave an unqualified yes ("sure", "send it", "interested", "know more"). The resource IS the "more info".
-- pricing: a pricing question, ONLY when the agent's pricing_notes (given to you below) literally already contains the answer. If pricing_notes is empty, or doesn't cover what's specifically asked, this is objection_or_question instead, not pricing. A plain, unconditional "what's the price?" / "how much does it cost?" with non-empty pricing_notes IS pricing with simple_ask=true - quoting the notes verbatim answers it fully.
+- pricing: a pricing question, ONLY when the agent's instructions (given to you below) literally already contains the answer. If instructions is empty, or doesn't cover what's specifically asked, this is objection_or_question instead, not pricing. A plain, unconditional "what's the price?" / "how much does it cost?" with non-empty instructions IS pricing with simple_ask=true - quoting the instructions verbatim answers it fully.
 - scheduling: wants to book a call, gave availability, or asked to schedule, AND a plain two-slot-plus-booking-link answer would be a faithful reply. Scheduling is a simple ask ONLY when the lead is flexible about timing (several days offered, "sometime next week", "send me some options" with no date named). If they name ONE specific day, date, or time ("Friday after 2:30", "the 24th", "next Thursday"), or ask for TODAY/tonight/"earlier"/"asap", set simple_ask=false - our two fixed slots may not match what they asked for.
 - bespoke_request: wants something made specifically for them - a Loom or video recorded for them, an audit or breakdown OF THEIR company or website, anything "specific to us". EXCEPTION: if the agent's own resource_name/resource_description below says the fixed resource already IS that video/audit, sending it is send_resource, not bespoke_request.
-- objection_or_question: needs judgement or nuance - a direct question not answerable purely from pricing_notes, a fit/commission/industry question, "where are you based", a conditional commitment ("if X then we'd try it" - a CONDITION anywhere always means simple_ask=false, even when pricing_notes seems to answer it), or ANY report that a link, video, or resource did not work or arrive ("link didn't work", "couldn't watch the video", "can you send it again?" after a failure) - something may genuinely be broken, so a person must check before anything is re-sent.
+- objection_or_question: needs judgement or nuance - a direct question not answerable purely from instructions, a fit/commission/industry question, "where are you based", a conditional commitment ("if X then we'd try it" - a CONDITION anywhere always means simple_ask=false, even when instructions seems to answer it), or ANY report that a link, video, or resource did not work or arrive ("link didn't work", "couldn't watch the video", "can you send it again?" after a failure) - something may genuinely be broken, so a person must check before anything is re-sent.
 - not_interested: a plain no or decline, not hostile.
 - unsubscribe_dnc: asks to be removed, to stop contacting them, to cease, or is hostile/legal in tone (lawyer, GDPR, complaint). ALWAYS this intent even if the message is short and looks polite, e.g. "kindly cease" or "remove me" - never send_resource just because it reads politely.
 - ooo: an out-of-office autoreply.
@@ -665,7 +678,7 @@ Intents (pick exactly one primary_intent; list every intent that genuinely appli
 - bounce_or_system: a bounce, spam-block, or other system notice, not a human reply.
 - other: none of the above fit.
 
-simple_ask is true ONLY if the ENTIRE reply is satisfiable by (a) sending the resource, (b) quoting pricing_notes verbatim, or (c) proposing our two call slots plus the booking link - with nothing else needed, no unanswered question, no invented fact. If the reply contains ANY question, condition, or ask outside those three things, set simple_ask=false even if the primary intent looks simple. When genuinely ambiguous, simple_ask=false.
+simple_ask is true ONLY if the ENTIRE reply is satisfiable by (a) sending the resource, (b) quoting instructions verbatim, or (c) proposing our two call slots plus the booking link - with nothing else needed, no unanswered question, no invented fact. If the reply contains ANY question, condition, or ask outside those three things, set simple_ask=false even if the primary intent looks simple. When genuinely ambiguous, simple_ask=false.
 
 Two further rules:
 - IGNORE the sender's own email signature when working out the ask: their phone numbers, their own booking/calendar links, social handles, follower counts, taglines, and legal footers are not part of the request. Never treat a link in THEIR signature as them asking us to schedule.
@@ -688,7 +701,7 @@ Never invent facts. Examples of the exact reasoning to apply (do not copy their 
 - "No thanks, Bjion." -> not_interested.
 - "Can you share the video?" -> send_resource ONLY if the agent's resource description says it already is that video; otherwise bespoke_request.
 - "Could you record a quick Loom walking through how this would work for our agency specifically?" -> bespoke_request, simple_ask=false.
-- "So you work on commission?" -> objection_or_question, UNLESS pricing_notes literally answers commission structure, then pricing.
+- "So you work on commission?" -> objection_or_question, UNLESS instructions literally answers commission structure, then pricing.
 - "Your message ... couldn't be delivered ... spam block list" -> bounce_or_system.
 - A reply that reports a broken link AND asks a separate out-of-scope question -> simple_ask=false (the extra question is not answerable from fixed resources)."""
 
@@ -708,7 +721,7 @@ def classify(reply: dict, agent: dict) -> dict:
         "agent": {
             "resource_name": agent.get("resource_name") or "",
             "resource_description": agent.get("resource_description") or "",
-            "pricing_notes": agent.get("pricing_notes") or "",
+            "instructions": _agent_instructions(agent),
             "allowed_intents": agent.get("allowed_intents") or [],
         },
     })
@@ -732,50 +745,46 @@ DRAFT_SCHEMA = {
     "required": ["subject", "html"],
 }
 
-DRAFT_SYSTEM = """You write the reply for a cold-email appointment-setter agent, in this exact house style. Mirror the shape precisely, filling in the brackets:
+DRAFT_SYSTEM = """You write the reply for a cold-email appointment-setter agent. Output real, sendable HTML shaped exactly like the team's real sent emails: short paragraphs, each one its own <div>...</div>, every paragraph separated by <br>, sign-off as <div>Best,<br>{SenderFirst}</div>. NEVER write one run-on line - always separate block paragraphs.
 
-Hi {First},
+Two real sent emails, to show the exact house shape (match the STYLE, never copy this content):
 
-{one short ack line, e.g. "Of course." or "Great to hear from you."}
+<div>Hi Nick,</div><br><div>Of course.</div><br><div><a href="https://navreo.notion.site/breakdown">Here's the breakdown I prepared.</a></div><br><div>Would you be free for a call on <a href="https://calendly.com/navreo/book-a-call/2026-07-15T11:00">Wednesday, 15th July at 11:00 AM BST</a> or <a href="https://calendly.com/navreo/book-a-call/2026-07-15T14:00">2:00 PM BST</a>, where I could share how I would implement our strategy for you?</div><br><div>If neither works, feel free to book in here: <a href="https://calendly.com/navreo/book-a-call">navreo.ai/book-a-call</a></div><br><div>Best,<br>Bjion</div>
 
-<a href="{resource_link}">{natural anchor text describing the resource}</a>
-
-Would you be free for a call on {day 1} at {time 1} or {day 2} at {time 2}, so that I can walk you through how it applies to {their context}?
-
-If neither works, feel free to book in here: {booking_link}
-
-Best,
-{SenderFirst}
+<div>Hi Gerry,</div><br><div>Good question, it is a flat monthly fee rather than commission.</div><br><div>Would you be free for a call on <a href="https://calendly.com/navreo/book-a-call/2026-07-16T10:00">Thursday, 16th July at 10:00 AM BST</a> or <a href="https://calendly.com/navreo/book-a-call/2026-07-16T13:00">1:00 PM BST</a>, where I could walk you through it?</div><br><div>If neither works, feel free to book in here: <a href="https://calendly.com/navreo/book-a-call">navreo.ai/book-a-call</a></div><br><div>Best,<br>Bjion</div>
 
 Rules:
+- Every draft must be built from short <div> paragraphs separated by <br>, exactly like the two examples above. A single-line reply with no paragraph breaks will be rejected.
 - No em dashes anywhere, ever - use a comma or period instead.
 - No emoji.
 - Plain English, under 160 words total.
 - Only include the resource link/anchor when send_resource is one of the intents to answer.
-- Anchor text reads like the real examples: "Here's the breakdown I prepared." or "Here's a case study I put together." - natural, first-person, never the bare resource title.
-- When the intent is bespoke_request, objection_or_question, or wrong_person, the ack line must acknowledge the lead's SPECIFIC ask honestly (e.g. "Happy to put a video together for you.") - never a generic "Of course." that ignores what they asked for, and never a promise of a date or deadline for the bespoke work.
+- Anchor text reads like the examples above: "Here's the breakdown I prepared." or "Here's a case study I put together." - natural, first-person, never the bare resource title.
+- When the intent is bespoke_request, objection_or_question, or wrong_person, the ack paragraph must acknowledge the lead's SPECIFIC ask honestly (e.g. "Happy to put a video together for you.") - never a generic "Of course." that ignores what they asked for, and never a promise of a date or deadline for the bespoke work.
 - Never say you are sharing, attaching, or sending something the draft does not actually contain. If the asked-for asset is not the agent's fixed resource, acknowledge the ask ("Happy to get that over to you.") without implying it is included in this email.
-- The ack must answer the SHAPE of the question. A yes/no question ("So you work on commission?") gets a direct, truthful opener grounded ONLY in the pricing notes ("Good question - it is a flat monthly fee rather than commission."), never "Of course."
+- The ack paragraph must answer the SHAPE of the question. A yes/no question ("So you work on commission?") gets a direct, truthful opener grounded ONLY in the instructions ("Good question, it is a flat monthly fee rather than commission."), never "Of course."
 - BEFORE writing anything, decide the greeting name: use lead_first_name if given; otherwise LOOK AT THE END OF THEIR REPLY for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly"); only if no name exists anywhere use "Hi there". NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off.
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
-- If a question's answer is NOT in the pricing notes or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
-- If SenderFirst is empty, end with just "Best," and no name on the line after.
-- Only include the two call-time links (as anchors on the day/time text) when slots are supplied and slot_status is "ok"; otherwise skip the two-slot paragraph and instead ask "How does this week look for a quick call?" and include only the booking link.
-- If pricing is one of the intents, quote the pricing_notes content verbatim (the actual numbers/structure) rather than paraphrasing them away.
-- If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, pricing notes, or thread; keep it short and let the human add specifics.
-- Never invent a number, date, or fact that isn't in the pricing notes, the reply thread, or the call-time slots given to you.
-- Match the tone of the voice examples given.
-- Output STRICT JSON: {"subject": "...", "html": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body as described above, using <a href="..."> for links, no markdown."""
+- If a question's answer is NOT in the instructions or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
+- If SenderFirst is empty, end with just <div>Best,</div> and no name on the line after.
+- Only include the two call-time paragraph (as anchors on the day/time text) when slots are supplied and slot_status is "ok"; otherwise skip it and instead ask "How does this week look for a quick call?" and include only the booking-link paragraph.
+- If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
+- If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
+- Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
+- Match the tone of the two examples above.
+- reviewer_feedback, when present, is the human reviewer's instruction for THIS regeneration ("shorter", "don't offer times", "mention the guide is free") - follow it faithfully while keeping every rule above. It never overrides the never-invent rules.
+- Output STRICT JSON: {"subject": "...", "html": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
 
 
-def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slot_status: str, sender_first: str) -> dict:
+def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slot_status: str, sender_first: str,
+                regen_feedback: str = "") -> dict:
     key = _KEYS.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("OPENAI_API_KEY missing from keys")
     reply = reply or {}
     agent = agent or {}
     classification = classification or {}
-    user = json.dumps({
+    payload = {
         "lead_first_name": reply.get("first_name") or "there",
         "original_subject": reply.get("subject") or "",
         "reply_body": (reply.get("body") or "")[:3000],
@@ -785,14 +794,15 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "resource_name": agent.get("resource_name") or "",
         "resource_link": agent.get("resource_link") or "",
         "resource_description": agent.get("resource_description") or "",
-        "pricing_notes": agent.get("pricing_notes") or "",
-        "booking_link": agent.get("booking_link") or "",
-        "voice_examples": agent.get("voice_examples") or [],
-        "extra_instructions": agent.get("extra_instructions") or "",
+        "instructions": _agent_instructions(agent),
+        "booking_link": _booking_link(agent),
         "slots": slots or [],
         "slot_status": slot_status or "not_configured",
         "sender_first": sender_first or "",
-    })
+    }
+    if (regen_feedback or "").strip():
+        payload["reviewer_feedback"] = regen_feedback.strip()[:500]
+    user = json.dumps(payload)
     r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
              {"Authorization": f"Bearer {key}"},
              {"model": OPENAI_MODEL,
@@ -918,7 +928,7 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
             "reply_email_time": target.get("time"),
             "reply_email_body": target.get("body") or "",
             "reply_subject": target.get("subject") or "",
-            "thread": norm[-3:],
+            "thread": norm[-6:],
             "sender_first": sender_first,
             "answered_since_reply": answered_since_reply,
         }, ""
@@ -962,7 +972,7 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
 
         now_utc = _parse_iso(now_utc) if not isinstance(now_utc, _dt.datetime) else (
             now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
-        horizon_days = int(settings.get("horizon_working_days") or 5)
+        horizon_days = HORIZON_WORKING_DAYS
         span_days = max(horizon_days + 4, 7)
         # Calendly rejects a start_time that isn't strictly in the future -
         # starting at "now" exactly made the first (and usually only) chunk
@@ -1019,13 +1029,42 @@ def _save_settings(doc: dict):
        prefer="resolution=merge-duplicates,return=minimal")
 
 
+def _load_grading() -> dict:
+    """Grading page (temporary): stored in the same settings-doc table under
+    the reserved id __grading__, same pattern as __settings__."""
+    default = {"cases": [], "answers": {}}
+    if not _SB:
+        return default
+    try:
+        rows = _SB("GET", f"{AGENTS_TABLE}?id=eq.{GRADING_ID}&select=doc")
+        if isinstance(rows, list) and rows:
+            doc = dict(rows[0].get("doc") or {})
+            doc.setdefault("cases", [])
+            doc.setdefault("answers", {})
+            return doc
+    except Exception:  # noqa: BLE001
+        pass
+    return default
+
+
+def _save_grading(doc: dict):
+    if not _SB:
+        return
+    _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": GRADING_ID, "doc": doc},
+       prefer="resolution=merge-duplicates,return=minimal")
+
+
 def _load_agents() -> list:
     if not _SB:
         return []
     try:
-        rows = _SB("GET", f"{AGENTS_TABLE}?id=neq.{SETTINGS_ID}&select=doc")
+        # Reserved doc rows (__settings__, __grading__) live in the same table
+        # but are never real agents - filtered out client-side so they can
+        # never leak into the agents list or campaign assignment lookups.
+        rows = _SB("GET", f"{AGENTS_TABLE}?select=id,doc")
         if isinstance(rows, list):
-            return [r.get("doc") or {} for r in rows if isinstance(r, dict)]
+            return [r.get("doc") or {} for r in rows
+                   if isinstance(r, dict) and r.get("id") not in (SETTINGS_ID, GRADING_ID)]
     except Exception:  # noqa: BLE001
         pass
     return []
@@ -1070,6 +1109,10 @@ def _save_agent(doc: dict) -> dict:
     doc.setdefault("campaign_ids", [])
     doc.setdefault("allowed_intents", [])
     doc.setdefault("confidence_threshold", 0.9)
+    doc.setdefault("instructions", "")
+    # Legacy fields kept so agent docs saved before the v2 simplification keep
+    # working (pricing_notes is still read as the instructions fallback) -
+    # just no longer shown or written to by the v2 editor UI.
     doc.setdefault("voice_examples", [])
     doc.setdefault("pricing_notes", "")
     doc.setdefault("extra_instructions", "")
@@ -1435,7 +1478,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             "needs_resource_link": needs_resource_link, "resource_link": agent.get("resource_link") or "",
             "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
             "slot_labels": [s.get("label") for s in slots],
-            "pricing_notes": agent.get("pricing_notes") or "",
+            "instructions": _agent_instructions(agent),
             "thread_text": f"{body_text} {thread_text}",
         }
         lint_ok, lint_reason = lint_draft(draft_body, ctx_lint)
@@ -1725,7 +1768,10 @@ def route_settings_save(payload):
         elif str(payload.get("calendly_token") or "").strip():
             s["calendly_token"] = payload["calendly_token"].strip()
             s.pop("_calendly_user_uri", None)  # token changed -> re-resolve next use
-        for k in ("work_start", "work_end", "horizon_working_days"):
+        # horizon_working_days is no longer a settings-drawer field (the slot
+        # rule is fixed - see HORIZON_WORKING_DAYS); work_start/work_end
+        # remain the only schedule settings.
+        for k in ("work_start", "work_end"):
             if payload.get(k) is not None:
                 try:
                     s[k] = int(payload[k])
@@ -1878,7 +1924,8 @@ def route_queue_redraft(payload):
                     slot_status = "none_available"
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body")},
-            agent, classification, slots, slot_status, sender_first="")
+            agent, classification, slots, slot_status, sender_first="",
+            regen_feedback=str(payload.get("feedback") or ""))
         patch = {"draft_subject": d.get("subject"), "draft_body": d.get("html"), "slots": slots}
         _apply_patch(row, patch)
         return 200, {"row": {**row, **patch}}
@@ -1914,10 +1961,54 @@ def route_test_inject(payload):
         return 500, {"error": str(e)[:300]}
 
 
+# ── grading page (temporary) ─────────────────────────────────────────────────
+# Cases are generated by the orchestrator elsewhere, not this file - these
+# routes only read/write the stored doc. See setter_v2_spec.md section 4.
+
+def route_grading_get(_params):
+    try:
+        doc = _load_grading()
+        return 200, {"cases": doc.get("cases") or [], "answers": doc.get("answers") or {}}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_grading_answer(payload):
+    try:
+        payload = payload or {}
+        case_id = payload.get("id")
+        if not case_id:
+            return 400, {"error": "id is required"}
+        doc = _load_grading()
+        answers = dict(doc.get("answers") or {})
+        answers[str(case_id)] = {
+            "decision_ok": payload.get("decision_ok"),
+            "reply_ok": payload.get("reply_ok"),
+            "note": payload.get("note") or "",
+            "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+        }
+        doc["answers"] = answers
+        _save_grading(doc)
+        return 200, {"ok": True, "answers": answers}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_grading_reset(_payload):
+    try:
+        doc = _load_grading()
+        doc["answers"] = {}
+        _save_grading(doc)
+        return 200, {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 GET_ROUTES = {
     "/api/setter/agents": route_agents_get,
     "/api/setter/campaigns": route_campaigns_get,
     "/api/setter/queue": route_queue_get,
+    "/api/setter/grading": route_grading_get,
 }
 
 POST_ROUTES = {
@@ -1926,5 +2017,7 @@ POST_ROUTES = {
     "/api/setter/settings/save": route_settings_save,
     "/api/setter/queue/action": route_queue_action,
     "/api/setter/queue/redraft": route_queue_redraft,
+    "/api/setter/grading/answer": route_grading_answer,
+    "/api/setter/grading/reset": route_grading_reset,
     "/api/setter/test/inject": route_test_inject,
 }

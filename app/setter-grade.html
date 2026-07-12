@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setter grading · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* == Setter grading: rate historical inbound messages one at a time == */
+.err-banner {
+  background: var(--red-bg); border: 1px solid var(--red-line); color: #861E10;
+  border-radius: var(--radius); padding: 12px 16px; font-size: 13px; margin: 14px 0;
+}
+.grade-main { max-width: 720px; }
+.setter-head-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 6px; }
+.sh-title { font-family: var(--font-sans); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; margin: 0; }
+.setter-head-row .sh-spacer { flex: 1; }
+.grade-sub { font-size: 13px; color: var(--ink-3); margin: 0 0 20px; }
+
+.grade-progress { font-size: 12.5px; color: var(--ink-3); margin-bottom: 10px; }
+
+.grade-card {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px;
+}
+.grade-lab {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-3); margin-bottom: 8px;
+}
+.grade-msg { font-size: 13.5px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; }
+
+.grade-call {
+  font-size: 13px; padding: 10px 14px; border-radius: 8px; margin: 0 0 14px; line-height: 1.5;
+}
+.grade-call.g { background: var(--green-bg); color: #195C3F; }
+.grade-call.a { background: var(--amber-bg); color: #6B4A00; }
+.grade-call.n { background: var(--bg-sunken); color: var(--ink-2); }
+
+/* Draft rendered as an email, matching the setter composer's shape. */
+.qc-draft {
+  border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 14px;
+  font-size: 13px; line-height: 1.65; margin-top: 6px;
+}
+.qc-draft div { min-height: 1em; }
+.qc-draft a { color: var(--orange-700); }
+
+.grade-q { margin: 18px 0; }
+.grade-q-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.grade-btns { display: flex; gap: 10px; }
+.grade-btns .btn { flex: 1; justify-content: center; padding: 14px 16px; font-size: 14px; }
+.grade-btns .btn.sel.big-yes { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
+.grade-btns .btn.sel.big-no { background: var(--red-bg); border-color: var(--red-line); color: #861E10; }
+
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12px; color: var(--ink-3); font-weight: 500; margin-bottom: 6px; }
+.field input[type=text] {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 11px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent; box-sizing: border-box;
+}
+.field input:focus { outline: none; box-shadow: var(--focus); }
+
+.grade-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 18px; }
+
+.grade-stat-row { display: flex; gap: 14px; margin: 14px 0; flex-wrap: wrap; }
+.grade-stat { flex: 1; min-width: 160px; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.gs-num { font-family: var(--font-display); font-weight: 400; font-size: 26px; letter-spacing: -0.02em; }
+.gs-lab { font-size: 12px; color: var(--ink-3); margin-top: 4px; }
+
+.grade-notes { margin-top: 18px; }
+.grade-note-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.grade-note-item:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main grade-main">
+    <div class="setter-head-row">
+      <h1 class="sh-title">Setter grading</h1>
+      <div class="sh-spacer"></div>
+    </div>
+    <div class="grade-sub">Rate how the pipeline handled real historical replies. Nothing here sends anything - it only records what you think.</div>
+
+    <div id="errBanner" class="err-banner" style="display:none"></div>
+    <div id="gradeApp"></div>
+  </main>
+</div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("");
+
+/* ── State ─────────────────────────────────────────────── */
+let CASES = [];
+let ANSWERS = {};
+let idx = 0;
+let view = "loading"; // loading | empty | case | final
+let resetArmed = false;
+
+/* ── Fetch helper (same shape as setter.html's) ───────────── */
+async function fetchJson(url, opts) {
+  try {
+    const res = await fetch(url, opts);
+    let data = {};
+    try { data = await res.json(); } catch { data = {}; }
+    if (!res.ok) return { ok: false, status: res.status, error: (data && data.error) || `Request failed (${res.status})`, data };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || "Network error" };
+  }
+}
+function showError(msg) {
+  const el = document.getElementById("errBanner");
+  el.textContent = msg;
+  el.style.display = "block";
+}
+function clearError() { document.getElementById("errBanner").style.display = "none"; }
+
+/* ── Load ──────────────────────────────────────────────── */
+async function loadGrading() {
+  const res = await fetchJson("/api/setter/grading");
+  if (!res.ok) { showError("Couldn't load grading cases: " + res.error); view = "empty"; CASES = []; ANSWERS = {}; render(); return; }
+  clearError();
+  CASES = (res.data && res.data.cases) || [];
+  ANSWERS = (res.data && res.data.answers) || {};
+  if (!CASES.length) { view = "empty"; render(); return; }
+  // Resume where the user left off: land on the first unanswered case, or
+  // the final results screen once every case has an answer.
+  if (allAnswered()) { view = "final"; render(); return; }
+  idx = firstUnansweredIndex();
+  view = "case";
+  render();
+}
+function allAnswered() {
+  return CASES.length > 0 && CASES.every((c) => ANSWERS[c.id]);
+}
+function firstUnansweredIndex() {
+  const i = CASES.findIndex((c) => !ANSWERS[c.id]);
+  return i === -1 ? Math.max(0, CASES.length - 1) : i;
+}
+function currentAnswer(caseId) {
+  const a = ANSWERS[caseId];
+  return a ? { decision_ok: a.decision_ok, reply_ok: a.reply_ok, note: a.note || "" } : { decision_ok: undefined, reply_ok: null, note: "" };
+}
+
+function render() {
+  const el = document.getElementById("gradeApp");
+  if (view === "loading") { el.innerHTML = `<div class="empty">Loading…</div>`; return; }
+  if (view === "empty") {
+    el.innerHTML = `<div class="empty">No graded cases yet. These are generated by the setter pipeline - check back once some have run.</div>`;
+    return;
+  }
+  if (view === "final") { renderFinal(); return; }
+  renderCase();
+}
+
+/* ── The tool's call, in plain English ────────────────────── */
+function callLineFor(c) {
+  if (c.decision === "auto_send") return { cls: "g", text: "Would have sent automatically" };
+  if (c.decision === "review") return { cls: "a", text: `Held for a person - ${c.reason || "needs a human look"}` };
+  return { cls: "n", text: `Filed as no action - ${c.reason || "no action needed"}` };
+}
+
+function renderCase() {
+  const el = document.getElementById("gradeApp");
+  const c = CASES[idx];
+  const a = currentAnswer(c.id);
+  const total = CASES.length;
+  // A case only counts as answered once "Right call?" has a value - matches
+  // exactly what persistAnswer() is willing to save to the server, so the
+  // counter can never disagree with what a reload would show.
+  const answeredCount = CASES.filter((x) => ANSWERS[x.id] && ANSWERS[x.id].decision_ok !== undefined).length;
+  const call = callLineFor(c);
+  const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
+
+  el.innerHTML = `
+    <div class="grade-progress">Case ${idx + 1} of ${total} &middot; ${answeredCount} of ${total} answered</div>
+    <div class="grade-card">
+      <div class="grade-lab">Their message</div>
+      <div class="grade-msg">${esc(c.inbound || "").replace(/\n/g, "<br>") || "<i>No message text.</i>"}</div>
+    </div>
+    <div class="grade-call ${call.cls}">${esc(call.text)}</div>
+    ${hasDraft ? `
+    <div class="grade-card">
+      <div class="grade-lab">The proposed reply</div>
+      <div class="qc-draft">${c.draft_html}</div>
+    </div>` : ""}
+    <div class="grade-q">
+      <div class="grade-q-label">Right call?</div>
+      <div class="grade-btns">
+        <button type="button" class="btn big-yes ${a.decision_ok === true ? "sel" : ""}" data-q="decision_ok" data-v="true">Yes (1)</button>
+        <button type="button" class="btn big-no ${a.decision_ok === false ? "sel" : ""}" data-q="decision_ok" data-v="false">No (2)</button>
+      </div>
+    </div>
+    ${hasDraft ? `
+    <div class="grade-q">
+      <div class="grade-q-label">Good reply?</div>
+      <div class="grade-btns">
+        <button type="button" class="btn big-yes ${a.reply_ok === true ? "sel" : ""}" data-q="reply_ok" data-v="true">Yes (3)</button>
+        <button type="button" class="btn big-no ${a.reply_ok === false ? "sel" : ""}" data-q="reply_ok" data-v="false">No (4)</button>
+      </div>
+    </div>` : ""}
+    <div class="field">
+      <label>Note (optional)</label>
+      <input type="text" id="gradeNote" value="${esc(a.note || "")}" placeholder="Anything worth remembering about this one">
+    </div>
+    <div class="small" id="gradeNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
+    <div class="grade-nav">
+      <button type="button" class="btn" id="gradePrevBtn" ${idx === 0 ? "disabled" : ""}>&lsaquo; Previous</button>
+      <span class="small muted">Press Enter to move on</span>
+      <button type="button" class="btn primary" id="gradeNextBtn">${idx === total - 1 ? "Finish" : "Next"} &rsaquo;</button>
+    </div>
+  `;
+  wireCaseEvents(c);
+}
+
+function wireCaseEvents(c) {
+  document.querySelectorAll(".grade-btns button[data-q]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const field = btn.getAttribute("data-q");
+      const value = btn.getAttribute("data-v") === "true";
+      setAnswerField(c, field, value);
+    });
+  });
+  const prevBtn = document.getElementById("gradePrevBtn");
+  if (prevBtn) prevBtn.addEventListener("click", goPrev);
+  const nextBtn = document.getElementById("gradeNextBtn");
+  if (nextBtn) nextBtn.addEventListener("click", goNext);
+  const noteEl = document.getElementById("gradeNote");
+  if (noteEl) {
+    noteEl.addEventListener("blur", () => { setAnswerField(c, "note", noteEl.value.trim(), { skipRender: true }); });
+  }
+}
+
+/* Selecting Yes/No (or editing the note) updates local state and saves
+   immediately - "advancing auto-saves" is the floor, this is the ceiling: no
+   answer is ever lost even if the tab closes before Next is pressed. */
+async function setAnswerField(c, field, value, opts) {
+  const a = ANSWERS[c.id] || {};
+  a[field] = value;
+  ANSWERS[c.id] = a;
+  if (!(opts && opts.skipRender)) renderCase();
+  if (a.decision_ok !== undefined) await persistAnswer(c);
+}
+
+async function persistAnswer(c) {
+  const a = ANSWERS[c.id] || {};
+  if (a.decision_ok === undefined) return; // nothing worth saving yet
+  const payload = {
+    id: c.id,
+    decision_ok: !!a.decision_ok,
+    reply_ok: (a.reply_ok === true || a.reply_ok === false) ? a.reply_ok : null,
+    note: a.note || "",
+  };
+  const res = await fetchJson("/api/setter/grading/answer", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) showError("Couldn't save that answer: " + res.error);
+  else clearError();
+}
+
+async function goNext() {
+  const c = CASES[idx];
+  const a0 = ANSWERS[c.id];
+  if (!a0 || a0.decision_ok === undefined) {
+    // Advancing an unanswered case would silently skip it - nudge instead.
+    const nudge = document.getElementById("gradeNudge");
+    if (nudge) { nudge.textContent = "Answer \"Right call?\" first (press 1 or 2)."; nudge.style.display = "block"; }
+    return;
+  }
+  const noteEl = document.getElementById("gradeNote");
+  if (noteEl) {
+    const a = ANSWERS[c.id] || {};
+    a.note = noteEl.value.trim();
+    ANSWERS[c.id] = a;
+  }
+  await persistAnswer(c);
+  if (idx < CASES.length - 1) { idx++; view = "case"; render(); }
+  else { view = "final"; render(); }
+}
+function goPrev() {
+  if (idx > 0) { idx--; render(); }
+}
+
+/* ── Keyboard: 1/2 right-call yes/no, 3/4 reply yes/no, Enter next ────── */
+document.addEventListener("keydown", (e) => {
+  if (view !== "case") return;
+  const active = document.activeElement;
+  if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+    if (e.key === "Enter" && active.id === "gradeNote") { e.preventDefault(); goNext(); }
+    return; // never hijack normal typing in the note field
+  }
+  const c = CASES[idx];
+  if (!c) return;
+  const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
+  if (e.key === "1") setAnswerField(c, "decision_ok", true);
+  else if (e.key === "2") setAnswerField(c, "decision_ok", false);
+  else if (e.key === "3" && hasDraft) setAnswerField(c, "reply_ok", true);
+  else if (e.key === "4" && hasDraft) setAnswerField(c, "reply_ok", false);
+  else if (e.key === "Enter") goNext();
+});
+
+/* ── Final screen ──────────────────────────────────────── */
+function renderFinal() {
+  const el = document.getElementById("gradeApp");
+  const total = CASES.length;
+  const answered = CASES.filter((c) => ANSWERS[c.id]);
+  const decisionYes = answered.filter((c) => ANSWERS[c.id].decision_ok === true).length;
+  const decisionTotal = answered.length;
+  const replyAnswered = answered.filter((c) => ANSWERS[c.id].reply_ok === true || ANSWERS[c.id].reply_ok === false);
+  const replyYes = replyAnswered.filter((c) => ANSWERS[c.id].reply_ok === true).length;
+
+  const autoCases = answered.filter((c) => c.would_auto);
+  const heldCases = answered.filter((c) => !c.would_auto);
+  const autoAgree = autoCases.filter((c) => ANSWERS[c.id].decision_ok === true).length;
+  const heldAgree = heldCases.filter((c) => ANSWERS[c.id].decision_ok === true).length;
+
+  const notes = CASES.filter((c) => ANSWERS[c.id] && ANSWERS[c.id].note)
+    .map((c) => ({ inbound: c.inbound, note: ANSWERS[c.id].note }));
+
+  el.innerHTML = `
+    <div class="grade-card">
+      <div class="grade-lab">Results</div>
+      <div class="small muted" style="margin-bottom:6px">${answered.length} of ${total} cases answered.</div>
+      <div class="grade-stat-row">
+        <div class="grade-stat">
+          <div class="gs-num">${pctText(decisionYes, decisionTotal)}</div>
+          <div class="gs-lab">Agreed with the call (${decisionYes} of ${decisionTotal})</div>
+        </div>
+        <div class="grade-stat">
+          <div class="gs-num">${pctText(replyYes, replyAnswered.length)}</div>
+          <div class="gs-lab">Good replies (${replyYes} of ${replyAnswered.length})</div>
+        </div>
+      </div>
+      <div class="grade-stat-row">
+        <div class="grade-stat">
+          <div class="gs-num">${pctText(autoAgree, autoCases.length)}</div>
+          <div class="gs-lab">Agreement on cases that would have auto-sent (${autoCases.length})</div>
+        </div>
+        <div class="grade-stat">
+          <div class="gs-num">${pctText(heldAgree, heldCases.length)}</div>
+          <div class="gs-lab">Agreement on cases held for a person (${heldCases.length})</div>
+        </div>
+      </div>
+      ${notes.length ? `
+      <div class="grade-notes">
+        <div class="grade-lab">Notes you left</div>
+        ${notes.map((n) => `<div class="grade-note-item"><b>${esc(truncateText(n.inbound || "", 70))}</b><div class="small muted" style="margin-top:4px">${esc(n.note)}</div></div>`).join("")}
+      </div>` : ""}
+      <button type="button" class="btn" id="gradeResetBtn" style="margin-top:18px">Start over (clear all answers)</button>
+    </div>
+  `;
+  const resetBtn = document.getElementById("gradeResetBtn");
+  if (resetBtn) resetBtn.addEventListener("click", onResetClick);
+}
+function pctText(n, d) { return d > 0 ? Math.round(100 * n / d) + "%" : "–"; }
+function truncateText(s, n) {
+  s = String(s || "");
+  return s.length > n ? s.slice(0, Math.max(0, n - 1)) + "…" : s;
+}
+
+function onResetClick() {
+  const btn = document.getElementById("gradeResetBtn");
+  if (!resetArmed) {
+    resetArmed = true;
+    btn.textContent = "Are you sure? Clear all answers";
+    btn.classList.add("danger");
+    setTimeout(() => {
+      resetArmed = false;
+      if (btn.isConnected) { btn.textContent = "Start over (clear all answers)"; btn.classList.remove("danger"); }
+    }, 5000);
+    return;
+  }
+  resetArmed = false;
+  doReset();
+}
+async function doReset() {
+  const btn = document.getElementById("gradeResetBtn");
+  const restore = busyBtn(btn, "Clearing…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/grading/reset", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+  });
+  restore();
+  if (!res.ok) { showError("Couldn't clear the answers: " + res.error); return; }
+  clearError();
+  ANSWERS = {};
+  idx = 0;
+  protoNote("Answers cleared");
+  view = CASES.length ? "case" : "empty";
+  render();
+}
+
+/* ── Boot ──────────────────────────────────────────────── */
+loadGrading();
+</script>
+</body>
+</html>

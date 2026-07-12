@@ -17,23 +17,28 @@
 }
 
 /* ── Slim inline stats row (replaces the 3 big KPI cards) ─────────────── */
-.stats-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 8px 0 16px; flex-wrap: wrap; }
+.stats-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 0; flex-wrap: wrap; }
 .stats-inline b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .stats-inline b.amber { color: #6B4A00; }
 .stats-inline .sep { color: var(--line-2); }
 
+/* ── One compact header row: title + inline stats + primary action ────── */
+.setter-head-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; }
+.sh-title { font-family: var(--font-sans); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; margin: 0; }
+.setter-head-row .sh-spacer { flex: 1; }
+
 /* ── Toolbar row: filters + test toggle + Agents/Settings/Try it + master switch pill ── */
-.setter-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 16px; }
+.setter-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
 .setter-toolbar .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .test-toggle { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
 .setter-toolbar .tb-spacer { flex: 1; }
 .setter-toolbar .tb-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .autopilot-pill { cursor: pointer; border: none; font: 500 11px var(--font-sans); }
 
-/* ── Two-pane inbox shell ──────────────────────────────────────────────── */
+/* ── Three-pane inbox shell: list | conversation | fixed lead-info sidebar ── */
 .inbox-shell {
   display: flex; border: 1px solid var(--line); border-radius: var(--radius);
-  overflow: hidden; height: calc(100vh - 300px); min-height: 460px;
+  overflow: hidden; height: calc(100vh - 220px); min-height: 460px;
 }
 .inbox-left { width: 340px; flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
@@ -46,25 +51,51 @@
 .il-list { flex: 1; overflow-y: auto; }
 .il-test-note { padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .il-list .empty { padding: 40px 16px; }
+.il-pager { flex-shrink: 0; border-top: 1px solid var(--line); padding: 7px 10px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
+.il-pager button { padding: 4px 9px; font-size: 12px; }
 .inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 40px; }
 
-.inbox-item { padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; border-left: 3px solid transparent; }
+/* Fixed lead-info sidebar (third column), Smartlead Lead-Overview-style but
+   docked, not an overlay. Only shown once a row is selected (renderDetail
+   toggles display:none/"" on the wrapper directly). */
+.lead-panel { width: 280px; flex-shrink: 0; border-left: 1px solid var(--line); overflow-y: auto; padding: 20px 20px 40px; }
+.lead-panel .lp-section { margin-bottom: 22px; }
+.lead-panel .lp-section:last-child { margin-bottom: 0; }
+.lead-panel .lp-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-3); margin-bottom: 8px;
+}
+.lead-panel .lp-name { font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
+.lead-panel .lp-line { font-size: 12.5px; color: var(--ink-2); margin-bottom: 4px; line-height: 1.5; }
+.lead-panel .lp-line:last-child { margin-bottom: 0; }
+.lead-panel .lp-line a { color: var(--orange-700); }
+.lead-panel .qc-sub-chk { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+
+.inbox-item { padding: 8px 14px; border-bottom: 1px solid var(--line); cursor: pointer; border-left: 3px solid transparent; }
 .inbox-item:hover { background: var(--bg-sunken); }
 .inbox-item.selected { background: var(--bg-sunken); border-left-color: var(--orange); }
 .ii-line1 { display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
-.ii-email { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
-.ii-snippet { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ii-hold { font-size: 11px; color: #6B4A00; margin-top: 4px; }
-.ii-meta { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-.ii-camp { font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
-.ii-time { font-size: 11px; color: var(--ink-3); margin-left: auto; }
+.ii-snippet { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ii-line3 { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: nowrap; }
+.ii-hold { font-size: 11px; color: #6B4A00; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ii-time { font-size: 11px; color: var(--ink-3); margin-left: auto; flex-shrink: 0; }
 
 .mobile-back { display: none; margin-bottom: 12px; }
+/* Tablet / narrow-desktop: list + conversation stay side by side, the lead
+   panel drops to a full-width block below (still hidden entirely when
+   nothing is selected - that's controlled by inline style, not this query). */
+@media (max-width: 1200px) {
+  .inbox-shell { flex-wrap: wrap; height: auto; min-height: 0; }
+  .inbox-left, .inbox-right { height: 60vh; }
+  .lead-panel { flex: 1 1 100%; width: 100%; border-left: none; border-top: 1px solid var(--line); max-height: 46vh; }
+}
 @media (max-width: 900px) {
   .inbox-shell { flex-direction: column; height: auto; min-height: 0; border: none; overflow: visible; }
-  .inbox-left { width: 100%; border-right: none; border: 1px solid var(--line); border-radius: var(--radius); }
-  .inbox-right { padding: 16px 4px 40px; }
+  .inbox-left { width: 100%; border-right: none; border: 1px solid var(--line); border-radius: var(--radius); height: auto; }
+  .inbox-right { padding: 16px 4px 40px; height: auto; }
+  .lead-panel { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 16px; max-height: none; }
   .inbox-shell:not(.mobile-detail) .inbox-right { display: none; }
+  .inbox-shell:not(.mobile-detail) .lead-panel { display: none; }
   .inbox-shell.mobile-detail .inbox-left { display: none; }
   .inbox-shell.mobile-detail .mobile-back { display: inline-flex; }
 }
@@ -73,10 +104,8 @@
 .back-link:hover { color: var(--ink); }
 
 /* ── Detail (right pane) ──────────────────────────────────────────────── */
-.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.detail-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
 .dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
-.dh-meta { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
-.dh-sub { flex-shrink: 0; }
 .qc-sub-chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
 
 .qc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
@@ -86,35 +115,55 @@
 .sent-line.auto_sent { background: var(--green-bg); color: #195C3F; }
 .sent-line.sent { background: var(--bg-sunken); color: var(--ink-2); }
 
+/* "How this was decided" - only used by the Try-it drawer now (the real
+   inbox detail pane shows the same content permanently in the lead-info
+   sidebar, see .lead-panel above). */
 .thread-details { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; }
 .thread-details summary { padding: 9px 13px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; list-style: none; }
 .thread-details summary::-webkit-details-marker { display: none; }
 .thread-details[open] summary { border-bottom: 1px solid var(--line); }
 .thread-list { padding: 10px 13px; }
-.thread-msg { margin-bottom: 12px; }
+
+/* ── Threaded conversation (Change 1): one scrollable column, oldest first,
+   their current reply always last and visually emphasised ─────────────── */
+.convo { position: relative; max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 4px 0; }
+.convo-fade {
+  position: absolute; top: 0; left: 0; right: 0; height: 30px; border-radius: 8px 8px 0 0;
+  background: linear-gradient(var(--card), rgba(255, 255, 255, 0));
+  pointer-events: none; opacity: 0; transition: opacity 0.15s ease; z-index: 2;
+}
+.thread-msg { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px; background: var(--bg-sunken); }
 .thread-msg:last-child { margin-bottom: 0; }
-.tm-head { font-size: 12px; margin-bottom: 3px; }
-.tm-body { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+.thread-msg.current { background: var(--amber-bg); border: 1px solid var(--amber-line); }
+.tm-head { font-size: 11.5px; font-weight: 600; color: var(--ink-3); margin-bottom: 3px; }
+.tm-head .muted { font-weight: 400; }
+.tm-body { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; white-space: pre-wrap; }
+.thread-msg.current .tm-head { color: #6B4A00; }
+.thread-msg.current .tm-body { color: var(--ink); }
 
 .msg-card { margin: 16px 0; }
 .msg-card-lab {
   font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--ink-3); margin-bottom: 7px; display: flex; align-items: center; gap: 8px;
 }
-.qc-reply {
-  font-size: 13px; color: var(--ink-2); background: var(--bg-sunken); border-radius: 8px;
-  padding: 10px 12px; margin: 4px 0; white-space: pre-wrap; line-height: 1.55;
-}
-.qc-reply.collapsed { max-height: 58px; overflow: hidden; }
-.qc-reply-toggle { font-size: 11.5px; color: var(--orange-700); background: none; border: none; cursor: pointer; padding: 0; margin: -4px 0 6px; }
+/* Change 2: the "Your reply" label line now also carries the action buttons,
+   right-aligned, wrapping on narrow screens. */
+.composer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 7px; }
+.composer-head .msg-card-lab { margin-bottom: 0; }
+.composer-head .qc-actions { margin-top: 0; }
 .qc-draft {
   border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 14px;
   font-size: 13px; line-height: 1.65; min-height: 60px; margin-top: 6px;
 }
 .qc-draft:focus { outline: none; box-shadow: var(--focus); }
-.qc-slots { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
-.qc-slots a { text-decoration: none; }
+.qc-draft div { min-height: 1em; }
+.qc-draft a { color: var(--orange-700); }
 .qc-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.qc-split { display: inline-flex; }
+.qc-split .qc-regen { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
+.qc-split .qc-regen-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 10px; }
+.qc-feedback { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.qc-feedback .qc-feedback-input { flex: 1; min-width: 200px; }
 .detail-err { margin: 10px 0; }
 
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
@@ -189,18 +238,14 @@
 <div class="app">
   <div id="rail"></div>
   <main class="main">
-    <div class="pagehead">
-      <div>
-        <div class="eyebrow">Setter</div>
-        <h1>Appointment Setter</h1>
-        <div class="small muted" style="margin-top:2px">Drafts and sends simple replies for the campaigns you assign. Anything unusual is held for you.</div>
-      </div>
+    <div class="setter-head-row">
+      <h1 class="sh-title">Appointment Setter</h1>
+      <div class="stats-inline" id="statsInline"></div>
+      <div class="sh-spacer"></div>
       <button class="btn primary" id="checkNowBtn" type="button">Check for new replies</button>
     </div>
 
     <div id="errBanner" class="err-banner" style="display:none"></div>
-
-    <div class="stats-inline" id="statsInline"></div>
 
     <div class="setter-toolbar">
       <div class="filters" id="queueFilters"></div>
@@ -227,8 +272,10 @@
         </div>
         <div class="il-test-note small muted" id="testOnlyNote" style="display:none"></div>
         <div class="il-list" id="inboxList"></div>
+        <div class="il-pager" id="inboxPager" style="display:none"></div>
       </div>
       <div class="inbox-right" id="inboxRight"></div>
+      <div class="lead-panel" id="leadPanel" style="display:none"></div>
     </div>
   </main>
 </div>
@@ -325,6 +372,10 @@ let inboxSearchQuery = "";
 /* rowId -> last edited (unsent) draft HTML, so a background refresh never
    clobbers text the user is mid-way through editing */
 const EDITED_DRAFTS = {};
+/* left-list pagination: 25 rows/page. Reset to page 1 whenever the filter
+   pill, search query, or test-toggle changes the underlying row set. */
+let inboxPage = 1;
+const INBOX_PAGE_SIZE = 25;
 
 const FILTER_PILLS = [
   { key: "needs_review", label: "Needs review" },
@@ -358,6 +409,15 @@ const STATUS_LABELS = {
   no_action: "No action", dismissed: "Dismissed", error: "Error", new: "New",
 };
 function statusLabel(status) { return STATUS_LABELS[status] || esc(status || ""); }
+/* decide()'s raw decision value (auto_send/review/no_action) in plain
+   English, for the bolded line inside "How this was decided". Falls back to
+   the row's own status label when decision isn't set (e.g. an already-sent
+   or dismissed row being re-viewed later). */
+const DECISION_LABELS = { auto_send: "Sent automatically", review: "Held for review", no_action: "No action needed" };
+function decisionLabel(row) {
+  if (row.decision && DECISION_LABELS[row.decision]) return DECISION_LABELS[row.decision];
+  return statusLabel(row.status);
+}
 function statusPillClass(status) {
   if (status === "needs_review" || status === "error") return "a";
   if (status === "auto_sent" || status === "sent") return "g";
@@ -485,6 +545,7 @@ function renderQueueFilters() {
   ).join("");
   wrap.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     currentStatus = b.getAttribute("data-status");
+    inboxPage = 1;
     loadQueue();
   }));
   const hasTest = QUEUE_ROWS.some((r) => r.is_test);
@@ -495,7 +556,10 @@ function renderQueueFilters() {
    (server already orders created_at.desc). A non-empty search ignores the
    active filter pill and searches every row (ALL_ROWS) instead of just the
    current pill's rows (QUEUE_ROWS), so a search never misses a match sitting
-   under a different status. An empty search restores the pill's own scope. */
+   under a different status. An empty search restores the pill's own scope.
+   This is the FULL matching set across every page - pagedInboxRows() below
+   slices it for display, but keyboard nav and the KPI counts always work off
+   this complete list so paging never hides a match. */
 function visibleInboxRows() {
   const chk = document.getElementById("showTestChk");
   const showTest = chk ? chk.checked : true;
@@ -512,6 +576,18 @@ function visibleInboxRows() {
   return rows;
 }
 
+/* 25-per-page slice of visibleInboxRows() for the left list's DOM. Clamps
+   inboxPage back into range whenever the underlying set shrinks (a dismiss,
+   a filter switch, a narrower search). */
+function pagedInboxRows() {
+  const rows = visibleInboxRows();
+  const totalPages = Math.max(1, Math.ceil(rows.length / INBOX_PAGE_SIZE));
+  if (inboxPage > totalPages) inboxPage = totalPages;
+  if (inboxPage < 1) inboxPage = 1;
+  const start = (inboxPage - 1) * INBOX_PAGE_SIZE;
+  return { rows: rows.slice(start, start + INBOX_PAGE_SIZE), total: rows.length, totalPages };
+}
+
 function renderQueue() {
   renderInboxList();
   const stillThere = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId));
@@ -520,34 +596,55 @@ function renderQueue() {
 
 function renderInboxList() {
   const el = document.getElementById("inboxList");
-  const rows = visibleInboxRows();
+  const paged = pagedInboxRows();
   const testNoteEl = document.getElementById("testOnlyNote");
   if (testNoteEl) {
-    const onlyTest = rows.length > 0 && rows.every((r) => r.is_test);
+    const onlyTest = paged.rows.length > 0 && paged.rows.every((r) => r.is_test);
     testNoteEl.style.display = onlyTest ? "block" : "none";
     testNoteEl.textContent = onlyTest ? "These are simulated test replies. Real replies will appear here." : "";
   }
-  if (!rows.length) {
+  if (!paged.rows.length) {
     el.innerHTML = `<div class="empty">No replies here. New ones will show up after the next check.</div>`;
-    return;
+  } else {
+    el.innerHTML = paged.rows.map(inboxItemHtml).join("");
+    el.querySelectorAll(".inbox-item").forEach((item) => {
+      item.addEventListener("click", () => selectRow(item.getAttribute("data-id")));
+    });
   }
-  el.innerHTML = rows.map(inboxItemHtml).join("");
-  el.querySelectorAll(".inbox-item").forEach((item) => {
-    item.addEventListener("click", () => selectRow(item.getAttribute("data-id")));
-  });
+  renderInboxPager(paged.total, paged.totalPages);
 }
 
-/* Fix 1 (hold-reason keyword map): each keyword is checked in order against
-   the row's decision_reason; first match wins. Falls back to the first 40
-   chars of the reason after the "Held for review: " marker so a reason we
-   haven't mapped yet still shows something useful instead of nothing. */
+function renderInboxPager(total, totalPages) {
+  const el = document.getElementById("inboxPager");
+  if (!el) return;
+  if (total <= INBOX_PAGE_SIZE) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "flex";
+  el.innerHTML = `
+    <button type="button" class="btn" id="inboxPrevBtn" ${inboxPage <= 1 ? "disabled" : ""}>&lsaquo;</button>
+    <span>Page ${inboxPage} of ${totalPages}</span>
+    <button type="button" class="btn" id="inboxNextBtn" ${inboxPage >= totalPages ? "disabled" : ""}>&rsaquo;</button>
+  `;
+  const prevBtn = document.getElementById("inboxPrevBtn");
+  const nextBtn = document.getElementById("inboxNextBtn");
+  if (prevBtn) prevBtn.addEventListener("click", () => { inboxPage = Math.max(1, inboxPage - 1); renderInboxList(); });
+  if (nextBtn) nextBtn.addEventListener("click", () => { inboxPage = Math.min(totalPages, inboxPage + 1); renderInboxList(); });
+}
+
+/* Hold-reason keyword map: each keyword is checked in order against the
+   row's decision_reason; first match wins. Falls back to the first 40 chars
+   of the reason after the "Held for review: " marker so a reason we haven't
+   mapped yet still shows something useful instead of nothing. Both the new
+   (v2) and legacy decide() wording are matched so this keeps working through
+   the backend's simplification pass. */
 const HOLD_REASON_KEYWORDS = [
   ["bespoke", "Custom work asked"],
   ["Calendly is not connected", "Calendly not connected"],
+  ["no free Calendly slots coming up", "No free slots"],
   ["no Calendly availability", "No free slots"],
   ["master switch", "Ready, autopilot off"],
   ["draft only", "Ready, agent on draft mode"],
   ["timezone", "Timezone unclear"],
+  ["no instructions cover pricing", "Pricing not configured"],
   ["pricing notes", "Pricing not configured"],
   ["replied before", "Repeat reply"],
   ["already categorised", "Smartlead flagged it"],
@@ -576,21 +673,24 @@ function holdReasonLabel(reason, row) {
   return truncate(rest, 40);
 }
 
+/* Minimal 3-line row: bold name + TEST chip / one-line snippet / hold label
+   + relative time. Email, campaign, and the status pill (except under "All")
+   moved into the detail pane's "How this was decided" panel. */
 function inboxItemHtml(row) {
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
   const snippet = esc(String(row.reply_body || "").trim().replace(/\s+/g, " "));
   const selected = String(row.id) === String(selectedRowId) ? "selected" : "";
-  const campaignName = campaignNameFor(row);
-  const holdLine = (row.status === "needs_review" && row.decision_reason)
-    ? `<div class="ii-hold">${esc(holdReasonLabel(row.decision_reason, row))}</div>` : "";
+  const holdLabel = (row.status === "needs_review" && row.decision_reason) ? holdReasonLabel(row.decision_reason, row) : "";
+  // Status pill shows under "All" AND while a search is active - search spans
+  // every filter, so without the pill a mixed result list would be unreadable.
+  const statusChip = (currentStatus === "" || inboxSearchQuery.trim())
+    ? `<span class="pill ${statusPillClass(row.status)}">${statusLabel(row.status)}</span>` : "";
   return `<div class="inbox-item ${selected}" data-id="${esc(row.id)}">
     <div class="ii-line1">${esc(leadName(row))} ${testChip}</div>
-    <div class="ii-email">${esc(row.lead_email || "")}</div>
     <div class="ii-snippet">${snippet || "No reply text."}</div>
-    ${holdLine}
-    <div class="ii-meta">
-      <span class="pill ${statusPillClass(row.status)}">${statusLabel(row.status)}</span>
-      <span class="ii-camp" title="${esc(campaignName)}">${esc(truncate(campaignName, 20))}</span>
+    <div class="ii-line3">
+      ${holdLabel ? `<span class="ii-hold">${esc(holdLabel)}</span>` : ""}
+      ${statusChip}
       <span class="ii-time">${pulledAgo(row.replied_at)}</span>
     </div>
   </div>`;
@@ -602,7 +702,11 @@ function selectRow(id) {
   document.querySelectorAll(".inbox-item").forEach((item) => {
     item.classList.toggle("selected", item.getAttribute("data-id") === String(id));
   });
-  const row = QUEUE_ROWS.find((r) => String(r.id) === String(id));
+  // Look in BOTH sets: a cross-filter search renders rows from ALL_ROWS, so a
+  // filter-scoped lookup alone left a search result highlighted but the pane
+  // empty (found live by a tester).
+  const row = QUEUE_ROWS.find((r) => String(r.id) === String(id))
+           || ALL_ROWS.find((r) => String(r.id) === String(id));
   renderDetail(row || null);
 }
 
@@ -610,33 +714,38 @@ function backToInbox() {
   document.getElementById("inboxShell").classList.remove("mobile-detail");
 }
 
-/* ── Right pane: detail / composer ─────────────────────── */
+/* ── Right pane: conversation / composer ───────────────── */
+/* Conversation column, top to bottom, exactly: (1) compact header - name +
+   TEST chip, nothing else (the subsequence checkbox and every "how decided"
+   fact now live permanently in the fixed lead-info sidebar - see
+   leadPanelHtml / renderDetail below); (2) the threaded conversation
+   (convoHtml); (3) "Your reply" - label row with the action buttons beside
+   it, feedback row, sent-line / no-slots hint, then the draft. */
 function renderDetail(row) {
   const el = document.getElementById("inboxRight");
+  const panelEl = document.getElementById("leadPanel");
   if (!row) {
     // No selection: on narrow screens fall back to the list view, never a
-    // full-screen empty pane with the list hidden behind it.
+    // full-screen empty pane with the list hidden behind it. The lead-info
+    // sidebar has nothing to show either, so it's hidden entirely.
     selectedRowId = null;
     document.getElementById("inboxShell").classList.remove("mobile-detail");
     el.innerHTML = `<div class="empty">Select a reply on the left.</div>`;
+    if (panelEl) { panelEl.style.display = "none"; panelEl.innerHTML = ""; }
     return;
   }
-  const cls = row.classification || {};
-  const campaignName = campaignNameFor(row);
-  const tz = row.timezone || cls.timezone_guess || "";
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
 
-  const chips = [];
-  chips.push(`<span class="pill n">${intentLabel(cls.primary_intent)}</span>`);
-  if (cls.confidence != null) chips.push(`<span class="pill n">${Math.round(cls.confidence * 100)}% sure</span>`);
-  chips.push(`<span class="pill n">${tz ? "Timezone: " + esc(tz) : "Timezone unknown"}</span>`);
+  // A genuine processing error is surfaced right away (distinct from the
+  // routine "needs review" hold reason, which lives in the sidebar's "The
+  // decision" section instead of a top banner).
+  const errorBannerHtml = (row.status === "error" && row.error)
+    ? `<div class="err-banner" style="display:block;margin:10px 0">${esc(row.error)}</div>` : "";
 
-  let banner = "";
-  if (row.status === "needs_review" && row.decision_reason) {
-    banner = `<div class="warn-banner">${esc(row.decision_reason)}</div>`;
-  } else if (row.status === "error" && row.error) {
-    banner = `<div class="err-banner" style="display:block;margin:10px 0">${esc(row.error)}</div>`;
-  } else if (row.status === "auto_sent" || row.status === "sent") {
+  // Auto-sent / sent rows keep one calm line, placed right above the draft
+  // itself rather than at the top of the page.
+  let sentLineHtml = "";
+  if (row.status === "auto_sent" || row.status === "sent") {
     let mins = null;
     if (row.sent_at && row.replied_at) {
       const d = (new Date(row.sent_at) - new Date(row.replied_at)) / 60000;
@@ -645,147 +754,213 @@ function renderDetail(row) {
     const line = row.status === "auto_sent"
       ? `Sent automatically · ${pulledAgo(row.sent_at)}${mins != null ? ` · ${mins} minutes after their reply` : ""}`
       : `Sent by you · ${pulledAgo(row.sent_at)}`;
-    banner = `<div class="sent-line ${esc(row.status)}">${line}</div>`;
+    sentLineHtml = `<div class="sent-line ${esc(row.status)}">${line}</div>`;
   }
 
   // No-slots guidance: only when the hold is specifically about Calendly
   // (not connected, no availability, or a load error) - other hold reasons
-  // don't need this hint.
+  // don't need this hint. Shown just above the composer, where it's actionable.
   let noSlotsHint = "";
   if (row.status === "needs_review" && row.decision_reason) {
     const dr = row.decision_reason;
-    if (dr.includes("Calendly is not connected") || dr.includes("no Calendly availability") || dr.includes("couldn't load Calendly")) {
-      noSlotsHint = `<div class="small muted" style="margin:-4px 0 10px">You can still send the draft with the booking link, type in a time you know is free, or free up the calendar and press Regenerate.</div>`;
+    if (dr.includes("Calendly is not connected") || dr.includes("no free Calendly slots coming up")
+        || dr.includes("no Calendly availability") || dr.includes("couldn't load Calendly")) {
+      noSlotsHint = `<div class="small muted" style="margin:0 0 10px">You can still send the draft with the booking link, type in a time you know is free, or free up the calendar and press Regenerate.</div>`;
     }
   }
-
-  const showSubChk = row.status === "needs_review" || row.status === "auto_sent" || row.status === "sent";
-  const subChkHtml = showSubChk
-    ? `<label class="qc-sub-chk dh-sub"><input type="checkbox" class="qc-sub" data-id="${esc(row.id)}" ${row.added_to_subsequence ? "checked" : ""}> Added to subsequence</label>`
-    : "";
 
   el.innerHTML = `
     <a class="back-link mobile-back" href="#" id="backToInboxLink">&larr; Back to inbox</a>
     <div class="detail-head">
-      <div>
-        <h2 class="dh-name">${esc(leadName(row))} ${testChip}</h2>
-        <div class="dh-meta">${esc(row.lead_email || "")} · ${esc(campaignName)}</div>
-      </div>
-      ${subChkHtml}
+      <h2 class="dh-name">${esc(leadName(row))} ${testChip}</h2>
     </div>
-    <div class="qc-chips">${chips.join("")}</div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
-    ${banner}
-    ${noSlotsHint}
-    ${earlierThreadHtml(row)}
-    ${replyCardHtml(row)}
+    ${errorBannerHtml}
+    ${convoHtml(row)}
     <div class="msg-card">
-      <div class="msg-card-lab">Your reply</div>
+      <div class="composer-head">
+        <div class="msg-card-lab">Your reply</div>
+        ${composerActionsHtml(row)}
+      </div>
+      ${composerFeedbackHtml(row)}
+      ${sentLineHtml}
+      ${noSlotsHint}
       ${composerHtml(row)}
     </div>
-    ${pricingNotesHtml(row)}
-    ${howDecidedDetailsHtml(row)}
   `;
+  if (panelEl) {
+    panelEl.style.display = "";
+    panelEl.innerHTML = leadPanelHtml(row);
+  }
   wireDetailEvents(el, row);
+  wireLeadPanelEvents(panelEl);
   reapplyEditedDraft(row.id);
 }
 
-/* Fix 3: inline pricing reference - shown only when this reply's
-   classification includes a pricing intent, so the person reviewing can see
-   exactly what the draft is allowed to quote without opening the agent editor. */
-function pricingNotesHtml(row) {
-  const cls = row.classification || {};
-  const allIntents = cls.all_intents || [];
-  if (!allIntents.includes("pricing")) return "";
-  const agent = AGENTS.find((a) => String(a.id) === String(row.agent_id));
-  const notes = (agent && agent.pricing_notes) || "";
-  return `<details class="thread-details" style="margin-top:14px" open>
-    <summary>Agent's saved pricing notes (what the draft may quote)</summary>
-    <div class="thread-list" style="white-space:pre-wrap">${esc(notes) || "<i>No pricing notes saved for this agent.</i>"}</div>
-  </details>`;
-}
-
-/* Fix 4: "How this was decided" - shared content builder used by both the
-   real inbox detail pane and the Try-it drawer (renderTryItResult), so the
-   two never drift out of sync on what "decided" actually shows. */
-function howDecidedContentHtml(row) {
+/* "How this was decided" - shared content builder used by both the fixed
+   lead-info sidebar (see leadPanelHtml) and the Try-it drawer
+   (renderTryItResult), so the two never drift out of sync on what "decided"
+   actually shows. Absorbs what the old top-of-page banner used to say
+   (decision + full reason, bolded, first) plus every fact that used to live
+   in the removed chips row / dh-meta line. opts.skipIdentity omits the
+   Email/Campaign lines - the sidebar already shows those in its own LEAD /
+   CAMPAIGN blocks just above, so the Try-it drawer keeps calling this
+   WITHOUT opts and sees the identity lines exactly as before. */
+function howDecidedContentHtml(row, opts) {
+  opts = opts || {};
   const cls = row.classification || {};
   const guardrails = row.guardrails || {};
   const lexHits = Array.isArray(guardrails.lexicon_hits) ? guardrails.lexicon_hits : [];
   const redFlags = Array.isArray(guardrails.llm_red_flags) ? guardrails.llm_red_flags : [];
   const tz = row.timezone || cls.timezone_guess || "";
-  const rows = [];
-  rows.push(["Intent", `${esc(intentLabel(cls.primary_intent))}${cls.confidence != null ? ` (${Math.round(cls.confidence * 100)}% sure)` : ""}`]);
-  rows.push(["Decision", `${esc(row.decision || "not decided yet")}${row.decision_reason ? " - " + esc(row.decision_reason) : ""}`]);
-  rows.push(["Lexicon hits", lexHits.length ? esc(lexHits.join(", ")) : "none"]);
-  rows.push(["AI flags", redFlags.length ? esc(redFlags.join(", ")) : "none"]);
-  rows.push(["Timezone", tz ? esc(tz) : "unknown"]);
-  rows.push(["Call slots", esc(slotSituationText(row))]);
-  if (row.category) rows.push(["Smartlead category", esc(row.category)]);
-  return rows.map(([label, val]) => `<div class="small" style="margin-bottom:6px"><b>${esc(label)}:</b> ${val}</div>`).join("");
+  const allIntents = cls.all_intents || [];
+
+  const parts = [];
+  if (row.decision_reason) {
+    parts.push(`<div style="margin-bottom:10px"><b>${esc(decisionLabel(row))}</b><br>${esc(row.decision_reason)}</div>`);
+  }
+  const kv = (label, val) => `<div class="small" style="margin-bottom:6px"><b>${esc(label)}:</b> ${val}</div>`;
+  if (!opts.skipIdentity) {
+    parts.push(kv("Email", row.lead_email ? esc(row.lead_email) : "unknown"));
+    parts.push(kv("Campaign", esc(campaignNameFor(row))));
+  }
+  parts.push(kv("Intent", `${esc(intentLabel(cls.primary_intent))}${cls.confidence != null ? ` (${Math.round(cls.confidence * 100)}% sure)` : ""}`));
+  parts.push(kv("Timezone", tz ? esc(tz) : "unknown"));
+  parts.push(kv("Opt-out hits", lexHits.length ? esc(lexHits.join(", ")) : "none"));
+  parts.push(kv("AI flags", redFlags.length ? esc(redFlags.join(", ")) : "none"));
+  parts.push(kv("Call slots", esc(slotSituationText(row))));
+  if (row.category) parts.push(kv("Smartlead category", esc(row.category)));
+
+  if (allIntents.includes("pricing")) {
+    const agent = AGENTS.find((a) => String(a.id) === String(row.agent_id));
+    const instructions = (agent && (agent.instructions || agent.pricing_notes)) || "";
+    parts.push(`<div style="margin-top:10px"><b>What this agent may share</b>
+      <div class="small" style="white-space:pre-wrap;margin-top:4px">${esc(instructions) || "<i>No instructions saved for this agent.</i>"}</div>
+    </div>`);
+  }
+  return parts.join("");
 }
 function slotSituationText(row) {
   const slots = row.slots || [];
   if (slots.length) return `${slots.length} time${slots.length === 1 ? "" : "s"} proposed`;
   const reason = String(row.decision_reason || "");
   if (reason.includes("Calendly is not connected")) return "Calendly is not connected";
-  if (reason.includes("no Calendly availability")) return "no free slots inside the working window";
+  if (reason.includes("no free Calendly slots coming up") || reason.includes("no Calendly availability")) return "no free slots inside the working window";
   if (reason.includes("couldn't load Calendly")) return "couldn't load Calendly availability";
   return "no call times proposed";
 }
-function howDecidedDetailsHtml(row) {
-  if (!row.classification) return "";
-  return `<details class="thread-details" style="margin-top:14px">
-    <summary>How this was decided</summary>
-    <div class="thread-list">${howDecidedContentHtml(row)}</div>
-  </details>`;
+
+/* Change 3: fixed lead-info sidebar content, top to bottom - the
+   subsequence checkbox (moved here from the header), then LEAD / CAMPAIGN /
+   an always-open "The decision" (howDecidedContentHtml with the Email/
+   Campaign lines skipped, since LEAD/CAMPAIGN above already show them - the
+   pricing "what this agent may share" block rides along inside that same
+   call, unchanged). Rendered into #leadPanel by renderDetail, which also
+   hides the whole panel when nothing is selected. */
+function leadPanelHtml(row) {
+  const showSubChk = row.status === "needs_review" || row.status === "auto_sent" || row.status === "sent";
+  const subChkHtml = showSubChk
+    ? `<label class="qc-sub-chk"><input type="checkbox" class="qc-sub" data-id="${esc(row.id)}" ${row.added_to_subsequence ? "checked" : ""}> Added to subsequence</label>`
+    : "";
+  const websiteHtml = row.company_domain
+    ? `<div class="lp-line"><a href="https://${esc(row.company_domain)}" target="_blank" rel="noopener">${esc(row.company_domain)}</a></div>`
+    : "";
+  return `
+    ${subChkHtml}
+    <div class="lp-section">
+      <div class="lp-label">Lead</div>
+      <div class="lp-name">${esc(leadName(row))}</div>
+      <div class="lp-line">${row.lead_email ? esc(row.lead_email) : "<i>No email on file</i>"}</div>
+      ${websiteHtml}
+    </div>
+    <div class="lp-section">
+      <div class="lp-label">Campaign</div>
+      <div class="lp-line">${esc(campaignNameFor(row))}</div>
+    </div>
+    <div class="lp-section">
+      <div class="lp-label">The decision</div>
+      ${howDecidedContentHtml(row, { skipIdentity: true })}
+    </div>
+  `;
+}
+function wireLeadPanelEvents(root) {
+  if (!root) return;
+  root.querySelectorAll(".qc-sub").forEach((chk) => chk.addEventListener("change", () => doSubsequence(chk)));
 }
 
-function earlierThreadHtml(row) {
-  // Exclude the reply this row is actually about - matched by message/stats id
-  // first (the reliable key), falling back to an exact time match. A synthetic
-  // or edge-case row without matching ids still degrades safely (shows nothing
-  // extra rather than hiding a real earlier message).
-  const earlier = (row.thread || []).filter((m) => {
+/* Change 1: one scrollable, chronological conversation built from
+   row.thread (SENT/REPLY history), with the current inbound reply always
+   rendered last and visually emphasised - replaces the old separate "Their
+   reply" card and "What we sent earlier" details. Test rows carry no real
+   thread, so that case naturally falls back to just the current reply. */
+function convoMsgHtml(who, when, body, emphasize) {
+  const text = String(body || "").trim();
+  return `<div class="thread-msg${emphasize ? " current" : ""}">
+    <div class="tm-head">${esc(who)} · ${pulledAgo(when)}</div>
+    <div class="tm-body">${esc(text).replace(/\n/g, "<br>") || "<i>No content.</i>"}</div>
+  </div>`;
+}
+function convoHtml(row) {
+  const thread = Array.isArray(row.thread) ? row.thread : [];
+  const replyHead80 = String(row.reply_body || "").trim().slice(0, 80);
+  const older = thread.filter((m) => {
     if (!m) return false;
+    if (m.type !== "REPLY") return true; // every SENT message is older context
+    // Dedupe: this REPLY entry IS the current inbound reply, rendered
+    // separately below as the emphasised last message - drop it here so it
+    // never shows twice.
     if (row.email_stats_id != null && m.stats_id != null && String(m.stats_id) === String(row.email_stats_id)) return false;
     if (row.message_id != null && m.message_id != null && String(m.message_id) === String(row.message_id)) return false;
-    return m.time !== row.replied_at;
+    const mHead80 = String(m.body || "").trim().slice(0, 80);
+    if (mHead80 && mHead80 === replyHead80) return false;
+    return true;
   });
-  if (!earlier.length) return "";
-  const items = earlier.map((m) => `
-    <div class="thread-msg">
-      <div class="tm-head"><b>${esc(m.type === "SENT" ? "You" : (m.from_name || leadName(row)))}</b> <span class="muted small">${pulledAgo(m.time)}</span></div>
-      <div class="tm-body">${esc(String(m.body || "").trim()).replace(/\n/g, "<br>") || "No content."}</div>
-    </div>`).join("");
-  return `<details class="thread-details"><summary>Earlier in this thread</summary><div class="thread-list">${items}</div></details>`;
-}
-
-function replyCardHtml(row) {
-  const replyText = String(row.reply_body || "").trim();
-  const isLong = replyText.length > 240;
-  const replyHtml = esc(replyText).replace(/\n/g, "<br>");
+  const olderHtml = older.map((m) => convoMsgHtml(m.type === "SENT" ? "You" : "Them", m.time, m.body, false)).join("");
+  const currentHtml = convoMsgHtml("Their reply", row.replied_at, row.reply_body, true);
+  // Fade hint only when there's earlier content to scroll up to - test rows
+  // (no thread) skip it entirely, matching "container shrinks to fit".
+  const fadeHtml = older.length ? `<div class="convo-fade"></div>` : "";
   return `
     <div class="msg-card">
-      <div class="msg-card-lab">Their reply <span class="muted" style="text-transform:none;font-weight:400">${pulledAgo(row.replied_at)}</span></div>
-      <div class="qc-reply ${isLong ? "collapsed" : ""}" id="reply-${esc(row.id)}">${replyHtml || "<i>No reply text.</i>"}</div>
-      ${isLong ? `<button type="button" class="qc-reply-toggle" data-id="${esc(row.id)}">Show more</button>` : ""}
+      <div class="msg-card-lab">Conversation</div>
+      <div class="convo" id="convo-${esc(row.id)}">
+        ${fadeHtml}
+        ${olderHtml}
+        ${currentHtml}
+      </div>
     </div>`;
 }
 
+/* Draft is rendered exactly as delivered (div/br paragraph HTML from the
+   drafter - see .qc-draft div CSS) so the composer reads like a real email.
+   No slot pills: proposed times are already links inside the draft text. */
+function needsComposerActions(row) {
+  return row.status === "needs_review" || (row.status === "no_action" && row.draft_body);
+}
+/* Change 2: Approve / Regenerate-split / Dismiss now live beside the "Your
+   reply" label instead of below the draft - same classes (qc-send, qc-regen,
+   qc-regen-arrow, qc-dismiss), just relocated, so the existing wiring in
+   wireDetailEvents binds them exactly as before. */
+function composerActionsHtml(row) {
+  if (!needsComposerActions(row)) return "";
+  return `<div class="qc-actions">
+    <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button">Approve</button>
+    <span class="qc-split">
+      <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="Regenerate with feedback" aria-label="Regenerate with feedback">&#9662;</button>
+    </span>
+    <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+  </div>`;
+}
+function composerFeedbackHtml(row) {
+  if (!needsComposerActions(row)) return "";
+  return `<div class="qc-feedback" id="fb-${esc(row.id)}" style="display:none">
+    <input type="text" class="qc-feedback-input" data-id="${esc(row.id)}" placeholder="Tell it what to change, e.g. shorter, or do not offer times">
+    <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">Regenerate with feedback</button>
+  </div>`;
+}
 function composerHtml(row) {
-  if (row.status === "needs_review" || (row.status === "no_action" && row.draft_body)) {
-    const slotsHtml = (row.slots || []).map((s) =>
-      `<a class="pill o" href="${esc(s.link || "#")}" target="_blank" rel="noopener">${esc(s.label || s.iso || "Proposed time")}</a>`
-    ).join("");
-    return `
-      <div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>
-      ${slotsHtml ? `<div class="qc-slots">${slotsHtml}</div>` : ""}
-      <div class="qc-actions">
-        <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button">Send reply</button>
-        <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button>
-        <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
-      </div>`;
+  if (needsComposerActions(row)) {
+    return `<div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>`;
   }
   if (row.status === "auto_sent" || row.status === "sent") {
     return `<div class="qc-draft" style="background:var(--bg-sunken)">${row.sent_body || row.draft_body || ""}</div>`;
@@ -810,19 +985,41 @@ function wireDetailEvents(root, row) {
   const backLink = root.querySelector("#backToInboxLink");
   if (backLink) backLink.addEventListener("click", (e) => { e.preventDefault(); backToInbox(); });
 
-  root.querySelectorAll(".qc-reply-toggle").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-id");
-      const replyEl = document.getElementById("reply-" + id);
-      replyEl.classList.toggle("collapsed");
-      btn.textContent = replyEl.classList.contains("collapsed") ? "Show more" : "Show less";
-    });
-  });
+  // Threaded conversation: start scrolled to the bottom (their reply is
+  // always the last block) on every render, and only show the top fade
+  // while there's earlier content scrolled out of view above.
+  const convoEl = root.querySelector(".convo");
+  if (convoEl) {
+    convoEl.scrollTop = convoEl.scrollHeight;
+    const fadeEl = convoEl.querySelector(".convo-fade");
+    if (fadeEl) {
+      const toggleFade = () => { fadeEl.style.opacity = convoEl.scrollTop > 8 ? "1" : "0"; };
+      toggleFade();
+      convoEl.addEventListener("scroll", toggleFade);
+    }
+  }
+
   root.querySelectorAll(".qc-send").forEach((btn) => btn.addEventListener("click", () => doSend(btn)));
   root.querySelectorAll(".qc-regen").forEach((btn) => btn.addEventListener("click", () => doRedraft(btn)));
+  root.querySelectorAll(".qc-regen-arrow").forEach((btn) => btn.addEventListener("click", () => {
+    const fb = document.getElementById(`fb-${btn.getAttribute("data-id")}`);
+    if (!fb) return;
+    const opening = fb.style.display === "none";
+    fb.style.display = opening ? "flex" : "none";
+    if (opening) { const inp = fb.querySelector(".qc-feedback-input"); if (inp) inp.focus(); }
+  }));
+  root.querySelectorAll(".qc-regen-fb").forEach((btn) => btn.addEventListener("click", () => {
+    const inp = document.querySelector(`.qc-feedback-input[data-id="${CSS.escape(btn.getAttribute("data-id"))}"]`);
+    doRedraft(btn, inp ? inp.value.trim() : "");
+  }));
+  root.querySelectorAll(".qc-feedback-input").forEach((inp) => inp.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const btn = document.querySelector(`.qc-regen-fb[data-id="${CSS.escape(inp.getAttribute("data-id"))}"]`);
+    if (btn) btn.click();
+  }));
   root.querySelectorAll(".qc-dismiss").forEach((btn) => btn.addEventListener("click", () => doDismiss(btn)));
   root.querySelectorAll(".qc-draft-anyway").forEach((btn) => btn.addEventListener("click", () => doDraftAnyway(btn)));
-  root.querySelectorAll(".qc-sub").forEach((chk) => chk.addEventListener("change", () => doSubsequence(chk)));
 
   const draftEl = root.querySelector(".qc-draft[contenteditable]");
   if (draftEl) {
@@ -856,8 +1053,20 @@ async function doSend(btn) {
   const linkWasThere = link && row && (row.draft_body || "").includes(link);
   if (draftEl && linkWasThere && !draftEl.innerHTML.includes(link) && sendGuardArmedId !== id) {
     sendGuardArmedId = id;
-    showDetailError("The resource link is no longer in this draft. Click Send reply again to send without it.");
+    showDetailError("The resource link is no longer in this draft. Click Approve again to send without it.");
     setTimeout(() => { if (sendGuardArmedId === id) sendGuardArmedId = null; }, 6000);
+    return;
+  }
+  // Same idea for booking: if the original draft gave the lead a way to book
+  // (any calendly link) and the edit removed them ALL, check before sending a
+  // reply with no way to book at all. Removing just one of two proposed times
+  // stays silent - that's a normal edit.
+  const hadBooking = row && /calendly\.com/.test(row.draft_body || "");
+  const hasBookingNow = draftEl ? /calendly\.com/.test(draftEl.innerHTML) : true;
+  if (draftEl && hadBooking && !hasBookingNow && sendGuardArmedId !== `book-${id}`) {
+    sendGuardArmedId = `book-${id}`;
+    showDetailError("There is no booking link left in this draft. Click Approve again to send it anyway.");
+    setTimeout(() => { if (sendGuardArmedId === `book-${id}`) sendGuardArmedId = null; }, 6000);
     return;
   }
   sendGuardArmedId = null;
@@ -880,12 +1089,14 @@ async function doSend(btn) {
   loadQueue();
 }
 
-async function doRedraft(btn) {
+async function doRedraft(btn, feedback) {
   const restore = busyBtn(btn, "Regenerating…");
   if (!restore) return;
   const id = btn.getAttribute("data-id");
+  const payload = { id: Number(id) };
+  if (feedback) payload.feedback = feedback;
   const res = await fetchJson("/api/setter/queue/redraft", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id) }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
   restore();
   if (!res.ok) {
@@ -960,16 +1171,25 @@ document.getElementById("checkNowBtn").addEventListener("click", async () => {
   setTimeout(async () => { await loadQueue(); restore(); protoNote("Checked for new replies"); }, 2500);
 });
 
-document.getElementById("showTestChk").addEventListener("change", () => { renderQueue(); renderKpis(); });
+document.getElementById("showTestChk").addEventListener("change", () => { inboxPage = 1; renderQueue(); renderKpis(); });
 document.getElementById("inboxSearch").addEventListener("input", (e) => {
   inboxSearchQuery = e.target.value || "";
+  inboxPage = 1;
   const note = document.getElementById("searchAllNote");
-  if (note) note.style.display = inboxSearchQuery.trim() ? "inline" : "none";
+  const searching = !!inboxSearchQuery.trim();
+  if (note) note.style.display = searching ? "inline" : "none";
+  // While a search spans every filter, the highlighted pill isn't what's on
+  // screen - dim the pill row so the two can't visually contradict.
+  const pills = document.getElementById("queueFilters");
+  if (pills) pills.style.opacity = searching ? "0.45" : "";
   renderInboxList();
   renderKpis();
 });
 
 /* ── Keyboard nav: ArrowUp/ArrowDown and j/k move the selection ────────── */
+/* Moves over the FULL matching set (visibleInboxRows), not just the current
+   page - if the next/previous row lives on a different page, the page turns
+   first so the row exists in the DOM before it's selected. */
 function scrollSelectedIntoView() {
   const el = document.querySelector(".inbox-item.selected");
   if (el) el.scrollIntoView({ block: "nearest" });
@@ -992,6 +1212,8 @@ document.addEventListener("keydown", (e) => {
   let idx = rows.findIndex((r) => String(r.id) === String(selectedRowId));
   let nextIdx = idx === -1 ? 0 : idx + (isDown ? 1 : -1);
   nextIdx = Math.max(0, Math.min(rows.length - 1, nextIdx));
+  const neededPage = Math.floor(nextIdx / INBOX_PAGE_SIZE) + 1;
+  if (neededPage !== inboxPage) { inboxPage = neededPage; renderInboxList(); }
   selectRow(rows[nextIdx].id);
   scrollSelectedIntoView();
 });
@@ -1157,25 +1379,24 @@ function renderAgents() {
   el.querySelectorAll(".agent-card").forEach((card) => card.addEventListener("click", () => openAgentModal(card.getAttribute("data-id"))));
 }
 
+/* Field order: name, campaigns, resource name/link/description, instructions,
+   allowed intents, mode toggle, confidence, Calendly link. Voice examples,
+   extra instructions, and the separate booking-link field are gone from the
+   UI (still tolerated on older agent docs, just not shown or re-saved) -
+   house style lives in DRAFT_SYSTEM's own few-shot examples now, and
+   booking_link is derived server-side from the Calendly link. */
 function agentFormHtml(agent) {
   currentAgentMode = agent.mode === "autopilot" ? "autopilot" : "draft_only";
   currentAgentEnabled = agent.enabled !== false;
   const allowed = new Set(agent.allowed_intents || []);
   const conf = agent.confidence_threshold != null ? Math.round(agent.confidence_threshold * 100) : 90;
-  const voice = (agent.voice_examples || []).join("\n");
+  // instructions is the new field; older agent docs only have pricing_notes.
+  const instructions = agent.instructions != null ? agent.instructions : (agent.pricing_notes || "");
+  const calendlyLink = agent.calendly_event_url || agent.booking_link || "";
   return `
     <div class="field">
       <label>Name</label>
       <input type="text" id="agName" value="${esc(agent.name || "")}" placeholder="e.g. Clay migration setter">
-    </div>
-    <div class="field">
-      <label>Mode</label>
-      <div class="mode-toggle">
-        <button type="button" class="btn ${currentAgentMode === "draft_only" ? "primary" : ""}" id="agModeDraft" data-mode="draft_only">Draft only</button>
-        <button type="button" class="btn ${currentAgentMode === "autopilot" ? "primary" : ""}" id="agModeAuto" data-mode="autopilot">Autopilot</button>
-      </div>
-      <div class="hint">Autopilot sends simple replies itself. Everything unusual still comes to you.</div>
-      <div class="hint">Nothing sends itself until the master switch is on.</div>
     </div>
     <div class="field">
       <label>Campaigns</label>
@@ -1195,9 +1416,9 @@ function agentFormHtml(agent) {
       <textarea id="agResourceDesc" placeholder="1-2 lines: what it is and the value line used to pitch the call">${esc(agent.resource_description || "")}</textarea>
     </div>
     <div class="field">
-      <label>Pricing notes</label>
-      <textarea id="agPricingNotes" placeholder="Paste your exact pricing text here">${esc(agent.pricing_notes || "")}</textarea>
-      <div class="hint">Only answers priced questions with exactly what you write here. Leave empty to always hold pricing questions for review.</div>
+      <label>Instructions - what this agent may share (and what it may not)</label>
+      <textarea id="agInstructions" style="min-height:110px" placeholder="Paste exactly what this agent may quote - pricing, policies, anything factual">${esc(instructions)}</textarea>
+      <div class="hint">What may this agent share, and what must it never promise? It only ever quotes what you write here.</div>
     </div>
     <div class="field">
       <label>What this agent can answer on its own</label>
@@ -1208,6 +1429,15 @@ function agentFormHtml(agent) {
       </div>
     </div>
     <div class="field">
+      <label>Mode</label>
+      <div class="mode-toggle">
+        <button type="button" class="btn ${currentAgentMode === "draft_only" ? "primary" : ""}" id="agModeDraft" data-mode="draft_only">Draft only</button>
+        <button type="button" class="btn ${currentAgentMode === "autopilot" ? "primary" : ""}" id="agModeAuto" data-mode="autopilot">Autopilot</button>
+      </div>
+      <div class="hint">Autopilot sends simple replies itself. Everything unusual still comes to you.</div>
+      <div class="hint">Nothing sends itself until the master switch is on.</div>
+    </div>
+    <div class="field">
       <label>How sure it is</label>
       <div class="slider-row">
         <input type="range" id="agConfidence" min="70" max="99" value="${conf}">
@@ -1216,20 +1446,9 @@ function agentFormHtml(agent) {
       <div class="hint">Below this confidence, replies wait for you.</div>
     </div>
     <div class="field">
-      <label>Booking link</label>
-      <input type="text" id="agBookingLink" value="${esc(agent.booking_link || "https://www.navreo.ai/book-a-call")}">
-    </div>
-    <div class="field">
-      <label>Calendly event URL</label>
-      <input type="text" id="agCalendlyEventUrl" value="${esc(agent.calendly_event_url || "")}" placeholder="https://calendly.com/…">
-    </div>
-    <div class="field">
-      <label>Voice examples</label>
-      <textarea id="agVoiceExamples" style="min-height:110px" placeholder="One example reply per line">${esc(voice)}</textarea>
-    </div>
-    <div class="field">
-      <label>Extra instructions (optional)</label>
-      <textarea id="agExtraInstructions" placeholder="Anything else this agent should know">${esc(agent.extra_instructions || "")}</textarea>
+      <label>Calendly link</label>
+      <input type="text" id="agCalendlyLink" value="${esc(calendlyLink)}" placeholder="https://calendly.com/…">
+      <div class="hint">The call-booking link this agent proposes times from, and falls back to when nothing's free.</div>
     </div>
   `;
 }
@@ -1280,7 +1499,13 @@ function openAgentModal(id) {
   wireAgentModalEvents();
   document.getElementById("agentModalOverlay").classList.add("on");
 }
-function closeAgentModal() { document.getElementById("agentModalOverlay").classList.remove("on"); }
+function closeAgentModal() {
+  document.getElementById("agentModalOverlay").classList.remove("on");
+  // A half-armed "Are you sure? Save" must never survive the modal closing.
+  agentSaveArmed = false;
+  const sb = document.getElementById("agentSaveBtn");
+  if (sb) { sb.textContent = "Save"; sb.classList.remove("danger"); }
+}
 function showAgentModalErr(msg) {
   const el = document.getElementById("agentModalErr");
   el.textContent = msg; el.style.display = "block";
@@ -1319,7 +1544,6 @@ document.getElementById("agentSaveBtn").addEventListener("click", async () => {
   if (document.getElementById("agIntentSend").checked) allowed_intents.push("send_resource");
   if (document.getElementById("agIntentPricing").checked) allowed_intents.push("pricing");
   if (document.getElementById("agIntentScheduling").checked) allowed_intents.push("scheduling");
-  const voice_examples = document.getElementById("agVoiceExamples").value.split("\n").map((s) => s.trim()).filter(Boolean);
   const doc = {
     name,
     mode: currentAgentMode,
@@ -1328,13 +1552,10 @@ document.getElementById("agentSaveBtn").addEventListener("click", async () => {
     resource_name: document.getElementById("agResourceName").value.trim(),
     resource_link: document.getElementById("agResourceLink").value.trim(),
     resource_description: document.getElementById("agResourceDesc").value.trim(),
-    pricing_notes: document.getElementById("agPricingNotes").value,
+    instructions: document.getElementById("agInstructions").value,
     allowed_intents,
     confidence_threshold: Number(document.getElementById("agConfidence").value) / 100,
-    booking_link: document.getElementById("agBookingLink").value.trim(),
-    calendly_event_url: document.getElementById("agCalendlyEventUrl").value.trim(),
-    voice_examples,
-    extra_instructions: document.getElementById("agExtraInstructions").value.trim(),
+    calendly_event_url: document.getElementById("agCalendlyLink").value.trim(),
   };
   if (editingAgentId) doc.id = editingAgentId;
   const btn = document.getElementById("agentSaveBtn");
@@ -1379,6 +1600,10 @@ document.getElementById("agentDeleteBtn").addEventListener("click", async () => 
 });
 
 /* ── Settings ──────────────────────────────────────────── */
+/* Calendly token + work hours only. The "how many working days ahead" field
+   is gone - the slot rule is fixed (earliest available 9-17 slots in the
+   recipient's timezone; the internal search window stays ~10 working days
+   in code, no longer user-facing). */
 function renderSettings() {
   const el = document.getElementById("settingsBody");
   const connected = !!SETTINGS.calendly_connected;
@@ -1398,10 +1623,6 @@ function renderSettings() {
         <input type="number" id="stWorkEnd" min="0" max="23" value="${SETTINGS.work_end != null ? SETTINGS.work_end : 17}">
       </div>
     </div>
-    <div class="field">
-      <label>How many working days ahead to offer call times</label>
-      <input type="number" id="stHorizonDays" min="1" max="30" value="${SETTINGS.horizon_working_days != null ? SETTINGS.horizon_working_days : 5}">
-    </div>
     <div id="settingsErr" class="modal-err" style="display:none"></div>
     <button class="btn primary" id="settingsSaveBtn" type="button">Save settings</button>
   `;
@@ -1412,7 +1633,6 @@ async function saveSettings() {
   const payload = {
     work_start: Number(document.getElementById("stWorkStart").value),
     work_end: Number(document.getElementById("stWorkEnd").value),
-    horizon_working_days: Number(document.getElementById("stHorizonDays").value),
   };
   const token = document.getElementById("stCalendlyToken").value.trim();
   if (token) payload.calendly_token = token;
@@ -1478,25 +1698,28 @@ async function runTryIt() {
 }
 
 /* Rendered with the same building blocks as the inbox detail pane (chips,
-   decision banner, "your reply" card) so a simulated reply looks like the
-   real thing - just without the row id the Send/Regenerate/Dismiss actions
-   need, since a Try-it row is never persisted to the queue. */
+   email-shaped draft, collapsed "How this was decided") so a simulated
+   reply looks like the real thing - just without the row id the
+   Send/Regenerate/Dismiss actions need, since a Try-it row is never
+   persisted to the queue. Shares howDecidedContentHtml with the real detail
+   pane (see there) so the decision + reason is never explained twice or
+   differently in two places. */
 function renderTryItResult(row) {
   const cls = row.classification || {};
-  // Shared with the real inbox detail pane's "How this was decided" (see
-  // howDecidedContentHtml) so a simulated reply is explained the same way a
-  // real one is - no separate logic to keep in sync.
-  const decidedHtml = row.classification ? howDecidedContentHtml(row) : "";
+  const allIntents = cls.all_intents || [];
+  const autoOpen = row.decision === "review" && allIntents.includes("pricing");
   const chips = [`<span class="pill n">${intentLabel(cls.primary_intent)}</span>`];
   if (cls.confidence != null) chips.push(`<span class="pill n">${Math.round(cls.confidence * 100)}% sure</span>`);
   chips.push(`<span class="pill ${row.decision === "auto_send" ? "g" : (row.decision === "review" ? "a" : "n")}">${esc(row.decision || row.status || "")}</span>`);
   return `
     <div class="msg-card" style="border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin:0">
       <div class="qc-chips">${chips.join("")}</div>
-      ${row.decision_reason ? `<div class="warn-banner">${esc(row.decision_reason)}</div>` : ""}
-      ${decidedHtml ? `<div style="margin:10px 0"><div class="small muted" style="margin-bottom:6px">How this was decided</div>${decidedHtml}</div>` : ""}
       <div class="msg-card-lab" style="margin-top:10px">Your reply</div>
       ${row.draft_body ? `<div class="qc-draft">${row.draft_body}</div>` : `<div class="small muted">No draft was generated for this reply.</div>`}
+      ${row.classification ? `<details class="thread-details" style="margin-top:14px" ${autoOpen ? "open" : ""}>
+        <summary>How this was decided</summary>
+        <div class="thread-list">${howDecidedContentHtml(row)}</div>
+      </details>` : ""}
     </div>`;
 }
 

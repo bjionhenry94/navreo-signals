@@ -154,7 +154,7 @@ class FakeSB:
             rows = list(self.agents.values())
             if "id" in params:
                 rows = [r for r in rows if self._match_eq(r["id"], params["id"])]
-            return [{"doc": r["doc"]} for r in rows]
+            return [{"id": r["id"], "doc": r["doc"]} for r in rows]
         if method == "POST":
             self.agents[body["id"]] = {"id": body["id"], "doc": body["doc"]}
             return []
@@ -422,42 +422,32 @@ def test_pick_slots():
     from zoneinfo import ZoneInfo
     now_utc = dt.datetime(2026, 7, 11, 8, 0, tzinfo=dt.timezone.utc)  # a Saturday
     zi = ZoneInfo("Europe/London")
-    cur = now_utc + dt.timedelta(days=1)
-    weekdays = []
-    while len(weekdays) < 6:
-        if cur.weekday() < 5:
-            weekdays.append(cur.date())
-        cur += dt.timedelta(days=1)
 
-    avail = []
-    for d in weekdays:
-        for hour in (8, 9, 10, 13, 16, 17, 18):  # 8/17/18 are out of [9,17)
-            local_dt = dt.datetime(d.year, d.month, d.day, hour, 0, tzinfo=zi)
-            avail.append(local_dt.astimezone(dt.timezone.utc).isoformat())
-    # a Saturday slot that must be filtered out as a weekend
-    sat_date = weekdays[0]
-    while sat_date.weekday() != 5:
-        sat_date += dt.timedelta(days=1)
-    sat_local = dt.datetime(sat_date.year, sat_date.month, sat_date.day, 10, 0, tzinfo=zi)
-    avail.append(sat_local.astimezone(dt.timezone.utc).isoformat())
-    # a too-soon slot (< 20h out) that must be filtered
-    avail.append((now_utc + dt.timedelta(hours=2)).isoformat())
+    def local_slot(d, hour, minute=0):
+        local_dt = dt.datetime(d.year, d.month, d.day, hour, minute, tzinfo=zi)
+        return local_dt.astimezone(dt.timezone.utc).isoformat()
 
-    settings = {"work_start": 9, "work_end": 17, "horizon_working_days": 5,
+    monday = dt.date(2026, 7, 13)
+    wednesday = dt.date(2026, 7, 15)
+    saturday = dt.date(2026, 7, 11)
+
+    settings = {"work_start": 9, "work_end": 17,
                 "_agent": {"calendly_event_url": "https://calendly.com/navreo/book-a-call"},
                 "_lead": {"first_name": "Jane", "last_name": "Doe", "email": "jane@example.com"}}
-    slots = setter.pick_slots(avail, "Europe/London", settings, now_utc)
 
-    check("slots: returns exactly 2", len(slots) == 2, f"got {len(slots)}")
+    # ── earliest-slot rule, case 1: a same-day slot >=2h after the first
+    # qualifying slot exists -> that's the second slot, not a later day's.
+    # Includes an 08:00 (before work_start) and a 17:00 (== work_end, excluded)
+    # to prove the work-hours filter still runs before the earliest-slot pick.
+    avail = [local_slot(monday, 8), local_slot(monday, 9), local_slot(monday, 10),
+            local_slot(monday, 13), local_slot(monday, 17), local_slot(wednesday, 9)]
+    slots = setter.pick_slots(avail, "Europe/London", settings, now_utc)
+    check("slots: returns exactly 2 when a qualifying pair exists", len(slots) == 2, slots)
     if len(slots) == 2:
-        d1 = slots[0]["iso"][:10]
-        d2 = slots[1]["iso"][:10]
-        check("slots: two different days", d1 != d2, f"{d1} vs {d2}")
-        h1 = int(slots[0]["iso"][11:13])
-        h2 = int(slots[1]["iso"][11:13])
-        check("slots: within work hours [9,17)", 9 <= h1 < 17 and 9 <= h2 < 17, f"{h1}, {h2}")
-        check("slots: spread late-morning/mid-afternoon", (h1 < 13) != (h2 < 13) or (10 <= h1 < 13 and 10 <= h2 < 13),
-             f"{h1}, {h2}")
+        check("slots: first slot is the earliest qualifying slot (09:00 Monday, not 08:00)",
+             slots[0]["iso"][:16] == "2026-07-13T09:00", slots)
+        check("slots: second slot is the same-day slot >=2h later (13:00), not Wednesday",
+             slots[1]["iso"][:16] == "2026-07-13T13:00", slots)
         for s in slots:
             check(f"slots: label format for {s['iso']}",
                  all(tok in s["label"] for tok in (" at ", ",")) and any(c.isalpha() for c in s["label"][-4:]),
@@ -467,9 +457,24 @@ def test_pick_slots():
                  "name=Jane%20Doe" in s["link"] and "email=jane%40example.com" in s["link"],
                  s["link"])
 
+    # ── case 2: no same-day slot >=2h after the first -> second slot is the
+    # next available day's earliest slot instead.
+    avail2 = [local_slot(monday, 9), local_slot(monday, 9, 45), local_slot(wednesday, 9)]
+    slots2 = setter.pick_slots(avail2, "Europe/London", settings, now_utc)
+    check("slots: case 2 returns exactly 2", len(slots2) == 2, slots2)
+    if len(slots2) == 2:
+        check("slots: case 2 first slot is still the earliest (Monday 09:00)",
+             slots2[0]["iso"][:16] == "2026-07-13T09:00", slots2)
+        check("slots: case 2 second slot skips the too-close 09:45 and falls to the next day's earliest",
+             slots2[1]["iso"][:16] == "2026-07-15T09:00", slots2)
+
+    # ── case 3: only one qualifying slot total -> a single slot is returned,
+    # never padded out with something outside the rule.
+    slots3 = setter.pick_slots([local_slot(monday, 9)], "Europe/London", settings, now_utc)
+    check("slots: only one qualifying slot -> exactly one slot returned", len(slots3) == 1, slots3)
+
     # weekday-only + 20h-out filters, isolated
-    only_weekend_and_soon = [sat_local.astimezone(dt.timezone.utc).isoformat(),
-                             (now_utc + dt.timedelta(hours=2)).isoformat()]
+    only_weekend_and_soon = [local_slot(saturday, 10), (now_utc + dt.timedelta(hours=2)).isoformat()]
     slots_empty = setter.pick_slots(only_weekend_and_soon, "Europe/London", settings, now_utc)
     check("slots: weekend + too-soon slots both filtered out", slots_empty == [], slots_empty)
 
@@ -484,24 +489,46 @@ def test_lint_draft():
     ctx = {"subject": "Re: hello", "first_name": "Jane", "needs_resource_link": True,
            "resource_link": "https://navreo.notion.site/abc", "slot_status": "ok",
            "slot_links": ["https://calendly.com/x/1"], "slot_labels": ["Monday, 13th July at 10:00 AM BST"],
-           "pricing_notes": "", "thread_text": ""}
-    html_ok = ('Hi Jane, Of course. <a href="https://navreo.notion.site/abc">Here is the breakdown</a> '
-              'Would you be free on <a href="https://calendly.com/x/1">Monday, 13th July at 10:00 AM BST</a>? '
-              'Best, Sam')
+           "instructions": "", "thread_text": ""}
+    # email-shaped (v2): short <div> paragraphs separated by <br>, matching
+    # the real house shape the drafter is now asked to produce.
+    html_ok = ('<div>Hi Jane,</div><br><div>Of course.</div><br>'
+              '<div><a href="https://navreo.notion.site/abc">Here is the breakdown</a></div><br>'
+              '<div>Would you be free on <a href="https://calendly.com/x/1">Monday, 13th July at 10:00 AM BST</a>?</div><br>'
+              '<div>Best,<br>Sam</div>')
 
     ok, reason = setter.lint_draft(html_ok, ctx)
-    check("lint: clean draft passes", ok, reason)
+    check("lint: clean email-shaped draft passes", ok, reason)
 
-    ok, reason = setter.lint_draft(html_ok + " We spoke on the phone — let's talk", ctx)
+    # the OLD (pre-v2) single-line shape must now fail specifically on the
+    # new email-shape check, even though every other check would pass it.
+    single_line = ('Hi Jane, Of course. <a href="https://navreo.notion.site/abc">Here is the breakdown</a> '
+                  'Would you be free on <a href="https://calendly.com/x/1">Monday, 13th July at 10:00 AM BST</a>? '
+                  'Best, Sam')
+    ok, reason = setter.lint_draft(single_line, ctx)
+    check("lint: single-line (no div/br) draft fails the email-shape check",
+         not ok and "formatted like an email" in reason, reason)
+
+    # multiple <div> blocks with no <br> at all should also satisfy the shape
+    # check (3+ blocks = at least 2 gaps between them), per the spec's "or
+    # multiple div/p blocks" clause.
+    div_only = ('<div>Hi Jane,</div><div>Of course.</div>'
+               '<div><a href="https://navreo.notion.site/abc">Here is the breakdown</a></div>'
+               '<div>Would you be free on <a href="https://calendly.com/x/1">Monday, 13th July at 10:00 AM BST</a>?</div>'
+               '<div>Best, Sam</div>')
+    ok, reason = setter.lint_draft(div_only, ctx)
+    check("lint: multiple div blocks with no <br> still passes the email-shape check", ok, reason)
+
+    ok, reason = setter.lint_draft(html_ok + "<br><div>We spoke on the phone — let's talk</div>", ctx)
     check("lint: em dash fails", not ok and "em dash" in reason, reason)
 
-    ok, reason = setter.lint_draft(html_ok + " {{first_name}}", ctx)
+    ok, reason = setter.lint_draft(html_ok + "<br><div>{{first_name}}</div>", ctx)
     check("lint: unfilled placeholder fails", not ok and "placeholder" in reason, reason)
 
     ok, reason = setter.lint_draft(html_ok.replace('href="https://navreo.notion.site/abc"', 'href="https://x.example"'), ctx)
     check("lint: missing resource link fails", not ok and "resource link" in reason, reason)
 
-    ok, reason = setter.lint_draft(html_ok + " call us on 55512 now", ctx)
+    ok, reason = setter.lint_draft(html_ok + "<br><div>call us on 55512 now</div>", ctx)
     check("lint: invented number fails", not ok and "invents a number" in reason, reason)
 
     ok, reason = setter.lint_draft(html_ok.replace("Jane", "Bob"), ctx)
@@ -513,7 +540,7 @@ def test_lint_draft():
     ok, reason = setter.lint_draft("", ctx)
     check("lint: empty draft fails", not ok, reason)
 
-    ok, reason = setter.lint_draft(html_ok.replace('<a href="https://navreo.notion.site/abc">Here is the breakdown</a>', ''),
+    ok, reason = setter.lint_draft(html_ok.replace('<div><a href="https://navreo.notion.site/abc">Here is the breakdown</a></div><br>', ''),
                                    ctx)
     check("lint: resource link entirely absent fails", not ok, reason)
 
@@ -1169,6 +1196,124 @@ def test_ensure_webhooks_second_call_is_noop():
          len(http.smartlead_calls) == calls_after_first, (calls_after_first, len(http.smartlead_calls)))
 
 
+# ── v2: instructions field (with pricing_notes fallback) ───────────────────
+
+def test_agent_instructions_fallback():
+    # a brand-new v2 doc using the `instructions` key directly
+    check("_agent_instructions: reads the new `instructions` key",
+         setter._agent_instructions({"instructions": "Flat $500/mo."}) == "Flat $500/mo.")
+
+    # a legacy doc that only ever had `pricing_notes` still works unchanged
+    check("_agent_instructions: falls back to legacy pricing_notes when instructions is unset",
+         setter._agent_instructions({"pricing_notes": "Flat $400/mo, 2 seats."}) == "Flat $400/mo, 2 seats.")
+
+    # instructions present but blank still falls back to pricing_notes (an
+    # old doc re-saved by the v2 UI with a blank instructions box shouldn't
+    # silently lose its legacy pricing answer)
+    check("_agent_instructions: blank instructions still falls back to pricing_notes",
+         setter._agent_instructions({"instructions": "  ", "pricing_notes": "Flat $400/mo."}) == "Flat $400/mo.")
+
+    # instructions takes priority when both are set (a v2 re-save of an old doc)
+    check("_agent_instructions: non-blank instructions wins over pricing_notes",
+         setter._agent_instructions({"instructions": "New answer.", "pricing_notes": "Old answer."}) == "New answer.")
+
+    check("_agent_instructions: neither key set -> empty string",
+         setter._agent_instructions({}) == "")
+
+    # decide()'s pricing gate: a legacy doc with only pricing_notes (no
+    # `instructions` key at all) still auto-sends a pricing question
+    legacy_agent = {k: v for k, v in AGENT_AUTO.items() if k != "instructions"}
+    legacy_agent["pricing_notes"] = "Flat $500/mo."
+    d, r = setter.decide(_cls("pricing"), legacy_agent, CTX_ALL_GOOD)
+    check("decide: legacy pricing_notes-only agent still auto-sends a pricing question", d == "auto_send", r)
+
+    # decide()'s pricing gate: the new `instructions` field alone (no
+    # pricing_notes at all) also auto-sends
+    v2_agent = {k: v for k, v in AGENT_AUTO.items() if k != "pricing_notes"}
+    v2_agent["instructions"] = "Flat $500/mo, 3 seats included."
+    d, r = setter.decide(_cls("pricing"), v2_agent, CTX_ALL_GOOD)
+    check("decide: v2 instructions-only agent auto-sends a pricing question", d == "auto_send", r)
+
+    # decide()'s pricing gate: both empty -> review, with the v2 reason text
+    empty_agent = {**AGENT_AUTO, "pricing_notes": "", "instructions": ""}
+    d, r = setter.decide(_cls("pricing"), empty_agent, CTX_ALL_GOOD)
+    check("decide: pricing intent with no instructions and no legacy pricing_notes -> review", d == "review", r)
+    check("decide: exact v2 reason text for the empty-instructions pricing gate",
+         r == "Held for review: no instructions cover pricing, so a person should answer.", r)
+
+
+# ── v2: booking_link derived from calendly_event_url ────────────────────────
+
+def test_booking_link_derivation():
+    check("_booking_link: derives from calendly_event_url, trailing slash stripped",
+         setter._booking_link({"calendly_event_url": "https://calendly.com/navreo/book-a-call/"}) ==
+         "https://calendly.com/navreo/book-a-call")
+
+    check("_booking_link: no trailing slash to strip -> unchanged",
+         setter._booking_link({"calendly_event_url": "https://calendly.com/navreo/book-a-call"}) ==
+         "https://calendly.com/navreo/book-a-call")
+
+    check("_booking_link: an explicit legacy booking_link still wins over the derived one",
+         setter._booking_link({"calendly_event_url": "https://calendly.com/navreo/book-a-call",
+                               "booking_link": "https://navreo.ai/book-a-call"}) == "https://navreo.ai/book-a-call")
+
+    check("_booking_link: neither field set -> empty string", setter._booking_link({}) == "")
+
+
+# ── v2: grading page endpoints ──────────────────────────────────────────────
+
+def test_grading_endpoints():
+    sb, http = fresh_setter()
+
+    status, resp = setter.route_grading_get(None)
+    check("grading: GET with nothing stored returns empty cases/answers",
+         status == 200 and resp == {"cases": [], "answers": {}}, resp)
+
+    status, resp = setter.route_grading_answer({"id": "case-1", "decision_ok": True, "reply_ok": False,
+                                                "note": "close but no cigar"})
+    check("grading: answer upsert returns 200 ok", status == 200 and resp.get("ok") is True, resp)
+    check("grading: the answer is stored under its case id",
+         resp.get("answers", {}).get("case-1", {}).get("decision_ok") is True, resp)
+    check("grading: reply_ok and note both persisted",
+         resp.get("answers", {}).get("case-1", {}).get("reply_ok") is False and
+         resp.get("answers", {}).get("case-1", {}).get("note") == "close but no cigar", resp)
+
+    _, resp2 = setter.route_grading_get(None)
+    check("grading: GET reflects the stored answer", resp2.get("answers", {}).get("case-1", {}).get("decision_ok") is True, resp2)
+
+    # a second, different case is additive - both persist
+    setter.route_grading_answer({"id": "case-2", "decision_ok": False, "reply_ok": None, "note": ""})
+    _, resp3 = setter.route_grading_get(None)
+    check("grading: two different cases both persist",
+         set(resp3.get("answers", {}).keys()) == {"case-1", "case-2"}, resp3)
+
+    # re-answering the same case upserts in place rather than duplicating
+    setter.route_grading_answer({"id": "case-1", "decision_ok": False, "reply_ok": True, "note": "actually no"})
+    _, resp4 = setter.route_grading_get(None)
+    check("grading: re-answering the same case id upserts in place, not a duplicate",
+         resp4.get("answers", {}).get("case-1", {}).get("decision_ok") is False and
+         len(resp4.get("answers", {})) == 2, resp4)
+
+    # answer with no id is rejected
+    status5, resp5 = setter.route_grading_answer({"decision_ok": True})
+    check("grading: answer without an id returns 400", status5 == 400, (status5, resp5))
+
+    # reset clears answers only, never the cases list
+    doc = setter._load_grading()
+    doc["cases"] = [{"id": "case-1", "inbound": "hi"}]
+    setter._save_grading(doc)
+    status6, resp6 = setter.route_grading_reset({})
+    check("grading: reset returns 200 ok", status6 == 200 and resp6.get("ok") is True, resp6)
+    _, resp7 = setter.route_grading_get(None)
+    check("grading: reset clears every answer", resp7.get("answers") == {}, resp7)
+    check("grading: reset leaves the stored cases list untouched",
+         resp7.get("cases") == [{"id": "case-1", "inbound": "hi"}], resp7)
+
+    # the reserved __grading__ doc row must never leak into _load_agents()
+    check("grading: the __grading__ doc row never appears in _load_agents()",
+         all(a.get("id") != setter.GRADING_ID for a in setter._load_agents()), setter._load_agents())
+
+
 # ── run everything ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1196,6 +1341,9 @@ if __name__ == "__main__":
     test_ensure_webhooks_adds_one_and_preserves_existing()
     test_ensure_webhooks_dry_run_skips()
     test_ensure_webhooks_second_call_is_noop()
+    test_agent_instructions_fallback()
+    test_booking_link_derivation()
+    test_grading_endpoints()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
