@@ -2020,21 +2020,15 @@ def _cached_read_drafts() -> list:
     return _DRAFTS_READ_SWR.get()
 
 
-def _leads_for_sources(srcs: list) -> list:
-    """Map signal_leads rows for a set of draft sources -> UI lead dicts. One
-    Supabase query for the whole set; local prospect index attached so ✓/✕ work."""
-    if not srcs:
-        return []
-    ids = ",".join(str(d["id"]) for d in srcs)
-    # Column-trimmed select: only the fields the UI (leads tab + list-view activity
-    # chart) actually reads - source_id/pulled_at/campaign_id come via the local
-    # `srcs` join below, so this list is what's pulled straight off each row.
-    # See app/campaigns.html leadRowInner()/velocityChart()/renderList()'s
-    # leads-batch consumer for the read set this mirrors.
-    cols = "source_id,full_name,title,company,domain,linkedin_url,country,icebreaker,email,status,pushed_to,pulled_at"
-    rows = sb_get_all(f"signal_leads?select={cols}&source_id=in.({ids})&order=pulled_at.desc")
-    if not isinstance(rows, list):
-        return []
+# Column-trimmed select: only the fields the UI (leads tab + list-view activity
+# chart) actually reads - source_id/pulled_at/campaign_id come via the local
+# `srcs` join below, so this list is what's pulled straight off each row.
+_LEADS_COLS = "source_id,full_name,title,company,domain,linkedin_url,country,icebreaker,email,status,pushed_to,pulled_at"
+
+
+def _map_lead_rows(rows: list, srcs: list) -> list:
+    """signal_leads rows -> UI lead dicts, with the local prospect index attached
+    so ✓/✕ work. Shared by the full-list and paged fetch paths."""
     by_src = {d["id"]: d for d in srcs}
     out = []
     for r in rows:
@@ -2055,6 +2049,39 @@ def _leads_for_sources(srcs: list) -> list:
             "_sid": r.get("source_id"), "_idx": local[0] if local else None,
         })
     return out
+
+
+def _leads_for_sources(srcs: list) -> list:
+    """Every signal_leads row for a set of draft sources -> UI lead dicts. One
+    Supabase query for the whole set (all pages), newest first."""
+    if not srcs:
+        return []
+    ids = ",".join(str(d["id"]) for d in srcs)
+    rows = sb_get_all(f"signal_leads?select={_LEADS_COLS}&source_id=in.({ids})&order=pulled_at.desc")
+    if not isinstance(rows, list):
+        return []
+    return _map_lead_rows(rows, srcs)
+
+
+def _leads_page_for_campaign(campaign_id: str, offset: int, limit: int) -> list:
+    """ONE page of a campaign's signal_leads, straight from Supabase via a Range
+    request — the Leads tab loads incrementally (offset/limit) so a large
+    campaign never pulls every row at once. Newest first; same row shape as
+    api_leads. Bypasses the all-rows SWR cache on purpose."""
+    campaign_id = str(campaign_id or "")
+    if not campaign_id:
+        return []
+    srcs = [d for d in _cached_read_drafts() if str(d.get("campaign_id")) == campaign_id]
+    if not srcs:
+        return []
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 500))  # hard cap: never let one page pull an unbounded slice
+    ids = ",".join(str(d["id"]) for d in srcs)
+    rows = sb("GET", f"signal_leads?select={_LEADS_COLS}&source_id=in.({ids})&order=pulled_at.desc",
+              headers={"Range-Unit": "items", "Range": f"{offset}-{offset + limit - 1}"})
+    if not isinstance(rows, list):
+        return []
+    return _map_lead_rows(rows, srcs)
 
 
 _LEADS_TTL_S = 30  # mirrors _LEAD_COUNTS_TTL_S - the leads tab/dashboard poll these on every
@@ -9556,11 +9583,14 @@ Reply with ONLY a JSON array of exactly 15 objects, no fences, no commentary:
     err = ""
     for attempt in (1, 2):  # one retry on a malformed reply
         try:
+            # reasoning_effort=low keeps generation well under the Render proxy
+            # timeout (~30-50s vs 90-130s at default), so the whole thing fits in
+            # one synchronous request - no cross-instance job store to go stale.
             r = http_json("POST", "https://api.openai.com/v1/chat/completions",
                           {"Authorization": f"Bearer {key}"},
-                          {"model": "gpt-5-mini",
+                          {"model": "gpt-5-mini", "reasoning_effort": "low",
                            "messages": [{"role": "user", "content": prompt}]},
-                          timeout=180)
+                          timeout=120)
             if r.get("error"):
                 raise RuntimeError(str(r["error"].get("message", r["error"]))[:200])
             text = (r["choices"][0]["message"]["content"] or "").strip()
@@ -10165,7 +10195,14 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/leads":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            return self._json(api_leads((q.get("campaign_id") or [""])[0]))
+            cid = (q.get("campaign_id") or [""])[0]
+            lim = (q.get("limit") or [""])[0]
+            if lim.isdigit():
+                # Leads tab: incremental server-side page (offset/limit). Absent
+                # limit keeps the legacy all-rows path (Overview/velocity/batch).
+                off = (q.get("offset") or ["0"])[0]
+                return self._json(_leads_page_for_campaign(cid, int(off) if off.lstrip("-").isdigit() else 0, int(lim)))
+            return self._json(api_leads(cid))
         if path == "/api/leads-batch":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)

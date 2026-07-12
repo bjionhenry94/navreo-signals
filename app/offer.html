@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v3-guard -->
+<!-- offer-maker-v4-sync-fast -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
@@ -169,40 +169,14 @@ async function generate(){
     catch(_) { return {ok:false, message:(r.status>=502&&r.status<=504)?SLOW_MSG:GENERIC_MSG}; }
   }
   try {
-    let d = null;
-    // The job lives in one server instance's memory. During a deploy the site
-    // briefly runs two instances, so a start on instance A and a poll on
-    // instance B would not find the job ("expired" on the very first poll). If
-    // that happens we just start again - in the normal single-instance steady
-    // state this retry never triggers. Up to 3 start attempts.
-    outer:
-    for(let startAttempt = 0; startAttempt < 3; startAttempt++){
-      const sr = await fetch("/api/offer/start", { method: "POST",
-        headers: {"Content-Type":"application/json"}, body: JSON.stringify({url}) });
-      const sd = await readJson(sr);
-      if(!sr.ok || !sd.ok || !sd.job_id){ throw new Error(sd.message || GENERIC_MSG); }
-      const started = Date.now();
-      let firstPoll = true;
-      while(true){
-        await new Promise(res => setTimeout(res, 3000));
-        if(Date.now() - started > 240000){ throw new Error(SLOW_MSG); }
-        let pr;
-        try {
-          pr = await fetch("/api/offer/result", { method: "POST",
-            headers: {"Content-Type":"application/json"}, body: JSON.stringify({job_id: sd.job_id}) });
-        } catch(_) { continue; }  // transient network blip, keep polling
-        const pd = await readJson(pr);
-        if(pd.status === "running"){ firstPoll = false; continue; }
-        if(!pd.ok){
-          // Job missing on the FIRST poll => instance mismatch during a deploy;
-          // start over on a fresh job. Any later disappearance is a real error.
-          if(firstPoll && /expired/i.test(pd.message || "")){ continue outer; }
-          throw new Error(pd.message || GENERIC_MSG);
-        }
-        d = pd; break outer;
-      }
-    }
-    if(!d){ throw new Error(SLOW_MSG); }
+    // One synchronous request. The model runs at low reasoning effort so the
+    // whole generation finishes in ~30-50s, comfortably inside the Render proxy
+    // timeout. No job id, no polling, no server-side state that could go stale
+    // if the load balancer routes a follow-up to a different instance.
+    const r = await fetch("/api/offer/generate", { method: "POST",
+      headers: {"Content-Type":"application/json"}, body: JSON.stringify({url}) });
+    const d = await readJson(r);
+    if(!r.ok || !d.ok){ throw new Error(d.message || GENERIC_MSG); }
     OFFERS = d.offers; DOMAIN = d.domain;
     render();
   } catch(e) {
