@@ -8053,8 +8053,10 @@ def _deliv_audit_restore():
     from datetime import datetime
     try:
         rows = sb("GET", "deliverability_audit_cache?id=eq.audit&select=blob,ts", prefer="return=representation")
-        with _DELIV_AUDIT_LOCK:  # definitive read (row present or absent) — stop retrying
-            _DELIV_AUDIT["restore_tried"] = True
+        if rows is not None:  # sb() returns None (not an exception) on failure —
+            # only a definitive read (row present or absent) stops the retries
+            with _DELIV_AUDIT_LOCK:
+                _DELIV_AUDIT["restore_tried"] = True
         if rows and isinstance(rows, list) and rows[0].get("blob"):
             ts = rows[0].get("ts") or ""
             epoch = _deliv_iso_epoch(ts)
@@ -8210,8 +8212,9 @@ def _deliv_bundle_restore():
     from datetime import datetime
     try:
         rows = sb("GET", "deliverability_audit_cache?id=eq.bundle&select=blob,ts", prefer="return=representation")
-        with _DELIV_BUNDLE_LOCK:  # definitive read — stop retrying
-            _DELIV_BUNDLE["restore_tried"] = True
+        if rows is not None:  # sb() returns None on failure — see audit restore
+            with _DELIV_BUNDLE_LOCK:
+                _DELIV_BUNDLE["restore_tried"] = True
         if rows and isinstance(rows, list) and rows[0].get("blob"):
             # Belt-and-braces vs the mock-poisoning incident: refuse any
             # persisted bundle stamped mock, whatever wrote it.
@@ -10079,6 +10082,14 @@ class Handler(SimpleHTTPRequestHandler):
             log_activity(path, {"force": force}, action="bundle_refresh",
                          entity="deliverability")
             return self._json(_deliv_bundle_start(force=force))
+        if path.startswith("/api/deliverability/reminder"):
+            # reminder create / reminder-done / reminder-enable-warmup mutate
+            # the reminders the 5-min cache serves — invalidate so the next
+            # GET (page reload right after the click) re-reads live instead
+            # of showing the pre-mutation list for up to 5 minutes
+            self._proxy_deliverability("POST")
+            _restore_plan_invalidate()
+            return
         if path.startswith("/api/deliverability/"):
             return self._proxy_deliverability("POST")
         setter_route = setter.POST_ROUTES.get(path)
