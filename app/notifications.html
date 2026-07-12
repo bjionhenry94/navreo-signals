@@ -317,6 +317,10 @@ tr.var-winner td.var-flagcell { color: var(--green); }
 /* "In progress" status pill (acknowledged) — light blue. Its own class so it
    never touches .pill.a, which is also used by Medium-priority pills. */
 .pill.b { background: #E4EFFC; color: #1F5AA8; }
+/* Done-state Acknowledge button: the button IS the status indicator on cards
+   (the separate status pill was removed), so it keeps the light-blue "In
+   progress" palette instead of the greyed disabled look. */
+.btn.done-ack, .btn.done-ack[disabled] { background: #E4EFFC; color: #1F5AA8; border-color: #E4EFFC; opacity: 1; }
 </style>
 </head>
 <body>
@@ -1030,7 +1034,6 @@ function variantFindingCardHTML(n) {
         <b>${esc(variantFindingLabel(n))}</b> &middot; ${campaignLink(n.campaign_name, ctx.smartlead_url)}
         <span class="ctx">&middot; <span class="jg" title="Client Success Manager — the Navreo team member who manages this client's account, not the client itself.">CSM</span>: ${esc(ctx.client || "Unassigned")} &middot; ${fmt(ctx.sent)} sent, ${fmt(ctx.positive)} pos, ${completion}% complete</span>
       </div>
-      <div class="ab-pills"><span class="ab-status">${statusPillN(n.status)}</span></div>
     </div>
     <div class="ab-verdict-row"><div class="ab-verdict">${esc(n.suggested_action || (n.detail || "").split(". ")[0] || "Review this variant")}</div></div>
     <div class="action-row">
@@ -1272,7 +1275,6 @@ function actionBlockHTML(n) {
       </div>
       <div class="ab-pills">
         ${priorityPill(n.priority)}
-        <span class="ab-status">${statusPillN(n.status)}</span>
       </div>
     </div>
     <div class="ab-verdict-row">
@@ -1304,6 +1306,7 @@ function actionBtn(n, target, label, doneLabel) {
                       (target === "actioned" && n.status === "acknowledged");
   const cls = ["btn", "sm"];
   if (isNextStep && !disabled) cls.push("primary");
+  if (isDone && target === "acknowledged") cls.push("done-ack");
   const text = isDone ? doneLabel : label;
   const tip = STATUS_ACTION_TOOLTIP[target] || label;
   return `<button type="button" class="${cls.join(" ")}" data-nid="${esc(String(n.id))}" data-target="${target}" ${disabled ? "disabled" : ""} title="${esc(tip)}">${esc(text)}</button>`;
