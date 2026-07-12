@@ -1589,14 +1589,16 @@ function scCollectiveHtml(sc, leadCounts, drafts) {
   });
   const tile = (lab, val, sub) => `<div class="sc-tile"><div class="lab">${esc(lab)}</div><div class="val">${val}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
   const ratio = positives > 0 ? `1 per ${fmt(Math.round(sent / positives))}` : `<span class="sc-muted">–</span>`;
+  // Sent / reply-rate / bounce-rate live in the graph above (fleet-wide, daily)
+  // — showing them here too (managed-only, usually 0 for a tool full of drafts)
+  // read as a broken, self-contradicting chart. These tiles carry only the
+  // funnel metrics the graph doesn't: sourced → sent → positive → meetings.
   return `<div class="sc-tiles">
     ${tile("Leads sourced", leadsKnown ? fmt(leads) : "–", "found by your signals")}
-    ${tile("Emails sent", fmt(sent), "across all campaigns")}
+    ${tile("Emails sent", fmt(sent), "from campaigns run here")}
     ${tile("Completion", total ? `${Math.round(scPct(completed, total))}%` : "–", "finished the sequence")}
-    ${tile("Reply rate", sent ? `${scPct(replied, sent).toFixed(2)}%` : "0%", `${fmt(replied)} replies`)}
     ${tile("Sends / positive", ratio, `${fmt(positives)} positive`)}
     ${tile("Meetings", meetingsCovered ? fmt(meetings) : `<span class="sc-muted">–</span>`, meetingsCovered ? "booked" : "source not connected")}
-    ${tile("Bounce rate", sent ? `${scPct(bounced, sent).toFixed(2)}%` : "0%", `${fmt(bounced)} bounced`)}
   </div>`;
 }
 /* Collective trend lines: how the aggregate metrics move over time. Real numbers
@@ -1824,9 +1826,12 @@ async function renderList() {
     </div>
     <div class="card panel" style="margin-top:16px">
       <h2 style="font-size:15px;margin-bottom:2px">Performance</h2>
-      <div class="small muted" style="margin-bottom:10px">Live Smartlead totals across the campaigns managed here, and the fleet's daily send/reply/bounce record from the data layer.</div>
-      <div id="sc-collective"><div class="skel" style="height:70px"></div></div>
-      <div id="perf-chart" style="min-height:240px;margin-top:10px"><div class="skel" style="height:210px"></div></div>
+      <div class="small muted" style="margin-bottom:10px">Emails sent, reply rate and bounce rate per day across <b>every</b> campaign in the account — straight from the data layer.</div>
+      <div id="perf-chart" style="min-height:240px"><div class="skel" style="height:210px"></div></div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <div class="small muted" style="margin-bottom:8px">Totals for the campaigns you run in this tool</div>
+        <div id="sc-collective"><div class="skel" style="height:70px"></div></div>
+      </div>
     </div>
     <div style="margin-top:16px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
@@ -2078,7 +2083,7 @@ async function renderDrafts(campaignId) {
           <div class="small muted">${s.last_pull ? `${s._count_stale ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span>' : `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found`} · last pulled ${pulledAgo(s.last_pull)}` : (s.total ? `<span title="Estimate — not yet pulled; not included in lead totals">~${fmt(s.total)} people expected</span>` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
-          ${s.list_id ? `<a class="btn sm" style="text-decoration:none" href="lists.html#${esc(s.list_id)}" title="Open this source's people as a list in All Files — reuse them in another campaign from there" onclick="event.stopPropagation()">View list ↗</a>` : ""}
+          ${s.list_id ? `<a class="btn sm" style="text-decoration:none" href="lists.html#${esc(s.list_id)}" title="Open this source's people as a list in All Files — reuse them in another campaign from there" onclick="event.stopPropagation();event.preventDefault();location.assign('lists.html#${esc(s.list_id)}')">View list ↗</a>` : ""}
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
           <button class="btn sm primary" onclick="pullProspects('${s.id}','${campaignId}',this)">${s.prospects ? "Find people again" : "Find people now"}</button>
           ${(s.mechanism || s.type) === "engagement" ? "" : `<button class="btn sm" title="Open the setup wizard for this source, prefilled with its current targeting" onclick="editSourceTargeting('${s.id}','${campaignId}')">✎ Edit targeting</button>`}
