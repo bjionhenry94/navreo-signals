@@ -41,11 +41,13 @@
 
 /* ── File browser ──────────────────────────────────────── */
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 14px; }
-.toolbar .search {
+/* search + New Folder live together in the top-right corner of the page head */
+.fb-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.fb-actions .search {
   border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 15px;
   font: 400 13px var(--font-sans); width: 240px; background: transparent; color: var(--ink);
 }
-.toolbar .search:focus { outline: none; box-shadow: var(--focus); }
+.fb-actions .search:focus { outline: none; box-shadow: var(--focus); }
 .toolbar .spacer { flex: 1; }
 
 table.lists-tbl { table-layout: fixed; }
@@ -73,7 +75,9 @@ a.sheet-link:hover { color: var(--orange-700); text-decoration: underline; }
    folder row lights up while it can accept the drop */
 .lists-tbl tr.row-sheet[draggable] { cursor: grab; }
 .lists-tbl tr.row-sheet[draggable]:active { cursor: grabbing; }
-.lists-tbl tr.row-sheet.dragging td { opacity: .45; }
+.lists-tbl tr.row-folder[draggable="true"] .lbl { cursor: grab; }
+.lists-tbl tr.row-sheet.dragging td,
+.lists-tbl tr.row-folder.dragging td { opacity: .45; }
 .lists-tbl tr.row-folder.drop-hover td { background: var(--orange-100);
   box-shadow: inset 0 1.5px 0 var(--orange), inset 0 -1.5px 0 var(--orange); }
 .kebab-btn { background: none; border: none; cursor: pointer; padding: 3px; border-radius: 6px; color: var(--ink-3); display: inline-flex; }
@@ -330,11 +334,10 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
           <div class="eyebrow">Lists</div>
           <h1>All Files</h1>
         </div>
-      </div>
-      <div class="toolbar">
-        <input class="search" id="fbSearch" placeholder="Search lists or clients…">
-        <div class="spacer"></div>
-        <button class="btn primary" id="newFolderBtn">+ New Folder</button>
+        <div class="fb-actions">
+          <input class="search" id="fbSearch" placeholder="Search lists or clients…">
+          <button class="btn primary" id="newFolderBtn">+ New Folder</button>
+        </div>
       </div>
       <div id="filesBody-wrap">
         <table class="tbl lists-tbl">
@@ -947,8 +950,11 @@ function renderFileBrowser() {
     });
     // drop target for list drags: a real sub-folder, or the client root (unfiled)
     const dropKey = folderObj ? `folder:${folderObj.id}` : `root:${label}`;
+    // themed sub-folders drag (to reparent under another client); the top-level
+    // client grouping row isn't a real record, so it's a drop target only.
+    const folderDrag = folderObj ? `draggable="true" data-folder-drag="${esc(folderObj.id)}"` : "";
     return { html: `
-    <tr class="row-folder" data-folder-key="${esc(key)}" data-drop-key="${esc(dropKey)}">
+    <tr class="row-folder" data-folder-key="${esc(key)}" data-drop-key="${esc(dropKey)}" ${folderDrag}>
       <td>
         <div class="row-name" style="padding-left:${depth * 22}px">
           <span class="chev ${isOpen ? "open" : ""}" onclick="toggleFolder('${esc(key)}')">${svgChevron}</span>
@@ -994,86 +1000,144 @@ function toggleFolder(key) {
   renderFileBrowser();
 }
 
-/* ── drag a list row into a folder (or a client root = unfiled) ──────────────
-   Same POST /api/lists/move the "Move to folder…" modal uses. Lists only —
-   folder rows never drag; drops are same-client (a move can't change the
-   list's client column). Optimistic: the row lands immediately, and is put
+/* ── drag rows to reorganise ─────────────────────────────────────────────────
+   A LIST drops into any folder or client root — across clients too, since it
+   adopts the destination's client (POST /api/lists/move, the same the "Move
+   to folder…" modal uses). A themed SUB-FOLDER drops onto a different client's
+   root to move the whole folder there; its lists cascade with it (POST
+   /api/lists/folder/move). Folders can't nest inside folders, so a folder over
+   a sub-folder is refused. Optimistic: the row lands immediately and is put
    back if the API says no. */
-let DRAG_LIST = null; // {id, client, folder_id}
+let DRAG_LIST = null;   // {id, client, folder_id}
+let DRAG_FOLDER = null; // {id, client, name}
 
+/* where a hovered folder row would file the dragged LIST → {folder_id, client, label} | null */
 function dragDropTarget(row) {
   if (!DRAG_LIST || !row) return null;
   const key = row.getAttribute("data-drop-key") || "";
   if (key.startsWith("root:")) {
     const client = key.slice(5);
-    if (client !== DRAG_LIST.client) return null;
     const root = (LISTS_DATA.folders || []).find((f) => f.client === client && f.name === null);
-    if (!DRAG_LIST.folder_id || (root && DRAG_LIST.folder_id === root.id)) return null; // already unfiled
-    return { folder_id: null, label: client };
+    const atThisRoot = DRAG_LIST.client === client &&
+      (!DRAG_LIST.folder_id || (root && DRAG_LIST.folder_id === root.id));
+    if (atThisRoot) return null; // already unfiled under this client
+    return { folder_id: null, client, label: client };
   }
   if (key.startsWith("folder:")) {
     const f = (LISTS_DATA.folders || []).find((x) => x.id === key.slice(7));
-    if (!f || f.client !== DRAG_LIST.client) return null;
-    if (DRAG_LIST.folder_id === f.id) return null;
-    return { folder_id: f.id, label: f.name };
+    if (!f) return null;
+    if (DRAG_LIST.folder_id === f.id && DRAG_LIST.client === f.client) return null;
+    return { folder_id: f.id, client: f.client, label: f.name };
   }
   return null;
+}
+
+/* where a hovered row would move the dragged FOLDER → {client, label} | null.
+   Only a client ROOT of a DIFFERENT client is valid (folders never nest). */
+function folderDropTarget(row) {
+  if (!DRAG_FOLDER || !row) return null;
+  const key = row.getAttribute("data-drop-key") || "";
+  if (!key.startsWith("root:")) return null; // over a sub-folder = nesting, refused
+  const client = key.slice(5);
+  if (client === DRAG_FOLDER.client) return null; // already under this client
+  return { client, label: client };
 }
 
 async function moveListByDrag(listId, t) {
   const l = (LISTS_DATA.lists || []).find((x) => x.id === listId);
   if (!l) return;
-  const prev = l.folder_id || null;
-  l.folder_id = t.folder_id; // optimistic
+  const prevF = l.folder_id || null, prevC = l.client;
+  l.folder_id = t.folder_id; l.client = t.client; // optimistic
+  openFolders.add(`client:${t.client}`);
   if (t.folder_id) openFolders.add(t.folder_id); // show the row landing
   renderFileBrowser();
   protoNote(`Moved to ${t.label}`);
   try {
     const r = await fetch("/api/lists/move", { method: "POST",
-      body: JSON.stringify({ list_id: listId, folder_id: t.folder_id }) });
+      body: JSON.stringify({ list_id: listId, folder_id: t.folder_id, client: t.client }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't move the list");
   } catch (err) {
-    l.folder_id = prev; // revert — the move didn't stick
+    l.folder_id = prevF; l.client = prevC; // revert — the move didn't stick
     renderFileBrowser();
     protoNote(err.message || "Couldn't reach the server — the list was put back", { ms: 4200 });
   }
 }
 
-(function wireListDnD() {
+async function moveFolderByDrag(folderId, t) {
+  const f = (LISTS_DATA.folders || []).find((x) => x.id === folderId);
+  if (!f) return;
+  const prevC = f.client;
+  const kids = (LISTS_DATA.lists || []).filter((l) => l.folder_id === folderId);
+  const prevKidC = kids.map((l) => l.client);
+  f.client = t.client; kids.forEach((l) => { l.client = t.client; }); // optimistic (+ cascade)
+  openFolders.add(`client:${t.client}`); openFolders.add(folderId);
+  renderFileBrowser();
+  protoNote(`Moved to ${t.label}`);
+  try {
+    const r = await fetch("/api/lists/folder/move", { method: "POST",
+      body: JSON.stringify({ folder_id: folderId, client: t.client }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.message || "Couldn't move the folder");
+  } catch (err) {
+    f.client = prevC; kids.forEach((l, i) => { l.client = prevKidC[i]; }); // revert
+    renderFileBrowser();
+    protoNote(err.message || "Couldn't reach the server — the folder was put back", { ms: 4200 });
+  }
+}
+
+(function wireRowDnD() {
   const body = document.getElementById("filesBody");
+  const targetFor = (row) => DRAG_FOLDER ? folderDropTarget(row) : dragDropTarget(row);
   body.addEventListener("dragstart", (e) => {
-    const row = e.target.closest("[data-list-row]");
-    if (!row) return;
-    const l = (LISTS_DATA && LISTS_DATA.lists || []).find((x) => x.id === row.getAttribute("data-list-row"));
-    if (!l) { e.preventDefault(); return; }
-    DRAG_LIST = { id: l.id, client: l.client, folder_id: l.folder_id || null };
-    row.classList.add("dragging");
-    e.dataTransfer.effectAllowed = "move";
-    try { e.dataTransfer.setData("text/plain", l.id); } catch {}
+    const listRow = e.target.closest("[data-list-row]");
+    if (listRow) {
+      const l = (LISTS_DATA && LISTS_DATA.lists || []).find((x) => x.id === listRow.getAttribute("data-list-row"));
+      if (!l) { e.preventDefault(); return; }
+      DRAG_LIST = { id: l.id, client: l.client, folder_id: l.folder_id || null };
+      DRAG_FOLDER = null;
+      listRow.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", l.id); } catch {}
+      return;
+    }
+    const folderRowEl = e.target.closest("[data-folder-drag]");
+    if (folderRowEl) {
+      const f = (LISTS_DATA && LISTS_DATA.folders || []).find((x) => x.id === folderRowEl.getAttribute("data-folder-drag"));
+      if (!f) { e.preventDefault(); return; }
+      DRAG_FOLDER = { id: f.id, client: f.client, name: f.name };
+      DRAG_LIST = null;
+      folderRowEl.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", f.id); } catch {}
+    }
   });
   body.addEventListener("dragend", () => {
-    DRAG_LIST = null;
+    DRAG_LIST = null; DRAG_FOLDER = null;
     body.querySelectorAll(".dragging, .drop-hover").forEach((x) => x.classList.remove("dragging", "drop-hover"));
   });
   body.addEventListener("dragover", (e) => {
     const row = e.target.closest("[data-drop-key]");
     body.querySelectorAll(".drop-hover").forEach((x) => { if (x !== row) x.classList.remove("drop-hover"); });
-    if (!row || !dragDropTarget(row)) return;
-    e.preventDefault(); // this folder can take the drop
+    if (!row || !targetFor(row)) return;
+    e.preventDefault(); // this row can take the drop
     e.dataTransfer.dropEffect = "move";
     row.classList.add("drop-hover");
   });
   body.addEventListener("drop", (e) => {
     const row = e.target.closest("[data-drop-key]");
     if (!row) return;
-    const t = dragDropTarget(row);
+    const t = targetFor(row);
     if (!t) return;
     e.preventDefault();
     row.classList.remove("drop-hover");
-    const id = DRAG_LIST.id;
-    DRAG_LIST = null;
-    moveListByDrag(id, t);
+    if (DRAG_FOLDER) {
+      const id = DRAG_FOLDER.id; DRAG_FOLDER = null;
+      moveFolderByDrag(id, t);
+    } else if (DRAG_LIST) {
+      const id = DRAG_LIST.id; DRAG_LIST = null;
+      moveListByDrag(id, t);
+    }
   });
 })();
 

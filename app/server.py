@@ -2893,8 +2893,73 @@ def _lists_patch(list_id, patch: dict) -> tuple:
 
 
 def lists_move(p: dict) -> tuple:
-    # folder_id null/absent = unfiled (back under the client root)
-    return _lists_patch(p.get("list_id"), {"folder_id": p.get("folder_id") or None})
+    # folder_id null/absent = unfiled (back under the client root). An optional
+    # `client` lets drag-and-drop move a list ACROSS clients (dropping it onto
+    # another client's folder or root row): the file browser groups by
+    # lists.client, so the list must adopt the destination's client to stay
+    # visible under — and travel with — that folder.
+    patch = {"folder_id": p.get("folder_id") or None}
+    if str(p.get("client") or "").strip():
+        patch["client"] = str(p.get("client")).strip()
+    return _lists_patch(p.get("list_id"), patch)
+
+
+def lists_folder_move(p: dict) -> tuple:
+    """POST /api/lists/folder/move — reparent a themed sub-folder under a
+    different client's root. That's the only meaningful folder move: folders
+    live at exactly one level (client root -> theme), so a folder can't nest
+    inside another folder, only change which client it belongs to. Sets the
+    folder's client + parent_id and CASCADES the new client onto every list
+    filed in it, so the browser (which groups by lists.client) keeps the folder
+    and its contents together. Client ROOT folders (name IS NULL) can't move."""
+    folder_id = p.get("folder_id")
+    target = str(p.get("client") or "").strip()
+    if not folder_id:
+        return 400, {"ok": False, "message": "folder_id is required"}
+    if not target:
+        return 400, {"ok": False, "message": "a destination client is required"}
+    existing = sb("GET", f"list_folders?id=eq.{folder_id}&select=id,client,name")
+    if existing is None:
+        return 503, _LISTS_DB_DOWN
+    if not isinstance(existing, list) or not existing:
+        return 404, {"ok": False, "message": "folder not found"}
+    folder = existing[0]
+    if folder.get("name") is None:
+        return 400, {"ok": False, "message": "Client root folders can't be moved."}
+    if folder.get("client") == target:
+        return 200, {"ok": True}  # already under this client — nothing to do
+    # find (or create) the destination client's root folder to parent under.
+    # Fetch all roots and match in Python so an arbitrary client name never has
+    # to be URL-encoded into a PostgREST filter.
+    roots = sb("GET", "list_folders?name=is.null&select=id,client")
+    if not isinstance(roots, list):
+        return 503, _LISTS_DB_DOWN
+    root = next((r for r in roots if r.get("client") == target), None)
+    root_id = root.get("id") if root else None
+    if not root_id:
+        made = sb("POST", "list_folders",
+                  {"client": target, "name": None, "parent_id": None},
+                  prefer="return=representation")
+        err = _lists_sb_error(made)
+        if err:
+            return 400, {"ok": False, "message": err[:300]}
+        if not isinstance(made, list) or not made:
+            return 502, _LISTS_DB_DOWN
+        root_id = made[0].get("id")
+    res = sb("PATCH", f"list_folders?id=eq.{folder_id}",
+             {"client": target, "parent_id": root_id},
+             prefer="return=representation")
+    if _lists_is_duplicate_error(res):
+        return 400, {"ok": False,
+                     "message": f"A folder named '{folder.get('name')}' already exists under {target}."}
+    err = _lists_sb_error(res)
+    if err:
+        return 400, {"ok": False, "message": err[:300]}
+    if not isinstance(res, list) or not res:
+        return 404, {"ok": False, "message": "folder not found"}
+    # cascade the new client onto the folder's lists so they move with it.
+    sb("PATCH", f"lists?folder_id=eq.{folder_id}", {"client": target})
+    return 200, {"ok": True}
 
 
 def lists_touch(p: dict) -> tuple:
@@ -3430,6 +3495,7 @@ LISTS_POST_ROUTES = {
     "/api/lists/folder": lists_create_folder,
     "/api/lists/folder/rename": lists_folder_rename,
     "/api/lists/folder/delete": lists_folder_delete,
+    "/api/lists/folder/move": lists_folder_move,
     "/api/lists/move": lists_move,
     "/api/lists/touch": lists_touch,
     "/api/lists/rows/delete": lists_rows_delete,
