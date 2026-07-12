@@ -12,6 +12,7 @@ CHECK_LABELS = {
     "normalisation": "Name & company cleaning",
     "variable_fill": "Email variables filled",
     "recontact": "Already contacted / suppressed",
+    "cross_campaign": "Cross-campaign collisions",
     "email_verification": "Email deliverability",
 }
 FIELD_LABELS = {
@@ -30,6 +31,7 @@ FIX_MODE = {
     "normalisation": "click",    # one-click apply the suggested clean value
     "variable_fill": "none",     # icebreakers come from the icebreaker skills, not typing
     "recontact": "none",
+    "cross_campaign": "none",
     "email_verification": "none",
 }
 PILL = {"PASS": "g", "FAIL": "r", "OVERRIDDEN": "a", "RESOLVED": "g"}
@@ -69,6 +71,15 @@ def humanise(f):
             lines = [f"“{e['campaign'].strip()}” ({e.get('client','?')}) — {_date(e.get('first_contacted_at'))}"
                      for e in entries]
             head = f"Already emailed in {len(entries)} campaign{'s' if len(entries) > 1 else ''}: "
+            return head + " · ".join(lines), None
+        except (ValueError, KeyError, TypeError):
+            return d, None
+    if check == "cross_campaign":
+        try:
+            entries = json.loads(d)
+            lines = [f"“{e['campaign'].strip()}” ({e.get('client', '?')}) — last sent {_date(e.get('last_sent'))}"
+                     for e in entries]
+            head = f"Also active in {len(entries)} other campaign{'s' if len(entries) > 1 else ''}: "
             return head + " · ".join(lines), None
         except (ValueError, KeyError, TypeError):
             return d, None
