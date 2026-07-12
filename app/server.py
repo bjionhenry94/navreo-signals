@@ -9058,34 +9058,44 @@ def auth_login(email: str, password: str):
 # block the app) and hard rate-limited below. Nothing about the visitor or
 # their URL is persisted — stdout only.
 
-OFFER_RL_PER_IP_HOUR = 10
-OFFER_RL_GLOBAL_DAY = 200
+OFFER_RL_PER_IP_HOUR = 10       # successful generations (LLM calls) per IP per hour
+OFFER_RL_ATTEMPTS_HOUR = 30     # any request per IP per hour (typos don't burn generations)
+OFFER_RL_GLOBAL_DAY = 200       # generations per UTC day across all visitors
 _OFFER_RL_LOCK = threading.Lock()
-_OFFER_RL_IP: dict = {}                    # ip -> [timestamps within last hour]
-_OFFER_RL_DAY = {"date": "", "count": 0}   # global daily counter (UTC date)
+_OFFER_RL_IP: dict = {}                    # ip -> {"gen": [ts], "try": [ts]}
+_OFFER_RL_DAY = {"date": "", "count": 0}   # global daily generation counter (UTC date)
 
 
-def _offer_rate_check(ip: str):
-    """Debit one generation for this ip. Returns a plain-English refusal
-    message if over either cap, else None."""
+def _offer_rate_check(ip: str, kind: str):
+    """kind='try' debits one attempt (checked before the site fetch); kind='gen'
+    debits one generation (checked only once the site fetched OK, right before
+    the LLM call - a typo'd URL never burns a generation). Returns a
+    plain-English refusal message if over the relevant cap, else None."""
     now = time.time()
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     with _OFFER_RL_LOCK:
         if _OFFER_RL_DAY["date"] != today:
             _OFFER_RL_DAY["date"], _OFFER_RL_DAY["count"] = today, 0
-        if _OFFER_RL_DAY["count"] >= OFFER_RL_GLOBAL_DAY:
-            return ("The offer maker has hit its daily limit. "
-                    "Please come back tomorrow, or email us and we'll run it for you.")
-        hits = [t for t in _OFFER_RL_IP.get(ip, []) if now - t < 3600]
-        if len(hits) >= OFFER_RL_PER_IP_HOUR:
-            return ("You've generated offers 10 times in the last hour, which is the limit. "
-                    "Please wait a little while and try again.")
-        hits.append(now)
-        _OFFER_RL_IP[ip] = hits
+        rec = _OFFER_RL_IP.setdefault(ip, {"gen": [], "try": []})
+        rec["gen"] = [t for t in rec["gen"] if now - t < 3600]
+        rec["try"] = [t for t in rec["try"] if now - t < 3600]
+        if kind == "try":
+            if len(rec["try"]) >= OFFER_RL_ATTEMPTS_HOUR:
+                return ("Too many tries from your connection in the last hour. "
+                        "Please wait a little while and try again.")
+            rec["try"].append(now)
+        else:
+            if _OFFER_RL_DAY["count"] >= OFFER_RL_GLOBAL_DAY:
+                return ("The offer maker has hit its daily limit. "
+                        "Please come back tomorrow, or email us and we'll run it for you.")
+            if len(rec["gen"]) >= OFFER_RL_PER_IP_HOUR:
+                return ("You've generated offers 10 times in the last hour, which is the limit. "
+                        "Please wait a little while and try again.")
+            rec["gen"].append(now)
+            _OFFER_RL_DAY["count"] += 1
         if len(_OFFER_RL_IP) > 5000:  # bound memory on a public endpoint
-            _OFFER_RL_IP.clear(); _OFFER_RL_IP[ip] = hits
-        _OFFER_RL_DAY["count"] += 1
+            keep = _OFFER_RL_IP[ip]; _OFFER_RL_IP.clear(); _OFFER_RL_IP[ip] = keep
     return None
 
 
@@ -9162,13 +9172,16 @@ def _offer_scrub(s: str) -> str:
 
 def offer_generate(p: dict, ip: str):
     """Returns (status, body). Real errors, no fallback catalogue."""
-    refusal = _offer_rate_check(ip)
+    refusal = _offer_rate_check(ip, "try")
     if refusal:
         return 429, {"ok": False, "message": refusal}
     try:
         site = _offer_fetch_site(p.get("url") or "")
     except ValueError as e:
         return 400, {"ok": False, "message": str(e)}
+    refusal = _offer_rate_check(ip, "gen")
+    if refusal:
+        return 429, {"ok": False, "message": refusal}
     key = KEYS.get("OPENAI_API_KEY")
     if not key:
         return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
