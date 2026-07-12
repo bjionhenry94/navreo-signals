@@ -71,6 +71,12 @@
 
 .grade-lead-line { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 12px; }
 
+/* First email = quiet context (sunken); their reply = the thing to judge. */
+.grade-first { background: var(--bg-sunken); }
+.grade-first .grade-msg { max-height: 220px; overflow-y: auto; }
+.grade-their-reply { border-color: var(--line-2); }
+.grade-first-missing .grade-msg { font-size: 13px; }
+
 .grade-relearn-banner {
   font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin: 0 0 12px; background: var(--bg-sunken); color: var(--ink-2);
 }
@@ -260,18 +266,45 @@ function leadContextLine(c) {
 
 /* Earlier messages in the thread, chronological, oldest first (matches the
    order case.thread is stored in), each line labelled You/Them. */
-function renderThread(thread) {
-  if (!thread || !thread.length) return "";
-  const rows = thread.map((m) => {
+function renderThread(c) {
+  const thread = c.thread || [];
+  if (!thread.length) return "";
+  // The first email and the current reply are already shown as their own
+  // cards - keep only the middle messages here, so nothing is repeated.
+  const key = (s) => String(s || "").replace(/\s+/g, " ").trim().slice(0, 80).toLowerCase();
+  const firstKey = key(c.first_email);
+  const replyKey = key(c.inbound);
+  const middles = thread.filter((m) => {
+    const k = key(m.email_body || m.body);
+    return k && k !== firstKey && k !== replyKey;
+  });
+  if (!middles.length) return "";
+  const rows = middles.map((m) => {
     const who = String(m.type || "").toUpperCase() === "SENT" ? "You" : "Them";
     const body = esc(String(m.email_body || m.body || "")).replace(/\n/g, "<br>");
     return `<div class="grade-thread-msg"><b>${who}:</b> ${body || "<i>No message text.</i>"}</div>`;
   }).join("");
   return `
     <details class="grade-thread">
-      <summary>Earlier in this thread</summary>
+      <summary>Other messages in this thread</summary>
       <div class="grade-thread-body">${rows}</div>
     </details>`;
+}
+
+/* The original outreach this reply is answering - shown prominently so the
+   call ("sure send it" / "what's the price") can actually be judged. */
+function renderFirstEmail(c) {
+  const fe = String(c.first_email || "").trim();
+  if (!fe) {
+    return `<div class="grade-card grade-first-missing">
+      <div class="grade-lab">The email we sent them</div>
+      <div class="grade-msg muted"><i>The original email could not be loaded for this one.</i></div>
+    </div>`;
+  }
+  return `<div class="grade-card grade-first">
+    <div class="grade-lab">The email we sent them</div>
+    <div class="grade-msg">${esc(fe).replace(/\n/g, "<br>")}</div>
+  </div>`;
 }
 
 function renderCase() {
@@ -291,9 +324,10 @@ function renderCase() {
     <div class="grade-progress">Case ${idx + 1} of ${total} &middot; ${answeredCount} of ${total} answered</div>
     <div class="grade-lead-line">${leadContextLine(c)}</div>
     ${renderRelearnBanner()}
-    ${renderThread(c.thread)}
-    <div class="grade-card">
-      <div class="grade-lab">Their message</div>
+    ${renderFirstEmail(c)}
+    ${renderThread(c)}
+    <div class="grade-card grade-their-reply">
+      <div class="grade-lab">Their reply</div>
       <div class="grade-msg">${esc(c.inbound || "").replace(/\n/g, "<br>") || "<i>No message text.</i>"}</div>
     </div>
     <div class="grade-call ${call.cls}">${esc(call.text)}${updatedTag}</div>

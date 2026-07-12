@@ -98,7 +98,7 @@ def main():
         campaign_id = row.get("smartlead_campaign_id")
         msg_id = str(row.get("smartlead_message_id") or "")
         body = setter.clean_body(row.get("reply_body") or "")
-        first, last, thread, last_outbound = "", "", [], ""
+        first, last, thread, last_outbound, first_outbound = "", "", [], "", ""
         hydrated = False
         if hydrate and campaign_id and email:
             ok, hyd, herr = setter.hydrate_lead(campaign_id, email, msg_id)
@@ -111,6 +111,7 @@ def main():
                 first = hyd.get("first_name") or ""
                 last = hyd.get("last_name") or ""
                 thread = hyd.get("thread") or []
+                first_outbound = hyd.get("first_outbound") or ""
                 body = setter.clean_body(hyd.get("reply_email_body") or "") or body
                 for m in reversed(thread):
                     if str(m.get("type") or "").upper() == "SENT":
@@ -120,7 +121,7 @@ def main():
                 print(f"  case {i:02d} hydration miss ({herr}) - using archive data")
         try:
             cls = setter.classify({"subject": row.get("reply_subject") or "", "body": body,
-                                   "last_outbound": last_outbound}, agent)
+                                   "last_outbound": last_outbound, "first_outbound": first_outbound}, agent)
         except Exception as e:  # noqa: BLE001
             print(f"  case {i:02d}: classify failed {e}")
             continue
@@ -142,7 +143,8 @@ def main():
         lint_ok, lint_reason = False, "No draft was produced."
         if not is_clear_neg:
             try:
-                d = setter.draft_reply({"first_name": first, "subject": row.get("reply_subject") or "", "body": body},
+                d = setter.draft_reply({"first_name": first, "subject": row.get("reply_subject") or "", "body": body,
+                                        "first_outbound": first_outbound},
                                        agent, cls, slots, st, sender_first="Bjion")
                 draft_html = d.get("html")
                 lint_ok, lint_reason = setter.lint_draft(draft_html, {
@@ -167,13 +169,14 @@ def main():
         cases.append({
             "id": f"case-{i:02d}", "bucket": row.get("bucket"), "inbound": body[:1200],
             "lead_first_name": first, "company_domain": domain, "hydrated": hydrated,
-            "thread": thread[-4:],
+            "thread": thread[-4:], "first_email": first_outbound,
             "category": row.get("category"), "intent": primary,
             "confidence": cls.get("confidence"), "decision": decision, "reason": reason,
             "draft_html": draft_html, "would_auto": decision == "auto_send",
             "_ctx": {"category": row.get("category"), "timezone": tz, "slot_status": st,
                       "body_len": len(body), "same_day_ask": ctx["same_day_ask"],
-                      "subject": row.get("reply_subject") or "", "last_outbound": last_outbound},
+                      "subject": row.get("reply_subject") or "", "last_outbound": last_outbound,
+                      "first_outbound": first_outbound},
         })
         print(f"  case {i:02d} [{row.get('bucket')}] {'HYD' if hydrated else 'arc'} -> {decision} ({primary})")
 

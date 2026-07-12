@@ -692,6 +692,7 @@ red_flags: list any hostile/legal/opt-out language you notice (a second determin
 timezone_guess: an IANA tz name if the reply or signature strongly implies one (city, area code, country), else null. tz_confidence 0 to 1.
 wants: one plain-English line - what the lead is actually asking for.
 rationale: one line - why you chose this intent.
+original_outreach is the first email we sent this lead - the offer their reply is answering. ALWAYS read it first: it tells you what "sure", "send it", "yes please", "how much", or "not interested" actually refers to. A bare "yes" is only a simple send_resource ask when the outreach (or last_outbound) offered exactly that one thing; if the outreach pitched a call, "yes" is scheduling; if it asked a question, "yes" answers that question and may need a person. When original_outreach is empty, judge from the reply alone and lean toward review on anything ambiguous.
 owner_corrections, when present, are standing corrections the business owner has given while reviewing this tool's calls - apply them faithfully when judging intent and simple_ask (they refine, never loosen, the safety rules above).
 
 Replies in ANY language get the same rules ("Oui pourquoi ne pas essayer, mais je n'ai pas encore le site web" contains a caveat - simple_ask=false). If you cannot fully understand the reply, simple_ask=false.
@@ -717,6 +718,9 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
     payload = {
         "reply_subject": reply.get("subject") or "",
         "reply_body": (reply.get("body") or "")[:4000],
+        # the ORIGINAL outreach this is a reply to - the offer/pitch that gives
+        # "sure, send it" / "what's the price" / "not for us" their meaning
+        "original_outreach": (reply.get("first_outbound") or "")[:1500],
         # the last message WE sent before this reply - lets the model resolve
         # a bare "Yes" against what was actually offered
         "last_outbound": (reply.get("last_outbound") or "")[:800],
@@ -777,6 +781,7 @@ Rules:
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
 - Match the tone of the two examples above.
+- original_outreach is the first email we sent this lead. Keep the reply consistent with what it actually offered - answer the thing they were pitched, and echo the lead's own wording where natural, so the message reads like a real continuation of that thread, not a generic template.
 - reviewer_feedback, when present, is the human reviewer's instruction for THIS regeneration ("shorter", "don't offer times", "mention the guide is free") - follow it faithfully while keeping every rule above. It never overrides the never-invent rules.
 - Output STRICT JSON: {"subject": "...", "html": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
 
@@ -792,6 +797,7 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     payload = {
         "lead_first_name": reply.get("first_name") or "there",
         "original_subject": reply.get("subject") or "",
+        "original_outreach": (reply.get("first_outbound") or "")[:1500],
         "reply_body": (reply.get("body") or "")[:3000],
         "wants": classification.get("wants") or "",
         "primary_intent": classification.get("primary_intent") or "",
@@ -910,6 +916,12 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
             name = sent[-1].get("from_name") or ""
             sender_first = name.split()[0] if name else ""
 
+        # The FIRST email we sent this lead - the original outreach that their
+        # reply is answering. Without it, "sure, send it" / "what's the price"
+        # are un-interpretable. Taken from the full history (not the truncated
+        # thread window), so it survives even on a deep sequence.
+        first_outbound = clean_body(sent[0].get("body") or "")[:1500] if sent else ""
+
         # Was this reply already answered in the thread (by a person in
         # Smartlead, or an earlier run)? If so the pipeline must not draft
         # over them, and must never double-reply.
@@ -936,6 +948,7 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
             "thread": norm[-6:],
             "sender_first": sender_first,
             "answered_since_reply": answered_since_reply,
+            "first_outbound": first_outbound,
         }, ""
     except Exception as e:  # noqa: BLE001 - a hydration crash must degrade to review, never kill the run
         return False, {}, f"Couldn't load the Smartlead thread ({type(e).__name__})."
@@ -1347,6 +1360,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     sender_first = reply.get("sender_first") or ""
     hydrated = True
     answered_since_reply = False
+    first_outbound = reply.get("first_outbound") or ""
     if not is_test:
         ok, hyd, herr = hydrate_lead(campaign_id, email, message_id)
         if not ok:
@@ -1367,6 +1381,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         row["lead_last_name"] = hyd.get("last_name") or row["lead_last_name"]
         sender_first = hyd.get("sender_first") or sender_first
         answered_since_reply = bool(hyd.get("answered_since_reply"))
+        first_outbound = hyd.get("first_outbound") or first_outbound
         # Hydration can resolve a different (real) message id than the one we
         # claimed under. If another row already owns the real key, the other
         # intake path (webhook vs poll) got here first - stand down rather
@@ -1392,6 +1407,14 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         if str(m.get("type") or "").upper() == "SENT":
             last_outbound = _TAG_RE.sub(" ", str(m.get("body") or ""))[:800]
             break
+    # the FIRST email we sent - the original pitch this reply is answering.
+    # Hydration provides it from the full history; fall back to the earliest
+    # SENT in whatever thread we have (test-inject rows may carry one).
+    if not first_outbound:
+        for m in (row.get("thread") or []):
+            if str(m.get("type") or "").upper() == "SENT":
+                first_outbound = clean_body(str(m.get("body") or ""))[:1500]
+                break
 
     # timezone hints
     comp_hints = _company_hints(domain)
@@ -1405,9 +1428,11 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
 
     lex_hits = lexicon_hits(body_text)
 
+    row["first_outbound"] = first_outbound
     try:
         classification = classify({"subject": row["reply_subject"], "body": body_text,
-                                   "last_outbound": last_outbound}, agent)
+                                   "last_outbound": last_outbound,
+                                   "first_outbound": first_outbound}, agent)
     except Exception as e:  # noqa: BLE001 - a classify outage must degrade to review, never crash
         classification = {
             "primary_intent": None, "all_intents": [], "simple_ask": False, "confidence": 0.0,
@@ -1466,7 +1491,8 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     if not is_clear_negative:
         try:
             d = draft_reply(
-                {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text},
+                {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text,
+                 "first_outbound": first_outbound},
                 agent, classification, slots, slot_status, sender_first)
             draft_subject, draft_body = d.get("subject"), d.get("html")
         except Exception as e:  # noqa: BLE001 - a draft outage falls back to no draft -> lint fails -> review
@@ -2148,10 +2174,12 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
     try:
         ctx_src = case.get("_ctx") or {}
         inbound = case.get("inbound") or ""
+        first_outbound = ctx_src.get("first_outbound") or case.get("first_email") or ""
         reply_for_classify = {
             "subject": ctx_src.get("subject") or "",
             "body": inbound,
             "last_outbound": ctx_src.get("last_outbound") or "",
+            "first_outbound": first_outbound,
         }
         cls = classify(reply_for_classify, agent_snapshot, owner_hints=digest)
 
@@ -2174,7 +2202,7 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
             try:
                 d = draft_reply(
                     {"first_name": case.get("lead_first_name") or "", "subject": ctx_src.get("subject") or "",
-                     "body": inbound},
+                     "body": inbound, "first_outbound": first_outbound},
                     agent_snapshot, cls, slots, slot_status, sender_first="Bjion", regen_feedback=digest)
                 draft_html = d.get("html")
                 lint_ok, lint_reason = lint_draft(draft_html, {
