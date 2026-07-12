@@ -8980,9 +8980,10 @@ def api_restore_live(p: dict):
 AUTH_COOKIE = "navreo_session"
 AUTH_SESSION_DAYS = 30
 
-_AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css"}
+_AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
+                    "/app/offer.html"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
-_AUTH_PUBLIC_POST = {"/api/auth/login",
+_AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
@@ -9048,6 +9049,198 @@ def auth_login(email: str, password: str):
         return True, "ok"
     msg = (data or {}).get("error_description") or (data or {}).get("msg") or ""
     return False, "Wrong email or password." if "credentials" in msg.lower() else (msg or "Login failed.")
+
+
+# ── Offer Maker (public page /app/offer.html) ────────────────────────────────
+# POST /api/offer/generate: fetch the visitor's website homepage, generate
+# 12-18 cold-email offer ideas via gpt-5-mini. PUBLIC endpoint, so it is
+# special-cased in do_POST (outside drafts_lock — a slow public call must never
+# block the app) and hard rate-limited below. Nothing about the visitor or
+# their URL is persisted — stdout only.
+
+OFFER_RL_PER_IP_HOUR = 10
+OFFER_RL_GLOBAL_DAY = 200
+_OFFER_RL_LOCK = threading.Lock()
+_OFFER_RL_IP: dict = {}                    # ip -> [timestamps within last hour]
+_OFFER_RL_DAY = {"date": "", "count": 0}   # global daily counter (UTC date)
+
+
+def _offer_rate_check(ip: str):
+    """Debit one generation for this ip. Returns a plain-English refusal
+    message if over either cap, else None."""
+    now = time.time()
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with _OFFER_RL_LOCK:
+        if _OFFER_RL_DAY["date"] != today:
+            _OFFER_RL_DAY["date"], _OFFER_RL_DAY["count"] = today, 0
+        if _OFFER_RL_DAY["count"] >= OFFER_RL_GLOBAL_DAY:
+            return ("The offer maker has hit its daily limit. "
+                    "Please come back tomorrow, or email us and we'll run it for you.")
+        hits = [t for t in _OFFER_RL_IP.get(ip, []) if now - t < 3600]
+        if len(hits) >= OFFER_RL_PER_IP_HOUR:
+            return ("You've generated offers 10 times in the last hour, which is the limit. "
+                    "Please wait a little while and try again.")
+        hits.append(now)
+        _OFFER_RL_IP[ip] = hits
+        if len(_OFFER_RL_IP) > 5000:  # bound memory on a public endpoint
+            _OFFER_RL_IP.clear(); _OFFER_RL_IP[ip] = hits
+        _OFFER_RL_DAY["count"] += 1
+    return None
+
+
+# Verbatim offer lines that actually drove positive replies (mined from the
+# Supabase reply archive 2026-07-12; identities swapped for placeholders, copy
+# untouched). Used as few-shot examples so generated offers sound like winners.
+OFFER_WINNING_EXAMPLES = """\
+1. "If it fits, we can build or run it for you guaranteeing 30 qualified leads in 90 days or we refund you." (guarantee + full refund; 30+ positive replies)
+2. "You only pay after we've built it, so zero upfront amount." (pay after result; 12 positive replies)
+3. "If it's useful, we run it for you on a pay-per-lead basis." (pay per result; 6 positive replies)
+4. "If it lands, we can run it for you on a pay-per-lead basis, so you only pay for the leads we deliver." (pay per result, spelled out; 4 positive replies)
+5. "You only pay once sales come through, so nothing out of pocket to start." (pay per result; 10 positive replies)
+6. "I'd happily put together a mood board, a render, and a sourcing snapshot, and have it back within 48 hours, no charge or commitment." (free sample; 38 positive replies, the single best line mined)
+7. "I've compiled a breakdown showing how we're using Claude Code to almost replace Clay in our outbound, reducing cost and complexity while improving results. Want me to send it across?" (free resource + ask-to-send CTA; 59 positive replies across variants)
+8. "We've put together a quick breakdown of the exact campaigns we'd run to get {{company}} 30 qualified leads a month." (free custom sample; 7 positive replies)
+9. "I recorded a Loom for {{company}} showing what we'd build to help you land more clients." (Loom CTA; 30+ positive replies)
+10. "If we could build you an AI lead-generation engine that added 30+ qualified leads every month, without needing to hire a BDR team, would you be interested?" (problem + differentiator in one question; 12 positive replies)
+11. "Most SaaS leaders we speak to find hiring and ramping SDRs burns months and budget before any pipeline shows up." (high-consequence problem statement; 6 positive replies)
+12. "If we could help {{company}} book your sales team meetings with facility and property managers needing building services, and I showed you exactly how through a 2-minute video, would you be keen to see it?" (named buyer type + video CTA; 4 positive replies)"""
+
+OFFER_FIELDS = ("name", "problem", "differentiator", "pricing", "risk_reversal",
+                "risk_reversal_type", "stipulation", "opener", "why_cold_email")
+OFFER_RISK_TYPES = ("pay_after_result", "pay_per_result", "guarantee_refund")
+
+
+def _offer_fetch_site(url: str):
+    """Fetch the homepage only and strip it to text. Raises ValueError with a
+    plain-English message on anything unreachable. Refuses private hosts (this
+    is a public endpoint — never let it probe our own network)."""
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("Please paste your website address first.")
+    if not url.startswith("http"):
+        url = "https://" + url
+    host = url.split("//", 1)[1].split("/", 1)[0].split(":")[0]
+    domain = host.removeprefix("www.")
+    if "." not in domain:
+        raise ValueError(f"'{domain}' doesn't look like a website address. Try something like yourcompany.com")
+    import ipaddress, socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        raise ValueError(f"We couldn't find a website at {domain}. Check the spelling and try again.")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError(f"We couldn't reach {domain}. Check the address and try again.")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; NavreoOfferMaker)"})
+        with urllib.request.urlopen(req, timeout=15, context=SSL_CTX) as resp:
+            raw = resp.read(500_000).decode("utf-8", "ignore")
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"We couldn't open {domain} ({str(e)[:80]}). "
+                         "Check the address works in your browser, then try again.")
+    body = re.sub(r"<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", raw, flags=re.I | re.S)
+    title = re.search(r"<title[^>]*>([^<]+)</title>", body, re.I)
+    desc = re.search(r'<meta[^>]+(?:name|property)=["\'](?:og:)?description["\'][^>]+content=["\']([^"\']+)', body, re.I)
+    text = re.sub(r"<[^>]+>", " ", body)
+    import html as _html
+    text = re.sub(r"\s+", " ", _html.unescape(text)).strip()
+    if len(text) < 200:
+        raise ValueError(f"We reached {domain} but couldn't read enough of the page to work with. "
+                         "If your site is mostly images or loads with JavaScript, email us the address instead.")
+    return {"domain": domain,
+            "title": (title.group(1).strip() if title else domain),
+            "description": (desc.group(1).strip() if desc else ""),
+            "text": text[:12_000]}
+
+
+def _offer_scrub(s: str) -> str:
+    """Backstop the style law: no em-dashes ever reach the page."""
+    return re.sub(r"\s*[—–]\s*", " - ", str(s or "")).strip()
+
+
+def offer_generate(p: dict, ip: str):
+    """Returns (status, body). Real errors, no fallback catalogue."""
+    refusal = _offer_rate_check(ip)
+    if refusal:
+        return 429, {"ok": False, "message": refusal}
+    try:
+        site = _offer_fetch_site(p.get("url") or "")
+    except ValueError as e:
+        return 400, {"ok": False, "message": str(e)}
+    key = KEYS.get("OPENAI_API_KEY")
+    if not key:
+        return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
+    prompt = f"""You are an expert at designing cold-email OFFERS for a B2B lead-generation agency.
+
+A business owner pasted their website. Here is what their homepage says:
+WEBSITE: {site['domain']}
+TITLE: {site['title']}
+DESCRIPTION: {site['description']}
+PAGE TEXT (truncated): {site['text']}
+
+First, silently work out what this business sells and who buys it. Then generate EXACTLY 15 distinct offer ideas this business could use in cold emails to win NEW customers.
+
+THE OFFER FRAMEWORK (every offer must have all four):
+(a) PROBLEM: one specific, high-consequence problem the buyer has (money, time, or risk on the line - name the consequence).
+(b) DIFFERENTIATOR: what this business would do about it AND an explicit comparison to the usual way (the words "instead of" or "unlike" or "most" should appear: e.g. "unlike agencies that charge a retainer", "instead of waiting weeks for quotes", "most suppliers make you...").
+(c) PRICING: a pricing angle that favours the buyer (fixed price, pay less than the alternative, price tied to results, free first step).
+(d) RISK REVERSAL: exactly one of three types, and across the 15 offers ALL THREE types must appear at least 3 times each:
+   - pay_after_result: buyer pays nothing until the work is delivered or the result shows up.
+   - pay_per_result: buyer pays per unit of result (per lead, per sale, per placement), not a retainer.
+   - guarantee_refund: a concrete promise (number + deadline) with a full refund if missed.
+
+HARD RULES:
+- NEW MONEY ONLY: every offer must promise the RECIPIENT new revenue - new customers, new sales, new orders, new markets, new booked work. Never promise to optimise, audit, refresh, speed up, tidy up or save money on something the recipient already does (no "cut your shipping costs", no "improve your website", no "optimise your ads", no "streamline your operations"). If what this business sells is efficiency or cost saving, find the angle where it unlocks NEW revenue for the recipient (reach new markets, launch a new channel, stock more shelves, win contracts they currently lose) and lead with that.
+- WHO THE EMAIL GOES TO: cold email is business-to-business. If this business sells to consumers, aim every offer at business buyers instead (retailers who could stock the product, distributors, corporate accounts, partners), never at individual consumers.
+- LOW-RISK CTA: the example opener must offer to SEND something small (a short Loom video, a free sample, a one-page breakdown, a worked example) - never "book a call" or "hop on a call".
+- STIPULATION: each offer includes one fair condition that protects the seller (e.g. "leads must match an agreed target list", "guarantee starts after onboarding is complete", "capped at N per month").
+- PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned words and phrases: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. Say it the way a shop owner would: "your ideal customers", "a salesperson", "steady flow of new deals". A 12-year-old should understand every sentence. NEVER use an em-dash anywhere.
+- The opener is ONE sentence, 20 words or fewer, written as the first line of a cold email from this business to its buyer. Use {{{{company}}}} where the prospect's company name would go.
+- why_cold_email: one or two plain sentences explaining to a beginner WHY this offer works on cold strangers (e.g. it removes their risk, it asks for a tiny yes, it names their exact problem).
+
+REAL OFFER LINES THAT GOT POSITIVE REPLIES (mined from real campaigns - match this energy and concreteness, do not copy them word for word unless they genuinely fit):
+{OFFER_WINNING_EXAMPLES}
+
+Reply with ONLY a JSON array of exactly 15 objects, no fences, no commentary:
+[{{"name": "<3-6 word plain name for the offer>", "problem": "<the specific high-consequence problem, 1-2 sentences>", "differentiator": "<what you do and why it beats the usual way, 1-2 sentences>", "pricing": "<the buyer-favouring pricing angle, 1 sentence>", "risk_reversal": "<the risk-reversal promise written out, 1 sentence>", "risk_reversal_type": "<pay_after_result|pay_per_result|guarantee_refund>", "stipulation": "<the fair protective condition, 1 sentence>", "opener": "<one-line example cold email opener, max 20 words>", "why_cold_email": "<plain-English reason this works on cold email, 1-2 sentences>"}}]"""
+    offers = None
+    err = ""
+    for attempt in (1, 2):  # one retry on a malformed reply
+        try:
+            r = http_json("POST", "https://api.openai.com/v1/chat/completions",
+                          {"Authorization": f"Bearer {key}"},
+                          {"model": "gpt-5-mini",
+                           "messages": [{"role": "user", "content": prompt}]},
+                          timeout=180)
+            if r.get("error"):
+                raise RuntimeError(str(r["error"].get("message", r["error"]))[:200])
+            text = (r["choices"][0]["message"]["content"] or "").strip()
+            m = re.search(r"\[.*\]", text, re.S)
+            cand = json.loads(m.group(0) if m else text)
+            if not isinstance(cand, list) or not 12 <= len(cand) <= 18:
+                raise ValueError(f"got {len(cand) if isinstance(cand, list) else 'non-list'} offers")
+            for o in cand:
+                for f in OFFER_FIELDS:
+                    if not str(o.get(f) or "").strip():
+                        raise ValueError(f"offer missing {f}")
+                if o["risk_reversal_type"] not in OFFER_RISK_TYPES:
+                    raise ValueError(f"bad risk_reversal_type {o['risk_reversal_type']!r}")
+            types = {o["risk_reversal_type"] for o in cand}
+            if types != set(OFFER_RISK_TYPES):
+                raise ValueError(f"missing risk types: {set(OFFER_RISK_TYPES) - types}")
+            offers = [{f: _offer_scrub(o[f]) for f in OFFER_FIELDS} for o in cand]
+            break
+        except Exception as e:  # noqa: BLE001
+            err = f"{type(e).__name__}: {str(e)[:120]}"
+            print(f"OFFER GEN attempt {attempt} failed for {site['domain']}: {err}")
+    if offers is None:
+        return 502, {"ok": False, "message":
+                     "The offer generator hit a problem and couldn't finish. Please try again in a minute."}
+    print(f"OFFER GEN ok: {site['domain']} -> {len(offers)} offers")
+    return 200, {"ok": True, "domain": site["domain"], "site_name": site["title"],
+                 "offers": offers}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -9845,6 +10038,21 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json_with_cookie(
                 {"ok": True, "email": email},
                 _session_cookie(_mint_session(email), AUTH_SESSION_DAYS * 86400))
+        if path == "/api/offer/generate":
+            # Public offer maker — no session, no drafts_lock (slow LLM call must
+            # never block the app), no persistence of the visitor's URL. Rate
+            # limits are enforced inside offer_generate().
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 4096:
+                return self._json({"ok": False, "message": "payload too large"}, 413)
+            try:
+                p = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            ip = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip() \
+                or self.client_address[0]
+            status, body = offer_generate(p, ip)
+            return self._json(body, status)
         if path.startswith("/api/qa-gate/") and path != "/api/qa-gate/runs" and self._qa_token_ok():
             return self._qa_gate_post(path)
         if path not in _AUTH_PUBLIC_POST and not self._gate(path):

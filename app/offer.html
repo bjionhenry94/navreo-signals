@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offer Maker - Navreo</title>
+<!-- offer-maker-v1 -->
+<link rel="stylesheet" href="/app/navreo.css">
+<style>
+  body { background: var(--bg); }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 36px; }
+  .brand .mark { width: 34px; height: 34px; border-radius: 9px; background: var(--ink);
+    color: var(--cream); font-family: var(--font-display); font-size: 18px;
+    display: flex; align-items: center; justify-content: center; }
+  .brand span { font-family: var(--font-display); font-size: 17px; }
+  h1 { font-size: 34px; margin-bottom: 10px; }
+  .lede { font-size: 16px; color: var(--ink-2); max-width: 640px; margin-bottom: 6px; }
+  .teach { background: var(--cream-50); border: 1px solid var(--light-200); border-radius: var(--radius);
+    padding: 18px 20px; margin: 26px 0; }
+  .teach h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); margin-bottom: 10px; }
+  .teach ol { margin-left: 18px; font-size: 14.5px; color: var(--ink-2); display: grid; gap: 7px; }
+  .teach b { color: var(--ink); }
+  .inputrow { display: flex; gap: 10px; margin: 8px 0 6px; }
+  .inputrow input { flex: 1; font: inherit; font-size: 16px; padding: 13px 16px;
+    border: 1.5px solid var(--line-2); border-radius: var(--radius); outline: none; }
+  .inputrow input:focus { border-color: var(--orange); box-shadow: var(--focus); }
+  .inputrow button { font: inherit; font-size: 15.5px; font-weight: 600; padding: 13px 22px;
+    background: var(--orange); color: #fff; border: 0; border-radius: var(--radius); cursor: pointer; }
+  .inputrow button:hover { background: var(--orange-600); }
+  .inputrow button:disabled { opacity: 0.55; cursor: default; }
+  .hint { font-size: 13px; color: var(--ink-3); }
+  .status { display: none; margin: 30px 0; padding: 20px; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--bg-sunken); font-size: 15px; color: var(--ink-2); }
+  .status .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 12px; }
+  .status .bar i { display: block; height: 100%; width: 0%; background: var(--orange); transition: width 1s linear; }
+  .error { display: none; margin: 24px 0; padding: 16px 18px; border: 1px solid var(--red-line);
+    background: var(--red-bg); color: var(--red); border-radius: var(--radius); font-size: 15px; }
+  .results { display: none; }
+  .savebanner { margin: 26px 0 18px; padding: 12px 16px; border: 1px solid var(--amber-line);
+    background: var(--amber-bg); color: var(--amber); border-radius: var(--radius); font-size: 14px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 26px; }
+  .actions button { font: inherit; font-size: 14.5px; font-weight: 600; padding: 10px 18px;
+    border-radius: 10px; border: 1.5px solid var(--ink); background: var(--ink); color: #fff; cursor: pointer; }
+  .actions button.ghost { background: #fff; color: var(--ink); }
+  .actions button:hover { opacity: 0.88; }
+  .group { margin: 34px 0 10px; }
+  .group h2 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 4px; }
+  .group .gsub { font-size: 14px; color: var(--ink-3); margin-bottom: 14px; max-width: 620px; }
+  .card { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 20px; margin-bottom: 14px; background: var(--card); }
+  .card h3 { font-size: 17px; margin-bottom: 12px; }
+  .card .field { margin-bottom: 10px; font-size: 14.5px; color: var(--ink-2); }
+  .card .field b { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-3); margin-bottom: 2px; font-weight: 600; }
+  .card .opener { background: var(--cream-50); border: 1px dashed var(--light-200);
+    border-radius: 9px; padding: 10px 12px; font-style: italic; }
+  .card .why { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; }
+  .proof { margin-top: 50px; border-top: 1px solid var(--line-2); padding-top: 30px; }
+  .proof h2 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 4px; }
+  .proof .gsub { font-size: 14px; color: var(--ink-3); margin-bottom: 16px; max-width: 640px; }
+  .quote { border-left: 3px solid var(--orange); padding: 8px 14px; margin-bottom: 14px; }
+  .quote p { font-size: 15px; font-style: italic; color: var(--ink-2); }
+  .quote span { font-size: 12.5px; color: var(--ink-3); }
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 14px;
+    opacity: 0; pointer-events: none; transition: opacity 0.25s; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 560px) { .inputrow { flex-direction: column; } h1 { font-size: 27px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><div class="mark">N</div><span>Navreo Offer Maker</span></div>
+
+  <h1>Turn your website into offers people say yes to</h1>
+  <p class="lede">Paste your website below. We'll read it and write 15 ready-to-use offer ideas
+  for winning new customers with cold email. You don't need to know anything about cold email.
+  Pick the ones you like, download them, and send them to us.</p>
+
+  <div class="teach">
+    <h3>What makes a good offer? Four things.</h3>
+    <ol>
+      <li><b>A real problem.</b> Something that costs your buyer money, time, or sleep. Not a nice-to-have.</li>
+      <li><b>What you'd do about it.</b> And why your way beats the usual way.</li>
+      <li><b>Pricing that favours the buyer.</b> Cheaper than the alternative, or tied to results.</li>
+      <li><b>A promise that removes their risk.</b> Pay after the work is done, pay per result, or get a full refund if we miss. Each promise comes with one fair condition so nobody gets burned.</li>
+    </ol>
+  </div>
+
+  <div class="inputrow">
+    <input id="url" type="text" placeholder="yourcompany.com" autocomplete="off"
+      onkeydown="if(event.key==='Enter')generate()">
+    <button id="go" onclick="generate()">Make my offers</button>
+  </div>
+  <p class="hint">Just your website address. Nothing is saved, and nothing gets sent to anyone.</p>
+
+  <div class="status" id="status">
+    <span id="statustext">Reading your website...</span>
+    <div class="bar"><i id="barfill"></i></div>
+  </div>
+  <div class="error" id="error"></div>
+
+  <div class="results" id="results">
+    <div class="savebanner"><b>Heads up:</b> nothing here is saved. Download your offers or copy
+    them before you close this page.</div>
+    <div class="actions">
+      <button onclick="downloadCsv()">Download all offers (CSV)</button>
+      <button class="ghost" onclick="copyAll()">Copy everything</button>
+    </div>
+    <div id="groups"></div>
+  </div>
+
+  <div class="proof">
+    <h2>Real offers that got replies</h2>
+    <p class="gsub">These lines are word-for-word from real cold emails we sent that got interested
+    replies. Names are swapped out for privacy. Notice how each one makes a promise, removes risk,
+    or offers something small and free.</p>
+    <div class="quote"><p>"If it fits, we can build or run it for you guaranteeing 30 qualified leads in 90 days or we refund you."</p><span>A promise with a full refund. 30+ interested replies.</span></div>
+    <div class="quote"><p>"You only pay after we've built it, so zero upfront amount."</p><span>Pay after the work is done. 12 interested replies.</span></div>
+    <div class="quote"><p>"If it lands, we can run it for you on a pay-per-lead basis, so you only pay for the leads we deliver."</p><span>Pay per result. Several booked calls came from this.</span></div>
+    <div class="quote"><p>"I'd happily put together a mood board, a render, and a sourcing snapshot, and have it back within 48 hours, no charge or commitment."</p><span>A free sample, no strings. 38 interested replies, our best line.</span></div>
+    <div class="quote"><p>"We've put together a quick breakdown of the exact campaigns we'd run to get {{company}} 30 qualified leads a month."</p><span>A free worked example for that exact company. 7 interested replies.</span></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","risk_reversal_type","stipulation","opener","why_cold_email"];
+const GROUPS = [
+  ["pay_after_result", "Pay after the work is done",
+   "The buyer pays nothing upfront. The work gets delivered first, then they pay. Easiest yes there is."],
+  ["pay_per_result", "Pay for each result",
+   "No retainer. The buyer pays per lead, per sale, or per placement, so they only ever pay for what they actually get."],
+  ["guarantee_refund", "A promise with a full refund",
+   "A concrete promise with a number and a deadline. Miss it and the buyer gets every penny back."]
+];
+let OFFERS = [];
+let DOMAIN = "";
+
+function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg;
+  t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
+
+async function generate(){
+  const url = document.getElementById("url").value.trim();
+  const err = document.getElementById("error"), st = document.getElementById("status");
+  err.style.display = "none";
+  document.getElementById("results").style.display = "none";
+  if(!url){ err.textContent = "Please paste your website address first."; err.style.display = "block"; return; }
+  const go = document.getElementById("go");
+  go.disabled = true; st.style.display = "block";
+  const bar = document.getElementById("barfill"); bar.style.width = "0%";
+  const stext = document.getElementById("statustext");
+  const phases = ["Reading your website...", "Working out what you sell and who buys it...",
+                  "Writing your offers... this takes about a minute", "Nearly there, checking every offer..."];
+  let ph = 0; stext.textContent = phases[0];
+  const tick = setInterval(()=>{ ph = Math.min(ph+1, phases.length-1);
+    stext.textContent = phases[ph];
+    bar.style.width = Math.min(92, parseFloat(bar.style.width||0)+8) + "%"; }, 9000);
+  bar.style.width = "8%";
+  try {
+    const r = await fetch("/api/offer/generate", { method: "POST",
+      headers: {"Content-Type":"application/json"}, body: JSON.stringify({url}) });
+    const d = await r.json();
+    if(!r.ok || !d.ok){ throw new Error(d.message || "Something went wrong. Please try again."); }
+    OFFERS = d.offers; DOMAIN = d.domain;
+    render();
+  } catch(e) {
+    err.textContent = e.message || "Something went wrong. Please try again.";
+    err.style.display = "block";
+  } finally {
+    clearInterval(tick); st.style.display = "none"; go.disabled = false;
+  }
+}
+
+function render(){
+  const wrap = document.getElementById("groups");
+  wrap.innerHTML = "";
+  for(const [key, title, sub] of GROUPS){
+    const items = OFFERS.filter(o => o.risk_reversal_type === key);
+    if(!items.length) continue;
+    const g = document.createElement("div"); g.className = "group";
+    g.innerHTML = `<h2>${esc(title)}</h2><p class="gsub">${esc(sub)}</p>`;
+    for(const o of items){
+      const c = document.createElement("div"); c.className = "card";
+      c.innerHTML = `
+        <h3>${esc(o.name)}</h3>
+        <div class="field"><b>The problem it solves</b>${esc(o.problem)}</div>
+        <div class="field"><b>What you'd do, and why it's better</b>${esc(o.differentiator)}</div>
+        <div class="field"><b>The pricing angle</b>${esc(o.pricing)}</div>
+        <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
+        <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
+        <div class="field"><b>Example first line of the email</b><div class="opener">${esc(o.opener)}</div></div>
+        <div class="field why"><b>Why this works on cold email</b>${esc(o.why_cold_email)}</div>`;
+      g.appendChild(c);
+    }
+    wrap.appendChild(g);
+  }
+  document.getElementById("results").style.display = "block";
+  document.getElementById("results").scrollIntoView({behavior:"smooth"});
+}
+
+function csvCell(s){ s = String(s??""); return '"' + s.replace(/"/g,'""') + '"'; }
+function downloadCsv(){
+  const header = ["Offer name","The problem","What you'd do and why it's better","Pricing angle",
+                  "The promise","Promise type","One fair condition","Example first line","Why this works on cold email"];
+  const rows = [header.join(",")];
+  for(const o of OFFERS){ rows.push(FIELDS.map(f => csvCell(o[f])).join(",")); }
+  const blob = new Blob(["﻿" + rows.join("\r\n")], {type: "text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "offers-" + (DOMAIN || "site").replace(/[^a-z0-9.-]/gi,"") + ".csv";
+  a.click(); URL.revokeObjectURL(a.href);
+  toast("Downloaded " + OFFERS.length + " offers");
+}
+
+function offerText(o, i){
+  return `OFFER ${i+1}: ${o.name}
+The problem: ${o.problem}
+What you'd do, and why it's better: ${o.differentiator}
+Pricing angle: ${o.pricing}
+The promise: ${o.risk_reversal}
+One fair condition: ${o.stipulation}
+Example first line: ${o.opener}
+Why this works on cold email: ${o.why_cold_email}`;
+}
+async function copyAll(){
+  const text = "Offers for " + DOMAIN + " (made with the Navreo Offer Maker)\n\n" +
+    OFFERS.map(offerText).join("\n\n");
+  try { await navigator.clipboard.writeText(text); toast("Copied all " + OFFERS.length + " offers"); }
+  catch(e) {
+    const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand("copy"); ta.remove();
+    toast("Copied all " + OFFERS.length + " offers");
+  }
+}
+</script>
+</body>
+</html>
