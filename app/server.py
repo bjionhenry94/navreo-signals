@@ -5248,6 +5248,245 @@ def outreach_destinations(p: dict) -> dict:
     return _OUTREACH_DESTS_SWR.get()
 
 
+# ── Source → List bridge (campaigns-unified-home) ─────────────────────────
+# A source's pulled prospects are materialised into a real `lists` +
+# `list_rows` list so the People/All Files page can open them directly
+# (deep link lists.html#<list_id>) and visibly reuse them in another
+# campaign. THE JOIN LIVES HERE: sources.doc["list_id"] -> lists.id (uuid).
+# Idempotent — one list per source, rows fully re-synced from the source's
+# prospects after every pull; called from pull_source and backfilled once
+# at boot for pre-existing sources.
+_SOURCE_LIST_COLS = ["name", "title", "company", "domain", "linkedin_url",
+                     "country", "email", "icebreaker"]
+
+
+def _client_display_name(client_id) -> str:
+    try:
+        clients, _ = _cached_clients()
+        for c in (clients or []):
+            if c.get("id") == client_id:
+                return c.get("name") or "Navreo"
+    except Exception:  # noqa: BLE001
+        pass
+    return "Navreo"
+
+
+def _ensure_source_list(src: dict):
+    """Create/refresh the `lists` mirror of this source's prospects and
+    stamp list_id on the source doc. Best-effort: a lists outage must never
+    fail the pull that triggered it."""
+    try:
+        prospects = src.get("prospects") or []
+        if not prospects:
+            return src.get("list_id")
+        list_id = src.get("list_id")
+        if list_id:
+            cur = sb("GET", f"lists?id=eq.{list_id}&select=id")
+            if not (isinstance(cur, list) and cur):
+                list_id = None  # list was deleted out from under us — recreate
+        name = f"{src.get('name') or 'Source'} (source)"
+        if not list_id:
+            created = sb("POST", "lists",
+                         {"name": name,
+                          "client": _client_display_name(src.get("client_id")),
+                          "source_skill": "signal-source",
+                          "owner": "signals-tool",
+                          "columns": _SOURCE_LIST_COLS,
+                          "row_count": 0},
+                         prefer="return=representation")
+            if not (isinstance(created, list) and created):
+                return None
+            list_id = created[0]["id"]
+            src["list_id"] = list_id
+            write_source(src)
+        rows = [{"list_id": list_id, "row_num": i + 1,
+                 "data": {"name": x.get("name") or "", "title": x.get("title") or "",
+                          "company": x.get("company") or "", "domain": x.get("domain") or "",
+                          "linkedin_url": x.get("linkedin") or "", "country": x.get("country") or "",
+                          "email": x.get("email") or "", "icebreaker": x.get("icebreaker") or ""}}
+                for i, x in enumerate(prospects)]
+        sb("DELETE", f"list_rows?list_id=eq.{list_id}")
+        sb("POST", "list_rows", rows, prefer="return=minimal")
+        sb("PATCH", f"lists?id=eq.{list_id}", {"row_count": len(rows)})
+        return list_id
+    except Exception as e:  # noqa: BLE001
+        print(f"[source-list] sync failed for {src.get('id')}: {e}", flush=True)
+        return src.get("list_id")
+
+
+def _backfill_source_lists():
+    """One-shot boot backfill: every live source with prospects but no
+    (valid) list gets its mirror list created."""
+    try:
+        n = 0
+        for src in read_drafts():
+            if src.get("deleted_at"):
+                continue
+            if (src.get("prospects") and _ensure_source_list(src)):
+                n += 1
+        print(f"[source-list] backfill done: {n} sources linked", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[source-list] backfill failed: {e}", flush=True)
+
+
+# ── Unified campaigns mirror (campaigns-unified-home) ──────────────────────
+# ONE row per outbound campaign across the whole account: every Smartlead
+# campaign (all statuses) + every HeyReach campaign, merged with the
+# platform-keyed campaign_drafts docs (camp-sl-<id> / camp-hr-<listId>).
+# Rows without a draft doc are EXTERNAL (read-only in the UI — managed in
+# the platform, not this tool). Same SWR + last-good-on-error pattern as
+# outreach-destinations. Never returns a silently-empty list on auth
+# failure: the per-platform *_error field survives into the payload.
+_CAMPAIGNS_UNIFIED_TTL_S = 600
+
+
+def _compute_campaigns_unified(refresh: bool = False) -> dict:
+    out: dict = {"rows": []}
+    sl_rows, hr_rows = [], []
+    try:
+        camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
+        if not isinstance(camps, list):
+            msg = camps.get("message") if isinstance(camps, dict) else str(camps)
+            raise RuntimeError(f"Smartlead /campaigns: {msg or 'unexpected response'}")
+        sl_rows = [{"key": f"camp-sl-{c.get('id')}", "platform": "smartlead",
+                    "platform_id": c.get("id"), "name": c.get("name") or "",
+                    "status": (c.get("status") or "").upper()}
+                   for c in camps]
+        out["smartlead_synced_at"] = int(time.time())
+    except Exception as e:  # noqa: BLE001
+        out["smartlead_error"] = str(e)[:150]
+    try:
+        for it in _hey_pages("/campaign/GetAll"):
+            hr_rows.append({"key": f"camp-hr-c{it.get('id')}", "platform": "heyreach",
+                            "platform_id": it.get("id"), "name": it.get("name") or "",
+                            "status": (it.get("status") or "").upper(),
+                            "hr_list_id": it.get("linkedInUserListId")})
+        out["heyreach_synced_at"] = int(time.time())
+    except Exception as e:  # noqa: BLE001
+        out["heyreach_error"] = str(e)[:150]
+
+    # join the app's own docs: camp-sl-<id> direct; camp-hr-<listId> joins a
+    # HeyReach campaign through its linkedInUserListId (a HR draft doc is
+    # keyed by the LIST the tool fills, not the campaign that sends it)
+    try:
+        all_drafts, _fetch_failed = _cached_campaign_drafts()
+        drafts = [d for d in (all_drafts or []) if not d.get("superseded_by") and not d.get("deleted_at")]
+    except Exception:  # noqa: BLE001
+        drafts = []
+    by_key = {d.get("id"): d for d in drafts}
+    claimed = set()
+    for r in sl_rows:
+        doc = by_key.get(r["key"])
+        if doc:
+            r["draft_id"], r["client_id"], r["managed"] = doc.get("id"), doc.get("client_id"), True
+            claimed.add(doc.get("id"))
+        else:
+            r["managed"] = False
+    for r in hr_rows:
+        doc = by_key.get(f"camp-hr-{r.get('hr_list_id')}") if r.get("hr_list_id") else None
+        if doc:
+            r["draft_id"], r["client_id"], r["managed"] = doc.get("id"), doc.get("client_id"), True
+            claimed.add(doc.get("id"))
+        else:
+            r["managed"] = False
+    # drafts with no live platform row (unlinked or platform fetch failed):
+    # still shown, never silently dropped
+    for d in drafts:
+        if d.get("id") in claimed:
+            continue
+        plat = "smartlead" if str(d.get("id", "")).startswith("camp-sl-") else \
+               ("heyreach" if str(d.get("id", "")).startswith("camp-hr-") else None)
+        if plat == "smartlead" and out.get("smartlead_error"):
+            continue  # last-good handling below keeps the mirror row instead
+        out.setdefault("unlinked", []).append(
+            {"key": d.get("id"), "platform": plat, "platform_id": None,
+             "name": d.get("name") or "", "status": "UNLINKED",
+             "draft_id": d.get("id"), "client_id": d.get("client_id"), "managed": True})
+    out["rows"] = sl_rows + hr_rows + (out.pop("unlinked", []) or [])
+    out["smartlead_count"] = len(sl_rows)
+    out["heyreach_count"] = len(hr_rows)
+    return out
+
+
+_CAMPAIGNS_UNIFIED_SWR = _SWRCache(_compute_campaigns_unified, _CAMPAIGNS_UNIFIED_TTL_S,
+                                    is_degraded=lambda p: bool(p.get("smartlead_error") or p.get("heyreach_error")),
+                                    name="campaigns-unified")
+
+
+def campaigns_unified(p: dict) -> dict:
+    if bool(p.get("refresh")):
+        out = _compute_campaigns_unified(refresh=True)
+        with _CAMPAIGNS_UNIFIED_SWR.lock:
+            _CAMPAIGNS_UNIFIED_SWR.ts = time.time()
+            _CAMPAIGNS_UNIFIED_SWR.payload = out
+        return out
+    return _CAMPAIGNS_UNIFIED_SWR.get()
+
+
+# ── Per-day performance series (campaigns-unified-home) ────────────────────
+# The homepage's single multi-line graph. Every point is read from the
+# Supabase data layer (fed by the existing Smartlead/HeyReach daily syncs);
+# NOTHING is fabricated — a day/metric with no data is null, and the UI
+# renders a labelled gap. Sources of truth per line:
+#   sent       — sent_messages rows per sent_at::date (outbound archive of
+#                synced campaigns; a real undercount of fleet volume, so the
+#                label says so)
+#   reply_rate — fleet 30d-rolling reply % from mailbox_stats_daily
+#                (sum replies_30d / sum sent_30d per stat_date). NOT
+#                replies÷sent_messages: that archive only holds replied
+#                threads historically, which made the naive daily ratio read
+#                84–400% — real numbers, misleading metric.
+#   bounce_rate— fleet 30d-rolling bounce % from mailbox_stats_daily
+#                (sum bounces_30d / sum sent_30d per stat_date; the only
+#                bounce series the data layer has — sparse, labelled)
+def perf_daily(p: dict) -> dict:
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    try:
+        days = max(7, min(120, int(p.get("days") or 30)))
+    except Exception:  # noqa: BLE001
+        days = 30
+    today = _dt.now(_tz.utc).date()
+    start = today - _td(days=days - 1)
+    dates = [(start + _td(days=i)).isoformat() for i in range(days)]
+
+    sent_by, rep_by, brate_by = {}, {}, {}
+    max_sent_day = None
+    rows = sb_get_all(f"sent_messages?select=sent_at&sent_at=gte.{start.isoformat()}")
+    if rows is None:
+        return {"error": "Supabase read failed", "days": dates,
+                "sent": [None] * days, "reply_rate": [None] * days, "bounce_rate": [None] * days}
+    for r in rows:
+        d = (r.get("sent_at") or "")[:10]
+        if d:
+            sent_by[d] = sent_by.get(d, 0) + 1
+            if not max_sent_day or d > max_sent_day:
+                max_sent_day = d
+    mb = sb_get_all(f"mailbox_stats_daily?select=stat_date,replies_30d,bounces_30d,sent_30d&stat_date=gte.{start.isoformat()}") or []
+    agg: dict = {}
+    for r in mb:
+        d = r.get("stat_date")
+        if d:
+            a = agg.setdefault(d, [0, 0, 0])
+            a[0] += r.get("bounces_30d") or 0
+            a[1] += r.get("replies_30d") or 0
+            a[2] += r.get("sent_30d") or 0
+    for d, (b, rep, s) in agg.items():
+        brate_by[d] = round(100.0 * b / s, 2) if s else None
+        rep_by[d] = round(100.0 * rep / s, 2) if s else None
+
+    sent, reply_rate, bounce_rate = [], [], []
+    for d in dates:
+        # days past the archive's last synced day are UNKNOWN (null), not zero
+        sent.append(sent_by.get(d, 0) if (max_sent_day and d <= max_sent_day) else None)
+        reply_rate.append(rep_by.get(d))
+        bounce_rate.append(brate_by.get(d))
+    return {"days": dates, "sent": sent, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
+            "labels": {"sent": "Emails sent/day (archived sends from synced campaigns — Supabase sent_messages)",
+                       "reply_rate": "Reply rate % (fleet 30-day rolling — mailbox_stats_daily)",
+                       "bounce_rate": "Bounce rate % (fleet 30-day rolling — mailbox_stats_daily)"},
+            "last_synced_day": max_sent_day}
+
+
 # ── Campaign scorecard (Smartlead-style per-campaign performance) ──────────
 # Powers the campaigns-list scorecard: for every signal campaign that sends to
 # a real Smartlead campaign, its live Smartlead numbers (sent / reply / positive
@@ -7576,9 +7815,13 @@ def pull_source(p: dict) -> dict:
     if not src:
         return {"ok": False, "message": "Source not found"}
     if (src.get("mechanism") or src.get("type")) == "hiring":
-        return pull_hiring_source(src, drafts)
+        r = pull_hiring_source(src, drafts)
+        _ensure_source_list(src)  # keep the People-page mirror list in step
+        return r
     if (src.get("mechanism") or src.get("type")) == "engagement":
-        return pull_engagement_source(src, drafts)
+        r = pull_engagement_source(src, drafts)
+        _ensure_source_list(src)
+        return r
     cfg = {**(src.get("config") or {}), **(src.get("params") or {})}
     titles = src.get("titles") or (cfg.get("titles").split(",") if isinstance(cfg.get("titles"), str) else cfg.get("titles")) or []
     titles = [x.strip() for x in titles if str(x).strip()]
@@ -7647,6 +7890,7 @@ def pull_source(p: dict) -> dict:
     sb("POST", "signal_leads?on_conflict=source_id,linkedin_url", rows,
        prefer="resolution=merge-duplicates,return=minimal")
     sb("PATCH", f"signal_sources?id=eq.{src['id']}", {"last_pull_at": src["last_pull"]})
+    _ensure_source_list(src)  # keep the People-page mirror list in step
     return {"ok": True, "total": total, "broadened": False, "prospects": prospects, "db_synced": True}
 
 
@@ -9605,13 +9849,25 @@ def _offer_scrub(s: str) -> str:
     return re.sub(r"\s*[—–]\s*", " - ", str(s or "")).strip()
 
 
-def _offer_llm(site: dict):
+def _offer_llm(site: dict, audience: str = ""):
     """Run the gpt-5-mini generation for a fetched site. Returns (status, body).
     Blocking and slow (up to ~2 min) - callers run it either synchronously
-    (offer_generate, for curl/tests) or in a background thread (offer_start)."""
+    (offer_generate, for curl/tests) or in a background thread (offer_start).
+    audience: optional plain-English description of who the business sells to,
+    typed by the visitor. When given, every offer and opener is aimed at it."""
     key = KEYS.get("OPENAI_API_KEY")
     if not key:
         return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
+    audience = (audience or "").strip()[:300]
+    if audience:
+        audience_block = (f"WHO THEY SELL TO (given by the business owner - this is the buyer to aim EVERY "
+                          f"offer and EVERY example first line at): {audience}\n"
+                          "Every offer must target this exact buyer, and the {{company}} merge tag in each "
+                          "opener refers to that buyer's company. Do not aim offers at any other kind of buyer.\n")
+        who_line = "The buyer is given above - aim every offer at them."
+    else:
+        audience_block = ""
+        who_line = "work out who buys it and aim the offers at that buyer."
     prompt = f"""You are an expert at designing cold-email OFFERS for a B2B lead-generation agency.
 
 A business owner pasted their website. Here is what their homepage says:
@@ -9619,8 +9875,8 @@ WEBSITE: {site['domain']}
 TITLE: {site['title']}
 DESCRIPTION: {site['description']}
 PAGE TEXT (truncated): {site['text']}
-
-First, silently work out what this business sells and who buys it. Then generate EXACTLY 15 distinct offer ideas this business could use in cold emails to win NEW customers.
+{audience_block}
+First, silently work out what this business sells, then {who_line} Then generate EXACTLY 15 distinct offer ideas this business could use in cold emails to win NEW customers.
 
 THE OFFER FRAMEWORK (every offer must have all four):
 (a) PROBLEM: the specific NEW BUSINESS the recipient is MISSING OUT ON, and what that gap costs them. Phrase it as money they are NOT winning, e.g. "You are missing [new customers / new orders / new contracts / new tenants] because [reason], which costs you [amount] in sales you never make." Do NOT phrase the problem as a current operational pain, a risk of loss, downtime, wasted spend, or something breaking - if the problem is not about missed NEW revenue, the offer is wrong.
@@ -9682,15 +9938,13 @@ Reply with ONLY a JSON array of exactly 15 objects, no fences, no commentary:
     if offers is None:
         return 502, {"ok": False, "message":
                      "The offer generator hit a problem and couldn't finish. Please try again in a minute."}
-    print(f"OFFER GEN ok: {site['domain']} -> {len(offers)} offers")
+    print(f"OFFER GEN ok: {site['domain']} -> {len(offers)} offers" + (f" (audience: {audience})" if audience else ""))
     return 200, {"ok": True, "domain": site["domain"], "site_name": site["title"],
-                 "offers": offers}
+                 "audience": audience, "offers": offers}
 
 
 def offer_generate(p: dict, ip: str):
-    """Synchronous path (curl / internal tests). Returns (status, body). The
-    browser uses the async offer_start/offer_result pair instead, so it never
-    hits the Render proxy timeout on a slow generation."""
+    """Synchronous path (browser + curl). Returns (status, body)."""
     refusal = _offer_rate_check(ip, "try")
     if refusal:
         return 429, {"ok": False, "message": refusal}
@@ -9701,7 +9955,7 @@ def offer_generate(p: dict, ip: str):
     refusal = _offer_rate_check(ip, "gen")
     if refusal:
         return 429, {"ok": False, "message": refusal}
-    return _offer_llm(site)
+    return _offer_llm(site, p.get("audience") or "")
 
 
 # ── Async offer jobs ─────────────────────────────────────────────────────────
@@ -9715,18 +9969,18 @@ _OFFER_JOBS_LOCK = threading.Lock()
 _OFFER_JOB_TTL_S = 900  # a finished result is claimable for 15 min
 
 
-def _offer_job_run(job_id: str, site: dict):
+def _offer_job_run(job_id: str, site: dict, audience: str = ""):
     status, body = 502, {"ok": False, "message":
                          "The offer generator hit a problem and couldn't finish. Please try again."}
     try:
-        status, body = _offer_llm(site)
+        status, body = _offer_llm(site, audience)
     except Exception as e:  # noqa: BLE001 — never let a thread die silently
         print(f"OFFER JOB {job_id} crashed: {type(e).__name__}: {str(e)[:120]}")
     with _OFFER_JOBS_LOCK:
         job = _OFFER_JOBS.get(job_id)
         if job is not None:
             if body.get("ok"):
-                job.update(status="done", domain=body["domain"],
+                job.update(status="done", domain=body["domain"], audience=body.get("audience", ""),
                            site_name=body["site_name"], offers=body["offers"], ts=time.time())
             else:
                 job.update(status="error", message=body.get("message")
@@ -9758,7 +10012,7 @@ def offer_start(p: dict, ip: str):
         if len(_OFFER_JOBS) > 500:
             _OFFER_JOBS.clear()
         _OFFER_JOBS[job_id] = {"status": "running", "ts": now}
-    threading.Thread(target=_offer_job_run, args=(job_id, site), daemon=True).start()
+    threading.Thread(target=_offer_job_run, args=(job_id, site, p.get("audience") or ""), daemon=True).start()
     return 200, {"ok": True, "job_id": job_id}
 
 
@@ -9777,7 +10031,7 @@ def offer_result(p: dict):
     if job["status"] == "error":
         return 200, {"ok": False, "status": "error", "message": job.get("message")}
     return 200, {"ok": True, "status": "done", "domain": job["domain"],
-                 "site_name": job["site_name"], "offers": job["offers"]}
+                 "audience": job.get("audience", ""), "site_name": job["site_name"], "offers": job["offers"]}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -10338,6 +10592,19 @@ class Handler(SimpleHTTPRequestHandler):
             # Smartlead-style per-campaign performance for the campaigns-list
             # scorecard. SWR-cached (~10min); every number is Smartlead's own.
             return self._json(_CAMPAIGN_SCORECARD_SWR.get())
+        if path == "/api/campaigns-unified":
+            # ONE row per outbound campaign account-wide (Smartlead + HeyReach
+            # + unlinked drafts). Homepage list source. SWR-cached ~10min.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
+            return self._json(campaigns_unified({"refresh": refresh}))
+        if path == "/api/perf-daily":
+            # Homepage multi-line graph: per-day sent / reply-rate / bounce-rate
+            # straight from the Supabase data layer. Nulls, never fake zeros.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(perf_daily({"days": (q.get("days") or ["30"])[0]}))
         if path == "/api/version":
             # Deploy verification: which commit/instance is actually serving.
             return self._json({"commit": _GIT_COMMIT or None,
@@ -11069,4 +11336,6 @@ if __name__ == "__main__":
     threading.Thread(target=_job_zombie_sweeper, daemon=True).start()
     # campaigns-tab mirror: keep Smartlead campaigns + HeyReach lists ~10-min fresh
     threading.Thread(target=_outreach_sync_loop, daemon=True).start()
+    # one-shot: materialise mirror lists for pre-existing sources (source→list bridge)
+    threading.Thread(target=_backfill_source_lists, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()
