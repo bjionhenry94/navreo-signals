@@ -1262,12 +1262,28 @@ def test_booking_link_derivation():
 
 # ── v2: grading page endpoints ──────────────────────────────────────────────
 
+def _wait_for_relearn_idle(timeout=2.0):
+    """Relearn runs on a background thread; against the fakes it's near
+    instant (no real network), but polling for idle rather than assuming a
+    fixed sleep keeps this test honest and non-flaky either way."""
+    import time as _time
+    deadline = _time.time() + timeout
+    resp = {}
+    while _time.time() < deadline:
+        _, resp = setter.route_grading_get(None)
+        if (resp.get("relearn") or {}).get("status") == "idle":
+            return resp
+        _time.sleep(0.01)
+    return resp
+
+
 def test_grading_endpoints():
     sb, http = fresh_setter()
 
     status, resp = setter.route_grading_get(None)
-    check("grading: GET with nothing stored returns empty cases/answers",
-         status == 200 and resp == {"cases": [], "answers": {}}, resp)
+    check("grading: GET with nothing stored returns empty cases/answers/relearn/feedback_log",
+         status == 200 and resp == {"cases": [], "answers": {}, "relearn": {"status": "idle"}, "feedback_log": []},
+         resp)
 
     status, resp = setter.route_grading_answer({"id": "case-1", "decision_ok": True, "reply_ok": False,
                                                 "note": "close but no cigar"})
@@ -1277,18 +1293,32 @@ def test_grading_endpoints():
     check("grading: reply_ok and note both persisted",
          resp.get("answers", {}).get("case-1", {}).get("reply_ok") is False and
          resp.get("answers", {}).get("case-1", {}).get("note") == "close but no cigar", resp)
+    # a note (or a False on either question) is feedback worth learning from -
+    # the answer response reports that a relearn pass has been kicked off
+    check("grading: an answer carrying a note kicks off a relearn pass immediately",
+         resp.get("relearn", {}).get("status") == "running", resp)
+    _wait_for_relearn_idle()
 
     _, resp2 = setter.route_grading_get(None)
     check("grading: GET reflects the stored answer", resp2.get("answers", {}).get("case-1", {}).get("decision_ok") is True, resp2)
+    check("grading: the feedback note landed in feedback_log",
+         any(e.get("note") == "close but no cigar" for e in resp2.get("feedback_log") or []), resp2.get("feedback_log"))
 
-    # a second, different case is additive - both persist
-    setter.route_grading_answer({"id": "case-2", "decision_ok": False, "reply_ok": None, "note": ""})
+    # a second, different case is additive - both persist. decision_ok=False
+    # with no note is still a wrong-call signal, so it also triggers relearn.
+    status_b, resp_b = setter.route_grading_answer({"id": "case-2", "decision_ok": False, "reply_ok": None, "note": ""})
+    check("grading: a noteless wrong-decision answer also kicks off relearn",
+         resp_b.get("relearn", {}).get("status") == "running", resp_b)
+    _wait_for_relearn_idle()
     _, resp3 = setter.route_grading_get(None)
     check("grading: two different cases both persist",
          set(resp3.get("answers", {}).keys()) == {"case-1", "case-2"}, resp3)
+    check("grading: feedback_log has one entry per triggering answer (2 so far)",
+         len(resp3.get("feedback_log") or []) == 2, resp3.get("feedback_log"))
 
     # re-answering the same case upserts in place rather than duplicating
     setter.route_grading_answer({"id": "case-1", "decision_ok": False, "reply_ok": True, "note": "actually no"})
+    _wait_for_relearn_idle()
     _, resp4 = setter.route_grading_get(None)
     check("grading: re-answering the same case id upserts in place, not a duplicate",
          resp4.get("answers", {}).get("case-1", {}).get("decision_ok") is False and
@@ -1312,6 +1342,102 @@ def test_grading_endpoints():
     # the reserved __grading__ doc row must never leak into _load_agents()
     check("grading: the __grading__ doc row never appears in _load_agents()",
          all(a.get("id") != setter.GRADING_ID for a in setter._load_agents()), setter._load_agents())
+
+
+def test_grading_relearn_updates_unanswered_cases():
+    """The owner's own scenario: leave feedback on one case, and every other
+    still-unanswered case should get re-classified/re-decided/re-drafted with
+    that feedback folded in - without the owner repeating themselves, and
+    without ever touching an already-answered case."""
+    sb, http = fresh_setter()
+    agent_snapshot = {
+        "id": "agent-grading-test", "mode": "autopilot", "enabled": True,
+        "allowed_intents": ["send_resource", "pricing", "scheduling"],
+        "instructions": "Flat $500/mo.", "confidence_threshold": 0.9,
+        "resource_link": "https://x.example/r",
+    }
+    case_answered = {
+        "id": "case-00", "bucket": "b", "inbound": "Sure, send it over.",
+        "lead_first_name": "Jane", "company_domain": "example.com", "hydrated": True,
+        "thread": [], "category": None, "intent": "send_resource", "confidence": 0.5,
+        "decision": "review", "reason": "old reason", "draft_html": "<div>old</div>", "would_auto": False,
+        "_ctx": {"category": None, "timezone": "Europe/London", "slot_status": "not_configured",
+                 "body_len": 20, "same_day_ask": False, "subject": "Re: hi", "last_outbound": ""},
+    }
+    case_unanswered = {
+        "id": "case-01", "bucket": "b", "inbound": "Yeah go for it, cheers",
+        "lead_first_name": "Sam", "company_domain": "example.org", "hydrated": True,
+        "thread": [], "category": None, "intent": None, "confidence": 0.4,
+        "decision": "review", "reason": "old reason", "draft_html": None, "would_auto": False,
+        "_ctx": {"category": None, "timezone": "Europe/London", "slot_status": "ok",
+                 "body_len": 22, "same_day_ask": False, "subject": "Re: hi", "last_outbound": ""},
+    }
+    doc = {"cases": [case_answered, case_unanswered],
+          "answers": {"case-00": {"decision_ok": True, "reply_ok": True, "note": ""}},
+          "agent_snapshot": agent_snapshot, "feedback_log": [], "relearn": {"status": "idle"}}
+    setter._save_grading(doc)
+
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.97, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants the resource", "rationale": "unqualified yes",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi",
+                               "html": '<div>Hi Sam,</div><br><div>Of course.</div><br>'
+                                       '<div><a href="https://x.example/r">Here it is</a></div><br>'
+                                       '<div>Best,<br>Bjion</div>'}
+
+    status, resp = setter.route_grading_answer({"id": "case-00", "decision_ok": False, "reply_ok": True,
+                                                "note": "This should have been held for review"})
+    check("grading relearn: answering with a note kicks off a running relearn pass immediately",
+         status == 200 and resp.get("relearn", {}).get("status") == "running", resp)
+
+    final = _wait_for_relearn_idle()
+    check("grading relearn: relearn settles back to idle", final.get("relearn", {}).get("status") == "idle", final)
+    check("grading relearn: notes_applied reflects the one feedback entry",
+         final.get("relearn", {}).get("notes_applied") == 1, final.get("relearn"))
+    check("grading relearn: cases_updated counts the one unanswered case",
+         final.get("relearn", {}).get("cases_updated") == 1, final.get("relearn"))
+    check("grading relearn: feedback_log recorded the note verbatim",
+         len(final.get("feedback_log") or []) == 1 and
+         final["feedback_log"][0]["note"] == "This should have been held for review", final.get("feedback_log"))
+
+    updated_cases = {c["id"]: c for c in final.get("cases") or []}
+    check("grading relearn: the ANSWERED case (case-00) is left completely untouched",
+         updated_cases["case-00"]["draft_html"] == "<div>old</div>" and
+         not updated_cases["case-00"].get("updated_by_feedback"), updated_cases.get("case-00"))
+    check("grading relearn: the UNANSWERED case (case-01) got re-classified and re-drafted",
+         updated_cases["case-01"].get("updated_by_feedback") is True and
+         updated_cases["case-01"]["intent"] == "send_resource" and
+         updated_cases["case-01"]["decision"] == "auto_send" and
+         updated_cases["case-01"]["would_auto"] is True and
+         "Hi Sam" in (updated_cases["case-01"]["draft_html"] or ""), updated_cases.get("case-01"))
+
+
+def test_grading_relearn_extracts_real_calendly_slots_from_existing_draft():
+    """When a case's own _ctx.slot_status was 'ok', a relearn re-draft must
+    keep offering the SAME two real call times already baked into the case's
+    existing draft (extracted from its calendly.com anchors), never invent
+    fresh ones and never call Calendly again."""
+    html = ('<div>Hi Sam,</div><br><div>Of course.</div><br>'
+           '<div>Would you be free on <a href="https://calendly.com/navreo/book-a-call/2026-07-15T09:00">'
+           'Wednesday, 15th July at 9:00 AM BST</a> or '
+           '<a href="https://calendly.com/navreo/book-a-call/2026-07-15T13:00">1:00 PM BST</a>?</div><br>'
+           '<div>Best,<br>Bjion</div>')
+    slots = setter._extract_calendly_slots(html)
+    check("grading relearn: extracts exactly two calendly slots from an existing draft's anchors",
+         len(slots) == 2, slots)
+    if len(slots) == 2:
+        check("grading relearn: first slot's link is the real calendly deep link",
+             slots[0]["link"] == "https://calendly.com/navreo/book-a-call/2026-07-15T09:00", slots)
+        check("grading relearn: first slot's label is the anchor's own text",
+             slots[0]["label"] == "Wednesday, 15th July at 9:00 AM BST", slots)
+        check("grading relearn: second slot's link is the real calendly deep link",
+             slots[1]["link"] == "https://calendly.com/navreo/book-a-call/2026-07-15T13:00", slots)
+    check("grading relearn: no calendly anchors in the draft -> empty slots, never raises",
+         setter._extract_calendly_slots("<div>no links here</div>") == [])
+    check("grading relearn: empty/None draft_html -> empty slots, never raises",
+         setter._extract_calendly_slots(None) == [] and setter._extract_calendly_slots("") == [])
 
 
 # ── run everything ───────────────────────────────────────────────────────────
@@ -1344,6 +1470,8 @@ if __name__ == "__main__":
     test_agent_instructions_fallback()
     test_booking_link_derivation()
     test_grading_endpoints()
+    test_grading_relearn_updates_unanswered_cases()
+    test_grading_relearn_extracts_real_calendly_slots_from_existing_draft()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

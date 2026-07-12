@@ -1,13 +1,19 @@
 """One-off: build the __grading__ case set for setter-grade.html.
 
-Runs the REAL pipeline pieces (clean_body -> classify -> tz -> live Calendly
-slots -> draft -> decide) over a stratified JSON of real inbound replies and
-stores the finished cases in the settings-table doc row id "__grading__".
+Runs the REAL pipeline pieces over real archived inbound replies and stores
+the finished cases in the settings-table doc row id "__grading__". With
+--hydrate, each case is processed EXACTLY as production would process it:
+the real lead is looked up in Smartlead (read-only GETs - real first name,
+real thread, real answered-since check), timezone comes from the company
+record / phone / domain, and slots come from live Calendly. Nothing here
+sends anything or writes to any campaign.
+
 Decisions are computed AS IF the master switch were ON and the agent in
 autopilot, because the question being graded is "should this have auto-sent".
-Nothing here sends anything anywhere.
 
-Usage: python3 generate_grading.py <inbounds.json>
+Usage: python3 generate_grading.py <inbounds.json> [--hydrate] [--append]
+inbounds.json rows: {email, smartlead_campaign_id, smartlead_message_id,
+                     category, reply_subject, reply_body, bucket}
 """
 
 import datetime
@@ -15,6 +21,7 @@ import json
 import os
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -58,6 +65,7 @@ def http_json(method, url, headers, body=None, timeout=90):
 
 
 def main():
+    hydrate = "--hydrate" in sys.argv
     append = "--append" in sys.argv
     inbounds = json.load(open(sys.argv[1]))
     keys = load_keys()
@@ -72,27 +80,49 @@ def main():
     setter.configure(sb=sb, http_json=http_json, keys=keys, log_activity=lambda *a, **k: None)
     agents = setter._load_agents()
     agent = next(a for a in agents if a.get("id") == "agent-d403bbcd")
-    # The grading question is "should this have auto-sent", so decisions are
-    # computed with the agent forced into autopilot regardless of its live
-    # mode (the master switch is likewise forced on via ctx below).
+    # The grading question is "should this have auto-sent" - force autopilot
+    # regardless of the live doc's mode (the master switch is likewise forced
+    # on via ctx below). No send path exists anywhere in this script.
     agent = {**agent, "mode": "autopilot", "enabled": True}
     settings = setter._load_settings()
 
     now = datetime.datetime.now(datetime.timezone.utc)
     eff = dict(settings)
     eff["_agent"] = agent
-    slot_status, avail, serr = setter.get_calendly_availability(agent, eff, now)
-    print(f"calendly: {slot_status} ({len(avail)} slots) {serr}")
+    slot_status0, avail, serr = setter.get_calendly_availability(agent, eff, now)
+    print(f"calendly: {slot_status0} ({len(avail)} slots) {serr}")
 
     cases = []
     for i, row in enumerate(inbounds):
+        email = (row.get("email") or "").strip().lower()
+        campaign_id = row.get("smartlead_campaign_id")
+        msg_id = str(row.get("smartlead_message_id") or "")
         body = setter.clean_body(row.get("reply_body") or "")
-        email = row.get("email") or f"case{i}@example.com"
-        first = ""
+        first, last, thread, last_outbound = "", "", [], ""
+        hydrated = False
+        if hydrate and campaign_id and email:
+            ok, hyd, herr = setter.hydrate_lead(campaign_id, email, msg_id)
+            time.sleep(0.5)  # 3 GETs/case; stay far under Smartlead's 200/min
+            if ok:
+                if hyd.get("answered_since_reply"):
+                    print(f"  case {i:02d} SKIP (already answered by a person)")
+                    continue
+                hydrated = True
+                first = hyd.get("first_name") or ""
+                last = hyd.get("last_name") or ""
+                thread = hyd.get("thread") or []
+                body = setter.clean_body(hyd.get("reply_email_body") or "") or body
+                for m in reversed(thread):
+                    if str(m.get("type") or "").upper() == "SENT":
+                        last_outbound = setter._TAG_RE.sub(" ", str(m.get("body") or ""))[:800]
+                        break
+            else:
+                print(f"  case {i:02d} hydration miss ({herr}) - using archive data")
         try:
-            cls = setter.classify({"subject": row.get("reply_subject") or "", "body": body, "last_outbound": ""}, agent)
+            cls = setter.classify({"subject": row.get("reply_subject") or "", "body": body,
+                                   "last_outbound": last_outbound}, agent)
         except Exception as e:  # noqa: BLE001
-            print(f"  case {i}: classify failed {e}")
+            print(f"  case {i:02d}: classify failed {e}")
             continue
         domain = email.split("@", 1)[1] if "@" in email else ""
         hints = {"phone": setter._extract_phone(body), "tld": ".".join(domain.split(".")[-2:]), "body": body}
@@ -102,9 +132,9 @@ def main():
         if not tz and cls.get("timezone_guess") and float(cls.get("tz_confidence") or 0) >= 0.5:
             tz = cls.get("timezone_guess")
 
-        eff["_lead"] = {"first_name": first, "last_name": "", "email": email}
-        slots = setter.pick_slots(avail, tz or "Europe/London", eff, now) if slot_status == "ok" else []
-        st = slot_status if (slot_status != "ok" or slots) else "none_available"
+        eff["_lead"] = {"first_name": first, "last_name": last, "email": email}
+        slots = setter.pick_slots(avail, tz or "Europe/London", eff, now) if slot_status0 == "ok" else []
+        st = slot_status0 if (slot_status0 != "ok" or slots) else "none_available"
 
         primary = cls.get("primary_intent")
         is_clear_neg = primary in setter.CLEAR_NEGATIVE_INTENTS and float(cls.get("confidence") or 0) >= 0.8
@@ -124,7 +154,7 @@ def main():
                     "pricing_notes": setter._agent_instructions(agent), "thread_text": body,
                 })
             except Exception as e:  # noqa: BLE001
-                print(f"  case {i}: draft failed {e}")
+                print(f"  case {i:02d}: draft failed {e}")
         ctx = {
             "red_flag_hits": setter.lexicon_hits(body), "category": row.get("category"),
             "first_touch": True, "slot_status": st, "timezone": tz,
@@ -136,11 +166,16 @@ def main():
         decision, reason = setter.decide(cls, agent, ctx)
         cases.append({
             "id": f"case-{i:02d}", "bucket": row.get("bucket"), "inbound": body[:1200],
+            "lead_first_name": first, "company_domain": domain, "hydrated": hydrated,
+            "thread": thread[-4:],
             "category": row.get("category"), "intent": primary,
             "confidence": cls.get("confidence"), "decision": decision, "reason": reason,
             "draft_html": draft_html, "would_auto": decision == "auto_send",
+            "_ctx": {"category": row.get("category"), "timezone": tz, "slot_status": st,
+                      "body_len": len(body), "same_day_ask": ctx["same_day_ask"],
+                      "subject": row.get("reply_subject") or "", "last_outbound": last_outbound},
         })
-        print(f"  case {i:02d} [{row.get('bucket')}] -> {decision} ({primary})")
+        print(f"  case {i:02d} [{row.get('bucket')}] {'HYD' if hydrated else 'arc'} -> {decision} ({primary})")
 
     if append:
         rows = sb("GET", f"{setter.AGENTS_TABLE}?id=eq.__grading__&select=doc")
@@ -152,11 +187,13 @@ def main():
         answers = old.get("answers") or {}
     else:
         answers = {}
-    doc = {"cases": cases, "answers": answers}
+    doc = {"cases": cases, "answers": answers,
+           "agent_snapshot": agent, "feedback_log": [], "relearn": {"status": "idle"}}
     sb("POST", f"{setter.AGENTS_TABLE}?on_conflict=id", {"id": "__grading__", "doc": doc},
        prefer="resolution=merge-duplicates,return=minimal")
     n_auto = sum(1 for c in cases if c["would_auto"])
-    print(f"stored {len(cases)} cases ({n_auto} would auto-send)")
+    n_hyd = sum(1 for c in cases if c.get("hydrated"))
+    print(f"stored {len(cases)} cases ({n_auto} would auto-send, {n_hyd} fully hydrated)")
 
 
 if __name__ == "__main__":

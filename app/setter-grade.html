@@ -68,6 +68,27 @@
 .grade-notes { margin-top: 18px; }
 .grade-note-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .grade-note-item:last-child { border-bottom: none; }
+
+.grade-lead-line { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 12px; }
+
+.grade-relearn-banner {
+  font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin: 0 0 12px; background: var(--bg-sunken); color: var(--ink-2);
+}
+.grade-relearn-banner.settled { background: var(--green-bg); color: #195C3F; }
+
+.grade-updated-tag {
+  display: inline-block; margin-left: 8px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.03em; color: var(--orange-700);
+  background: var(--bg-sunken); border-radius: 999px; padding: 2px 8px; vertical-align: middle;
+}
+
+.grade-thread { margin-bottom: 12px; }
+.grade-thread summary { cursor: pointer; font-size: 12px; color: var(--ink-3); }
+.grade-thread-body {
+  margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 8px;
+}
+.grade-thread-msg { font-size: 13px; line-height: 1.55; margin-bottom: 8px; }
+.grade-thread-msg:last-child { margin-bottom: 0; }
 </style>
 </head>
 <body>
@@ -96,6 +117,17 @@ let idx = 0;
 let view = "loading"; // loading | empty | case | final
 let resetArmed = false;
 
+/* Relearn: the background pass that re-processes every unanswered case with
+   the owner's feedback folded in. RELEARN mirrors the server's doc.relearn;
+   relearnBanner controls the slim status line under the progress bar
+   ("hidden" | "learning" | "settled"), independent of RELEARN.status so the
+   "settled" message can hang around for a few seconds after the pass ends. */
+let RELEARN = { status: "idle" };
+let FEEDBACK_LOG = [];
+let relearnBanner = "hidden";
+let relearnPollTimer = null;
+let relearnSettleTimer = null;
+
 /* ── Fetch helper (same shape as setter.html's) ───────────── */
 async function fetchJson(url, opts) {
   try {
@@ -115,6 +147,61 @@ function showError(msg) {
 }
 function clearError() { document.getElementById("errBanner").style.display = "none"; }
 
+/* ── Relearn: background pass + its status line ───────────── */
+function handleRelearnResponse(relearn) {
+  if (!relearn) return;
+  RELEARN = relearn;
+  if (RELEARN.status === "running") {
+    relearnBanner = "learning";
+    startRelearnPolling();
+    render();
+  }
+}
+function startRelearnPolling() {
+  if (relearnPollTimer) return; // already polling, never double up
+  relearnPollTimer = setInterval(pollRelearnOnce, 8000);
+}
+function stopRelearnPolling() {
+  if (relearnPollTimer) { clearInterval(relearnPollTimer); relearnPollTimer = null; }
+}
+async function pollRelearnOnce() {
+  const res = await fetchJson("/api/setter/grading");
+  if (!res.ok) return; // a transient poll failure is not worth surfacing - just try again next tick
+  const data = res.data || {};
+  RELEARN = data.relearn || { status: "idle" };
+  FEEDBACK_LOG = data.feedback_log || [];
+  const freshById = {};
+  (data.cases || []).forEach((c) => { freshById[c.id] = c; });
+  const displayedId = (view === "case" && CASES[idx]) ? CASES[idx].id : null;
+  let currentCaseChanged = false;
+  CASES = CASES.map((c) => {
+    if (ANSWERS[c.id]) return c; // never let a background pass touch an already-answered case's display
+    const updated = freshById[c.id];
+    if (!updated) return c;
+    if (JSON.stringify(updated) !== JSON.stringify(c)) {
+      if (c.id === displayedId) currentCaseChanged = true;
+      return updated;
+    }
+    return c;
+  });
+  if (RELEARN.status !== "running") {
+    stopRelearnPolling();
+    if (relearnBanner === "learning") {
+      relearnBanner = "settled";
+      if (relearnSettleTimer) clearTimeout(relearnSettleTimer);
+      relearnSettleTimer = setTimeout(() => { relearnBanner = "hidden"; relearnSettleTimer = null; render(); }, 4000);
+    }
+    render();
+  } else if (currentCaseChanged) {
+    render();
+  }
+}
+function renderRelearnBanner() {
+  if (relearnBanner === "learning") return `<div class="grade-relearn-banner">Learning from your feedback - updating the remaining examples...</div>`;
+  if (relearnBanner === "settled") return `<div class="grade-relearn-banner settled">Remaining examples updated.</div>`;
+  return "";
+}
+
 /* ── Load ──────────────────────────────────────────────── */
 async function loadGrading() {
   const res = await fetchJson("/api/setter/grading");
@@ -122,6 +209,12 @@ async function loadGrading() {
   clearError();
   CASES = (res.data && res.data.cases) || [];
   ANSWERS = (res.data && res.data.answers) || {};
+  RELEARN = (res.data && res.data.relearn) || { status: "idle" };
+  FEEDBACK_LOG = (res.data && res.data.feedback_log) || [];
+  // A relearn pass may already be running from a previous answer (e.g. the
+  // page was reloaded mid-pass) - pick the polling back up so the banner and
+  // live case updates resume without the user re-triggering anything.
+  if (RELEARN.status === "running") { relearnBanner = "learning"; startRelearnPolling(); }
   if (!CASES.length) { view = "empty"; render(); return; }
   // Resume where the user left off: land on the first unanswered case, or
   // the final results screen once every case has an answer.
@@ -160,6 +253,27 @@ function callLineFor(c) {
   return { cls: "n", text: `Filed as no action - ${c.reason || "no action needed"}` };
 }
 
+function leadContextLine(c) {
+  const name = esc((c.lead_first_name && String(c.lead_first_name).trim()) || "Unknown name");
+  return c.company_domain ? `${name} &middot; ${esc(c.company_domain)}` : name;
+}
+
+/* Earlier messages in the thread, chronological, oldest first (matches the
+   order case.thread is stored in), each line labelled You/Them. */
+function renderThread(thread) {
+  if (!thread || !thread.length) return "";
+  const rows = thread.map((m) => {
+    const who = String(m.type || "").toUpperCase() === "SENT" ? "You" : "Them";
+    const body = esc(String(m.email_body || m.body || "")).replace(/\n/g, "<br>");
+    return `<div class="grade-thread-msg"><b>${who}:</b> ${body || "<i>No message text.</i>"}</div>`;
+  }).join("");
+  return `
+    <details class="grade-thread">
+      <summary>Earlier in this thread</summary>
+      <div class="grade-thread-body">${rows}</div>
+    </details>`;
+}
+
 function renderCase() {
   const el = document.getElementById("gradeApp");
   const c = CASES[idx];
@@ -171,14 +285,18 @@ function renderCase() {
   const answeredCount = CASES.filter((x) => ANSWERS[x.id] && ANSWERS[x.id].decision_ok !== undefined).length;
   const call = callLineFor(c);
   const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
+  const updatedTag = c.updated_by_feedback ? `<span class="grade-updated-tag">Updated with your feedback</span>` : "";
 
   el.innerHTML = `
     <div class="grade-progress">Case ${idx + 1} of ${total} &middot; ${answeredCount} of ${total} answered</div>
+    <div class="grade-lead-line">${leadContextLine(c)}</div>
+    ${renderRelearnBanner()}
+    ${renderThread(c.thread)}
     <div class="grade-card">
       <div class="grade-lab">Their message</div>
       <div class="grade-msg">${esc(c.inbound || "").replace(/\n/g, "<br>") || "<i>No message text.</i>"}</div>
     </div>
-    <div class="grade-call ${call.cls}">${esc(call.text)}</div>
+    <div class="grade-call ${call.cls}">${esc(call.text)}${updatedTag}</div>
     ${hasDraft ? `
     <div class="grade-card">
       <div class="grade-lab">The proposed reply</div>
@@ -254,8 +372,9 @@ async function persistAnswer(c) {
   const res = await fetchJson("/api/setter/grading/answer", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
-  if (!res.ok) showError("Couldn't save that answer: " + res.error);
-  else clearError();
+  if (!res.ok) { showError("Couldn't save that answer: " + res.error); return; }
+  clearError();
+  handleRelearnResponse(res.data && res.data.relearn);
 }
 
 async function goNext() {
@@ -314,8 +433,14 @@ function renderFinal() {
   const autoAgree = autoCases.filter((c) => ANSWERS[c.id].decision_ok === true).length;
   const heldAgree = heldCases.filter((c) => ANSWERS[c.id].decision_ok === true).length;
 
-  const notes = CASES.filter((c) => ANSWERS[c.id] && ANSWERS[c.id].note)
-    .map((c) => ({ inbound: c.inbound, note: ANSWERS[c.id].note }));
+  // "What you taught it" is sourced from the server's feedback_log (every
+  // note left, plus the case's own inbound text for context), not just the
+  // locally-held ANSWERS - it's what the relearn pass actually saw.
+  const caseById = {};
+  CASES.forEach((c) => { caseById[c.id] = c; });
+  const taughtNotes = (FEEDBACK_LOG || [])
+    .filter((e) => e && e.note)
+    .map((e) => ({ inbound: (caseById[e.case_id] || {}).inbound || "", note: e.note }));
 
   el.innerHTML = `
     <div class="grade-card">
@@ -341,10 +466,16 @@ function renderFinal() {
           <div class="gs-lab">Agreement on cases held for a person (${heldCases.length})</div>
         </div>
       </div>
-      ${notes.length ? `
+      <div class="grade-stat-row">
+        <div class="grade-stat">
+          <div class="gs-num">${(RELEARN && RELEARN.cases_updated) || 0}</div>
+          <div class="gs-lab">Examples updated from your feedback</div>
+        </div>
+      </div>
+      ${taughtNotes.length ? `
       <div class="grade-notes">
-        <div class="grade-lab">Notes you left</div>
-        ${notes.map((n) => `<div class="grade-note-item"><b>${esc(truncateText(n.inbound || "", 70))}</b><div class="small muted" style="margin-top:4px">${esc(n.note)}</div></div>`).join("")}
+        <div class="grade-lab">What you taught it</div>
+        ${taughtNotes.map((n) => `<div class="grade-note-item"><b>${esc(truncateText(n.inbound || "", 70))}</b><div class="small muted" style="margin-top:4px">${esc(n.note)}</div></div>`).join("")}
       </div>` : ""}
       <button type="button" class="btn" id="gradeResetBtn" style="margin-top:18px">Start over (clear all answers)</button>
     </div>
