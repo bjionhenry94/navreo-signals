@@ -3052,6 +3052,23 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     renderLeadCountSpans();
   }
 
+  // "Last verified 3 Jul 2026, 8:14 am BST · 412 checked · 37 removed" — the
+  // campaign's durable verification record (verify_campaign_state via
+  // /api/verify-status), so nobody has to guess whether a list was ever
+  // cleaned. Empty string when the campaign has never been verified.
+  function lastVerifiedLine(cid) {
+    const st = _verifyStatus[String(cid)];
+    if (!st || !st.last_verify_at) return "";
+    const d = new Date(st.last_verify_at);
+    if (isNaN(d.getTime())) return "";
+    const when = d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+    const ct = st.counts || {};
+    const checked = ct.total != null ? fmtN(ct.total) : "?";
+    const removed = fmtN(Number(ct.removed || 0));
+    return `<div class="dlv-vmeta dlv-vlast" data-cid="${esc(String(cid))}" style="display:block;margin-top:2px">Last verified ${esc(when)} · ${checked} checked · ${removed} removed</div>`;
+  }
+
   function renderVerifyCampRow(c) {
     const cid = String(c.id);
     const cl = (S.A.history || []).find((h) => String(h.campaign) === String(c.id));
@@ -3079,6 +3096,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return `<div class="dlv-vcamp${busy ? " dlv-vcamp-busy" : ""}"${cl && !busy ? ' style="opacity:.7"' : ""}>
       <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>
       <span class="dlv-vmeta">${c.bounce_pct}% bounce${isLive() ? ` · <span class="dlv-vleads" data-cid="${c.id}" data-sent="${c.sent}">${vleadsContent}</span>` : ""}</span>${badge}
+      ${lastVerifiedLine(cid)}
       <div class="dlv-vbtns">
         <button class="btn sm" data-act="verify-campaign" data-id="${c.id}" data-mode="listmint" data-done="${cl ? esc(cl.date) : ""}"${dis} title="ListMint verification — SMTP + catch-all, every lead">✓ ${glossify("ListMint")}</button>
         <span class="dlv-vsep" aria-hidden="true"></span>
@@ -3119,6 +3137,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return `<div class="dlv-vcamp">
         <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(st.name || c.name)}</a>
         <span class="dlv-vmeta">${esc(meta.join(" · "))}</span>
+        ${lastVerifiedLine(cid)}
         ${btns.length ? `<div class="dlv-vbtns">${btns.join("")}</div>` : ""}
       </div>`;
     }).join("");

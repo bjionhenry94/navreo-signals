@@ -3693,12 +3693,21 @@ def _jobs_recover_orphans():
     """On boot, mark this instance's orphaned in-flight jobs 'interrupted'.
 
     A job left 'running'/'queued' when a process dies has no live worker, so the
-    UI must be told to stop showing it as active. We DO NOT auto-re-run it: the
-    user resumes on demand with the sidebar's Resume button (which continues
-    cheaply from the 60-day verdict cache). Auto-resume was removed because it
-    stormed — every server incarnation (including overlapping deploy instances
-    and any dev box sharing this Supabase) would re-enqueue the SAME jobs,
-    producing duplicate concurrent ListMint runs and wasted credits.
+    UI must be told to stop showing it as active.
+
+    Auto-resume history: removed 2026-07 because it stormed — every server
+    incarnation (including overlapping deploy instances and any dev box sharing
+    this Supabase) would re-enqueue the SAME jobs, producing duplicate
+    concurrent ListMint runs and wasted credits. Restored 2026-07-12 in
+    _sweep_orphan_jobs with guards that close each storm vector: production
+    instance only (_ON_RENDER + exact owner match, so dev boxes never
+    re-enqueue), a compare-and-set on app_jobs.auto_resumed (so overlapping
+    incarnations can't both re-enqueue the same row — Postgres arbitrates),
+    the _campaign_has_active_job check under _JOB_CREATE_LOCK (same TOCTOU
+    guard as the manual Resume button), and it only ever fires for rows the
+    sweep itself just transitioned running/queued → interrupted — historical
+    'interrupted' rows stay manual-resume-only. Credit safety is the 60-day
+    verdict cache: a continuation only pays for not-yet-checked emails.
 
     Ownership guard: only touch rows this instance owns (`owner` = _SERVER_INSTANCE),
     so a local/dev server can never mark or disturb production's live jobs, and
@@ -3726,7 +3735,9 @@ def _sweep_orphan_jobs(grace_s: int):
     try:
         from urllib.parse import quote
         stuck = sb("GET", "app_jobs?status=in.(running,queued)"
-                          f"&updated_at=lt.{quote(cutoff, safe='')}&select=id,owner")
+                          f"&updated_at=lt.{quote(cutoff, safe='')}"
+                          "&select=id,owner,kind,campaign_id,mode,label,auto_remove,"
+                          "resume_count,auto_resumed")
     except Exception:  # noqa: BLE001 — best-effort; never block boot or the sweeper
         return
     with JOBS_LOCK:
@@ -3744,6 +3755,34 @@ def _sweep_orphan_jobs(grace_s: int):
                 "finished_at": _now_iso()})
         except Exception:  # noqa: BLE001 — one bad row must not stop the rest
             continue
+        _maybe_auto_resume(r)
+
+
+def _maybe_auto_resume(r: dict):
+    """Auto-resume a verify job the sweep just marked 'interrupted' — guarded
+    so the 2026-07 duplicate-run storm cannot recur (see _jobs_recover_orphans
+    docstring for the full guard rationale). At most one automatic continuation
+    per app_jobs row, enforced by a compare-and-set on auto_resumed so parallel
+    incarnations can't both win. Anything skipped here stays 'interrupted' with
+    the manual Resume button as the fallback."""
+    if not (_ON_RENDER and r.get("owner") == _SERVER_INSTANCE):
+        return  # production instance only — dev boxes never re-enqueue
+    if r.get("kind") != "verify" or r.get("auto_resumed"):
+        return
+    try:
+        with _JOB_CREATE_LOCK:
+            if _campaign_has_active_job(r.get("campaign_id")):
+                return  # something is already working this campaign
+            claimed = sb("PATCH",
+                         f"app_jobs?id=eq.{r['id']}&auto_resumed=eq.false",
+                         {"auto_resumed": True}, prefer="return=representation")
+            if not claimed:  # another incarnation claimed it first
+                return
+            new_job = _reenqueue_verify(r, (r.get("resume_count") or 0) + 1)
+        print(f"[auto-resume] job {r['id']} (campaign {r.get('campaign_id')}) "
+              f"-> continuation {new_job['id']}")
+    except Exception as e:  # noqa: BLE001 — a failed resume must not kill the sweep
+        print(f"[auto-resume] failed for job {r.get('id')}: {e}")
 
 
 def _job_zombie_sweeper():
@@ -4236,6 +4275,10 @@ def _verify_state_upsert(campaign_id, **fields):
     row = {"campaign_id": str(campaign_id),
            "updated_at": datetime.now(timezone.utc).isoformat()}
     row.update({k: v for k, v in fields.items() if v is not None})
+    # Any state change here (verify finished, bad leads removed, dismissed)
+    # changes what "N to verify" should show — drop the hour-long cached count
+    # so the next repaint recomputes instead of serving a stale number.
+    _LEAD_COUNT_CACHE.pop(str(campaign_id), None)
     sb("POST", "verify_campaign_state?on_conflict=campaign_id", row,
        prefer="resolution=merge-duplicates,return=minimal")
 
@@ -9799,6 +9842,13 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(outreach_destinations({"refresh": refresh}))
+        if path == "/api/version":
+            # Deploy verification: which commit/instance is actually serving.
+            return self._json({"commit": _GIT_COMMIT or None,
+                               "server_instance": _SERVER_INSTANCE,
+                               "render_instance_id": os.environ.get("RENDER_INSTANCE_ID"),
+                               "on_render": _ON_RENDER,
+                               "uptime_seconds": round(time.time() - _BOOT_AT)})
         if path == "/api/jobs":
             # Memory first (live progress), then union in durable app_jobs rows
             # that aren't in memory (recent history + jobs from before a restart).
@@ -9845,21 +9895,21 @@ class Handler(SimpleHTTPRequestHandler):
                         break
                     except Exception:  # noqa: BLE001 — retry, then "unknown" not a 500
                         continue
-                # Owner request 2026-07-11: "leads to verify" must exclude
-                # emails already verified recently. Emails checked in the last
-                # _VERIFY_TTL_DAYS for this campaign sit in email_verifications
-                # (the overflow tier tags campaign_id) — a verify run would
-                # skip them via its cache, so don't count them as "to verify".
+                # "Leads to verify" excludes leads already verified within
+                # _VERIFY_TTL_DAYS. A verify run's cache lookup spans TWO
+                # tiers (people.email_verification + email_verifications), so
+                # the discount must too — the old email_verifications-only
+                # subtraction undercounted whenever verdicts landed on people
+                # rows (the primary tier). campaign_verified_count() is a
+                # Postgres function doing the distinct-email union across both
+                # tiers, using contact_history to know which emails belong to
+                # this campaign.
                 if n:
                     try:
-                        from datetime import datetime, timedelta, timezone
-                        from urllib.parse import quote as _q
-                        _cut = (datetime.now(timezone.utc)
-                                - timedelta(days=_VERIFY_TTL_DAYS)).isoformat()
-                        _vc = sb_count(f"email_verifications?campaign_id=eq.{_q(str(cid), safe='')}"
-                                       f"&verified_at=gt.{_q(_cut, safe='')}&select=email")
-                        if _vc is not None:
-                            n = max(0, n - _vc)
+                        _vc = sb("POST", "rpc/campaign_verified_count",
+                                 {"cid": str(cid), "ttl_days": _VERIFY_TTL_DAYS})
+                        if isinstance(_vc, (int, float)):
+                            n = max(0, n - int(_vc))
                     except Exception:  # noqa: BLE001 — best-effort discount; raw total beats a 500
                         pass
                 if n is not None:
@@ -10448,11 +10498,62 @@ def _boot_warmup():
     print(f"[warmup] complete in {time.time() - t0:.1f}s")
 
 
+_BOOT_AT = time.time()
+_GIT_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or ""
+_BOOT_LEDGER_ID = [None]  # set once _boot_ledger_start's insert lands
+
+
+def _boot_ledger_start():
+    """One server_boot_ledger row per process boot, plus a 60s heartbeat on
+    that row's last_seen_at. The next boot reads the previous incarnation's
+    row to compute how long it lived (prev_uptime_seconds) — that gap pattern
+    is what lets a restart be attributed to redeploy vs idle spin-down vs
+    crash without any Render API access. Best-effort: a Supabase outage must
+    never block boot."""
+    from datetime import datetime, timezone
+    prev_uptime = None
+    try:
+        prev = sb("GET", f"server_boot_ledger?server_instance=eq.{_SERVER_INSTANCE}"
+                         "&order=booted_at.desc&limit=1&select=booted_at,last_seen_at")
+        if prev:
+            b = datetime.fromisoformat(prev[0]["booted_at"].replace("Z", "+00:00"))
+            s = datetime.fromisoformat(prev[0]["last_seen_at"].replace("Z", "+00:00"))
+            prev_uptime = max(0.0, (s - b).total_seconds())
+    except Exception as e:  # noqa: BLE001
+        print(f"[boot-ledger] prev-uptime read failed: {e}")
+    try:
+        row = sb("POST", "server_boot_ledger",
+                 {"booted_at": datetime.now(timezone.utc).isoformat(),
+                  "server_instance": _SERVER_INSTANCE,
+                  "render_instance_id": os.environ.get("RENDER_INSTANCE_ID"),
+                  "git_commit": _GIT_COMMIT, "prev_uptime_seconds": prev_uptime},
+                 prefer="return=representation")
+        if row:
+            _BOOT_LEDGER_ID[0] = row[0]["id"]
+            print(f"[boot-ledger] row {row[0]['id']} (prev uptime "
+                  f"{prev_uptime and round(prev_uptime) or 'unknown'}s)")
+    except Exception as e:  # noqa: BLE001
+        print(f"[boot-ledger] insert failed: {e}")
+
+    def _heartbeat():
+        from datetime import datetime, timezone
+        while _BOOT_LEDGER_ID[0] is not None:
+            time.sleep(60)
+            try:
+                sb("PATCH", f"server_boot_ledger?id=eq.{_BOOT_LEDGER_ID[0]}",
+                   {"last_seen_at": datetime.now(timezone.utc).isoformat()})
+            except Exception:  # noqa: BLE001 — the heartbeat must never die
+                pass
+    if _BOOT_LEDGER_ID[0] is not None:
+        threading.Thread(target=_heartbeat, daemon=True).start()
+
+
 if __name__ == "__main__":
     # Render injects $PORT and needs 0.0.0.0; locally, argv[1] or 7901 on 127.0.0.1.
     port = int(os.environ.get("PORT") or (sys.argv[1] if len(sys.argv) > 1 else 7901))
     host = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
     print(f"Serving {PROJECT_DIR} + /api on http://{host}:{port}")
+    threading.Thread(target=_boot_ledger_start, daemon=True).start()
     threading.Thread(target=_boot_warmup, daemon=True).start()
     # Serialise verify/remove jobs so multiple ListMint runs don't blow its rate
     # limit — extra jobs wait in `queued` until a worker frees.
