@@ -3136,7 +3136,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (dismissed.has(cid)) btns.push(`<button class="btn sm" data-act="verify-undismiss" data-id="${c.id}">Un-ignore</button>`);
       return `<div class="dlv-vcamp">
         <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(st.name || c.name)}</a>
-        <span class="dlv-vmeta">${esc(meta.join(" · "))}</span>
+        <span class="dlv-vmeta">${esc(meta.join(" · "))}${isLive() ? ` · <span class="dlv-vleads" data-cid="${c.id}" data-sent="${c.sent}">counting leads…</span>` : ""}</span>
         ${lastVerifiedLine(cid)}
         ${btns.length ? `<div class="dlv-vbtns">${btns.join("")}</div>` : ""}
       </div>`;
