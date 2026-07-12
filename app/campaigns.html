@@ -155,6 +155,10 @@
 .stratbl td { vertical-align: middle; }
 .stratbl tr.sel td { background: var(--orange-100); }
 .stratbl tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
+.wizck { width: 20px; height: 20px; flex-shrink: 0; border: 2px solid var(--line-2); border-radius: 6px;
+         display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
+         color: #fff; background: transparent; transition: background .12s, border-color .12s; }
+.wizck.on { background: var(--orange); border-color: var(--orange); }
 
 /* Gojiberry-style people preview rows */
 .lead-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 8px; text-align: left; }
@@ -2976,7 +2980,7 @@ function drawWiz() {
     if (rows.length === 1 && !wiz.sources.length) wiz.sources = [rows[0].id];  // one idea = pre-picked, no dead "pick one" step
     body.innerHTML = `
       <h2>${wiz.client ? "Ways into " + esc(wiz.client.name) + "'s market." : "Ways into this market."}</h2>
-      <div class="lead">Fresh ideas for this offer, sized against live data. Pick what to kick off - you approve every person before anything sends.</div>
+      <div class="lead">Fresh ideas for this offer, sized against live data. <b>Tap a row to select it</b> (a checkbox fills in) - pick one or more, then hit Next. You approve every person before anything sends.</div>
       <div class="small" style="margin:-8px 0 12px"><span class="pill g">goal applied</span> <span class="muted">"${esc(wiz.goal)}"${wiz.mechanism ? ` · you meant the ${wiz.mechanism.replace("_", " ")} signal, so that is all we built` : ""}${wiz.avoid ? ` · avoiding: ${esc(wiz.avoid)}` : ""}</span></div>
       <div style="display:flex;gap:8px;align-items:center;margin:0 0 14px;justify-content:center">
         <input id="wiz-steer" value="${esc(wiz.goal || "")}" placeholder="Change the goal and redo"
@@ -2991,8 +2995,8 @@ function drawWiz() {
           const biggest = !r.estimated && r.dms === Math.max(...rows.filter((x) => !x.estimated).map((x) => x.dms || 0));
           const on = wiz.sources.includes(r.id);
           return `<tr class="click ${on ? "sel" : ""}" title="${esc(r.signal || "")}" onclick="wizToggle('sources','${r.id}')">
-            <td style="width:30px"><span class="ictile" style="width:26px;height:26px">${ic8(meta[0])}</span></td>
-            <td><div style="font-weight:600">${esc(r.idea)}${r.id === (strat.rows || [])[0]?.id ? ' <span class="pill g" title="Best balance of fit, timing and reach">recommended</span>' : ""}</div>
+            <td style="width:54px"><span style="display:inline-flex;align-items:center;gap:7px"><span class="wizck ${on ? "on" : ""}" aria-hidden="true">${on ? "✓" : ""}</span><span class="ictile" style="width:26px;height:26px">${ic8(meta[0])}</span></span></td>
+            <td><div style="font-weight:600">${esc(r.idea)}${on ? ' <span class="pill g" style="background:var(--orange);color:#fff">✓ selected</span>' : ""}${r.id === (strat.rows || [])[0]?.id ? ' <span class="pill g" title="Best balance of fit, timing and reach">recommended</span>' : ""}</div>
               ${ice ? `<div class="small" style="color:var(--ink-2);font-style:italic;margin-top:2px">"${esc(ice)}"</div>` : ""}</td>
             <td style="text-align:right">${r.estimated ? `<span class="muted small">${r.mechanism === "engagement" ? "tracked live" : "sized on first run"}</span>` : `${r.approx ? "≈ " : ""}<b>${fmt(r.dms)}</b>${r.approx ? ' <span class="muted small" title="An estimate - the daily pull counts the real people">estimated</span>' : ""}${biggest ? ' <span class="pill n" title="Biggest list, usually colder">largest</span>' : ""}`}</td>
           </tr>`;
