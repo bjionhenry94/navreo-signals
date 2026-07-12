@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v1 rl2 -->
+<!-- offer-maker-v2-async -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
@@ -158,15 +158,45 @@ async function generate(){
     stext.textContent = phases[ph];
     bar.style.width = Math.min(92, parseFloat(bar.style.width||0)+8) + "%"; }, 9000);
   bar.style.width = "8%";
+  const SLOW_MSG = "This is taking longer than usual. Please wait a moment and try again. If it keeps happening, email us your website address and we'll run it for you.";
+  const GENERIC_MSG = "Something went wrong on our side. Please try again in a moment.";
+  // Read a response as JSON without ever letting r.json() throw a raw
+  // "Unexpected token '<'" at a normal person: a gateway timeout returns an
+  // HTML page, so parse the text ourselves and treat non-JSON as a plain error.
+  async function readJson(r){
+    const raw = await r.text();
+    try { return JSON.parse(raw); }
+    catch(_) { return {ok:false, message:(r.status>=502&&r.status<=504)?SLOW_MSG:GENERIC_MSG}; }
+  }
   try {
-    const r = await fetch("/api/offer/generate", { method: "POST",
+    // 1) Kick off the job (fast: just reads the website).
+    const sr = await fetch("/api/offer/start", { method: "POST",
       headers: {"Content-Type":"application/json"}, body: JSON.stringify({url}) });
-    const d = await r.json();
-    if(!r.ok || !d.ok){ throw new Error(d.message || "Something went wrong. Please try again."); }
+    const sd = await readJson(sr);
+    if(!sr.ok || !sd.ok || !sd.job_id){ throw new Error(sd.message || GENERIC_MSG); }
+    // 2) Poll for the result. Each request is short, so no gateway timeout can
+    // hit us even when generation takes two minutes.
+    const started = Date.now();
+    let d = null;
+    while(true){
+      await new Promise(res => setTimeout(res, 3000));
+      if(Date.now() - started > 240000){ throw new Error(SLOW_MSG); }
+      let pr;
+      try {
+        pr = await fetch("/api/offer/result", { method: "POST",
+          headers: {"Content-Type":"application/json"}, body: JSON.stringify({job_id: sd.job_id}) });
+      } catch(_) { continue; }  // transient network blip, keep polling
+      const pd = await readJson(pr);
+      if(pd.status === "running"){ continue; }
+      if(!pd.ok){ throw new Error(pd.message || GENERIC_MSG); }
+      d = pd; break;
+    }
     OFFERS = d.offers; DOMAIN = d.domain;
     render();
   } catch(e) {
-    err.textContent = e.message || "Something went wrong. Please try again.";
+    const friendly = (e && e.message && !/JSON|token|NetworkError|Failed to fetch|Load failed/i.test(e.message))
+      ? e.message : SLOW_MSG;
+    err.textContent = friendly;
     err.style.display = "block";
   } finally {
     clearInterval(tick); st.style.display = "none"; go.disabled = false;

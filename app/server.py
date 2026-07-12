@@ -9212,7 +9212,7 @@ AUTH_SESSION_DAYS = 30
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
                     "/app/offer.html"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
-_AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate",
+_AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
@@ -9391,7 +9391,10 @@ def _offer_fetch_site(url: str):
     return {"domain": domain,
             "title": (title.group(1).strip() if title else domain),
             "description": (desc.group(1).strip() if desc else ""),
-            "text": text[:12_000]}
+            # 6k chars of homepage text is plenty to understand a business, and
+            # keeping the prompt small keeps gpt-5-mini comfortably under the
+            # Render proxy timeout (heavy sites were pushing ~90s and 502ing).
+            "text": text[:6_000]}
 
 
 def _offer_scrub(s: str) -> str:
@@ -9399,18 +9402,10 @@ def _offer_scrub(s: str) -> str:
     return re.sub(r"\s*[—–]\s*", " - ", str(s or "")).strip()
 
 
-def offer_generate(p: dict, ip: str):
-    """Returns (status, body). Real errors, no fallback catalogue."""
-    refusal = _offer_rate_check(ip, "try")
-    if refusal:
-        return 429, {"ok": False, "message": refusal}
-    try:
-        site = _offer_fetch_site(p.get("url") or "")
-    except ValueError as e:
-        return 400, {"ok": False, "message": str(e)}
-    refusal = _offer_rate_check(ip, "gen")
-    if refusal:
-        return 429, {"ok": False, "message": refusal}
+def _offer_llm(site: dict):
+    """Run the gpt-5-mini generation for a fetched site. Returns (status, body).
+    Blocking and slow (up to ~2 min) - callers run it either synchronously
+    (offer_generate, for curl/tests) or in a background thread (offer_start)."""
     key = KEYS.get("OPENAI_API_KEY")
     if not key:
         return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
@@ -9483,6 +9478,99 @@ Reply with ONLY a JSON array of exactly 15 objects, no fences, no commentary:
     print(f"OFFER GEN ok: {site['domain']} -> {len(offers)} offers")
     return 200, {"ok": True, "domain": site["domain"], "site_name": site["title"],
                  "offers": offers}
+
+
+def offer_generate(p: dict, ip: str):
+    """Synchronous path (curl / internal tests). Returns (status, body). The
+    browser uses the async offer_start/offer_result pair instead, so it never
+    hits the Render proxy timeout on a slow generation."""
+    refusal = _offer_rate_check(ip, "try")
+    if refusal:
+        return 429, {"ok": False, "message": refusal}
+    try:
+        site = _offer_fetch_site(p.get("url") or "")
+    except ValueError as e:
+        return 400, {"ok": False, "message": str(e)}
+    refusal = _offer_rate_check(ip, "gen")
+    if refusal:
+        return 429, {"ok": False, "message": refusal}
+    return _offer_llm(site)
+
+
+# ── Async offer jobs ─────────────────────────────────────────────────────────
+# Generation takes 40-130s (gpt-5-mini reasoning), which exceeds the Render
+# proxy's request timeout, so heavy sites 502. offer_start returns a job id in a
+# few seconds (just the site fetch) and runs the LLM in a daemon thread;
+# offer_result is polled by the browser. Every HTTP request stays short.
+# Jobs live in memory only (nothing persisted) with a short TTL sweep.
+_OFFER_JOBS: dict = {}
+_OFFER_JOBS_LOCK = threading.Lock()
+_OFFER_JOB_TTL_S = 900  # a finished result is claimable for 15 min
+
+
+def _offer_job_run(job_id: str, site: dict):
+    status, body = 502, {"ok": False, "message":
+                         "The offer generator hit a problem and couldn't finish. Please try again."}
+    try:
+        status, body = _offer_llm(site)
+    except Exception as e:  # noqa: BLE001 — never let a thread die silently
+        print(f"OFFER JOB {job_id} crashed: {type(e).__name__}: {str(e)[:120]}")
+    with _OFFER_JOBS_LOCK:
+        job = _OFFER_JOBS.get(job_id)
+        if job is not None:
+            if body.get("ok"):
+                job.update(status="done", domain=body["domain"],
+                           site_name=body["site_name"], offers=body["offers"], ts=time.time())
+            else:
+                job.update(status="error", message=body.get("message")
+                           or "Something went wrong. Please try again.", ts=time.time())
+
+
+def offer_start(p: dict, ip: str):
+    """Kick off a generation. Fast: rate-check, fetch the site, spawn the LLM in
+    a thread, return a job id. Returns (status, body)."""
+    refusal = _offer_rate_check(ip, "try")
+    if refusal:
+        return 429, {"ok": False, "message": refusal}
+    try:
+        site = _offer_fetch_site(p.get("url") or "")
+    except ValueError as e:
+        return 400, {"ok": False, "message": str(e)}
+    refusal = _offer_rate_check(ip, "gen")
+    if refusal:
+        return 429, {"ok": False, "message": refusal}
+    if not KEYS.get("OPENAI_API_KEY"):
+        return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
+    import uuid
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _OFFER_JOBS_LOCK:
+        # prune expired / bound memory
+        for jid in [j for j, v in _OFFER_JOBS.items() if now - v.get("ts", now) > _OFFER_JOB_TTL_S]:
+            _OFFER_JOBS.pop(jid, None)
+        if len(_OFFER_JOBS) > 500:
+            _OFFER_JOBS.clear()
+        _OFFER_JOBS[job_id] = {"status": "running", "ts": now}
+    threading.Thread(target=_offer_job_run, args=(job_id, site), daemon=True).start()
+    return 200, {"ok": True, "job_id": job_id}
+
+
+def offer_result(p: dict):
+    """Poll a job. Always returns 200 with JSON so the browser never has to
+    parse a gateway HTML page. Returns (status, body)."""
+    job_id = str(p.get("job_id") or "")
+    with _OFFER_JOBS_LOCK:
+        job = _OFFER_JOBS.get(job_id)
+        job = dict(job) if job else None
+    if job is None:
+        return 200, {"ok": False, "status": "error",
+                     "message": "That result expired. Please make your offers again."}
+    if job["status"] == "running":
+        return 200, {"ok": True, "status": "running"}
+    if job["status"] == "error":
+        return 200, {"ok": False, "status": "error", "message": job.get("message")}
+    return 200, {"ok": True, "status": "done", "domain": job["domain"],
+                 "site_name": job["site_name"], "offers": job["offers"]}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -10291,10 +10379,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json_with_cookie(
                 {"ok": True, "email": email},
                 _session_cookie(_mint_session(email), AUTH_SESSION_DAYS * 86400))
-        if path == "/api/offer/generate":
+        if path in ("/api/offer/generate", "/api/offer/start", "/api/offer/result"):
             # Public offer maker — no session, no drafts_lock (slow LLM call must
             # never block the app), no persistence of the visitor's URL. Rate
-            # limits are enforced inside offer_generate().
+            # limits are enforced inside the handlers. /start + /result are the
+            # async pair the browser uses (each request stays short, immune to
+            # the Render proxy timeout); /generate is the synchronous curl path.
             length = int(self.headers.get("Content-Length") or 0)
             if length > 4096:
                 return self._json({"ok": False, "message": "payload too large"}, 413)
@@ -10304,7 +10394,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             ip = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip() \
                 or self.client_address[0]
-            status, body = offer_generate(p, ip)
+            if path == "/api/offer/start":
+                status, body = offer_start(p, ip)
+            elif path == "/api/offer/result":
+                status, body = offer_result(p)
+            else:
+                status, body = offer_generate(p, ip)
             return self._json(body, status)
         if path.startswith("/api/qa-gate/") and path != "/api/qa-gate/runs" and self._qa_token_ok():
             return self._qa_gate_post(path)
