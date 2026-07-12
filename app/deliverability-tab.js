@@ -596,8 +596,8 @@
       A.campaignsFlagged = [];
       A._liveMissing.push("highbCamps");
     }
-    // Per-reminder health isn't in the /run blob — an empty map keeps
-    // renderReminderRow's `S.A.remHealth[r.id]` lookups returning undefined
+    // Per-reminder health isn't in the /run blob — an empty map keeps the
+    // restore rows' `S.A.remHealth[r.id]` lookups returning undefined
     // (health line simply omitted) instead of throwing on a missing object.
     A.remHealth = {};
     A._live = true;
@@ -1067,7 +1067,7 @@
       // The Inbox & domain manager moved INTO Overview (owner request
       // 2026-07-11, just under the KPI header) — stored pointers to its old
       // tab (and to the even older "reminders" tab) land on Overview.
-      if (v === "reminders") { dlvSubtab = "overview"; UI.mgr.flow = "reminders"; return; }
+      if (v === "reminders") { dlvSubtab = "overview"; UI.mgr.flow = "inwarmup"; return; }
       if (v === "manager") { dlvSubtab = "overview"; return; }
       if (v && DLV_SUBTABS.some(([id]) => id === v)) dlvSubtab = v;
     } catch (e) {}
@@ -2118,7 +2118,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       case "reminder-due": {
         const n = D.reminderDueCount;
         if (!n) return { key: "reminder-due", level: "note", count: 0, resolved: true, text: "No restore reminders due." };
-        return { key: "reminder-due", level: "note", count: n, text: n + " restore reminder(s) due today or overdue.", action: "Check warm-up health and either add back to a campaign or extend the reminder.", reminderDue: true };
+        return { key: "reminder-due", level: "note", count: n, text: n + " restore reminder(s) due today or overdue.", action: "Open the In warm-up view to restore them, or let them keep resting until due.", reminderDue: true };
       }
       case "retired-domains": {
         if (liveMissing("lifecycle")) return null; // not measured by the live audit — claim nothing
@@ -3190,7 +3190,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       ));
     }
     if (it._openManager) btns.push(`<button class="btn sm" data-act="open-manager"${it._mgrFlow ? ` data-flow="${esc(it._mgrFlow)}"` : ""}>${it._mgrFlow === "inwarmup" ? "Open In warm-up ↓" : "Open manager ↓"}</button>`);
-    if (it.reminderDue) btns.push(`<button class="btn sm" data-act="open-reminders">Reminders ↓</button>`);
+    if (it.reminderDue) btns.push(`<button class="btn sm" data-act="open-manager" data-flow="inwarmup">Open In warm-up ↓</button>`);
     if ((it.key === "warmup-notwarming" || it._wc) && it.count > 0) btns.push(`<button class="btn sm primary" data-act="open-warmup-fix">Enable warmup on all</button>`);
     if (it.key === "signatures") btns.push(`<button class="btn sm primary" data-act="open-sig-fix">Fix signatures…</button>`);
     if (it.key === "new-unprocessed") btns.push(`<button class="btn sm primary" data-act="open-process-new">Process…</button>`);
@@ -3361,7 +3361,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     ["notwarming", "Not warming"],
     ["inwarmup", "In warm-up"],
     ["reconnect", "Needs reconnect"],
-    ["reminders", "Restore reminders"],
   ];
 
   // A mailbox row's stable selection key, always a string: live rows key by
@@ -3517,7 +3516,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       notwarming: "Mailboxes with warmup switched OFF — nothing is rebuilding their reputation (Maildoso warms externally, by design)",
       inwarmup: "Resting or warming on purpose, due-date tracked — restore when due",
       reconnect: "Mailboxes whose connection failed — silently sending nothing until reconnected",
-      reminders: "The restore queue — everything waiting to come back, closest due date first",
     };
     const chip = (id, label) => {
       const n = counts[id];
@@ -3525,18 +3523,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return `<button class="dlv-flowchip ${flow === id ? "on" : ""} ${id === "floor" && n ? "warn" : ""}" data-act="mgr-flow" data-flow="${id}" role="tab" aria-selected="${flow === id}" title="${esc(CHIP_TIPS[id] || "")}">${label} <span class="dlv-flowchip-n">${badge}</span></button>`;
     };
     const chips = `<div class="dlv-flowchips" role="tablist">${MGR_FLOWS.map(([id, label]) => chip(id, label)).join("")}</div>`;
-    // Restore reminders (owner request 2026-07-11): a plain ranked queue —
-    // closest due date first, no forecast/visualisations — plus the manual
-    // add-reminder bar. No toolbar, no table shell.
-    if (flow === "reminders") {
-      return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
-        <div class="dlv-subtab-head">${headIc("mail")}Inbox &amp; domain manager<span class="hint">${counts.reminders ? counts.reminders + " waiting to come back" : "restore queue"}</span></div>
-        <div class="dlv-fold-body">
-          ${chips}
-          ${renderRemindersFlowBody()}
-        </div>
-      </div>`;
-    }
     const { minSent, cutoff } = dhCutoffMin();
     const src = dhSource();
     const winSel = flow === "floor" ? `<span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" data-act="mgr-window" title="Reporting window the reply floor is judged over">
@@ -3841,33 +3827,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   /* ============================================================
      17. Restore reminders
      ============================================================ */
-  const WU_REASON_TXT = { off: "warmup off — enable", missing: "mailbox missing at provider", transient: "transient bounce (self-clears)", blocked: "warmup blocked by provider", dead: "dead — needs reconnect" };
-  function renderReminderRow(r) {
-    const today = todayISO();
-    const due = r.dueDate <= today;
-    const daysLeft = daysUntil(r.dueDate);
-    const status = r.done ? `<span class="dlv-rem-tag done">✓ added back</span>` : (due ? `<span class="dlv-rem-tag due">DUE now</span>` : `<span class="dlv-rem-tag wait">in ${daysLeft}d</span>`);
-    const h = S.A.remHealth[r.id];
-    let healthLine = "";
-    if (!r.done && h) {
-      const enableable = h.reasons.off || 0;
-      let s = `<b>${h.total}</b> mailboxes · <span style="color:var(--green)">${h.warming} warming</span>`;
-      if (h.failed) s += ` · <span style="color:var(--red);font-weight:700">${h.failed} not warming</span>` + (enableable ? ` <button class="btn sm" style="padding:4px 9px;font-size:11px" data-act="rem-enable-warmup" data-id="${r.id}">Enable warmup (${enableable})</button>` : "");
-      else s += ` <span style="color:var(--green)">✓ all warming</span>`;
-      if (h.dead) s += ` · <span style="color:var(--ink-3)">${h.dead} dead (needs reconnect)</span>`;
-      const parts = Object.entries(h.reasons || {}).filter(([k, v]) => v > 0).map(([k, v]) => `<b>${v}</b> ${WU_REASON_TXT[k] || k}`);
-      if (parts.length) s += `<div style="margin-top:4px;font-size:11px">${parts.join(" &nbsp;·&nbsp; ")}</div>`;
-      healthLine = `<div class="dlv-rem-health">${s}</div>`;
-    }
-    return `<div class="dlv-rem-row ${r.done ? "done" : ""}">
-      <div class="dlv-rem-main">
-        <div class="dlv-rem-doms">${esc((r.domains || []).join(", "))}</div>
-        <div class="dlv-rem-meta">restored ${esc(r.restoredDate)} · due ${esc(r.dueDate)}${r.note ? " · " + esc(r.note) : ""}</div>
-        ${healthLine}
-      </div>
-      <div class="dlv-rem-acts">${status}${r.done ? `<button class="btn sm" data-act="rem-undo" data-id="${r.id}">↩ Undo</button>` : `<button class="btn sm primary" data-act="rem-done" data-id="${r.id}">✓ Mark added</button>`}<button class="btn sm" data-act="rem-remove" data-id="${r.id}" title="Delete this reminder">Remove</button></div>
-    </div>`;
-  }
   // Rebuilt 2026-07-11 as a restore QUEUE: entries ranked by due date (never
   // insertion order), auto-detected resting domains merged in server-side, a
   // per-client capacity forecast strip on top, and a "Restore to sending"
@@ -3900,75 +3859,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       DATA.plan = Object.assign(DATA.plan, { status: "error", error: String(e && e.message || e) });
       paintPage();
     });
-  }
-  function renderRestoreRow(e) {
-    const badges = [];
-    if (e.blacklisted) badges.push(`<span class="dlv-rst-badge bl" title="This domain is on a public blocklist — restoring is blocked until it is delisted (see the Blacklist tab)">blacklisted</span>`);
-    if (e.source === "auto") badges.push(`<span class="dlv-rst-badge auto" title="Detected from live resting state — nobody typed this in">detected resting</span>`);
-    badges.push(`<span class="dlv-rst-badge client">${esc(e.client || "—")}</span>`);
-    const status = e.overdue ? `<span class="dlv-rem-tag due">DUE now</span>` : `<span class="dlv-rem-tag wait">in ${e.days_left}d</span>`;
-    const h = e.source === "reminder" ? S.A.remHealth[e.id] : null;
-    let healthLine = "";
-    if (h) {
-      const enableable = h.reasons.off || 0;
-      let s = `<b>${h.total}</b> mailboxes · <span style="color:var(--green)">${h.warming} warming</span>`;
-      if (h.failed) s += ` · <span style="color:var(--red);font-weight:700">${h.failed} not warming</span>` + (enableable ? ` <button class="btn sm" style="padding:4px 9px;font-size:11px" data-act="rem-enable-warmup" data-id="${e.id}">Enable warmup (${enableable})</button>` : "");
-      if (h.dead) s += ` · <span style="color:var(--ink-3)">${h.dead} dead (needs reconnect)</span>`;
-      healthLine = `<div class="dlv-rem-health">${s}</div>`;
-    }
-    const attached = e.attached_boxes != null && e.attached_boxes > 0
-      ? ` · <span style="color:var(--green)">${e.attached_boxes} of ${e.mailboxes} already in campaigns</span>` : "";
-    const capLine = `<div class="dlv-rst-capline"><b>${e.mailboxes}</b> mailbox(es) · <b>+${fmtN(e.parked_capacity || 0)}</b>/day when restored${e.zero_cap_boxes ? ` · ${e.zero_cap_boxes} cap(s) held by the audit service` : ""}${attached}</div>`;
-    const restoreBtn = e.blacklisted
-      ? `<button class="btn sm" disabled title="Blocked: still on a blocklist — delist first (Blacklist tab)">Restore to sending</button>`
-      : `<button class="btn sm primary" data-act="rst-restore" data-id="${esc(e.id)}">Restore to sending</button>`;
-    // Every row gets "Mark added" (owner fix 2026-07-11: it existed only on
-    // manual reminders, so detected-resting rows looked broken). Manual rows
-    // tick the reminder off; detected rows dismiss the ledger entry. Both are
-    // bookkeeping only — Smartlead untouched.
-    const secondary = e.source === "reminder"
-      ? `<button class="btn sm" data-act="rem-done" data-id="${esc(e.id)}" title="Bookkeeping only — tick it off without touching Smartlead (use when it was restored outside this app)">✓ Mark added</button><button class="btn sm" data-act="rem-remove" data-id="${esc(e.id)}" title="Delete this reminder">Remove</button>`
-      : `<button class="btn sm" data-act="rst-dismiss" data-id="${esc(e.id)}" data-domains="${esc((e.domains || []).join(","))}" title="Bookkeeping only — clear it from the queue without touching Smartlead (use when it was handled outside this app)">✓ Mark added</button>`;
-    return `<div class="dlv-rem-row">
-      <div class="dlv-rem-main">
-        <div class="dlv-rem-doms">${esc((e.domains || []).join(", "))} ${badges.join(" ")}</div>
-        <div class="dlv-rem-meta">resting since ${esc(e.restoredDate || "?")} · due back <b>${esc(e.dueDate || "?")}</b></div>
-        ${capLine}
-        ${healthLine}
-      </div>
-      <div class="dlv-rem-acts">${status}${restoreBtn}${secondary}</div>
-    </div>`;
-  }
-  // The manager's "Restore reminders" flow body (owner request 2026-07-11:
-  // no forecast, no capacity visualisations — just the queue ranked closest
-  // due date first, one-click Restore, and the manual add bar).
-  function renderRemindersFlowBody() {
-    const rem = S.A.reminders || [];
-    loadRestorePlan();
-    const plan = DATA.plan;
-    const entries = reminderEntries();
-    const loading = plan && plan.status === "loading" && !plan.data;
-    const planErr = plan && plan.status === "error"
-      ? `<div class="dlv-rst-warn">Live restore data unavailable (${esc(plan.error || "error")}) — showing local reminders only. <a class="dlv-dl" data-act="rst-retry">Retry</a></div>` : "";
-    const list = loading
-      ? `<div class="dlv-mb-count" style="padding:10px 0"><span class="dlv-spinner"></span> Loading the restore queue…</div>`
-      : (entries.length ? entries.map(renderRestoreRow).join("") : `<div class="dlv-mb-count" style="padding:10px 0">Nothing is resting or in warm-up recovery right now.</div>`);
-    const doneRows = rem.filter((r) => r.done);
-    const doneFold = doneRows.length
-      ? `<details class="dlv-fold" style="margin-top:14px"><summary>Completed<span class="hint">${doneRows.length} restored / added back</span></summary><div class="dlv-fold-body">${doneRows.map(renderReminderRow).join("")}</div></details>` : "";
-    return `${planErr}
-        ${list}
-        ${doneFold}
-        <div style="margin-top:18px;border-top:1px solid var(--line-2);padding-top:14px">
-        <label class="dlv-field-label" for="dlv-rem-date">Add a manual reminder — date the domain was rested/restored <span class="dlv-field-hint">(due date = +14 days; domains resting via this dashboard appear above automatically)</span></label>
-        <div class="dlv-rem-add">
-          <input class="dlv-input" type="text" id="dlv-rem-doms" placeholder="domains — e.g. getnavreogrowth.org, arnicbiz.biz" data-act="rem-doms-input">
-          <input class="dlv-input" style="width:auto" type="date" id="dlv-rem-date" value="${todayISO()}" data-act="rem-date-input">
-          <button class="btn primary" data-act="rem-add">+ Add 14-day reminder</button>
-        </div>
-        <div class="dlv-rem-err" id="dlv-rem-err">Type at least one domain first</div>
-        <div class="dlv-mb-count" id="dlv-rem-hint" style="margin:-6px 0 4px">Will be due ${esc(addDays(todayISO(), 14))}</div>
-        </div>`;
   }
   // ── Restore-to-sending modal (self-contained; buttons wired directly) ──
   function rstModalClose() { const m = $id("dlv-rst-modal"); if (m) m.remove(); }
@@ -7070,9 +6960,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       UI.mgr.search = "";
       gotoManager();
     }); return; }
-    // "Restore reminders" is the manager's fifth flow chip — same landing.
+    // Legacy alias: the old "Restore reminders" chip was removed — any
+    // lingering deep-link lands on In warm-up, the single restore surface.
     if (act === "open-reminders") { runAct(act, () => {
-      UI.mgr.flow = "reminders"; UI.mgr.search = "";
+      UI.mgr.flow = "inwarmup"; UI.mgr.search = "";
       gotoManager();
     }); return; }
     // Rewired: "Blacklisted domains" is now its own sub-tab (the to-do card's
