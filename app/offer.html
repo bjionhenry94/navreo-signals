@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v8-workedemail -->
+<!-- offer-maker-v9-autoemail -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
@@ -61,12 +61,9 @@
     border-radius: 9px; padding: 10px 12px; font-style: italic; }
   .card .email { white-space: pre-wrap; background: var(--bg-sunken); border: 1px solid var(--line);
     border-radius: 9px; padding: 12px 14px; font-size: 14px; line-height: 1.55; color: var(--ink); }
-  .card .emailbtn { font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 16px;
-    border-radius: 9px; border: 1.5px solid var(--orange); background: #fff; color: var(--orange-700); cursor: pointer; }
-  .card .emailbtn:hover { background: var(--orange-100); }
-  .card .emailbtn:disabled { opacity: 0.6; cursor: default; }
+  .card .emailpending { font-size: 13.5px; color: var(--ink-3); background: var(--bg-sunken);
+    border: 1px dashed var(--line-2); border-radius: 9px; padding: 12px 14px; }
   .card .emailnote { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
-  .card .emailerr { font-size: 12.5px; color: var(--red); margin-top: 6px; }
   .card .why { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; }
   .proof { margin-top: 50px; border-top: 1px solid var(--line-2); padding-top: 30px; }
   .proof h2 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 4px; }
@@ -142,9 +139,9 @@
 
 <script>
 const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","risk_reversal_type","stipulation","opener","why_cold_email"];
-// A fully-worked example cold email is written on demand per offer (the "Write
-// the full cold email" button calls /api/offer/email). Until then, this simple
-// starter email is the fallback in the exports so no row is ever empty.
+// A simple starter email, used only as the fallback if the worked-email write
+// fails for an offer. Normally every card gets a full worked email written for
+// it automatically (see autoWriteEmails below).
 function starterEmail(o){
   return "Hi {{first_name}},\n\n"
     + "[Add one line about them here, like a recent post, a new hire, or a win.]\n\n"
@@ -152,30 +149,38 @@ function starterEmail(o){
     + "Best,\n[Your name]\n\n"
     + "P.S - [Add one real result you have delivered.]";
 }
-// The email used in exports: the worked one if the user generated it, else the starter.
+// The email used in exports: the worked one, or the starter if the write failed.
 function exportEmail(o){ return o._email || starterEmail(o); }
 
-async function writeEmail(i, btn){
-  const wrap = btn.parentElement;
-  btn.disabled = true; btn.textContent = "Writing the email...";
+// Fill one card's email box with a fully-worked cold email from the server.
+async function genEmailInto(i){
+  const wrap = document.getElementById("emailwrap-" + i);
   try {
     const r = await fetch("/api/offer/email", { method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({offer: OFFERS[i], audience: AUDIENCE, domain: DOMAIN}) });
     let d; const raw = await r.text();
-    try { d = JSON.parse(raw); }
-    catch(_) { d = {ok:false, message:(r.status>=502&&r.status<=504)
-      ? "That took too long. Please try again." : "Something went wrong. Please try again."}; }
-    if(!r.ok || !d.ok || !d.email){ throw new Error(d.message || "Couldn't write that email."); }
+    try { d = JSON.parse(raw); } catch(_) { d = {ok:false}; }
+    if(!r.ok || !d.ok || !d.email){ throw new Error(d.message || "fail"); }
     OFFERS[i]._email = d.email;
-    wrap.innerHTML = `<div class="email">${esc(d.email)}</div>
-      <p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`;
+    if(wrap) wrap.innerHTML = `<div class="email">${esc(d.email)}</div>`
+      + `<p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`;
   } catch(e) {
-    btn.disabled = false; btn.textContent = "Write the full cold email";
-    let er = wrap.querySelector(".emailerr");
-    if(!er){ er = document.createElement("p"); er.className = "emailerr"; wrap.appendChild(er); }
-    er.textContent = e.message || "Couldn't write that email.";
+    // Never leave a card stuck: fall back to the starter email.
+    if(wrap) wrap.innerHTML = `<div class="email">${esc(starterEmail(OFFERS[i]))}</div>`
+      + `<p class="emailnote">A starter to personalise. Refresh to try a fully-written version again.</p>`;
   }
+}
+
+// As soon as the offers render, write a full cold email into every card in the
+// background, a few at a time so the requests stay small and never time out.
+async function autoWriteEmails(){
+  const CONCURRENCY = 4;
+  let next = 0;
+  async function worker(){
+    while(next < OFFERS.length){ const i = next++; await genEmailInto(i); }
+  }
+  await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
 }
 const GROUPS = [
   ["pay_after_result", "Pay after the work is done",
@@ -265,9 +270,9 @@ function render(){
         <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
         <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
         <div class="field"><b>The cold email you'd send</b>
-          <div class="emailwrap">${o._email
+          <div class="emailwrap" id="emailwrap-${OFFERS.indexOf(o)}">${o._email
             ? `<div class="email">${esc(o._email)}</div><p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`
-            : `<button class="emailbtn" onclick="writeEmail(${OFFERS.indexOf(o)}, this)">Write the full cold email</button>`}</div></div>
+            : `<div class="emailpending">Writing the email...</div>`}</div></div>
         <div class="field why"><b>Why this works on cold email</b>${esc(o.why_cold_email)}</div>`;
       g.appendChild(c);
     }
@@ -275,6 +280,7 @@ function render(){
   }
   document.getElementById("results").style.display = "block";
   document.getElementById("results").scrollIntoView({behavior:"smooth"});
+  autoWriteEmails();  // fill every card's full cold email in the background
 }
 
 function csvCell(s){ s = String(s??""); return '"' + s.replace(/"/g,'""') + '"'; }
