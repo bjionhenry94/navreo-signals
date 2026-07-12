@@ -1008,6 +1008,15 @@ function section3(rows) {
    merged group on both the eager pass and a lazy re-expand. */
 let variantAnalysisRows = [];
 let variantAnalysisCtx = new Map();
+let variantsByCampaign = new Map();
+function buildVariantsByCampaign(rows) {
+  const map = new Map();
+  rows.forEach((n) => {
+    const key = String(n.campaign_id);
+    if (!map.has(key) && parsedVariants(n)) map.set(key, n);
+  });
+  return map;
+}
 
 /* A short label for a variant-analysis finding, used as the card's lead-in
    (mirrors the "N. Campaign" lead-in on a normal recommended-action card). */
@@ -1043,10 +1052,11 @@ function variantFindingCardHTML(n) {
       ${actionBtn(n, "actioned", "Mark as completed", "Completed")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
-    ${(n.detail || angle) ? `<details class="ab-why"><summary>Why?</summary><div class="ab-why-body">
+    <details class="ab-why"><summary>Why?</summary><div class="ab-why-body">
       ${n.detail ? `<div class="ab-impact"><span>${esc(n.detail)}</span></div>` : ""}
       ${angle ? `<div class="ab-impact"><span><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span>: ${esc(angle)}</span></div>` : ""}
-    </div></details>` : ""}
+      ${variantsTableHTML(variantsByCampaign.get(String(n.campaign_id)) || n)}
+    </div></details>
   </div>`;
 }
 
@@ -1560,6 +1570,7 @@ function draw() {
   // lazy re-expand. See variantAnalysisSectionHTML().
   variantAnalysisRows = by(4);
   variantAnalysisCtx = ctxMap;
+  variantsByCampaign = buildVariantsByCampaign(all.filter(matchesActiveClient));
   const rec7Count = by(7).length + variantAnalysisRows.length;
 
   // Sections renumbered sequentially for display (1-6) — the internal data
