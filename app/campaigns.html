@@ -476,6 +476,13 @@ function route() {
 
 let dtab = sessionStorage.getItem("cdtab") || "overview";
 async function renderDraftCampaign(id) {
+  // Opening a DIFFERENT campaign always starts on Overview (the headline
+  // performance numbers) — the tab stays sticky only while you're inside one
+  // campaign. Without this, arriving from the list dropped you on whatever tab
+  // you last used (usually Sources), hiding the numbers a step away — four
+  // testers flagged "why did it open on Sources?".
+  if (window._lastCampaignId !== id && !window._swrRepaint) { dtab = "overview"; sessionStorage.setItem("cdtab", "overview"); }
+  window._lastCampaignId = id;
   // Paint the frame instantly (using the cached draft if we already have it), then hydrate
   // in parallel — the four reads below don't depend on each other, so they fire together.
   const cachedDc = Array.isArray(DB.campaignDrafts) ? DB.campaignDrafts.find((x) => x.id === id) : null;
@@ -1404,7 +1411,7 @@ function perfChart(pd) {
   const anyGap = series.some((s) => s.disp.some((v) => v == null) && s.disp.some((v) => v != null));
   return `${chart}
     <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
-    ${anyGap ? '<div class="small muted" style="margin-top:6px">Gaps mean no data recorded for that day — nothing here is estimated. Counts on the left axis, rates on the right. Hover the lines for exact sources.</div>' : '<div class="small muted" style="margin-top:6px">Counts on the left axis, rates on the right. Hover the legend for exact data sources.</div>'}`;
+    ${anyGap ? '<div class="small muted" style="margin-top:6px">Gaps mean no data recorded for that day — nothing here is estimated. Counts on the left axis, rates on the right. Hover a line for its exact value; hover a legend label for where the number comes from.</div>' : '<div class="small muted" style="margin-top:6px">Counts on the left axis, rates on the right. Hover a line for its exact value.</div>'}`;
 }
 
 async function sendAllLeads(campaignId) {
