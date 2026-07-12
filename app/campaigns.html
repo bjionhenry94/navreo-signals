@@ -1409,7 +1409,23 @@ function perfChart(pd) {
     suffix: "",
   });
   const anyGap = series.some((s) => s.disp.some((v) => v == null) && s.disp.some((v) => v != null));
+  // Plain-English "is it working?" line — the raw multi-line graph answers it
+  // for analysts, but non-technical founders asked for the verdict spelled out.
+  // Bounce rate is the clear health signal (deliverability); reply rate is shown
+  // as context, no verdict (its "good" level is offer/channel-dependent). Only
+  // states a verdict when there IS real data — never invents a health call.
+  const lastOf = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; return null; };
+  const lastBounce = lastOf(brVals), lastReply = lastOf(rrVals), lastSent = lastOf(sentVals);
+  let verdict = "";
+  if (lastBounce != null) {
+    const tone = lastBounce < 2 ? ["#2F9E44", "healthy"] : lastBounce < 5 ? ["#E8590C", "worth watching"] : ["#E03131", "high — check deliverability"];
+    verdict = `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:${tone[0]};display:inline-block"></span>`
+      + `<b>Bounce rate ${lastBounce}%</b> — ${tone[1]}${lastReply != null ? ` · reply rate ${lastReply}%` : ""}${lastSent != null ? ` · ~${fmt(lastSent)} sent on the latest recorded day` : ""}</span>`;
+  } else if (lastSent != null) {
+    verdict = `<b>~${fmt(lastSent)} sent on the latest recorded day.</b> Reply/bounce rates start showing once the daily deliverability sync has a few days of data.`;
+  }
   return `${chart}
+    ${verdict ? `<div class="small" style="margin-top:8px;color:var(--ink-2)">${verdict}</div>` : ""}
     <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
     ${anyGap ? '<div class="small muted" style="margin-top:6px">Gaps mean no data recorded for that day — nothing here is estimated. Counts on the left axis, rates on the right. Hover a line for its exact value; hover a legend label for where the number comes from.</div>' : '<div class="small muted" style="margin-top:6px">Counts on the left axis, rates on the right. Hover a line for its exact value.</div>'}`;
 }
