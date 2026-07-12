@@ -67,6 +67,10 @@ def http_json(method, url, headers, body=None, timeout=90):
 def main():
     hydrate = "--hydrate" in sys.argv
     append = "--append" in sys.argv
+    target = 0
+    for a in sys.argv:
+        if a.startswith("--target="):
+            target = int(a.split("=", 1)[1])
     inbounds = json.load(open(sys.argv[1]))
     keys = load_keys()
     url, srk = keys["SUPABASE_URL"], keys["SUPABASE_SERVICE_ROLE_KEY"]
@@ -94,6 +98,9 @@ def main():
 
     cases = []
     for i, row in enumerate(inbounds):
+        if target and len(cases) >= target:
+            print(f"reached target of {target} good cases")
+            break
         email = (row.get("email") or "").strip().lower()
         campaign_id = row.get("smartlead_campaign_id")
         msg_id = str(row.get("smartlead_message_id") or "")
@@ -119,6 +126,11 @@ def main():
                         break
             else:
                 print(f"  case {i:02d} hydration miss ({herr}) - using archive data")
+        # A grading case with no original outreach is useless - the whole point
+        # is to judge the reply against what we first said. Drop it.
+        if hydrate and not (first_outbound or "").strip():
+            print(f"  case {i:02d} SKIP (no original email recoverable)")
+            continue
         try:
             cls = setter.classify({"subject": row.get("reply_subject") or "", "body": body,
                                    "last_outbound": last_outbound, "first_outbound": first_outbound}, agent)
