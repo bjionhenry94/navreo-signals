@@ -17,15 +17,14 @@
 }
 
 /* ── Slim inline stats row (replaces the 3 big KPI cards) ─────────────── */
-.stats-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 0; flex-wrap: wrap; }
+.stats-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 6px 0 0; flex-wrap: wrap; }
 .stats-inline b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .stats-inline b.amber { color: #6B4A00; }
 .stats-inline .sep { color: var(--line-2); }
 
-/* ── One compact header row: title + inline stats + primary action ────── */
-.setter-head-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; }
-.sh-title { font-family: var(--font-sans); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; margin: 0; }
-.setter-head-row .sh-spacer { flex: 1; }
+/* ── House pagehead (eyebrow + display h1) with the stats line under the
+   title and the primary action on the right ── */
+.setter-head-row { margin: 0 0 12px; align-items: center; }
 
 /* ── Toolbar row: filters + test toggle + Agents/Settings/Try it + master switch pill ── */
 .setter-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
@@ -42,7 +41,7 @@
 /* ── Three-pane inbox shell: list | conversation | fixed lead-info sidebar ── */
 .inbox-shell {
   display: flex; border: 1px solid var(--line); border-radius: var(--radius);
-  overflow: hidden; height: calc(100vh - 140px); min-height: 460px;
+  overflow: hidden; height: calc(100vh - 186px); min-height: 460px;
 }
 .inbox-left { width: 340px; flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
@@ -237,10 +236,12 @@
 <div class="app">
   <div id="rail"></div>
   <main class="main">
-    <div class="setter-head-row">
-      <h1 class="sh-title">Appointment Setter</h1>
-      <div class="stats-inline" id="statsInline"></div>
-      <div class="sh-spacer"></div>
+    <div class="pagehead setter-head-row">
+      <div>
+        <div class="eyebrow">Setter</div>
+        <h1>Appointment setter.</h1>
+        <div class="stats-inline" id="statsInline"></div>
+      </div>
       <button class="btn primary" id="checkNowBtn" type="button">Check for new replies</button>
     </div>
 
