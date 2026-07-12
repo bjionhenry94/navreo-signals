@@ -1618,6 +1618,26 @@ function scTrendHtml(tr) {
   </div>`;
 }
 
+/* Live campaign search: pure DOM display-toggle over the already-rendered rows
+   (every row carries data-search with both its names) — no re-render, so the
+   input never loses focus mid-typing. */
+function filterCampRows(q) {
+  q = String(q || "").trim().toLowerCase();
+  const rows = document.querySelectorAll("#camp-rows [data-search]");
+  let shown = 0;
+  rows.forEach((el) => {
+    // a non-empty search spans EVERY campaign regardless of the status pill —
+    // you search for the name you saw, wherever it lives; with no search the
+    // status pill decides (each row carries its bucket)
+    const hit = q ? (el.getAttribute("data-search") || "").includes(q)
+                  : (window._campFilter === "all" || el.getAttribute("data-bucket") === window._campFilter);
+    el.style.display = hit ? "" : "none";
+    if (hit) shown++;
+  });
+  const nm = document.getElementById("camp-nomatch");
+  if (nm) nm.style.display = (rows.length && !shown) ? "" : "none";
+}
+
 async function renderList() {
   // Paint the skeleton frame first so the list feels instant, then hydrate. The list can paint
   // as soon as the CRITICAL group resolves (campaign-drafts + clients + lead-counts + dests) —
@@ -1714,12 +1734,16 @@ async function renderList() {
   window._campSearch = window._campSearch || "";
   const buckets = { all: scoped.length, active: 0, paused: 0, draft: 0, done: 0, setup: 0 };
   scoped.forEach((r) => { buckets[bucketOf(r.status)]++; });
-  const q = (window._campSearch || "").trim().toLowerCase();
-  let visible = scoped.filter((r) => (window._campFilter === "all" || bucketOf(r.status) === window._campFilter)
-                                     && (!q || String(r.name).toLowerCase().includes(q)));
+  // search matches BOTH the campaign's own title (the draft doc name) and the
+  // platform-side name — a user searches whichever name they last saw.
+  // EVERY scoped row is rendered; the status pill + search box are pure DOM
+  // visibility toggles (filterCampRows), so typing never re-renders the page.
+  const searchable = (r) => `${r.name || ""} ${(r.doc && r.doc.name) || ""}`.toLowerCase();
+  let visible = scoped.slice();
   // managed campaigns first, then alphabetical — the rows you can act on lead
   visible.sort((a, b) => (b.managed - a.managed) || String(a.name).localeCompare(String(b.name)));
-  const ROW_CAP = 150;
+  const ROW_CAP = 1000;  // all rows stay in the DOM so the search box can filter
+                         // them live (display toggle) without re-rendering the page
   const overflow = Math.max(0, visible.length - ROW_CAP);
   visible = visible.slice(0, ROW_CAP);
   const statusPill = (st) => {
@@ -1730,6 +1754,7 @@ async function renderList() {
       : b === "setup" ? '<span class="pill n" title="Created in this tool but not linked to a live Smartlead/HeyReach campaign yet">Needs setup</span>'
       : `<span class="pill" style="opacity:.7">${esc(String(st || "").toLowerCase() || "done")}</span>`;
   };
+  const rowSearchAttr = (r) => ` data-search="${esc(searchable(r))}" data-bucket="${bucketOf(r.status)}"`;
   const managedRow = (r) => {
     const dc = r.doc;
     const lc = leadCounts[String(dc.id)];
@@ -1738,10 +1763,10 @@ async function renderList() {
     const nSent = countUnavailable ? null : lc.sent;
     const notSending = bucketOf(r.status) === "active" && nLeads != null && nLeads > 0 && nSent === 0;
     return `
-    <div class="srcrow click" style="padding:14px 16px;cursor:pointer" onclick="location.hash='${dc.id}'">
+    <div class="srcrow click" style="padding:14px 16px;cursor:pointer"${rowSearchAttr(r)} onclick="location.hash='${dc.id}'">
       <div class="ictile">${destLogo(r.platform)}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:500">${esc(r.name || dc.name)}</div>
+        <div style="font-weight:500">${esc(dc.name || r.name)}${r.name && dc.name && r.name !== dc.name ? ` <span class="small muted" style="font-weight:400" title="The ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} campaign this sends into">→ ${esc(r.name)}</span>` : ""}</div>
         <div class="small muted">${countUnavailable ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span> <span class="muted" style="font-size:10px">(couldn\'t load)</span>' : (nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"} sourced${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No sourced leads yet")} · ${esc((dc.created_at || "").slice(0, 10))}</div>
         <div id="srcdeco-${dc.id}" class="small muted" style="margin-top:6px" title="Source-level details still loading">checking sources…</div>
         <div id="sc-${dc.id}" class="sc-row-holder" onclick="event.stopPropagation()"></div>
@@ -1754,7 +1779,7 @@ async function renderList() {
     </div>`;
   };
   const externalRow = (r) => `
-    <div class="srcrow" style="padding:12px 16px;opacity:.85" title="This campaign runs in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} — it isn't set up in this tool, so it's shown read-only">
+    <div class="srcrow" style="padding:12px 16px;opacity:.85"${rowSearchAttr(r)} title="This campaign runs in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} — it isn't set up in this tool, so it's shown read-only">
       <div class="ictile">${destLogo(r.platform)}</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:500">${esc(r.name)}</div>
@@ -1795,11 +1820,12 @@ async function renderList() {
     <div style="margin-top:16px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
         ${pill("active", "Active")}${pill("paused", "Paused")}${pill("draft", "Draft")}${pill("done", "Done")}${pill("setup", "Needs setup")}${pill("all", "All")}
-        <input id="camp-search" type="search" placeholder="Search ${fmt(buckets.all)} campaigns…" value="${esc(window._campSearch || "")}" style="margin-left:auto;padding:6px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:12.5px;min-width:220px" oninput="window._campSearch=this.value;clearTimeout(window._campSearchT);window._campSearchT=setTimeout(()=>{const p=document.getElementById('camp-search');const pos=p&&p.selectionStart;renderList().then(()=>{const n=document.getElementById('camp-search');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}})},250)">
+        <input id="camp-search" type="search" placeholder="Search ${fmt(buckets.all)} campaigns…" value="${esc(window._campSearch || "")}" style="margin-left:auto;padding:6px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:12.5px;min-width:220px" oninput="window._campSearch=this.value;filterCampRows(this.value)">
       </div>
       ${activeClient ? '<div class="small muted" style="margin-bottom:8px">Client filter on — external (read-only) campaigns are hidden because they don\'t belong to a client in this tool. Switch to All clients to see everything.</div>' : ""}
       ${mirrorBanner}
-      <div class="card">${listRows}</div>
+      <div class="card" id="camp-rows">${listRows}</div>
+      <div class="empty" id="camp-nomatch" style="display:none">Nothing matches — clear the search or try another status pill.</div>
       ${deleted.length ? `
       <details class="card" style="margin-top:16px" ${window._showDeleted ? "open" : ""} ontoggle="window._showDeleted=this.open">
         <summary style="cursor:pointer;padding:12px 16px;font-weight:500;color:var(--ink-2)">Recently deleted (${deleted.length})</summary>
@@ -1816,6 +1842,7 @@ async function renderList() {
       </details>` : ""}
     </div>`;
   hydrateFade(main);  // ease the real list in over the skeleton
+  filterCampRows(window._campSearch);  // apply status-pill + any persisted search visibility
   // Campaign scorecard: live Smartlead per-campaign performance. Fetched in the
   // background (like sources) and patched into the collective strip + each row.
   // leadCounts (already fetched above) supplies "leads sourced" per campaign, so
