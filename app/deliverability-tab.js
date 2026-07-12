@@ -3116,7 +3116,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // (see uncleanedVerifyCamps in derive()) but still need a way back / a
   // Remove path for leftover bad leads. Empty string when neither set has
   // members (renderTodoCard only calls this when the verify card shows).
-  function renderIgnoredVerifyFold() {
+  // `inCard` marks the copy rendered inside the active verify to-do card.
+  // When that card isn't on the page (every flagged campaign recently
+  // verified or ignored), the section renderer places the fold standalone —
+  // without that, the fold's "Remove N bad" buttons and per-campaign verify
+  // records become unreachable the moment the last active campaign clears.
+  let _verifyFoldInCard = false;
+  function renderIgnoredVerifyFold(inCard) {
+    if (inCard) _verifyFoldInCard = true;
     const dismissed = dismissedVerifyCampIds();
     const camps = (S.A.campaignsFlagged || []).filter((c) => {
       const st = _verifyStatus[String(c.id)];
@@ -3147,7 +3154,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function renderTodoCard(it, i, D) {
     const extraBits = [];
     if (it.verifyCamps && it.verifyCamps.length) extraBits.push(`<div class="dlv-vcamps">${it.verifyCamps.map(renderVerifyCampRow).join("")}</div>`);
-    if (it.key === "verify-campaigns") extraBits.push(renderIgnoredVerifyFold());
+    if (it.key === "verify-campaigns") extraBits.push(renderIgnoredVerifyFold(true));
     // Item 5a: the card's own "Manage ↓" button (below) deliberately opens
     // just the Blacklisted-domains fold — the simple, matching-scope target
     // for "pause these domains". The full inbox & domain manager (bulk
@@ -3239,6 +3246,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // (Owner request 2026-07-11: the "Auto-resolved today" row of anonymous
     // "✓ handled" chips is gone — the good-chips row below already says what's
     // healthy in words, and resolved items need no extra badge wall.)
+    // Standalone "Ignored & recently verified" fold when no active verify
+    // card carried it (see renderIgnoredVerifyFold) — verify records and
+    // Remove-bad stay one click away even after everything is verified.
+    if (!_verifyFoldInCard) html += renderIgnoredVerifyFold(false);
+    _verifyFoldInCard = false;
     if (D.goodChips.length) {
       html += `<div class="dlv-good-row">${D.goodChips.map((g) => `<span class="dlv-good-chip">✓ ${esc(g)}</span>`).join("")}</div>`;
     }
