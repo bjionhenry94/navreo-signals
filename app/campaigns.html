@@ -1383,10 +1383,15 @@ function perfChart(pd) {
   const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
   const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(Math.floor(dates.length / 2)), xlab(dates.length - 1)].join("");
   const legend = series.map((s) => {
-    const hasData = s.disp.some((v) => v != null);
+    const nDays = s.disp.filter((v) => v != null).length;
+    const hasData = nDays > 0;
+    // a rate series the data layer only started recording recently (e.g.
+    // mailbox_stats_daily began mid-window) shows as a short fragment — say so
+    // in the legend so it reads as "new data source", not "broken empty chart"
+    const sparse = hasData && nDays < Math.ceil(dates.length * 0.4);
     return `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11px;color:var(--ink-2)" title="${esc((pd.labels || {})[s.axis === "left" ? "sent" : (s.name.startsWith("Reply") ? "reply_rate" : "bounce_rate")] || "")}">`
       + `<span style="width:14px;height:0;border-top:${s.width >= 2.5 ? "3" : "2"}px solid ${s.color};display:inline-block;${hasData ? "" : "opacity:.35"}"></span>`
-      + `${esc(s.name)}${hasData ? "" : ' <span class="muted">(no data in this window)</span>'}</span>`;
+      + `${esc(s.name)}${hasData ? (sparse ? ` <span class="muted">(last ${nDays} day${nDays === 1 ? "" : "s"} only)</span>` : "") : ' <span class="muted">(no data in this window)</span>'}</span>`;
   }).join("");
   const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:210px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>`;
   const chart = chartWrap(svg, {
