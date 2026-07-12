@@ -4431,9 +4431,13 @@ def _mock_verify_worker(job: dict, campaign_id, mode: str):
     from datetime import datetime, timezone
     _job_started(job)
     try:
+        # mock_leads (in-memory only, mock jobs only): lets a restart-survival
+        # test size the fake run long enough to straddle a deploy — at 0.03s a
+        # lead, the default 40 finishes in ~1s, useless for that.
+        n_leads = min(max(int(job.get("mock_leads") or _MOCK_LEAD_COUNT), 1), 30000)
         targets = [{"lead_id": f"mock-{i}", "email": f"mock+{i}@example.com",
                     "replied": False, "status": "STARTED", "is_unsubscribed": False,
-                    "contacted": False} for i in range(_MOCK_LEAD_COUNT)]
+                    "contacted": False} for i in range(n_leads)]
         contacted_skipped = 0
         with JOBS_LOCK:
             job["progress"]["total"] = len(targets)
@@ -4796,6 +4800,8 @@ def api_verify_campaign(p: dict):
         job = _new_job("verify", label, campaign_id, mode, dry_run,
                        auto_remove=auto_remove, mock=mock)
         job["name"] = name
+        if mock and p.get("mock_leads"):
+            job["mock_leads"] = p.get("mock_leads")
         _enqueue_job(_verify_job_worker, job,
                      (job, campaign_id, mode, mv_key, lm_key, sl_key))
     return {"job_id": job["id"]}, 202
