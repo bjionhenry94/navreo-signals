@@ -354,6 +354,29 @@ def guess_timezone(hints: dict):
     return None, 0.0
 
 
+def resolve_timezone(hints: dict, classification: dict):
+    """Best-effort IANA timezone plus whether it is CONFIDENT enough to
+    auto-send at. A deterministic hit (company country/state/city, phone
+    country code, ccTLD) is always confident. Otherwise the model's educated
+    guess (inferred from the company/domain/signature, like a person glancing
+    at LinkedIn) is used for DISPLAY even when weak - so a held draft still
+    shows a plausible local time instead of defaulting to London - but only
+    counts as confident for AUTO-SENDING at tz_confidence >= 0.7, so a real
+    send never fires at a guessed-wrong hour. Returns (tz|None, confident)."""
+    tz, _ = guess_timezone(hints or {})
+    if tz:
+        return tz, True
+    classification = classification or {}
+    guess = classification.get("timezone_guess")
+    try:
+        gc = float(classification.get("tz_confidence") or 0)
+    except (TypeError, ValueError):
+        gc = 0.0
+    if guess:
+        return guess, gc >= 0.7
+    return None, False
+
+
 # ── slot picking + labelling ─────────────────────────────────────────────────
 
 _ORDINAL_SUFFIX = {1: "st", 2: "nd", 3: "rd"}
@@ -615,15 +638,20 @@ def decide(classification: dict, agent: dict, ctx: dict):
     if not ctx.get("first_touch", True):
         return "review", "Held for review: this lead has replied before, so a person should take it."
 
-    # 7. slots + timezone must both be ready
+    # 7. slots + timezone must both be ready. A guessed timezone is fine for
+    # showing a draft, but auto-sending needs to be CONFIDENT of the hour, or
+    # we might propose 2pm when it is 2am for them.
     if ctx.get("timezone") is None:
         return "review", "Held for review: couldn't work out the lead's timezone."
+    if not ctx.get("tz_confident", True):
+        return "review", "Held for review: not sure enough of the lead's timezone to pick a time for them."
     slot_status = ctx.get("slot_status")
     if slot_status != "ok":
         reason_map = {
             "not_configured": "Held for review: Calendly is not connected.",
             "none_available": "Held for review: no free Calendly slots coming up.",
             "error": "Held for review: couldn't load Calendly availability.",
+            "tz_unknown": "Held for review: couldn't work out the lead's timezone.",
         }
         return "review", reason_map.get(slot_status, "Held for review: call times aren't ready.")
 
@@ -689,7 +717,7 @@ live_lead: true when a reply that is otherwise a negative still contains a real 
 
 confidence: 0 to 1, your own honest confidence in this call - not a proxy for how short the message is.
 red_flags: list any hostile/legal/opt-out language you notice (a second deterministic pass also checks this; do not rely on this list alone).
-timezone_guess: an IANA tz name if the reply or signature strongly implies one (city, area code, country), else null. tz_confidence 0 to 1.
+timezone_guess: your best educated guess of the lead's IANA timezone, the way a person would by glancing at their LinkedIn. Infer it from lead_email_domain (a ccTLD like .co.uk / .com.au / .de, or where a company with that domain or name is typically headquartered), company_location when given, the email signature (a phone country code, an address, a city), and the language used. Give an actual IANA name whenever you have ANY reasonable basis - only use null if you genuinely cannot tell at all. When only the country is clear, use that country's primary business timezone (US -> America/New_York, Canada -> America/Toronto, Australia -> Australia/Sydney, Germany -> Europe/Berlin). tz_confidence 0 to 1: 0.9+ for an explicit signal (a stated city, a +country-code phone, a ccTLD); 0.6-0.8 for a strong inference from a clearly-regional company; 0.3-0.5 for a weak lean.
 wants: one plain-English line - what the lead is actually asking for.
 rationale: one line - why you chose this intent.
 original_outreach is the first email we sent this lead - the offer their reply is answering. ALWAYS read it first: it tells you what "sure", "send it", "yes please", "how much", or "not interested" actually refers to. A bare "yes" is only a simple send_resource ask when the outreach (or last_outbound) offered exactly that one thing; if the outreach pitched a call, "yes" is scheduling; if it asked a question, "yes" answers that question and may need a person. When original_outreach is empty, judge from the reply alone and lean toward review on anything ambiguous.
@@ -718,6 +746,9 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
     payload = {
         "reply_subject": reply.get("subject") or "",
         "reply_body": (reply.get("body") or "")[:4000],
+        # so the model can make an educated timezone guess (LinkedIn-style)
+        "lead_email_domain": reply.get("email_domain") or "",
+        "company_location": reply.get("company_location") or "",
         # the ORIGINAL outreach this is a reply to - the offer/pitch that gives
         # "sure, send it" / "what's the price" / "not for us" their meaning
         "original_outreach": (reply.get("first_outbound") or "")[:1500],
@@ -1424,15 +1455,16 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         "country": comp_hints.get("country"), "state": comp_hints.get("state"), "city": comp_hints.get("city"),
         "phone": _extract_phone(body_text), "tld": two_part or tld, "body": body_text,
     }
-    tz, _tz_conf = guess_timezone(hints)
+    company_location = ", ".join([v for v in (comp_hints.get("country"), comp_hints.get("state"),
+                                              comp_hints.get("city")) if v])
 
     lex_hits = lexicon_hits(body_text)
 
     row["first_outbound"] = first_outbound
     try:
         classification = classify({"subject": row["reply_subject"], "body": body_text,
-                                   "last_outbound": last_outbound,
-                                   "first_outbound": first_outbound}, agent)
+                                   "last_outbound": last_outbound, "first_outbound": first_outbound,
+                                   "email_domain": domain, "company_location": company_location}, agent)
     except Exception as e:  # noqa: BLE001 - a classify outage must degrade to review, never crash
         classification = {
             "primary_intent": None, "all_intents": [], "simple_ask": False, "confidence": 0.0,
@@ -1442,12 +1474,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         row["error"] = row.get("error") or f"classify failed: {type(e).__name__}"
     row["classification"] = classification
 
-    if not tz and classification.get("timezone_guess"):
-        try:
-            if float(classification.get("tz_confidence") or 0) >= 0.5:
-                tz = classification.get("timezone_guess")
-        except (TypeError, ValueError):
-            pass
+    tz, tz_confident = resolve_timezone(hints, classification)
     row["timezone"] = tz
 
     row["guardrails"] = {"lexicon_hits": lex_hits, "llm_red_flags": classification.get("red_flags") or []}
@@ -1474,17 +1501,20 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         eff_settings = dict(settings)
         eff_settings["_agent"] = agent
         eff_settings["_lead"] = {"first_name": row["lead_first_name"], "last_name": row["lead_last_name"], "email": email}
-        # Unknown timezone still gets TENTATIVE slots built in London time so
-        # the human reviewer sees concrete times to edit. decide() vetoes
-        # auto-send on timezone=None regardless, so this can't mis-send.
-        slot_tz = tz or "Europe/London"
-        slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
-        if slot_status == "ok":
-            slots = pick_slots(avail, slot_tz, eff_settings, now)
-            if not slots:
-                slot_status = "none_available"
-        if serr and not row.get("error"):
-            row["error"] = serr
+        # Build slots only when we have a timezone (even a low-confidence
+        # guess) - so a held draft shows plausible LOCAL times. When the
+        # timezone is genuinely unknown we never fabricate London times; the
+        # draft falls back to booking-link phrasing instead.
+        if tz:
+            slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
+            if slot_status == "ok":
+                slots = pick_slots(avail, tz, eff_settings, now)
+                if not slots:
+                    slot_status = "none_available"
+            if serr and not row.get("error"):
+                row["error"] = serr
+        else:
+            slot_status = "tz_unknown"
     row["slots"] = slots
 
     draft_subject, draft_body = None, None
@@ -1516,7 +1546,8 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
 
     ctx = {
         "red_flag_hits": lex_hits, "category": category, "first_touch": first_touch,
-        "slot_status": slot_status, "timezone": tz, "lint_ok": lint_ok, "lint_reason": lint_reason,
+        "slot_status": slot_status, "timezone": tz, "tz_confident": tz_confident,
+        "lint_ok": lint_ok, "lint_reason": lint_reason,
         "body_len": len(body_text or ""), "hydrated": hydrated,
         "answered_since_reply": answered_since_reply,
         "autopilot_enabled": bool(settings.get("autopilot_enabled")),
@@ -2180,6 +2211,8 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
             "body": inbound,
             "last_outbound": ctx_src.get("last_outbound") or "",
             "first_outbound": first_outbound,
+            "email_domain": ctx_src.get("email_domain") or "",
+            "company_location": ctx_src.get("company_location") or "",
         }
         cls = classify(reply_for_classify, agent_snapshot, owner_hints=digest)
 
@@ -2220,6 +2253,7 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
         ctx = {
             "red_flag_hits": lexicon_hits(inbound), "category": ctx_src.get("category"),
             "first_touch": True, "slot_status": slot_status, "timezone": tz,
+            "tz_confident": ctx_src.get("tz_confident", tz is not None),
             "lint_ok": lint_ok, "lint_reason": lint_reason,
             "body_len": ctx_src.get("body_len") if ctx_src.get("body_len") is not None else len(inbound),
             "hydrated": True, "answered_since_reply": False, "autopilot_enabled": True,

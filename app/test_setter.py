@@ -1050,15 +1050,63 @@ def test_tz_none_still_builds_tentative_slots_but_vetoes_auto():
     row = setter.process_reply(reply, agent, settings)
 
     check("tz-none: timezone stays unresolved", row.get("timezone") is None, row.get("timezone"))
-    check("tz-none: tentative slots are still built (slot building isn't skipped for tz=None)",
-         len(row.get("slots") or []) > 0, row.get("slots"))
-    check("tz-none: tentative slot labels carry a Europe/London zone abbreviation",
-         all((s.get("label") or "")[-3:] in ("GMT", "BST") for s in (row.get("slots") or [])), row.get("slots"))
-    check("tz-none: decide() still vetoes auto-send purely because the timezone is unresolved",
+    check("tz-none: NO slots are fabricated when the timezone is unknown (never a London default)",
+         len(row.get("slots") or []) == 0, row.get("slots"))
+    check("tz-none: no draft slot uses a Europe/London zone abbreviation",
+         not any((s.get("label") or "")[-3:] in ("GMT", "BST") for s in (row.get("slots") or [])), row.get("slots"))
+    check("tz-none: decide() vetoes auto-send because the timezone is unresolved",
          row.get("decision") == "review", row)
     check("tz-none: veto reason is the timezone gate specifically",
          row.get("decision_reason") == "Held for review: couldn't work out the lead's timezone.",
          row.get("decision_reason"))
+
+
+def test_tz_guessed_low_confidence_shows_local_times_but_holds():
+    # A weak educated guess (e.g. US company, no hard signal): the draft should
+    # show plausible LOCAL times, but the decision must still HOLD - never
+    # auto-send at a possibly-wrong hour.
+    sb, http = fresh_setter()
+    http.calendly_avail = _future_weekday_avail()
+    http.message_history = [{
+        "type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+        "email_body": "Sure, send it over", "message_id": "m-tzLo", "stats_id": "st-tzLo",
+    }]
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.99, "red_flags": [], "timezone_guess": "America/New_York", "tz_confidence": 0.4,
+        "wants": "wants the resource", "rationale": "US company guess",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi",
+                               "html": 'Hi There, <a href="https://x.example/r">Here it is</a>. Best, Sam'}
+    agent = {
+        "id": "agent-tzLo01", "mode": "autopilot", "enabled": True, "campaign_ids": [909],
+        "allowed_intents": ["send_resource", "pricing", "scheduling"], "pricing_notes": "x",
+        "confidence_threshold": 0.9, "resource_link": "https://x.example/r",
+        "calendly_event_url": "https://calendly.com/navreo/book-a-call-with-us-clone-2",
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    settings = {"autopilot_enabled": True, "calendly_token": "tok123"}
+    reply = {"workspace": "navreo", "campaign_id": 909, "email": "there@nofraud.com",
+             "first_name": "There", "message_id": "m-tzLo", "body": "Sure, send it over", "subject": "Re: hi",
+             "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    row = setter.process_reply(reply, agent, settings)
+    check("tz-guess-low: timezone is the guessed zone", row.get("timezone") == "America/New_York", row.get("timezone"))
+    check("tz-guess-low: local slots ARE built for the reviewer to see", len(row.get("slots") or []) > 0, row.get("slots"))
+    check("tz-guess-low: held, not auto-sent", row.get("decision") == "review", row.get("decision"))
+    check("tz-guess-low: reason is the confidence gate",
+         "not sure enough of the lead's timezone" in (row.get("decision_reason") or ""), row.get("decision_reason"))
+
+
+def test_tz_confidence_gate_in_decide():
+    # A guessed timezone that isn't confident holds; a confident one is eligible.
+    d_lo, r_lo = setter.decide(_cls("send_resource"),
+                              AGENT_AUTO, {**CTX_ALL_GOOD, "timezone": "America/New_York", "tz_confident": False})
+    check("tz-decide: low-confidence timezone holds", d_lo == "review", (d_lo, r_lo))
+    check("tz-decide: hold reason is the confidence gate",
+         "not sure enough of the lead's timezone" in r_lo, r_lo)
+    d_hi, r_hi = setter.decide(_cls("send_resource"),
+                              AGENT_AUTO, {**CTX_ALL_GOOD, "timezone": "America/New_York", "tz_confident": True})
+    check("tz-decide: confident guess is eligible to auto-send", d_hi == "auto_send", (d_hi, r_hi))
 
 
 # ── handle_inbound: Smartlead EMAIL_REPLY webhook -> pipeline ───────────────
@@ -1459,6 +1507,8 @@ if __name__ == "__main__":
     test_claim_race_returns_existing_row_without_classifying()
     test_hydrate_lead_answered_since_reply()
     test_tz_none_still_builds_tentative_slots_but_vetoes_auto()
+    test_tz_guessed_low_confidence_shows_local_times_but_holds()
+    test_tz_confidence_gate_in_decide()
     test_handle_inbound_field_mapping()
     test_handle_inbound_non_reply_event_ignored()
     test_handle_inbound_missing_message_id_ignored()

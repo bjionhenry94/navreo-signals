@@ -160,21 +160,24 @@ def process(row, agent, avail, slot_status0, now):
     body = setter.clean_body(row.get("reply_body") or "")
     fe = row.get("first_email") or ""
     domain = email.split("@", 1)[1] if "@" in email else ""
+    comp = setter._company_hints(domain)
+    company_location = ", ".join([v for v in (comp.get("country"), comp.get("state"), comp.get("city")) if v])
     try:
         cls = setter.classify({"subject": row.get("reply_subject") or "", "body": body,
-                               "last_outbound": fe, "first_outbound": fe}, agent)
+                               "last_outbound": fe, "first_outbound": fe,
+                               "email_domain": domain, "company_location": company_location}, agent)
     except Exception as e:  # noqa: BLE001
         return None
     hints = {"phone": setter._extract_phone(body), "tld": ".".join(domain.split(".")[-2:]), "body": body}
-    comp = setter._company_hints(domain)
     hints.update({k: comp.get(k) for k in ("country", "state", "city")})
-    tz, _ = setter.guess_timezone(hints)
-    if not tz and cls.get("timezone_guess") and float(cls.get("tz_confidence") or 0) >= 0.5:
-        tz = cls.get("timezone_guess")
+    tz, tz_confident = setter.resolve_timezone(hints, cls)
     eff = {"work_start": 9, "work_end": 17, "_agent": agent,
            "_lead": {"first_name": "", "last_name": "", "email": email}}
-    slots = setter.pick_slots(avail, tz or "Europe/London", eff, now) if slot_status0 == "ok" else []
-    st = slot_status0 if (slot_status0 != "ok" or slots) else "none_available"
+    if tz:
+        slots = setter.pick_slots(avail, tz, eff, now) if slot_status0 == "ok" else []
+        st = slot_status0 if (slot_status0 != "ok" or slots) else "none_available"
+    else:
+        slots, st = [], "tz_unknown"
     primary = cls.get("primary_intent")
     is_neg = primary in setter.CLEAR_NEGATIVE_INTENTS and float(cls.get("confidence") or 0) >= 0.8
     draft_html, lint_ok, lint_reason = None, False, "No draft was produced."
@@ -192,9 +195,9 @@ def process(row, agent, avail, slot_status0, now):
         except Exception:  # noqa: BLE001
             pass
     ctx = {"red_flag_hits": setter.lexicon_hits(body), "category": row.get("category"), "first_touch": True,
-           "slot_status": st, "timezone": tz, "lint_ok": lint_ok, "lint_reason": lint_reason,
-           "body_len": len(body), "hydrated": True, "answered_since_reply": False, "autopilot_enabled": True,
-           "same_day_ask": bool(setter._SAME_DAY_RE.search(setter._strip_quoted(body)))}
+           "slot_status": st, "timezone": tz, "tz_confident": tz_confident, "lint_ok": lint_ok,
+           "lint_reason": lint_reason, "body_len": len(body), "hydrated": True, "answered_since_reply": False,
+           "autopilot_enabled": True, "same_day_ask": bool(setter._SAME_DAY_RE.search(setter._strip_quoted(body)))}
     decision, reason = setter.decide(cls, agent, ctx)
     return {
         "bucket": row.get("bucket"), "inbound": body[:1200], "lead_first_name": "",
@@ -202,9 +205,10 @@ def process(row, agent, avail, slot_status0, now):
         "category": row.get("category"), "intent": primary, "confidence": cls.get("confidence"),
         "decision": decision, "reason": reason, "draft_html": draft_html,
         "would_auto": decision == "auto_send",
-        "_ctx": {"category": row.get("category"), "timezone": tz, "slot_status": st, "body_len": len(body),
-                 "same_day_ask": ctx["same_day_ask"], "subject": row.get("reply_subject") or "",
-                 "last_outbound": fe, "first_outbound": fe},
+        "_ctx": {"category": row.get("category"), "timezone": tz, "tz_confident": tz_confident,
+                 "slot_status": st, "body_len": len(body), "email_domain": domain,
+                 "company_location": company_location, "same_day_ask": ctx["same_day_ask"],
+                 "subject": row.get("reply_subject") or "", "last_outbound": fe, "first_outbound": fe},
     }
 
 
