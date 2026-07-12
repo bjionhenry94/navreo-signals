@@ -2803,7 +2803,10 @@ function wizPick(el, action) {
     el.parentElement.querySelectorAll(".srctype").forEach((x) => x.classList.remove("picking"));
     el.classList.add("picking");
   } catch (_) {}
-  requestAnimationFrame(() => requestAnimationFrame(() => { try { action(); } catch (e) { console.error(e); } }));
+  // linger ~170ms so the orange press + ✓ is actually SEEN before the step
+  // advances — 2 frames (~32ms) read as an instant jump with no confirmation
+  // (tester feedback). Short enough not to feel sluggish to a power user.
+  setTimeout(() => { try { action(); } catch (e) { console.error(e); } }, 170);
 }
 
 function drawWiz() {
