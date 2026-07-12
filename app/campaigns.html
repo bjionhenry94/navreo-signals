@@ -23,6 +23,32 @@
 .srcic .ictile { width: 26px; height: 26px; border-radius: 7px; }
 .srcic .ictile .ic8 { width: 13px; height: 13px; }
 
+/* ── Campaign scorecard (Smartlead-style performance) ─────────────────── */
+/* Collective tiles across the top of the list. */
+.sc-tiles { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+@media (max-width: 900px) { .sc-tiles { grid-template-columns: repeat(3, 1fr); } }
+.sc-tile { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; background: var(--card); }
+.sc-tile .lab { font-size: 11px; color: var(--ink-3); font-weight: 500; display: flex; align-items: center; gap: 5px; }
+.sc-tile .val { font-size: 22px; font-weight: 700; margin-top: 5px; line-height: 1; letter-spacing: -.02em; }
+.sc-tile .sub { font-size: 10.5px; color: var(--ink-3); margin-top: 4px; }
+/* Per-campaign stat strip: ring on the left, coloured columns to the right. */
+.sc-row { display: flex; align-items: center; gap: 18px; margin-top: 10px; padding-top: 11px; border-top: 1px dashed var(--line); flex-wrap: wrap; }
+.sc-cols { display: flex; gap: 20px; flex-wrap: wrap; align-items: baseline; }
+.sc-stat { min-width: 62px; }
+.sc-stat .n { font-size: 16px; font-weight: 700; line-height: 1; letter-spacing: -.01em; }
+.sc-stat .n .pc { font-size: 11px; font-weight: 500; color: var(--ink-3); margin-left: 3px; }
+.sc-stat .l { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
+.sc-c-sent { color: var(--ink); } .sc-c-reply { color: var(--blue-600, #1971c2); }
+.sc-c-pos { color: var(--green, #2f9e44); } .sc-c-bounce { color: var(--red, #e03131); }
+.sc-c-meet { color: var(--ink); } .sc-c-leads { color: var(--orange-600, #f08c00); }
+.sc-ring { --pct: 0; width: 48px; height: 48px; border-radius: 999px; flex-shrink: 0;
+  background: conic-gradient(var(--green, #2f9e44) calc(var(--pct) * 1%), var(--line) 0);
+  display: flex; align-items: center; justify-content: center; position: relative; }
+.sc-ring::before { content: ""; position: absolute; inset: 5px; border-radius: 999px; background: var(--card); }
+.sc-ring .pv { position: relative; font-size: 12px; font-weight: 700; color: var(--ink); }
+.sc-ring.gated { background: var(--line); }
+.sc-muted { color: var(--ink-3); font-weight: 500; }
+
 /* detail */
 .dethead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .funnel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
@@ -1434,6 +1460,106 @@ function sourcesFor(campaignId) {
 const SIG_ICON = { hiring: "briefcase", news: "signal", linkedin: "linkedin", tech_adoption: "data", company_attribute: "search" };
 
 /* ══ LIST ══ */
+/* ── Campaign scorecard helpers (Smartlead-style per-campaign performance) ──
+   Every number here comes from /api/campaign-scorecard (live Smartlead) or the
+   signal leads count — nothing is invented. `meetings === null` means the
+   optimiser cache doesn't cover that campaign, so the tile is GATED (shows "—"),
+   never faked. */
+function scPct(num, den) { return den > 0 ? (100 * num / den) : 0; }
+function scRing(pct, gated) {
+  if (gated) return `<div class="sc-ring gated" title="No completion data yet"><span class="pv sc-muted">–</span></div>`;
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  return `<div class="sc-ring" style="--pct:${p}" title="${p}% of leads have finished the sequence"><span class="pv">${p}%</span></div>`;
+}
+function scRatio(sent, pos) {
+  if (!pos || pos <= 0) return `<span class="sc-muted">–</span>`;
+  return `1 per ${fmt(Math.round(sent / pos))}`;
+}
+function scStat(cls, n, label, title) {
+  return `<div class="sc-stat"${title ? ` title="${esc(title)}"` : ""}><div class="n ${cls}">${n}</div><div class="l">${esc(label)}</div></div>`;
+}
+/* Per-campaign stat strip: completion ring + coloured columns. m = the campaign's
+   Smartlead metrics (or null when it has no email destination); leadsSourced = the
+   signal leads count for this campaign (or null when unknown). */
+function scRowHtml(m, leadsSourced) {
+  const hasSL = !!(m && (m.total > 0 || m.sent > 0 || m.status));
+  const ring = scRing(m ? scPct(m.completed, m.total) : 0, !hasSL || !m.total);
+  const pcNum = (num, den) => (m && den) ? `${scPct(num, den).toFixed(1)}<span class="pc">%</span>` : (m ? `0<span class="pc">%</span>` : "–");
+  const sent = m ? fmt(m.sent) : "–";
+  const ratio = m ? scRatio(m.sent, m.positives) : "–";
+  const meet = (m && m.meetings != null) ? fmt(m.meetings)
+    : `<span class="sc-muted" title="Meetings source not connected for this campaign">–</span>`;
+  const leads = (leadsSourced != null) ? fmt(leadsSourced) : "–";
+  return `<div class="sc-row">
+    ${ring}
+    <div class="sc-cols">
+      ${scStat("sc-c-leads", leads, "Leads sourced", "People your signals surfaced for this campaign")}
+      ${scStat("sc-c-sent", sent, "Emails sent")}
+      ${scStat("sc-c-reply", pcNum(m && m.replied, m && m.sent), "Reply rate")}
+      ${scStat("sc-c-sent", ratio, "Sends / positive", "Emails sent per positive reply")}
+      ${scStat("sc-c-meet", meet, "Meetings")}
+      ${scStat("sc-c-bounce", pcNum(m && m.bounced, m && m.sent), "Bounce rate")}
+    </div>
+  </div>`;
+}
+/* Collective strip: the same six metrics aggregated across every campaign, plus
+   total leads sourced. Rates are recomputed from summed numerators/denominators
+   (never averaged-of-averages). Meetings + leads gate to "—" when unknown. */
+function scCollectiveHtml(sc, leadCounts, drafts) {
+  const camps = (sc && sc.campaigns) || {};
+  let sent = 0, replied = 0, positives = 0, bounced = 0, completed = 0, total = 0;
+  let meetings = 0, meetingsCovered = false, leads = 0, leadsKnown = false;
+  (drafts || []).forEach((dc) => {
+    const lc = leadCounts && leadCounts[String(dc.id)];
+    if (lc && typeof lc.leads === "number") { leads += lc.leads; leadsKnown = true; }
+  });
+  Object.values(camps).forEach((m) => {
+    sent += m.sent; replied += m.replied; positives += m.positives;
+    bounced += m.bounced; completed += m.completed; total += m.total;
+    if (m.meetings != null) { meetings += m.meetings; meetingsCovered = true; }
+  });
+  const tile = (lab, val, sub) => `<div class="sc-tile"><div class="lab">${esc(lab)}</div><div class="val">${val}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
+  const ratio = positives > 0 ? `1 per ${fmt(Math.round(sent / positives))}` : `<span class="sc-muted">–</span>`;
+  return `<div class="sc-tiles">
+    ${tile("Leads sourced", leadsKnown ? fmt(leads) : "–", "found by your signals")}
+    ${tile("Emails sent", fmt(sent), "across all campaigns")}
+    ${tile("Completion", total ? `${Math.round(scPct(completed, total))}%` : "–", "finished the sequence")}
+    ${tile("Reply rate", sent ? `${scPct(replied, sent).toFixed(2)}%` : "0%", `${fmt(replied)} replies`)}
+    ${tile("Sends / positive", ratio, `${fmt(positives)} positive`)}
+    ${tile("Meetings", meetingsCovered ? fmt(meetings) : `<span class="sc-muted">–</span>`, meetingsCovered ? "booked" : "source not connected")}
+    ${tile("Bounce rate", sent ? `${scPct(bounced, sent).toFixed(2)}%` : "0%", `${fmt(bounced)} bounced`)}
+  </div>`;
+}
+/* Collective trend lines: how the aggregate metrics move over time. Real numbers
+   from Smartlead's own day-wise-overall-stats (via /api/deliverability-trends) —
+   the same fleet series the deliverability page trends. Reuses activityChart
+   (the list's existing chart helper). Only days with real sends are plotted, so
+   weekend zero-send gaps don't draw a misleading dip to zero. */
+function scTrendHtml(tr) {
+  const s = tr && tr.series;
+  if (!s || !Array.isArray(s.days) || !s.days.length)
+    return '<div class="small muted" style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)">Trends build as your daily sends accumulate.</div>';
+  const idx = s.days.map((_, i) => i).filter((i) => (s.sent[i] || 0) > 0);
+  if (!idx.length)
+    return '<div class="small muted" style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)">Trends build as your daily sends accumulate.</div>';
+  const days = idx.map((i) => s.days[i]);
+  const sent = idx.map((i) => s.sent[i] || 0);
+  const reply = idx.map((i) => (s.reply_pct[i] == null ? 0 : s.reply_pct[i]));
+  const bounce = idx.map((i) => (s.bounce_pct[i] == null ? 0 : s.bounce_pct[i]));
+  const sentChart = activityChart(days, [{ name: "Emails sent", color: "#1971C2", width: 2.5, vals: sent }]);
+  const rateChart = activityChart(days, [
+    { name: "Reply rate %", color: "#2F9E44", width: 2, vals: reply },
+    { name: "Bounce rate %", color: "#E03131", width: 2, vals: bounce },
+  ]);
+  return `<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
+    <div class="small muted" style="margin-bottom:8px">How your whole Smartlead account is trending, day by day.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px">
+      <div><div class="small" style="font-weight:600;margin-bottom:4px">Emails sent per day</div>${sentChart}</div>
+      <div><div class="small" style="font-weight:600;margin-bottom:4px">Reply &amp; bounce rate</div>${rateChart}</div>
+    </div>
+  </div>`;
+}
+
 async function renderList() {
   // Paint the skeleton frame first so the list feels instant, then hydrate. The list can paint
   // as soon as the CRITICAL group resolves (campaign-drafts + clients + lead-counts + dests) —
@@ -1531,6 +1657,7 @@ async function renderList() {
             <div style="font-weight:500">${esc(dc.name)}</div>
             <div class="small muted">${countUnavailable ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span> <span class="muted" style="font-size:10px">(couldn\'t load)</span>' : (nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"}${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No leads yet")} · ${esc((dc.created_at || "").slice(0, 10))}</div>
             <div id="srcdeco-${dc.id}" class="small muted" style="margin-top:6px" title="Source-level details still loading">checking sources…</div>
+            <div id="sc-${dc.id}" class="sc-row-holder" onclick="event.stopPropagation()"></div>
           </div>
           ${dc.paused ? '<span class="pill o">⏸ Paused</span>' : '<span class="pill g">● Running</span>'}
           ${notSending ? `<span class="pill n" title="This campaign is running and has leads, but none have gone out yet - check its destination/outreach setup">not sending</span>` : ""}
@@ -1551,6 +1678,12 @@ async function renderList() {
              localStorage["navreo_client"] value and re-renders on "navreo:client-changed". -->
         <button class="btn primary" onclick="openWizard()">${ic8("idea")} New campaign</button>
       </div>
+    </div>
+    <div class="card panel" style="margin-top:16px">
+      <h2 style="font-size:15px;margin-bottom:2px">Campaign performance</h2>
+      <div class="small muted" style="margin-bottom:10px">Live Smartlead numbers, totalled across the campaigns on this page.</div>
+      <div id="sc-collective"><div class="skel" style="height:70px"></div></div>
+      <div id="sc-trend"></div>
     </div>
     <div class="card panel" style="margin-top:16px">
       <h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2>
@@ -1589,6 +1722,47 @@ async function renderList() {
       </div>
     </div>`;
   hydrateFade(main);  // ease the real list in over the skeleton
+  // Campaign scorecard: live Smartlead per-campaign performance. Fetched in the
+  // background (like sources) and patched into the collective strip + each row.
+  // leadCounts (already fetched above) supplies "leads sourced" per campaign, so
+  // that number paints even if the Smartlead fetch is slow/degraded.
+  (async () => {
+    const drawFromLeadsOnly = () => {
+      const collEl = document.getElementById("sc-collective");
+      if (collEl) collEl.innerHTML = scCollectiveHtml(null, leadCounts, drafts);
+      drafts.forEach((dc) => {
+        const el = document.getElementById(`sc-${dc.id}`);
+        const lc = leadCounts[String(dc.id)];
+        if (el) el.innerHTML = scRowHtml(null, (!leadCountsDegraded && lc) ? lc.leads : null);
+      });
+    };
+    // Collective trend lines (Smartlead fleet day-wise) — fetched independently
+    // so the trends paint even if the per-campaign scorecard fetch is slow.
+    (async () => {
+      let tr = null;
+      try { tr = await cachedGet("/api/deliverability-trends?days=30"); } catch { tr = null; }
+      const tEl = document.getElementById("sc-trend");
+      if (tEl) { tEl.innerHTML = scTrendHtml(tr); hydrateFade(tEl); hydrateCharts(tEl); }
+    })();
+    let sc;
+    try { sc = await cachedGet("/api/campaign-scorecard"); } catch { sc = null; }
+    if (!sc || !sc.campaigns) { drawFromLeadsOnly(); return; }
+    const camps = sc.campaigns;
+    const slOf = (dc) => {
+      const d = dc.destination || {};
+      const sl = d.smartlead_campaign_id || (dc.type === "smartlead" ? dc.campaign_id : "");
+      return sl ? String(sl) : "";
+    };
+    const collEl = document.getElementById("sc-collective");
+    if (collEl) collEl.innerHTML = scCollectiveHtml(sc, leadCounts, drafts);
+    drafts.forEach((dc) => {
+      const el = document.getElementById(`sc-${dc.id}`);
+      if (!el) return;
+      const lc = leadCounts[String(dc.id)];
+      const leadsSourced = (!leadCountsDegraded && lc) ? lc.leads : null;
+      el.innerHTML = scRowHtml(camps[slOf(dc)] || null, leadsSourced);
+    });
+  })();
   // Patch in the sources-dependent decorations (destination badges, "sources removed" chip)
   // once the slower /api/sources call lands - the list above already painted without it.
   // Joined with destsP (S2) so DB.dests is populated before destBadges() reads it.

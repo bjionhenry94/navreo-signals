@@ -5155,6 +5155,116 @@ def outreach_destinations(p: dict) -> dict:
     return _OUTREACH_DESTS_SWR.get()
 
 
+# ── Campaign scorecard (Smartlead-style per-campaign performance) ──────────
+# Powers the campaigns-list scorecard: for every signal campaign that sends to
+# a real Smartlead campaign, its live Smartlead numbers (sent / reply / positive
+# / bounce / completion). Meetings is the ONE metric Smartlead's /analytics call
+# doesn't return, so it's read from the optimiser_notifications cache (the same
+# {Call Booked, Meeting Request} category count build_notifications already
+# computes) and left null — the UI gates it, never fakes it — when a campaign
+# isn't covered there. Every number is Smartlead's own; nothing is invented.
+_CAMPAIGN_SCORECARD_TTL_S = 600  # like _OUTREACH_DESTS: the live per-campaign
+# /analytics fetches are the slow part; 10-min SWR keeps repaints instant and
+# respects Smartlead's shared 200/min budget (only a handful of campaigns).
+
+
+def _sc_int(v) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _scorecard_smartlead_ids() -> list:
+    """Unique Smartlead campaign ids referenced by non-deleted signal campaigns,
+    in first-seen order. A draft points at Smartlead via
+    destination.smartlead_campaign_id (or, for a legacy type=='smartlead' doc,
+    its campaign_id)."""
+    drafts, _failed = _cached_campaign_drafts()
+    ids, seen = [], set()
+    for d in (drafts or []):
+        if d.get("deleted_at"):
+            continue
+        dest = d.get("destination") or {}
+        sl = dest.get("smartlead_campaign_id") or (
+            d.get("campaign_id") if d.get("type") == "smartlead" else None)
+        sl = str(sl) if sl else ""
+        if sl and sl not in seen:
+            seen.add(sl)
+            ids.append(sl)
+    return ids
+
+
+def _scorecard_meetings(sl_ids: list) -> dict:
+    """{sl_id: meetings} for the covered ids, from the latest optimiser_notifications
+    row per campaign. Absent id -> not in the dict -> UI gates the tile."""
+    out = {}
+    if not sl_ids:
+        return out
+    from urllib.parse import quote
+    ors = ",".join(sl_ids)
+    rows = sb("GET", "optimiser_notifications?select=campaign_id,meetings,created_at"
+                     f"&campaign_id=in.({quote(ors, safe=',')})"
+                     "&order=created_at.desc") or []
+    for r in rows:
+        cid = str(r.get("campaign_id") or "")
+        if cid and cid not in out and r.get("meetings") is not None:
+            out[cid] = _sc_int(r.get("meetings"))
+    return out
+
+
+def _compute_campaign_scorecard() -> dict:
+    """{ generated_at, campaigns: {sl_id: {..metrics..}}, degraded: bool }.
+    Per campaign, straight from Smartlead /analytics: sent, replied, positives,
+    bounced, completed, total (lead stats). meetings from the optimiser cache or
+    None. Rates are computed by the UI from these raw counts so the collective
+    strip can re-derive them from summed numerators/denominators."""
+    from datetime import datetime, timezone
+    sl_ids = _scorecard_smartlead_ids()
+    meetings = _scorecard_meetings(sl_ids)
+    camps, degraded = {}, False
+    for sl in sl_ids:
+        try:
+            data = _smartlead_json("GET", f"/campaigns/{sl}/analytics") or {}
+        except Exception as e:  # noqa: BLE001 — one bad id must not blank the whole board
+            print(f"[scorecard] analytics fetch failed for {sl}: {e}", file=sys.stderr)
+            degraded = True
+            continue
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            data = data["data"]
+        if not isinstance(data, dict):
+            data = {}
+        cls = data.get("campaign_lead_stats") if isinstance(data.get("campaign_lead_stats"), dict) else {}
+        positives = data.get("positive_reply_count")
+        if positives is None:
+            positives = data.get("positiveReplyCount")
+        if positives is None:
+            positives = cls.get("interested")
+        camps[sl] = {
+            "sent": _sc_int(data.get("sent_count") or data.get("sent")),
+            "replied": _sc_int(data.get("reply_count") or data.get("replied")),
+            "positives": _sc_int(positives),
+            "bounced": _sc_int(data.get("bounce_count")),
+            "completed": _sc_int(cls.get("completed")),
+            "total": _sc_int(cls.get("total") or data.get("total_count")),
+            "status": data.get("status"),
+            "meetings": meetings.get(sl),  # int, or None -> UI gates it
+        }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "campaigns": camps,
+        "degraded": degraded,
+    }
+
+
+_CAMPAIGN_SCORECARD_SWR = _SWRCache(
+    _compute_campaign_scorecard, _CAMPAIGN_SCORECARD_TTL_S,
+    is_degraded=lambda p: not isinstance(p, dict) or not p.get("campaigns"),
+    name="campaign-scorecard")
+
+
 def _split_name(pr: dict) -> tuple[str, str]:
     parts = (pr.get("name") or "").strip().split(" ", 1)
     return parts[0] or ".", (parts[1] if len(parts) > 1 else ".") or "."
@@ -10120,6 +10230,10 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(outreach_destinations({"refresh": refresh}))
+        if path == "/api/campaign-scorecard":
+            # Smartlead-style per-campaign performance for the campaigns-list
+            # scorecard. SWR-cached (~10min); every number is Smartlead's own.
+            return self._json(_CAMPAIGN_SCORECARD_SWR.get())
         if path == "/api/version":
             # Deploy verification: which commit/instance is actually serving.
             return self._json({"commit": _GIT_COMMIT or None,
