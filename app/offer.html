@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v7-email -->
+<!-- offer-maker-v8-workedemail -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
@@ -61,6 +61,12 @@
     border-radius: 9px; padding: 10px 12px; font-style: italic; }
   .card .email { white-space: pre-wrap; background: var(--bg-sunken); border: 1px solid var(--line);
     border-radius: 9px; padding: 12px 14px; font-size: 14px; line-height: 1.55; color: var(--ink); }
+  .card .emailbtn { font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 16px;
+    border-radius: 9px; border: 1.5px solid var(--orange); background: #fff; color: var(--orange-700); cursor: pointer; }
+  .card .emailbtn:hover { background: var(--orange-100); }
+  .card .emailbtn:disabled { opacity: 0.6; cursor: default; }
+  .card .emailnote { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
+  .card .emailerr { font-size: 12.5px; color: var(--red); margin-top: 6px; }
   .card .why { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; }
   .proof { margin-top: 50px; border-top: 1px solid var(--line-2); padding-top: 30px; }
   .proof h2 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 4px; }
@@ -136,15 +142,40 @@
 
 <script>
 const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","risk_reversal_type","stipulation","opener","why_cold_email"];
-// The full cold email is built here from the offer's opener, so the sender gets
-// a complete, ready-to-send email with clear blanks for the two things only they
-// know: the personal opening line and a real result. No extra AI call.
-function fullEmail(o){
+// A fully-worked example cold email is written on demand per offer (the "Write
+// the full cold email" button calls /api/offer/email). Until then, this simple
+// starter email is the fallback in the exports so no row is ever empty.
+function starterEmail(o){
   return "Hi {{first_name}},\n\n"
     + "[Add one line about them here, like a recent post, a new hire, or a win.]\n\n"
     + o.opener + "\n\n"
     + "Best,\n[Your name]\n\n"
     + "P.S - [Add one real result you have delivered.]";
+}
+// The email used in exports: the worked one if the user generated it, else the starter.
+function exportEmail(o){ return o._email || starterEmail(o); }
+
+async function writeEmail(i, btn){
+  const wrap = btn.parentElement;
+  btn.disabled = true; btn.textContent = "Writing the email...";
+  try {
+    const r = await fetch("/api/offer/email", { method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({offer: OFFERS[i], audience: AUDIENCE, domain: DOMAIN}) });
+    let d; const raw = await r.text();
+    try { d = JSON.parse(raw); }
+    catch(_) { d = {ok:false, message:(r.status>=502&&r.status<=504)
+      ? "That took too long. Please try again." : "Something went wrong. Please try again."}; }
+    if(!r.ok || !d.ok || !d.email){ throw new Error(d.message || "Couldn't write that email."); }
+    OFFERS[i]._email = d.email;
+    wrap.innerHTML = `<div class="email">${esc(d.email)}</div>
+      <p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`;
+  } catch(e) {
+    btn.disabled = false; btn.textContent = "Write the full cold email";
+    let er = wrap.querySelector(".emailerr");
+    if(!er){ er = document.createElement("p"); er.className = "emailerr"; wrap.appendChild(er); }
+    er.textContent = e.message || "Couldn't write that email.";
+  }
 }
 const GROUPS = [
   ["pay_after_result", "Pay after the work is done",
@@ -233,7 +264,10 @@ function render(){
         <div class="field"><b>The pricing angle</b>${esc(o.pricing)}</div>
         <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
         <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
-        <div class="field"><b>The cold email you'd send</b><div class="email">${esc(fullEmail(o))}</div></div>
+        <div class="field"><b>The cold email you'd send</b>
+          <div class="emailwrap">${o._email
+            ? `<div class="email">${esc(o._email)}</div><p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`
+            : `<button class="emailbtn" onclick="writeEmail(${OFFERS.indexOf(o)}, this)">Write the full cold email</button>`}</div></div>
         <div class="field why"><b>Why this works on cold email</b>${esc(o.why_cold_email)}</div>`;
       g.appendChild(c);
     }
@@ -248,7 +282,7 @@ function downloadCsv(){
   const header = ["Offer name","The problem","What you'd do and why it's better","Pricing angle",
                   "The promise","Promise type","One fair condition","Example first line","Why this works on cold email","Full cold email"];
   const rows = [header.join(",")];
-  for(const o of OFFERS){ rows.push(FIELDS.map(f => csvCell(o[f])).concat(csvCell(fullEmail(o))).join(",")); }
+  for(const o of OFFERS){ rows.push(FIELDS.map(f => csvCell(o[f])).concat(csvCell(exportEmail(o))).join(",")); }
   const blob = new Blob(["﻿" + rows.join("\r\n")], {type: "text/csv;charset=utf-8"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -267,7 +301,7 @@ One fair condition: ${o.stipulation}
 Why this works on cold email: ${o.why_cold_email}
 
 The cold email you'd send:
-${fullEmail(o)}`;
+${exportEmail(o)}`;
 }
 async function copyAll(){
   const head = "Offers for " + DOMAIN + (AUDIENCE ? ", aimed at " + AUDIENCE : "") +

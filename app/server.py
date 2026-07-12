@@ -9659,7 +9659,7 @@ AUTH_SESSION_DAYS = 30
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
                     "/app/offer.html"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
-_AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result",
+_AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
@@ -9736,16 +9736,18 @@ def auth_login(email: str, password: str):
 
 OFFER_RL_PER_IP_HOUR = 10       # successful generations (LLM calls) per IP per hour
 OFFER_RL_ATTEMPTS_HOUR = 30     # any request per IP per hour (typos don't burn generations)
+OFFER_RL_EMAIL_HOUR = 80        # per-offer worked-email writes per IP per hour (cheap, one email each)
 OFFER_RL_GLOBAL_DAY = 200       # generations per UTC day across all visitors
 _OFFER_RL_LOCK = threading.Lock()
-_OFFER_RL_IP: dict = {}                    # ip -> {"gen": [ts], "try": [ts]}
+_OFFER_RL_IP: dict = {}                    # ip -> {"gen": [ts], "try": [ts], "email": [ts]}
 _OFFER_RL_DAY = {"date": "", "count": 0}   # global daily generation counter (UTC date)
 
 
 def _offer_rate_check(ip: str, kind: str):
     """kind='try' debits one attempt (checked before the site fetch); kind='gen'
     debits one generation (checked only once the site fetched OK, right before
-    the LLM call - a typo'd URL never burns a generation). Returns a
+    the LLM call - a typo'd URL never burns a generation); kind='email' debits
+    one worked-email write (its own generous per-IP bucket). Returns a
     plain-English refusal message if over the relevant cap, else None."""
     now = time.time()
     from datetime import datetime, timezone
@@ -9753,14 +9755,19 @@ def _offer_rate_check(ip: str, kind: str):
     with _OFFER_RL_LOCK:
         if _OFFER_RL_DAY["date"] != today:
             _OFFER_RL_DAY["date"], _OFFER_RL_DAY["count"] = today, 0
-        rec = _OFFER_RL_IP.setdefault(ip, {"gen": [], "try": []})
-        rec["gen"] = [t for t in rec["gen"] if now - t < 3600]
-        rec["try"] = [t for t in rec["try"] if now - t < 3600]
+        rec = _OFFER_RL_IP.setdefault(ip, {"gen": [], "try": [], "email": []})
+        for k in ("gen", "try", "email"):
+            rec[k] = [t for t in rec.get(k, []) if now - t < 3600]
         if kind == "try":
             if len(rec["try"]) >= OFFER_RL_ATTEMPTS_HOUR:
                 return ("Too many tries from your connection in the last hour. "
                         "Please wait a little while and try again.")
             rec["try"].append(now)
+        elif kind == "email":
+            if len(rec["email"]) >= OFFER_RL_EMAIL_HOUR:
+                return ("You've written a lot of emails in the last hour, which is the limit. "
+                        "Please wait a little while and try again.")
+            rec["email"].append(now)
         else:
             if _OFFER_RL_DAY["count"] >= OFFER_RL_GLOBAL_DAY:
                 return ("The offer maker has hit its daily limit. "
@@ -9957,6 +9964,74 @@ def offer_generate(p: dict, ip: str):
     if refusal:
         return 429, {"ok": False, "message": refusal}
     return _offer_llm(site, p.get("audience") or "")
+
+
+def offer_email(p: dict, ip: str):
+    """Write ONE fully-worked, standalone cold email for a single offer, at the
+    claude-breakdown level: concrete example recipient, a concrete icebreaker,
+    the offer in the body, and a concrete P.S. proof line. No merge tags, no
+    square-bracket blanks. Fast (one email, low reasoning). Returns (status, body)."""
+    refusal = _offer_rate_check(ip, "email")
+    if refusal:
+        return 429, {"ok": False, "message": refusal}
+    key = KEYS.get("OPENAI_API_KEY")
+    if not key:
+        return 502, {"ok": False, "message": "The email writer isn't available right now. Please try again later."}
+    o = p.get("offer") or {}
+    fields = {k: str(o.get(k) or "").strip()[:600] for k in
+              ("name", "problem", "differentiator", "pricing", "risk_reversal", "stipulation", "opener")}
+    if not fields["problem"] or not fields["opener"]:
+        return 400, {"ok": False, "message": "That offer looks incomplete, please generate the offers again."}
+    audience = str(p.get("audience") or "").strip()[:300]
+    domain = str(p.get("domain") or "").strip()[:120]
+    who = f"The business sending this email is {domain}." if domain else ""
+    aud = (f"They sell to: {audience}. Write the email to a realistic example person in that group."
+           if audience else "Write the email to a realistic example person in the buyer group this offer targets.")
+    prompt = f"""You are an expert cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below.
+
+{who}
+{aud}
+
+THE OFFER:
+- Name: {fields['name']}
+- Problem it solves (the NEW business the buyer is missing): {fields['problem']}
+- What we would do and why it is better: {fields['differentiator']}
+- Pricing angle: {fields['pricing']}
+- The promise (risk reversal): {fields['risk_reversal']}
+- One fair condition: {fields['stipulation']}
+- Suggested opening line: {fields['opener']}
+
+WRITE THE EMAIL LIKE THIS (a real, sendable example, NOT a template):
+- Invent a realistic first name for the recipient and a realistic example company name for their business. Use them as concrete values. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
+- Line 1: "Hi <recipient first name>,"
+- Then a one-line icebreaker that names a concrete, plausible trigger for THIS buyer (for example a recent hire, a new location, a product launch, a post they made) and ends with "so I wanted to reach out." Do not pitch in the icebreaker.
+- Then the offer in the body: name the problem they are missing out on, what you would do about it, and the promise, ending in a question that offers to SEND something small (a short Loom video, a one-page plan, or a sample). Never ask to "book a call". Keep the body 45 to 70 words.
+- Then "Best," on its own line, then a realistic sender first name on the next line.
+- Then a P.S. that is one concrete line of social proof (a named example client and/or a plausible result). Mark nothing as made up inside the email, just write it as a confident real result.
+
+Rules: plain English an 11th grader understands. No em-dashes anywhere. No spam words (free, trial, guaranteed, risk-free, today, urgent). Real line breaks between the parts.
+
+Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full email, with real line breaks>"}}"""
+    err = ""
+    for attempt in (1, 2):
+        try:
+            r = http_json("POST", "https://api.openai.com/v1/chat/completions",
+                          {"Authorization": f"Bearer {key}"},
+                          {"model": "gpt-5-mini", "reasoning_effort": "low",
+                           "messages": [{"role": "user", "content": prompt}]},
+                          timeout=90)
+            if r.get("error"):
+                raise RuntimeError(str(r["error"].get("message", r["error"]))[:200])
+            text = (r["choices"][0]["message"]["content"] or "").strip()
+            m = re.search(r"\{.*\}", text, re.S)
+            email = _offer_scrub(json.loads(m.group(0) if m else text).get("email", ""))
+            if len(email) < 60 or "Hi " not in email[:8]:
+                raise ValueError("email too short or malformed")
+            return 200, {"ok": True, "email": email}
+        except Exception as e:  # noqa: BLE001
+            err = f"{type(e).__name__}: {str(e)[:120]}"
+            print(f"OFFER EMAIL attempt {attempt} failed: {err}")
+    return 502, {"ok": False, "message": "Couldn't write that email just now. Please try again in a moment."}
 
 
 # ── Async offer jobs ─────────────────────────────────────────────────────────
@@ -10865,14 +10940,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json_with_cookie(
                 {"ok": True, "email": email},
                 _session_cookie(_mint_session(email), AUTH_SESSION_DAYS * 86400))
-        if path in ("/api/offer/generate", "/api/offer/start", "/api/offer/result"):
+        if path in ("/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email"):
             # Public offer maker — no session, no drafts_lock (slow LLM call must
             # never block the app), no persistence of the visitor's URL. Rate
-            # limits are enforced inside the handlers. /start + /result are the
-            # async pair the browser uses (each request stays short, immune to
-            # the Render proxy timeout); /generate is the synchronous curl path.
+            # limits are enforced inside the handlers. /generate is the synchronous
+            # offers path; /email writes one worked cold email for a single offer.
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 4096:
+            if length > 12288:  # /email carries a full offer object
                 return self._json({"ok": False, "message": "payload too large"}, 413)
             try:
                 p = json.loads(self.rfile.read(length).decode() or "{}")
@@ -10884,6 +10958,8 @@ class Handler(SimpleHTTPRequestHandler):
                 status, body = offer_start(p, ip)
             elif path == "/api/offer/result":
                 status, body = offer_result(p)
+            elif path == "/api/offer/email":
+                status, body = offer_email(p, ip)
             else:
                 status, body = offer_generate(p, ip)
             return self._json(body, status)
