@@ -3588,7 +3588,9 @@ _JOBS_CAP = 200
 
 _JOB_DB_FIELDS = ("id", "kind", "label", "campaign_id", "mode", "status",
                   "progress", "counts", "error", "dry_run", "started_at",
-                  "finished_at", "auto_remove", "resume_count", "owner")
+                  "finished_at", "auto_remove", "resume_count", "owner",
+                  "max_new")  # max_new is durable so an auto-resumed
+                              # continuation inherits the spend cap
 # NOTE: app_jobs has no `mock` column (confirmed live: PGRST204 "column
 # app_jobs.mock does not exist") - the in-memory job dict keeps a `mock` key
 # for runtime branching, but it is deliberately excluded from _JOB_DB_FIELDS.
@@ -3614,14 +3616,15 @@ def _job_persist(job: dict):
 
 
 def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool = False,
-             auto_remove: bool = False, resume_count: int = 0, mock: bool = False) -> dict:
+             auto_remove: bool = False, resume_count: int = 0, mock: bool = False,
+             max_new: int | None = None) -> dict:
     import uuid
     job = {"id": uuid.uuid4().hex[:10], "kind": kind, "label": label,
            "campaign_id": campaign_id, "mode": mode, "status": "queued",
            "progress": {"done": 0, "total": 0}, "started_at": None,
            "finished_at": None, "counts": {}, "error": None, "dry_run": dry_run,
            "cancel_requested": False, "auto_remove": auto_remove,
-           "resume_count": resume_count, "mock": mock,
+           "resume_count": resume_count, "mock": mock, "max_new": max_new,
            "owner": _SERVER_INSTANCE}  # which server instance owns this job (see recovery)
     with JOBS_LOCK:
         JOBS[job["id"]] = job
@@ -3818,7 +3821,8 @@ def _reenqueue_verify(r: dict, new_resume_count: int):
     label = r.get("label") or f"Verify campaign {campaign_id}"
     new_job = _new_job("verify", label, campaign_id, mode, dry_run=False,
                        auto_remove=bool(r.get("auto_remove")),
-                       resume_count=new_resume_count, mock=mock)
+                       resume_count=new_resume_count, mock=mock,
+                       max_new=r.get("max_new"))
     _enqueue_job(_verify_job_worker, new_job,
                  (new_job, campaign_id, mode, mv_key, lm_key, sl_key))
     return new_job
@@ -4126,6 +4130,20 @@ _LM_CHUNK = 10  # ListMint does live SMTP + catch-all checks (~3s/email) — sma
                 # chunks keep per-request time bounded and progress moving.
 
 
+def _meter_verify_calls(provider: str, campaign_id, n: int):
+    """Best-effort provider-call ledger: one provider_usage row per batch of
+    real verification lookups, so spend is auditable by SQL (same table the
+    TheirStack meter uses). Never allowed to fail a verify run."""
+    if not n:
+        return
+    try:
+        sb("POST", "provider_usage",
+           {"provider": provider, "source_id": str(campaign_id or ""),
+            "credits": n, "endpoint": "verify", "called_at": _now_iso()})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict, campaign_id=None):
     """Run ListMint over `rows` (subset of the details list), writing
     lm_result + overriding verdict in place. Chunked + sequential. When
@@ -4152,6 +4170,8 @@ def _listmint_pass(job: dict, rows: list, lm_key: str, api_errors: dict, campaig
                 job["progress"]["done"] += 1
         if campaign_id is not None:
             _persist_verdicts([r for r in chunk if r.get("lm_result")], campaign_id, "listmint")
+        _meter_verify_calls("listmint", campaign_id,
+                            sum(1 for r in chunk if res.get(r["email"])))
         _job_persist(job)  # durable progress so a restart's app_jobs row isn't frozen at 0
     return False  # ran to completion, not cancelled
 
@@ -4549,6 +4569,14 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
                                 "verdict": c.get("verdict") or "unknown", "replied": ld["replied"]})
             else:
                 uncached.append(ld)
+        # max_new: hard cap on fresh (credit-spending) verifications this run.
+        # Durable on the job row, so an auto-resumed continuation inherits it —
+        # without that, a resume after a restart would blow straight past the
+        # cap the original run was started with.
+        cap_skipped = 0
+        if job.get("max_new") is not None and len(uncached) > int(job["max_new"]):
+            cap_skipped = len(uncached) - int(job["max_new"])
+            uncached = uncached[:int(job["max_new"])]
         uncached_details = [{"lead_id": ld["lead_id"], "email": ld["email"], "mv_result": None,
                              "lm_result": None, "verdict": "unknown", "replied": ld["replied"]}
                             for ld in uncached]
@@ -4557,7 +4585,7 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
         # progress: cached leads are instantly "done" — only uncached ones do
         # real work, so total/done both start honest rather than fake-full.
         with JOBS_LOCK:
-            job["progress"]["total"] = len(targets)
+            job["progress"]["total"] = len(details)
             job["progress"]["done"] = cached_n
 
         if mode == "mv":
@@ -4597,6 +4625,9 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
                     done = job["progress"]["done"]
                 if done % 100 == 0:
                     _job_persist(job)  # durable progress heartbeat every 100 leads
+            _meter_verify_calls("millionverifier", campaign_id,
+                                sum(1 for d in uncached_details
+                                    if d.get("mv_result") and d["mv_result"] != "error"))
             if cancelled:
                 _job_finished(job, "cancelled")
                 return
@@ -4635,6 +4666,8 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
             counts[d["verdict"]] += 1
         counts["cached"] = cached_n
         counts["contacted_skipped"] = contacted_skipped
+        if cap_skipped:
+            counts["cap_skipped"] = cap_skipped  # leads left unverified by max_new
         bad_emails = [d["email"] for d in details if d["verdict"] == "bad"]
         if mode == "mv" and not lm_key:
             counts["listmint_recheck"] = "skipped (LISTMINT_API_KEY not set)"
@@ -4643,7 +4676,7 @@ def _verify_job_worker(job: dict, campaign_id, mode: str, mv_key: str,
         # never a full-campaign re-fetch (which is slow and restart-prone).
         _store_bad_leads(campaign_id, [d for d in details if d["verdict"] == "bad"])
         with JOBS_LOCK:
-            job["counts"] = {"total": len(targets), **counts, "bad_emails": bad_emails}
+            job["counts"] = {"total": len(details), **counts, "bad_emails": bad_emails}
 
         # Auto-remove tail: only when asked, only when there's something bad
         # to remove, and only if the verify pass itself wasn't cancelled.
@@ -4797,8 +4830,14 @@ def api_verify_campaign(p: dict):
         if not dry_run and not mock and _campaign_has_active_job(campaign_id):
             return {"error": "already_active",
                     "message": "This campaign already has a task running — wait for it to finish."}, 409
+        max_new = None
+        if p.get("max_new") is not None:
+            try:
+                max_new = max(0, int(p["max_new"]))
+            except (TypeError, ValueError):
+                max_new = None
         job = _new_job("verify", label, campaign_id, mode, dry_run,
-                       auto_remove=auto_remove, mock=mock)
+                       auto_remove=auto_remove, mock=mock, max_new=max_new)
         job["name"] = name
         if mock and p.get("mock_leads"):
             job["mock_leads"] = p.get("mock_leads")
