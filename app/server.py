@@ -9483,6 +9483,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
             return self._qa_gate_get(path)
+        if path == "/api/insights":  # Today homepage: daily insight feed (generated on first request, cached per day)
+            import insights_engine
+            payload = insights_engine.api_insights(sb)
+            if payload:
+                return self._json(payload)
+            return self._json({"error": "insights_unavailable"}, 503)
         if path == "/api/cron/last-run":  # observability: latest scheduled batch-pull summary
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
