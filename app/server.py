@@ -5451,28 +5451,26 @@ def perf_daily(p: dict) -> dict:
 
     sent_by, rep_by, brate_by = {}, {}, {}
     max_sent_day = None
-    rows = sb_get_all(f"sent_messages?select=sent_at&sent_at=gte.{start.isoformat()}")
-    if rows is None:
+    # DB-side aggregation (rpc/perf_daily_series) — one exact row per day. This
+    # replaced two client-side sb_get_all pulls (~35k mailbox_stats_daily rows)
+    # that paginated WITHOUT a stable ORDER BY, so Range-offset paging
+    # skipped/duplicated rows and the reply/bounce sums jittered between calls.
+    series = sb("POST", "rpc/perf_daily_series", {"p_start": start.isoformat()})
+    if not isinstance(series, list):
         return {"error": "Supabase read failed", "days": dates,
                 "sent": [None] * days, "reply_rate": [None] * days, "bounce_rate": [None] * days}
-    for r in rows:
-        d = (r.get("sent_at") or "")[:10]
-        if d:
-            sent_by[d] = sent_by.get(d, 0) + 1
+    for r in series:
+        d = r.get("d")
+        if not d:
+            continue
+        if r.get("sent") is not None:
+            sent_by[d] = r.get("sent")
             if not max_sent_day or d > max_sent_day:
                 max_sent_day = d
-    mb = sb_get_all(f"mailbox_stats_daily?select=stat_date,replies_30d,bounces_30d,sent_30d&stat_date=gte.{start.isoformat()}") or []
-    agg: dict = {}
-    for r in mb:
-        d = r.get("stat_date")
-        if d:
-            a = agg.setdefault(d, [0, 0, 0])
-            a[0] += r.get("bounces_30d") or 0
-            a[1] += r.get("replies_30d") or 0
-            a[2] += r.get("sent_30d") or 0
-    for d, (b, rep, s) in agg.items():
-        brate_by[d] = round(100.0 * b / s, 2) if s else None
-        rep_by[d] = round(100.0 * rep / s, 2) if s else None
+        s30 = r.get("sent_30d")
+        if s30:
+            brate_by[d] = round(100.0 * (r.get("bounces_30d") or 0) / s30, 2)
+            rep_by[d] = round(100.0 * (r.get("replies_30d") or 0) / s30, 2)
 
     sent, reply_rate, bounce_rate = [], [], []
     for d in dates:
