@@ -3125,6 +3125,7 @@ function directRoute(mech) {
   // no campaign row is written on cancel/back-out. openSourceWizard runs against
   // a "__pending__" campaign; ensureCampaign() creates it the moment we save.
   wiz.mechanism = mech;
+  const dmTitles = [...(wiz.titles || [])];  // client-ICP DMs, resolved at pickClient
   const pending = {
     name: `${wiz.client?.name || "New"} · ${(wiz.goal || "").trim().slice(0, 48) || DIRECT_LABEL[mech]}`,
     client_id: wiz.client?.id || null, goal: wiz.goal || "",
@@ -3133,9 +3134,20 @@ function directRoute(mech) {
   };
   const clientId = wiz.client?.id || null;
   closeWizard();
-  openSourceWizard(DIRECT_SRC_TYPE[mech] || "companies", "__pending__");
+  const srcType = DIRECT_SRC_TYPE[mech] || "companies";
+  openSourceWizard(srcType, "__pending__");
   sw._pendingCampaign = pending;
   sw._clientId = clientId;
+  // Pre-fill the required "Who we email" field. The async suggest inside
+  // openSourceWizard keys off campaign_id="__pending__", which has no ICP to
+  // resolve, so it left the field blank — every tester stalled on it. Seed it
+  // from the client's ICP DMs now (already in wiz.titles), or a sensible
+  // Director+ default so it is never empty on arrival.
+  if (srcType === "hiring" && !sw.dm_titles) {
+    sw.dm_titles = (dmTitles.length ? dmTitles : ["Founder", "CEO", "VP of Sales", "Head of Sales"]).join(", ");
+    sw._touched = { ...(sw._touched || {}), dm_titles: true };  // don't let the async suggest wipe it
+    if (sw.step === 1) drawSrc();
+  }
   protoNote("Set up the signal - the campaign is created when you save it");
 }
 
