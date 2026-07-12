@@ -129,6 +129,10 @@ let resetArmed = false;
    ("hidden" | "learning" | "settled"), independent of RELEARN.status so the
    "settled" message can hang around for a few seconds after the pass ends. */
 let RELEARN = { status: "idle" };
+// Fresh versions of the CURRENTLY displayed case that arrived from a relearn
+// poll - held back so they don't swap under the user mid-grade, applied when
+// they navigate away.
+let PENDING_UPDATE = {};
 let FEEDBACK_LOG = [];
 let relearnBanner = "hidden";
 let relearnPollTimer = null;
@@ -179,28 +183,36 @@ async function pollRelearnOnce() {
   const freshById = {};
   (data.cases || []).forEach((c) => { freshById[c.id] = c; });
   const displayedId = (view === "case" && CASES[idx]) ? CASES[idx].id : null;
-  let currentCaseChanged = false;
+  // Merge fresh data into unanswered cases SILENTLY. We never re-render here:
+  // a full render would wipe whatever the user is typing in the note field.
+  // The current case is left untouched on screen until the user moves off it
+  // (its fresh version is stashed and applied on navigate); every other case
+  // shows its update the next time it is rendered.
   CASES = CASES.map((c) => {
-    if (ANSWERS[c.id]) return c; // never let a background pass touch an already-answered case's display
+    if (ANSWERS[c.id]) return c;            // never touch an answered case
     const updated = freshById[c.id];
     if (!updated) return c;
-    if (JSON.stringify(updated) !== JSON.stringify(c)) {
-      if (c.id === displayedId) currentCaseChanged = true;
-      return updated;
+    if (c.id === displayedId) {             // don't swap the case being worked on now
+      PENDING_UPDATE[c.id] = updated;
+      return c;
     }
-    return c;
+    return updated;
   });
   if (RELEARN.status !== "running") {
     stopRelearnPolling();
     if (relearnBanner === "learning") {
       relearnBanner = "settled";
       if (relearnSettleTimer) clearTimeout(relearnSettleTimer);
-      relearnSettleTimer = setTimeout(() => { relearnBanner = "hidden"; relearnSettleTimer = null; render(); }, 4000);
+      relearnSettleTimer = setTimeout(() => { relearnBanner = "hidden"; updateBannerInPlace(); relearnSettleTimer = null; }, 4000);
     }
-    render();
-  } else if (currentCaseChanged) {
-    render();
   }
+  updateBannerInPlace();
+}
+/* Update ONLY the banner element, never the whole case - so polling can show
+   "learning..." without disturbing the note field or the answer buttons. */
+function updateBannerInPlace() {
+  const host = document.getElementById("relearnBannerHost");
+  if (host) host.innerHTML = renderRelearnBanner();
 }
 function renderRelearnBanner() {
   if (relearnBanner === "learning") return `<div class="grade-relearn-banner">Learning from your feedback - updating the remaining examples...</div>`;
@@ -323,7 +335,7 @@ function renderCase() {
   el.innerHTML = `
     <div class="grade-progress">Case ${idx + 1} of ${total} &middot; ${answeredCount} of ${total} answered</div>
     <div class="grade-lead-line">${leadContextLine(c)}</div>
-    ${renderRelearnBanner()}
+    <div id="relearnBannerHost">${renderRelearnBanner()}</div>
     ${renderFirstEmail(c)}
     ${renderThread(c)}
     <div class="grade-card grade-their-reply">
@@ -379,6 +391,11 @@ function wireCaseEvents(c) {
   if (nextBtn) nextBtn.addEventListener("click", goNext);
   const noteEl = document.getElementById("gradeNote");
   if (noteEl) {
+    // Keep ANSWERS in sync on every keystroke (no render, no save) so the
+    // field's text survives any re-render, and blur persists it.
+    noteEl.addEventListener("input", () => {
+      const a = ANSWERS[c.id] || {}; a.note = noteEl.value; ANSWERS[c.id] = a;
+    });
     noteEl.addEventListener("blur", () => { setAnswerField(c, "note", noteEl.value.trim(), { skipRender: true }); });
   }
 }
@@ -427,11 +444,20 @@ async function goNext() {
     ANSWERS[c.id] = a;
   }
   await persistAnswer(c);
+  applyPendingUpdate(c.id);
   if (idx < CASES.length - 1) { idx++; view = "case"; render(); }
   else { view = "final"; render(); }
 }
 function goPrev() {
-  if (idx > 0) { idx--; render(); }
+  if (idx > 0) { applyPendingUpdate(CASES[idx] && CASES[idx].id); idx--; render(); }
+}
+/* Fold in any relearn update that arrived while this case was on screen. */
+function applyPendingUpdate(id) {
+  if (id && PENDING_UPDATE[id] && !ANSWERS[id]) {
+    const i = CASES.findIndex((x) => x.id === id);
+    if (i >= 0) CASES[i] = PENDING_UPDATE[id];
+  }
+  if (id) delete PENDING_UPDATE[id];
 }
 
 /* ── Keyboard: 1/2 right-call yes/no, 3/4 reply yes/no, Enter next ────── */
