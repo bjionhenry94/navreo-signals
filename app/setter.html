@@ -35,10 +35,17 @@
 .setter-toolbar .tb-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .autopilot-pill { cursor: pointer; border: none; font: 500 11px var(--font-sans); }
 
+/* Setter page is full-bleed: the inbox shell runs edge to edge (no shared
+   .main gutters, no 80px bottom pad - both would waste screen), while the
+   header row and toolbar keep their own side gutter. */
+.main { padding: 20px 0 0; }
+.setter-head-row, .setter-toolbar, #errBanner { margin-left: 22px; margin-right: 22px; }
+.inbox-shell { border-left: none; border-right: none; border-radius: 0; }
+
 /* ── Three-pane inbox shell: list | conversation | fixed lead-info sidebar ── */
 .inbox-shell {
   display: flex; border: 1px solid var(--line); border-radius: var(--radius);
-  overflow: hidden; height: calc(100vh - 220px); min-height: 460px;
+  overflow: hidden; height: calc(100vh - 140px); min-height: 460px;
 }
 .inbox-left { width: 340px; flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
@@ -53,7 +60,12 @@
 .il-list .empty { padding: 40px 16px; }
 .il-pager { flex-shrink: 0; border-top: 1px solid var(--line); padding: 7px 10px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
 .il-pager button { padding: 4px 9px; font-size: 12px; }
-.inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 40px; }
+.inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 28px; display: flex; flex-direction: column; }
+.inbox-right > * { flex-shrink: 0; }
+/* The conversation card is the one flexible child: it absorbs all vertical
+   space between the header and the composer, and .convo scrolls inside it. */
+.inbox-right > .convo-card { flex: 1 1 auto; min-height: 190px; display: flex; flex-direction: column; }
+.convo-card .convo { flex: 1 1 auto; min-height: 0; }
 
 /* Fixed lead-info sidebar (third column), Smartlead Lead-Overview-style but
    docked, not an overlay. Only shown once a row is selected (renderDetail
@@ -92,7 +104,8 @@
 @media (max-width: 900px) {
   .inbox-shell { flex-direction: column; height: auto; min-height: 0; border: none; overflow: visible; }
   .inbox-left { width: 100%; border-right: none; border: 1px solid var(--line); border-radius: var(--radius); height: auto; }
-  .inbox-right { padding: 16px 4px 40px; height: auto; }
+  .inbox-right { padding: 16px 4px 40px; height: auto; display: block; }
+  .convo { max-height: 60vh; }
   .lead-panel { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 16px; max-height: none; }
   .inbox-shell:not(.mobile-detail) .inbox-right { display: none; }
   .inbox-shell:not(.mobile-detail) .lead-panel { display: none; }
@@ -126,7 +139,7 @@
 
 /* ── Threaded conversation (Change 1): one scrollable column, oldest first,
    their current reply always last and visually emphasised ─────────────── */
-.convo { position: relative; max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 4px 0; }
+.convo { position: relative; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 4px 0; }
 .convo-fade {
   position: absolute; top: 0; left: 0; right: 0; height: 30px; border-radius: 8px 8px 0 0;
   background: linear-gradient(var(--card), rgba(255, 255, 255, 0));
@@ -921,7 +934,7 @@ function convoHtml(row) {
   // (no thread) skip it entirely, matching "container shrinks to fit".
   const fadeHtml = older.length ? `<div class="convo-fade"></div>` : "";
   return `
-    <div class="msg-card">
+    <div class="msg-card convo-card">
       <div class="msg-card-lab">Conversation</div>
       <div class="convo" id="convo-${esc(row.id)}">
         ${fadeHtml}
