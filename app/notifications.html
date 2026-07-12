@@ -286,14 +286,15 @@ tr.var-winner td.var-flagcell { color: var(--green); }
    number on purpose. */
 #rollup.rollup-filtered { opacity: 0.55; }
 .rollup-filter-note { color: var(--ink-3); font-weight: 500; }
-.rollup-chips { margin-top: 2px; }
+#rollup { display: flex; align-items: center; column-gap: 18px; row-gap: 4px; flex-wrap: wrap; }
+.rollup-chips { margin-top: 0; }
 
 /* Freshness chip: when the daily optimiser generation last succeeded
    (signal_cron_runs, kind=optimiser_notifications) — NOT page-load time.
    Muted by default; flips to amber if the last run is stale (>26h, i.e. the
    daily cron missed its window), which is the one case worth calling out. */
 .freshness-chip {
-  display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
   font-size: 11px; font-weight: 600; color: var(--ink-3); background: var(--bg-sunken);
   vertical-align: middle;
 }
@@ -1520,7 +1521,7 @@ function updateSummary() {
     rollupEl.classList.toggle("rollup-filtered", filterActive);
     // Trimmed to essentials: how many campaigns need attention, the actionable
     // High/Medium/Low breakdown (click → Recommended Actions), and freshness.
-    rollupEl.innerHTML = `<b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention` +
+    rollupEl.innerHTML = `<span><b>${fmt(needingAttention)}</b> campaign${needingAttention === 1 ? "" : "s"} need${needingAttention === 1 ? "s" : ""} attention</span>` +
       `<div class="rollup-chips"><button type="button" class="rollup-chip" onclick="jumpToSection(7)">${fmt(tierCount("High"))} High / ${fmt(tierCount("Medium"))} Medium / ${fmt(tierCount("Low"))} Low actions</button>` +
       (filterActive ? `<span class="rollup-filter-note"> &middot; totals — clear filter to compare</span>` : "") +
       `</div>` + freshnessChipHTML();
