@@ -9985,7 +9985,7 @@ def offer_email(p: dict, ip: str):
     who = f"The business sending this email is {domain}." if domain else ""
     aud = (f"They sell to: {audience}. Write the email to a realistic example person in that group."
            if audience else "Write the email to a realistic example person in the buyer group this offer targets.")
-    prompt = f"""You are an expert cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below.
+    prompt = f"""You are our house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below, using our "Service Pitch" template EXACTLY.
 
 {who}
 {aud}
@@ -9999,15 +9999,26 @@ THE OFFER:
 - One fair condition: {fields['stipulation']}
 - Suggested opening line: {fields['opener']}
 
-WRITE THE EMAIL LIKE THIS (a real, sendable example, NOT a template):
-- Invent a realistic first name for the recipient and a realistic example company name for their business. Use them as concrete values. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
-- Line 1: "Hi <recipient first name>,"
-- Then a one-line icebreaker that names a concrete, plausible trigger for THIS buyer (for example a recent hire, a new location, a product launch, a post they made) and ends with "so I wanted to reach out." Do not pitch in the icebreaker.
-- Then the offer in the body: name the problem they are missing out on, what you would do about it, and the promise, ending in a question that offers to SEND something small (a short Loom video, a one-page plan, or a sample). Never ask to "book a call". Keep the body 45 to 70 words.
-- Then "Best," on its own line, then a realistic sender first name on the next line.
-- Then a P.S. that is one concrete line of social proof (a named example client and/or a plausible result). Mark nothing as made up inside the email, just write it as a confident real result.
+THE SERVICE PITCH TEMPLATE (follow this shape exactly, one blank line between each part):
 
-Rules: plain English an 11th grader understands. No em-dashes anywhere. No spam words (free, trial, guaranteed, risk-free, today, urgent). Real line breaks between the parts.
+Hi <recipient first name>,
+
+<Icebreaker: ONE short line naming a concrete, plausible trigger about the recipient's company (a recent hire, a new office, a launch, a post) that ends with the exact words "so I wanted to reach out.". Do not pitch here.>
+
+If we could <the new-money outcome they want> by <what we would do, in plain words>, <the risk reversal woven in as a natural clause>, <a low-risk CTA question that offers to SEND something small like a short Loom, a one-page plan, or a sample>?
+
+Best,
+<sender first name>
+
+P.S - <one concrete line of proof: a named example client and a result>
+
+HARD RULES:
+- Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
+- The "If we could ... ?" part is ONE flowing sentence that ends on the question mark. Do NOT split the risk reversal into its own separate sentence, and do NOT add any sentence after the question.
+- The CTA offers to SEND something small (a short Loom, a one-page plan, a sample). Never "book a call" or "hop on a call".
+- Keep the "If we could ... ?" sentence between 45 and 70 words.
+- Plain English an 11th grader understands. No em-dashes anywhere. No colons or semicolons in the body. No spam words (free, trial, guaranteed, risk-free, today, urgent).
+- Real line breaks between the parts, exactly as shown.
 
 Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full email, with real line breaks>"}}"""
     err = ""
