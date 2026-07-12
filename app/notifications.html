@@ -78,7 +78,7 @@
      rail itself is shell-owned, left alone) and give touch targets a 44px
      minimum so mini row-actions are tappable. */
   .main { padding-left: 14px; padding-right: 14px; }
-  .row-actions .btn, .section-nav .nav-chip { min-height: 44px; }
+  .row-actions .btn { min-height: 44px; }
   .mini-actions .btn.xs { min-height: 44px; padding-left: 10px; padding-right: 10px; }
   .action-toast { bottom: max(14px, env(safe-area-inset-bottom, 14px)); }
 }
@@ -109,8 +109,6 @@
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .bar-actions { display: flex; align-items: center; gap: 10px; }
 .sel { border: 1px solid var(--line-2); background: var(--card); border-radius: 10px; padding: 7px 11px; font-size: 12.5px; color: var(--ink-2); font-family: inherit; cursor: pointer; }
-.rank-explainer { font-size: 12px; color: var(--ink-3); line-height: 1.55; margin: 0 2px 18px; max-width: 900px; }
-.rank-explainer .jg { border-bottom: 1px dotted var(--ink-3); cursor: help; }
 .state-msg { text-align: center; color: var(--brown-400); font-size: 13px; padding: 60px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .state-msg .spin { width: 18px; height: 18px; border-width: 2.5px; }
 
@@ -143,33 +141,13 @@
 .dimmed { opacity: 0.5; }
 .callout .row-actions { margin-top: 8px; }
 
-/* Worst-offender bridge callout + header rollup chips (fix E) */
-.worst-offender {
-  border: 1px solid var(--line); border-left: 3px solid var(--red); border-radius: var(--radius);
-  padding: 12px 16px; font-size: 13px; background: var(--bg-sunken); margin: 0 0 16px; cursor: pointer;
-}
-.worst-offender:hover { background: var(--card); }
-.worst-offender b { font-weight: 600; }
+/* Header rollup chips (fix E) */
 .rollup-chip {
   font: 600 11.5px var(--font-mono); border: none; background: transparent; color: inherit;
   cursor: pointer; padding: 0; text-decoration: underline dotted; text-underline-offset: 2px;
 }
 .rollup-chip:hover { color: var(--orange-700); }
 
-/* Sticky section nav (fix G) */
-.section-nav {
-  position: sticky; top: 0; z-index: 60; display: flex; gap: 6px; align-items: center;
-  padding: 8px 0; margin: 0 0 12px; background: var(--card); border-bottom: 1px solid var(--line);
-  overflow-x: auto; -webkit-overflow-scrolling: touch;
-}
-.section-nav .nav-chip {
-  flex-shrink: 0; border: 1px solid var(--line-2); background: transparent; border-radius: 999px;
-  min-width: 28px; height: 28px; padding: 0 8px; box-sizing: border-box; display: flex;
-  align-items: center; justify-content: center; font: 600 12px var(--font-sans); color: var(--ink-2);
-  cursor: pointer;
-}
-.section-nav .nav-chip:hover { background: var(--bg-sunken); }
-.section-nav .nav-chip.current { background: var(--ink); color: var(--cream); border-color: var(--ink); }
 
 /* Newcomer-layer tooltip term (fix H1) — dotted-underline discoverability cue */
 .jg { border-bottom: 1px dotted var(--ink-3); cursor: help; }
@@ -233,7 +211,6 @@
    verdict. The pill carries the number; the reason is plain English so a
    strategist never needs the formula to trust the order. */
 .ab-impact { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); }
-.impact-pill { border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 9px; font-weight: 700; font-size: 11.5px; color: var(--ink); white-space: nowrap; }
 /* "Work on these first": the top-5 highest-impact cards render eagerly;
    everything below sits in a one-line-per-campaign summary list with the full
    cards behind an expander, so the default view is 5 cards, not 60. */
@@ -301,7 +278,6 @@ tr.var-winner td.var-flagcell { color: var(--green); }
 }
 .triage-chip:hover { background: var(--bg-sunken); }
 .triage-chip.active { background: var(--ink); color: var(--cream); border-color: var(--ink); }
-.ab-legend { margin: 0 0 12px; }
 
 /* Rollup count-system fix (#6): when a status/priority filter is active, the
    top rollup (always full-client totals, never re-scoped by the filter) is
@@ -348,7 +324,6 @@ tr.var-winner td.var-flagcell { color: var(--green); }
   <main class="main">
     <div class="pagehead">
       <div>
-        <div class="eyebrow">Notifications</div>
         <h1>Campaign Optimisation Priority Report</h1>
       </div>
       <div id="summary" class="freshness"></div>
@@ -386,14 +361,6 @@ tr.var-winner td.var-flagcell { color: var(--green); }
         <button class="btn sm" id="refreshBtn" type="button">Refresh</button>
       </div>
     </div>
-    <nav id="sectionNav" class="section-nav" aria-label="Jump to report section">
-      <button type="button" class="nav-chip" data-nav-section="1" title="Campaigns Needing Optimisation">1</button>
-      <button type="button" class="nav-chip" data-nav-section="2" title="Performing Campaigns">2</button>
-      <button type="button" class="nav-chip" data-nav-section="3" title="Campaign Lifecycle">3</button>
-      <button type="button" class="nav-chip" data-nav-section="5" title="Low Reply Rate Flags">4</button>
-      <button type="button" class="nav-chip" data-nav-section="6" title="Variant Distribution Flags">5</button>
-      <button type="button" class="nav-chip" data-nav-section="7" title="Recommended Actions">6</button>
-    </nav>
     <div id="list"></div>
   </main>
 </div>
@@ -419,7 +386,6 @@ tr.var-winner td.var-flagcell { color: var(--green); }
     <p id="disableVariantModalCampaign"></p>
     <p id="disableVariantModalTarget"></p>
     <p>The variant stops receiving traffic. Its share is redistributed across the remaining active variants. Historical stats are preserved. No copy is changed.</p>
-    <p>This is a beta action, first uses are monitored.</p>
     <p>Type <b>DISABLE</b> to confirm.</p>
     <input id="disableVariantConfirmInput" type="text" autocomplete="off" placeholder="Type DISABLE">
     <div class="modal-err" id="disableVariantModalErr"></div>
@@ -598,7 +564,6 @@ function isExpanded(num) { return !!sectionExpandState.get(num); }
    collapsed) so expanding right after a filter change renders the current
    filtered subset, not stale data from page load. */
 const sectionRenderers = new Map();
-let sectionNavObserver = null;
 
 /* perf fix (round4): an eagerly-rendered section/tier body with hundreds of
    rows built in one synchronous innerHTML pass froze the tab (the reported
@@ -980,9 +945,8 @@ function section1(rows, blockMap) {
     if (az && bz) return (b.sent || 0) - (a.sent || 0);
     return (b.sent_pos_ratio || 0) - (a.sent_pos_ratio || 0);
   });
-  const body = sorted.map((n, i) => `
+  const body = sorted.map((n) => `
     <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
-      <td>${i + 1}</td>
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}${jumpLinkHTML(n.campaign_id, blockMap)}</td>
       <td>${fmt(n.sent)}</td>
       <td>${fmt(n.positive)}</td>
@@ -990,7 +954,7 @@ function section1(rows, blockMap) {
       <td class="actions-td">${rowActionsHTML(n)}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th class="actions-th">Status</th></tr></thead>
+    <thead><tr><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th class="actions-th">Status</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }
 
@@ -1000,9 +964,8 @@ function section2(rows, blockMap) {
   // Acknowledge / Dismiss lifecycle — there's nothing to triage. What's
   // useful here is the outcome, so the status column is replaced by a
   // Meetings column (campaign-level booked-meeting count, meetings int).
-  const body = sorted.map((n, i) => `
+  const body = sorted.map((n) => `
     <tr class="${isRetiredStatus(n.status) ? "dimmed" : ""}" id="row-${esc(String(n.id))}">
-      <td>${i + 1}</td>
       <td>${campaignLink(n.campaign_name, n.smartlead_url)}${jumpLinkHTML(n.campaign_id, blockMap)}</td>
       <td>${fmt(n.sent)}</td>
       <td>${fmt(n.positive)}</td>
@@ -1010,7 +973,7 @@ function section2(rows, blockMap) {
       <td>${Number.isFinite(n.meetings) ? fmt(n.meetings) : "–"}</td>
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
-    <thead><tr><th>#</th><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th><span class="jg" title="Meetings booked from this campaign so far.">Meetings</span></th></tr></thead>
+    <thead><tr><th>Campaign</th><th>Sent</th><th>Positive</th>${SENT_POS_TH}<th><span class="jg" title="Meetings booked from this campaign so far.">Meetings</span></th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }
 
@@ -1109,7 +1072,6 @@ function variantAnalysisSectionHTML() {
   return `<div class="va-merge">
     <div class="lowimpact-h"><span class="jg" title="One specific email copy version (A/B test) within a step of the sequence.">Variant</span> analysis &mdash; ${campaignCount} campaign${campaignCount === 1 ? "" : "s"}, ${rows.length} finding${rows.length === 1 ? "" : "s"}</div>
     ${cards}
-    <div class="fixnote">Need a fresh angle on any campaign above? A CSM can run <span class="jg" title="A command the CSM can run in Claude Code (Claude with Navreo's skills installed) to have it generate new copy angles/mechanisms for a specific campaign.">/lilly-strategy &lt;slug&gt;</span> for <span class="jg" title="CSM ideation - the CSM (not the client) brainstorming new campaign angles, most often by running /lilly-strategy, once existing variants are underperforming.">CSM ideation</span> on new mechanisms or copy angles.</div>
   </div>`;
 }
 
@@ -1147,8 +1109,7 @@ function section5(rows) {
     </tr>`).join("");
   return `<div class="table-scroll"><table class="tbl">
     <thead><tr><th>Campaign</th><th>Sent</th><th>Unique Replies</th><th>Reply Rate</th><th class="actions-th">Status</th><th><span class="jg" title="Copy a Claude prompt to run a list audit and spam-word check on this campaign.">List audit</span></th></tr></thead>
-    <tbody>${body}</tbody></table></div>
-    <div class="fixnote">Recommended next step: run <span class="jg" title="Pulls every lead, classifies each title by function, and reports how much of the list is on-ICP vs off-ICP.">lilly-list-audit</span> on each flagged campaign to confirm the enrolled leads match the intended <span class="jg" title="Ideal Customer Profile — the target buyer persona this campaign is built for.">ICP</span>, and check deliverability (spam placement, sender reputation, warmup) in parallel.</div>`;
+    <tbody>${body}</tbody></table></div>`;
 }
 
 function section6(rows) {
@@ -1319,8 +1280,8 @@ function actionBlockHTML(n) {
       <div class="ab-verdict">${esc(verdictLine(n))}</div>
       ${fixSplitTagHTML(n)}
     </div>
-    ${(n.impact_score != null || n.impact_reason)
-      ? `<div class="ab-impact">${n.impact_score != null ? `<span class="impact-pill" title="Expected leads still winnable here, weighted up when the campaign is already booking meetings or getting positives. Higher = more worth your time.">Impact ${esc(String(n.impact_score))}</span>` : ""}<span>${esc(n.impact_reason || "")}</span></div>`
+    ${n.impact_reason
+      ? `<div class="ab-impact"><span>${esc(n.impact_reason)}</span></div>`
       : ""}
     ${bestVariantHTML(n)}
     <div class="action-row">
@@ -1331,7 +1292,7 @@ function actionBlockHTML(n) {
       ${actionBtn(n, "actioned", "Mark as completed", "Completed")}
       ${actionBtn(n, "dismissed", "Dismiss", "Dismissed")}
     </div>
-    ${showWhy ? `<details class="ab-why"><summary>Why? (${reasonCount} reason${reasonCount === 1 ? "" : "s"})</summary><div class="ab-why-body">${whyBody}</div></details>` : ""}
+    ${showWhy ? `<details class="ab-why"><summary>Why?</summary><div class="ab-why-body">${whyBody}</div></details>` : ""}
   </div>`;
 }
 
@@ -1393,7 +1354,6 @@ function triageStripHTML(allRows) {
    ambiguous the first time a CSM sees them (do they touch the live
    campaign?), so spell out plainly that they only move this row's own
    status, never Smartlead itself. */
-const AB_LEGEND_HTML = `<div class="small muted ab-legend">Buttons: Acknowledge = I've seen it &middot; Mark as completed = I've done it &middot; Dismiss = not relevant. None of them change the campaign itself. Completed and dismissed cards leave this list - pick a status in the filter above to see them again.</div>`;
 function section7(rows) {
   const stripHTML = triageStripHTML(rows);
   // Filtering happens here, AFTER counts are computed from the full `rows`
@@ -1414,26 +1374,26 @@ function section7(rows) {
   // expander would hide them. So while a filter is active, render everything
   // eager (still chunked for weight); unfiltered draws get the top-5 split.
   if (section7ActionTypeFilter !== "all") {
-    return stripHTML + AB_LEGEND_HTML + explainersHTML
+    return stripHTML + explainersHTML
       + chunkedHTML("7-filtered", sorted, (rs) => rs.map(actionBlockHTML).join(""))
       + variantAnalysisSectionHTML();
   }
   const top = sorted.slice(0, 5);
   const rest = sorted.slice(5);
   const topHTML = top.length
-    ? `<div class="work-first"><div class="work-first-h">Work on these first &mdash; the biggest wins still on the table</div>${top.map(actionBlockHTML).join("")}</div>`
+    ? `<div class="work-first"><div class="work-first-h">Work on these first</div>${top.map(actionBlockHTML).join("")}</div>`
     : "";
   // Lower-impact actions get the SAME full-card formatting and treatment as
   // the top recommended actions — just minimised by default. The one-line
   // summary list is gone; the expander (collapsed on load) reveals the full
   // action-block cards so the CSM can read and action the data.
   const restHTML = rest.length
-    ? `<div class="lowimpact-h">${rest.length} lower-impact action${rest.length === 1 ? "" : "s"} &mdash; less data left to win, in descending order</div>`
+    ? `<div class="lowimpact-h">${rest.length} lower-impact action${rest.length === 1 ? "" : "s"}</div>`
       + tierExpanderHTML("7-rest", "lower-impact", rest)
     : "";
   // Variant analysis sits ABOVE the lower-impact (low-priority) actions — it's
   // part of the recommended work, not a footnote below the drained campaigns.
-  return stripHTML + AB_LEGEND_HTML + explainersHTML + topHTML + variantAnalysisSectionHTML() + restHTML;
+  return stripHTML + explainersHTML + topHTML + variantAnalysisSectionHTML() + restHTML;
 }
 /* Toggle a Section 7 tier expander in place (fix #5's click wiring) — builds
    the tier's DOM lazily on first open, same pattern as setSectionExpanded. */
@@ -1497,20 +1457,6 @@ function reportSection(num, title, rows, bodyFn, opts = {}) {
   </div>`;
 }
 
-/* fix E2: one-line "worst offender" callout above Section 1, pointing at
-   whatever Section 7 currently considers block #1 (lowest block_number =
-   most urgent, same ordering section7() sorts by). Built from `by(7)` (the
-   currently filtered/rendered set) so its jump target always exists. */
-function worstOffenderCallout(actionRows) {
-  if (!actionRows.length) return "";
-  const top = [...actionRows].sort((a, b) => (a.block_number ?? 9999) - (b.block_number ?? 9999))[0];
-  const reasonLabel = esc(ACTION_TYPE_LABEL[top.action_type] || parseActionBullets(top.detail)[0] || "flagged for action");
-  const reasonHTML = reasonLabel.replace(/kill threshold/, `<span class="jg" title="This campaign hit the automatic kill threshold — spend/sends passed the cutoff with no positive signal.">kill threshold</span>`);
-  return `<div class="worst-offender" data-jump-block="${esc(String(top.id))}">
-    <b>Most urgent:</b> ${campaignLink(top.campaign_name, top.smartlead_url)} &mdash; ${reasonHTML} &rarr; block #${esc(String(top.block_number ?? "?"))}
-  </div>`;
-}
-
 /* Freshness chip: last successful daily optimiser generation (signal_cron_runs,
    kind=optimiser_notifications), fetched once and independent of loadState/filters -
    it must reflect when the data was GENERATED, never when this page happened to load. */
@@ -1552,8 +1498,7 @@ function updateSummary() {
   // Total excludes the (no-longer-rendered) all-clear tail so "X of Y" reconciles.
   const totalFindings = all.filter((n) => n.section !== 0).length;
   const campaignCount = new Set(shown.map((n) => n.campaign_id ?? n.campaign_name)).size;
-  el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${totalFindings}</b> findings</div>` +
-    `<div>${campaignCount} campaign${campaignCount === 1 ? "" : "s"}</div>`;
+  el.innerHTML = `<div>Showing <b>${shown.length}</b> of <b>${totalFindings}</b> findings</div>`;
 
   // Top-line rollup: always computed from the full client-scoped `all` (not the currently
   // chosen status/priority filter) so a 5-minute user gets the true picture at a glance,
@@ -1618,7 +1563,6 @@ function draw() {
   // section ids (1,2,3,5,6,7) stay as-is so filtering/context keep working.
   // Table sections 1-4 show their top 5 rows with a "Load more" (chunkLimit).
   const html = [
-    worstOffenderCallout(by(7)),
     reportSection(1, "Campaigns Needing Optimisation", by(1), (rows) => section1(rows, blockMap), { displayNum: 1, chunkLimit: 5 }),
     reportSection(2, "Performing Campaigns", by(2), (rows) => section2(rows, blockMap), { displayNum: 2, chunkLimit: 5 }),
     reportSection(3, "Campaign Lifecycle", by(3), section3, { displayNum: 3, chunkLimit: 5 }),
@@ -1628,7 +1572,6 @@ function draw() {
   ].join("");
 
   root.innerHTML = html;
-  setupSectionNavObserver();
 }
 
 document.getElementById("statusFilter").onchange = (e) => { filters.status = e.target.value; draw(); };
@@ -1717,26 +1660,6 @@ function jumpToBlock(id) {
 /* fix G: highlight whichever section header is currently at the top of the
    viewport in the sticky nav. Re-created on every draw() since .rsection-h
    nodes are rebuilt each time. */
-function setupSectionNavObserver() {
-  const navEl = document.getElementById("sectionNav");
-  if (!navEl) return;
-  if (sectionNavObserver) sectionNavObserver.disconnect();
-  sectionNavObserver = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
-      if (!entry.isIntersecting) return;
-      const sec = entry.target.closest(".rsection");
-      if (!sec) return;
-      const num = sec.dataset.section;
-      navEl.querySelectorAll(".nav-chip").forEach((c) => c.classList.toggle("current", c.dataset.navSection === num));
-    });
-  }, { rootMargin: "-10% 0px -75% 0px", threshold: 0 });
-  document.querySelectorAll(".rsection-h").forEach((h) => sectionNavObserver.observe(h));
-}
-document.getElementById("sectionNav").addEventListener("click", (e) => {
-  const chip = e.target.closest("[data-nav-section]");
-  if (!chip) return;
-  jumpToSection(Number(chip.dataset.navSection));
-});
 
 /* fix B: one core PATCH call, shared by a normal status action and its Undo
    so both go through the same request shape / cache-bust / `all[]` update. */
@@ -2180,7 +2103,7 @@ function showActionToast(msg, undoFn) {
   const msgEl = document.getElementById("actionToastMsg");
   const undoBtn = document.getElementById("actionToastUndo");
   const bar = document.getElementById("toastProgressBar");
-  msgEl.textContent = undoFn ? `${msg} — Undo` : msg;
+  msgEl.textContent = msg;
   undoBtn.style.display = undoFn ? "" : "none";
   toastUndoHandler = undoFn || null;
   toastExpiresAt = undoFn ? Date.now() + UNDO_WINDOW_MS : 0;
