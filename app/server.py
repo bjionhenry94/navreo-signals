@@ -3508,7 +3508,7 @@ def update_source(p: dict) -> dict:
                           "linkedin": row.get("linkedin_url") or p["linkedin"],
                           "icebreaker": row.get("icebreaker"), "email": row.get("email") or None}
                 if pr is not None:
-                    dest = resolve_destination(d)
+                    dest = resolve_destination(d, ctx_campaign_id=p.get("ctx_campaign_id"))
                     if p["verdict"] == "undo":
                         push = unpush_prospect(pr, dest)  # removes from the live tool
                         if pr.get("linkedin"):
@@ -5056,7 +5056,7 @@ def heyreach_lists(refresh: bool = False) -> list:
     return items
 
 
-_OUTREACH_DESTS_TTL_S = 300  # the live Smartlead /campaigns GET was the slowest of
+_OUTREACH_DESTS_TTL_S = 600  # the live Smartlead /campaigns GET was the slowest of
                               # the 5 list-view calls (baseline ~4s) - the picker
                               # data doesn't need to be second-fresh, and the
                               # frontend already calls ?refresh=1 (which bypasses
@@ -5065,27 +5065,74 @@ _OUTREACH_DESTS_TTL_S = 300  # the live Smartlead /campaigns GET was the slowest
                               # campaign/list from the picker that created it.
 
 
-def _compute_outreach_destinations() -> dict:
+def _compute_outreach_destinations(refresh: bool = False) -> dict:
     out: dict = {"smartlead": [], "heyreach": []}
     try:
         camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
+        if not isinstance(camps, list):
+            # an auth failure comes back as {"message": "Invalid API Key"} — that
+            # must surface as an error, never as a silently empty campaign list
+            msg = camps.get("message") if isinstance(camps, dict) else str(camps)
+            raise RuntimeError(f"Smartlead /campaigns: {msg or 'unexpected response'}")
         out["smartlead"] = [{"id": c.get("id"), "name": c.get("name") or "", "status": c.get("status")}
-                            for c in (camps if isinstance(camps, list) else [])
-                            if c.get("status") in ("ACTIVE", "PAUSED", "DRAFTED")][:100]
+                            for c in camps
+                            if c.get("status") in ("ACTIVE", "PAUSED", "DRAFTED")]
+        out["smartlead_synced_at"] = int(time.time())
     except Exception as e:  # noqa: BLE001
         out["smartlead_error"] = str(e)[:150]
     try:
-        out["heyreach"] = heyreach_lists(refresh=False)
+        out["heyreach"] = heyreach_lists(refresh=refresh)
+        out["heyreach_synced_at"] = int(time.time())
     except Exception as e:  # noqa: BLE001
         out["heyreach_error"] = str(e)[:150]
     return out
 
 
 _OUTREACH_DESTS_SWR = _SWRCache(_compute_outreach_destinations, _OUTREACH_DESTS_TTL_S,
-                                 name="outreach-destinations")  # always cached, even
-                                 # partial *_error payloads - matches the pre-SWR
-                                 # behavior of this endpoint (soft-fails inline, no
-                                 # top-level _degraded flag to gate on)
+                                 is_degraded=lambda p: bool(p.get("smartlead_error") or p.get("heyreach_error")),
+                                 name="outreach-destinations")  # error payloads are
+                                 # served once but never cached, so a transient
+                                 # "Invalid API Key" can't poison the mirror
+
+
+_OUTREACH_SYNC_INTERVAL_S = 540  # the campaigns-tab mirror refreshes on this
+                                  # cadence (one Smartlead GET + one HeyReach
+                                  # page-walk per cycle — nowhere near the shared
+                                  # 200/min Smartlead budget)
+
+
+def _store_outreach_payload(out: dict) -> dict:
+    """Store a freshly computed destinations payload into the SWR cache,
+    keeping the last good per-platform list when the new fetch errored — the
+    error field stays on the payload so the UI can show it loudly next to
+    the (stale) rows instead of an empty tab."""
+    with _OUTREACH_DESTS_SWR.lock:
+        prev = _OUTREACH_DESTS_SWR.payload or {}
+        for plat in ("smartlead", "heyreach"):
+            if out.get(f"{plat}_error") and prev.get(plat):
+                out[plat] = prev[plat]
+                if prev.get(f"{plat}_synced_at"):
+                    out[f"{plat}_synced_at"] = prev[f"{plat}_synced_at"]
+        _OUTREACH_DESTS_SWR.ts = time.time()
+        _OUTREACH_DESTS_SWR.payload = out
+    return out
+
+
+def _outreach_sync_loop():
+    """~10-minute background mirror sync for the campaigns tab (in-process,
+    no external cron)."""
+    while True:
+        time.sleep(_OUTREACH_SYNC_INTERVAL_S)
+        try:
+            out = _compute_outreach_destinations()
+            _store_outreach_payload(out)
+            print(f"[outreach-sync] refreshed: {len(out.get('smartlead') or [])} smartlead, "
+                  f"{len(out.get('heyreach') or [])} heyreach"
+                  + (f", smartlead_error={out.get('smartlead_error')}" if out.get("smartlead_error") else "")
+                  + (f", heyreach_error={out.get('heyreach_error')}" if out.get("heyreach_error") else ""),
+                  flush=True)
+        except Exception as e:  # noqa: BLE001 - the sync loop must never die
+            print(f"[outreach-sync] cycle failed: {e}", flush=True)
 
 
 def outreach_destinations(p: dict) -> dict:
@@ -5100,22 +5147,11 @@ def outreach_destinations(p: dict) -> dict:
     and the live Smartlead /campaigns fetch (baseline ~4s) never blocks a
     normal picker open once the cache has been populated once."""
     if bool(p.get("refresh")):
-        out: dict = {"smartlead": [], "heyreach": []}
-        try:
-            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
-            out["smartlead"] = [{"id": c.get("id"), "name": c.get("name") or "", "status": c.get("status")}
-                                for c in (camps if isinstance(camps, list) else [])
-                                if c.get("status") in ("ACTIVE", "PAUSED", "DRAFTED")][:100]
-        except Exception as e:  # noqa: BLE001
-            out["smartlead_error"] = str(e)[:150]
-        try:
-            out["heyreach"] = heyreach_lists(refresh=True)
-        except Exception as e:  # noqa: BLE001
-            out["heyreach_error"] = str(e)[:150]
-        with _OUTREACH_DESTS_SWR.lock:
-            _OUTREACH_DESTS_SWR.ts = time.time()
-            _OUTREACH_DESTS_SWR.payload = out
-        return out
+        # the campaigns-tab manual "↻ Refresh" — recorded so we can see whether
+        # users lean on it (signal for tuning the background sync cadence)
+        log_activity("/api/outreach-destinations", actor="user",
+                     action="refresh", entity="outreach_destinations")
+        return _store_outreach_payload(_compute_outreach_destinations(refresh=True))
     return _OUTREACH_DESTS_SWR.get()
 
 
@@ -5195,11 +5231,17 @@ def push_to_heyreach(pr: dict, list_id) -> dict:
     return {"ok": False, "message": str(r)[:150]}
 
 
-def resolve_destination(src: dict) -> dict:
+def resolve_destination(src: dict, ctx_campaign_id: str | None = None) -> dict:
     """Where ✓'d people go: campaign-level destination first, source-level
-    fallback. Accepts legacy {type, campaign_id} and the two-tool shape."""
+    fallback. Accepts legacy {type, campaign_id} and the two-tool shape.
+
+    `ctx_campaign_id` overrides which campaign doc's destination to read —
+    needed when a source is shared by two campaigns (doc.campaign_ids) and the
+    verdict is being actioned from a specific campaign's Sources tab, not the
+    source's own (single) campaign_id."""
+    want_cid = str(ctx_campaign_id) if ctx_campaign_id else str(src.get("campaign_id"))
     camp = next((c for c in read_json_list(CAMPAIGN_DRAFTS)
-                 if str(c.get("id")) == str(src.get("campaign_id"))), {})
+                 if str(c.get("id")) == want_cid), {})
     dest: dict = {}
     for d in ((camp.get("destination") or {}), (src.get("destination") or {})):
         if d.get("type") == "smartlead" and d.get("campaign_id"):  # legacy
@@ -6244,6 +6286,10 @@ def pull_engagement_source(src: dict, drafts: list) -> dict:
     src["prospects"] = prospects
     src["total"] = len(prospects)
     src["signals_found"] = counts["qualified"]
+    # analogous to hiring's companies_scanned/left_for_next_run (S5): engagers
+    # scanned this pull, and anything queued past today's cap for next time.
+    src["companies_scanned"] = len(events)
+    src["left_for_next_run"] = counts.get("capped") or 0
     src["mechanism"] = "engagement"
     src["last_pull"] = datetime.now().isoformat(timespec="seconds")
     write_source(src)
@@ -7401,6 +7447,74 @@ def pull_source(p: dict) -> dict:
     return {"ok": True, "total": total, "broadened": False, "prospects": prospects, "db_synced": True}
 
 
+def _link_unlinked_draft(old_doc: dict, new_dest: dict, drafts: list) -> dict:
+    """LINK flow (S3): an Unlinked draft (cdraft-*, no platform id yet) gets a
+    destination that names a live Smartlead campaign and/or HeyReach list for
+    the first time. Materialise the platform-keyed camp-sl-*/camp-hr-* doc(s)
+    (merging into one that already exists, e.g. a second unlinked draft picking
+    the same platform target), tombstone the old doc with `superseded_by` (kept,
+    never deleted, so history/undo stays possible), and re-point every `sources`
+    row + `signal_sources.campaign_draft_id` row that pointed at the old id so
+    pulls/pushes keep working uninterrupted. Mutates `drafts` in place; caller
+    still persists via write_drafts(drafts, CAMPAIGN_DRAFTS)."""
+    from datetime import datetime
+    old_id = old_doc["id"]
+    now = datetime.now().isoformat(timespec="seconds")
+    sl = new_dest.get("smartlead_campaign_id")
+    hr = new_dest.get("heyreach_list_id")
+    hr_name = new_dest.get("heyreach_list_name")
+    plan = []  # [(new_id, identity_fields)] — smartlead first so it's the primary when both present
+    if sl:
+        plan.append((f"camp-sl-{sl}", {"platform": "smartlead", "smartlead_campaign_id": sl}))
+    if hr or hr_name:
+        ident = {"platform": "heyreach", "heyreach_list_id": hr}
+        if hr_name:
+            ident["heyreach_list_name"] = hr_name
+        plan.append((f"camp-hr-{hr or hr_name}", ident))
+    if not plan:
+        return {"ok": False, "message": "destination has no platform id to link to"}
+    body_base = {k: v for k, v in old_doc.items()
+                 if k not in ("id", "destination", "deleted_at", "platform",
+                              "smartlead_campaign_id", "heyreach_list_id",
+                              "heyreach_list_name", "migrated_from", "migrated_at",
+                              "superseded_by")}
+    old_sources = old_doc.get("sources") or []
+    new_ids = []
+    for new_id, ident in plan:
+        existing = next((d for d in drafts if d.get("id") == new_id), None)
+        if existing:
+            if old_sources:
+                existing["sources"] = (existing.get("sources") or []) + old_sources
+            mig = existing.get("migrated_from") or []
+            if old_id not in mig:
+                mig.append(old_id)
+            existing["migrated_from"] = mig
+        else:
+            drafts.append({**body_base, **ident, "id": new_id,
+                           "destination": dict(ident), "sources": list(old_sources),
+                           "migrated_from": [old_id], "migrated_at": now})
+        new_ids.append(new_id)
+    old_doc["superseded_by"] = new_ids
+    primary = new_ids[0]
+
+    # re-point `sources` table rows (doc.campaign_id) that belonged to the old draft
+    all_srcs = read_drafts(strict=True)
+    touched = []
+    for s in all_srcs:
+        if str(s.get("campaign_id")) == str(old_id):
+            s["campaign_id"] = primary
+            if len(new_ids) > 1:
+                s["campaign_ids"] = list(new_ids)
+            touched.append(s)
+    if touched:
+        write_sources(touched)
+
+    # re-point signal_sources.campaign_draft_id (relational column, not a doc field)
+    sb("PATCH", f"signal_sources?campaign_draft_id=eq.{old_id}", {"campaign_draft_id": primary})
+
+    return {"ok": True, "id": primary, "linked": new_ids}
+
+
 def update_campaign_draft(p: dict) -> dict:
     from datetime import datetime
     drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
@@ -7424,6 +7538,20 @@ def update_campaign_draft(p: dict) -> dict:
         write_drafts(drafts, CAMPAIGN_DRAFTS)
         return {"ok": True, "soft_deleted": True}
     else:
+        target = next((d for d in drafts if d.get("id") == cid), None)
+        if "destination" in p and target is not None:
+            new_dest = p["destination"] or {}
+            cur_dest = target.get("destination") or {}
+            is_unlinked = (str(cid).startswith("cdraft-") and not target.get("platform")
+                          and not cur_dest.get("smartlead_campaign_id")
+                          and not cur_dest.get("heyreach_list_id"))
+            wants_platform = bool(new_dest.get("smartlead_campaign_id")
+                                  or new_dest.get("heyreach_list_id")
+                                  or new_dest.get("heyreach_list_name"))
+            if is_unlinked and wants_platform:
+                result = _link_unlinked_draft(target, new_dest, drafts)
+                write_drafts(drafts, CAMPAIGN_DRAFTS)
+                return result
         for d in drafts:
             if d.get("id") != cid:
                 continue
@@ -7568,11 +7696,24 @@ def duplicate_campaign_draft(p: dict) -> dict:
     return {"ok": True, "id": new_id, "name": new["name"], "sources": len(new_srcs)}
 
 
+_CAMP_KEY_RE = re.compile(r"^camp-(sl|hr)-[A-Za-z0-9_]+$")
+
+
 def save_campaign_draft(p: dict) -> dict:
     from datetime import datetime
     import uuid
     drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
-    p["id"] = f"cdraft-{uuid.uuid4().hex[:8]}"  # never reuse ids (same lesson as sources)
+    want_id = str(p.get("id") or "")
+    if _CAMP_KEY_RE.match(want_id):
+        # Platform-mirror row lazily materialising its state doc for the first
+        # time (e.g. first add-source on a bare mirror row). Idempotent: if the
+        # doc already exists, just hand back its id rather than duplicating it.
+        existing = next((d for d in drafts if d.get("id") == want_id), None)
+        if existing:
+            return {"ok": True, "id": existing["id"]}
+        p["id"] = want_id
+    else:
+        p["id"] = f"cdraft-{uuid.uuid4().hex[:8]}"  # never reuse ids (same lesson as sources)
     p["created_at"] = datetime.now().isoformat(timespec="seconds")
     drafts.append(p)
     CAMPAIGN_DRAFTS.parent.mkdir(parents=True, exist_ok=True)
@@ -9874,6 +10015,10 @@ class Handler(SimpleHTTPRequestHandler):
             cid = (q.get("client_id") or [""])[0].strip()
             if cid:
                 drafts = [d for d in drafts if d.get("client_id") == cid]
+            # Tombstoned docs (superseded by a platform-keyed camp-* doc during
+            # the mirror migration) must never surface — the platform mirror
+            # row is the only visible representation of that campaign now.
+            drafts = [d for d in drafts if not d.get("superseded_by")]
             return self._json(drafts)
         if path == "/api/notifications":
             from urllib.parse import parse_qs, urlparse
@@ -10609,4 +10754,6 @@ if __name__ == "__main__":
     # for zombies born during deploy overlap after this boot's pass ran.
     threading.Thread(target=_jobs_recover_orphans, daemon=True).start()
     threading.Thread(target=_job_zombie_sweeper, daemon=True).start()
+    # campaigns-tab mirror: keep Smartlead campaigns + HeyReach lists ~10-min fresh
+    threading.Thread(target=_outreach_sync_loop, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()
