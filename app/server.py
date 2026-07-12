@@ -5464,6 +5464,69 @@ def campaign_readonly(p: dict) -> dict:
     return {"error": "unknown platform", "id": cid}
 
 
+def campaign_platform_leads(p: dict) -> dict:
+    """One page of a campaign's ACTUAL leads from the platform, so the detail
+    Leads tab shows the real audience of any campaign (not just app-sourced
+    signal leads). Smartlead: /campaigns/{id}/leads with offset/limit. HeyReach:
+    campaign leads via the public API. Read-only — these people are already in
+    the platform campaign."""
+    platform = (p.get("platform") or "").lower()
+    cid = str(p.get("id") or "").strip()
+    try:
+        offset = max(0, int(p.get("offset") or 0))
+    except Exception:  # noqa: BLE001
+        offset = 0
+    try:
+        limit = max(1, min(100, int(p.get("limit") or 50)))
+    except Exception:  # noqa: BLE001
+        limit = 50
+    if not cid:
+        return {"error": "missing id", "leads": [], "total": None}
+    if platform == "smartlead":
+        key = KEYS.get("SMARTLEAD_API_KEY", "")
+        url = f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={key}&offset={offset}&limit={limit}"
+        page = _smartlead_get_retry(url)
+        if not isinstance(page, dict):
+            return {"error": "Smartlead leads fetch failed", "leads": [], "total": None}
+        total = page.get("total_leads")
+        try:
+            total = int(total) if total is not None else None
+        except Exception:  # noqa: BLE001
+            total = None
+        out = []
+        for row in (page.get("data") or []):
+            lead = row.get("lead") or {}
+            nm = " ".join(x for x in [(lead.get("first_name") or "").strip(), (lead.get("last_name") or "").strip()] if x).strip()
+            status = (row.get("status") or "").strip().upper()
+            replied = row.get("lead_category_id") is not None
+            out.append({"name": nm or (lead.get("email") or ""),
+                        "email": lead.get("email") or "",
+                        "company": lead.get("company_name") or "",
+                        "title": lead.get("linkedin_bio") or lead.get("title") or "",
+                        "status": status,
+                        "replied": replied,
+                        "unsubscribed": bool(row.get("is_unsubscribed"))})
+        return {"platform": "smartlead", "id": cid, "leads": out, "total": total, "offset": offset, "limit": limit}
+    if platform == "heyreach":
+        try:
+            r = heyreach("/campaign/GetLeadsFromCampaign", {"campaignId": int(cid), "offset": offset, "limit": limit})
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)[:150], "leads": [], "total": None}
+        items = (r or {}).get("items") or []
+        total = (r or {}).get("totalCount")
+        out = []
+        for it in items:
+            prof = it.get("linkedInUserProfile") or it
+            nm = " ".join(x for x in [(prof.get("firstName") or "").strip(), (prof.get("lastName") or "").strip()] if x).strip()
+            out.append({"name": nm or (prof.get("profileUrl") or ""),
+                        "company": prof.get("companyName") or "",
+                        "title": prof.get("headline") or prof.get("position") or "",
+                        "status": (it.get("status") or "").upper(),
+                        "linkedin": prof.get("profileUrl") or ""})
+        return {"platform": "heyreach", "id": cid, "leads": out, "total": total, "offset": offset, "limit": limit}
+    return {"error": "unknown platform", "leads": [], "total": None}
+
+
 def campaigns_unified(p: dict) -> dict:
     if bool(p.get("refresh")):
         out = _compute_campaigns_unified(refresh=True)
@@ -10741,6 +10804,13 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(perf_daily({"days": (q.get("days") or ["30"])[0]}))
+        if path == "/api/campaign-platform-leads":
+            # One page of a campaign's real platform leads for the detail Leads tab.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(campaign_platform_leads({
+                "platform": (q.get("platform") or [""])[0], "id": (q.get("id") or [""])[0],
+                "offset": (q.get("offset") or ["0"])[0], "limit": (q.get("limit") or ["50"])[0]}))
         if path == "/api/campaign-readonly":
             # Read-only live snapshot of ONE external campaign (not set up in
             # this tool), so clicking it on the homepage opens a view instead of

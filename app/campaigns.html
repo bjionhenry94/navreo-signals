@@ -433,7 +433,13 @@ const SOURCE_TYPES = [
   ["Engagement signal", "Warm leads engaging with LinkedIn profiles", "linkedin", "engagement"],
 ];
 
-init();
+// Defer to a macrotask so every module-level `let`/`const` below (dtab, the
+// TTL consts, …) is initialised before init()→route() can reach a detail view.
+// Running init() inline here left renderDraftCampaign hitting `dtab` in its
+// temporal dead zone on a fresh load that lands directly on a campaign hash
+// (deep link / refresh) — the page came up blank. renderList (homepage) never
+// touches dtab, which is why only campaign URLs broke.
+setTimeout(init, 0);
 async function init() {
   // Signals-tab data comes from /api/* (campaign-drafts, outreach-destinations, lead-counts),
   // loaded lazily below. The old static data/*.json prototype files are no longer served on the
@@ -474,11 +480,10 @@ function route() {
   return r;
 }
 
-/* Read-only detail for a campaign that runs in Smartlead/HeyReach but isn't set
-   up in this tool. Reached by clicking an external row on the homepage — so a
-   click always opens SOMETHING instead of dead-ending. Live numbers only, no
-   edit controls (the campaign is managed in its platform). */
-async function renderExternalCampaign(key) {
+/* SUPERSEDED by the unified detail in renderDraftCampaign (external campaigns
+   synthesise a dc and render the full Overview/Leads/Sources page). Kept only
+   so nothing dangles; not reachable. */
+async function _deadRenderExternalCampaign(key) {
   window._lastCampaignId = key;
   const platform = key.startsWith("camp-hr-") ? "heyreach" : "smartlead";
   const pid = platform === "heyreach" ? key.replace(/^camp-hr-c?/, "") : key.replace(/^camp-sl-/, "");
@@ -539,7 +544,7 @@ async function renderDraftCampaign(id) {
   // campaign. Without this, arriving from the list dropped you on whatever tab
   // you last used (usually Sources), hiding the numbers a step away — four
   // testers flagged "why did it open on Sources?".
-  if (window._lastCampaignId !== id && !window._swrRepaint) { dtab = "overview"; sessionStorage.setItem("cdtab", "overview"); }
+  if (window._lastCampaignId !== id && !window._swrRepaint) { dtab = "overview"; sessionStorage.setItem("cdtab", "overview"); window._extLeadsOffset = 0; }
   window._lastCampaignId = id;
   // Paint the frame instantly (using the cached draft if we already have it), then hydrate
   // in parallel — the four reads below don't depend on each other, so they fire together.
@@ -553,11 +558,33 @@ async function renderDraftCampaign(id) {
   ]);
   DB.campaignDrafts = Array.isArray(drafts0) ? drafts0 : [];
   DB.dests = dests0 || { smartlead: [], heyreach: [] };
-  const dc = DB.campaignDrafts.find((x) => x.id === id);
-  // Not one of THIS tool's campaigns → it's an external Smartlead/HeyReach
-  // campaign from the unified mirror. Show a read-only performance view rather
-  // than bouncing back to the list (which read as "clicking does nothing").
-  if (!dc) { return renderExternalCampaign(id); }
+  let dc = DB.campaignDrafts.find((x) => x.id === id);
+  // Every campaign — app-built OR native to Smartlead/HeyReach — opens the SAME
+  // detail page. A platform campaign the tool hasn't adopted yet has no draft
+  // doc, so synthesise one in memory from the unified mirror; it becomes a real
+  // (persisted) campaign the moment the user adds a source (save_campaign_draft
+  // is idempotent on the camp-sl-*/camp-hr-* id). No read-only second tier.
+  let external = false;
+  if (!dc) {
+    external = true;
+    let row = null;
+    try { const uni = await cachedGet("/api/campaigns-unified", SESSION_TTL); row = ((uni && uni.rows) || []).find((x) => x.key === id) || null; } catch {}
+    const platform = id.startsWith("camp-hr-") ? "heyreach" : "smartlead";
+    const pid = platform === "heyreach" ? id.replace(/^camp-hr-c?/, "") : id.replace(/^camp-sl-/, "");
+    dc = { id, name: (row && row.name) || id, paused: true, autopilot: false,
+           destination: platform === "smartlead" ? { smartlead_campaign_id: pid } : { heyreach_campaign_id: pid },
+           _external: true, _platform: platform, _platform_id: pid, _platformStatus: (row && row.status) || "" };
+    window._externalDc = dc;  // used by ensureCampaign() to adopt on first add-source
+  }
+  // A platform campaign we can pull live performance + real leads for (any
+  // campaign that sends through a Smartlead/HeyReach destination, adopted or not).
+  const platMeta = (() => {
+    if (dc._external) return { platform: dc._platform, id: dc._platform_id };
+    const d0 = dc.destination || {};
+    const sl = d0.smartlead_campaign_id || (d0.type === "smartlead" ? d0.campaign_id : "");
+    if (sl) return { platform: "smartlead", id: String(sl) };
+    return null;  // HeyReach managed drafts key off a LIST, not a campaign — no per-campaign platform metrics
+  })();
   {
     const d0 = dc.destination || {};
     const sl0 = d0.smartlead_campaign_id || (d0.type === "smartlead" ? d0.campaign_id : "") || "";
@@ -588,11 +615,18 @@ async function renderDraftCampaign(id) {
       <div style="flex:1;min-width:0">
         <div class="dethead">
           <h1 style="font-size:22px;line-height:1.3;font-weight:600" id="camp-title">${esc(String(dc.name))}</h1>
-          <button class="btn sm" title="Rename this campaign" style="border:none;padding:4px 6px" onclick="renameCampaign('${id}')">✎</button>
+          ${external ? "" : `<button class="btn sm" title="Rename this campaign" style="border:none;padding:4px 6px" onclick="renameCampaign('${id}')">✎</button>`}
         </div>
-        <div class="destbar" style="margin-top:10px">${destBar(dc, id)}</div>
+        ${external ? "" : `<div class="destbar" style="margin-top:10px">${destBar(dc, id)}</div>`}
       </div>
       <div style="flex-shrink:0;text-align:right">
+        ${external ? `
+        <div style="display:inline-flex;align-items:center;gap:8px;justify-content:flex-end">
+          <span class="ictile" style="width:24px;height:24px">${destLogo(dc._platform)}</span>
+          <span class="small" style="color:var(--ink-2)">Runs in ${dc._platform === "heyreach" ? "HeyReach" : "Smartlead"}${dc._platformStatus ? ` · ${esc(String(dc._platformStatus).toLowerCase())}` : ""}</span>
+        </div>
+        <div class="small muted" style="margin-top:6px;max-width:360px">This campaign already sends in ${dc._platform === "heyreach" ? "HeyReach" : "Smartlead"}. Add a source below to start feeding it new people from your signals.</div>
+        ` : `
         <div style="display:flex;gap:10px;justify-content:flex-end">
           ${(() => {
             const seg = (onLeft, leftLab, rightLab, leftClick, rightClick, leftTitle, rightTitle, active) => {
@@ -619,6 +653,7 @@ async function renderDraftCampaign(id) {
           : dc.autopilot
             ? "Finds new people daily and sends them into outreach automatically."
             : "Finds new people daily - they wait in Leads until you ✓ them."}</div>
+        `}
       </div>
     </div>
     <div class="tabs">${tabs.map((x) =>
@@ -640,8 +675,15 @@ async function renderDraftCampaign(id) {
       if (s.last_pull) pullFeed.push({ t: s.last_pull, msg: `${(s.prospects || []).length} new people found · ${s.name}` });
     });
     pullFeed.sort((a, b) => (b.t || "").localeCompare(a.t || ""));
-    el.innerHTML = `<div style="display:flex;gap:14px;align-items:flex-start">
+    el.innerHTML = `
+    ${platMeta ? `<div class="card panel" style="margin-bottom:14px">
+      <h2 style="font-size:14px;margin-bottom:2px">Live performance</h2>
+      <div class="small muted" style="margin-bottom:10px">Straight from ${platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead"} — how this campaign is actually doing.</div>
+      <div class="sc-tiles" id="ov-perf-tiles"><div class="skel" style="height:70px;width:100%"></div></div>
+    </div>` : ""}
+    <div style="display:flex;gap:14px;align-items:flex-start">
       <div style="flex:1;min-width:0">
+        ${external ? `<div class="small muted" style="margin:0 0 8px 2px">Signals feeding this campaign — add a source to start finding new people for it.</div>` : ""}
         <div class="funnel" style="grid-template-columns:repeat(4,1fr)">
           ${tileMeta.map(([lab, ic], i) =>
             `<div class="fstage"><div class="ictile">${ic8(ic)}</div><div class="lab">${lab}</div><div class="num-hero" id="ov-num-${i}" style="font-size:26px;margin:6px 0 2px" title="loading">…</div><div class="conv" id="ov-cv-${i}">&nbsp;</div></div>`).join("")}
@@ -657,6 +699,22 @@ async function renderDraftCampaign(id) {
         <div id="ov-feed">${pullFeed.length ? pullFeed.map((f) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(f.msg)}${f.t ? `<div class="muted">${pulledAgo(f.t)}</div>` : ""}</div>`).join("") : '<div class="small muted" style="padding:8px 0">Nothing yet - pulls and approvals show here</div>'}</div>
       </div>
     </div>`;
+    if (platMeta) (async () => {
+      // Live performance tiles — real Smartlead/HeyReach numbers for this campaign.
+      let d = null;
+      try { d = await cachedGet(`/api/campaign-readonly?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}`, SESSION_TTL); } catch {}
+      const holder = document.getElementById("ov-perf-tiles");
+      if (!holder) return;
+      const pctv = (n, dv) => (dv ? `${(100 * n / dv).toFixed(2)}%` : "0%");
+      const t = (lab, val, sub) => `<div class="sc-tile"><div class="lab">${esc(lab)}</div><div class="val">${val}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
+      if (!d || d.error) { holder.innerHTML = `<div class="small muted" style="padding:8px 0">Couldn't load live ${platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead"} numbers right now.</div>`; return; }
+      holder.innerHTML = platMeta.platform === "smartlead"
+        ? [t("Emails sent", fmt(d.sent)), t("Replies", fmt(d.replied), pctv(d.replied, d.sent) + " reply rate"),
+           t("Positive replies", fmt(d.positives)), t("Bounced", fmt(d.bounced), pctv(d.bounced, d.sent) + " bounce rate"),
+           t("Leads", fmt(d.total), d.completed ? `${fmt(d.completed)} finished` : "")].join("")
+        : [t("People", fmt(d.total)), t("In progress", fmt(d.in_progress)), t("Finished", fmt(d.completed)), t("Failed", fmt(d.failed))].join("");
+      hydrateFade(holder);
+    })();
     (async () => {
       let rows = null;
       try {
@@ -701,6 +759,45 @@ async function renderDraftCampaign(id) {
         const extra = feedTail.map((msg) => `<div class="small" style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(msg)}</div>`).join("");
         feedEl.innerHTML = (pullFeed.length ? feedEl.innerHTML : "") + extra;
       }
+    })();
+  } else if (dtab === "leads" && external && platMeta) {
+    // External campaign: the "leads" are the real people already in its
+    // Smartlead/HeyReach campaign (read-only, paginated). Once the user adds a
+    // source, this campaign also grows an app-signal leads workflow (the branch
+    // below), and it stops being `external`.
+    window._extLeadsOffset = window._extLeadsOffset || 0;
+    el.innerHTML = '<div class="card panel"><h2 style="font-size:15px">People in this campaign</h2><div class="small muted" id="ext-leads-sub">Loading from ' + (platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead") + '…</div><div id="ext-leads-body"><div class="skel" style="height:200px;margin-top:10px"></div></div></div>';
+    (async () => {
+      const off = window._extLeadsOffset, lim = 50;
+      let d = null;
+      try { d = await cachedGet(`/api/campaign-platform-leads?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}&offset=${off}&limit=${lim}`); } catch {}
+      const body = document.getElementById("ext-leads-body"), sub = document.getElementById("ext-leads-sub");
+      if (!body) return;
+      if (!d || d.error || !Array.isArray(d.leads)) { body.innerHTML = `<div class="small muted" style="padding:16px 4px">Couldn't load the people list${d && d.error ? ` — ${esc(d.error)}` : ""}. <button class="btn sm" onclick="bustCache('/api/campaign-platform-leads?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}&offset=${off}&limit=${lim}');renderDraftCampaign('${id}')">Retry</button></div>`; return; }
+      const total = d.total;
+      if (sub) sub.textContent = (total != null ? `${fmt(total)} people` : `${fmt(d.leads.length)} people`) + ` · already in this ${platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead"} campaign (read-only)`;
+      const statusPill = (s, replied) => replied ? '<span class="pill g">replied</span>'
+        : s === "COMPLETED" ? '<span class="pill">completed</span>'
+        : s === "INPROGRESS" || s === "IN_PROGRESS" ? '<span class="pill g">in progress</span>'
+        : s === "STARTED" ? '<span class="pill n">queued</span>'
+        : s ? `<span class="pill" style="opacity:.7">${esc(s.toLowerCase())}</span>` : "";
+      const rowsHtml = d.leads.map((l) => `
+        <div class="srcrow" style="padding:10px 14px">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:500">${esc(l.name || l.email || "—")}${l.company ? ` <span class="small muted">· ${esc(l.company)}</span>` : ""}</div>
+            <div class="small muted">${esc(l.email || l.linkedin || "")}${l.title ? ` · ${esc(String(l.title).slice(0, 60))}` : ""}</div>
+          </div>
+          ${statusPill(l.status, l.replied)}
+        </div>`).join("");
+      const nextOff = off + lim, hasMore = total != null ? nextOff < total : d.leads.length === lim;
+      const prevOff = Math.max(0, off - lim);
+      body.innerHTML = `<div class="card" style="margin-top:10px">${rowsHtml || '<div class="empty">No people in this campaign yet.</div>'}</div>
+        ${(off > 0 || hasMore) ? `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <button class="btn sm" ${off === 0 ? "disabled" : ""} onclick="window._extLeadsOffset=${prevOff};renderDraftCampaign('${id}')">← Prev</button>
+          <span class="small muted">${fmt(off + 1)}–${fmt(off + d.leads.length)}${total != null ? ` of ${fmt(total)}` : ""}</span>
+          <button class="btn sm" ${hasMore ? "" : "disabled"} onclick="window._extLeadsOffset=${nextOff};renderDraftCampaign('${id}')">Next →</button>
+        </div>` : ""}`;
+      hydrateFade(body);
     })();
   } else if (dtab === "leads") {
     el.innerHTML = '<div class="card panel"><h2>People</h2><div class="sub">Loading your leads…</div></div>';
@@ -1876,11 +1973,11 @@ async function renderList() {
     </div>`;
   };
   const externalRow = (r) => `
-    <div class="srcrow click" style="padding:12px 16px;opacity:.9;cursor:pointer"${rowSearchAttr(r)} title="Runs in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} — click to view its performance (read-only; it isn't set up in this tool)" onclick="location.hash='${r.key}'">
+    <div class="srcrow click" style="padding:14px 16px;cursor:pointer"${rowSearchAttr(r)} title="Open ${esc(r.name)} — see its performance and leads, and add sources to feed it" onclick="location.hash='${r.key}'">
       <div class="ictile">${destLogo(r.platform)}</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:500">${esc(r.name)}</div>
-        <div class="small muted">Read-only · managed in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} · click to view</div>
+        <div class="small muted">Sends via ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} · open to view leads &amp; add sources</div>
       </div>
       ${statusPill(r.status)}
     </div>`;
@@ -3356,11 +3453,29 @@ async function wizGen(field) {
 
 /* source wizard: create the deferred (pending) campaign the moment we save a source */
 async function ensureCampaign() {
-  if (sw.campaignId !== "__pending__") return true;
-  const pc = sw._pendingCampaign || { name: "New campaign", paused: true };
-  const r = await (await fetch("/api/campaign-drafts", { method: "POST", body: JSON.stringify({ ...pc, sources: [] }) })).json();
-  if (!r || !r.ok) { protoNote((r && r.message) || "Couldn't create the campaign"); return false; }
-  sw.campaignId = r.id; DB.campaignDrafts = null;
+  if (sw.campaignId === "__pending__") {
+    const pc = sw._pendingCampaign || { name: "New campaign", paused: true };
+    const r = await (await fetch("/api/campaign-drafts", { method: "POST", body: JSON.stringify({ ...pc, sources: [] }) })).json();
+    if (!r || !r.ok) { protoNote((r && r.message) || "Couldn't create the campaign"); return false; }
+    sw.campaignId = r.id; DB.campaignDrafts = null;
+    return true;
+  }
+  // Adding a source to a platform campaign the tool hasn't adopted yet
+  // (camp-sl-*/camp-hr-* with no draft doc). Materialise its doc now — idempotent
+  // server-side on the platform-keyed id — so the source has a real campaign to
+  // attach to and the campaign becomes fully managed here.
+  if (/^camp-(sl|hr)-/.test(String(sw.campaignId))) {
+    const drafts = DB.campaignDrafts || [];
+    const has = Array.isArray(drafts) && drafts.some((d) => d.id === sw.campaignId);
+    if (!has) {
+      const doc = window._externalDc && window._externalDc.id === sw.campaignId
+        ? { id: sw.campaignId, name: window._externalDc.name, destination: window._externalDc.destination, paused: false }
+        : { id: sw.campaignId, name: sw.campaignId, paused: false };
+      const r = await (await fetch("/api/campaign-drafts", { method: "POST", body: JSON.stringify({ ...doc, sources: [] }) })).json();
+      if (!r || !r.ok) { protoNote((r && r.message) || "Couldn't set up this campaign in the tool"); return false; }
+      DB.campaignDrafts = null;
+    }
+  }
   return true;
 }
 /* footer "Save for later": persist the source as-is, no preview */
