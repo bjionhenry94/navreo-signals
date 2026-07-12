@@ -376,6 +376,7 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
           <span id="gridPushChips" style="display:inline-flex;gap:6px;align-items:center"></span>
         </div>
         <div class="gh-right">
+          <button class="btn" id="reuseBtn" title="Use this list's people in another campaign — shows where it's already been pushed and how to push it">↗ Reuse in campaign…</button>
           <button class="btn" id="downloadBtn" title="Download the current view as CSV">
             <span class="dlicon" id="dlIcon"></span> Download
           </button>
@@ -2044,6 +2045,38 @@ function confirmDeleteRows() {
 }
 
 /* ── grid-view overflow menu: Move to folder… / Delete list… ── */
+/* "Reuse in campaign" — navigate-and-surface ONLY (dashboard-terminal
+   principle): this panel shows where the list has already been pushed and
+   hands you the exact Claude Code instruction to push it again — the push
+   itself always runs in Claude Code so it passes the QA gate. */
+document.getElementById("reuseBtn").addEventListener("click", async () => {
+  const name = grid.meta ? grid.meta.name : "this list";
+  const rows = grid.total || 0;
+  let pushedHtml = '<span class="muted">not pushed to any campaign yet</span>';
+  try {
+    await loadPushSummary();
+    const flat = pushCampaignsFlat(grid.id);
+    if (flat.length) pushedHtml = flat.map((c) => `${esc(c.campaign_name || c.campaign_id)} <span class="muted">(${esc(c.platform)})</span>`).join(" · ");
+  } catch {}
+  const cmd = `Push the list "${name}" (list id ${grid.id}) into a new campaign`;
+  showModal({
+    title: "Reuse this list in a campaign",
+    bodyHtml: `
+      <div class="small" style="line-height:1.55">
+        <div><b>${esc(name)}</b> · ${fmt(rows)} row${rows === 1 ? "" : "s"}</div>
+        <div style="margin-top:8px"><b>Already pushed to:</b> ${pushedHtml}</div>
+        <div style="margin-top:12px">Pushing runs in <b>Claude Code</b> (so every upload passes the QA gate) — this dashboard never pushes leads itself. Paste this instruction there:</div>
+        <div style="margin-top:8px;padding:10px 12px;background:var(--bg-sunken,#f6f7f8);border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,monospace;font-size:12px" id="reuseCmd">${esc(cmd)}</div>
+        <div style="margin-top:10px"><a href="campaigns.html" style="font-size:12.5px">Open the Campaigns page ↗</a> to see where it would land.</div>
+      </div>`,
+    confirmLabel: "Copy instruction",
+    onConfirm: async () => {
+      try { await navigator.clipboard.writeText(cmd); protoNote("Copied — paste it into Claude Code"); } catch { protoNote("Couldn't copy — select the text manually"); }
+      closeModal();
+    },
+  });
+});
+
 document.getElementById("gridOverflowBtn").addEventListener("click", (ev) => {
   ev.stopPropagation();
   closeAnyPopover();
@@ -2169,7 +2202,14 @@ document.getElementById("shareBtn").addEventListener("click", async () => {
 
 /* ═══════════════════════════ router ═══════════════════════════ */
 function route() {
-  const hash = (location.hash || "").replace(/^#/, "").trim();
+  let hash = (location.hash || "").replace(/^#/, "").trim();
+  // deep-link aliases: #list=<id> and ?list=<id> both mean "open this list" —
+  // campaign source rows link here (campaigns.html Sources tab → View list ↗)
+  if (hash.startsWith("list=")) hash = hash.slice(5).trim();
+  if (!hash) {
+    const qp = new URLSearchParams(location.search).get("list");
+    if (qp) { location.hash = qp; return; }  // normalise to the canonical #<id> form
+  }
   closeAnyPopover();
   if (hash) {
     document.getElementById("view-files").style.display = "none";

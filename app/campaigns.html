@@ -402,12 +402,9 @@ window.addEventListener("signals:refreshed", () => {
 function listSkeleton() {
   const row = `<div class="srcrow" style="padding:14px 16px"><div class="ictile skel" style="width:34px;height:34px"></div><div style="flex:1"><div class="skel" style="width:42%;height:13px"></div><div class="skel" style="width:26%;height:10px;margin-top:7px"></div></div><div class="skel" style="width:74px;height:22px;border-radius:999px"></div></div>`;
   return `
-    <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Signal campaigns.</h1></div></div>
-    <div class="card panel" style="margin-top:16px"><h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2><div class="small muted" style="margin-bottom:8px">People found and sent to outreach each day, across all your campaigns.</div><div class="skel" style="height:260px"></div></div>
-    <div style="display:flex;gap:16px;align-items:flex-start;margin-top:16px">
-      <div style="flex:1;min-width:0"><div class="card">${row.repeat(3)}</div></div>
-      <div class="card panel" style="width:290px;flex-shrink:0"><h2 style="font-size:15px;margin-bottom:6px">Status</h2><div class="skel" style="height:236px"></div></div>
-    </div>`;
+    <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Campaigns.</h1></div></div>
+    <div class="card panel" style="margin-top:16px"><h2 style="font-size:15px;margin-bottom:2px">Performance</h2><div class="small muted" style="margin-bottom:8px">Emails sent per day, reply rate and bounce rate — straight from the data layer.</div><div class="skel" style="height:70px"></div><div class="skel" style="height:210px;margin-top:10px"></div></div>
+    <div style="margin-top:16px"><div class="card">${row.repeat(4)}</div></div>`;
 }
 function detailSkeleton(dc) {
   const title = dc ? esc(String(dc.name).split(" · ")[0]) : "&nbsp;";
@@ -463,7 +460,7 @@ function route() {
   if (!window._swrRepaint) { window._editDest = false; window._confirmAll = false; }
   const id = location.hash.replace("#", "");
   let r;
-  if (id.startsWith("cdraft-")) r = renderDraftCampaign(id);
+  if (id.startsWith("cdraft-") || id.startsWith("camp-")) r = renderDraftCampaign(id);  // camp-sl-*/camp-hr-* are the platform-keyed drafts (249d321 migration)
   else if (id === "deliverability") { location.replace("deliverability.html"); return; }  // old in-page tab — now a rail page
   else if (id && (DB.campaigns || []).some((c) => String(c.id) === id)) r = renderDetail(Number(id));
   else r = renderList();
@@ -1338,6 +1335,67 @@ function activityChart(dates, series) {
     ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps going.</div>' : ""}`;
 }
 
+/* Homepage performance graph: ONE multi-line chart of per-day sent (left axis,
+   count) + reply rate + bounce rate (right axis, %). Data comes straight from
+   /api/perf-daily (the Supabase data layer) — a null datapoint is a GAP in the
+   line, never a fabricated zero, and a series with no data in the window stays
+   as a labelled absent line in the legend. */
+function perfChart(pd) {
+  const dates = pd.days || [];
+  if (!dates.length) return '<div class="small muted" style="padding:16px 0">No performance data yet.</div>';
+  const W = 640, H = 190, padL = 34, padR = 38, padT = 12, padB = 26;
+  const sentVals = pd.sent || [], rrVals = pd.reply_rate || [], brVals = pd.bounce_rate || [];
+  const maxSent = Math.max(1, ...sentVals.filter((v) => v != null));
+  const rateMaxRaw = Math.max(...rrVals.filter((v) => v != null), ...brVals.filter((v) => v != null), 0);
+  const maxRate = rateMaxRaw > 0 ? Math.max(0.5, Math.ceil(rateMaxRaw * 2) / 2) : 1;
+  const x = (i) => dates.length === 1 ? (padL + (W - padL - padR) / 2) : padL + i * (W - padL - padR) / (dates.length - 1);
+  const y = (v) => padT + (1 - v / maxSent) * (H - padT - padB);
+  // rates are drawn against the RIGHT axis: scale into the left-axis space so
+  // one y() works for line drawing and the shared tooltip dot positioning
+  const rateScaled = (arr) => arr.map((v) => v == null ? null : v / maxRate * maxSent);
+  const series = [
+    { name: "Emails sent", color: "#1971C2", width: 2.5, vals: sentVals, disp: sentVals, axis: "left" },
+    { name: "Reply rate (%)", color: "#2F9E44", width: 2, vals: rateScaled(rrVals), disp: rrVals, axis: "right" },
+    { name: "Bounce rate (%)", color: "#E8590C", width: 2, vals: rateScaled(brVals), disp: brVals, axis: "right" },
+  ];
+  const grid = [0, 0.5, 1].map((f) => { const yy = y(maxSent * f); return `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
+    + `<text x="${padL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-3)">${Math.round(maxSent * f)}</text>`
+    + `<text x="${W - padR + 6}" y="${(yy + 3).toFixed(1)}" text-anchor="start" font-size="9" fill="var(--ink-3)">${(maxRate * f).toFixed(1)}%</text>`; }).join("");
+  // null-aware: draw each contiguous non-null run as its own segment, so a
+  // missing day is a visible gap (a lone point renders as a dot)
+  const drawLine = (s) => {
+    const segs = []; let run = [];
+    s.vals.forEach((v, i) => {
+      if (v == null) { if (run.length) segs.push(run); run = []; }
+      else run.push([x(i), y(v)]);
+    });
+    if (run.length) segs.push(run);
+    return segs.map((seg) => seg.length === 1
+      ? `<circle cx="${seg[0][0].toFixed(1)}" cy="${seg[0][1].toFixed(1)}" r="3" fill="${s.color}"/>`
+      : `<polyline fill="none" stroke="${s.color}" stroke-width="${s.width}" points="${seg.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ")}" stroke-linejoin="round" stroke-linecap="round"/>`).join("");
+  };
+  const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
+  const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(Math.floor(dates.length / 2)), xlab(dates.length - 1)].join("");
+  const legend = series.map((s) => {
+    const hasData = s.disp.some((v) => v != null);
+    return `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11px;color:var(--ink-2)" title="${esc((pd.labels || {})[s.axis === "left" ? "sent" : (s.name.startsWith("Reply") ? "reply_rate" : "bounce_rate")] || "")}">`
+      + `<span style="width:14px;height:0;border-top:${s.width >= 2.5 ? "3" : "2"}px solid ${s.color};display:inline-block;${hasData ? "" : "opacity:.35"}"></span>`
+      + `${esc(s.name)}${hasData ? "" : ' <span class="muted">(no data in this window)</span>'}</span>`;
+  }).join("");
+  const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:210px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>`;
+  const chart = chartWrap(svg, {
+    W, H, padT, padB, maxV: maxSent,
+    xs: dates.map((_, i) => +x(i).toFixed(1)),
+    labels: dates,
+    series: series.map((s) => ({ name: s.name, color: s.color, vals: s.vals, disp: s.disp })),
+    suffix: "",
+  });
+  const anyGap = series.some((s) => s.disp.some((v) => v == null) && s.disp.some((v) => v != null));
+  return `${chart}
+    <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
+    ${anyGap ? '<div class="small muted" style="margin-top:6px">Gaps mean no data recorded for that day — nothing here is estimated. Counts on the left axis, rates on the right. Hover the lines for exact sources.</div>' : '<div class="small muted" style="margin-top:6px">Counts on the left axis, rates on the right. Hover the legend for exact data sources.</div>'}`;
+}
+
 async function sendAllLeads(campaignId) {
   const todo = (window._leadRows || draftProspects(window._drafts || []))
     .filter((x) => !x.verdict && !(Object.keys(x.pushed || {}).length || x.pushed_to) && x._sid != null && (x._idx != null || x.linkedin));
@@ -1593,17 +1651,20 @@ async function renderList() {
   // account-wide as picker options) — genuinely no client dimension, so it stays
   // unfiltered/uncached-per-client on purpose (see server.py comment).
   const destsP = cachedGet("/api/outreach-destinations", SESSION_TTL).catch(() => (DB.dests || { smartlead: [], heyreach: [] }));
-  const [drafts0, clients0, leadCounts0] = await Promise.all([
+  const [drafts0, clients0, leadCounts0, uni0] = await Promise.all([
     cachedGet(draftsUrl, SESSION_TTL).catch(() => ({ error: "fetch_failed" })),
     cachedGet("/api/clients", SESSION_TTL).catch(() => (window._clients || [])),
     cachedGet(leadCountsUrl).catch(() => ({})),
+    // the unified account-wide mirror: EVERY Smartlead + HeyReach campaign,
+    // app-managed or not (external rows render read-only)
+    cachedGet("/api/campaigns-unified", SESSION_TTL).catch(() => null),
   ]);
   // A 503 (Supabase unreachable AND no file fallback - see server.py /api/campaign-drafts)
   // comes back as a JSON error object, not an array: fetch() doesn't throw on non-2xx, so this
   // is the honest signal, not a silent 200-[] that would otherwise read as "no campaigns yet".
   if (!Array.isArray(drafts0)) {
     main.innerHTML = `
-      <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Signal campaigns.</h1></div></div>
+      <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Campaigns.</h1></div></div>
       <div class="card panel" style="margin-top:16px">
         <div class="empty">Couldn't load campaigns — the database didn't respond.
           <div style="margin-top:12px"><button class="btn sm" onclick="bustCache('/api/campaign-drafts');bustCache('/api/sources');renderList()">Retry</button></div>
@@ -1626,51 +1687,97 @@ async function renderList() {
   const forClient = (DB.campaignDrafts || []).filter((d) => !activeClient || d.client_id === activeClient);
   const drafts = forClient.filter((d) => !d.deleted_at);
   const deleted = forClient.filter((d) => d.deleted_at);
-  const totalFound = leadCountsDegraded ? null : drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).leads || 0), 0);
-  const totalSent = leadCountsDegraded ? null : drafts.reduce((a, dc) => a + ((leadCounts[String(dc.id)] || {}).sent || 0), 0);
-  const running = drafts.filter((d) => !d.paused).length;
-  const paused = drafts.filter((d) => d.paused).length;
-  const strow = (label, val, sub, id) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-        <span class="small" style="color:var(--ink-2)">${label}</span>
-        <span style="font-weight:600;font-size:15px;display:inline-flex;align-items:center;gap:5px"${id ? ` id="${id}"` : ""}>${val}</span>
-      </div>${sub ? `<div class="muted" style="font-size:10.5px;margin-top:1px">${sub}</div>` : ""}</div>`;
-  // Sources-dependent bits (destination badges, "sources removed" chip) start as an explicit
-  // "checking sources…" placeholder and get patched in by sourcesP.then(...) below once the
-  // (slower) /api/sources call lands - the row itself (name, leads count, paused/running,
-  // Duplicate/Remove) is fully interactive from this first paint.
-  const listRows = drafts.length ? drafts.map((dc) => {
-        // the real Leads count (Supabase, all pulls) - if the DB fetch failed or this
-        // campaign has no entry, show "—" rather than the stale local last-pull count
-        const lc = leadCounts[String(dc.id)];
-        const countUnavailable = leadCountsDegraded || !lc;
-        const nLeads = countUnavailable ? null : lc.leads;
-        const nSent = countUnavailable ? null : lc.sent;
-        // S5a: a running campaign with leads but nothing sent yet looks identical to an
-        // actively-sending one at a glance - flag it with the same muted warning-chip
-        // pattern/class ("pill n") already used for "sources removed" below.
-        const notSending = !dc.paused && nLeads != null && nLeads > 0 && nSent === 0;
-        return `
-        <div class="srcrow click" style="padding:14px 16px;cursor:pointer" onclick="location.hash='${dc.id}'">
-          <div class="ictile">${ic8("signal")}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:500">${esc(dc.name)}</div>
-            <div class="small muted">${countUnavailable ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span> <span class="muted" style="font-size:10px">(couldn\'t load)</span>' : (nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"}${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No leads yet")} · ${esc((dc.created_at || "").slice(0, 10))}</div>
-            <div id="srcdeco-${dc.id}" class="small muted" style="margin-top:6px" title="Source-level details still loading">checking sources…</div>
-            <div id="sc-${dc.id}" class="sc-row-holder" onclick="event.stopPropagation()"></div>
-          </div>
-          ${dc.paused ? '<span class="pill o">⏸ Paused</span>' : '<span class="pill g">● Running</span>'}
-          ${notSending ? `<span class="pill n" title="This campaign is running and has leads, but none have gone out yet - check its destination/outreach setup">not sending</span>` : ""}
-          <span id="srcpill-${dc.id}"></span>
-          <button class="btn sm" title="Copy this campaign and all its targeting into a new one" onclick="duplicateCampaign('${dc.id}', event)">Duplicate</button>
-          <button class="btn sm" onclick="removeCampaign('${dc.id}', event)">Remove</button>
-        </div>`;
-      }).join("") : `<div class="empty">No signal campaigns yet - hit New campaign</div>`;
+  // ── Unified account-wide list: every Smartlead + HeyReach campaign, plus
+  // app-managed docs joined in by the server. External (unmanaged) rows are
+  // READ-ONLY here — they're run in the platform itself; this page is the
+  // single pane that shows them all. Sources-dependent decorations on managed
+  // rows still patch in from sourcesP below.
+  const uniRows = (uni0 && Array.isArray(uni0.rows)) ? uni0.rows : null;
+  const draftById = {}; drafts.forEach((d) => { draftById[d.id] = d; });
+  const bucketOf = (st) => {
+    const s = String(st || "").toUpperCase();
+    if (s === "UNLINKED") return "setup";
+    if (["ACTIVE", "IN_PROGRESS", "IN PROGRESS", "STARTED", "RUNNING"].includes(s)) return "active";
+    if (s === "PAUSED") return "paused";
+    if (["DRAFTED", "DRAFT"].includes(s)) return "draft";
+    return "done";  // COMPLETED / STOPPED / FINISHED / CANCELED / ARCHIVED…
+  };
+  // fall back to managed-drafts-only rows if the mirror endpoint is down —
+  // never a blank page, and the degradation is labelled in the banner below
+  const rows = uniRows ? uniRows.map((r) => ({ ...r, doc: r.draft_id ? draftById[r.draft_id] : null }))
+    : drafts.map((d) => ({ key: d.id, platform: (d.id.startsWith("camp-hr") ? "heyreach" : "smartlead"),
+                           name: d.name, status: d.paused ? "PAUSED" : "ACTIVE", managed: true, draft_id: d.id, client_id: d.client_id, doc: d }));
+  // client scope: managed rows filter by client; external rows have no client
+  // dimension, so they only show under "All clients" (said out loud below)
+  const scoped = rows.filter((r) => !activeClient || (r.managed && r.client_id === activeClient));
+  window._campFilter = window._campFilter || "active";
+  window._campSearch = window._campSearch || "";
+  const buckets = { all: scoped.length, active: 0, paused: 0, draft: 0, done: 0, setup: 0 };
+  scoped.forEach((r) => { buckets[bucketOf(r.status)]++; });
+  const q = (window._campSearch || "").trim().toLowerCase();
+  let visible = scoped.filter((r) => (window._campFilter === "all" || bucketOf(r.status) === window._campFilter)
+                                     && (!q || String(r.name).toLowerCase().includes(q)));
+  // managed campaigns first, then alphabetical — the rows you can act on lead
+  visible.sort((a, b) => (b.managed - a.managed) || String(a.name).localeCompare(String(b.name)));
+  const ROW_CAP = 150;
+  const overflow = Math.max(0, visible.length - ROW_CAP);
+  visible = visible.slice(0, ROW_CAP);
+  const statusPill = (st) => {
+    const b = bucketOf(st);
+    return b === "active" ? '<span class="pill g">● Active</span>'
+      : b === "paused" ? '<span class="pill o">⏸ Paused</span>'
+      : b === "draft" ? '<span class="pill n">Draft</span>'
+      : b === "setup" ? '<span class="pill n" title="Created in this tool but not linked to a live Smartlead/HeyReach campaign yet">Needs setup</span>'
+      : `<span class="pill" style="opacity:.7">${esc(String(st || "").toLowerCase() || "done")}</span>`;
+  };
+  const managedRow = (r) => {
+    const dc = r.doc;
+    const lc = leadCounts[String(dc.id)];
+    const countUnavailable = leadCountsDegraded || !lc;
+    const nLeads = countUnavailable ? null : lc.leads;
+    const nSent = countUnavailable ? null : lc.sent;
+    const notSending = bucketOf(r.status) === "active" && nLeads != null && nLeads > 0 && nSent === 0;
+    return `
+    <div class="srcrow click" style="padding:14px 16px;cursor:pointer" onclick="location.hash='${dc.id}'">
+      <div class="ictile">${destLogo(r.platform)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:500">${esc(r.name || dc.name)}</div>
+        <div class="small muted">${countUnavailable ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span> <span class="muted" style="font-size:10px">(couldn\'t load)</span>' : (nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"} sourced${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No sourced leads yet")} · ${esc((dc.created_at || "").slice(0, 10))}</div>
+        <div id="srcdeco-${dc.id}" class="small muted" style="margin-top:6px" title="Source-level details still loading">checking sources…</div>
+        <div id="sc-${dc.id}" class="sc-row-holder" onclick="event.stopPropagation()"></div>
+      </div>
+      ${statusPill(r.status)}
+      ${notSending ? `<span class="pill n" title="This campaign is running and has leads, but none have gone out yet - check its destination/outreach setup">not sending</span>` : ""}
+      <span id="srcpill-${dc.id}"></span>
+      <button class="btn sm" title="Copy this campaign and all its targeting into a new one" onclick="duplicateCampaign('${dc.id}', event)">Duplicate</button>
+      <button class="btn sm" onclick="removeCampaign('${dc.id}', event)">Remove</button>
+    </div>`;
+  };
+  const externalRow = (r) => `
+    <div class="srcrow" style="padding:12px 16px;opacity:.85" title="This campaign runs in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} — it isn't set up in this tool, so it's shown read-only">
+      <div class="ictile">${destLogo(r.platform)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:500">${esc(r.name)}</div>
+        <div class="small muted">Read-only · managed in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"}</div>
+      </div>
+      ${statusPill(r.status)}
+    </div>`;
+  const listRows = visible.length
+    ? visible.map((r) => (r.managed && r.doc) ? managedRow(r) : externalRow(r)).join("")
+      + (overflow ? `<div class="small muted" style="padding:12px 16px">…and ${fmt(overflow)} more — use the search box to narrow down.</div>` : "")
+    : `<div class="empty">${scoped.length ? "No campaigns match this filter — " + `<a href="#" onclick="window._campFilter='all';renderList();return false">show all ${fmt(buckets.all)}</a>` : "No campaigns yet - hit New campaign"}</div>`;
+  const pill = (key, label) => `<button class="btn sm${window._campFilter === key ? " primary" : ""}" onclick="window._campFilter='${key}';renderList()">${label} <span class="muted">${fmt(buckets[key])}</span></button>`;
+  const mirrorBanner = !uniRows
+    ? `<div class="small" style="color:var(--orange-700);margin-top:8px">⚠ Couldn't reach the live Smartlead/HeyReach mirror — showing only the campaigns managed in this tool. <a href="#" onclick="bustCache('/api/campaigns-unified');renderList();return false">Retry</a></div>`
+    : (uni0.smartlead_error || uni0.heyreach_error)
+      ? `<div class="small" style="color:var(--orange-700);margin-top:8px">⚠ ${esc(uni0.smartlead_error || uni0.heyreach_error)} — showing the last good sync.</div>`
+      : "";
   main.innerHTML = `
     <div class="pagehead">
       <div>
         <div class="eyebrow">Campaigns</div>
-        <h1>Signal campaigns.</h1>
+        <h1>Campaigns.</h1>
+        <div class="small muted" style="margin-top:4px">Every outbound campaign — Smartlead + HeyReach — in one place. Signals feed campaigns as <b>sources</b>; open a campaign to see its sources.</div>
       </div>
       <div style="display:flex;gap:10px;align-items:center">
         <!-- Client switcher now lives once, globally, in the shared rail (shell.js
@@ -1680,46 +1787,33 @@ async function renderList() {
       </div>
     </div>
     <div class="card panel" style="margin-top:16px">
-      <h2 style="font-size:15px;margin-bottom:2px">Campaign performance</h2>
-      <div class="small muted" style="margin-bottom:10px">Live Smartlead numbers, totalled across the campaigns on this page.</div>
+      <h2 style="font-size:15px;margin-bottom:2px">Performance</h2>
+      <div class="small muted" style="margin-bottom:10px">Live Smartlead totals across the campaigns managed here, and the fleet's daily send/reply/bounce record from the data layer.</div>
       <div id="sc-collective"><div class="skel" style="height:70px"></div></div>
-      <div id="sc-trend"></div>
+      <div id="perf-chart" style="min-height:240px;margin-top:10px"><div class="skel" style="height:210px"></div></div>
     </div>
-    <div class="card panel" style="margin-top:16px">
-      <h2 style="font-size:15px;margin-bottom:2px">Lead activity</h2>
-      <div class="small muted" style="margin-bottom:8px">People found and sent to outreach each day, across all your campaigns.</div>
-      <div id="dash-chart" style="min-height:260px"><div class="skel" style="height:210px"></div></div>
-    </div>
-    <div style="display:flex;gap:16px;align-items:flex-start;margin-top:16px">
-      <div style="flex:1;min-width:0">
-        <div class="card">${listRows}</div>
-        ${deleted.length ? `
-        <details class="card" style="margin-top:16px" ${window._showDeleted ? "open" : ""} ontoggle="window._showDeleted=this.open">
-          <summary style="cursor:pointer;padding:12px 16px;font-weight:500;color:var(--ink-2)">Recently deleted (${deleted.length})</summary>
-          ${deleted.map((dc) => `
-            <div class="srcrow" style="padding:14px 16px;opacity:.75">
-              <div class="ictile">${ic8("signal")}</div>
-              <div style="flex:1">
-                <div style="font-weight:500">${esc(dc.name)}</div>
-                <div class="small muted">Deleted ${esc(String(dc.deleted_at || "").slice(0, 16).replace("T", " "))} · restore keeps all leads & monitoring</div>
-              </div>
-              <button class="btn sm" onclick="restoreCampaign('${dc.id}', event)">Restore</button>
-              <button class="btn sm danger" onclick="purgeCampaign('${dc.id}', event)">Delete permanently</button>
-            </div>`).join("")}
-        </details>` : ""}
+    <div style="margin-top:16px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        ${pill("active", "Active")}${pill("paused", "Paused")}${pill("draft", "Draft")}${pill("done", "Done")}${pill("setup", "Needs setup")}${pill("all", "All")}
+        <input id="camp-search" type="search" placeholder="Search ${fmt(buckets.all)} campaigns…" value="${esc(window._campSearch || "")}" style="margin-left:auto;padding:6px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:12.5px;min-width:220px" oninput="window._campSearch=this.value;clearTimeout(window._campSearchT);window._campSearchT=setTimeout(()=>{const p=document.getElementById('camp-search');const pos=p&&p.selectionStart;renderList().then(()=>{const n=document.getElementById('camp-search');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}})},250)">
       </div>
-      <div class="card panel" style="width:290px;flex-shrink:0;margin-top:0">
-        <h2 style="font-size:15px;margin-bottom:6px">Status</h2>
-        ${strow("People found", totalFound == null ? '<span title="Live count unavailable — showing no number rather than a stale one">–</span>' : fmt(totalFound), '<span id="st-foundsplit">everyone your signals have surfaced</span>')}
-        ${strow("Sent to outreach", totalSent == null ? '<span title="Live count unavailable — showing no number rather than a stale one">–</span>' : fmt(totalSent), "added to your email + LinkedIn outreach", "st-split")}
-        ${strow("Waiting in Leads", '<span id="st-waiting" title="loading">…</span>', "found, waiting for your ✓ to send them")}
-        ${strow("Skipped", '<span id="st-skipped" title="loading">…</span>', "you marked these not a fit")}
-        ${strow("Found today", '<span id="st-today" title="loading">…</span>', "new people from today's run")}
-        ${strow("Campaigns", `${running} running · ${paused} paused`, "")}
-        ${strow("Last pull", '<span id="st-lastpull" title="loading">…</span>', "when new people last came in")}
-        <div class="muted" style="font-size:10.5px;margin-top:8px" title="When this page's data was fetched/rendered - individual numbers may be served from a short-lived cache and lag a live Supabase read by up to ~30s">as of ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
-        <div id="st-warn"></div>
-      </div>
+      ${activeClient ? '<div class="small muted" style="margin-bottom:8px">Client filter on — external (read-only) campaigns are hidden because they don\'t belong to a client in this tool. Switch to All clients to see everything.</div>' : ""}
+      ${mirrorBanner}
+      <div class="card">${listRows}</div>
+      ${deleted.length ? `
+      <details class="card" style="margin-top:16px" ${window._showDeleted ? "open" : ""} ontoggle="window._showDeleted=this.open">
+        <summary style="cursor:pointer;padding:12px 16px;font-weight:500;color:var(--ink-2)">Recently deleted (${deleted.length})</summary>
+        ${deleted.map((dc) => `
+          <div class="srcrow" style="padding:14px 16px;opacity:.75">
+            <div class="ictile">${ic8("signal")}</div>
+            <div style="flex:1">
+              <div style="font-weight:500">${esc(dc.name)}</div>
+              <div class="small muted">Deleted ${esc(String(dc.deleted_at || "").slice(0, 16).replace("T", " "))} · restore keeps all leads & monitoring</div>
+            </div>
+            <button class="btn sm" onclick="restoreCampaign('${dc.id}', event)">Restore</button>
+            <button class="btn sm danger" onclick="purgeCampaign('${dc.id}', event)">Delete permanently</button>
+          </div>`).join("")}
+      </details>` : ""}
     </div>`;
   hydrateFade(main);  // ease the real list in over the skeleton
   // Campaign scorecard: live Smartlead per-campaign performance. Fetched in the
@@ -1736,13 +1830,18 @@ async function renderList() {
         if (el) el.innerHTML = scRowHtml(null, (!leadCountsDegraded && lc) ? lc.leads : null);
       });
     };
-    // Collective trend lines (Smartlead fleet day-wise) — fetched independently
-    // so the trends paint even if the per-campaign scorecard fetch is slow.
+    // The single performance graph (sent/day + reply rate + bounce rate) —
+    // per-day numbers from the Supabase data layer via /api/perf-daily.
+    // Fetched independently so it paints even if the scorecard fetch is slow.
     (async () => {
-      let tr = null;
-      try { tr = await cachedGet("/api/deliverability-trends?days=30"); } catch { tr = null; }
-      const tEl = document.getElementById("sc-trend");
-      if (tEl) { tEl.innerHTML = scTrendHtml(tr); hydrateFade(tEl); hydrateCharts(tEl); }
+      let pd = null;
+      try { pd = await cachedGet("/api/perf-daily?days=30"); } catch { pd = null; }
+      const tEl = document.getElementById("perf-chart");
+      if (!tEl) return;
+      tEl.innerHTML = (pd && Array.isArray(pd.days) && !pd.error)
+        ? perfChart(pd)
+        : '<div class="small muted" style="padding:16px 0">Couldn\'t read the data layer for the daily performance series — nothing is estimated, so the graph stays empty. Retry shortly.</div>';
+      hydrateFade(tEl); hydrateCharts(tEl);
     })();
     let sc;
     try { sc = await cachedGet("/api/campaign-scorecard"); } catch { sc = null; }
@@ -1782,57 +1881,6 @@ async function renderList() {
         : `<span id="srcpill-${dc.id}"></span>`;
     });
   });
-  (async () => {
-    // One batched call for every campaign's leads (was N calls, one per campaign).
-    let allRows = [];
-    if (drafts.length) {
-      try { allRows = await cachedGet(`/api/leads-batch?campaign_ids=${drafts.map((d) => d.id).join(",")}`); } catch {}
-    }
-    if (!Array.isArray(allRows)) allRows = [];
-    const today = new Date().toISOString().slice(0, 10);
-    const isSent = (r) => r.pushed_to || (r.pushed && Object.keys(r.pushed).length);
-    const toolOf = (r) => { const p = (r.pushed_to || "") + Object.keys(r.pushed || {}).join(","); return /heyreach/i.test(p) ? "heyreach" : /smartlead/i.test(p) ? "smartlead" : (r.email ? "smartlead" : "heyreach"); };
-    let sEmail = 0, sLi = 0, waiting = 0, skipped = 0, foundEmail = 0, foundNoEmail = 0, todayN = 0, lastPull = "";
-    const foundByDate = {}, sentByDate = {};
-    allRows.forEach((r) => {
-      const d = String(r.pulled_at || "").slice(0, 10);
-      if (d) { foundByDate[d] = (foundByDate[d] || 0) + 1; if ((r.pulled_at || "") > lastPull) lastPull = r.pulled_at; if (d === today) todayN++; }
-      if (r.email) foundEmail++; else foundNoEmail++;
-      if (isSent(r)) { if (toolOf(r) === "heyreach") sLi++; else sEmail++; if (d) sentByDate[d] = (sentByDate[d] || 0) + 1; }
-      else if (r.verdict === "reject") skipped++;
-      else waiting++;
-    });
-    const dates = [...new Set([...Object.keys(foundByDate), ...Object.keys(sentByDate)])].sort();
-    const series = [
-      { name: "Found", color: "#1971C2", width: 2.5, vals: dates.map((d) => foundByDate[d] || 0) },
-      { name: "Sent to outreach", color: "#2F9E44", width: 2, vals: dates.map((d) => sentByDate[d] || 0) },
-    ];
-    const set = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
-    const chartEl = document.getElementById("dash-chart"); if (chartEl) { chartEl.innerHTML = activityChart(dates, series); hydrateFade(chartEl); hydrateCharts(chartEl); }
-    set("st-split", (sEmail + sLi) ? `${destLogo("smartlead")} ${sEmail} · ${destLogo("heyreach")} ${sLi}` : "0");
-    set("st-foundsplit", `${destLogo("smartlead")} ${fmt(foundEmail)} have an email · ${destLogo("heyreach")} ${fmt(foundNoEmail)} no email`);
-    set("st-waiting", fmt(waiting));
-    set("st-skipped", fmt(skipped));
-    set("st-today", fmt(todayN));
-    set("st-lastpull", lastPull ? pulledAgo(lastPull) : "—");
-    // leads grouped per campaign (the batched leads-fetch replaced the old
-    // per-campaign `per` array but this staleness check still referenced it)
-    const per = drafts.map((dc) => allRows.filter((r) => String(r.campaign_id) === String(dc.id)));
-    const warns = [];
-    drafts.forEach((dc, i) => {
-      if (dc.paused) return;
-      const dst = dc.destination || {};
-      const hasDest = dst.smartlead_campaign_id || dst.heyreach_list_id || (dst.type && dst.campaign_id);
-      if (!hasDest) { warns.push(`⚠ <b>${esc(dc.name)}</b> has no destination set - nothing can be sent`); return; }
-      const rows = Array.isArray(per[i]) ? per[i] : [];
-      const newest = rows.reduce((m, r) => ((r.pulled_at || "") > m ? r.pulled_at : m), "");
-      const days = newest ? Math.floor((Date.now() - new Date(newest).getTime()) / 864e5) : 99;
-      if (days >= 4) warns.push(`⚠ <b>${esc(dc.name)}</b> running but nothing found in ${days} days`);
-    });
-    set("st-warn", `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">${warns.length
-      ? warns.map((w) => `<div class="small" style="color:var(--orange-700);margin-bottom:5px;line-height:1.35">${w}</div>`).join("")
-      : '<div class="small" style="color:var(--green)">✓ All running campaigns look healthy</div>'}</div>`);
-  })();
 }
 
 /* ══ DETAIL ══ */
@@ -1992,6 +2040,7 @@ async function renderDrafts(campaignId) {
           <div class="small muted">${s.last_pull ? `${s._count_stale ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span>' : `${fmt(s.total)} ${Number(s.total) === 1 ? "person" : "people"} found`} · last pulled ${pulledAgo(s.last_pull)}` : (s.total ? `<span title="Estimate — not yet pulled; not included in lead totals">~${fmt(s.total)} people expected</span>` : "Sized on the first daily run")}${s.broadened ? " · signal had no live matches today, so these are people from your main audience instead" : ""}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
+          ${s.list_id ? `<a class="btn sm" style="text-decoration:none" href="lists.html#${esc(s.list_id)}" title="Open this source's people as a list in All Files — reuse them in another campaign from there" onclick="event.stopPropagation()">View list ↗</a>` : ""}
           ${(s.mechanism || s.type) === "engagement" ? engProvisionBtn(s, campaignId) : ""}
           <button class="btn sm primary" onclick="pullProspects('${s.id}','${campaignId}',this)">${s.prospects ? "Find people again" : "Find people now"}</button>
           ${(s.mechanism || s.type) === "engagement" ? "" : `<button class="btn sm" title="Open the setup wizard for this source, prefilled with its current targeting" onclick="editSourceTargeting('${s.id}','${campaignId}')">✎ Edit targeting</button>`}
