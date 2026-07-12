@@ -9896,6 +9896,7 @@ HARD RULES:
 - PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned words and phrases: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. Say it the way a shop owner would: "your ideal customers", "a salesperson", "steady flow of new deals". A 12-year-old should understand every sentence. NEVER use an em-dash anywhere.
 - The opener is ONE sentence, 20 words or fewer, written as the first line of a cold email from this business to its buyer. Use {{{{company}}}} where the prospect's company name would go.
 - why_cold_email: one or two plain sentences explaining to a beginner WHY this offer works on cold strangers (e.g. it removes their risk, it asks for a tiny yes, it names their exact problem).
+- opener writing rule: the opener is the FIRST line of the email and must offer to SEND something small (a short Loom, a one-page plan, a sample). The page wraps it into a full ready-to-send email around it, so make it read as a natural, complete opening line.
 
 REAL OFFER LINES THAT GOT POSITIVE REPLIES (mined from real campaigns - match this energy and concreteness, do not copy them word for word unless they genuinely fit):
 {OFFER_WINNING_EXAMPLES}
