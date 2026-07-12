@@ -5413,6 +5413,57 @@ _CAMPAIGNS_UNIFIED_SWR = _SWRCache(_compute_campaigns_unified, _CAMPAIGNS_UNIFIE
                                     name="campaigns-unified")
 
 
+def campaign_readonly(p: dict) -> dict:
+    """Live, read-only performance for ONE campaign the tool doesn't manage —
+    so the homepage can open an external campaign instead of leaving a dead
+    row. Smartlead: fresh /analytics. HeyReach: latest stored snapshot (LinkedIn
+    campaigns have progress counts, not email metrics). Every number is the
+    platform's own; nothing is invented."""
+    platform = (p.get("platform") or "").lower()
+    cid = str(p.get("id") or "").strip()
+    if not cid:
+        return {"error": "missing id"}
+    if platform == "smartlead":
+        try:
+            data = _smartlead_json("GET", f"/campaigns/{cid}/analytics") or {}
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)[:150], "platform": "smartlead", "id": cid}
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            data = data["data"]
+        if not isinstance(data, dict):
+            data = {}
+        cls = data.get("campaign_lead_stats") if isinstance(data.get("campaign_lead_stats"), dict) else {}
+        positives = data.get("positive_reply_count")
+        if positives is None:
+            positives = data.get("positiveReplyCount")
+        if positives is None:
+            positives = cls.get("interested")
+        return {"platform": "smartlead", "id": cid,
+                "name": data.get("name") or data.get("campaign_name"),
+                "status": data.get("status"),
+                "sent": _sc_int(data.get("sent_count") or data.get("sent")),
+                "replied": _sc_int(data.get("reply_count") or data.get("replied")),
+                "positives": _sc_int(positives),
+                "bounced": _sc_int(data.get("bounce_count")),
+                "total": _sc_int(cls.get("total") or data.get("total_count")),
+                "completed": _sc_int(cls.get("completed"))}
+    if platform == "heyreach":
+        rows = sb("GET", f"heyreach_campaigns?heyreach_id=eq.{cid}&order=snapshot_date.desc&limit=1") or []
+        payload = (rows[0].get("payload") if rows and isinstance(rows, list) else {}) or {}
+        ps = payload.get("progressStats") or {}
+        return {"platform": "heyreach", "id": cid,
+                "name": payload.get("name"),
+                "status": payload.get("status"),
+                "list_name": payload.get("linkedInUserListName"),
+                "total": _sc_int(ps.get("totalUsers")),
+                "in_progress": _sc_int(ps.get("totalUsersInProgress")),
+                "completed": _sc_int(ps.get("totalUsersFinished")),
+                "failed": _sc_int(ps.get("totalUsersFailed"))}
+    return {"error": "unknown platform", "id": cid}
+
+
 def campaigns_unified(p: dict) -> dict:
     if bool(p.get("refresh")):
         out = _compute_campaigns_unified(refresh=True)
@@ -10690,6 +10741,14 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(perf_daily({"days": (q.get("days") or ["30"])[0]}))
+        if path == "/api/campaign-readonly":
+            # Read-only live snapshot of ONE external campaign (not set up in
+            # this tool), so clicking it on the homepage opens a view instead of
+            # a dead row. Smartlead = live /analytics; HeyReach = latest snapshot.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(campaign_readonly({"platform": (q.get("platform") or [""])[0],
+                                                 "id": (q.get("id") or [""])[0]}))
         if path == "/api/version":
             # Deploy verification: which commit/instance is actually serving.
             return self._json({"commit": _GIT_COMMIT or None,

@@ -474,6 +474,64 @@ function route() {
   return r;
 }
 
+/* Read-only detail for a campaign that runs in Smartlead/HeyReach but isn't set
+   up in this tool. Reached by clicking an external row on the homepage — so a
+   click always opens SOMETHING instead of dead-ending. Live numbers only, no
+   edit controls (the campaign is managed in its platform). */
+async function renderExternalCampaign(key) {
+  window._lastCampaignId = key;
+  const platform = key.startsWith("camp-hr-") ? "heyreach" : "smartlead";
+  const pid = platform === "heyreach" ? key.replace(/^camp-hr-c?/, "") : key.replace(/^camp-sl-/, "");
+  const platLabel = platform === "heyreach" ? "HeyReach" : "Smartlead";
+  let row = null;
+  try {
+    const uni = await cachedGet("/api/campaigns-unified", SESSION_TTL);
+    row = ((uni && uni.rows) || []).find((x) => x.key === key) || null;
+  } catch {}
+  const name = (row && row.name) || key;
+  const status = row && row.status ? String(row.status) : "";
+  const back = `<button style="border:none;background:none;font-family:inherit;font-size:13px;color:var(--ink-3);cursor:pointer;padding:0" onclick="location.hash=''">&larr; Campaigns</button>`;
+  if (!window._swrRepaint) main.innerHTML = `
+    ${back}
+    <div class="pagehead" style="margin-top:8px;align-items:flex-start">
+      <div style="flex:1;min-width:0;display:flex;align-items:center;gap:10px">
+        <div class="ictile">${destLogo(platform)}</div>
+        <h1 style="font-size:22px;line-height:1.3;font-weight:600">${esc(name)}</h1>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">${status ? `<span class="pill" style="opacity:.85">${esc(status.toLowerCase())}</span>` : ""}</div>
+    </div>
+    <div class="card panel" style="margin-top:4px;border-left:3px solid var(--orange);background:var(--orange-100)">
+      <div class="small" style="color:var(--ink-2)">This campaign runs in <b>${platLabel}</b> and isn't set up in this tool, so it's shown read-only. To personalise it with signals, open it in ${platLabel} or build a matching campaign here.</div>
+    </div>
+    <div id="ext-body"><div class="skel" style="height:120px;margin-top:14px"></div></div>`;
+  let d = null;
+  try { d = await cachedGet(`/api/campaign-readonly?platform=${platform}&id=${encodeURIComponent(pid)}`); } catch {}
+  const el = document.getElementById("ext-body");
+  if (!el) return;
+  if (!d || d.error) {
+    el.innerHTML = `<div class="card panel" style="margin-top:14px"><div class="empty">Couldn't load this campaign's live numbers${d && d.error ? ` — ${esc(d.error)}` : ""}.
+      <div style="margin-top:10px"><button class="btn sm" onclick="bustCache('/api/campaign-readonly?platform=${platform}&id=${encodeURIComponent(pid)}');renderExternalCampaign('${key}')">Retry</button></div></div></div>`;
+    hydrateFade(el);
+    return;
+  }
+  const pct = (n, dv) => (dv ? `${(100 * n / dv).toFixed(2)}%` : "0%");
+  const tile = (lab, val, sub) => `<div class="sc-tile"><div class="lab">${esc(lab)}</div><div class="val">${val}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
+  const tiles = platform === "smartlead"
+    ? [tile("Emails sent", fmt(d.sent), "on this campaign"),
+       tile("Replies", fmt(d.replied), pct(d.replied, d.sent) + " reply rate"),
+       tile("Positive replies", fmt(d.positives), ""),
+       tile("Bounced", fmt(d.bounced), pct(d.bounced, d.sent) + " bounce rate"),
+       tile("Leads", fmt(d.total), d.completed ? `${fmt(d.completed)} finished` : "")].join("")
+    : [tile("People", fmt(d.total), "in this campaign"),
+       tile("In progress", fmt(d.in_progress), ""),
+       tile("Finished", fmt(d.completed), ""),
+       tile("Failed", fmt(d.failed), "")].join("");
+  el.innerHTML = `
+    <div class="sc-tiles" style="margin-top:14px">${tiles}</div>
+    <div class="small muted" style="margin-top:10px">Live from ${platLabel}. Read-only — manage this campaign in ${platLabel}.</div>`;
+  hydrateFade(el);
+}
+
 let dtab = sessionStorage.getItem("cdtab") || "overview";
 async function renderDraftCampaign(id) {
   // Opening a DIFFERENT campaign always starts on Overview (the headline
@@ -496,7 +554,10 @@ async function renderDraftCampaign(id) {
   DB.campaignDrafts = Array.isArray(drafts0) ? drafts0 : [];
   DB.dests = dests0 || { smartlead: [], heyreach: [] };
   const dc = DB.campaignDrafts.find((x) => x.id === id);
-  if (!dc) { location.hash = ""; return; }
+  // Not one of THIS tool's campaigns → it's an external Smartlead/HeyReach
+  // campaign from the unified mirror. Show a read-only performance view rather
+  // than bouncing back to the list (which read as "clicking does nothing").
+  if (!dc) { return renderExternalCampaign(id); }
   {
     const d0 = dc.destination || {};
     const sl0 = d0.smartlead_campaign_id || (d0.type === "smartlead" ? d0.campaign_id : "") || "";
@@ -1815,11 +1876,11 @@ async function renderList() {
     </div>`;
   };
   const externalRow = (r) => `
-    <div class="srcrow" style="padding:12px 16px;opacity:.85"${rowSearchAttr(r)} title="This campaign runs in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} — it isn't set up in this tool, so it's shown read-only">
+    <div class="srcrow click" style="padding:12px 16px;opacity:.9;cursor:pointer"${rowSearchAttr(r)} title="Runs in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} — click to view its performance (read-only; it isn't set up in this tool)" onclick="location.hash='${r.key}'">
       <div class="ictile">${destLogo(r.platform)}</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:500">${esc(r.name)}</div>
-        <div class="small muted">Read-only · managed in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"}</div>
+        <div class="small muted">Read-only · managed in ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} · click to view</div>
       </div>
       ${statusPill(r.status)}
     </div>`;
