@@ -180,6 +180,8 @@
 .sumrow .k { width: 110px; flex-shrink: 0; color: var(--ink-3); font-size: 11.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
 .srcpick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; }
 .srcpick .srctype.on { border-color: var(--orange); box-shadow: 0 0 0 1px var(--orange); }
+.srcpick .srctype.picking { border-color: var(--orange); box-shadow: 0 0 0 2px var(--orange); background: var(--orange-100); }
+.srcpick .srctype.picking::after { content: "✓"; margin-left: auto; color: var(--orange); font-weight: 800; font-size: 15px; }
 /* Gojiberry-style targeting page — chips match the wizard's standard .chip */
 .tsec { font: 600 11px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); margin: 16px 0 7px; text-align: left; }
 .tgrid { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; }
@@ -2791,6 +2793,19 @@ function guessMechanism(goal) {
   return "";
 }
 
+/* Give a wizard choice-card an instant "you picked this" cue (orange press +
+   ✓) BEFORE its action fires — several of the step's actions re-render or kick
+   off a multi-second live search, and without this the click reads as dead
+   (tester feedback, non-technical + power users both). Paint the pressed state,
+   then run the action on the next frame so the cue is visible first. */
+function wizPick(el, action) {
+  try {
+    el.parentElement.querySelectorAll(".srctype").forEach((x) => x.classList.remove("picking"));
+    el.classList.add("picking");
+  } catch (_) {}
+  requestAnimationFrame(() => requestAnimationFrame(() => { try { action(); } catch (e) { console.error(e); } }));
+}
+
 function drawWiz() {
   hideNote();  // clear any stale validation toast when the step re-renders
   document.getElementById("wdots").innerHTML = [1, 2, 3, 4, 5, 6].map((n) =>
@@ -2837,11 +2852,11 @@ function drawWiz() {
       <div class="lead">Every campaign anchors on a client. Pick one or add one.</div>
       <div class="srcpick">
         ${clients.map((c) => `
-          <div class="srctype" onclick="pickClient('${c.id}')">
+          <div class="srctype" onclick="wizPick(this,()=>pickClient('${c.id}'))">
             <div class="ictile">${ic8("home")}</div>
             <div style="flex:1"><div class="t">${esc(c.name)}</div><div class="d">${esc(c.domain || c.website || "")}</div></div>
           </div>`).join("")}
-        <div class="srctype" onclick="startNewClient()" style="border-style:dashed">
+        <div class="srctype" onclick="wizPick(this,()=>startNewClient())" style="border-style:dashed">
           <div class="ictile">${ic8("idea")}</div>
           <div><div class="t">New client</div><div class="d">From their website</div></div>
         </div>
@@ -2856,15 +2871,15 @@ function drawWiz() {
       <input id="wiz-avoid" value="${esc(wiz.avoid || "")}" placeholder="e.g. no agencies, UK only">
     </div>
     <div class="srcpick" style="max-width:560px;margin:10px auto 0">
-      <div class="srctype" onclick="wizStartIdeas()">
+      <div class="srctype" onclick="wizPick(this,()=>wizStartIdeas())">
         <div class="ictile">${ic8("idea")}</div>
         <div><div class="t">Suggest ideas for ${wiz.client ? esc(wiz.client.name) : "this client"}</div><div class="d">A few signal options, sized with live data - built from what we know about the client, skipping anything already running</div></div>
       </div>
-      <div class="srctype" onclick="wiz.avoid=document.getElementById('wiz-avoid')?.value??wiz.avoid;directRoute('hiring')">
+      <div class="srctype" onclick="wizPick(this,()=>{wiz.avoid=document.getElementById('wiz-avoid')?.value??wiz.avoid;directRoute('hiring')})">
         <div class="ictile">${ic8("briefcase")}</div>
         <div><div class="t">Set up a Hiring signal</div><div class="d">Companies hiring your buyer - you pick the roles</div></div>
       </div>
-      <div class="srctype" onclick="wiz.avoid=document.getElementById('wiz-avoid')?.value??wiz.avoid;directRoute('engagement')">
+      <div class="srctype" onclick="wizPick(this,()=>{wiz.avoid=document.getElementById('wiz-avoid')?.value??wiz.avoid;directRoute('engagement')})">
         <div class="ictile">${ic8("linkedin")}</div>
         <div><div class="t">Set up an Engagement signal</div><div class="d">Warm leads engaging with LinkedIn profiles you pick</div></div>
       </div>
