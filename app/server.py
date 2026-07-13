@@ -5556,50 +5556,127 @@ def campaigns_unified(p: dict) -> dict:
 #   bounce_rate— fleet 30d-rolling bounce % from mailbox_stats_daily
 #                (sum bounces_30d / sum sent_30d per stat_date; the only
 #                bounce series the data layer has — sparse, labelled)
+def _campaign_source_ids(smartlead_id) -> list:
+    """signal_leads.source_id list for every source feeding the campaign(s) whose
+    destination is this Smartlead campaign id. The join is: campaign_drafts.doc
+    (destination.smartlead_campaign_id == id) -> draft id -> sources.doc where
+    campaign_id == draft id -> source id (== signal_leads.source_id). Returns []
+    (not None) when the id resolves to no sources, so leads_added scopes to an
+    empty set (all-null absent line) rather than falling back to fleet."""
+    if not smartlead_id:
+        return None
+    sid = str(smartlead_id)
+    drafts, _failed = _cached_campaign_drafts()
+    draft_ids = {str(d.get("id")) for d in (drafts or [])
+                 if str((d.get("destination") or {}).get("smartlead_campaign_id") or "") == sid and d.get("id")}
+    if not draft_ids:
+        return []
+    srcs = read_drafts() or []
+    return [str(s.get("id")) for s in srcs
+            if str(s.get("campaign_id") or "") in draft_ids and s.get("id")]
+
+
+# ── Per-day performance series (campaigns homepage graph) ──────────────────
+# FIVE per-day series, each from its REAL Supabase store (nothing estimated):
+#   sent        — sent_messages archive by sent_at UTC date
+#   leads_added — signal_leads by pulled_at UTC date (scoped to the campaign's
+#                 source ids when a campaign is selected)
+#   positives   — replies in POSITIVE_CATEGORIES by replied_at UTC date
+#   meetings    — replies in MEETING_CATEGORIES  by replied_at UTC date
+#   reply_rate  — fleet: mailbox_stats_daily 30d rolling; per-campaign: 30d
+#                 trailing replies÷sent over the archive (bounded, campaign-scoped)
+# Accepts days (7/30/90/…) OR explicit start/end, plus an optional campaign
+# (smartlead_campaign_id; absent/"all" = fleet). A series with no data in the
+# window is an all-null (labelled ABSENT) line; a real zero-activity day inside
+# an active run stays 0 — the two never get confused. Bounce is still returned
+# for any other consumer but the homepage graph no longer plots it.
 def perf_daily(p: dict) -> dict:
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    try:
-        days = max(7, min(120, int(p.get("days") or 30)))
-    except Exception:  # noqa: BLE001
-        days = 30
     today = _dt.now(_tz.utc).date()
-    start = today - _td(days=days - 1)
-    dates = [(start + _td(days=i)).isoformat() for i in range(days)]
+    end = today
+    start = None
+    s_in, e_in = p.get("start"), p.get("end")
+    if s_in and e_in:
+        try:
+            start = _dt.fromisoformat(str(s_in)[:10]).date()
+            end = _dt.fromisoformat(str(e_in)[:10]).date()
+        except Exception:  # noqa: BLE001
+            start = None
+    if start is None:
+        try:
+            days = max(7, min(120, int(p.get("days") or 30)))
+        except Exception:  # noqa: BLE001
+            days = 30
+        start = end - _td(days=days - 1)
+    if end < start:
+        start, end = end, start
+    ndays = (end - start).days + 1
+    dates = [(start + _td(days=i)).isoformat() for i in range(ndays)]
 
-    sent_by, rep_by, brate_by = {}, {}, {}
-    max_sent_day = None
-    # DB-side aggregation (rpc/perf_daily_series) — one exact row per day. This
-    # replaced two client-side sb_get_all pulls (~35k mailbox_stats_daily rows)
-    # that paginated WITHOUT a stable ORDER BY, so Range-offset paging
-    # skipped/duplicated rows and the reply/bounce sums jittered between calls.
-    series = sb("POST", "rpc/perf_daily_series", {"p_start": start.isoformat()})
-    if not isinstance(series, list):
-        return {"error": "Supabase read failed", "days": dates,
-                "sent": [None] * days, "reply_rate": [None] * days, "bounce_rate": [None] * days}
-    for r in series:
-        d = r.get("d")
-        if not d:
-            continue
-        if r.get("sent") is not None:
-            sent_by[d] = r.get("sent")
-            if not max_sent_day or d > max_sent_day:
-                max_sent_day = d
-        s30 = r.get("sent_30d")
-        if s30:
-            brate_by[d] = round(100.0 * (r.get("bounces_30d") or 0) / s30, 2)
-            rep_by[d] = round(100.0 * (r.get("replies_30d") or 0) / s30, 2)
+    camp_raw = p.get("campaign")
+    campaign = str(camp_raw).strip() if camp_raw not in (None, "", "all", "All") else None
+    src_ids = _campaign_source_ids(campaign) if campaign else None
 
-    sent, reply_rate, bounce_rate = [], [], []
-    for d in dates:
-        # days past the archive's last synced day are UNKNOWN (null), not zero
-        sent.append(sent_by.get(d, 0) if (max_sent_day and d <= max_sent_day) else None)
-        reply_rate.append(rep_by.get(d))
-        bounce_rate.append(brate_by.get(d))
-    return {"days": dates, "sent": sent, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
-            "labels": {"sent": "Emails sent/day (archived sends from synced campaigns — Supabase sent_messages)",
-                       "reply_rate": "Reply rate % (fleet 30-day rolling — mailbox_stats_daily)",
-                       "bounce_rate": "Bounce rate % (fleet 30-day rolling — mailbox_stats_daily)"},
-            "last_synced_day": max_sent_day}
+    # DB-side aggregation (rpc/…_v2) = one exact row per day, no client-side
+    # pagination. p_source_ids scopes leads_added to the campaign's sources.
+    rows = sb("POST", "rpc/perf_daily_series_v2",
+              {"p_start": start.isoformat(), "p_end": end.isoformat(),
+               "p_campaign": campaign, "p_source_ids": src_ids})
+    if not isinstance(rows, list):
+        return {"error": "Supabase read failed", "days": dates, "campaign": campaign,
+                "sent": [None] * ndays, "leads_added": [None] * ndays,
+                "positives": [None] * ndays, "meetings": [None] * ndays,
+                "reply_rate": [None] * ndays, "bounce_rate": [None] * ndays}
+
+    by = {r.get("d"): r for r in rows if r.get("d")}
+    def col(name):
+        return {d: _sc_int(by.get(d, {}).get(name)) for d in dates}
+    sent_m, pos_m, mtg_m, la_m = col("sent"), col("positives"), col("meetings"), col("leads_added")
+    s30_m, r30_m, b30_m = col("sent_30d"), col("replies_30d"), col("bounces_30d")
+
+    def bounded(m):
+        # real count (incl 0) between the first and last active day IN the visible
+        # window; null outside (unknown); all-null when the series never fires —
+        # that's the labelled ABSENT line, never a fabricated zero.
+        active = [d for d in dates if m.get(d, 0) > 0]
+        if not active:
+            return [None] * ndays
+        lo, hi = min(active), max(active)
+        return [(m.get(d, 0) if lo <= d <= hi else None) for d in dates]
+
+    sent = bounded(sent_m)
+    leads_added = bounded(la_m)
+    positives = bounded(pos_m)
+    meetings = bounded(mtg_m)
+
+    # Reply rate is a fleet-level line only. The data layer has NO trustworthy
+    # per-campaign daily denominator: sent_messages under-mirrors older campaigns
+    # while the replies table is complete, so replies÷sent per campaign inflates
+    # to nonsense (60–80%). Rather than ship a misleading line, a per-campaign
+    # view renders reply-rate as a labelled ABSENT line — never a fabricated one.
+    reply_rate, bounce_rate = [], []
+    if campaign:
+        reply_rate = [None] * ndays
+        bounce_rate = [None] * ndays
+    else:
+        for d in dates:
+            s30 = s30_m.get(d, 0)
+            reply_rate.append(round(100.0 * r30_m.get(d, 0) / s30, 2) if s30 else None)
+            bounce_rate.append(round(100.0 * b30_m.get(d, 0) / s30, 2) if s30 else None)
+
+    return {"days": dates, "campaign": campaign,
+            "sent": sent, "leads_added": leads_added, "positives": positives,
+            "meetings": meetings, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
+            "labels": {
+                "sent": "Emails sent/day (Supabase sent_messages archive)",
+                "leads_added": ("Leads added/day (signal_leads — this campaign's sources)"
+                                if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
+                "positives": "Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)",
+                "meetings": "Meetings/day (replies: Call Booked / Meeting Request)",
+                "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
+                               if campaign else "Reply rate % (fleet 30-day rolling — mailbox_stats_daily)"),
+                "bounce_rate": "Bounce rate % (fleet 30-day rolling — mailbox_stats_daily)"},
+            "last_synced_day": max([d for d in dates if sent_m.get(d, 0)], default=None)}
 
 
 # ── Campaign scorecard (Smartlead-style per-campaign performance) ──────────
@@ -10955,11 +11032,17 @@ class Handler(SimpleHTTPRequestHandler):
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(campaigns_unified({"refresh": refresh}))
         if path == "/api/perf-daily":
-            # Homepage multi-line graph: per-day sent / reply-rate / bounce-rate
-            # straight from the Supabase data layer. Nulls, never fake zeros.
+            # Homepage 5-line graph: per-day sent / leads-added / reply-rate /
+            # positives / meetings from the Supabase data layer. Optional
+            # ?campaign=<smartlead_id> (default fleet) and ?days=N or
+            # ?start=&end=. Nulls (labelled absent), never fake zeros.
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            return self._json(perf_daily({"days": (q.get("days") or ["30"])[0]}))
+            return self._json(perf_daily({
+                "days": (q.get("days") or ["30"])[0],
+                "start": (q.get("start") or [None])[0],
+                "end": (q.get("end") or [None])[0],
+                "campaign": (q.get("campaign") or [None])[0]}))
         if path == "/api/collective-30d":
             # Homepage strip's LAST-30-DAYS top line (sent/reply/positives/meetings/
             # signals) — one cheap DB round-trip via rpc/collective_30d, SWR-cached.

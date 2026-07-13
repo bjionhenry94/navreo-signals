@@ -791,56 +791,46 @@ async function renderDraftCampaign(id) {
     })();
   } else if (dtab === "leads" && external && platMeta) {
     // External campaign: the "leads" are the real people already in its
-    // Smartlead/HeyReach campaign (read-only, paginated). Once the user adds a
-    // source, this campaign also grows an app-signal leads workflow (the branch
-    // below), and it stops being `external`.
-    window._extLeadsOffset = window._extLeadsOffset || 0;
+    // Smartlead/HeyReach campaign — READ-ONLY. Loaded up to a labelled cap
+    // (the platform API pages at 100/call) into the shared Airtable-style grid
+    // so search / sort / per-column filter / column show-hide / pagination all
+    // work client-side. No control here ever writes lead data.
     el.innerHTML = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:2px 0 10px"><h2 style="font-size:15px;margin:0">People in this campaign</h2><span class="small muted" id="ext-leads-sub">Loading from ' + (platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead") + '…</span></div><div id="ext-leads-body"><div class="skel" style="height:200px"></div></div>';
     (async () => {
-      const off = window._extLeadsOffset, lim = 50;
-      let d = null;
-      try { d = await cachedGet(`/api/campaign-platform-leads?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}&offset=${off}&limit=${lim}`); } catch {}
+      const PAGE = 100, CAP = 500;   // up to 5 platform calls; labelled if there's more
+      const base = `/api/campaign-platform-leads?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}`;
+      let all = [], total = null, failed = false;
+      for (let off = 0; off < CAP; off += PAGE) {
+        let d = null;
+        try { d = await cachedGet(`${base}&offset=${off}&limit=${PAGE}`); } catch {}
+        if (!d || d.error || !Array.isArray(d.leads)) { if (off === 0) failed = d && d.error ? d.error : true; break; }
+        total = d.total != null ? d.total : total;
+        all = all.concat(d.leads);
+        if (d.leads.length < PAGE || (total != null && all.length >= total)) break;
+      }
       const body = document.getElementById("ext-leads-body"), sub = document.getElementById("ext-leads-sub");
       if (!body) return;
-      if (!d || d.error || !Array.isArray(d.leads)) { body.innerHTML = `<div class="small muted" style="padding:16px 4px">Couldn't load the people list${d && d.error ? ` — ${esc(d.error)}` : ""}. <button class="btn sm" onclick="bustCache('/api/campaign-platform-leads?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}&offset=${off}&limit=${lim}');renderDraftCampaign('${id}')">Retry</button></div>`; return; }
-      const total = d.total;
-      if (sub) sub.textContent = (total != null ? `${fmt(total)} people` : `${fmt(d.leads.length)} people`) + ` · already in this ${platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead"} campaign (read-only)`;
-      const statusCell = (s, replied) => replied ? '<span class="pill g">replied</span>'
-        : s === "COMPLETED" ? '<span class="pill">completed</span>'
-        : s === "INPROGRESS" || s === "IN_PROGRESS" ? '<span class="pill g">in progress</span>'
-        : s === "STARTED" ? '<span class="pill n">queued</span>'
-        : s ? `<span class="pill" style="opacity:.7">${esc(String(s).toLowerCase())}</span>` : "";
-      // Same datagrid as the Lists page: sticky uppercase headers, monospace #
-      // gutter, quiet linkified cells, horizontal-only borders. Read-only here
-      // (these people already live in the platform campaign), so no select/sort.
-      const contactCol = platMeta.platform === "heyreach" ? "LinkedIn" : "Email";
-      const cols = ["Name", contactCol, "Company", "Title", "Status"];
-      const thead = `<thead><tr>
-        <th class="gutter">#</th>
-        ${cols.map((c) => `<th><div class="thwrap"><span class="thlbl">${esc(c)}</span></div></th>`).join("")}
-      </tr></thead>`;
-      const tbody = `<tbody>${d.leads.map((l, idx) => {
-        const link = l.email || l.linkedin || "";
-        return `<tr>
-          <td class="gutter" title="position in this campaign">${fmt(off + idx + 1)}</td>
-          <td title="${esc4attr(l.name || "")}" style="color:var(--ink);font-weight:500">${esc(l.name || "—")}</td>
-          <td title="${esc4attr(link)}">${linkifyCell(link)}</td>
-          <td title="${esc4attr(l.company || "")}">${esc(l.company || "")}</td>
-          <td title="${esc4attr(l.title || "")}">${esc(l.title || "")}</td>
-          <td>${statusCell(l.status, l.replied)}</td>
-        </tr>`;
-      }).join("")}</tbody>`;
-      const gridHtml = d.leads.length
-        ? `<div class="gridwrap"><table class="datagrid">${thead}${tbody}</table></div>`
+      if (failed && !all.length) { body.innerHTML = `<div class="small muted" style="padding:16px 4px">Couldn't load the people list${typeof failed === "string" ? ` — ${esc(failed)}` : ""}. <button class="btn sm" onclick="bustCache('${base}&offset=0&limit=${PAGE}');renderDraftCampaign('${id}')">Retry</button></div>`; return; }
+      const shownTotal = total != null ? total : all.length;
+      const capped = total != null && total > all.length;
+      if (sub) sub.textContent = `${fmt(shownTotal)} people · already in this ${platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead"} campaign (read-only)${capped ? ` · grid shows the first ${fmt(all.length)} — use search to find someone` : ""}`;
+      const statusOf = (l) => l.replied ? "replied"
+        : l.status === "COMPLETED" ? "completed"
+        : (l.status === "INPROGRESS" || l.status === "IN_PROGRESS") ? "in progress"
+        : l.status === "STARTED" ? "queued"
+        : l.status ? String(l.status).toLowerCase() : "";
+      const statusPillOf = (l) => { const s = statusOf(l); const cls = s === "replied" || s === "in progress" ? "g" : s === "queued" ? "n" : ""; return s ? `<span class="pill ${cls}" style="${cls ? "" : "opacity:.7"}">${esc(s)}</span>` : ""; };
+      const contactLabel = platMeta.platform === "heyreach" ? "LinkedIn" : "Email";
+      const columns = [
+        { key: "name", label: "Name", get: (l) => l.name || "", cell: (l) => `<span style="color:var(--ink);font-weight:500">${esc(l.name || "—")}</span>` },
+        { key: "contact", label: contactLabel, get: (l) => l.email || l.linkedin || "", cell: (l) => linkifyCell(l.email || l.linkedin || "") },
+        { key: "company", label: "Company", get: (l) => l.company || "" },
+        { key: "title", label: "Title", get: (l) => l.title || "" },
+        { key: "status", label: "Status", get: (l) => statusOf(l), cell: (l) => statusPillOf(l) },
+      ];
+      body.innerHTML = all.length
+        ? initGrid(`extleads-${id}`, all, columns, { pageSize: 25 })
         : '<div class="empty" style="padding:24px;text-align:center;color:var(--ink-3)">No people in this campaign yet.</div>';
-      const nextOff = off + lim, hasMore = total != null ? nextOff < total : d.leads.length === lim;
-      const prevOff = Math.max(0, off - lim);
-      body.innerHTML = gridHtml +
-        ((off > 0 || hasMore) ? `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-          <button class="btn sm" ${off === 0 ? "disabled" : ""} onclick="window._extLeadsOffset=${prevOff};renderDraftCampaign('${id}')">← Prev</button>
-          <span class="small muted">${fmt(off + 1)}–${fmt(off + d.leads.length)}${total != null ? ` of ${fmt(total)}` : ""}</span>
-          <button class="btn sm" ${hasMore ? "" : "disabled"} onclick="window._extLeadsOffset=${nextOff};renderDraftCampaign('${id}')">Next →</button>
-        </div>` : "");
       hydrateFade(body);
     })();
   } else if (dtab === "leads") {
@@ -876,58 +866,54 @@ async function renderDraftCampaign(id) {
         return local ? { ...pr, ...local, _sid: pr._sid, _idx: pr._idx } : pr;
       });
       const wasSent = (p) => Object.keys(p.pushed || {}).length || p.pushed_to;
-      const F = window._leadFilter || "all";
-      const counts = {
-        all: rows.length,
-        email: rows.filter((p) => p.email && !wasSent(p)).length,
-        linkedin: rows.filter((p) => !p.email && !wasSent(p)).length,
-        sent: rows.filter(wasSent).length,
-      };
       window._leadRows = rows;
-      // S4: client-side search over name/company/title/email — all rows are already in
-      // memory (`rows`), so this is a pure filter, no new fetch. Case-insensitive substring
-      // match, applied on top of the existing chip filter and before pagination.
-      const q = (window._leadSearch || "").trim().toLowerCase();
-      const matchesSearch = (p) => !q || [p.name, p.company, p.title, p.email].some((v) => (v || "").toLowerCase().includes(q));
-      const shown = rows.filter((p) => (F === "all" ? true : F === "sent" ? wasSent(p) : F === "email" ? (p.email && !wasSent(p)) : (!p.email && !wasSent(p))) && matchesSearch(p));
-      const pages = Math.max(1, Math.ceil(shown.length / 10));
-      const pg = window._leadsPage = Math.max(0, Math.min(window._leadsPage || 0, pages - 1));
-      const slice = shown.slice(pg * 10, pg * 10 + 10);
-      const chip = (key, label) => `<button class="btn sm ${F === key ? "primary" : ""}" data-chip="${key}" data-lab="${label}" onclick="window._leadFilter='${key}';window._leadsPage=0;renderDraftCampaign('${id}')">${label} (${counts[key]})</button>`;
-      const leadRow = (merged) => `
-        <div class="srcrow" id="lr-${merged._sid}-${rowKey(merged)}" style="${merged.verdict === "reject" ? "opacity:.4" : ""}">${leadRowInner(merged, id)}</div>`;
+      // App-signal leads as the shared Airtable-style READ-ONLY grid: search /
+      // sort / per-column filter / column show-hide / pagination are all pure
+      // view state and never write. The only writes are the explicit ✓/✕ per-row
+      // controls (existing setVerdict) and the "Send all" bulk button — the grid
+      // rebuild introduces no new write path. Status column replaces the old
+      // All/Email/LinkedIn/Sent chips (filter the Status column to the same end).
+      const gid = `appleads-${id}`;
+      const leadStatus = (p) => wasSent(p) ? "Sent" : p.verdict === "reject" ? "Skipped" : p.verdict === "keep" ? "Kept" : p.email ? "Email" : "LinkedIn";
+      const statusPill = (p) => { const s = leadStatus(p); const cls = s === "Sent" ? "g" : s === "Skipped" ? "n" : ""; return `<span class="pill ${cls}" style="${cls ? "" : "opacity:.7"}">${esc(s.toLowerCase())}</span>`; };
+      const actionCell = (p) => {
+        const canAct = p._sid != null && (p._idx != null || p.linkedin);
+        if (!canAct) return "";
+        const idxArg = p._idx != null ? p._idx : "null";
+        const lnArg = esc(p.linkedin || "");
+        if (wasSent(p)) return `<button class="btn sm" title="Remove from outreach" onclick="this.textContent='Undoing…';this.disabled=true;setVerdict('${p._sid}',${idxArg},'undo','${id}','${lnArg}')">Undo</button>`;
+        if (p.verdict === "reject") return `<button class="btn sm" title="Approve & send" onclick="this.disabled=true;setVerdict('${p._sid}',${idxArg},'keep','${id}','${lnArg}')">✓ Send</button>`;
+        return `<button class="btn sm" title="Send to outreach" onclick="this.textContent='…';this.disabled=true;setVerdict('${p._sid}',${idxArg},'keep','${id}','${lnArg}')">✓ Send</button> <button class="btn sm" title="Skip" onclick="setVerdict('${p._sid}',${idxArg},'reject','${id}','${lnArg}')">✕</button>`;
+      };
+      const columns = [
+        { key: "name", label: "Name", get: (p) => p.name || "", cell: (p) => p.linkedin ? `<a href="${esc4attr(p.linkedin)}" target="_blank" style="color:var(--ink);font-weight:500;text-decoration:none">${esc(p.name || "—")}</a>` : `<span style="font-weight:500">${esc(p.name || "—")}</span>` },
+        { key: "title", label: "Title", get: (p) => p.title || "" },
+        { key: "company", label: "Company", get: (p) => p.company || "" },
+        { key: "domain", label: "Domain", get: (p) => p.domain || "", cell: (p) => p.domain ? `<a href="https://${esc4attr(p.domain)}" target="_blank" style="color:var(--orange-700);text-decoration:none">${esc(p.domain)}</a>` : "" },
+        { key: "linkedin", label: "LinkedIn", get: (p) => p.linkedin || "", cell: (p) => p.linkedin ? `<a href="${esc4attr(p.linkedin)}" target="_blank" style="color:var(--orange-700);text-decoration:none">Profile ↗</a>` : "" },
+        { key: "country", label: "Country", get: (p) => p.country || "" },
+        { key: "email", label: "Email", get: (p) => p.email || "" },
+        { key: "icebreaker", label: "Icebreaker", get: (p) => p.icebreaker || "" },
+        { key: "status", label: "Status", get: (p) => leadStatus(p), cell: (p) => statusPill(p) },
+        { key: "actions", label: "Actions", get: () => "", cell: (p) => actionCell(p), sortable: false, filterable: false, search: false },
+      ];
       const tabBtn = [...document.querySelectorAll(".tab")].find((b) => b.textContent.startsWith("Leads"));
       if (tabBtn && rows.length) tabBtn.textContent = `Leads (${rows.length})`;
+      const nUnrev = rows.filter((x) => !x.verdict && !wasSent(x)).length;
+      const sendAll = nUnrev < 2 ? "" : (window._confirmAll
+        ? `<span class="small" style="font-weight:600">Send all ${nUnrev}?</span>
+           <button class="btn sm primary" onclick="window._confirmAll=false;sendAllLeads('${id}')">Yes, send all ${nUnrev}</button>
+           <button class="btn sm" onclick="window._confirmAll=false;renderDraftCampaign('${id}')">Cancel</button>`
+        : `<button class="btn sm" style="opacity:.75" data-sendall onclick="window._confirmAll=true;renderDraftCampaign('${id}')">Send all ${nUnrev} unreviewed…</button>`);
       el.innerHTML = `<div class="card panel">
-      <h2>People</h2>
-      ${rows.length ? `<div style="display:flex;gap:8px;margin:2px 0 12px;flex-wrap:wrap;align-items:center">
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${chip("all", "All")}${chip("email", "→ Email")}${chip("linkedin", "→ LinkedIn")}${chip("sent", "✓ Sent")}</div>
-        <input id="leads-search" class="input sm" placeholder="Search name, company, title, email…" value="${esc(window._leadSearch || "")}"
-          style="flex:1;min-width:160px;max-width:260px;border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent"
-          oninput="window._leadSearch=this.value;window._leadsPage=0;renderDraftCampaign('${id}')" autocomplete="off">
-        ${(() => {
-          const n = rows.filter((x) => !x.verdict && !wasSent(x)).length;
-          if (n < 2) return "";
-          return `<div style="margin-left:auto;display:flex;align-items:center;gap:8px">${window._confirmAll
-            ? `<span class="small" style="font-weight:600">Send all ${n}?</span>
-               <button class="btn sm primary" onclick="window._confirmAll=false;sendAllLeads('${id}')">Yes, send all ${n}</button>
-               <button class="btn sm" onclick="window._confirmAll=false;renderDraftCampaign('${id}')">Cancel</button>`
-            : `<button class="btn sm" style="opacity:.75" data-sendall onclick="window._confirmAll=true;renderDraftCampaign('${id}')">Send all ${n} unreviewed…</button>`}</div>`;
-        })()}
-      </div>` : '<div class="sub" style="margin:2px 0 8px">No pulls yet - run one from Sources.</div>'}
-      ${slice.length ? slice.map(leadRow).join("") : (q ? `<div class="sub" style="margin:2px 0 8px">No people match “${esc(window._leadSearch)}”.</div>` : "")}
-      ${pages > 1 ? `<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:12px">
-        <button class="btn sm" ${pg === 0 ? "disabled" : ""} onclick="window._leadsPage=${pg - 1};renderDraftCampaign('${id}')">← Prev</button>
-        <span class="small muted">Page ${pg + 1} of ${pages} · ${shown.length} people</span>
-        <button class="btn sm" ${pg >= pages - 1 ? "disabled" : ""} onclick="window._leadsPage=${pg + 1};renderDraftCampaign('${id}')">Next →</button>
-      </div>` : ""}
-    </div>`;
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:${rows.length ? "12" : "2"}px">
+          <h2 style="margin:0">People</h2>
+          ${rows.length ? `<span class="small muted">read-only grid — sort, filter and hide columns freely; only ✓ / ✕ change a lead</span>` : ""}
+          ${sendAll ? `<div style="margin-left:auto;display:flex;align-items:center;gap:8px">${sendAll}</div>` : ""}
+        </div>
+        ${rows.length ? initGrid(gid, rows, columns, { pageSize: 25 }) : '<div class="sub" style="margin:2px 0 8px">No pulls yet - run one from Sources.</div>'}
+      </div>`;
       hydrateFade(el);  // ease the leads list in once fetched
-      // Re-render replaces #leads-search wholesale on every keystroke (same pattern as the
-      // destination-picker search at destpop-search) - refocus + restore caret so typing
-      // doesn't lose focus after each oninput-triggered rebuild.
-      const sEl = document.getElementById("leads-search");
-      if (sEl && document.activeElement !== sEl) { sEl.focus(); const v = sEl.value; try { sEl.setSelectionRange(v.length, v.length); } catch (_) {} }
     })();
   } else if (dtab === "sources") {
     el.innerHTML = `<div id="draftlist"></div>
@@ -1315,6 +1301,143 @@ function leadRowInner(merged, cid) {
           <button class="btn sm" title="Skip this person" onclick="setVerdict('${merged._sid}',${idxArg},'reject','${cid}','${lnArg}')">✕</button>`}`;
 }
 
+/* ── Airtable-style read-only data grid ────────────────────────────────────
+   One reusable grid for BOTH leads flavors: search-all box, per-column Sort,
+   per-column Filter, column show/hide, and client-side pagination. It NEVER
+   mutates lead data — every control is pure client-side view state. Row-level
+   actions (the app-signal Send/Skip buttons) are passed in as a column's `cell`
+   renderer that calls the EXISTING setVerdict handler; the grid itself adds no
+   write path. Columns adapt to whatever fields each flavor carries.
+
+   col = { key, label, get(r)->value (sort/filter/search), cell(r)->html?,
+           sortable=true, filterable=true, search=true, hide=false } */
+window._grids = window._grids || {};
+window._gridDefs = window._gridDefs || {};
+
+function initGrid(gridId, rows, columns, opts) {
+  window._gridDefs[gridId] = { rows: rows || [], columns, opts: opts || {} };
+  const hidden = new Set(columns.filter((c) => c.hide).map((c) => c.key));
+  if (!window._grids[gridId]) window._grids[gridId] = { search: "", sortKey: null, sortDir: 1, filters: {}, hidden, page: 0 };
+  else window._grids[gridId].hidden = window._grids[gridId].hidden || hidden;
+  return `<div id="gw-${gridId}">${gridInner(gridId)}</div>`;
+}
+
+function gridProcessed(gridId) {
+  const D = window._gridDefs[gridId], S = window._grids[gridId];
+  let rows = D.rows.slice();
+  const q = (S.search || "").trim().toLowerCase();
+  if (q) rows = rows.filter((r) => D.columns.some((c) => c.search !== false && String(c.get(r) ?? "").toLowerCase().includes(q)));
+  Object.entries(S.filters).forEach(([k, fv]) => {
+    if (!fv) return;
+    const col = D.columns.find((c) => c.key === k);
+    if (col) { const f = String(fv).toLowerCase(); rows = rows.filter((r) => String(col.get(r) ?? "").toLowerCase().includes(f)); }
+  });
+  if (S.sortKey) {
+    const col = D.columns.find((c) => c.key === S.sortKey);
+    if (col) rows.sort((a, b) => {
+      const av = col.get(a) ?? "", bv = col.get(b) ?? "";
+      const na = parseFloat(av), nb = parseFloat(bv);
+      const numeric = !isNaN(na) && !isNaN(nb) && String(av).trim() !== "" && String(bv).trim() !== "";
+      const c = numeric ? na - nb : String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return c * S.sortDir;
+    });
+  }
+  return rows;
+}
+
+function gridInner(gridId) {
+  const D = window._gridDefs[gridId], S = window._grids[gridId];
+  const per = D.opts.pageSize || 25;
+  const vis = D.columns.filter((c) => !S.hidden.has(c.key));
+  const rows = gridProcessed(gridId);
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / per));
+  if (S.page >= pages) S.page = pages - 1;
+  if (S.page < 0) S.page = 0;
+  const arrow = (c) => S.sortKey === c.key ? (S.sortDir > 0 ? " ▲" : " ▼") : "";
+  const colsMenu = `<details class="grid-colsmenu" style="position:relative;display:inline-block">
+    <summary class="btn sm" style="list-style:none;cursor:pointer">Columns ▾</summary>
+    <div style="position:absolute;right:0;top:110%;z-index:20;background:var(--bg);border:1px solid var(--line-2);border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:150px">
+      ${D.columns.map((c) => `<label style="display:flex;align-items:center;gap:7px;padding:3px 2px;font-size:12.5px;cursor:pointer;white-space:nowrap">
+        <input type="checkbox" ${S.hidden.has(c.key) ? "" : "checked"} onchange="gridToggleCol('${gridId}','${c.key}')"> ${esc(c.label)}</label>`).join("")}
+    </div></details>`;
+  const toolbar = `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+    <input class="input sm" placeholder="Search rows…" value="${esc4attr(S.search || "")}"
+      style="flex:1;min-width:180px;max-width:300px;border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent"
+      oninput="gridSearch('${gridId}',this.value)" autocomplete="off">
+    <span class="small muted" id="gc-${gridId}">${fmt(total)} row${total === 1 ? "" : "s"}</span>
+    <span style="margin-left:auto">${colsMenu}</span>
+  </div>`;
+  const thead = `<thead id="gh-${gridId}"><tr>
+    <th class="gutter">#</th>
+    ${vis.map((c) => `<th style="vertical-align:top">
+      <div class="thwrap"><span class="thlbl" ${c.sortable === false ? "" : `onclick="gridSort('${gridId}','${c.key}')" style="cursor:pointer;user-select:none"`}>${esc(c.label)}${arrow(c)}</span></div>
+      ${c.filterable === false ? "" : `<input class="grid-filter" placeholder="filter" value="${esc4attr(S.filters[c.key] || "")}" oninput="gridFilter('${gridId}','${c.key}',this.value)"
+        style="width:100%;margin-top:4px;border:1px solid var(--line);border-radius:6px;padding:3px 6px;font:400 11px var(--font-sans);color:var(--ink);background:transparent" autocomplete="off">`}
+    </th>`).join("")}
+  </tr></thead>`;
+  return toolbar
+    + `<div class="gridwrap" style="overflow-x:auto"><table class="datagrid">${thead}<tbody id="gb-${gridId}">${gridBodyRows(gridId, rows, vis, per)}</tbody></table></div>`
+    + `<div id="gp-${gridId}">${gridPager(gridId, total, pages, per)}</div>`;
+}
+
+function gridBodyRows(gridId, rows, vis, per) {
+  const S = window._grids[gridId];
+  const slice = rows.slice(S.page * per, S.page * per + per);
+  if (!slice.length) return `<tr><td class="gutter"></td><td colspan="${vis.length}" style="padding:20px;color:var(--ink-3)">No rows match.</td></tr>`;
+  return slice.map((r, i) => `<tr>
+    <td class="gutter">${fmt(S.page * per + i + 1)}</td>
+    ${vis.map((c) => { const v = c.cell ? c.cell(r) : esc(String(c.get(r) ?? "") || ""); const raw = String(c.get(r) ?? ""); return `<td title="${esc4attr(raw)}">${v}</td>`; }).join("")}
+  </tr>`).join("");
+}
+
+function gridPager(gridId, total, pages, per) {
+  const S = window._grids[gridId];
+  if (pages <= 1) return "";
+  const from = total ? S.page * per + 1 : 0, to = Math.min(total, S.page * per + per);
+  return `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+    <button class="btn sm" ${S.page === 0 ? "disabled" : ""} onclick="gridPage('${gridId}',${S.page - 1})">← Prev</button>
+    <span class="small muted">${fmt(from)}–${fmt(to)} of ${fmt(total)}</span>
+    <button class="btn sm" ${S.page >= pages - 1 ? "disabled" : ""} onclick="gridPage('${gridId}',${S.page + 1})">Next →</button>
+  </div>`;
+}
+
+function gridRepaintBody(gridId) {
+  const D = window._gridDefs[gridId], S = window._grids[gridId];
+  const per = D.opts.pageSize || 25;
+  const vis = D.columns.filter((c) => !S.hidden.has(c.key));
+  const rows = gridProcessed(gridId);
+  const total = rows.length, pages = Math.max(1, Math.ceil(total / per));
+  if (S.page >= pages) S.page = pages - 1;
+  if (S.page < 0) S.page = 0;
+  const gb = document.getElementById(`gb-${gridId}`), gp = document.getElementById(`gp-${gridId}`), gc = document.getElementById(`gc-${gridId}`);
+  if (gb) gb.innerHTML = gridBodyRows(gridId, rows, vis, per);
+  if (gp) gp.innerHTML = gridPager(gridId, total, pages, per);
+  if (gc) gc.textContent = `${fmt(total)} row${total === 1 ? "" : "s"}`;
+}
+function gridRepaintAll(gridId) {
+  const gw = document.getElementById(`gw-${gridId}`);
+  if (gw) gw.innerHTML = gridInner(gridId);
+}
+function gridSearch(gridId, v) { window._grids[gridId].search = v; window._grids[gridId].page = 0; gridRepaintBody(gridId); }
+function gridFilter(gridId, k, v) { window._grids[gridId].filters[k] = v; window._grids[gridId].page = 0; gridRepaintBody(gridId); }
+function gridPage(gridId, n) { window._grids[gridId].page = n; gridRepaintBody(gridId); }
+function gridSort(gridId, k) {
+  const S = window._grids[gridId];
+  if (S.sortKey === k) S.sortDir *= -1; else { S.sortKey = k; S.sortDir = 1; }
+  const gh = document.getElementById(`gh-${gridId}`);
+  gridRepaintBody(gridId);
+  // repaint just the header arrows without clobbering the filter inputs' focus
+  if (gh) { const D = window._gridDefs[gridId]; const vis = D.columns.filter((c) => !S.hidden.has(c.key));
+    gh.querySelectorAll(".thlbl").forEach((el, i) => { const c = vis[i]; if (!c) return; el.textContent = c.label + (S.sortKey === c.key ? (S.sortDir > 0 ? " ▲" : " ▼") : ""); }); }
+}
+function gridToggleCol(gridId, k) {
+  const S = window._grids[gridId];
+  if (S.hidden.has(k)) S.hidden.delete(k); else S.hidden.add(k);
+  gridRepaintAll(gridId);
+  const d = document.querySelector(`#gw-${gridId} .grid-colsmenu`); if (d) d.open = true;
+}
+
 /* brand logo for a lead's destination: Smartlead (email) / HeyReach (LinkedIn) */
 function destLogo(kind) {
   const src = kind === "smartlead" ? "icons/smartlead.png" : "icons/heyreach.png";
@@ -1553,32 +1676,42 @@ function activityChart(dates, series) {
     ${dates.length === 1 ? '<div class="small muted" style="margin-top:6px">One day of data so far - the lines fill in as the daily run keeps going.</div>' : ""}`;
 }
 
-/* Homepage performance graph: ONE multi-line chart of per-day sent (left axis,
-   count) + reply rate + bounce rate (right axis, %). Data comes straight from
-   /api/perf-daily (the Supabase data layer) — a null datapoint is a GAP in the
-   line, never a fabricated zero, and a series with no data in the window stays
-   as a labelled absent line in the legend. */
+/* Homepage performance graph: ONE five-line chart from /api/perf-daily.
+   Left axis (counts) = Emails sent (solid) + Leads added (dashed). Right axis
+   (%) = Reply rate. Positives + Meetings are small counts drawn on their own
+   auto-scale for legibility (their true values always show in the hover
+   tooltip and the compact stat row — the plotted height is normalised, never a
+   fabricated number). A null datapoint is a GAP, never a zero; a series with no
+   data in the window renders as a labelled ABSENT line in the legend. Bounce is
+   intentionally NOT plotted here — deliverability.html owns bounce. */
 function perfChart(pd) {
   const dates = pd.days || [];
   if (!dates.length) return '<div class="small muted" style="padding:16px 0">No performance data yet.</div>';
-  const W = 640, H = 190, padL = 34, padR = 38, padT = 12, padB = 26;
-  const sentVals = pd.sent || [], rrVals = pd.reply_rate || [], brVals = pd.bounce_rate || [];
-  const maxSent = Math.max(1, ...sentVals.filter((v) => v != null));
-  const rateMaxRaw = Math.max(...rrVals.filter((v) => v != null), ...brVals.filter((v) => v != null), 0);
-  const maxRate = rateMaxRaw > 0 ? Math.max(0.5, Math.ceil(rateMaxRaw * 2) / 2) : 1;
+  const W = 640, H = 190, padL = 40, padR = 42, padT = 12, padB = 26;
+  const sentVals = pd.sent || [], leadVals = pd.leads_added || [], rrVals = pd.reply_rate || [],
+        posVals = pd.positives || [], mtgVals = pd.meetings || [];
+  const maxOf = (...arrs) => Math.max(1, ...arrs.flat().filter((v) => v != null));
+  const leftMax = maxOf(sentVals, leadVals);                    // thousands-scale counts
+  const rateMaxRaw = Math.max(...rrVals.filter((v) => v != null), 0);
+  const rateMax = rateMaxRaw > 0 ? Math.max(0.5, Math.ceil(rateMaxRaw * 2) / 2) : 1;  // %
+  const smallMax = maxOf(posVals, mtgVals);                     // tens-scale counts
   const x = (i) => dates.length === 1 ? (padL + (W - padL - padR) / 2) : padL + i * (W - padL - padR) / (dates.length - 1);
-  const y = (v) => padT + (1 - v / maxSent) * (H - padT - padB);
-  // rates are drawn against the RIGHT axis: scale into the left-axis space so
-  // one y() works for line drawing and the shared tooltip dot positioning
-  const rateScaled = (arr) => arr.map((v) => v == null ? null : v / maxRate * maxSent);
+  const y = (v) => padT + (1 - v / leftMax) * (H - padT - padB);     // left-count pixel space
+  const onLeft = (arr) => arr;                                       // already counts
+  const onRate = (arr) => arr.map((v) => v == null ? null : v / rateMax * leftMax);   // % → left space
+  const onSmall = (arr) => arr.map((v) => v == null ? null : v / smallMax * leftMax); // small count → left space
   const series = [
-    { name: "Emails sent", color: "#1971C2", width: 2.5, vals: sentVals, disp: sentVals, axis: "left" },
-    { name: "Reply rate (%)", color: "#2F9E44", width: 2, vals: rateScaled(rrVals), disp: rrVals, axis: "right" },
-    { name: "Bounce rate (%)", color: "#E8590C", width: 2, vals: rateScaled(brVals), disp: brVals, axis: "right" },
+    { name: "Emails sent", key: "sent", color: "#1971C2", width: 2.6, dash: "", vals: onLeft(sentVals), disp: sentVals },
+    { name: "Leads added", key: "leads_added", color: "#0CA678", width: 2, dash: "6 4", vals: onLeft(leadVals), disp: leadVals },
+    { name: "Reply rate (%)", key: "reply_rate", color: "#2F9E44", width: 2, dash: "", vals: onRate(rrVals), disp: rrVals },
+    { name: "Positives", key: "positives", color: "#7048E8", width: 2, dash: "", vals: onSmall(posVals), disp: posVals },
+    { name: "Meetings", key: "meetings", color: "#E8590C", width: 2, dash: "", vals: onSmall(mtgVals), disp: mtgVals },
   ];
-  const grid = [0, 0.5, 1].map((f) => { const yy = y(maxSent * f); return `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
-    + `<text x="${padL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-3)">${Math.round(maxSent * f)}</text>`
-    + `<text x="${W - padR + 6}" y="${(yy + 3).toFixed(1)}" text-anchor="start" font-size="9" fill="var(--ink-3)">${(maxRate * f).toFixed(1)}%</text>`; }).join("");
+  // Left ticks = counts, right ticks = %. The small-count scale is annotated in
+  // the legend (peak value) rather than given a third drawn axis, to stay clean.
+  const grid = [0, 0.5, 1].map((f) => { const yy = y(leftMax * f); return `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
+    + `<text x="${padL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-3)">${fmt(Math.round(leftMax * f))}</text>`
+    + `<text x="${W - padR + 6}" y="${(yy + 3).toFixed(1)}" text-anchor="start" font-size="9" fill="var(--ink-3)">${(rateMax * f).toFixed(1)}%</text>`; }).join("");
   // null-aware: draw each contiguous non-null run as its own segment, so a
   // missing day is a visible gap (a lone point renders as a dot)
   const drawLine = (s) => {
@@ -1588,51 +1721,97 @@ function perfChart(pd) {
       else run.push([x(i), y(v)]);
     });
     if (run.length) segs.push(run);
+    const dash = s.dash ? ` stroke-dasharray="${s.dash}"` : "";
     return segs.map((seg) => seg.length === 1
       ? `<circle cx="${seg[0][0].toFixed(1)}" cy="${seg[0][1].toFixed(1)}" r="3" fill="${s.color}"/>`
-      : `<polyline fill="none" stroke="${s.color}" stroke-width="${s.width}" points="${seg.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ")}" stroke-linejoin="round" stroke-linecap="round"/>`).join("");
+      : `<polyline fill="none" stroke="${s.color}" stroke-width="${s.width}"${dash} points="${seg.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ")}" stroke-linejoin="round" stroke-linecap="round"/>`).join("");
   };
   const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(dates[i].slice(5))}</text>`;
   const xticks = dates.length === 1 ? xlab(0) : [xlab(0), xlab(Math.floor(dates.length / 2)), xlab(dates.length - 1)].join("");
   const legend = series.map((s) => {
     const nDays = s.disp.filter((v) => v != null).length;
     const hasData = nDays > 0;
-    // a rate series the data layer only started recording recently (e.g.
-    // mailbox_stats_daily began mid-window) shows as a short fragment — say so
-    // in the legend so it reads as "new data source", not "broken empty chart"
     const sparse = hasData && nDays < Math.ceil(dates.length * 0.4);
-    return `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11px;color:var(--ink-2)" title="${esc((pd.labels || {})[s.axis === "left" ? "sent" : (s.name.startsWith("Reply") ? "reply_rate" : "bounce_rate")] || "")}">`
-      + `<span style="width:14px;height:0;border-top:${s.width >= 2.5 ? "3" : "2"}px solid ${s.color};display:inline-block;${hasData ? "" : "opacity:.35"}"></span>`
-      + `${esc(s.name)}${hasData ? (sparse ? ` <span class="muted">(last ${nDays} day${nDays === 1 ? "" : "s"} only)</span>` : "") : ' <span class="muted">(no data in this window)</span>'}</span>`;
+    const scaleNote = (s.key === "positives" || s.key === "meetings")
+      ? ` <span class="muted">(count, peak ${fmt(smallMax)})</span>` : "";
+    return `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11px;color:var(--ink-2)" title="${esc((pd.labels || {})[s.key] || "")}">`
+      + `<span style="width:14px;height:0;border-top:${s.width >= 2.5 ? "3" : "2"}px ${s.dash ? "dashed" : "solid"} ${s.color};display:inline-block;${hasData ? "" : "opacity:.35"}"></span>`
+      + `${esc(s.name)}${hasData ? (sparse ? ` <span class="muted">(last ${nDays} day${nDays === 1 ? "" : "s"} only)</span>` : scaleNote) : ' <span class="muted">(no data in this window)</span>'}</span>`;
   }).join("");
   const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:210px;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>`;
   const chart = chartWrap(svg, {
-    W, H, padT, padB, maxV: maxSent,
+    W, H, padT, padB, maxV: leftMax,
     xs: dates.map((_, i) => +x(i).toFixed(1)),
     labels: dates,
     series: series.map((s) => ({ name: s.name, color: s.color, vals: s.vals, disp: s.disp })),
     suffix: "",
   });
-  const anyGap = series.some((s) => s.disp.some((v) => v == null) && s.disp.some((v) => v != null));
-  // Plain-English "is it working?" line — the raw multi-line graph answers it
-  // for analysts, but non-technical founders asked for the verdict spelled out.
-  // Bounce rate is the clear health signal (deliverability); reply rate is shown
-  // as context, no verdict (its "good" level is offer/channel-dependent). Only
-  // states a verdict when there IS real data — never invents a health call.
-  const lastOf = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; return null; };
-  const lastBounce = lastOf(brVals), lastReply = lastOf(rrVals), lastSent = lastOf(sentVals);
-  let verdict = "";
-  if (lastBounce != null) {
-    const tone = lastBounce < 2 ? ["#2F9E44", "healthy"] : lastBounce < 5 ? ["#E8590C", "worth watching"] : ["#E03131", "high — check deliverability"];
-    verdict = `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:${tone[0]};display:inline-block"></span>`
-      + `<b>Bounce rate ${lastBounce}%</b> — ${tone[1]}${lastReply != null ? ` · reply rate ${lastReply}%` : ""}${lastSent != null ? ` · ~${fmt(lastSent)} sent on the latest recorded day` : ""}</span>`;
-  } else if (lastSent != null) {
-    verdict = `<b>~${fmt(lastSent)} sent on the latest recorded day.</b> Reply/bounce rates start showing once the daily deliverability sync has a few days of data.`;
-  }
   return `${chart}
-    ${verdict ? `<div class="small" style="margin-top:8px;color:var(--ink-2)">${verdict}</div>` : ""}
-    <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>
-    ${anyGap ? '<div class="small muted" style="margin-top:6px">Gaps mean no data recorded for that day — nothing here is estimated. Counts on the left axis, rates on the right. Hover a line for its exact value; hover a legend label for where the number comes from.</div>' : '<div class="small muted" style="margin-top:6px">Counts on the left axis, rates on the right. Hover a line for its exact value.</div>'}`;
+    <div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div>`;
+}
+
+/* Compact one-line stat row under the graph: leads · sent · reply % · positives
+   · meetings. Every figure is the window total from /api/perf-daily (reply % =
+   latest non-null fleet point); an all-null series shows "—" (absent), never 0. */
+function perfStatRow(pd) {
+  const sum = (a) => { const v = (a || []).filter((x) => x != null); return v.length ? v.reduce((s, x) => s + x, 0) : null; };
+  const last = (a) => { for (let i = (a || []).length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; };
+  const cell = (lab, val, suf) => `<div style="display:flex;flex-direction:column;gap:1px">
+    <div class="num-hero" style="font-size:19px;line-height:1.1">${val == null ? "—" : fmt(val) + (suf || "")}</div>
+    <div class="small muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.03em">${lab}</div></div>`;
+  const rr = last(pd.reply_rate);
+  return `<div style="display:flex;gap:26px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+    ${cell("Leads added", sum(pd.leads_added))}
+    ${cell("Emails sent", sum(pd.sent))}
+    ${cell("Reply rate", rr == null ? null : rr, "%")}
+    ${cell("Positives", sum(pd.positives))}
+    ${cell("Meetings", sum(pd.meetings))}
+  </div>`;
+}
+
+/* Performance graph controls: campaign dropdown + date-range (7/30/90/custom).
+   State lives on window so it survives the list re-render; loadPerf() re-queries
+   /api/perf-daily and repaints only the chart + stat row. */
+async function loadPerf() {
+  const tEl = document.getElementById("perf-chart"), sEl = document.getElementById("perf-stats");
+  if (!tEl) return;
+  const camp = window._perfCampaign || "";
+  const custom = window._perfCustom && window._perfStart && window._perfEnd;
+  let qs = custom ? `start=${encodeURIComponent(window._perfStart)}&end=${encodeURIComponent(window._perfEnd)}`
+                  : `days=${window._perfDays || 30}`;
+  if (camp) qs += `&campaign=${encodeURIComponent(camp)}`;
+  tEl.innerHTML = '<div class="skel" style="height:210px"></div>';
+  let pd = null;
+  try { pd = await cachedGet(`/api/perf-daily?${qs}`); } catch { pd = null; }
+  if (pd && Array.isArray(pd.days) && !pd.error) {
+    tEl.innerHTML = perfChart(pd);
+    if (sEl) sEl.innerHTML = perfStatRow(pd);
+    hydrateFade(tEl); hydrateCharts(tEl);
+  } else {
+    tEl.innerHTML = '<div class="small muted" style="padding:16px 0">Couldn\'t read the data layer for the daily performance series — nothing is estimated, so the graph stays empty. Retry shortly.</div>';
+    if (sEl) sEl.innerHTML = "";
+  }
+  document.querySelectorAll('#perf-range [data-days]').forEach((b) => {
+    const on = window._perfCustom ? b.dataset.days === "custom" : String(window._perfDays || 30) === b.dataset.days;
+    b.style.background = on ? "var(--orange-100)" : "";
+    b.style.color = on ? "var(--orange-700)" : "";
+    b.style.fontWeight = on ? "600" : "";
+  });
+}
+function perfSetDays(n) {
+  window._perfDays = n; window._perfCustom = false;
+  const c = document.getElementById("perf-custom"); if (c) c.style.display = "none";
+  loadPerf();
+}
+function perfToggleCustom() {
+  const c = document.getElementById("perf-custom");
+  if (c) c.style.display = c.style.display === "none" ? "inline-flex" : "none";
+}
+function perfApplyCustom() {
+  const s = document.getElementById("perf-start"), e = document.getElementById("perf-end");
+  if (s && e && s.value && e.value) {
+    window._perfStart = s.value; window._perfEnd = e.value; window._perfCustom = true; loadPerf();
+  }
 }
 
 async function sendAllLeads(campaignId) {
@@ -2097,13 +2276,36 @@ async function renderList() {
       </div>
     </div>
     <div class="card panel" style="margin-top:16px">
-      <h2 style="font-size:15px;margin-bottom:2px">Performance</h2>
-      <div class="small muted" style="margin-bottom:10px">Emails sent, reply rate and bounce rate per day across <b>every</b> campaign in the account — straight from the data layer.</div>
-      <div id="perf-chart" style="min-height:240px"><div class="skel" style="height:210px"></div></div>
-      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-        <div class="small muted" style="margin-bottom:8px">Top line across every Smartlead campaign in the account — <b>last 30 days</b></div>
-        <div id="sc-collective"><div class="skel" style="height:70px"></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+        <div style="min-width:0">
+          <h2 style="font-size:15px;margin-bottom:2px">Performance</h2>
+          <div class="small muted">Emails sent, leads added, reply rate, positives and meetings per day — straight from the data layer. Nothing estimated; a metric with no data shows as a labelled gap.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="perf-campaign" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent;max-width:230px" onchange="window._perfCampaign=this.value;loadPerf()">
+            <option value="">All campaigns</option>
+            ${(() => {
+              const seen = new Set();
+              return rows.filter((r) => r.platform === "smartlead" && r.platform_id && !seen.has(String(r.platform_id)) && seen.add(String(r.platform_id)))
+                .map((r) => ({ id: String(r.platform_id), name: (r.doc && r.doc.name) || r.name || `Campaign ${r.platform_id}` }))
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((o) => `<option value="${esc4attr(o.id)}"${String(window._perfCampaign || "") === o.id ? " selected" : ""}>${esc(o.name)}</option>`).join("");
+            })()}
+          </select>
+          <span id="perf-range" style="display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden">
+            ${[7, 30, 90].map((n) => `<button class="btn sm" data-days="${n}" style="border:none;border-radius:0" onclick="perfSetDays(${n})">${n}d</button>`).join("")}
+            <button class="btn sm" data-days="custom" style="border:none;border-radius:0" onclick="perfToggleCustom()" title="Pick an exact date range">Custom</button>
+          </span>
+          <span id="perf-custom" style="display:none;gap:6px;align-items:center">
+            <input id="perf-start" type="date" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;font:400 12px var(--font-sans);color:var(--ink);background:transparent">
+            <span class="small muted">→</span>
+            <input id="perf-end" type="date" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;font:400 12px var(--font-sans);color:var(--ink);background:transparent">
+            <button class="btn sm primary" onclick="perfApplyCustom()">Apply</button>
+          </span>
+        </div>
       </div>
+      <div id="perf-chart" style="min-height:240px;margin-top:12px"><div class="skel" style="height:210px"></div></div>
+      <div id="perf-stats"></div>
     </div>
     <div style="margin-top:16px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
@@ -2146,27 +2348,12 @@ async function renderList() {
         if (el) el.innerHTML = r.platform === "heyreach" ? scRowHtmlHeyReach(null, rowLeads(r)) : scRowHtml(null, rowLeads(r));
       });
     };
-    // Collective strip = LAST-30-DAYS top line, its own fetch so it paints even
-    // if the per-campaign scorecard is slow/degraded (mirrors the perf graph).
-    (async () => {
-      let c30 = null;
-      try { c30 = await cachedGet("/api/collective-30d"); } catch { c30 = null; }
-      const collEl = document.getElementById("sc-collective");
-      if (collEl) collEl.innerHTML = scCollectiveHtml(c30);
-    })();
-    // The single performance graph (sent/day + reply rate + bounce rate) —
-    // per-day numbers from the Supabase data layer via /api/perf-daily.
-    // Fetched independently so it paints even if the scorecard fetch is slow.
-    (async () => {
-      let pd = null;
-      try { pd = await cachedGet("/api/perf-daily?days=30"); } catch { pd = null; }
-      const tEl = document.getElementById("perf-chart");
-      if (!tEl) return;
-      tEl.innerHTML = (pd && Array.isArray(pd.days) && !pd.error)
-        ? perfChart(pd)
-        : '<div class="small muted" style="padding:16px 0">Couldn\'t read the data layer for the daily performance series — nothing is estimated, so the graph stays empty. Retry shortly.</div>';
-      hydrateFade(tEl); hydrateCharts(tEl);
-    })();
+    // The five-series performance graph + compact stat row, driven by the
+    // campaign dropdown + date-range controls above. loadPerf() reads that state
+    // and fetches /api/perf-daily; fired independently so it paints even if the
+    // per-campaign scorecard fetch is slow. (The old collective-30d strip is
+    // gone — the stat row under the graph is the single top-line now.)
+    loadPerf();
     let sc;
     try { sc = await cachedGet("/api/campaign-scorecard"); } catch { sc = null; }
     if (!sc || !sc.campaigns) { drawFromLeadsOnly(); return; }
