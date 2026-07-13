@@ -5643,60 +5643,64 @@ def perf_daily(p: dict) -> dict:
         lo, hi = min(active), max(active)
         return [(m.get(d, 0) if lo <= d <= hi else None) for d in dates]
 
-    # Emails sent — the "All campaigns" line MIRRORS the deliverability tab's
-    # source EXACTLY: Smartlead /analytics/day-wise-overall-stats, already fetched
-    # and cached by deliv_trends_get (the /api/deliverability-trends backend), so
-    # we don't double the work. This gives the FULL window's daily sends — the
-    # earlier mailbox_stats_daily snapshot method only reached back to the first
-    # sweep (2026-07-08), which is exactly why Campaigns showed nothing older than
-    # the 9th while deliverability did. A day Smartlead reports 0 for is a real 0;
-    # a day outside the returned window is null (absent). A single campaign has no
-    # fleet-analytics dimension, so it stays on the sent_messages archive.
-    # sent, reply-rate AND bounce-rate for the fleet all come from the SAME cached
-    # deliverability series (Smartlead day-wise), fetched once here.
-    _fleet_reply, _fleet_bounce = {}, {}
+    # Fleet ("All campaigns") sent / reply-rate / positives come from the
+    # PERMANENT day-by-day record in Supabase — fleet_daily_stats, sourced from
+    # Smartlead's own day-wise analytics (same source as the deliverability tab),
+    # backfilled and refreshed daily by the mailbox-sync cron. Full history (the
+    # old mailbox_stats_daily snapshot method only reached back to the first sweep,
+    # 2026-07-08, which is why Campaigns showed nothing older than the 9th).
+    # A day Smartlead reports 0 sent for is a real 0; a day with no stored row is
+    # null (absent). If the table isn't populated yet (pre-backfill), fall back to
+    # the live deliverability series so the graph never blanks. A single campaign
+    # has no fleet-analytics dimension → sent stays on the sent_messages archive,
+    # positives on the replies table, reply-rate absent (no reliable denominator).
     if campaign:
         sent = bounded(sent_m)
-    else:
-        lookback = min(90, max(7, (today - start).days + 1))
-        _tr, _ = deliv_trends_get(lookback)
-        _ser = (_tr or {}).get("series") or {}
-        _days = _ser.get("days") or []
-        _sentmap = dict(zip(_days, _ser.get("sent") or []))
-        _fleet_reply = dict(zip(_days, _ser.get("reply_pct") or []))
-        _fleet_bounce = dict(zip(_days, _ser.get("bounce_pct") or []))
-        sent = [_sentmap.get(d) for d in dates]
-    leads_added = bounded(la_m)
-    positives = bounded(pos_m)
-    meetings = bounded(mtg_m)
-
-    # Reply rate (and bounce) is a fleet-level line only, and it MIRRORS the
-    # deliverability tab exactly — Smartlead day-wise replied÷sent / bounced÷sent
-    # per day, from the same cached series as the sent line above (full history).
-    # A per-campaign view has NO trustworthy daily denominator (sent_messages
-    # under-mirrors older campaigns while the replies table is complete, so
-    # replies÷sent per campaign inflates to 60–80%), so it renders reply-rate as a
-    # labelled ABSENT line — never a fabricated one.
-    if campaign:
+        positives = bounded(pos_m)
         reply_rate = [None] * ndays
         bounce_rate = [None] * ndays
     else:
-        reply_rate = [_fleet_reply.get(d) for d in dates]
-        bounce_rate = [_fleet_bounce.get(d) for d in dates]
+        frows = sb("GET", ("fleet_daily_stats?select=stat_date,sent,replies,positives,bounced,reply_rate"
+                           f"&stat_date=gte.{start.isoformat()}&stat_date=lte.{end.isoformat()}"))
+        fmap = {r.get("stat_date"): r for r in (frows or []) if isinstance(r, dict)}
+        if fmap:
+            def _fg(field):
+                return [(fmap[d].get(field) if (d in fmap and fmap[d].get(field) is not None) else None) for d in dates]
+            sent = [int(v) if v is not None else None for v in _fg("sent")]
+            positives = [int(v) if v is not None else None for v in _fg("positives")]
+            reply_rate = [float(v) if v is not None else None for v in _fg("reply_rate")]
+            bounce_rate = [(round(int(fmap[d]["bounced"]) * 100.0 / int(fmap[d]["sent"]), 2)
+                            if (d in fmap and fmap[d].get("sent")) else None) for d in dates]
+        else:
+            # Table not populated yet → live deliverability series (Smartlead day-wise).
+            lookback = min(90, max(7, (today - start).days + 1))
+            _tr, _ = deliv_trends_get(lookback)
+            _ser = (_tr or {}).get("series") or {}
+            _days = _ser.get("days") or []
+            _sm = dict(zip(_days, _ser.get("sent") or []))
+            _rm = dict(zip(_days, _ser.get("reply_pct") or []))
+            _bm = dict(zip(_days, _ser.get("bounce_pct") or []))
+            sent = [_sm.get(d) for d in dates]
+            reply_rate = [_rm.get(d) for d in dates]
+            bounce_rate = [_bm.get(d) for d in dates]
+            positives = bounded(pos_m)
+    leads_added = bounded(la_m)
+    meetings = bounded(mtg_m)
 
     return {"days": dates, "campaign": campaign,
             "sent": sent, "leads_added": leads_added, "positives": positives,
             "meetings": meetings, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
             "labels": {
                 "sent": ("Emails sent/day (this campaign — sent_messages archive)"
-                         if campaign else "Emails sent/day (whole fleet — Smartlead day-wise analytics, same source as the deliverability tab)"),
+                         if campaign else "Emails sent/day (whole fleet — Smartlead day-wise, stored daily in Supabase fleet_daily_stats)"),
                 "leads_added": ("Leads added/day (signal_leads — this campaign's sources)"
                                 if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
-                "positives": "Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)",
+                "positives": ("Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)"
+                              if campaign else "Positive replies/day (whole fleet — Smartlead day-wise positive replies, stored in fleet_daily_stats)"),
                 "meetings": "Meetings/day (replies: Call Booked / Meeting Request)",
                 "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
-                               if campaign else "Reply rate % (whole fleet — Smartlead day-wise analytics, same source as the deliverability tab)"),
-                "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise analytics, same source as the deliverability tab)"},
+                               if campaign else "Reply rate % (whole fleet — Smartlead day-wise replies÷sent, stored in fleet_daily_stats)"),
+                "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise bounced÷sent, stored in fleet_daily_stats)"},
             "last_synced_day": max([d for d in dates if sent_m.get(d, 0)], default=None)}
 
 
@@ -8878,6 +8882,18 @@ def _mailbox_sync_bg():
            {"actor": "cron", "endpoint": "/api/cron/mailbox-sync",
             "action": "mailbox_sync_done" if code == 0 else "mailbox_sync_failed",
             "entity": "mailboxes", "payload": {"exit": code}})
+        # Going-forward capture of the fleet day-by-day record (sent / replies /
+        # reply-rate / positives). Runs on the same daily schedule; refreshes a
+        # trailing window so late-corrected days settle. Best-effort — a Smartlead
+        # hiccup here never fails the mailbox sweep.
+        try:
+            fs = fleet_stats_sync_recent(14)
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/mailbox-sync",
+                "action": "fleet_stats_done" if fs.get("ok") else "fleet_stats_failed",
+                "entity": "fleet_daily_stats", "payload": fs})
+        except Exception as fe:  # noqa: BLE001
+            print(f"[fleet-stats] FAILED: {fe}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[mailbox-sync] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",
@@ -9556,6 +9572,83 @@ def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
     return data, 200
 
 
+# ── Fleet daily stats: the permanent day-by-day record in Supabase ──────────
+# Sent / replies / reply-rate / positives per calendar day, straight from
+# Smartlead's OWN day-wise analytics (same source as the deliverability tab), so
+# it's verifiable against Smartlead and outlives Smartlead's UI window. Backfill
+# once with a wide range; the mailbox-sync cron re-upserts a trailing window
+# every day (going-forward capture + late-correction). Idempotent upsert keyed
+# on stat_date. Smartlead dates come back as "6 Jul" (no year) — a within-one-
+# calendar-year call keeps (day,month) unique, so we walk the exact date range
+# and match by (day,month).
+_FLEET_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+
+
+def _fleet_daywise(path: str, start_iso: str, end_iso: str) -> dict:
+    """{(day,month): email_engagement_metrics} for a Smartlead day-wise endpoint."""
+    url = (f"{SMARTLEAD_BASE}/analytics/{path}"
+           f"?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}"
+           f"&start_date={start_iso}&end_date={end_iso}")
+    data = http_json("GET", url, {}, timeout=45)
+    out = {}
+    for r in (((data or {}).get("data") or {}).get("day_wise_stats") or []):
+        try:
+            d, mon = str(r.get("date", "")).split()
+            out[(int(d), _FLEET_MONTHS.get(mon[:3], 0))] = r.get("email_engagement_metrics") or {}
+        except (ValueError, AttributeError):
+            continue
+    return out
+
+
+def fleet_stats_sync(start_iso: str, end_iso: str) -> dict:
+    """Pull Smartlead day-wise overall + positive stats for [start,end] (must be
+    within ONE calendar year) and upsert public.fleet_daily_stats. Idempotent."""
+    from datetime import date as _date, timedelta as _td2
+    overall = _fleet_daywise("day-wise-overall-stats", start_iso, end_iso)
+    positive = _fleet_daywise("day-wise-positive-reply-stats", start_iso, end_iso)
+    if not overall:
+        return {"ok": False, "error": "smartlead day-wise returned no data", "upserted": 0}
+    start = _date.fromisoformat(start_iso[:10])
+    end = _date.fromisoformat(end_iso[:10])
+    rows, cur = [], start
+    while cur <= end:
+        k = (cur.day, cur.month)
+        m = overall.get(k) or {}
+        sent = int(m.get("sent") or 0)
+        replied = int(m.get("replied") or 0)
+        bounced = int(m.get("bounced") or 0)
+        pos = int((positive.get(k) or {}).get("positive_replied") or 0)
+        rows.append({"stat_date": cur.isoformat(), "sent": sent, "replies": replied,
+                     "positives": pos, "bounced": bounced,
+                     "reply_rate": round(replied * 100.0 / sent, 2) if sent else None,
+                     "updated_at": _dtmod.datetime.utcnow().isoformat() + "Z"})
+        cur += _td2(days=1)
+    n = 0
+    for i in range(0, len(rows), 300):
+        chunk = rows[i:i + 300]
+        r = sb("POST", "fleet_daily_stats?on_conflict=stat_date", chunk,
+               prefer="resolution=merge-duplicates,return=minimal")
+        if r is None:
+            return {"ok": False, "error": "supabase upsert failed", "upserted": n}
+        n += len(chunk)
+    return {"ok": True, "upserted": n, "start": start.isoformat(), "end": end.isoformat()}
+
+
+def fleet_stats_sync_recent(days: int = 14) -> dict:
+    """Trailing-window refresh for the daily cron. Splits across a year boundary
+    if the window straddles Jan 1 (keeps each Smartlead call within one year so
+    the yearless 'day month' labels stay unambiguous)."""
+    from datetime import date as _date, timedelta as _td2
+    end = _date.today()
+    start = end - _td2(days=max(1, days) - 1)
+    if start.year != end.year:
+        a = fleet_stats_sync(start.isoformat(), _date(start.year, 12, 31).isoformat())
+        b = fleet_stats_sync(_date(end.year, 1, 1).isoformat(), end.isoformat())
+        return {"ok": a.get("ok") and b.get("ok"), "upserted": a.get("upserted", 0) + b.get("upserted", 0)}
+    return fleet_stats_sync(start.isoformat(), end.isoformat())
+
+
 # ── Restore queue + warm-up capacity forecast ────────────────────────────────
 # Powers the deliverability page's rebuilt "Restore reminders" tab:
 #   GET  /api/restore-plan  — pending restore entries ranked by due date +
@@ -10025,6 +10118,7 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
+                     "/api/cron/fleet-stats",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
@@ -11372,7 +11466,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                   "/api/setter/poll"):
+                   "/api/cron/fleet-stats", "/api/setter/poll"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
             # and the lock does not nest.
@@ -11409,6 +11503,25 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, actor="cron", action="sync", entity="mailboxes")
                 threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/cron/fleet-stats":
+                # Fleet day-by-day record sync. Synchronous (a couple of Smartlead
+                # calls + one upsert), so a manual backfill returns its counts:
+                #   ?start=YYYY-MM-DD&end=YYYY-MM-DD  (backfill, one calendar year)
+                #   ?days=N                            (trailing refresh, default 14)
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                start = (q.get("start") or [None])[0]
+                end = (q.get("end") or [None])[0]
+                try:
+                    res = (fleet_stats_sync(start, end) if (start and end)
+                           else fleet_stats_sync_recent(int((q.get("days") or ["14"])[0])))
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(e)[:300]}, 500)
+                sb("POST", "app_activity_log",
+                   {"actor": "cron", "endpoint": "/api/cron/fleet-stats",
+                    "action": "fleet_stats_done" if res.get("ok") else "fleet_stats_failed",
+                    "entity": "fleet_daily_stats", "payload": res})
+                return self._json(res, 200 if res.get("ok") else 502)
             if path == "/api/setter/poll":
                 if _SETTER_POLL_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
