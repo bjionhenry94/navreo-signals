@@ -1813,6 +1813,35 @@ def test_correction_remember_route_grows_memory():
          status4 == 400, (status4, resp4))
 
 
+def test_agents_memory_delete():
+    """The training page's memory viewer: a remembered lesson can always be
+    taken back, matched by timestamp (+ text defensively), without touching
+    the rest of the doc."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-memdel01", "mode": "draft_only", "enabled": True,
+             "instructions": "keep me",
+             "memory": [{"text": "Lead with the $300 line.", "at": "2026-07-13T20:00:00+00:00", "source": "s1"},
+                         {"text": "Never promise a discount.", "at": "2026-07-13T21:00:00+00:00", "source": "s2"}]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = setter.route_agents_memory_delete(
+        {"agent_id": agent["id"], "at": "2026-07-13T20:00:00+00:00", "text": "Lead with the $300 line."})
+    check("memory delete: 200", status == 200, (status, resp))
+    check("memory delete: count drops to 1", resp.get("memory_count") == 1, resp)
+    saved = setter._load_agent(agent["id"])
+    check("memory delete: the right entry survives",
+         (saved.get("memory") or [{}])[0].get("text") == "Never promise a discount.", saved.get("memory"))
+    check("memory delete: rest of the doc untouched", saved.get("instructions") == "keep me", saved)
+
+    status2, resp2 = setter.route_agents_memory_delete(
+        {"agent_id": agent["id"], "at": "2026-07-13T20:00:00+00:00"})
+    check("memory delete: already-removed entry -> 404", status2 == 404, (status2, resp2))
+    status3, resp3 = setter.route_agents_memory_delete({"agent_id": agent["id"]})
+    check("memory delete: missing at -> 400", status3 == 400, (status3, resp3))
+    status4, resp4 = setter.route_agents_memory_delete({"agent_id": "agent-nope", "at": "x"})
+    check("memory delete: unknown agent -> 404", status4 == 404, (status4, resp4))
+
+
 def test_redraft_scope_remember_persists_to_memory():
     sb, http = fresh_setter()
     agent = {"id": "agent-redraft01", "mode": "draft_only", "enabled": True,
@@ -2511,6 +2540,7 @@ if __name__ == "__main__":
     test_memory_digest_empty_is_byte_identical()
     test_correction_one_off_does_not_touch_memory()
     test_correction_remember_route_grows_memory()
+    test_agents_memory_delete()
     test_redraft_scope_remember_persists_to_memory()
     test_redraft_without_scope_does_not_persist()
     test_agent_duplicate()

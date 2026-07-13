@@ -2023,6 +2023,34 @@ def route_agents_correction(payload):
         return 500, {"error": str(e)[:300]}
 
 
+def route_agents_memory_delete(payload):
+    """Removes one remembered correction from an agent's brain, matched by
+    its timestamp (and text, defensively). The training page's memory viewer
+    uses this so a bad lesson can always be taken back - remembered
+    corrections are never write-only."""
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        at = str(payload.get("at") or "")
+        text = str(payload.get("text") or "")
+        if not agent_id or not at:
+            return 400, {"error": "agent_id and at are required"}
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+        memory = list(agent.get("memory") or [])
+        kept = [m for m in memory
+                if not (isinstance(m, dict) and str(m.get("at") or "") == at
+                        and (not text or str(m.get("text") or "") == text))]
+        if len(kept) == len(memory):
+            return 404, {"error": "That remembered note wasn't found (maybe already removed)."}
+        saved = _save_agent({"id": agent_id, "memory": kept})
+        return 200, {"ok": True, "agent_id": agent_id, "memory_count": len(saved.get("memory") or []),
+                     "memory": saved.get("memory") or []}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def route_agents_duplicate(payload):
     """Brain duplication: deep-copies an agent's whole doc (instructions,
     memory, voice examples, everything) under a brand-new id, so the clone
@@ -3213,6 +3241,7 @@ POST_ROUTES = {
     "/api/setter/agents/delete": route_agents_delete,
     "/api/setter/agents/correction": route_agents_correction,
     "/api/setter/agents/duplicate": route_agents_duplicate,
+    "/api/setter/agents/memory/delete": route_agents_memory_delete,
     "/api/setter/settings/save": route_settings_save,
     "/api/setter/queue/action": route_queue_action,
     "/api/setter/queue/redraft": route_queue_redraft,

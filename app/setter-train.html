@@ -54,6 +54,11 @@
 /* ── Scenario stream ───────────────────────────────────── */
 .train-progress { font-size: 12.5px; color: var(--ink-3); margin-bottom: 10px; }
 .rp-formula { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; margin: 8px 0 2px; }
+.rp-memory { margin-top: 10px; }
+.rp-mem-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line, #eee); }
+.rp-mem-row:last-child { border-bottom: none; }
+.rp-mem-text { flex: 1; font-size: 13px; line-height: 1.45; }
+.rp-mem-remove { flex: none; font-size: 12px; padding: 2px 10px; }
 .grade-q-hint { font-weight: 400; font-size: 12.5px; color: var(--ink-3); }
 .scope-hint { color: var(--ink-3); margin: -4px 0 10px; line-height: 1.45; }
 .train-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
@@ -136,7 +141,7 @@
       <h1 class="sh-title">Training</h1>
       <div class="sh-spacer"></div>
     </div>
-    <div class="train-sub">Rate real replies from your campaigns so this agent learns when to answer on its own and when to leave it to a human. Nothing here ever emails a lead.</div>
+    <div class="train-sub">Rate real replies from your campaigns so this agent learns when to answer on its own and when to leave it to a human. Batches mirror the mix of replies your campaigns actually receive. Nothing here ever emails a lead.</div>
 
     <div id="errBanner" class="err-banner" style="display:none"></div>
 
@@ -298,31 +303,64 @@ function renderReadinessPanel(animate) {
   const replyPct = Math.round((READINESS.reply_component || 0) * 100);
   const coveragePct = Math.round((READINESS.coverage || 0) * 100);
   const nAnswers = READINESS.n_answers || 0;
+  // Rough effort estimate: score = raw x min(1, n/20), so at the current
+  // agreement rate the score reaches 90 once n >= 90 * 20 / raw.
+  const rawNow = nAnswers ? (score / Math.min(1, nAnswers / 20)) : 0;
+  let etaLine = "";
+  if (nAnswers && score < 90) {
+    etaLine = rawNow >= 90
+      ? ` (about ${Math.max(1, Math.ceil((90 * 20) / rawNow) - nAnswers)} more ratings to reach 90 if you keep agreeing at this rate)`
+      : " (right now the agent needs to earn more of your agreement, not just more ratings, to reach 90)";
+  }
+  const agentDoc = AGENTS.find((a) => String(a.id) === String(selectedAgentId)) || {};
+  const memory = Array.isArray(agentDoc.memory) ? agentDoc.memory : [];
 
   host.innerHTML = `
     <div class="readiness-panel">
       <div class="rp-top">
         <div class="rp-num-wrap"><span class="rp-num ${ready ? "ready" : ""}" id="rpNum">0</span><span class="rp-num-max">/100</span></div>
         <div class="rp-headline">
-          <div class="rp-label">${ready ? "Ready to unleash" : "Readiness"}</div>
+          <div class="rp-label">${ready ? "Autopilot-ready" : "Readiness"}</div>
           <div class="rp-explain">${esc(READINESS.explanation || "")}</div>
         </div>
       </div>
       <div class="rp-bar-wrap">
         <div class="rp-bar-track">
           <div class="rp-bar-fill ${ready ? "ready" : ""}" id="rpBarFill" style="width:0%"></div>
-          <div class="rp-bar-marker"><span>Ready to unleash</span></div>
+          <div class="rp-bar-marker"><span>Autopilot-ready at 90</span></div>
         </div>
       </div>
-      <div class="rp-formula">Score = how often you agree with the agent &times; how much you've rated. Coverage fills up over your last 20 ratings, so a fresh agent starts low no matter how well it does. At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.</div>
+      <div class="rp-formula">Score = agreement &times; coverage. Agreement blends the two stats below (right calls count a bit more than good drafts); skipped drafts don't count either way. Coverage fills up over your last 20 ratings, so a fresh agent starts low no matter how well it does${etaLine}. At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.</div>
       <div class="rp-stats">
         <div class="rp-stat"><div class="rps-num">${decisionPct}%</div><div class="rps-lab">Right calls (recent)</div></div>
         <div class="rp-stat"><div class="rps-num">${replyPct}%</div><div class="rps-lab">Good drafts (recent)</div></div>
         <div class="rp-stat"><div class="rps-num">${coveragePct}%</div><div class="rps-lab">Coverage (builds to 20 ratings)</div></div>
         <div class="rp-stat"><div class="rps-num">${nAnswers}</div><div class="rps-lab">Ratings so far</div></div>
       </div>
+      <details class="tr-details rp-memory">
+        <summary>What this agent has remembered (${memory.length})${memory.length ? " - view or remove any lesson" : ""}</summary>
+        <div class="tr-details-body">
+          ${memory.length ? memory.map((m) => `
+            <div class="rp-mem-row" data-at="${esc(m.at || "")}">
+              <span class="rp-mem-text">${esc(m.text || "")}</span>
+              <button type="button" class="btn rp-mem-remove" data-at="${esc(m.at || "")}" data-text="${esc(m.text || "")}">Remove</button>
+            </div>`).join("")
+          : `<div class="small">Nothing yet. When you pick "Remember going forward" on a rating, the note is saved here - and you can remove it any time.</div>`}
+        </div>
+      </details>
     </div>
   `;
+  host.querySelectorAll(".rp-mem-remove").forEach((btn) => btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const res = await fetchJson("/api/setter/agents/memory/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: selectedAgentId, at: btn.dataset.at, text: btn.dataset.text }),
+    });
+    if (!res.ok) { btn.disabled = false; showError(res.error || "Couldn't remove that note."); return; }
+    const a = AGENTS.find((x) => String(x.id) === String(selectedAgentId));
+    if (a) a.memory = res.data.memory || [];
+    renderReadinessPanel(false);
+  }));
   const numEl = document.getElementById("rpNum");
   const fillEl = document.getElementById("rpBarFill");
   if (animate) {
@@ -370,7 +408,7 @@ function renderDone() {
     <div class="done-banner">
       <div class="db-icon">✓</div>
       <div><b>All caught up.</b></div>
-      <div class="db-msg">You've rated ${answeredCount} of ${CASES.length} scenarios for this agent. Pull the next batch of real replies - everything you've taught it so far is applied to how it handles them.</div>
+      <div class="db-msg">You've rated ${answeredCount} of ${CASES.length} scenarios for this agent. Pull the next batch of real replies - everything you've taught it so far is applied to how it handles them, and any unrated scenarios always stay.</div>
       <button class="btn primary" id="doneGenerateBtn" type="button">Pull more real replies</button>
     </div>
   `;
@@ -405,9 +443,9 @@ async function generateMore() {
 
 /* ── Scenario card ─────────────────────────────────────── */
 function callLineFor(c) {
-  if (c.decision === "auto_send") return { cls: "g", text: "The agent would have sent this automatically." };
-  if (c.decision === "review") return { cls: "a", text: `The agent held this for a person - ${c.decision_reason || "needs a human look"}.` };
-  return { cls: "n", text: `The agent filed this as no action - ${c.decision_reason || "no action needed"}.` };
+  if (c.decision === "auto_send") return { cls: "g", text: `The agent's call: answer on its own. ${c.decision_reason || ""}`.trim() };
+  if (c.decision === "review") return { cls: "a", text: `The agent's call: leave it to a human. ${c.decision_reason || "It wants a person to look first."}` };
+  return { cls: "n", text: `The agent's call: leave it to a human, and it suggests no reply is needed. ${c.decision_reason || ""}`.trim() };
 }
 
 function renderCase(unanswered, i) {
@@ -436,7 +474,7 @@ function renderCase(unanswered, i) {
   const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
 
   el.innerHTML = `
-    <div class="train-progress">Scenario ${i + 1} of ${total} left to rate &middot; ${answeredCount} of ${CASES.length} rated in this batch</div>
+    <div class="train-progress">Rated ${answeredCount} of ${CASES.length} in this batch &middot; shortcuts: <b>Y</b>/<b>N</b> answer, <b>S</b> skip draft, <b>Enter</b> save</div>
     <div class="train-card">
       <div class="tr-chips">
         <span class="pill n">${esc(campaignName)}</span>
@@ -492,7 +530,7 @@ function renderCase(unanswered, i) {
         </div>
       </div>
       <div class="small scope-hint">${p.note
-        ? "One-off: counts for this scenario only, nothing is saved. Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on."
+        ? "One-off: your note isn't saved (the rating itself still counts). Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on - you can view or remove it any time under the readiness panel."
         : "Type feedback above to unlock “Remember going forward”."}</div>
       <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
       <div class="grade-nav">
@@ -540,7 +578,7 @@ function wireCaseEvents(c, unanswered, i) {
       if (scopeRememberBtn) scopeRememberBtn.disabled = !hasNote;
       const hintEl = document.querySelector(".scope-hint");
       if (hintEl) hintEl.textContent = hasNote
-        ? "One-off: counts for this scenario only, nothing is saved. Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on."
+        ? "One-off: your note isn't saved (the rating itself still counts). Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on - you can view or remove it any time under the readiness panel."
         : "Type feedback above to unlock “Remember going forward”.";
       if (!hasNote && p.scope === "remember") {
         p.scope = "one_off";
@@ -605,6 +643,10 @@ async function submitAndAdvance(c, btn) {
   if (!res.ok) { showError("Couldn't save that answer: " + res.error); return; }
   clearError();
   ANSWERS[c.id] = { decision_ok: !!p.decision_ok, reply_ok: p.reply_ok, note: p.note || "", scope: effectiveScope };
+  if (effectiveScope === "remember" && (p.note || "").trim()) {
+    const a = AGENTS.find((x) => String(x.id) === String(selectedAgentId));
+    if (a) (a.memory = a.memory || []).push({ text: p.note.trim(), at: new Date().toISOString() });
+  }
   delete PENDING[c.id];
   applyReadiness((res.data && res.data.readiness) || READINESS, { animate: true });
 
@@ -614,6 +656,37 @@ async function submitAndAdvance(c, btn) {
   view = "stream";
   render();
 }
+
+/* ── Keyboard shortcuts: Y/N answer the first unanswered question on the
+   card (Right call first, then Good draft), S skips the draft, Enter saves.
+   Ignored while typing in the feedback box. ─────────────────────────────── */
+document.addEventListener("keydown", (e) => {
+  if (view !== "stream") return;
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return;
+  const k = e.key.toLowerCase();
+  const clickIn = (wrapId, val) => {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return false;
+    const btn = wrap.querySelector(`[data-v="${val}"]`);
+    if (btn) { btn.click(); return true; }
+    return false;
+  };
+  const decisionUnset = !document.querySelector("#decisionBtns .sel");
+  if (k === "y" || k === "n") {
+    e.preventDefault();
+    const val = k === "y" ? "true" : "false";
+    if (decisionUnset) clickIn("decisionBtns", val);
+    else clickIn("replyBtns", val);
+  } else if (k === "s") {
+    e.preventDefault();
+    clickIn("replyBtns", "null");
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const save = document.getElementById("trNextBtn");
+    if (save) save.click();
+  }
+});
 
 /* ── Boot ──────────────────────────────────────────────── */
 boot();
