@@ -5644,7 +5644,19 @@ def perf_daily(p: dict) -> dict:
         lo, hi = min(active), max(active)
         return [(m.get(d, 0) if lo <= d <= hi else None) for d in dates]
 
-    sent = bounded(sent_m)
+    # Emails sent — the "All campaigns" line MUST be the true fleet volume, not
+    # the sent_messages archive (which misses ~78% of sends). Fleet uses the same
+    # mailbox_stats_daily.sent_30d-delta method the deliverability section reports
+    # ("average daily sends"); a day with no snapshot boundary is null (absent).
+    # A single campaign has no mailbox-level dimension, so it stays on the
+    # sent_messages archive (labelled), which IS per-campaign daily granular.
+    if campaign:
+        sent = bounded(sent_m)
+    else:
+        fleet_rows = sb("POST", "rpc/perf_daily_fleet_sent",
+                        {"p_start": start.isoformat(), "p_end": end.isoformat()})
+        fs = {r.get("d"): r.get("sent") for r in fleet_rows if isinstance(fleet_rows, list) and r.get("d")}
+        sent = [(round(float(fs[d])) if fs.get(d) is not None else None) for d in dates]
     leads_added = bounded(la_m)
     positives = bounded(pos_m)
     meetings = bounded(mtg_m)
@@ -5668,7 +5680,8 @@ def perf_daily(p: dict) -> dict:
             "sent": sent, "leads_added": leads_added, "positives": positives,
             "meetings": meetings, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
             "labels": {
-                "sent": "Emails sent/day (Supabase sent_messages archive)",
+                "sent": ("Emails sent/day (this campaign — sent_messages archive)"
+                         if campaign else "Emails sent/day (whole fleet — mailbox_stats_daily 30-day-counter deltas, same source as deliverability's daily sends)"),
                 "leads_added": ("Leads added/day (signal_leads — this campaign's sources)"
                                 if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
                 "positives": "Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)",
