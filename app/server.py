@@ -5703,6 +5703,131 @@ def _compute_campaign_scorecard() -> dict:
     }
 
 
+# ── All-campaign scorecard (background-synced, Supabase-cached) ─────────────
+# The list wants real performance for EVERY campaign, not just the handful the
+# tool manages. 874 live /analytics calls per page load is impossible, so a
+# background thread fetches them all on a relaxed cadence and upserts to the
+# `campaign_scorecard` table; the endpoint reads that table (one cheap query)
+# and the numbers survive a restart. Same Smartlead source as the detail page's
+# Live-performance strip, so list and detail always agree.
+def _parse_smartlead_analytics(data) -> dict:
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        data = data["data"]
+    if not isinstance(data, dict):
+        data = {}
+    cls = data.get("campaign_lead_stats") if isinstance(data.get("campaign_lead_stats"), dict) else {}
+    positives = data.get("positive_reply_count")
+    if positives is None:
+        positives = data.get("positiveReplyCount")
+    if positives is None:
+        positives = cls.get("interested")
+    return {"sent": _sc_int(data.get("sent_count") or data.get("sent")),
+            "replied": _sc_int(data.get("reply_count") or data.get("replied")),
+            "positives": _sc_int(positives),
+            "bounced": _sc_int(data.get("bounce_count")),
+            "completed": _sc_int(cls.get("completed")),
+            "total": _sc_int(cls.get("total") or data.get("total_count")),
+            "status": data.get("status")}
+
+
+_SCORECARD_SYNC_INTERVAL_S = 3600  # hourly; campaign stats don't move fast and
+                                    # this is 874 /analytics calls per cycle
+_SCORECARD_SYNC_LOCK = threading.Lock()
+
+
+def _scorecard_sync_all():
+    """Fetch /analytics for every Smartlead campaign and upsert to the
+    campaign_scorecard cache. Paced under Smartlead's 200/min budget; one bad
+    campaign never aborts the run. Batched upserts keep Supabase writes cheap."""
+    if not _SCORECARD_SYNC_LOCK.acquire(blocking=False):
+        return  # a cycle is already running
+    try:
+        camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
+        if not isinstance(camps, list):
+            print(f"[scorecard-sync] campaign list unavailable: {camps}", flush=True)
+            return
+        rows, done, t0 = [], 0, time.time()
+        for c in camps:
+            cid = c.get("id")
+            if not cid:
+                continue
+            try:
+                data = _smartlead_json("GET", f"/campaigns/{cid}/analytics")
+                m = _parse_smartlead_analytics(data)
+            except Exception:  # noqa: BLE001
+                continue
+            rows.append({"smartlead_campaign_id": cid, "name": c.get("name") or "",
+                         "status": m.get("status") or c.get("status"),
+                         "sent": m["sent"], "replied": m["replied"], "positives": m["positives"],
+                         "bounced": m["bounced"], "completed": m["completed"], "total": m["total"],
+                         "updated_at": _now_iso()})
+            done += 1
+            if len(rows) >= 100:  # flush in batches so partial progress is visible
+                sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id", rows,
+                   prefer="resolution=merge-duplicates,return=minimal")
+                rows = []
+            time.sleep(0.28)  # ~215/min ceiling — stay just under Smartlead's cap
+        if rows:
+            sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id", rows,
+               prefer="resolution=merge-duplicates,return=minimal")
+        print(f"[scorecard-sync] refreshed {done} campaigns in {int(time.time() - t0)}s", flush=True)
+    finally:
+        _SCORECARD_SYNC_LOCK.release()
+
+
+def _scorecard_sync_loop():
+    """Background: prime once shortly after boot, then refresh hourly."""
+    time.sleep(20)  # let boot settle before the first (long) sweep
+    while True:
+        try:
+            _scorecard_sync_all()
+        except Exception as e:  # noqa: BLE001 — the loop must never die
+            print(f"[scorecard-sync] cycle failed: {e}", flush=True)
+        time.sleep(_SCORECARD_SYNC_INTERVAL_S)
+
+
+def _all_campaign_scorecard() -> dict:
+    """The cached scorecard for EVERY campaign — one Supabase read. Keyed by
+    str(smartlead_campaign_id), same shape as _compute_campaign_scorecard so the
+    UI is unchanged. Meetings merged from the optimiser cache. HeyReach campaigns
+    get their LinkedIn progress counts (people/replied) from the snapshot table."""
+    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,name,status,sent,replied,positives,bounced,completed,total")
+    camps = {}
+    for r in (rows or []):
+        sid = str(r.get("smartlead_campaign_id"))
+        camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total", "status")}
+        camps[sid]["meetings"] = None
+    # meetings from the optimiser cache (latest per campaign)
+    try:
+        for r in (sb("GET", "optimiser_notifications?select=campaign_id,meetings,created_at&order=created_at.desc") or []):
+            cid = str(r.get("campaign_id") or "")
+            if cid in camps and camps[cid].get("meetings") is None and r.get("meetings") is not None:
+                camps[cid]["meetings"] = _sc_int(r.get("meetings"))
+    except Exception:  # noqa: BLE001
+        pass
+    # HeyReach per-campaign LinkedIn progress (people / in-progress / finished),
+    # keyed hr-<campaignid> so the UI can show LinkedIn campaigns' real numbers
+    hr = {}
+    try:
+        for r in (sb_get_all("heyreach_campaigns?select=heyreach_id,payload") or []):
+            p = (r.get("payload") or {})
+            ps = p.get("progressStats") or {}
+            hr[f"hr-{r.get('heyreach_id')}"] = {
+                "people": _sc_int(ps.get("totalUsers")), "in_progress": _sc_int(ps.get("totalUsersInProgress")),
+                "finished": _sc_int(ps.get("totalUsersFinished")), "failed": _sc_int(ps.get("totalUsersFailed")),
+                "status": p.get("status")}
+    except Exception:  # noqa: BLE001
+        pass
+    return {"campaigns": camps, "heyreach": hr}
+
+
+_CAMPAIGN_SCORECARD_ALL_SWR = _SWRCache(_all_campaign_scorecard, 120,
+                                         is_degraded=lambda p: not (p and p.get("campaigns")),
+                                         name="campaign-scorecard-all")
+
+
 _CAMPAIGN_SCORECARD_SWR = _SWRCache(
     _compute_campaign_scorecard, _CAMPAIGN_SCORECARD_TTL_S,
     is_degraded=lambda p: not isinstance(p, dict) or not p.get("campaigns"),
@@ -10788,9 +10913,11 @@ class Handler(SimpleHTTPRequestHandler):
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(outreach_destinations({"refresh": refresh}))
         if path == "/api/campaign-scorecard":
-            # Smartlead-style per-campaign performance for the campaigns-list
-            # scorecard. SWR-cached (~10min); every number is Smartlead's own.
-            return self._json(_CAMPAIGN_SCORECARD_SWR.get())
+            # Real per-campaign performance for EVERY campaign in the list, read
+            # from the background-synced campaign_scorecard cache (Smartlead's own
+            # numbers) + HeyReach LinkedIn progress. SWR ~2min over a cheap
+            # Supabase read; the slow /analytics fetches happen in the bg thread.
+            return self._json(_CAMPAIGN_SCORECARD_ALL_SWR.get())
         if path == "/api/campaigns-unified":
             # ONE row per outbound campaign account-wide (Smartlead + HeyReach
             # + unlinked drafts). Homepage list source. SWR-cached ~10min.
@@ -11553,4 +11680,7 @@ if __name__ == "__main__":
     threading.Thread(target=_outreach_sync_loop, daemon=True).start()
     # one-shot: materialise mirror lists for pre-existing sources (source→list bridge)
     threading.Thread(target=_backfill_source_lists, daemon=True).start()
+    # hourly: cache every campaign's Smartlead analytics so the list shows real
+    # per-campaign performance without 874 live calls per page load
+    threading.Thread(target=_scorecard_sync_loop, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

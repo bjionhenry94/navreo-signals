@@ -1752,6 +1752,23 @@ function scRowHtml(m, leadsSourced) {
     </div>
   </div>`;
 }
+/* HeyReach campaigns have no email metrics — show their real LinkedIn progress
+   instead (people / in-progress / finished / failed), same row shape so the list
+   stays visually consistent. Tiles are labelled, so it's clear which is which. */
+function scRowHtmlHeyReach(hr, leadsSourced) {
+  const leads = (leadsSourced != null) ? fmt(leadsSourced) : "–";
+  const v = (n) => (hr && hr[n] != null) ? fmt(hr[n]) : "–";
+  return `<div class="sc-row">
+    ${scRing(0, true)}
+    <div class="sc-cols">
+      ${scStat("sc-c-leads", leads, "Leads sourced", "People your signals surfaced for this campaign")}
+      ${scStat("sc-c-people", v("people"), "People", "People in this LinkedIn campaign")}
+      ${scStat("sc-c-inprog", v("in_progress"), "In progress", "Currently being messaged")}
+      ${scStat("sc-c-finished", v("finished"), "Finished")}
+      ${scStat("sc-c-failed", v("failed"), "Failed")}
+    </div>
+  </div>`;
+}
 /* Collective strip: the same six metrics aggregated across every campaign, plus
    total leads sourced. Rates are recomputed from summed numerators/denominators
    (never averaged-of-averages). Meetings + leads gate to "—" when unknown. */
@@ -1759,14 +1776,20 @@ function scCollectiveHtml(sc, leadCounts, drafts) {
   const camps = (sc && sc.campaigns) || {};
   let sent = 0, replied = 0, positives = 0, bounced = 0, completed = 0, total = 0;
   let meetings = 0, meetingsCovered = false, leads = 0, leadsKnown = false;
+  // ONLY the campaigns run in this tool (managed drafts) — the scorecard map now
+  // covers the whole account, so summing all of it would turn this "your tool"
+  // strip into a fleet total.
   (drafts || []).forEach((dc) => {
     const lc = leadCounts && leadCounts[String(dc.id)];
     if (lc && typeof lc.leads === "number") { leads += lc.leads; leadsKnown = true; }
-  });
-  Object.values(camps).forEach((m) => {
-    sent += m.sent; replied += m.replied; positives += m.positives;
-    bounced += m.bounced; completed += m.completed; total += m.total;
-    if (m.meetings != null) { meetings += m.meetings; meetingsCovered = true; }
+    const d0 = dc.destination || {};
+    const sl = d0.smartlead_campaign_id || (dc.type === "smartlead" ? dc.campaign_id : "");
+    const m = sl ? camps[String(sl)] : null;
+    if (m) {
+      sent += m.sent || 0; replied += m.replied || 0; positives += m.positives || 0;
+      bounced += m.bounced || 0; completed += m.completed || 0; total += m.total || 0;
+      if (m.meetings != null) { meetings += m.meetings; meetingsCovered = true; }
+    }
   });
   const tile = (lab, val, sub) => `<div class="sc-tile"><div class="lab">${esc(lab)}</div><div class="val">${val}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
   const ratio = positives > 0 ? `1 per ${fmt(Math.round(sent / positives))}` : `<span class="sc-muted">–</span>`;
@@ -1963,7 +1986,7 @@ async function renderList() {
         <div style="font-weight:500">${esc(dc.name || r.name)}${r.name && dc.name && r.name !== dc.name ? ` <span class="small muted" style="font-weight:400" title="The ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} campaign this sends into">→ ${esc(r.name)}</span>` : ""}</div>
         <div class="small muted">${countUnavailable ? '<span title="Live count unavailable — showing no number rather than a stale one">—</span> <span class="muted" style="font-size:10px">(couldn\'t load)</span>' : (nLeads ? `${fmt(nLeads)} lead${nLeads === 1 ? "" : "s"} sourced${nSent ? ` · ${nSent} sent to outreach` : ""}` : "No sourced leads yet")} · ${esc((dc.created_at || "").slice(0, 10))}</div>
         <div id="srcdeco-${dc.id}" class="small muted" style="margin-top:6px" title="Source-level details still loading">checking sources…</div>
-        <div id="sc-${dc.id}" class="sc-row-holder" onclick="event.stopPropagation()"></div>
+        <div id="sc-${r.key}" class="sc-row-holder" onclick="event.stopPropagation()"></div>
       </div>
       ${statusPill(r.status)}
       ${notSending ? `<span class="pill n" title="This campaign is running and has leads, but none have gone out yet - check its destination/outreach setup">not sending</span>` : ""}
@@ -1978,6 +2001,7 @@ async function renderList() {
       <div style="flex:1;min-width:0">
         <div style="font-weight:500">${esc(r.name)}</div>
         <div class="small muted">Sends via ${r.platform === "heyreach" ? "HeyReach" : "Smartlead"} · open to view leads &amp; add sources</div>
+        <div id="sc-${r.key}" class="sc-row-holder" onclick="event.stopPropagation()"><div class="skel" style="height:44px;width:100%;margin-top:8px"></div></div>
       </div>
       ${statusPill(r.status)}
     </div>`;
@@ -2045,13 +2069,14 @@ async function renderList() {
   // leadCounts (already fetched above) supplies "leads sourced" per campaign, so
   // that number paints even if the Smartlead fetch is slow/degraded.
   (async () => {
+    // leads-sourced for a row: only managed campaigns have app-sourced leads
+    const rowLeads = (r) => (r.doc && !leadCountsDegraded && leadCounts[String(r.doc.id)]) ? leadCounts[String(r.doc.id)].leads : (r.managed ? 0 : null);
     const drawFromLeadsOnly = () => {
       const collEl = document.getElementById("sc-collective");
       if (collEl) collEl.innerHTML = scCollectiveHtml(null, leadCounts, drafts);
-      drafts.forEach((dc) => {
-        const el = document.getElementById(`sc-${dc.id}`);
-        const lc = leadCounts[String(dc.id)];
-        if (el) el.innerHTML = scRowHtml(null, (!leadCountsDegraded && lc) ? lc.leads : null);
+      visible.forEach((r) => {
+        const el = document.getElementById(`sc-${r.key}`);
+        if (el) el.innerHTML = r.platform === "heyreach" ? scRowHtmlHeyReach(null, rowLeads(r)) : scRowHtml(null, rowLeads(r));
       });
     };
     // The single performance graph (sent/day + reply rate + bounce rate) —
@@ -2070,20 +2095,19 @@ async function renderList() {
     let sc;
     try { sc = await cachedGet("/api/campaign-scorecard"); } catch { sc = null; }
     if (!sc || !sc.campaigns) { drawFromLeadsOnly(); return; }
-    const camps = sc.campaigns;
-    const slOf = (dc) => {
-      const d = dc.destination || {};
-      const sl = d.smartlead_campaign_id || (dc.type === "smartlead" ? dc.campaign_id : "");
-      return sl ? String(sl) : "";
-    };
+    const camps = sc.campaigns;         // {smartlead_campaign_id: {sent,replied,…}}
+    const hrmap = sc.heyreach || {};    // {hr-<campaignid>: {people,in_progress,…}}
     const collEl = document.getElementById("sc-collective");
     if (collEl) collEl.innerHTML = scCollectiveHtml(sc, leadCounts, drafts);
-    drafts.forEach((dc) => {
-      const el = document.getElementById(`sc-${dc.id}`);
+    // EVERY campaign row gets its real numbers — Smartlead campaigns keyed by
+    // their campaign id, HeyReach campaigns by their LinkedIn progress.
+    visible.forEach((r) => {
+      const el = document.getElementById(`sc-${r.key}`);
       if (!el) return;
-      const lc = leadCounts[String(dc.id)];
-      const leadsSourced = (!leadCountsDegraded && lc) ? lc.leads : null;
-      el.innerHTML = scRowHtml(camps[slOf(dc)] || null, leadsSourced);
+      const leadsSourced = rowLeads(r);
+      el.innerHTML = r.platform === "heyreach"
+        ? scRowHtmlHeyReach(hrmap[`hr-${r.platform_id}`] || null, leadsSourced)
+        : scRowHtml(camps[String(r.platform_id)] || null, leadsSourced);
     });
   })();
   // Patch in the sources-dependent decorations (destination badges, "sources removed" chip)
