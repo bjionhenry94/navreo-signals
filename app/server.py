@@ -5644,19 +5644,23 @@ def perf_daily(p: dict) -> dict:
         lo, hi = min(active), max(active)
         return [(m.get(d, 0) if lo <= d <= hi else None) for d in dates]
 
-    # Emails sent — the "All campaigns" line MUST be the true fleet volume, not
-    # the sent_messages archive (which misses ~78% of sends). Fleet uses the same
-    # mailbox_stats_daily.sent_30d-delta method the deliverability section reports
-    # ("average daily sends"); a day with no snapshot boundary is null (absent).
-    # A single campaign has no mailbox-level dimension, so it stays on the
-    # sent_messages archive (labelled), which IS per-campaign daily granular.
+    # Emails sent — the "All campaigns" line MIRRORS the deliverability tab's
+    # source EXACTLY: Smartlead /analytics/day-wise-overall-stats, already fetched
+    # and cached by deliv_trends_get (the /api/deliverability-trends backend), so
+    # we don't double the work. This gives the FULL window's daily sends — the
+    # earlier mailbox_stats_daily snapshot method only reached back to the first
+    # sweep (2026-07-08), which is exactly why Campaigns showed nothing older than
+    # the 9th while deliverability did. A day Smartlead reports 0 for is a real 0;
+    # a day outside the returned window is null (absent). A single campaign has no
+    # fleet-analytics dimension, so it stays on the sent_messages archive.
     if campaign:
         sent = bounded(sent_m)
     else:
-        fleet_rows = sb("POST", "rpc/perf_daily_fleet_sent",
-                        {"p_start": start.isoformat(), "p_end": end.isoformat()})
-        fs = {r.get("d"): r.get("sent") for r in fleet_rows if isinstance(fleet_rows, list) and r.get("d")}
-        sent = [(round(float(fs[d])) if fs.get(d) is not None else None) for d in dates]
+        lookback = min(90, max(7, (today - start).days + 1))
+        _tr, _ = deliv_trends_get(lookback)
+        _sentmap = dict(zip(((_tr or {}).get("series") or {}).get("days") or [],
+                            ((_tr or {}).get("series") or {}).get("sent") or []))
+        sent = [_sentmap.get(d) for d in dates]
     leads_added = bounded(la_m)
     positives = bounded(pos_m)
     meetings = bounded(mtg_m)
@@ -5681,7 +5685,7 @@ def perf_daily(p: dict) -> dict:
             "meetings": meetings, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
             "labels": {
                 "sent": ("Emails sent/day (this campaign — sent_messages archive)"
-                         if campaign else "Emails sent/day (whole fleet — mailbox_stats_daily 30-day-counter deltas, same source as deliverability's daily sends)"),
+                         if campaign else "Emails sent/day (whole fleet — Smartlead day-wise analytics, same source as the deliverability tab)"),
                 "leads_added": ("Leads added/day (signal_leads — this campaign's sources)"
                                 if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
                 "positives": "Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)",
