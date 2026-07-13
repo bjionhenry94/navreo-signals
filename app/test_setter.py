@@ -45,6 +45,7 @@ import json
 import os
 import re
 import sys
+from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import setter  # noqa: E402
@@ -99,7 +100,8 @@ class FakeSB:
         self.agents = {}       # id -> {"id":..., "doc": {...}}
         self.queue = []        # list of row dicts
         self.companies = {}    # domain -> {city, state, country}
-        self.replies = []      # list of raw reply rows for run_poll()
+        self.replies = []      # list of raw reply rows for run_poll() / training generation
+        self.sent_messages = []  # list of raw sent_messages rows for training's outreach/human-answer join
         self._next_id = 1
         self.calls = []
 
@@ -118,7 +120,7 @@ class FakeSB:
                 k, v = part.split("=", 1)
             else:
                 k, v = part, ""
-            params[k] = v
+            params[k] = unquote(v)
         return table, params
 
     @staticmethod
@@ -127,10 +129,16 @@ class FakeSB:
             return str(value) == op_value[3:]
         if op_value.startswith("neq."):
             return str(value) != op_value[4:]
+        if op_value.startswith("not.in."):
+            inner = op_value[7:].strip("()")
+            opts = [o for o in inner.split(",") if o != ""]
+            return str(value) not in opts
         if op_value.startswith("in."):
             inner = op_value[3:].strip("()")
             opts = [o for o in inner.split(",") if o != ""]
             return str(value) in opts
+        if op_value.startswith("gt."):
+            return str(value) > op_value[3:]
         if op_value.startswith("gte."):
             return True  # date comparisons not modelled; tests use recent timestamps
         return True
@@ -147,6 +155,8 @@ class FakeSB:
             return self._companies_table(params)
         if table == "replies":
             return self._replies_table(params)
+        if table == "sent_messages":
+            return self._sent_messages_table(params)
         return []
 
     def _agents_table(self, method, params, body):
@@ -218,13 +228,50 @@ class FakeSB:
         return [row] if row else []
 
     def _replies_table(self, params):
+        rows = self.replies
         cid_op = params.get("smartlead_campaign_id", "")
-        allowed = None
         if cid_op.startswith("in."):
             allowed = set(cid_op[3:].strip("()").split(","))
-        rows = self.replies
-        if allowed is not None:
             rows = [r for r in rows if str(r.get("smartlead_campaign_id")) in allowed]
+        elif cid_op:
+            rows = [r for r in rows if self._match_eq(r.get("smartlead_campaign_id"), cid_op)]
+        if "workspace" in params:
+            rows = [r for r in rows if self._match_eq(r.get("workspace"), params["workspace"])]
+        if "category" in params:
+            rows = [r for r in rows if self._match_eq(r.get("category"), params["category"])]
+        if "id" in params:
+            rows = [r for r in rows if self._match_eq(r.get("id"), params["id"])]
+        order = params.get("order", "")
+        if order.startswith("replied_at"):
+            rows = sorted(rows, key=lambda r: r.get("replied_at") or "", reverse=order.endswith("desc"))
+        limit = params.get("limit")
+        if limit:
+            try:
+                rows = rows[: int(limit)]
+            except ValueError:
+                pass
+        return copy.deepcopy(rows)
+
+    def _sent_messages_table(self, params):
+        rows = self.sent_messages
+        for key in ("smartlead_campaign_id", "email", "email_seq_number"):
+            if key in params:
+                rows = [r for r in rows if self._match_eq(r.get(key), params[key])]
+        if "is_manual_reply" in params:
+            op = params["is_manual_reply"]
+            want_bool = op[3:] == "true" if op.startswith("eq.") else True
+            rows = [r for r in rows if bool(r.get("is_manual_reply")) == want_bool]
+        if "sent_at" in params:
+            rows = [r for r in rows if self._match_eq(r.get("sent_at"), params["sent_at"])]
+        order = params.get("order", "")
+        if order.startswith("sent_at"):
+            rows = sorted(rows, key=lambda r: r.get("sent_at") or "", reverse=order.endswith("desc"))
+        limit = params.get("limit")
+        if limit:
+            try:
+                rows = rows[: int(limit)]
+            except ValueError:
+                pass
         return copy.deepcopy(rows)
 
 
@@ -249,6 +296,19 @@ class FakeHTTP:
         # returns the created object with an id, mirroring Smartlead's API shape.
         self.webhooks_by_campaign = {}
         self._next_webhook_id = 1
+        # Subsequence enrolment fixtures (real-Smartlead-write tests):
+        # campaign_leads_by_campaign: str(campaign_id) -> list of
+        #   {"campaign_lead_map_id": int, "status": str, "lead": {"id":, "email":}}
+        #   mirroring GET /campaigns/{id}/leads's `data` shape.
+        self.campaign_leads_by_campaign = {}
+        # all_campaigns: list of {"id","name","status","parent_campaign_id"}
+        # mirroring GET /campaigns/ (used to discover a parent's subsequences).
+        self.all_campaigns = []
+        # subsequence_push_result: None -> default success reply; a dict -> use
+        # verbatim; a callable(body) -> dict -> computed per-call (e.g. to
+        # simulate a Smartlead 500/failure).
+        self.subsequence_push_result = None
+        self.subsequence_push_calls = []
 
     def __call__(self, method, url, headers, body=None):
         self.calls.append((method, url))
@@ -278,11 +338,39 @@ class FakeHTTP:
             self.smartlead_calls.append((method, url, body))
             if "reply-email-thread" in url:
                 return {"ok": True}
+            if "master-inbox/push-to-subsequence" in url:
+                self.subsequence_push_calls.append(body)
+                if callable(self.subsequence_push_result):
+                    return self.subsequence_push_result(body)
+                if self.subsequence_push_result is not None:
+                    return self.subsequence_push_result
+                return {"success": True, "message": "Lead pushed to subsequence",
+                        "data": {"email_lead_map_id": (body or {}).get("email_lead_map_id"),
+                                 "parent_campaign_id": None,
+                                 "sub_sequence_id": (body or {}).get("sub_sequence_id"),
+                                 "will_start_at": "2026-07-14T00:00:00Z",
+                                 "stop_on_parent_reply": (body or {}).get("stop_lead_on_parent_campaign_reply")}}
             # message-history's own URL (".../leads/{id}/message-history") also
             # contains "/leads/", so it must be checked BEFORE the generic
-            # leads-lookup branch or it always shadows it.
+            # leads-lookup branch or it always shadows it. Campaign-leads
+            # listing (".../campaigns/{id}/leads?...") must also be checked
+            # first - it has no trailing slash before "?" so it wouldn't
+            # actually collide with the "/leads/" substring below, but keeping
+            # it here documents the ordering dependency explicitly.
             if "message-history" in url:
                 return {"history": self.message_history}
+            m = re.search(r"/campaigns/([^/?]+)/leads(?:\?|$)", url)
+            if m:
+                cid = m.group(1)
+                entries = self.campaign_leads_by_campaign.get(cid, [])
+                qs = url.split("?", 1)[1] if "?" in url else ""
+                q = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+                offset = int(q.get("offset", "0") or 0)
+                limit = int(q.get("limit", "100") or 100)
+                page = entries[offset: offset + limit]
+                return {"total_leads": str(len(entries)), "offset": offset, "limit": limit, "data": page}
+            if re.search(r"/campaigns/\?", url):
+                return list(self.all_campaigns)
             if "/leads/" in url:
                 return {"id": 999, "first_name": "Test", "last_name": "Lead"}
             m = re.search(r"/campaigns/([^/]+)/webhooks", url)
@@ -585,8 +673,13 @@ def test_decide_matrix():
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "category": "Not Interested"})
     check("decide: Smartlead categoriser veto -> review", d == "review", r)
 
+    # multi-turn autonomy, user ruling 2026-07-13: a later-turn reply that is
+    # STILL a simple, fully-allowed ask now continues past the first-touch
+    # gate instead of always holding (this replaces the old "second reply
+    # always goes to review" assertion - see the matching multi-turn tests
+    # further down for the off-intent / not-simple-ask review cases).
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "first_touch": False})
-    check("decide: second reply from same lead -> review", d == "review", r)
+    check("decide: second reply, simple + allowed ask -> auto_send (multi-turn autonomy)", d == "auto_send", r)
 
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "slot_status": "none_available"})
     check("decide: no Calendly slots available -> review", d == "review", r)
@@ -741,14 +834,20 @@ def test_fixtures():
     d, r = setter.decide(_cls("bespoke_request", simple_ask=False, confidence=0.6), AGENT_AUTO, ctx)
     check("fixture[share_video_bespoke]: review (default_auto_ok false) when resource isn't the video", d == "review", r)
 
-    # second-touch veto uses the real first_touch gate, not intent
+    # second-touch: multi-turn autonomy, user ruling 2026-07-13 - a simple,
+    # fully-allowed later-turn ask ("sure, send it over" is exactly that) now
+    # continues past the first-touch gate instead of always dropping to
+    # review. (This fixture's own "auto_ok": false / note describe the
+    # pre-2026-07-13 behaviour and are left as historical data in
+    # setter_fixtures.json; this test asserts the new spec directly.)
     c = cases["sure_but_second_reply"]
     ctx = dict(CTX_ALL_GOOD)
     ctx["red_flag_hits"] = setter.lexicon_hits(c["body"])
     ctx["body_len"] = len(c["body"])
     ctx["first_touch"] = False
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, ctx)
-    check("fixture[sure_but_second_reply]: second reply always goes to review", d != "auto_send", r)
+    check("fixture[sure_but_second_reply]: simple later-turn ask now auto_sends (multi-turn autonomy)",
+         d == "auto_send", r)
 
     # long_detailed_email: the fixture's own body is only ~1000 chars (short of the
     # 1500 the fixture's note describes) - pad it in the test itself so the length
@@ -936,6 +1035,177 @@ def test_route_queue_action_send_409_when_already_sent():
 
     status2, resp2 = setter.route_queue_action({"id": 502, "action": "send"})
     check("route_queue_action: send on an already sent row also returns 409", status2 == 409, (status2, resp2))
+
+
+# ── real Smartlead sub-sequence enrolment ───────────────────────────────────
+
+def _subsequence_fixture(sb, http, campaign_id=3591996, sub_id=3633403, lead_id=42,
+                          email="lead@x.com", map_id=777888):
+    """Wires up the Smartlead fixtures a subsequence push needs: one campaign
+    (`sub_id`) whose parent_campaign_id is `campaign_id` (so
+    _sl_find_subsequences() resolves it automatically), and one lead in
+    `campaign_id`'s leads listing carrying `map_id` as its campaign_lead_map_id
+    (so _sl_campaign_lead_map_id() resolves it)."""
+    http.all_campaigns = [{"id": sub_id, "name": "Meeting Request", "status": "ACTIVE",
+                           "parent_campaign_id": campaign_id}]
+    http.campaign_leads_by_campaign[str(campaign_id)] = [
+        {"campaign_lead_map_id": map_id, "status": "INPROGRESS", "created_at": "2026-07-01T00:00:00Z",
+         "lead": {"id": lead_id, "email": email, "first_name": "Lead"}},
+    ]
+
+
+def test_subsequence_success_pushes_live_and_patches_flag():
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http)
+    sb.queue.append({"id": 601, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": "m1",
+                     "status": "needs_review", "added_to_subsequence": False})
+
+    status, resp = setter.route_queue_action({"id": 601, "action": "subsequence", "checked": True})
+
+    check("subsequence success: 200 status", status == 200, (status, resp))
+    check("subsequence success: response says added_to_subsequence=true", resp.get("ok") is True
+         and resp.get("added_to_subsequence") is True, resp)
+    check("subsequence success: resolved subsequence id in response", resp.get("subsequence_id") == 3633403, resp)
+    check("subsequence success: exactly one live push POST fired", len(http.subsequence_push_calls) == 1,
+         http.subsequence_push_calls)
+    pushed_body = http.subsequence_push_calls[0] if http.subsequence_push_calls else {}
+    check("subsequence success: push body carries the resolved email_lead_map_id",
+         pushed_body.get("email_lead_map_id") == 777888, pushed_body)
+    check("subsequence success: push body targets the resolved subsequence",
+         pushed_body.get("sub_sequence_id") == 3633403, pushed_body)
+    check("subsequence success: push body stops the lead on a parent-campaign reply",
+         pushed_body.get("stop_lead_on_parent_campaign_reply") is True, pushed_body)
+    check("subsequence success: flag IS patched in the queue row",
+         sb.queue[0].get("added_to_subsequence") is True, sb.queue[0])
+
+
+def test_subsequence_failure_http200_okfalse_returns_502():
+    """Live-proven 2026-07-13: Smartlead answers HTTP 200 with
+    {"ok": false, "message": "Invalid subsequence or not related to the
+    parent campaign"} for a bad sub_sequence_id - no "success" key at all.
+    Success must be an explicit positive, or the route must report failure."""
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http)
+    http.subsequence_push_result = {"ok": False,
+                                    "message": "Invalid subsequence or not related to the parent campaign"}
+    sb.queue.append({"id": 603, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": "m3",
+                     "status": "needs_review", "added_to_subsequence": False})
+
+    status, resp = setter.route_queue_action({"id": 603, "action": "subsequence", "checked": True})
+
+    check("subsequence http200 ok:false -> 502", status == 502, (status, resp))
+    check("subsequence http200 ok:false -> Smartlead's message surfaced",
+         "Invalid subsequence" in str(resp.get("error")), resp)
+    check("subsequence http200 ok:false -> flag NOT patched",
+         sb.queue[0].get("added_to_subsequence") is False, sb.queue[0])
+
+
+def test_subsequence_failure_smartlead_error_returns_502_flag_untouched():
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http)
+    http.subsequence_push_result = {"success": False, "message": "Internal Server Error"}
+    sb.queue.append({"id": 602, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": "m2",
+                     "status": "needs_review", "added_to_subsequence": False})
+
+    status, resp = setter.route_queue_action({"id": 602, "action": "subsequence", "checked": True})
+
+    check("subsequence failure: Smartlead error -> 502", status == 502, (status, resp))
+    check("subsequence failure: checkbox-facing error string is Smartlead's own message",
+         resp.get("error") == "Internal Server Error", resp)
+    check("subsequence failure: added_to_subsequence is false in the response",
+         resp.get("added_to_subsequence") is False, resp)
+    check("subsequence failure: flag NOT patched in the queue row",
+         sb.queue[0].get("added_to_subsequence") is False, sb.queue[0])
+
+
+def test_subsequence_failure_lead_not_found_never_pushes():
+    sb, http = fresh_setter()
+    # A subsequence exists, but the lead isn't in the campaign's leads listing.
+    http.all_campaigns = [{"id": 3633403, "name": "Meeting Request", "status": "ACTIVE",
+                           "parent_campaign_id": 3591996}]
+    http.campaign_leads_by_campaign["3591996"] = []
+    sb.queue.append({"id": 603, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "ghost@x.com", "smartlead_lead_id": 999, "message_id": "m3",
+                     "status": "needs_review", "added_to_subsequence": False})
+
+    status, resp = setter.route_queue_action({"id": 603, "action": "subsequence", "checked": True})
+
+    check("subsequence failure (lead not found): 502", status == 502, (status, resp))
+    check("subsequence failure (lead not found): honest error, not a stack trace",
+         "couldn't find" in (resp.get("error") or "").lower(), resp)
+    check("subsequence failure (lead not found): the push endpoint was never called",
+         http.subsequence_push_calls == [], http.subsequence_push_calls)
+    check("subsequence failure (lead not found): flag NOT patched",
+         sb.queue[0].get("added_to_subsequence") is False, sb.queue[0])
+
+
+def test_subsequence_no_queue_row_route_resolves_by_email_and_pushes():
+    sb, http = fresh_setter()
+    # This route never has a smartlead_lead_id to work with (no queue row) -
+    # resolution must fall back to matching by email alone.
+    _subsequence_fixture(sb, http, email="standalone@x.com", lead_id=None, map_id=555111)
+
+    status, resp = setter.route_subsequence_push({"campaign_id": 3591996, "email": "standalone@x.com"})
+
+    check("no-queue-row push: 200 status", status == 200, (status, resp))
+    check("no-queue-row push: added_to_subsequence=true in response", resp.get("added_to_subsequence") is True, resp)
+    check("no-queue-row push: resolved subsequence id", resp.get("subsequence_id") == 3633403, resp)
+    check("no-queue-row push: exactly one live push POST fired", len(http.subsequence_push_calls) == 1,
+         http.subsequence_push_calls)
+    check("no-queue-row push: resolved by email lands the right map id",
+         http.subsequence_push_calls[0].get("email_lead_map_id") == 555111, http.subsequence_push_calls[0])
+    check("no-queue-row push: missing campaign_id/email -> 400, not a crash",
+         setter.route_subsequence_push({"email": "x@y.com"})[0] == 400)
+
+
+def test_subsequence_uncheck_makes_no_smartlead_call():
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http)
+    sb.queue.append({"id": 604, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": "m4",
+                     "status": "needs_review", "added_to_subsequence": True})
+
+    status, resp = setter.route_queue_action({"id": 604, "action": "subsequence", "checked": False})
+
+    check("subsequence uncheck: 200 status", status == 200, (status, resp))
+    check("subsequence uncheck: added_to_subsequence cleared in response",
+         resp.get("added_to_subsequence") is False, resp)
+    check("subsequence uncheck: zero Smartlead HTTP calls of any kind",
+         http.smartlead_calls == [], http.smartlead_calls)
+    check("subsequence uncheck: flag cleared in the queue row",
+         sb.queue[0].get("added_to_subsequence") is False, sb.queue[0])
+
+
+def test_subsequence_ambiguous_multiple_subsequences_needs_override():
+    sb, http = fresh_setter()
+    http.all_campaigns = [
+        {"id": 1001, "name": "Meeting Request", "status": "ACTIVE", "parent_campaign_id": 3591996},
+        {"id": 1002, "name": "Interested Reply", "status": "ACTIVE", "parent_campaign_id": 3591996},
+    ]
+    http.campaign_leads_by_campaign["3591996"] = [
+        {"campaign_lead_map_id": 42424242, "status": "INPROGRESS",
+         "lead": {"id": 42, "email": "lead@x.com"}},
+    ]
+    sb.queue.append({"id": 605, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": "m5",
+                     "status": "needs_review", "added_to_subsequence": False})
+
+    status, resp = setter.route_queue_action({"id": 605, "action": "subsequence", "checked": True})
+    check("subsequence ambiguous: two subsequences with no override -> 400",
+         status == 400, (status, resp))
+    check("subsequence ambiguous: both candidates surfaced for a picker",
+         {s["id"] for s in resp.get("subsequences", [])} == {1001, 1002}, resp)
+    check("subsequence ambiguous: nothing pushed to Smartlead", http.subsequence_push_calls == [])
+
+    # An explicit override skips resolution entirely and pushes straight through.
+    status2, resp2 = setter.route_queue_action({"id": 605, "action": "subsequence", "checked": True,
+                                                 "sub_sequence_id": 1002})
+    check("subsequence override: explicit sub_sequence_id succeeds", status2 == 200, (status2, resp2))
+    check("subsequence override: pushes to the requested subsequence, not the other one",
+         resp2.get("subsequence_id") == 1002, resp2)
 
 
 def test_claim_race_returns_existing_row_without_classifying():
@@ -1308,6 +1578,343 @@ def test_booking_link_derivation():
     check("_booking_link: neither field set -> empty string", setter._booking_link({}) == "")
 
 
+# ── multi-turn autonomy / persistent memory / brain duplication (2026-07-13) ─
+
+def test_decide_multi_turn_autonomy():
+    # simple, fully-allowed later-turn ask -> continues past the (weakened)
+    # first-touch gate instead of always holding
+    d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "first_touch": False})
+    check("multi-turn: simple + allowed later-turn ask -> auto_send", d == "auto_send", r)
+
+    # off-intent later-turn ask is still held - by gate 2 ("intent(s) within
+    # what this agent is allowed to answer alone"), which runs UNCONDITIONALLY
+    # before the first-touch gate and is never weakened
+    d, r = setter.decide(_cls("bespoke_request", simple_ask=False, confidence=0.4), AGENT_AUTO,
+                         {**CTX_ALL_GOOD, "first_touch": False})
+    check("multi-turn: off-intent later-turn ask -> review", d == "review", r)
+    check("multi-turn: off-intent later-turn ask uses the SAME intent-not-allowed reason first-touch gets "
+         "(gate 2 applies unchanged to later-turn replies)",
+         r == setter._INTENT_REASON["bespoke_request"], r)
+
+    # not-a-simple-ask later-turn is still held - by gate 3 ("simple ask +
+    # confidence"), same unchanged-gate guarantee
+    d, r = setter.decide(_cls("scheduling", simple_ask=False), AGENT_AUTO, {**CTX_ALL_GOOD, "first_touch": False})
+    check("multi-turn: not-simple later-turn ask -> review", d == "review", r)
+    check("multi-turn: not-simple later-turn ask uses the SAME confidence-gate reason first-touch gets "
+         "(gate 3 applies unchanged to later-turn replies)",
+         r == "Held for review: not confident enough this is a simple ask.", r)
+
+    # answered_since_reply still blocks regardless of first_touch (checked
+    # even earlier than the intent/simple-ask gates, so this was already true)
+    d, r = setter.decide(_cls("send_resource"), AGENT_AUTO,
+                         {**CTX_ALL_GOOD, "first_touch": False, "answered_since_reply": True})
+    check("multi-turn: answered_since_reply still blocks regardless of first_touch (no_action)", d == "no_action", r)
+
+    # a not-hydrated later-turn reply still holds too (also checked earlier)
+    d, r = setter.decide(_cls("send_resource"), AGENT_AUTO,
+                         {**CTX_ALL_GOOD, "first_touch": False, "hydrated": False})
+    check("multi-turn: not-hydrated later-turn reply -> review", d == "review", r)
+
+    # first_touch=True behaviour is unchanged (spot-check; test_decide_matrix
+    # and test_fixtures already exercise the full first-touch matrix)
+    d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, CTX_ALL_GOOD)
+    check("multi-turn: first_touch=True + simple/allowed still auto_sends, unchanged", d == "auto_send", r)
+    d, r = setter.decide(_cls("bespoke_request", simple_ask=False, confidence=0.4), AGENT_AUTO, CTX_ALL_GOOD)
+    check("multi-turn: first_touch=True + off-intent still reviews, unchanged", d == "review", r)
+
+
+def test_draft_reply_thread_continuity():
+    """draft_reply() must pass recent thread text through to the model
+    (stripped of HTML tags) when the caller supplies it, and must add NO new
+    key at all when it doesn't - so a first-touch draft (which has nothing to
+    pass here in the older call sites) stays byte-identical."""
+    sb, http = fresh_setter()
+    draft_calls = []
+    http.draft_fn = lambda body: draft_calls.append(body) or {"subject": "Re: hi", "html": "Hi There, thanks. Best, Sam"}
+    agent = {"id": "agent-thread01", "resource_link": "https://x.example/r"}
+    classification = {"primary_intent": "send_resource", "all_intents": ["send_resource"], "wants": "wants info"}
+
+    setter.draft_reply(
+        {"first_name": "There", "subject": "Re: hi", "body": "sure",
+         "thread_text": "Hi, following up on this <br> Sure, sounds good"},
+        agent, classification, [], "not_configured", "Sam")
+    payload = json.loads(draft_calls[-1]["messages"][1]["content"])
+    check("draft_reply: thread text reaches the model as recent_thread",
+         "following up" in payload.get("recent_thread", ""), payload.get("recent_thread"))
+    check("draft_reply: recent_thread has HTML tags stripped",
+         "<br>" not in payload.get("recent_thread", ""), payload.get("recent_thread"))
+
+    setter.draft_reply(
+        {"first_name": "There", "subject": "Re: hi", "body": "sure"},
+        agent, classification, [], "not_configured", "Sam")
+    payload2 = json.loads(draft_calls[-1]["messages"][1]["content"])
+    check("draft_reply: no thread_text given -> no recent_thread key at all (byte-identical to before this feature)",
+         "recent_thread" not in payload2, payload2)
+
+
+def test_memory_digest_reaches_classify_and_draft():
+    """Feature 1: agent['memory'] must be fed into EVERY live pipeline pass -
+    classify()'s owner_hints and draft_reply()'s regen_feedback - with no
+    extra work by the caller (process_reply builds the digest itself)."""
+    sb, http = fresh_setter()
+    captured = {}
+    http.message_history = [{
+        "type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+        "email_body": "sure, send it over", "message_id": "m-mem1", "stats_id": "st-mem1",
+    }]
+
+    def classify_fn(body):
+        captured["classify_body"] = body
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.98, "red_flags": [], "timezone_guess": "Europe/London", "tz_confidence": 0.9,
+            "wants": "wants the resource", "rationale": "unqualified yes",
+        }
+
+    def draft_fn(body):
+        captured["draft_body"] = body
+        return {"subject": "Re: hi", "html": 'Hi There, <a href="https://x.example/r">Here it is</a>. Best, Sam'}
+
+    http.classify_fn = classify_fn
+    http.draft_fn = draft_fn
+
+    agent = {
+        "id": "agent-mem0001", "mode": "draft_only", "enabled": True, "campaign_ids": [501],
+        "allowed_intents": ["send_resource", "pricing", "scheduling"], "pricing_notes": "x",
+        "confidence_threshold": 0.9, "resource_link": "https://x.example/r",
+        "memory": [
+            {"text": "Always mention the free trial.", "source": "manual", "scope": "remember",
+             "at": "2026-07-01T00:00:00+00:00"},
+            {"text": "Never promise a specific onboarding date.", "source": "q-1", "scope": "remember",
+             "at": "2026-07-05T00:00:00+00:00"},
+        ],
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    reply = {"workspace": "navreo", "campaign_id": 501, "email": "mem@example.com",
+             "first_name": "There", "message_id": "m-mem1", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    row = setter.process_reply(reply, agent, {})
+
+    classify_payload = json.loads(captured["classify_body"]["messages"][1]["content"])
+    draft_payload = json.loads(captured["draft_body"]["messages"][1]["content"])
+    check("memory digest: reaches classify() as owner_corrections",
+         "Never promise a specific onboarding date." in classify_payload.get("owner_corrections", ""),
+         classify_payload.get("owner_corrections"))
+    check("memory digest: reaches draft_reply() as reviewer_feedback",
+         "Never promise a specific onboarding date." in draft_payload.get("reviewer_feedback", ""),
+         draft_payload.get("reviewer_feedback"))
+    check("memory digest: newest-first ordering",
+         classify_payload["owner_corrections"].index("Never promise") <
+         classify_payload["owner_corrections"].index("Always mention"),
+         classify_payload["owner_corrections"])
+    check("memory digest: process_reply still returns a normal row",
+         row.get("status") in ("needs_review", "auto_sent", "sent", "no_action"), row)
+
+
+def test_memory_digest_empty_is_byte_identical():
+    """An agent with no memory must send NO owner_corrections/reviewer_feedback
+    key at all - not an empty-string key - matching pre-feature behaviour."""
+    sb, http = fresh_setter()
+    captured = {}
+    http.message_history = [{
+        "type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+        "email_body": "sure, send it over", "message_id": "m-mem2", "stats_id": "st-mem2",
+    }]
+
+    def classify_fn(body):
+        captured["classify_body"] = body
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.98, "red_flags": [], "timezone_guess": "Europe/London", "tz_confidence": 0.9,
+            "wants": "wants the resource", "rationale": "unqualified yes",
+        }
+
+    def draft_fn(body):
+        captured["draft_body"] = body
+        return {"subject": "Re: hi", "html": 'Hi There, <a href="https://x.example/r">Here it is</a>. Best, Sam'}
+
+    http.classify_fn = classify_fn
+    http.draft_fn = draft_fn
+
+    agent = {
+        "id": "agent-mem0002", "mode": "draft_only", "enabled": True, "campaign_ids": [502],
+        "allowed_intents": ["send_resource", "pricing", "scheduling"], "pricing_notes": "x",
+        "confidence_threshold": 0.9, "resource_link": "https://x.example/r", "memory": [],
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    reply = {"workspace": "navreo", "campaign_id": 502, "email": "nomem@example.com",
+             "first_name": "There", "message_id": "m-mem2", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    setter.process_reply(reply, agent, {})
+
+    classify_payload = json.loads(captured["classify_body"]["messages"][1]["content"])
+    draft_payload = json.loads(captured["draft_body"]["messages"][1]["content"])
+    check("memory digest empty: no owner_corrections key sent to classify()",
+         "owner_corrections" not in classify_payload, classify_payload)
+    check("memory digest empty: no reviewer_feedback key sent to draft_reply()",
+         "reviewer_feedback" not in draft_payload, draft_payload)
+
+
+def test_correction_one_off_does_not_touch_memory():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-corr0001", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"],
+             "memory": [{"text": "existing memory", "source": "manual", "scope": "remember",
+                        "at": "2026-07-01T00:00:00+00:00"}]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    before_digest = setter._agent_memory_digest(setter._load_agent(agent["id"]))
+    status, resp = setter.route_agents_correction(
+        {"agent_id": agent["id"], "text": "typo in the resource link", "scope": "one_off"})
+    check("correction one_off: returns 200", status == 200, (status, resp))
+    check("correction one_off: response reports feedback_log_count 1", resp.get("feedback_log_count") == 1, resp)
+    check("correction one_off: response reports memory_count 1 (unchanged)", resp.get("memory_count") == 1, resp)
+
+    saved = setter._load_agent(agent["id"])
+    check("correction one_off: feedback_log grew by one", len(saved.get("feedback_log") or []) == 1,
+         saved.get("feedback_log"))
+    check("correction one_off: memory is unchanged", saved.get("memory") == agent["memory"], saved.get("memory"))
+    after_digest = setter._agent_memory_digest(saved)
+    check("correction one_off: memory digest is unchanged", after_digest == before_digest,
+         (before_digest, after_digest))
+    check("correction one_off: feedback_log text stored verbatim",
+         saved["feedback_log"][0]["text"] == "typo in the resource link", saved["feedback_log"])
+
+
+def test_correction_remember_route_grows_memory():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-corr0002", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = setter.route_agents_correction(
+        {"agent_id": agent["id"], "text": "Always offer the case study.", "scope": "remember", "source": "manual"})
+    check("correction remember: returns 200", status == 200, (status, resp))
+    check("correction remember: memory_count reported back is 1", resp.get("memory_count") == 1, resp)
+
+    saved = setter._load_agent(agent["id"])
+    check("correction remember: memory grew by one", len(saved.get("memory") or []) == 1, saved.get("memory"))
+    check("correction remember: feedback_log untouched (empty)", (saved.get("feedback_log") or []) == [],
+         saved.get("feedback_log"))
+    digest = setter._agent_memory_digest(saved)
+    check("correction remember: digest contains the remembered text",
+         "Always offer the case study." in digest, digest)
+
+    status2, resp2 = setter.route_agents_correction(
+        {"agent_id": "agent-doesnotexist", "text": "x", "scope": "remember"})
+    check("correction: unknown agent -> 404", status2 == 404, (status2, resp2))
+
+    status3, resp3 = setter.route_agents_correction({"agent_id": agent["id"], "text": "  ", "scope": "remember"})
+    check("correction: blank text -> 400", status3 == 400, (status3, resp3))
+
+    status4, resp4 = setter.route_agents_correction({"agent_id": agent["id"], "scope": "remember"})
+    check("correction: missing agent_id on an otherwise-valid call still requires text -> 400",
+         status4 == 400, (status4, resp4))
+
+
+def test_redraft_scope_remember_persists_to_memory():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-redraft01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.queue.append({
+        "id": 601, "workspace": "navreo", "smartlead_campaign_id": 111, "agent_id": agent["id"],
+        "lead_email": "r@example.com", "lead_first_name": "There", "message_id": "m-r1",
+        "reply_subject": "Re: hi", "reply_body": "sure, send it",
+        "classification": {"primary_intent": "send_resource", "all_intents": ["send_resource"]},
+        "timezone": None, "thread": [],
+    })
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi There, thanks. Best, Sam"}
+
+    status, resp = setter.route_queue_redraft({"id": 601, "feedback": "shorter please", "scope": "remember"})
+    check("redraft remember: returns 200", status == 200, (status, resp))
+
+    saved = setter._load_agent(agent["id"])
+    check("redraft remember: memory grew by one", len(saved.get("memory") or []) == 1, saved.get("memory"))
+    check("redraft remember: memory text is the feedback text",
+         saved["memory"][0]["text"] == "shorter please", saved.get("memory"))
+    check("redraft remember: memory source is the queue row id",
+         saved["memory"][0]["source"] == "601", saved.get("memory"))
+
+
+def test_redraft_without_scope_does_not_persist():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-redraft02", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.queue.append({
+        "id": 602, "workspace": "navreo", "smartlead_campaign_id": 111, "agent_id": agent["id"],
+        "lead_email": "r2@example.com", "lead_first_name": "There", "message_id": "m-r2",
+        "reply_subject": "Re: hi", "reply_body": "sure, send it",
+        "classification": {"primary_intent": "send_resource", "all_intents": ["send_resource"]},
+        "timezone": None, "thread": [],
+    })
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi There, thanks. Best, Sam"}
+
+    status, resp = setter.route_queue_redraft({"id": 602, "feedback": "shorter please"})
+    check("redraft default scope (absent): returns 200", status == 200, (status, resp))
+    saved = setter._load_agent(agent["id"])
+    check("redraft default scope (absent): memory is NOT touched", (saved.get("memory") or []) == [],
+         saved.get("memory"))
+
+    status2, resp2 = setter.route_queue_redraft({"id": 602, "feedback": "shorter still", "scope": "one_off"})
+    check("redraft explicit scope=one_off: returns 200", status2 == 200, (status2, resp2))
+    saved2 = setter._load_agent(agent["id"])
+    check("redraft explicit scope=one_off: memory is still NOT touched", (saved2.get("memory") or []) == [],
+         saved2.get("memory"))
+
+
+def test_agent_duplicate():
+    sb, http = fresh_setter()
+    original = {
+        "id": "agent-dup0001", "name": "Sales Agent", "mode": "autopilot", "enabled": True,
+        "campaign_ids": [111, 222],
+        "campaign_assigned_at": {"111": "2026-07-01T00:00:00+00:00", "222": "2026-07-01T00:00:00+00:00"},
+        "allowed_intents": ["send_resource"], "instructions": "Flat $500/mo.",
+        "memory": [{"text": "remember this", "source": "manual", "scope": "remember",
+                   "at": "2026-07-01T00:00:00+00:00"}],
+        "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    sb.agents[original["id"]] = {"id": original["id"], "doc": copy.deepcopy(original)}
+
+    status, resp = setter.route_agents_duplicate({"agent_id": original["id"]})
+    check("duplicate: returns 200", status == 200, (status, resp))
+    clone = resp.get("doc") or {}
+    check("duplicate: clone has a new id", clone.get("id") not in (None, original["id"]), clone.get("id"))
+    check("duplicate: clone id follows the agent-<8 hex> shape",
+         bool(re.match(r"^agent-[0-9a-f]{8}$", str(clone.get("id") or ""))), clone.get("id"))
+    check("duplicate: clone name has the ' copy' suffix", clone.get("name") == "Sales Agent copy", clone.get("name"))
+    check("duplicate: clone mode is draft_only", clone.get("mode") == "draft_only", clone.get("mode"))
+    check("duplicate: clone has no campaigns", clone.get("campaign_ids") == [], clone.get("campaign_ids"))
+    check("duplicate: clone campaign_assigned_at is empty", clone.get("campaign_assigned_at") == {},
+         clone.get("campaign_assigned_at"))
+    check("duplicate: clone is enabled", clone.get("enabled") is True, clone.get("enabled"))
+    check("duplicate: clone carries over memory", clone.get("memory") == original["memory"], clone.get("memory"))
+    check("duplicate: clone carries over instructions", clone.get("instructions") == "Flat $500/mo.",
+         clone.get("instructions"))
+
+    original_after = setter._load_agent(original["id"])
+    check("duplicate: original doc is byte-unchanged", original_after == original, (original, original_after))
+    check("duplicate: original is now a separate row - two agents stored", len(sb.agents) == 2,
+         list(sb.agents.keys()))
+
+    # editing the clone must never touch the original
+    setter._save_agent({"id": clone["id"], "name": "Edited clone name"})
+    original_after_edit = setter._load_agent(original["id"])
+    check("duplicate: editing the clone leaves the original untouched", original_after_edit == original,
+         (original, original_after_edit))
+    clone_after_edit = setter._load_agent(clone["id"])
+    check("duplicate: the clone itself did pick up the edit", clone_after_edit.get("name") == "Edited clone name",
+         clone_after_edit)
+
+    status2, resp2 = setter.route_agents_duplicate({"agent_id": "agent-doesnotexist"})
+    check("duplicate: unknown agent -> 404", status2 == 404, (status2, resp2))
+
+    status3, resp3 = setter.route_agents_duplicate({})
+    check("duplicate: missing agent_id -> 400", status3 == 400, (status3, resp3))
+
+
 # ── v2: grading page endpoints ──────────────────────────────────────────────
 
 def _wait_for_relearn_idle(timeout=2.0):
@@ -1488,6 +2095,378 @@ def test_grading_relearn_extracts_real_calendly_slots_from_existing_draft():
          setter._extract_calendly_slots(None) == [] and setter._extract_calendly_slots("") == [])
 
 
+# ── training engine ──────────────────────────────────────────────────────────
+
+_TRAINING_CATEGORIES = ["Interested", "Information Request", "Meeting Request", "Contact Forward",
+                        "positive-re-reply", "Not Interested", "Do Not Contact", "Wrong Person", "Out Of Office"]
+
+
+def _seed_training_corpus(sb, per_category=6, campaign_id=8001, start_id=1):
+    """Real-shaped `replies` rows spread evenly across every training
+    category (5 actionable + 4 clear-negative), each with a real-looking,
+    >=10-char body - what _fetch_training_candidates requires."""
+    rid = start_id
+    for cat in _TRAINING_CATEGORIES:
+        for i in range(per_category):
+            sb.replies.append({
+                "id": rid, "workspace": "navreo", "smartlead_campaign_id": campaign_id,
+                "email": f"lead-{cat.lower().replace(' ', '-')}-{i}@example.com",
+                "replied_at": f"2026-06-{10 + i:02d}T09:00:00+00:00",
+                "category": cat, "reply_subject": "Re: our email",
+                "reply_body": f"Real archived reply body #{rid} for category {cat}. Thanks for the note.",
+            })
+            rid += 1
+
+
+def _training_classify_fn(body):
+    payload = json.loads(body["messages"][1]["content"])
+    return {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5,  # below any default threshold, so nothing would ever auto-send even if it tried
+        "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0, "wants": "wants info", "rationale": "",
+    }
+
+
+def test_training_generate_weighted_excludes_used_and_batch_cap():
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-train0001", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 8})
+    check("training generate: returns 200", status == 200, (status, resp))
+    check("training generate: default-sized batch generates 8 real cases", resp.get("generated") == 8, resp)
+    check("training generate: used_count grew by 8", resp.get("used_count") == 8, resp)
+
+    first_reply_ids = {c["reply_id"] for c in resp["cases"]}
+    check("training generate: no duplicate reply_id within one batch",
+         len(first_reply_ids) == len(resp["cases"]), resp["cases"])
+
+    status2, resp2 = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 999})
+    check("training generate: batch_size above the max is clamped to 10, not rejected",
+         status2 == 200 and resp2.get("generated") <= 10, resp2)
+
+    second_reply_ids = {c["reply_id"] for c in resp2["cases"]}
+    check("training generate: a later batch never repeats a reply_id already used",
+         first_reply_ids.isdisjoint(second_reply_ids), (first_reply_ids, second_reply_ids))
+
+    doc = setter._load_training(agent["id"])
+    check("training generate: used_reply_ids accumulates across calls",
+         len(doc.get("used_reply_ids") or []) == len(first_reply_ids) + len(second_reply_ids),
+         doc.get("used_reply_ids"))
+    check("training: the training-<agent_id> doc row never appears in _load_agents()",
+         all(not str(a.get("id") or "").startswith(setter.TRAINING_ID_PREFIX) for a in setter._load_agents()),
+         setter._load_agents())
+
+
+def test_training_generate_stores_real_bodies_verbatim():
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=8010)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-train0002", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    _, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 6})
+    by_reply_id = {r["id"]: r for r in sb.replies}
+    ok = True
+    for case in resp["cases"]:
+        original = by_reply_id[case["reply_id"]]
+        if case["inbound"]["raw_body"] != original["reply_body"]:
+            ok = False
+        if case["inbound"]["subject"] != original["reply_subject"]:
+            ok = False
+        if case["category"] != original["category"]:
+            ok = False
+    check("training generate: every case's inbound is the real reply verbatim (raw body, subject, category)",
+         ok, resp["cases"])
+
+
+def test_training_case_includes_original_outreach_and_human_answer_when_present():
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    campaign_id = 9001
+    email = "history@example.com"
+    sb.sent_messages.append({
+        "smartlead_campaign_id": campaign_id, "email": email, "email_seq_number": 1,
+        "is_manual_reply": False, "subject": "Our first email", "body": "Hi, wanted to share our breakdown.",
+        "sent_at": "2026-06-01T09:00:00+00:00",
+    })
+    sb.sent_messages.append({
+        "smartlead_campaign_id": campaign_id, "email": email, "email_seq_number": 2,
+        "is_manual_reply": True, "subject": "Re: our email", "body": "Sure, here is the call link.",
+        "sent_at": "2026-06-11T09:00:00+00:00",
+    })
+    reply_row = {"id": 9101, "smartlead_campaign_id": campaign_id, "email": email,
+                "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+                "reply_subject": "Re: our email", "reply_body": "Sounds great, send more info please."}
+
+    agent = {"id": "agent-train0003", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    case = setter._build_training_case(reply_row, agent, {}, [], "not_configured", now, "", idx=0)
+
+    check("training case: carries original_outreach when sent_messages has seq 1",
+         case["original_outreach"].get("body") == "Hi, wanted to share our breakdown.", case["original_outreach"])
+    check("training case: carries human_answer_history (earliest manual reply after replied_at)",
+         case["human_answer_history"].get("body") == "Sure, here is the call link.", case["human_answer_history"])
+    check("training case: inbound raw_body is the real reply verbatim",
+         case["inbound"]["raw_body"] == reply_row["reply_body"], case["inbound"])
+
+    reply_row2 = {"id": 9102, "smartlead_campaign_id": 9002, "email": "nohistory@example.com",
+                 "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+                 "reply_subject": "Re: our email", "reply_body": "Sounds great, send more info please."}
+    case2 = setter._build_training_case(reply_row2, agent, {}, [], "not_configured", now, "", idx=1)
+    check("training case: blank-canvas when no original outreach exists",
+         case2["original_outreach"] == {}, case2["original_outreach"])
+    check("training case: blank-canvas when no human answer exists",
+         case2["human_answer_history"] == {}, case2["human_answer_history"])
+
+
+def test_training_generate_memory_digest_reaches_classify():
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=8100)
+    captured = []
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured.append(payload.get("owner_corrections"))
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+            "wants": "wants info", "rationale": "",
+        }
+
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {
+        "id": "agent-train0004", "mode": "draft_only", "enabled": True,
+        "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+        "memory": [{"text": "Never promise a specific onboarding date.", "source": "manual",
+                   "scope": "remember", "at": "2026-07-01T00:00:00+00:00"}],
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
+    check("training generate: 200", status == 200, (status, resp))
+    check("training generate: classify was actually called", len(captured) > 0, captured)
+    check("training generate: agent memory digest reaches classify as owner_corrections",
+         len(captured) > 0 and all("Never promise a specific onboarding date." in (c or "") for c in captured),
+         captured)
+
+
+def test_training_generate_refuses_over_40_unanswered():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train0005", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": f"case-{i:04d}"} for i in range(41)], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
+    check("training generate: refuses (400) with more than 40 unanswered cases already pending",
+         status == 400, (status, resp))
+
+
+def test_training_answer_recomputes_readiness_and_counts():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train0006", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}, {"id": "case-0001"}], "answers": {}, "used_reply_ids": [101, 102],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": True, "reply_ok": True,
+        "note": "", "scope": "one_off",
+    })
+    check("training answer: returns 200", status == 200, (status, resp))
+    check("training answer: readiness score present and > 0", resp["readiness"]["score"] > 0, resp)
+    check("training answer: answered_count is 1", resp["answered_count"] == 1, resp)
+    check("training answer: unanswered_count is 1", resp["unanswered_count"] == 1, resp)
+
+    saved = setter._load_training(agent["id"])
+    check("training answer: readiness_history grew by one entry",
+         len(saved.get("readiness_history") or []) == 1, saved.get("readiness_history"))
+    check("training answer: used_reply_ids is untouched by answering",
+         saved.get("used_reply_ids") == [101, 102], saved.get("used_reply_ids"))
+
+    status2, resp2 = setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-0001", "decision_ok": True, "reply_ok": None, "scope": "one_off",
+    })
+    check("training answer: reply_ok=null is accepted", status2 == 200, (status2, resp2))
+    check("training answer: answered_count is 2 once both cases are answered", resp2["answered_count"] == 2, resp2)
+    check("training answer: unanswered_count is 0", resp2["unanswered_count"] == 0, resp2)
+
+    status3, resp3 = setter.route_training_answer({"agent_id": agent["id"], "case_id": "case-does-not-exist",
+                                                    "decision_ok": True})
+    check("training answer: unknown case_id -> 404", status3 == 404, (status3, resp3))
+
+    status4, resp4 = setter.route_training_answer({"case_id": "case-0000", "decision_ok": True})
+    check("training answer: missing agent_id -> 400", status4 == 400, (status4, resp4))
+
+
+def test_training_answer_remember_grows_memory_one_off_does_not():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train0007", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}, {"id": "case-0001"}], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": False,
+        "note": "Always offer the case study before pricing.", "scope": "remember",
+    })
+    saved = setter._load_agent(agent["id"])
+    check("training answer remember: agent memory grew by one",
+         len(saved.get("memory") or []) == 1, saved.get("memory"))
+    check("training answer remember: feedback_log untouched", (saved.get("feedback_log") or []) == [],
+         saved.get("feedback_log"))
+    digest = setter._agent_memory_digest(saved)
+    check("training answer remember: digest contains the remembered note",
+         "Always offer the case study before pricing." in digest, digest)
+
+    setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-0001", "decision_ok": True,
+        "note": "This one was fine, just a heads up.", "scope": "one_off",
+    })
+    saved2 = setter._load_agent(agent["id"])
+    check("training answer one_off: agent memory unchanged (still 1)",
+         len(saved2.get("memory") or []) == 1, saved2.get("memory"))
+    check("training answer one_off: feedback_log grew by one",
+         len(saved2.get("feedback_log") or []) == 1, saved2.get("feedback_log"))
+
+
+def test_training_reset_clears_answers_keeps_used_ids():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train0008", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {
+        "cases": [{"id": "case-0000"}, {"id": "case-0001"}],
+        "answers": {"case-0000": {"decision_ok": True, "reply_ok": True, "note": "",
+                                  "at": "2026-01-01T00:00:00+00:00"}},
+        "used_reply_ids": [201, 202, 203],
+        "readiness_history": [{"at": "2026-01-01T00:00:00+00:00", "score": 50, "n_answers": 1}],
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_reset({"agent_id": agent["id"]})
+    check("training reset: returns 200 ok", status == 200 and resp.get("ok") is True, (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    check("training reset: answers cleared", saved.get("answers") == {}, saved.get("answers"))
+    check("training reset: readiness_history cleared",
+         saved.get("readiness_history") == [], saved.get("readiness_history"))
+    check("training reset: used_reply_ids preserved so scenarios never repeat",
+         saved.get("used_reply_ids") == [201, 202, 203], saved.get("used_reply_ids"))
+    check("training reset: the stored cases list is untouched", len(saved.get("cases") or []) == 2,
+         saved.get("cases"))
+
+    status2, resp2 = setter.route_training_reset({})
+    check("training reset: missing agent_id -> 400", status2 == 400, (status2, resp2))
+
+
+def test_training_get_route():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train0009", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {
+        "cases": [{"id": "case-0000"}, {"id": "case-0001"}, {"id": "case-0002"}],
+        "answers": {"case-0000": {"decision_ok": True, "reply_ok": True, "at": "2026-01-01T00:00:00+00:00"}},
+        "used_reply_ids": [1, 2, 3], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_get({"agent_id": agent["id"]})
+    check("training get: returns 200", status == 200, (status, resp))
+    ids_in_order = [c["id"] for c in resp["cases"]]
+    check("training get: unanswered cases come before the answered one",
+         ids_in_order.index("case-0001") < ids_in_order.index("case-0000") and
+         ids_in_order.index("case-0002") < ids_in_order.index("case-0000"), ids_in_order)
+    check("training get: readiness is present and freshly computed",
+         resp["readiness"]["n_answers"] == 1, resp["readiness"])
+    check("training get: used_count is reported", resp["used_count"] == 3, resp)
+
+    status2, resp2 = setter.route_training_get({})
+    check("training get: missing agent_id -> 400", status2 == 400, (status2, resp2))
+
+
+def test_compute_readiness_pure_function():
+    empty = setter.compute_readiness({"answers": {}})
+    check("readiness: 0 answers -> score 0", empty["score"] == 0, empty)
+    check("readiness: 0 answers -> n_answers 0", empty["n_answers"] == 0, empty)
+
+    def _answers(n, correct=True, start="2026-01-01T00:00:00+00:00", key_offset=0):
+        base = dt.datetime.fromisoformat(start)
+        out = {}
+        for i in range(n):
+            at = (base + dt.timedelta(minutes=i)).isoformat()
+            out[f"case-{key_offset + i:04d}"] = {"decision_ok": correct, "reply_ok": correct, "at": at}
+        return out
+
+    high = setter.compute_readiness({"answers": _answers(20, True)})
+    check("readiness: 20 correct answers -> score >= 90", high["score"] >= 90, high)
+    check("readiness: explanation names the answer count", "20" in high["explanation"], high["explanation"])
+
+    all_wrong = setter.compute_readiness({"answers": _answers(20, False)})
+    check("readiness: 20 wrong answers -> score near 0", all_wrong["score"] <= 10, all_wrong)
+
+    fifteen_correct = _answers(15, True, key_offset=0)
+    ten_then_five_wrong = {}
+    ten_then_five_wrong.update(_answers(10, True, start="2026-01-01T00:00:00+00:00", key_offset=0))
+    ten_then_five_wrong.update(_answers(5, False, start="2026-01-01T00:20:00+00:00", key_offset=10))
+    r_fifteen = setter.compute_readiness({"answers": fifteen_correct})
+    r_mixed = setter.compute_readiness({"answers": ten_then_five_wrong})
+    check("readiness: 10 correct then 5 wrong scores lower than 15 correct (same n, same coverage)",
+         r_mixed["score"] < r_fifteen["score"], (r_mixed, r_fifteen))
+
+    r5 = setter.compute_readiness({"answers": _answers(5, True)})
+    r10 = setter.compute_readiness({"answers": _answers(10, True)})
+    r20 = setter.compute_readiness({"answers": _answers(20, True)})
+    r25 = setter.compute_readiness({"answers": _answers(25, True)})
+    check("readiness: coverage rises from n=5 to n=10 (all correct)", r10["coverage"] > r5["coverage"], (r5, r10))
+    check("readiness: coverage caps at 1.0 by n=20", r20["coverage"] == 1.0, r20)
+    check("readiness: coverage never exceeds 1.0 past n=20", r25["coverage"] == 1.0, r25)
+
+
+def test_readiness_30_answer_scripted_simulation():
+    def _scripted(pattern, start="2026-01-01T00:00:00+00:00"):
+        base = dt.datetime.fromisoformat(start)
+        out = {}
+        for i, ok in enumerate(pattern):
+            at = (base + dt.timedelta(minutes=i)).isoformat()
+            out[f"case-{i:04d}"] = {"decision_ok": ok, "reply_ok": ok, "at": at}
+        return out
+
+    # mostly correct with a few early misses; the last 20 (the RECENT
+    # stretch) are overwhelmingly correct.
+    pattern_good_tail = [True, False, True, True, False, True, True, True, False, True] + [True] * 20
+    r_good_tail = setter.compute_readiness({"answers": _scripted(pattern_good_tail)})
+    check("readiness 30-sim: overwhelmingly-correct recent stretch -> score >= 90",
+         r_good_tail["score"] >= 90, r_good_tail)
+
+    # same total mistake count, but concentrated in the RECENT stretch instead.
+    pattern_bad_tail = [True] * 20 + [True, False, True, False, True, False, True, False, True, False]
+    r_bad_tail = setter.compute_readiness({"answers": _scripted(pattern_bad_tail)})
+    check("readiness 30-sim: mistakes concentrated in the recent stretch -> score stays below 90",
+         r_bad_tail["score"] < 90, r_bad_tail)
+    check("readiness 30-sim: a bad recent stretch scores lower than a good recent stretch",
+         r_bad_tail["score"] < r_good_tail["score"], (r_bad_tail, r_good_tail))
+
+    r_all_wrong = setter.compute_readiness({"answers": _scripted([False] * 30)})
+    check("readiness 30-sim: all-wrong -> score near 0", r_all_wrong["score"] <= 5, r_all_wrong)
+
+
 # ── run everything ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1504,6 +2483,13 @@ if __name__ == "__main__":
     test_poll_never_raises_on_bad_agent_config()
     test_run_poll_assigned_at_filter()
     test_route_queue_action_send_409_when_already_sent()
+    test_subsequence_success_pushes_live_and_patches_flag()
+    test_subsequence_failure_http200_okfalse_returns_502()
+    test_subsequence_failure_smartlead_error_returns_502_flag_untouched()
+    test_subsequence_failure_lead_not_found_never_pushes()
+    test_subsequence_no_queue_row_route_resolves_by_email_and_pushes()
+    test_subsequence_uncheck_makes_no_smartlead_call()
+    test_subsequence_ambiguous_multiple_subsequences_needs_override()
     test_claim_race_returns_existing_row_without_classifying()
     test_hydrate_lead_answered_since_reply()
     test_tz_none_still_builds_tentative_slots_but_vetoes_auto()
@@ -1519,9 +2505,29 @@ if __name__ == "__main__":
     test_ensure_webhooks_second_call_is_noop()
     test_agent_instructions_fallback()
     test_booking_link_derivation()
+    test_decide_multi_turn_autonomy()
+    test_draft_reply_thread_continuity()
+    test_memory_digest_reaches_classify_and_draft()
+    test_memory_digest_empty_is_byte_identical()
+    test_correction_one_off_does_not_touch_memory()
+    test_correction_remember_route_grows_memory()
+    test_redraft_scope_remember_persists_to_memory()
+    test_redraft_without_scope_does_not_persist()
+    test_agent_duplicate()
     test_grading_endpoints()
     test_grading_relearn_updates_unanswered_cases()
     test_grading_relearn_extracts_real_calendly_slots_from_existing_draft()
+    test_training_generate_weighted_excludes_used_and_batch_cap()
+    test_training_generate_stores_real_bodies_verbatim()
+    test_training_case_includes_original_outreach_and_human_answer_when_present()
+    test_training_generate_memory_digest_reaches_classify()
+    test_training_generate_refuses_over_40_unanswered()
+    test_training_answer_recomputes_readiness_and_counts()
+    test_training_answer_remember_grows_memory_one_off_does_not()
+    test_training_reset_clears_answers_keeps_used_ids()
+    test_training_get_route()
+    test_compute_readiness_pure_function()
+    test_readiness_30_answer_scripted_simulation()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

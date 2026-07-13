@@ -16,9 +16,11 @@ server.py wiring and app/test_setter.py agree on the contract):
   pick_slots, lint_draft, lexicon_hits, run_poll.
 """
 
+import copy
 import datetime as _dt
 import json
 import os
+import random
 import re
 import sys
 import threading
@@ -634,9 +636,21 @@ def decide(classification: dict, agent: dict, ctx: dict):
     if category in CATEGORY_VETO:
         return "review", f"Held for review: Smartlead already categorised this as {category}."
 
-    # 6. first touch only - a second reply from the same lead always goes to a human
+    # 6. multi-turn autonomy (user ruling 2026-07-13): a later-turn reply no
+    # longer always drops to a human. Gates 2 ("intent(s) within what this
+    # agent is allowed to answer alone") and 3 ("simple ask + confidence")
+    # above already ran UNCONDITIONALLY, first touch or not, and would
+    # already have returned "review" for an off-intent or non-simple ask -
+    # so by the time execution reaches here, a later-turn reply is guaranteed
+    # simple_ask and fully allowed (ctx["hydrated"] and answered_since_reply
+    # were likewise already enforced, at gates 3/1). It may continue past
+    # this gate exactly like a first-touch reply would. The explicit re-check
+    # below is a defensive safety net (kept in case gates above this one are
+    # ever reordered) with its own, more specific reason.
     if not ctx.get("first_touch", True):
-        return "review", "Held for review: this lead has replied before, so a person should take it."
+        if off_intent or not simple_ask or confidence < threshold:
+            return "review", ("Held for review: this lead has replied before and the ask "
+                              "isn't simple enough to answer alone.")
 
     # 7. slots + timezone must both be ready. A guessed timezone is fine for
     # showing a draft, but auto-sending needs to be CONFIDENT of the hour, or
@@ -819,6 +833,7 @@ Rules:
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
 - Match the tone AND the exact recurring phrasing of the real examples above - the goal is a reply indistinguishable from what the team actually sends.
 - original_outreach is the first email we sent this lead. Keep the reply consistent with what it actually offered - answer the thing they were pitched, and echo the lead's own wording where natural, so the message reads like a real continuation of that thread, not a generic template.
+- recent_thread, when present, is the last few messages in this thread (our sends and their replies, oldest first) - a later-turn reply must read as a natural continuation of it, never repeating something already said or re-introducing yourself.
 - reviewer_feedback, when present, is the human reviewer's instruction for THIS regeneration ("shorter", "don't offer times", "mention the guide is free") - follow it faithfully while keeping every rule above. It never overrides the never-invent rules.
 - Output STRICT JSON: {"subject": "...", "html": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
 
@@ -848,6 +863,15 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "slot_status": slot_status or "not_configured",
         "sender_first": sender_first or "",
     }
+    # Thread continuity (multi-turn autonomy): when the reply dict carries the
+    # recent thread text (hydrate_lead already collects it - norm[-6:] - the
+    # caller just needs to pass it through), give the drafter that context so
+    # a later-turn reply reads as a continuation, not a repeat.
+    thread_raw = str(reply.get("thread_text") or "").strip()
+    if thread_raw:
+        thread_clean = re.sub(r"\s+", " ", _TAG_RE.sub(" ", thread_raw)).strip()[:1200]
+        if thread_clean:
+            payload["recent_thread"] = thread_clean
     if (regen_feedback or "").strip():
         payload["reviewer_feedback"] = regen_feedback.strip()[:500]
     user = json.dumps(payload)
@@ -896,6 +920,84 @@ def _sl_post(path: str, body: dict, params: dict = None):
     qs = dict(params or {})
     qs["api_key"] = key
     return _HTTP("POST", f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}", {}, body)
+
+
+def _sl_campaign_lead_map_id(campaign_id, lead_email: str, smartlead_lead_id=None, max_pages: int = 20):
+    """Resolves the Smartlead `campaign_lead_map_id` for a lead inside a
+    specific campaign - this is the id the push-to-subsequence endpoint calls
+    `email_lead_map_id`. Source: GET /campaigns/{campaign_id}/leads, docs at
+    https://api.smartlead.ai/api-reference/leads/get-by-campaign - each row of
+    the paginated `data` list carries a top-level `campaign_lead_map_id` plus
+    a nested `lead` object ({id, email, ...}). That endpoint has no documented
+    email/lead_id filter, so this pages through (100/lead, capped at
+    max_pages*100 leads) matching by Smartlead lead id first, email second.
+    Returns the id, or None if not found / on any failure."""
+    if not campaign_id:
+        return None
+    email_l = (lead_email or "").strip().lower()
+    offset = 0
+    try:
+        for _ in range(max_pages):
+            resp = _sl_get(f"/campaigns/{campaign_id}/leads", {"offset": offset, "limit": 100})
+            if not isinstance(resp, dict):
+                return None
+            page = resp.get("data")
+            if not isinstance(page, list) or not page:
+                return None
+            for entry in page:
+                if not isinstance(entry, dict):
+                    continue
+                lead = entry.get("lead") if isinstance(entry.get("lead"), dict) else {}
+                if smartlead_lead_id and str(lead.get("id")) == str(smartlead_lead_id):
+                    return entry.get("campaign_lead_map_id")
+                if email_l and str(lead.get("email") or "").strip().lower() == email_l:
+                    return entry.get("campaign_lead_map_id")
+            if len(page) < 100:
+                return None
+            offset += 100
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _push_to_subsequence(campaign_id, lead_email: str, smartlead_lead_id, sub_sequence_id):
+    """Real Smartlead sub-sequence enrolment.
+    Endpoint: POST /master-inbox/push-to-subsequence, docs at
+    https://api.smartlead.ai/reference/push-lead-to-subsequence (same shape
+    Smartlead's own MCP tool `push_to_master_inbox_subsequence` wraps).
+    Body: {email_lead_map_id, sub_sequence_id, sub_sequence_delay_time,
+    stop_lead_on_parent_campaign_reply}. `email_lead_map_id` is resolved via
+    _sl_campaign_lead_map_id() above. Never raises - always returns
+    (ok: bool, detail) where detail is Smartlead's response dict on success,
+    or a plain-English string on failure."""
+    try:
+        if not _sl_key():
+            return False, "Smartlead isn't connected (no API key configured)."
+        if not campaign_id or not sub_sequence_id:
+            return False, "Missing campaign or subsequence id."
+        map_id = _sl_campaign_lead_map_id(campaign_id, lead_email, smartlead_lead_id)
+        if not map_id:
+            return False, "Couldn't find this lead in that Smartlead campaign."
+        resp = _sl_post("/master-inbox/push-to-subsequence", {
+            "email_lead_map_id": map_id,
+            "sub_sequence_id": sub_sequence_id,
+            "sub_sequence_delay_time": 0,
+            "stop_lead_on_parent_campaign_reply": True,
+        })
+        if not isinstance(resp, dict):
+            return False, "Smartlead didn't respond (timeout or network error)."
+        # Smartlead answers HTTP 200 for rejections too (live-proven: a bad
+        # sub_sequence_id returns {"ok": false, "message": "Invalid
+        # subsequence or not related to the parent campaign"}), so success
+        # must be an EXPLICIT positive - anything else is a failure.
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        ok = resp.get("ok") is True or resp.get("success") is True or data.get("success") is True
+        if not ok:
+            msg = resp.get("message") or resp.get("error") or "Smartlead rejected the request."
+            return False, str(msg)[:300]
+        return True, resp
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)[:300]
 
 
 def hydrate_lead(campaign_id, email: str, message_id: str):
@@ -1113,13 +1215,15 @@ def _load_agents() -> list:
     if not _SB:
         return []
     try:
-        # Reserved doc rows (__settings__, __grading__) live in the same table
-        # but are never real agents - filtered out client-side so they can
-        # never leak into the agents list or campaign assignment lookups.
+        # Reserved doc rows (__settings__, __grading__, training-<agent_id>)
+        # live in the same table but are never real agents - filtered out
+        # client-side so they can never leak into the agents list or
+        # campaign assignment lookups.
         rows = _SB("GET", f"{AGENTS_TABLE}?select=id,doc")
         if isinstance(rows, list):
             return [r.get("doc") or {} for r in rows
-                   if isinstance(r, dict) and r.get("id") not in (SETTINGS_ID, GRADING_ID)]
+                   if isinstance(r, dict) and r.get("id") not in (SETTINGS_ID, GRADING_ID)
+                   and not str(r.get("id") or "").startswith(TRAINING_ID_PREFIX)]
     except Exception:  # noqa: BLE001
         pass
     return []
@@ -1171,6 +1275,12 @@ def _save_agent(doc: dict) -> dict:
     doc.setdefault("voice_examples", [])
     doc.setdefault("pricing_notes", "")
     doc.setdefault("extra_instructions", "")
+    # Persistent learning layer: standing corrections the owner wants applied
+    # to every future pipeline pass (memory), versus one-off corrections kept
+    # only for audit (feedback_log, never fed back into the model - see
+    # _agent_memory_digest).
+    doc.setdefault("memory", [])
+    doc.setdefault("feedback_log", [])
     # Stamp when each campaign was first assigned - the poll only processes
     # replies received after this, so activating an agent never sweeps an
     # already-handled backlog into the queue.
@@ -1183,6 +1293,48 @@ def _save_agent(doc: dict) -> dict:
         _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": doc["id"], "doc": doc},
            prefer="resolution=merge-duplicates,return=minimal")
     return doc
+
+
+def _agent_memory_digest(agent: dict, limit_chars: int = 2000) -> str:
+    """Plain-English digest of everything the owner has told this agent to
+    REMEMBER (agent['memory'], newest-first "- {text}" lines, capped to
+    roughly limit_chars) - same shape as _feedback_digest below. Fed into
+    every live classify()/draft_reply() call so a remembered correction is
+    actually applied on every future pass, not just recorded. One-off
+    corrections never reach here - those live only in agent['feedback_log']."""
+    agent = agent or {}
+    lines = []
+    for entry in reversed(list(agent.get("memory") or [])):
+        text = str((entry or {}).get("text") or "").strip()
+        if text:
+            lines.append(f"- {text}")
+    return "\n".join(lines)[:limit_chars]
+
+
+def _append_agent_memory(agent_id: str, text: str, source: str = "manual") -> dict:
+    """Appends one standing correction to agent['memory'] via _save_agent's
+    own partial-payload merge (only the 'memory' key is sent, so every other
+    field on the doc is left exactly as it was). Returns the saved doc."""
+    existing = _load_agent(agent_id) or {}
+    memory = list(existing.get("memory") or [])
+    memory.append({
+        "text": text, "source": source or "manual", "scope": "remember",
+        "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+    })
+    return _save_agent({"id": agent_id, "memory": memory})
+
+
+def _append_agent_feedback_log(agent_id: str, text: str, source: str = "manual") -> dict:
+    """Appends one one-off correction to agent['feedback_log'] - audit trail
+    only, never fed into classify()/draft_reply(). Same merge-safe pattern as
+    _append_agent_memory."""
+    existing = _load_agent(agent_id) or {}
+    log = list(existing.get("feedback_log") or [])
+    log.append({
+        "text": text, "source": source or "manual", "scope": "one_off",
+        "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+    })
+    return _save_agent({"id": agent_id, "feedback_log": log})
 
 
 def _existing_row(workspace: str, campaign_id, email: str, message_id: str):
@@ -1466,11 +1618,24 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
 
     lex_hits = lexicon_hits(body_text)
 
+    # Thread text (for a later-turn draft to read as a continuation - see
+    # draft_reply's recent_thread) computed once here so both the draft call
+    # below and the lint context further down share the same value.
+    thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
+
+    # Persistent learning layer: everything the owner has told this agent to
+    # remember, fed automatically into every live classify()/draft_reply()
+    # call. Empty memory -> empty digest -> classify()/draft_reply() add
+    # nothing to their payload, so behaviour is byte-identical to before this
+    # feature existed.
+    mem_digest = _agent_memory_digest(agent)
+
     row["first_outbound"] = first_outbound
     try:
         classification = classify({"subject": row["reply_subject"], "body": body_text,
                                    "last_outbound": last_outbound, "first_outbound": first_outbound,
-                                   "email_domain": domain, "company_location": company_location}, agent)
+                                   "email_domain": domain, "company_location": company_location},
+                                  agent, owner_hints=mem_digest)
     except Exception as e:  # noqa: BLE001 - a classify outage must degrade to review, never crash
         classification = {
             "primary_intent": None, "all_intents": [], "simple_ask": False, "confidence": 0.0,
@@ -1528,15 +1693,14 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         try:
             d = draft_reply(
                 {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text,
-                 "first_outbound": first_outbound},
-                agent, classification, slots, slot_status, sender_first)
+                 "first_outbound": first_outbound, "thread_text": thread_text},
+                agent, classification, slots, slot_status, sender_first, regen_feedback=mem_digest)
             draft_subject, draft_body = d.get("subject"), d.get("html")
         except Exception as e:  # noqa: BLE001 - a draft outage falls back to no draft -> lint fails -> review
             if not row.get("error"):
                 row["error"] = f"draft failed: {type(e).__name__}"
     row["draft_subject"], row["draft_body"] = draft_subject, draft_body
 
-    thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
     lint_ok, lint_reason = False, "No draft was produced."
     if draft_body:
         needs_resource_link = "send_resource" in (classification.get("all_intents") or [])
@@ -1826,6 +1990,78 @@ def route_agents_delete(payload):
         return 500, {"error": str(e)[:300]}
 
 
+def route_agents_correction(payload):
+    """Persistent learning layer: one correction the owner gives while
+    reviewing this agent's calls, outside the grading page's own per-case
+    feedback_log. scope="remember" is a standing correction applied to every
+    future classify()/draft_reply() call (agent['memory']); scope="one_off"
+    (the default) is audit-only and never fed back into the model
+    (agent['feedback_log'])."""
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        text = str(payload.get("text") or "").strip()
+        scope = payload.get("scope") or "one_off"
+        source = payload.get("source") or "manual"
+        if not agent_id:
+            return 400, {"error": "agent_id is required"}
+        if not text:
+            return 400, {"error": "text is required"}
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+        if scope == "remember":
+            saved = _append_agent_memory(agent_id, text, source)
+        else:
+            saved = _append_agent_feedback_log(agent_id, text, source)
+        return 200, {
+            "ok": True, "agent_id": agent_id, "scope": scope,
+            "memory_count": len(saved.get("memory") or []),
+            "feedback_log_count": len(saved.get("feedback_log") or []),
+        }
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_agents_duplicate(payload):
+    """Brain duplication: deep-copies an agent's whole doc (instructions,
+    memory, voice examples, everything) under a brand-new id, so the clone
+    can be tuned and tested without touching the live original. Ships
+    disabled from any campaign on purpose (draft_only, no campaign_ids) - a
+    duplicate must never start auto-sending on its own."""
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        if not agent_id:
+            return 400, {"error": "agent_id is required"}
+        original = _load_agent(agent_id)
+        if not original:
+            return 404, {"error": "Agent not found."}
+        clone = copy.deepcopy(original)
+        new_id = f"agent-{uuid.uuid4().hex[:8]}"
+        # Vanishingly unlikely, but never risk landing on (and merging onto)
+        # an id that already exists - _save_agent's merge-on-existing-id
+        # semantics exist precisely to protect a real agent from being
+        # overwritten by an unrelated partial save.
+        while _load_agent(new_id):
+            new_id = f"agent-{uuid.uuid4().hex[:8]}"
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        clone.update({
+            "id": new_id,
+            "name": f"{str(original.get('name') or '').strip()} copy".strip(),
+            "mode": "draft_only",
+            "campaign_ids": [],
+            "campaign_assigned_at": {},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        })
+        saved = _save_agent(clone)
+        return 200, {"doc": saved}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def route_settings_save(payload):
     try:
         payload = payload or {}
@@ -1859,6 +2095,47 @@ def route_settings_save(payload):
 # like "Meeting Request" / "Interested Reply". They are not assignable
 # targets, and ~300 of them would bury the real campaigns in the picker.
 _SUBSEQUENCE_NAME = re.compile(r"^\s*(meeting request|interested reply|information request)\b", re.IGNORECASE)
+
+
+def _sl_find_subsequences(parent_campaign_id):
+    """Live Smartlead lookup of `parent_campaign_id`'s subsequences. A
+    subsequence IS a campaign whose own `parent_campaign_id` field points back
+    at the parent (docs: https://api.smartlead.ai/api-reference/campaigns/get-all
+    lists `parent_campaign_id` on every campaign object). Read-only GET
+    /campaigns/ - never a write. Returns a list of {"id","name","status"}."""
+    if not parent_campaign_id:
+        return []
+    try:
+        resp = _sl_get("/campaigns/")
+        rows = resp if isinstance(resp, list) else []
+        out = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if r.get("parent_campaign_id") and str(r.get("parent_campaign_id")) == str(parent_campaign_id):
+                out.append({"id": r.get("id"), "name": r.get("name"), "status": r.get("status")})
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _resolve_subsequence_id(campaign_id, sub_sequence_id_override):
+    """Picks the subsequence to push a lead into. An explicit override always
+    wins (the caller already knows which one, e.g. a picker in the UI for
+    campaigns with several). Otherwise looks up campaign_id's subsequences via
+    _sl_find_subsequences(): exactly one -> use it; none -> honest 502; more
+    than one -> 400 asking the caller to disambiguate (with the list attached
+    so a picker can be built from it).
+    Returns (sub_sequence_id, error_response) where error_response is None on
+    success or a ready-to-return (status, body) tuple otherwise."""
+    if sub_sequence_id_override:
+        return sub_sequence_id_override, None
+    subs = _sl_find_subsequences(campaign_id)
+    if len(subs) == 1:
+        return subs[0]["id"], None
+    if len(subs) > 1:
+        return None, (400, {"error": "This campaign has multiple subsequences - pick one.", "subsequences": subs})
+    return None, (502, {"error": "No subsequence is configured for this campaign in Smartlead."})
 
 
 def route_campaigns_get(_params):
@@ -1949,8 +2226,25 @@ def route_queue_action(payload):
             return 200, {"ok": True, "status": "dismissed"}
         if action == "subsequence":
             checked = bool(payload.get("checked"))
-            _apply_patch(row, {"added_to_subsequence": checked})
-            return 200, {"ok": True, "added_to_subsequence": checked}
+            if not checked:
+                # Smartlead's API has no documented "remove from subsequence"
+                # call - unchecking only clears our own flag. Say so honestly
+                # rather than implying a Smartlead un-enrol happened.
+                _apply_patch(row, {"added_to_subsequence": False})
+                return 200, {"ok": True, "added_to_subsequence": False,
+                            "detail": "Cleared locally - Smartlead has no API to un-enrol a lead from a "
+                                      "subsequence, so nothing was changed on the Smartlead side."}
+            campaign_id = row.get("smartlead_campaign_id")
+            sub_id, err = _resolve_subsequence_id(campaign_id, payload.get("sub_sequence_id"))
+            if err:
+                return err
+            ok, detail = _push_to_subsequence(campaign_id, row.get("lead_email"), row.get("smartlead_lead_id"), sub_id)
+            if not ok:
+                return 502, {"ok": False, "added_to_subsequence": False, "subsequence_id": sub_id,
+                            "error": detail if isinstance(detail, str) else "Smartlead rejected the request.",
+                            "detail": detail}
+            _apply_patch(row, {"added_to_subsequence": True})
+            return 200, {"ok": True, "added_to_subsequence": True, "subsequence_id": sub_id, "detail": detail}
         if action == "send":
             if row.get("status") in ("sent", "auto_sent"):
                 return 409, {"error": "This reply was already sent."}
@@ -1960,6 +2254,30 @@ def route_queue_action(payload):
             result = _send_reply(row, agent, subject, body_html, is_test=bool(row.get("is_test")), success_status="sent")
             return 200, {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
         return 400, {"error": f"Unknown action '{action}'."}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_subsequence_push(payload):
+    """Pushes a lead into a Smartlead subsequence WITHOUT a setter_queue row
+    behind it (e.g. a lead the setter never touched). Resolves the lead by
+    email within campaign_id, same push path as route_queue_action's
+    "subsequence" action."""
+    try:
+        payload = payload or {}
+        campaign_id = payload.get("campaign_id")
+        email = str(payload.get("email") or "").strip()
+        if not campaign_id or not email:
+            return 400, {"error": "campaign_id and email are required"}
+        sub_id, err = _resolve_subsequence_id(campaign_id, payload.get("sub_sequence_id"))
+        if err:
+            return err
+        ok, detail = _push_to_subsequence(campaign_id, email, None, sub_id)
+        if not ok:
+            return 502, {"ok": False, "added_to_subsequence": False, "subsequence_id": sub_id,
+                        "error": detail if isinstance(detail, str) else "Smartlead rejected the request.",
+                        "detail": detail}
+        return 200, {"ok": True, "added_to_subsequence": True, "subsequence_id": sub_id, "detail": detail}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -1975,6 +2293,14 @@ def route_queue_redraft(payload):
         if not row:
             return 404, {"error": "Queue row not found."}
         agent = _load_agent(row.get("agent_id")) or {}
+        feedback_text = str(payload.get("feedback") or "").strip()
+        # Persistent learning layer: only when the caller explicitly opts in
+        # with scope="remember" does this feedback get written to the
+        # agent's memory (so every FUTURE pass applies it too, not just this
+        # regeneration). Default/absent scope ("one_off") persists nothing,
+        # matching pre-existing behaviour exactly.
+        if payload.get("scope") == "remember" and feedback_text and agent.get("id"):
+            agent = _append_agent_memory(agent.get("id"), feedback_text, source=str(qid))
         settings = _load_settings()
         classification = row.get("classification") or {}
         tz = row.get("timezone")
@@ -1990,10 +2316,17 @@ def route_queue_redraft(payload):
                 slots = pick_slots(avail, tz, eff_settings, now)
                 if not slots:
                     slot_status = "none_available"
+        thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
+        # Standing memory always applies first, then this specific redraft's
+        # feedback on top of it - same order Feature 1's spec sets for every
+        # live classify()/draft_reply() call.
+        mem_digest = _agent_memory_digest(agent)
+        combined_feedback = "\n".join([x for x in (mem_digest, feedback_text) if x])
         d = draft_reply(
-            {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body")},
+            {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
+             "thread_text": thread_text},
             agent, classification, slots, slot_status, sender_first="",
-            regen_feedback=str(payload.get("feedback") or ""))
+            regen_feedback=combined_feedback)
         patch = {"draft_subject": d.get("subject"), "draft_body": d.get("html"), "slots": slots}
         _apply_patch(row, patch)
         return 200, {"row": {**row, **patch}}
@@ -2355,20 +2688,539 @@ def _grading_relearn():
             pass
 
 
+# ── training engine (per-agent, permanent) ──────────────────────────────────
+# Turns real archived replies into scenarios one agent can be trained on, in
+# the open-ended batches. Every scenario's inbound text is a REAL reply
+# verbatim - the eval realism law applies here exactly like grading: no
+# invented pricing, resources, or facts. Doc row id "training-<agent_id>" in
+# the same reserved-row pattern as __settings__/__grading__ (see
+# _load_agents's exclusion filter above). Uses the exact same classify/
+# decide/draft_reply/lint_draft pipeline pieces as generate_grading.py, run
+# as-if the master switch and this agent's mode were both ON (the question
+# is "how would this agent have handled this", not "is autopilot on right
+# now") - no send path exists anywhere in this section.
+
+TRAINING_ID_PREFIX = "training-"
+SENT_MESSAGES_TABLE = "sent_messages"
+REPLIES_TABLE = "replies"
+
+TRAINING_BATCH_DEFAULT = 8
+TRAINING_BATCH_MAX = 10
+TRAINING_MAX_UNANSWERED = 40
+TRAINING_ACTIONABLE_SHARE = 0.8
+
+# Real corpus counts (verified against the live DB 2026-07-13) for the
+# actionable reply categories - used only to PROPORTION how many of each
+# real category a batch draws, never to invent a scenario.
+_TRAINING_ACTIONABLE_WEIGHTS = {
+    "Interested": 650, "Information Request": 482, "Meeting Request": 263,
+    "Contact Forward": 59, "positive-re-reply": 18,
+}
+# The majority-of-corpus clear-negative categories - included at ~20% of
+# every batch so a trainer also teaches the agent when to correctly LEAVE a
+# reply alone, not just when to intervene.
+_TRAINING_CLEAR_NEGATIVE_CATEGORIES = ["Not Interested", "Do Not Contact", "Wrong Person", "Out Of Office"]
+
+
+def _training_doc_id(agent_id: str) -> str:
+    return f"{TRAINING_ID_PREFIX}{agent_id}"
+
+
+def _load_training(agent_id: str) -> dict:
+    default = {"cases": [], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+               "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
+    if not _SB or not agent_id:
+        return default
+    try:
+        rows = _SB("GET", f"{AGENTS_TABLE}?id=eq.{_training_doc_id(agent_id)}&select=doc")
+        if isinstance(rows, list) and rows:
+            doc = dict(rows[0].get("doc") or {})
+            doc.setdefault("cases", [])
+            doc.setdefault("answers", {})
+            doc.setdefault("used_reply_ids", [])
+            doc.setdefault("readiness_history", [])
+            doc.setdefault("created_at", default["created_at"])
+            return doc
+    except Exception:  # noqa: BLE001
+        pass
+    return default
+
+
+def _save_training(agent_id: str, doc: dict):
+    if not _SB or not agent_id:
+        return
+    _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": _training_doc_id(agent_id), "doc": doc},
+       prefer="resolution=merge-duplicates,return=minimal")
+
+
+def _weighted_category_targets(n: int) -> dict:
+    """Splits a training batch size into per-category targets: ~80% across
+    the actionable categories proportional to their real corpus weights
+    (largest-remainder rounding, so the counts always sum exactly to the
+    actionable share), ~20% split evenly across the clear-negative
+    categories. This only decides HOW MANY of each real category to ask
+    Supabase for - it never invents a scenario."""
+    n = max(0, int(n or 0))
+    n_actionable = round(n * TRAINING_ACTIONABLE_SHARE)
+    n_negative = n - n_actionable
+    targets = {}
+    if n_actionable:
+        total_w = sum(_TRAINING_ACTIONABLE_WEIGHTS.values()) or 1
+        raw = {cat: (w / total_w) * n_actionable for cat, w in _TRAINING_ACTIONABLE_WEIGHTS.items()}
+        floors = {cat: int(v) for cat, v in raw.items()}
+        remainder = n_actionable - sum(floors.values())
+        order = sorted(raw, key=lambda c: raw[c] - floors[c], reverse=True)
+        for cat in order[:remainder]:
+            floors[cat] += 1
+        targets.update({cat: c for cat, c in floors.items() if c})
+    if n_negative:
+        cats = _TRAINING_CLEAR_NEGATIVE_CATEGORIES
+        base, extra = divmod(n_negative, len(cats))
+        for i, cat in enumerate(cats):
+            c = base + (1 if i < extra else 0)
+            if c:
+                targets[cat] = targets.get(cat, 0) + c
+    return targets
+
+
+def _fetch_training_candidates(category: str, exclude_ids: list, want: int) -> list:
+    """Real, unused `replies` rows for one category - excludes already-used
+    ids and null/short bodies. Over-fetches a small multiple of `want` so the
+    caller can randomly sample real variety instead of always drawing the
+    same handful of newest rows."""
+    if not _SB or want <= 0:
+        return []
+    try:
+        pool_size = max(want * 5, 20)
+        filt = (f"workspace=eq.{WORKSPACE}&category=eq.{quote(str(category), safe='')}"
+                f"&order=replied_at.desc&limit={pool_size}"
+                f"&select=id,smartlead_campaign_id,email,replied_at,category,reply_subject,reply_body")
+        exclude_ids = list(exclude_ids or [])
+        if exclude_ids:
+            ids_csv = ",".join(str(i) for i in exclude_ids[-300:])
+            filt += f"&id=not.in.({ids_csv})"
+        rows = _SB("GET", f"{REPLIES_TABLE}?{filt}")
+        if not isinstance(rows, list):
+            return []
+        exclude_set = {str(i) for i in exclude_ids}
+        out = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if str(r.get("id")) in exclude_set:
+                continue
+            if len(str(r.get("reply_body") or "").strip()) < 10:
+                continue
+            out.append(r)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _select_training_replies(doc: dict, batch_size: int) -> list:
+    """Weighted-real selection over the actionable + clear-negative category
+    mix (see _weighted_category_targets). If a category legitimately runs
+    dry (e.g. Contact Forward is a small slice of the corpus), a top-up pass
+    spreads the shortfall across whichever categories still have real,
+    unused rows rather than handing back a short batch."""
+    used = list(doc.get("used_reply_ids") or [])
+    targets = _weighted_category_targets(batch_size)
+    selected = []
+    seen_ids = set()
+
+    def take(cat, want):
+        if want <= 0:
+            return 0
+        exclude = used + list(seen_ids)
+        candidates = _fetch_training_candidates(cat, exclude, want)
+        random.shuffle(candidates)
+        got = 0
+        for c in candidates:
+            if got >= want:
+                break
+            cid = str(c.get("id"))
+            if cid in seen_ids:
+                continue
+            selected.append(c)
+            seen_ids.add(cid)
+            got += 1
+        return got
+
+    for cat, want in targets.items():
+        take(cat, want)
+
+    shortfall = batch_size - len(selected)
+    if shortfall > 0:
+        all_cats = list(_TRAINING_ACTIONABLE_WEIGHTS.keys()) + _TRAINING_CLEAR_NEGATIVE_CATEGORIES
+        attempts = 0
+        while shortfall > 0 and attempts < len(all_cats) * 2:
+            progressed = False
+            for cat in all_cats:
+                if shortfall <= 0:
+                    break
+                got = take(cat, 1)
+                if got:
+                    shortfall -= got
+                    progressed = True
+            attempts += 1
+            if not progressed:
+                break
+
+    return selected
+
+
+def _fetch_original_outreach(campaign_id, email: str) -> dict:
+    """The lead's original outbound (email_seq_number=1, same email+
+    campaign) - the offer their reply is answering. Returns {} when none is
+    recoverable (blank-canvas case, per spec - never skipped)."""
+    if not _SB or not campaign_id or not email:
+        return {}
+    try:
+        rows = _SB("GET", f"{SENT_MESSAGES_TABLE}?smartlead_campaign_id=eq.{campaign_id}&email=eq.{email}"
+                          f"&email_seq_number=eq.1&select=subject,body,sent_at&limit=1")
+        if isinstance(rows, list) and rows:
+            r = rows[0]
+            return {"subject": r.get("subject") or "", "body": r.get("body") or "", "sent_at": r.get("sent_at")}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _fetch_human_answer_history(campaign_id, email: str, replied_at: str) -> dict:
+    """The earliest human-sent reply (is_manual_reply=true) sent AFTER this
+    inbound's replied_at, same email+campaign - what a human actually said
+    in response, for the trainer to compare our decision against. Returns
+    {} when no human answer exists (blank-canvas)."""
+    if not _SB or not campaign_id or not email or not replied_at:
+        return {}
+    try:
+        rows = _SB("GET", f"{SENT_MESSAGES_TABLE}?smartlead_campaign_id=eq.{campaign_id}&email=eq.{email}"
+                          f"&is_manual_reply=eq.true&sent_at=gt.{replied_at}&order=sent_at.asc&limit=1"
+                          f"&select=subject,body,sent_at")
+        if isinstance(rows, list) and rows:
+            r = rows[0]
+            return {"subject": r.get("subject") or "", "body": r.get("body") or "", "sent_at": r.get("sent_at")}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail: list, slot_status0: str,
+                         now, mem_digest: str, idx: int) -> dict:
+    """Runs the real classify -> decide -> draft_reply pipeline pieces over
+    one real archived reply - mirrors generate_grading.py's approach exactly
+    (decisions computed as-if the master switch and autopilot were ON, real
+    Calendly availability resolved once per batch, no live Smartlead call).
+    The inbound text is the real reply verbatim; nothing here invents a
+    scenario. Costs at most 2 gpt-5-mini calls (one classify, one draft - a
+    clear-negative reply skips the draft call entirely). Never raises - a
+    bad reply just yields no case."""
+    try:
+        reply_id = reply_row.get("id")
+        campaign_id = reply_row.get("smartlead_campaign_id")
+        email = (reply_row.get("email") or "").strip().lower()
+        category = reply_row.get("category")
+        raw_body = reply_row.get("reply_body") or ""
+        body = clean_body(raw_body)
+        subject = reply_row.get("reply_subject") or ""
+        replied_at = reply_row.get("replied_at")
+
+        outreach = _fetch_original_outreach(campaign_id, email)
+        human_answer = _fetch_human_answer_history(campaign_id, email, replied_at)
+        first_outbound = outreach.get("body") or ""
+
+        domain = email.split("@", 1)[1] if "@" in email else ""
+        comp = _company_hints(domain)
+        hints = {"phone": _extract_phone(body), "tld": ".".join(domain.split(".")[-2:]) if domain else "",
+                 "body": body, "country": comp.get("country"), "state": comp.get("state"), "city": comp.get("city")}
+
+        cls = classify({"subject": subject, "body": body, "first_outbound": first_outbound,
+                        "last_outbound": "", "email_domain": domain}, agent, owner_hints=mem_digest)
+
+        tz, tz_confident = resolve_timezone(hints, cls)
+
+        primary = cls.get("primary_intent")
+        try:
+            confidence = float(cls.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
+
+        slots, slot_status = [], "not_configured"
+        if not is_clear_neg:
+            if tz:
+                slot_status = slot_status0
+                if slot_status == "ok":
+                    eff_lead = dict(eff_settings)
+                    eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": email}
+                    slots = pick_slots(avail, tz, eff_lead, now)
+                    if not slots:
+                        slot_status = "none_available"
+            else:
+                slot_status = "tz_unknown"
+
+        draft_html = None
+        lint_ok, lint_reason = False, "No draft was produced."
+        if not is_clear_neg:
+            try:
+                # No hydration, so no real sender name to draw on - "Bjion"
+                # matches the same non-hydrated fallback generate_grading.py
+                # and the grading relearn pass already use.
+                d = draft_reply({"first_name": "", "subject": subject, "body": body,
+                                 "first_outbound": first_outbound}, agent, cls, slots, slot_status,
+                                sender_first="Bjion", regen_feedback=mem_digest)
+                draft_html = d.get("html")
+                lint_ok, lint_reason = lint_draft(draft_html, {
+                    "subject": d.get("subject"), "first_name": "",
+                    "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
+                    "resource_link": agent.get("resource_link") or "",
+                    "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                    "slot_labels": [s.get("label") for s in slots],
+                    "instructions": _agent_instructions(agent), "thread_text": body,
+                })
+            except Exception:  # noqa: BLE001
+                draft_html = None
+                lint_ok, lint_reason = False, "No draft was produced."
+
+        ctx = {
+            "red_flag_hits": lexicon_hits(body), "category": category,
+            "first_touch": True, "slot_status": slot_status, "timezone": tz,
+            "tz_confident": tz_confident, "lint_ok": lint_ok, "lint_reason": lint_reason,
+            "body_len": len(body), "hydrated": True, "answered_since_reply": False,
+            "autopilot_enabled": True,
+            "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body))),
+        }
+        decision, reason = decide(cls, agent, ctx)
+
+        return {
+            "id": f"case-{idx:04d}", "reply_id": reply_id, "campaign_id": campaign_id,
+            "category": category,
+            "inbound": {"subject": subject, "body": body, "raw_body": raw_body},
+            "original_outreach": outreach, "human_answer_history": human_answer,
+            "classification": cls, "decision": decision, "decision_reason": reason,
+            "draft_html": draft_html,
+            "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+        }
+    except Exception:  # noqa: BLE001 - a single bad reply must never abort the whole batch
+        return None
+
+
+def compute_readiness(doc: dict) -> dict:
+    """Pure, transparent 0-100 readiness score over the trainer's answers so
+    far (doc['answers'], keyed by case_id, each {decision_ok, reply_ok, note,
+    at}). Weighted toward RECENT answers (a ~15-answer exponential half
+    life) so a correction actually moves the score, and scaled down by how
+    few answers exist yet (coverage) so a handful of lucky answers can't
+    read as 'ready'."""
+    doc = doc or {}
+    answers = dict(doc.get("answers") or {})
+    items = sorted(answers.items(), key=lambda kv: (kv[1] or {}).get("at") or "")
+    n = len(items)
+    if n == 0:
+        return {"score": 0, "decision_component": 0.0, "reply_component": 0.0, "coverage": 0.0,
+                "n_answers": 0, "explanation": "No answers yet. Answer a few training scenarios "
+                                               "to start building a readiness score."}
+
+    decision_num = decision_den = 0.0
+    reply_num = reply_den = 0.0
+    for age_rank, (_case_id, ans) in enumerate(reversed(items)):  # age_rank 0 = most recent
+        w = 0.5 ** (age_rank / 15)
+        decision_ok = (ans or {}).get("decision_ok")
+        if decision_ok is not None:
+            decision_den += w
+            if decision_ok:
+                decision_num += w
+        reply_ok = (ans or {}).get("reply_ok")
+        if reply_ok is not None:
+            reply_den += w
+            if reply_ok:
+                reply_num += w
+
+    decision_component = (decision_num / decision_den) if decision_den else 0.0
+    reply_component = (reply_num / reply_den) if reply_den else decision_component
+    raw = 100 * (0.6 * decision_component + 0.4 * reply_component)
+    coverage = min(1.0, n / 20)
+    score = round(raw * coverage)
+
+    explanation = (
+        f"Based on your last {n} verdict{'s' if n != 1 else ''}, the agent's intervene-vs-leave calls "
+        f"were right {round(decision_component * 100)}% of the time (weighted toward your most recent "
+        f"answers), and its drafts were rated good {round(reply_component * 100)}% of the time. With "
+        f"{n} of the 20 answers that count toward full coverage, that gives a readiness score of {score}/100."
+    )
+    return {"score": score, "decision_component": round(decision_component, 4),
+            "reply_component": round(reply_component, 4), "coverage": round(coverage, 4),
+            "n_answers": n, "explanation": explanation}
+
+
+def route_training_get(params):
+    try:
+        agent_id = _qp(params, "agent_id", "")
+        if not agent_id:
+            return 400, {"error": "agent_id is required"}
+        doc = _load_training(agent_id)
+        answers = dict(doc.get("answers") or {})
+        cases = list(doc.get("cases") or [])
+        unanswered = [c for c in cases if not _is_case_answered(c.get("id"), answers)]
+        answered = [c for c in cases if _is_case_answered(c.get("id"), answers)]
+        return 200, {
+            "cases": unanswered + answered, "answers": answers,
+            "readiness": compute_readiness(doc),
+            "used_count": len(doc.get("used_reply_ids") or []),
+        }
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_training_generate(payload):
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        if not agent_id:
+            return 400, {"error": "agent_id is required"}
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+        try:
+            batch_size = int(payload.get("batch_size") or TRAINING_BATCH_DEFAULT)
+        except (TypeError, ValueError):
+            batch_size = TRAINING_BATCH_DEFAULT
+        batch_size = max(1, min(batch_size, TRAINING_BATCH_MAX))
+
+        doc = _load_training(agent_id)
+        existing_cases = list(doc.get("cases") or [])
+        answers = dict(doc.get("answers") or {})
+        unanswered = [c for c in existing_cases if not _is_case_answered(c.get("id"), answers)]
+        if len(unanswered) > TRAINING_MAX_UNANSWERED:
+            return 400, {"error": f"There are already {len(unanswered)} unanswered scenarios waiting - "
+                                  "answer some before generating more."}
+
+        replies = _select_training_replies(doc, batch_size)
+        used_ids = list(doc.get("used_reply_ids") or [])
+        if not replies:
+            return 200, {"cases": [], "generated": 0, "used_count": len(used_ids),
+                        "message": "No new real replies left to draw scenarios from right now."}
+
+        # Force-on, same as generate_grading.py: the training question is
+        # "how would this agent have handled this", not "is autopilot on
+        # right now" - the master switch and mode are simulated ON purely
+        # for this generation pass. No send path exists anywhere here.
+        train_agent = {**agent, "mode": "autopilot", "enabled": True}
+        mem_digest = _agent_memory_digest(train_agent)
+
+        settings = _load_settings()
+        now = _dt.datetime.now(_dt.timezone.utc)
+        eff = dict(settings)
+        eff["_agent"] = train_agent
+        slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+
+        new_cases = []
+        start_idx = len(existing_cases)
+        for i, r in enumerate(replies):
+            case = _build_training_case(r, train_agent, eff, avail, slot_status0, now, mem_digest,
+                                        idx=start_idx + i)
+            if case:
+                new_cases.append(case)
+            used_ids.append(r.get("id"))
+
+        doc["cases"] = existing_cases + new_cases
+        doc["used_reply_ids"] = used_ids
+        _save_training(agent_id, doc)
+        return 200, {"cases": new_cases, "generated": len(new_cases), "used_count": len(used_ids)}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_training_answer(payload):
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        case_id = str(payload.get("case_id") or "")
+        if not agent_id:
+            return 400, {"error": "agent_id is required"}
+        if not case_id:
+            return 400, {"error": "case_id is required"}
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+
+        doc = _load_training(agent_id)
+        cases = list(doc.get("cases") or [])
+        if not any(str(c.get("id")) == case_id for c in cases):
+            return 404, {"error": "Training scenario not found."}
+
+        decision_ok = payload.get("decision_ok")
+        reply_ok = payload.get("reply_ok")
+        note = str(payload.get("note") or "").strip()
+        scope = payload.get("scope") or "one_off"
+        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+        answers = dict(doc.get("answers") or {})
+        answers[case_id] = {"decision_ok": decision_ok, "reply_ok": reply_ok, "note": note,
+                            "scope": scope, "at": at}
+        doc["answers"] = answers
+
+        # scope="remember" writes a standing correction into the agent's own
+        # live memory (feeds every future classify()/draft_reply() call, and
+        # every future training generation via _agent_memory_digest) -
+        # exactly the same persistent-learning-layer helpers the inbox
+        # correction/redraft flows already use. scope="one_off" (or an empty
+        # note) is audit-only and changes nothing.
+        if note and scope == "remember":
+            _append_agent_memory(agent_id, note, source=f"training:{case_id}")
+        elif note:
+            _append_agent_feedback_log(agent_id, note, source=f"training:{case_id}")
+
+        readiness = compute_readiness(doc)
+        history = list(doc.get("readiness_history") or [])
+        history.append({"at": at, "score": readiness["score"], "n_answers": readiness["n_answers"]})
+        doc["readiness_history"] = history
+
+        _save_training(agent_id, doc)
+
+        answered_count = sum(1 for c in cases if _is_case_answered(c.get("id"), answers))
+        unanswered_count = len(cases) - answered_count
+        return 200, {"ok": True, "readiness": readiness,
+                    "answered_count": answered_count, "unanswered_count": unanswered_count}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_training_reset(payload):
+    try:
+        agent_id = (payload or {}).get("agent_id")
+        if not agent_id:
+            return 400, {"error": "agent_id is required"}
+        doc = _load_training(agent_id)
+        doc["answers"] = {}
+        doc["readiness_history"] = []
+        _save_training(agent_id, doc)
+        return 200, {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 GET_ROUTES = {
     "/api/setter/agents": route_agents_get,
     "/api/setter/campaigns": route_campaigns_get,
     "/api/setter/queue": route_queue_get,
     "/api/setter/grading": route_grading_get,
+    "/api/setter/training": route_training_get,
 }
 
 POST_ROUTES = {
     "/api/setter/agents/save": route_agents_save,
     "/api/setter/agents/delete": route_agents_delete,
+    "/api/setter/agents/correction": route_agents_correction,
+    "/api/setter/agents/duplicate": route_agents_duplicate,
     "/api/setter/settings/save": route_settings_save,
     "/api/setter/queue/action": route_queue_action,
     "/api/setter/queue/redraft": route_queue_redraft,
+    "/api/setter/subsequence/push": route_subsequence_push,
     "/api/setter/grading/answer": route_grading_answer,
     "/api/setter/grading/reset": route_grading_reset,
+    "/api/setter/training/generate": route_training_generate,
+    "/api/setter/training/answer": route_training_answer,
+    "/api/setter/training/reset": route_training_reset,
     "/api/setter/test/inject": route_test_inject,
 }

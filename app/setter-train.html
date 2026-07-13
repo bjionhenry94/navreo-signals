@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Training · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* == Setter training: build readiness by grading real scenarios one at a time == */
+.err-banner {
+  background: var(--red-bg); border: 1px solid var(--red-line); color: #861E10;
+  border-radius: var(--radius); padding: 12px 16px; font-size: 13px; margin: 14px 0;
+}
+.train-main { max-width: 760px; }
+.setter-head-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 6px; }
+.sh-title { font-family: var(--font-sans); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; margin: 0; }
+.setter-head-row .sh-spacer { flex: 1; }
+.train-sub { font-size: 13px; color: var(--ink-3); margin: 0 0 18px; }
+
+.agent-picker-row { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; }
+.agent-picker-row label { font-size: 12px; color: var(--ink-3); font-weight: 500; }
+.agent-picker-row select {
+  border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 10px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent; min-width: 220px;
+}
+.agent-picker-row select:focus { outline: none; box-shadow: var(--focus); }
+
+/* ── Readiness panel ───────────────────────────────────── */
+.readiness-panel { border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; margin: 0 0 22px; }
+.rp-top { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 14px; flex-wrap: wrap; }
+.rp-num-wrap { display: flex; align-items: baseline; gap: 4px; flex-shrink: 0; }
+.rp-num { font-family: var(--font-display); font-weight: 400; font-size: 52px; line-height: 1; letter-spacing: -0.02em; color: var(--ink); transition: color 0.3s ease; }
+.rp-num.ready { color: var(--green); }
+.rp-num-max { font-size: 18px; color: var(--ink-3); }
+.rp-headline { flex: 1; min-width: 200px; }
+.rp-headline .rp-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); margin-bottom: 4px; }
+.rp-explain { font-size: 13px; color: var(--ink-2); line-height: 1.55; }
+
+.rp-bar-wrap { position: relative; margin: 6px 0 26px; }
+.rp-bar-track { height: 10px; border-radius: 999px; background: #F0F0EE; overflow: visible; position: relative; }
+.rp-bar-fill { height: 100%; border-radius: 999px; background: var(--orange); transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.3s ease; width: 0%; }
+.rp-bar-fill.ready { background: var(--green); }
+.rp-bar-marker { position: absolute; top: -4px; bottom: -4px; left: 90%; width: 2px; background: var(--ink-3); }
+.rp-bar-marker span {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  font-size: 10.5px; color: var(--ink-3); white-space: nowrap; font-weight: 500;
+}
+
+.rp-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+.rp-stat { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 13px; }
+.rp-stat .rps-num { font-family: var(--font-display); font-weight: 400; font-size: 20px; letter-spacing: -0.01em; }
+.rp-stat .rps-lab { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+
+/* ── Scenario stream ───────────────────────────────────── */
+.train-progress { font-size: 12.5px; color: var(--ink-3); margin-bottom: 10px; }
+.train-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
+.tr-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+
+.tr-details { border: 1px solid var(--line-2); border-radius: 8px; margin-bottom: 10px; }
+.tr-details summary { padding: 9px 13px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; list-style: none; }
+.tr-details summary::-webkit-details-marker { display: none; }
+.tr-details[open] summary { border-bottom: 1px solid var(--line-2); }
+.tr-details-body { padding: 10px 13px; font-size: 13px; line-height: 1.6; color: var(--ink-2); white-space: pre-wrap; }
+.tr-details-body .tr-subj { font-weight: 600; color: var(--ink); margin-bottom: 4px; }
+
+.tr-block { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.tr-block-lab { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); margin-bottom: 8px; }
+.tr-block.inbound { background: var(--amber-bg); border-color: var(--amber-line); }
+.tr-block.inbound .tr-block-lab { color: #6B4A00; }
+.tr-msg { font-size: 13.5px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; }
+.tr-msg.big { font-size: 14.5px; }
+
+.tr-call { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin: 0 0 12px; line-height: 1.5; }
+.tr-call.g { background: var(--green-bg); color: #195C3F; }
+.tr-call.a { background: var(--amber-bg); color: #6B4A00; }
+.tr-call.n { background: var(--bg-sunken); color: var(--ink-2); }
+
+.qc-draft {
+  border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 14px;
+  font-size: 13px; line-height: 1.65; margin-top: 6px;
+}
+.qc-draft div { min-height: 1em; }
+.qc-draft a { color: var(--orange-700); }
+
+.train-verdict { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.grade-q { margin: 0 0 18px; }
+.grade-q-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.grade-btns { display: flex; gap: 10px; }
+.grade-btns .btn { flex: 1; justify-content: center; padding: 12px 14px; font-size: 13.5px; }
+.grade-btns .btn.sel.big-yes { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
+.grade-btns .btn.sel.big-no { background: var(--red-bg); border-color: var(--red-line); color: #861E10; }
+.grade-btns .btn.sel.big-skip { background: var(--bg-sunken); border-color: var(--line-2); color: var(--ink-2); }
+.grade-btns.tr-3btn .btn { flex: 1; }
+
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12px; color: var(--ink-3); font-weight: 500; margin-bottom: 6px; }
+.field textarea {
+  width: 100%; min-height: 60px; resize: vertical; border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 11px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent; box-sizing: border-box;
+}
+.field textarea:focus { outline: none; box-shadow: var(--focus); }
+
+.scope-row { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
+.scope-row .scope-lab { font-size: 12px; color: var(--ink-3); }
+.mode-toggle { display: flex; gap: 8px; }
+.mode-toggle .btn { flex: 1; justify-content: center; }
+.mode-toggle .btn.primary.sel { background: var(--orange); border-color: var(--orange); color: var(--cream); }
+
+.grade-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+
+/* ── Done / empty states ───────────────────────────────── */
+.done-banner {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; text-align: center;
+}
+.done-banner .db-icon { font-size: 26px; margin-bottom: 8px; }
+.done-banner .db-msg { font-size: 13.5px; color: var(--ink-2); margin: 6px 0 16px; line-height: 1.55; }
+
+.empty-flow { border: 1px solid var(--line); border-radius: var(--radius); padding: 24px 26px; }
+.empty-flow p { font-size: 13.5px; color: var(--ink-2); line-height: 1.6; margin-bottom: 16px; }
+
+.generate-more-banner {
+  border: 1px solid var(--amber-line); background: var(--amber-bg); color: #6B4A00;
+  border-radius: 10px; padding: 12px 16px; margin: 0 0 16px; font-size: 13px;
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; line-height: 1.5;
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main train-main">
+    <div class="setter-head-row">
+      <h1 class="sh-title">Training</h1>
+      <div class="sh-spacer"></div>
+    </div>
+    <div class="train-sub">Rate real scenarios so this agent learns what a right call looks like. Nothing here sends anything.</div>
+
+    <div id="errBanner" class="err-banner" style="display:none"></div>
+
+    <div class="agent-picker-row" id="agentPickerRow" style="display:none">
+      <label for="agentPicker">Agent</label>
+      <select id="agentPicker"></select>
+    </div>
+
+    <div id="readinessPanelHost"></div>
+    <div id="trainApp"></div>
+  </main>
+</div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("training");
+
+/* ── State ─────────────────────────────────────────────── */
+let AGENTS = [];
+let CAMPAIGNS = [];
+let campaignMap = {};
+let selectedAgentId = null;
+
+let CASES = [];
+let ANSWERS = {};
+let READINESS = { score: 0, decision_component: 0, reply_component: 0, coverage: 0, n_answers: 0,
+                  explanation: "No answers yet. Answer a few training scenarios to start building a readiness score." };
+let usedCount = 0;
+let lastRenderedScore = 0;
+
+/* per-case draft answer, held locally until Save & continue submits it -
+   keyed by case id so browsing back and forth doesn't lose your picks */
+const PENDING = {};
+
+let view = "loading"; // loading | no_agents | empty | stream | done
+let idx = 0;
+let generating = false;
+
+/* ── Fetch helper (same shape as setter.html / setter-grade.html) ────────── */
+async function fetchJson(url, opts) {
+  try {
+    const res = await fetch(url, opts);
+    let data = {};
+    try { data = await res.json(); } catch { data = {}; }
+    if (!res.ok) return { ok: false, status: res.status, error: (data && data.error) || `Request failed (${res.status})`, data };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || "Network error" };
+  }
+}
+function showError(msg) {
+  const el = document.getElementById("errBanner");
+  el.textContent = msg;
+  el.style.display = "block";
+}
+function clearError() { document.getElementById("errBanner").style.display = "none"; }
+
+/* ── Load ──────────────────────────────────────────────── */
+async function boot() {
+  const [agentsRes, campaignsRes] = await Promise.all([
+    fetchJson("/api/setter/agents"),
+    fetchJson("/api/setter/campaigns"),
+  ]);
+  if (!agentsRes.ok) { showError("Couldn't load agents: " + agentsRes.error); view = "no_agents"; render(); return; }
+  clearError();
+  AGENTS = (agentsRes.data && agentsRes.data.agents) || [];
+  CAMPAIGNS = campaignsRes.ok ? (Array.isArray(campaignsRes.data) ? campaignsRes.data : (campaignsRes.data.campaigns || [])) : [];
+  campaignMap = {};
+  CAMPAIGNS.forEach((c) => { campaignMap[c.id] = c.name; });
+
+  if (!AGENTS.length) { view = "no_agents"; render(); return; }
+
+  renderAgentPicker();
+  let saved = null;
+  try { saved = localStorage.getItem("setterTrainAgentId"); } catch { /* ignore */ }
+  selectedAgentId = (saved && AGENTS.some((a) => String(a.id) === saved)) ? saved : String(AGENTS[0].id);
+  document.getElementById("agentPicker").value = selectedAgentId;
+  await loadTraining();
+}
+
+/* Stored outreach/reply bodies can be full HTML (Outlook divs, <br> runs).
+   Reduce to readable plain text, then escape for safe display. */
+function msgText(body) {
+  let t = String(body ?? "");
+  t = t.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(div|p|tr)>/gi, "\n").replace(/<[^>]+>/g, "");
+  const ta = document.createElement("textarea");
+  ta.innerHTML = t;  // decode &amp; &nbsp; etc.
+  t = ta.value.replace(/ /g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return esc(t).replace(/\n/g, "<br>");
+}
+
+function renderAgentPicker() {
+  const row = document.getElementById("agentPickerRow");
+  const sel = document.getElementById("agentPicker");
+  row.style.display = "flex";
+  sel.innerHTML = AGENTS.map((a) => `<option value="${esc(a.id)}">${esc(a.name || "Untitled agent")}</option>`).join("");
+  sel.addEventListener("change", async () => {
+    selectedAgentId = sel.value;
+    try { localStorage.setItem("setterTrainAgentId", selectedAgentId); } catch { /* ignore */ }
+    view = "loading"; render();
+    await loadTraining();
+  });
+}
+
+async function loadTraining() {
+  view = "loading"; render();
+  const res = await fetchJson(`/api/setter/training?agent_id=${encodeURIComponent(selectedAgentId)}`);
+  if (!res.ok) { showError("Couldn't load training scenarios: " + res.error); view = "empty"; render(); return; }
+  clearError();
+  CASES = (res.data && res.data.cases) || [];
+  ANSWERS = (res.data && res.data.answers) || {};
+  usedCount = (res.data && res.data.used_count) || 0;
+  applyReadiness((res.data && res.data.readiness) || READINESS, { animate: false });
+
+  if (!CASES.length) { view = "empty"; render(); return; }
+  const unanswered = currentUnanswered();
+  if (!unanswered.length) { view = "done"; render(); return; }
+  idx = 0;
+  view = "stream";
+  render();
+}
+
+function isAnswered(caseId) {
+  const a = ANSWERS[caseId];
+  return !!a && a.decision_ok !== undefined && a.decision_ok !== null;
+}
+function currentUnanswered() { return CASES.filter((c) => !isAnswered(c.id)); }
+function pendingFor(caseId) {
+  if (!PENDING[caseId]) PENDING[caseId] = { decision_ok: undefined, reply_ok: null, note: "", scope: "one_off" };
+  return PENDING[caseId];
+}
+
+/* ── Readiness panel ───────────────────────────────────── */
+function applyReadiness(r, opts) {
+  opts = opts || {};
+  READINESS = r || READINESS;
+  renderReadinessPanel(opts.animate !== false);
+}
+
+function animateNumber(el, from, to, duration) {
+  from = Number(from) || 0; to = Number(to) || 0;
+  if (from === to) { el.textContent = String(to); return; }
+  const start = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const val = Math.round(from + (to - from) * eased);
+    el.textContent = String(val);
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function renderReadinessPanel(animate) {
+  const host = document.getElementById("readinessPanelHost");
+  const score = Number(READINESS.score) || 0;
+  const ready = score >= 90;
+  const decisionPct = Math.round((READINESS.decision_component || 0) * 100);
+  const replyPct = Math.round((READINESS.reply_component || 0) * 100);
+  const coveragePct = Math.round((READINESS.coverage || 0) * 100);
+  const nAnswers = READINESS.n_answers || 0;
+
+  host.innerHTML = `
+    <div class="readiness-panel">
+      <div class="rp-top">
+        <div class="rp-num-wrap"><span class="rp-num ${ready ? "ready" : ""}" id="rpNum">0</span><span class="rp-num-max">/100</span></div>
+        <div class="rp-headline">
+          <div class="rp-label">${ready ? "Ready to unleash" : "Readiness"}</div>
+          <div class="rp-explain">${esc(READINESS.explanation || "")}</div>
+        </div>
+      </div>
+      <div class="rp-bar-wrap">
+        <div class="rp-bar-track">
+          <div class="rp-bar-fill ${ready ? "ready" : ""}" id="rpBarFill" style="width:0%"></div>
+          <div class="rp-bar-marker"><span>Ready to unleash</span></div>
+        </div>
+      </div>
+      <div class="rp-stats">
+        <div class="rp-stat"><div class="rps-num">${decisionPct}%</div><div class="rps-lab">Right calls</div></div>
+        <div class="rp-stat"><div class="rps-num">${replyPct}%</div><div class="rps-lab">Good replies</div></div>
+        <div class="rp-stat"><div class="rps-num">${coveragePct}%</div><div class="rps-lab">Coverage</div></div>
+        <div class="rp-stat"><div class="rps-num">${nAnswers}</div><div class="rps-lab">Answers so far</div></div>
+      </div>
+    </div>
+  `;
+  const numEl = document.getElementById("rpNum");
+  const fillEl = document.getElementById("rpBarFill");
+  if (animate) {
+    animateNumber(numEl, lastRenderedScore, score, 550);
+  } else {
+    numEl.textContent = String(score);
+  }
+  // one frame so the width transition actually animates from 0
+  requestAnimationFrame(() => { fillEl.style.width = Math.max(0, Math.min(100, score)) + "%"; });
+  lastRenderedScore = score;
+}
+
+/* ── Main render ───────────────────────────────────────── */
+function render() {
+  const el = document.getElementById("trainApp");
+  if (view === "loading") { el.innerHTML = `<div class="empty">Loading…</div>`; return; }
+  if (view === "no_agents") {
+    el.innerHTML = `<div class="empty-flow"><p>No agents yet. Create one on the <a href="setter.html">Setter</a> page first, then come back here to train it.</p></div>`;
+    return;
+  }
+  if (view === "empty") { renderEmpty(); return; }
+  if (view === "done") { renderDone(); return; }
+  const unanswered = currentUnanswered();
+  if (!unanswered.length) { view = "done"; renderDone(); return; }
+  if (idx >= unanswered.length) idx = unanswered.length - 1;
+  if (idx < 0) idx = 0;
+  renderCase(unanswered, idx);
+}
+
+function renderEmpty() {
+  const el = document.getElementById("trainApp");
+  el.innerHTML = `
+    <div class="empty-flow">
+      <p>This agent has no training scenarios yet. Generate a batch of real past replies, then say whether the agent's call and draft reply were right.</p>
+      <button class="btn primary" id="emptyGenerateBtn" type="button">Generate scenarios</button>
+    </div>
+  `;
+  document.getElementById("emptyGenerateBtn").addEventListener("click", () => generateMore());
+}
+
+function renderDone() {
+  const el = document.getElementById("trainApp");
+  const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
+  el.innerHTML = `
+    <div class="done-banner">
+      <div class="db-icon">✓</div>
+      <div><b>All caught up.</b></div>
+      <div class="db-msg">You've answered ${answeredCount} of ${CASES.length} scenarios for this agent. Generate the next batch - your feedback so far shapes them.</div>
+      <button class="btn primary" id="doneGenerateBtn" type="button">Generate more scenarios</button>
+    </div>
+  `;
+  document.getElementById("doneGenerateBtn").addEventListener("click", () => generateMore());
+}
+
+async function generateMore() {
+  const btns = document.querySelectorAll("#emptyGenerateBtn, #doneGenerateBtn, #midGenerateBtn");
+  const restores = [];
+  btns.forEach((b) => { const r = busyBtn(b, "Generating…"); if (r) restores.push(r); });
+  if (generating) return;
+  generating = true;
+  const res = await fetchJson("/api/setter/training/generate", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_id: selectedAgentId, batch_size: 8 }),
+  });
+  generating = false;
+  restores.forEach((r) => r());
+  if (!res.ok) { showError("Couldn't generate scenarios: " + res.error); return; }
+  clearError();
+  const newCases = (res.data && res.data.cases) || [];
+  usedCount = (res.data && res.data.used_count) || usedCount;
+  if (!newCases.length) {
+    showError((res.data && res.data.message) || "No new real replies left to draw scenarios from right now.");
+    return;
+  }
+  CASES = CASES.concat(newCases);
+  idx = 0;
+  view = "stream";
+  render();
+}
+
+/* ── Scenario card ─────────────────────────────────────── */
+function callLineFor(c) {
+  if (c.decision === "auto_send") return { cls: "g", text: "The agent would have sent this automatically." };
+  if (c.decision === "review") return { cls: "a", text: `The agent held this for a person - ${c.decision_reason || "needs a human look"}.` };
+  return { cls: "n", text: `The agent filed this as no action - ${c.decision_reason || "no action needed"}.` };
+}
+
+function renderCase(unanswered, i) {
+  const el = document.getElementById("trainApp");
+  const c = unanswered[i];
+  const p = pendingFor(c.id);
+  const total = unanswered.length;
+  const answeredCount = CASES.filter((x) => isAnswered(x.id)).length;
+
+  const campaignName = campaignMap[c.campaign_id] || (c.campaign_id ? `Campaign ${c.campaign_id}` : "Unknown campaign");
+  const category = c.category || "Uncategorised";
+
+  const outreach = c.original_outreach || {};
+  const hasOutreach = !!(outreach && outreach.body);
+  const outreachBody = hasOutreach
+    ? `${outreach.subject ? `<div class="tr-subj">${esc(outreach.subject)}</div>` : ""}${msgText(outreach.body)}`
+    : "<i>The original outreach could not be loaded for this one.</i>";
+
+  const humanHist = c.human_answer_history || {};
+  const hasHumanHist = !!(humanHist && humanHist.body);
+
+  const inbound = c.inbound || {};
+  const inboundBody = msgText(inbound.body) || "<i>No message text.</i>";
+
+  const call = callLineFor(c);
+  const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
+
+  el.innerHTML = `
+    <div class="train-progress">Scenario ${i + 1} of ${total} unanswered &middot; ${answeredCount} of ${CASES.length} answered overall</div>
+    <div class="train-card">
+      <div class="tr-chips">
+        <span class="pill n">${esc(campaignName)}</span>
+        <span class="pill n">${esc(category)}</span>
+      </div>
+      <details class="tr-details" open>
+        <summary>The original outreach we sent</summary>
+        <div class="tr-details-body">${hasOutreach ? outreachBody : outreachBody}</div>
+      </details>
+      ${hasHumanHist ? `
+      <details class="tr-details">
+        <summary>How a human answered a similar moment</summary>
+        <div class="tr-details-body">${humanHist.subject ? `<div class="tr-subj">${esc(humanHist.subject)}</div>` : ""}${msgText(humanHist.body)}</div>
+      </details>` : ""}
+      <div class="tr-block inbound">
+        <div class="tr-block-lab">Their reply</div>
+        <div class="tr-msg big">${inboundBody === "<i>No message text.</i>" ? inboundBody : inboundBody}</div>
+      </div>
+      <div class="tr-call ${call.cls}">${esc(call.text)}</div>
+      ${hasDraft ? `
+      <div class="tr-block">
+        <div class="tr-block-lab">The agent's draft reply</div>
+        <div class="qc-draft">${c.draft_html}</div>
+      </div>` : ""}
+    </div>
+
+    <div class="train-verdict">
+      <div class="grade-q">
+        <div class="grade-q-label">Right call?</div>
+        <div class="grade-btns" id="decisionBtns">
+          <button type="button" class="btn big-yes ${p.decision_ok === true ? "sel" : ""}" data-v="true">Yes</button>
+          <button type="button" class="btn big-no ${p.decision_ok === false ? "sel" : ""}" data-v="false">No</button>
+        </div>
+      </div>
+      ${hasDraft ? `
+      <div class="grade-q">
+        <div class="grade-q-label">Good reply?</div>
+        <div class="grade-btns tr-3btn" id="replyBtns">
+          <button type="button" class="btn big-yes ${p.reply_ok === true ? "sel" : ""}" data-v="true">Yes</button>
+          <button type="button" class="btn big-no ${p.reply_ok === false ? "sel" : ""}" data-v="false">No</button>
+          <button type="button" class="btn big-skip ${p.reply_ok === null ? "sel" : ""}" data-v="null">Skip</button>
+        </div>
+      </div>` : ""}
+      <div class="field">
+        <label>Feedback (optional)</label>
+        <textarea id="trNote" placeholder="Tell it what should have happened, e.g. this should have gone to review because pricing was asked">${esc(p.note || "")}</textarea>
+      </div>
+      <div class="scope-row">
+        <span class="scope-lab">Apply this feedback</span>
+        <div class="mode-toggle">
+          <button type="button" class="btn ${p.scope === "one_off" ? "primary sel" : ""}" id="scopeOneOff" data-scope="one_off">One-off</button>
+          <button type="button" class="btn ${p.scope === "remember" ? "primary sel" : ""}" id="scopeRemember" data-scope="remember" ${p.note ? "" : "disabled"}>Remember going forward</button>
+        </div>
+      </div>
+      <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
+      <div class="grade-nav">
+        <button type="button" class="btn" id="trPrevBtn" ${i === 0 ? "disabled" : ""}>&lsaquo; Previous</button>
+        <button type="button" class="btn" id="midGenerateBtn" style="display:none">Generate more scenarios</button>
+        <button type="button" class="btn primary" id="trNextBtn">Save & continue &rsaquo;</button>
+      </div>
+    </div>
+  `;
+  wireCaseEvents(c, unanswered, i);
+}
+
+function wireCaseEvents(c, unanswered, i) {
+  const p = pendingFor(c.id);
+
+  const decisionWrap = document.getElementById("decisionBtns");
+  if (decisionWrap) {
+    decisionWrap.querySelectorAll("button[data-v]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        p.decision_ok = btn.getAttribute("data-v") === "true";
+        decisionWrap.querySelectorAll("button").forEach((b) => b.classList.remove("sel"));
+        btn.classList.add("sel");
+        hideNudge();
+      });
+    });
+  }
+  const replyWrap = document.getElementById("replyBtns");
+  if (replyWrap) {
+    replyWrap.querySelectorAll("button[data-v]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const v = btn.getAttribute("data-v");
+        p.reply_ok = v === "true" ? true : v === "false" ? false : null;
+        replyWrap.querySelectorAll("button").forEach((b) => b.classList.remove("sel"));
+        btn.classList.add("sel");
+      });
+    });
+  }
+  const noteEl = document.getElementById("trNote");
+  const scopeOneOffBtn = document.getElementById("scopeOneOff");
+  const scopeRememberBtn = document.getElementById("scopeRemember");
+  if (noteEl) {
+    noteEl.addEventListener("input", () => {
+      p.note = noteEl.value;
+      const hasNote = !!p.note.trim();
+      if (scopeRememberBtn) scopeRememberBtn.disabled = !hasNote;
+      if (!hasNote && p.scope === "remember") {
+        p.scope = "one_off";
+        setScopeButtons(p.scope);
+      }
+    });
+  }
+  if (scopeOneOffBtn) scopeOneOffBtn.addEventListener("click", () => { p.scope = "one_off"; setScopeButtons(p.scope); });
+  if (scopeRememberBtn) scopeRememberBtn.addEventListener("click", () => {
+    if (scopeRememberBtn.disabled) return;
+    p.scope = "remember"; setScopeButtons(p.scope);
+  });
+
+  const prevBtn = document.getElementById("trPrevBtn");
+  if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
+  const midGenBtn = document.getElementById("midGenerateBtn");
+  if (midGenBtn && i === unanswered.length - 1) {
+    midGenBtn.style.display = "";
+    midGenBtn.addEventListener("click", () => generateMore());
+  }
+  const nextBtn = document.getElementById("trNextBtn");
+  if (nextBtn) nextBtn.addEventListener("click", () => submitAndAdvance(c, nextBtn));
+}
+
+function setScopeButtons(scope) {
+  const oneOff = document.getElementById("scopeOneOff");
+  const remember = document.getElementById("scopeRemember");
+  if (oneOff) oneOff.classList.toggle("sel", scope === "one_off");
+  if (oneOff) oneOff.classList.toggle("primary", scope === "one_off");
+  if (remember) remember.classList.toggle("sel", scope === "remember");
+  if (remember) remember.classList.toggle("primary", scope === "remember");
+}
+
+function showNudge(msg) {
+  const el = document.getElementById("trNudge");
+  if (el) { el.textContent = msg; el.style.display = "block"; }
+}
+function hideNudge() {
+  const el = document.getElementById("trNudge");
+  if (el) el.style.display = "none";
+}
+
+async function submitAndAdvance(c, btn) {
+  const p = pendingFor(c.id);
+  if (p.decision_ok === undefined) { showNudge("Answer \"Right call?\" first."); return; }
+  const noteEl = document.getElementById("trNote");
+  if (noteEl) p.note = noteEl.value.trim();
+  const effectiveScope = p.note ? (p.scope || "one_off") : "one_off";
+
+  const restore = busyBtn(btn, "Saving…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/training/answer", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      agent_id: selectedAgentId, case_id: c.id,
+      decision_ok: !!p.decision_ok,
+      reply_ok: (p.reply_ok === true || p.reply_ok === false) ? p.reply_ok : null,
+      note: p.note || "", scope: effectiveScope,
+    }),
+  });
+  restore();
+  if (!res.ok) { showError("Couldn't save that answer: " + res.error); return; }
+  clearError();
+  ANSWERS[c.id] = { decision_ok: !!p.decision_ok, reply_ok: p.reply_ok, note: p.note || "", scope: effectiveScope };
+  delete PENDING[c.id];
+  applyReadiness((res.data && res.data.readiness) || READINESS, { animate: true });
+
+  const unanswered = currentUnanswered();
+  if (!unanswered.length) { view = "done"; render(); return; }
+  if (idx >= unanswered.length) idx = unanswered.length - 1;
+  view = "stream";
+  render();
+}
+
+/* ── Boot ──────────────────────────────────────────────── */
+boot();
+</script>
+</body>
+</html>

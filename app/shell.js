@@ -5,16 +5,13 @@ function ic8(name, cls = "") {
   return `<span class="ic8 ${cls}" style="--icon:url('icons/${name}.png')"></span>`;
 }
 
-// campaigns → megaphone, deliverability → server rack; both are SVG masks
-// (any monochrome shape works — .ic8 masks it and inherits the nav color)
-const icSvg = (name, cls = "") => `<span class="ic8 ${cls}" style="--icon:url('icons/${name}.svg')"></span>`;
-
 const ICONS = {
   dashboard: ic8("home", "lg"),
-  campaigns: icSvg("megaphone", "lg"),
-  lists: ic8("people", "lg"),
-  deliverability: icSvg("server", "lg"),
+  campaigns: ic8("send", "lg"),
+  lists: ic8("data", "lg"),
+  deliverability: ic8("check", "lg"),
   setter: ic8("reply", "lg"),
+  training: ic8("thumbsup", "lg"),
   notifications: ic8("bell", "lg"),
 };
 
@@ -22,8 +19,9 @@ const NAV = [
   ["index.html", "dashboard", "Dashboard"],
   ["campaigns.html", "campaigns", "Campaigns"],
   ["lists.html", "lists", "Lists"],
-  ["setter.html", "setter", "Setter"],
   ["deliverability.html", "deliverability", "Deliverability"],
+  ["setter.html", "setter", "Setter"],
+  ["setter-train.html", "training", "Training"],
   ["notifications.html", "notifications", "Notifications"],
 ];
 
