@@ -5837,6 +5837,32 @@ _CAMPAIGN_SCORECARD_SWR = _SWRCache(
     name="campaign-scorecard")
 
 
+# ── Collective last-30-days top line (homepage strip) ──────────────────────
+# The strip above the campaign list is a LAST-30-DAYS window, not all-time.
+# Everything is one DB round-trip via rpc/collective_30d:
+#  - sent / replies / positives / bounces + reply% / bounce% come from the latest
+#    mailbox_stats_daily snapshot's per-mailbox trailing-30d columns (Smartlead's
+#    OWN numbers — same source + definitions as the deliverability graph, so the
+#    strip's reply/bounce rates match the graph's health verdict exactly);
+#  - meetings from the dated meetings table (booked_at, last 30d);
+#  - signals_sourced from signal_leads.pulled_at (last 30d).
+# Nothing is invented; a failed read degrades to a labelled empty strip.
+def _collective_30d() -> dict:
+    r = sb("POST", "rpc/collective_30d", {})
+    if isinstance(r, list):                 # defensive: some PostgREST shapes wrap
+        r = r[0] if r else None
+    if isinstance(r, dict) and "collective_30d" in r:   # select-style wrapping
+        r = r.get("collective_30d")
+    if not isinstance(r, dict) or r.get("sent") is None:
+        return {"error": "Supabase read failed"}
+    return r
+
+
+_COLLECTIVE_30D_SWR = _SWRCache(_collective_30d, 300,
+                                is_degraded=lambda p: not (isinstance(p, dict) and p.get("sent") is not None),
+                                name="collective-30d")
+
+
 def _split_name(pr: dict) -> tuple[str, str]:
     parts = (pr.get("name") or "").strip().split(" ", 1)
     return parts[0] or ".", (parts[1] if len(parts) > 1 else ".") or "."
@@ -10934,6 +10960,10 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(perf_daily({"days": (q.get("days") or ["30"])[0]}))
+        if path == "/api/collective-30d":
+            # Homepage strip's LAST-30-DAYS top line (sent/reply/positives/meetings/
+            # signals) — one cheap DB round-trip via rpc/collective_30d, SWR-cached.
+            return self._json(_COLLECTIVE_30D_SWR.get())
         if path == "/api/campaign-platform-leads":
             # One page of a campaign's real platform leads for the detail Leads tab.
             from urllib.parse import parse_qs, urlparse
