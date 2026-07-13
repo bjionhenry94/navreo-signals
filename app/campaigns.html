@@ -425,7 +425,7 @@ function listSkeleton() {
   const row = `<div class="srcrow" style="padding:14px 16px"><div class="ictile skel" style="width:34px;height:34px"></div><div style="flex:1"><div class="skel" style="width:42%;height:13px"></div><div class="skel" style="width:26%;height:10px;margin-top:7px"></div></div><div class="skel" style="width:74px;height:22px;border-radius:999px"></div></div>`;
   return `
     <div class="pagehead"><div><div class="eyebrow">Campaigns</div><h1>Campaigns.</h1></div></div>
-    <div class="card panel" style="margin-top:16px"><h2 style="font-size:15px;margin-bottom:2px">Performance</h2><div class="small muted" style="margin-bottom:8px">Emails sent per day, reply rate and bounce rate — straight from the data layer.</div><div class="skel" style="height:70px"></div><div class="skel" style="height:210px;margin-top:10px"></div></div>
+    <div class="card panel" style="margin-top:16px"><h2 style="font-size:15px;margin-bottom:10px">Performance</h2><div class="skel" style="height:210px"></div></div>
     <div style="margin-top:16px"><div class="card">${row.repeat(4)}</div></div>`;
 }
 function detailSkeleton(dc) {
@@ -2183,8 +2183,11 @@ async function renderList() {
     : drafts.map((d) => ({ key: d.id, platform: (d.id.startsWith("camp-hr") ? "heyreach" : "smartlead"),
                            name: d.name, status: d.paused ? "PAUSED" : "ACTIVE", managed: true, draft_id: d.id, client_id: d.client_id, created_at: d.created_at, doc: d }));
   // client scope: managed rows filter by client; external rows have no client
-  // dimension, so they only show under "All clients" (said out loud below)
-  const scoped = rows.filter((r) => !activeClient || (r.managed && r.client_id === activeClient));
+  // dimension, so they only show under "All clients" (said out loud below).
+  // The page-level campaign dropdown (window._perfCampaign) narrows BOTH the
+  // graph and this list to a single Smartlead campaign when one is picked.
+  const scoped = rows.filter((r) => (!activeClient || (r.managed && r.client_id === activeClient))
+    && (!window._perfCampaign || String(r.platform_id) === String(window._perfCampaign)));
   window._campFilter = window._campFilter || "active";
   window._campSearch = window._campSearch || "";
   const buckets = { all: scoped.length, active: 0, paused: 0, draft: 0, done: 0, setup: 0 };
@@ -2262,49 +2265,41 @@ async function renderList() {
       ? `<div class="small" style="color:var(--orange-700);margin-top:8px">⚠ ${esc(uni0.smartlead_error || uni0.heyreach_error)} — showing the last good sync.</div>`
       : "";
   main.innerHTML = `
-    <div class="pagehead">
+    <div class="pagehead" style="align-items:flex-start">
       <div>
         <div class="eyebrow">Campaigns</div>
         <h1>Campaigns.</h1>
-        <div class="small muted" style="margin-top:4px">Every outbound campaign — Smartlead + HeyReach — in one place. Signals feed campaigns as <b>sources</b>; open a campaign to see its sources.</div>
       </div>
-      <div style="display:flex;gap:10px;align-items:center">
-        <!-- Client switcher now lives once, globally, in the shared rail (shell.js
-             renderRail / #rail-client-select) — this page just reads the shared
-             localStorage["navreo_client"] value and re-renders on "navreo:client-changed". -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        <!-- Page-level filters: the campaign dropdown scopes BOTH the graph and
+             the campaign list below; the date range scopes the graph window.
+             Client switcher lives globally in the shared rail (shell.js). -->
+        <select id="perf-campaign" class="input sm" title="Filter the graph and the list to one campaign" style="border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent;max-width:230px" onchange="window._perfCampaign=this.value;if(this.value)window._campFilter='all';renderList()">
+          <option value="">All campaigns</option>
+          ${(() => {
+            const seen = new Set();
+            return rows.filter((r) => r.platform === "smartlead" && r.platform_id && !seen.has(String(r.platform_id)) && seen.add(String(r.platform_id)))
+              .map((r) => ({ id: String(r.platform_id), name: (r.doc && r.doc.name) || r.name || `Campaign ${r.platform_id}` }))
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((o) => `<option value="${esc4attr(o.id)}"${String(window._perfCampaign || "") === o.id ? " selected" : ""}>${esc(o.name)}</option>`).join("");
+          })()}
+        </select>
+        <span id="perf-range" style="display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden">
+          ${[7, 30, 90].map((n) => `<button class="btn sm" data-days="${n}" style="border:none;border-radius:0" onclick="perfSetDays(${n})">${n}d</button>`).join("")}
+          <button class="btn sm" data-days="custom" style="border:none;border-radius:0" onclick="perfToggleCustom()" title="Pick an exact date range">Custom</button>
+        </span>
+        <span id="perf-custom" style="display:none;gap:6px;align-items:center">
+          <input id="perf-start" type="date" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;font:400 12px var(--font-sans);color:var(--ink);background:transparent">
+          <span class="small muted">→</span>
+          <input id="perf-end" type="date" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;font:400 12px var(--font-sans);color:var(--ink);background:transparent">
+          <button class="btn sm primary" onclick="perfApplyCustom()">Apply</button>
+        </span>
         <button class="btn primary" onclick="openWizard()">${ic8("idea")} New campaign</button>
       </div>
     </div>
     <div class="card panel" style="margin-top:16px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-        <div style="min-width:0">
-          <h2 style="font-size:15px;margin-bottom:2px">Performance</h2>
-          <div class="small muted">Emails sent, leads added, reply rate, positives and meetings per day — straight from the data layer. Nothing estimated; a metric with no data shows as a labelled gap.</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <select id="perf-campaign" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:400 12.5px var(--font-sans);color:var(--ink);background:transparent;max-width:230px" onchange="window._perfCampaign=this.value;loadPerf()">
-            <option value="">All campaigns</option>
-            ${(() => {
-              const seen = new Set();
-              return rows.filter((r) => r.platform === "smartlead" && r.platform_id && !seen.has(String(r.platform_id)) && seen.add(String(r.platform_id)))
-                .map((r) => ({ id: String(r.platform_id), name: (r.doc && r.doc.name) || r.name || `Campaign ${r.platform_id}` }))
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map((o) => `<option value="${esc4attr(o.id)}"${String(window._perfCampaign || "") === o.id ? " selected" : ""}>${esc(o.name)}</option>`).join("");
-            })()}
-          </select>
-          <span id="perf-range" style="display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden">
-            ${[7, 30, 90].map((n) => `<button class="btn sm" data-days="${n}" style="border:none;border-radius:0" onclick="perfSetDays(${n})">${n}d</button>`).join("")}
-            <button class="btn sm" data-days="custom" style="border:none;border-radius:0" onclick="perfToggleCustom()" title="Pick an exact date range">Custom</button>
-          </span>
-          <span id="perf-custom" style="display:none;gap:6px;align-items:center">
-            <input id="perf-start" type="date" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;font:400 12px var(--font-sans);color:var(--ink);background:transparent">
-            <span class="small muted">→</span>
-            <input id="perf-end" type="date" class="input sm" style="border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;font:400 12px var(--font-sans);color:var(--ink);background:transparent">
-            <button class="btn sm primary" onclick="perfApplyCustom()">Apply</button>
-          </span>
-        </div>
-      </div>
-      <div id="perf-chart" style="min-height:240px;margin-top:12px"><div class="skel" style="height:210px"></div></div>
+      <h2 style="font-size:15px;margin-bottom:10px">Performance</h2>
+      <div id="perf-chart" style="min-height:240px"><div class="skel" style="height:210px"></div></div>
       <div id="perf-stats"></div>
     </div>
     <div style="margin-top:16px">
