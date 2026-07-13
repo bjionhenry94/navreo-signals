@@ -1728,6 +1728,12 @@ function scRatio(sent, pos) {
 function scStat(cls, n, label, title) {
   return `<div class="sc-stat"${title ? ` title="${esc(title)}"` : ""}><div class="n ${cls}">${n}</div><div class="l">${esc(label)}</div></div>`;
 }
+/* "Signals Sourced" — the count of people this campaign's SIGNALS surfaced.
+   Only shown when it actually has signal-sourced leads; pinned to the far right. */
+function signalsTile(leadsSourced) {
+  if (!(leadsSourced != null && leadsSourced > 0)) return "";
+  return `<div class="sc-stat" style="margin-left:auto;text-align:right" title="People your signals surfaced for this campaign"><div class="n sc-c-leads">${fmt(leadsSourced)}</div><div class="l">Signals Sourced</div></div>`;
+}
 /* Per-campaign stat strip: completion ring + coloured columns. m = the campaign's
    Smartlead metrics (or null when it has no email destination); leadsSourced = the
    signal leads count for this campaign (or null when unknown). */
@@ -1739,16 +1745,15 @@ function scRowHtml(m, leadsSourced) {
   const ratio = m ? scRatio(m.sent, m.positives) : "–";
   const meet = (m && m.meetings != null) ? fmt(m.meetings)
     : `<span class="sc-muted" title="Meetings source not connected for this campaign">–</span>`;
-  const leads = (leadsSourced != null) ? fmt(leadsSourced) : "–";
   return `<div class="sc-row">
     ${ring}
-    <div class="sc-cols">
-      ${scStat("sc-c-leads", leads, "Leads sourced", "People your signals surfaced for this campaign")}
+    <div class="sc-cols" style="flex:1">
       ${scStat("sc-c-sent", sent, "Emails sent")}
       ${scStat("sc-c-reply", pcNum(m && m.replied, m && m.sent), "Reply rate")}
       ${scStat("sc-c-sent", ratio, "Sends / positive", "Emails sent per positive reply")}
       ${scStat("sc-c-meet", meet, "Meetings")}
       ${scStat("sc-c-bounce", pcNum(m && m.bounced, m && m.sent), "Bounce rate")}
+      ${signalsTile(leadsSourced)}
     </div>
   </div>`;
 }
@@ -1756,16 +1761,15 @@ function scRowHtml(m, leadsSourced) {
    instead (people / in-progress / finished / failed), same row shape so the list
    stays visually consistent. Tiles are labelled, so it's clear which is which. */
 function scRowHtmlHeyReach(hr, leadsSourced) {
-  const leads = (leadsSourced != null) ? fmt(leadsSourced) : "–";
   const v = (n) => (hr && hr[n] != null) ? fmt(hr[n]) : "–";
   return `<div class="sc-row">
     ${scRing(0, true)}
-    <div class="sc-cols">
-      ${scStat("sc-c-leads", leads, "Leads sourced", "People your signals surfaced for this campaign")}
+    <div class="sc-cols" style="flex:1">
       ${scStat("sc-c-people", v("people"), "People", "People in this LinkedIn campaign")}
       ${scStat("sc-c-inprog", v("in_progress"), "In progress", "Currently being messaged")}
       ${scStat("sc-c-finished", v("finished"), "Finished")}
       ${scStat("sc-c-failed", v("failed"), "Failed")}
+      ${signalsTile(leadsSourced)}
     </div>
   </div>`;
 }
@@ -1798,7 +1802,7 @@ function scCollectiveHtml(sc, leadCounts, drafts) {
   // read as a broken, self-contradicting chart. These tiles carry only the
   // funnel metrics the graph doesn't: sourced → sent → positive → meetings.
   return `<div class="sc-tiles">
-    ${tile("Leads sourced", leadsKnown ? fmt(leads) : "–", "found by your signals")}
+    ${tile("Signals Sourced", leadsKnown ? fmt(leads) : "–", "found by your signals")}
     ${tile("Emails sent", fmt(sent), "from campaigns run here")}
     ${tile("Completion", total ? `${Math.round(scPct(completed, total))}%` : "–", "finished the sequence")}
     ${tile("Sends / positive", ratio, `${fmt(positives)} positive`)}
@@ -1943,7 +1947,7 @@ async function renderList() {
   // never a blank page, and the degradation is labelled in the banner below
   const rows = uniRows ? uniRows.map((r) => ({ ...r, doc: r.draft_id ? draftById[r.draft_id] : null }))
     : drafts.map((d) => ({ key: d.id, platform: (d.id.startsWith("camp-hr") ? "heyreach" : "smartlead"),
-                           name: d.name, status: d.paused ? "PAUSED" : "ACTIVE", managed: true, draft_id: d.id, client_id: d.client_id, doc: d }));
+                           name: d.name, status: d.paused ? "PAUSED" : "ACTIVE", managed: true, draft_id: d.id, client_id: d.client_id, created_at: d.created_at, doc: d }));
   // client scope: managed rows filter by client; external rows have no client
   // dimension, so they only show under "All clients" (said out loud below)
   const scoped = rows.filter((r) => !activeClient || (r.managed && r.client_id === activeClient));
@@ -1957,8 +1961,16 @@ async function renderList() {
   // visibility toggles (filterCampRows), so typing never re-renders the page.
   const searchable = (r) => `${r.name || ""} ${(r.doc && r.doc.name) || ""}`.toLowerCase();
   let visible = scoped.slice();
-  // managed campaigns first, then alphabetical — the rows you can act on lead
-  visible.sort((a, b) => (b.managed - a.managed) || String(a.name).localeCompare(String(b.name)));
+  // Newest first, by the date the campaign was launched (platform created_at, or
+  // the draft's created_at for tool-built ones). Undated rows sink to the bottom.
+  const launchedAt = (r) => r.created_at || (r.doc && r.doc.created_at) || "";
+  visible.sort((a, b) => {
+    const da = launchedAt(a), db = launchedAt(b);
+    if (da && db) return db < da ? -1 : db > da ? 1 : 0;  // desc
+    if (da) return -1;
+    if (db) return 1;
+    return String(a.name).localeCompare(String(b.name));
+  });
   const ROW_CAP = 1000;  // all rows stay in the DOM so the search box can filter
                          // them live (display toggle) without re-rendering the page
   const overflow = Math.max(0, visible.length - ROW_CAP);

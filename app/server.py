@@ -5350,7 +5350,8 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
             raise RuntimeError(f"Smartlead /campaigns: {msg or 'unexpected response'}")
         sl_rows = [{"key": f"camp-sl-{c.get('id')}", "platform": "smartlead",
                     "platform_id": c.get("id"), "name": c.get("name") or "",
-                    "status": (c.get("status") or "").upper()}
+                    "status": (c.get("status") or "").upper(),
+                    "created_at": c.get("created_at")}
                    for c in camps]
         out["smartlead_synced_at"] = int(time.time())
     except Exception as e:  # noqa: BLE001
@@ -5360,7 +5361,8 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
             hr_rows.append({"key": f"camp-hr-c{it.get('id')}", "platform": "heyreach",
                             "platform_id": it.get("id"), "name": it.get("name") or "",
                             "status": (it.get("status") or "").upper(),
-                            "hr_list_id": it.get("linkedInUserListId")})
+                            "hr_list_id": it.get("linkedInUserListId"),
+                            "created_at": it.get("creationTime") or it.get("startedAt")})
         out["heyreach_synced_at"] = int(time.time())
     except Exception as e:  # noqa: BLE001
         out["heyreach_error"] = str(e)[:150]
@@ -5401,7 +5403,8 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
         out.setdefault("unlinked", []).append(
             {"key": d.get("id"), "platform": plat, "platform_id": None,
              "name": d.get("name") or "", "status": "UNLINKED",
-             "draft_id": d.get("id"), "client_id": d.get("client_id"), "managed": True})
+             "draft_id": d.get("id"), "client_id": d.get("client_id"), "managed": True,
+             "created_at": d.get("created_at")})
     out["rows"] = sl_rows + hr_rows + (out.pop("unlinked", []) or [])
     out["smartlead_count"] = len(sl_rows)
     out["heyreach_count"] = len(hr_rows)
