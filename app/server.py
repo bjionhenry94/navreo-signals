@@ -5632,7 +5632,6 @@ def perf_daily(p: dict) -> dict:
     def col(name):
         return {d: _sc_int(by.get(d, {}).get(name)) for d in dates}
     sent_m, pos_m, mtg_m, la_m = col("sent"), col("positives"), col("meetings"), col("leads_added")
-    s30_m, r30_m, b30_m = col("sent_30d"), col("replies_30d"), col("bounces_30d")
 
     def bounded(m):
         # real count (incl 0) between the first and last active day IN the visible
@@ -5653,32 +5652,37 @@ def perf_daily(p: dict) -> dict:
     # the 9th while deliverability did. A day Smartlead reports 0 for is a real 0;
     # a day outside the returned window is null (absent). A single campaign has no
     # fleet-analytics dimension, so it stays on the sent_messages archive.
+    # sent, reply-rate AND bounce-rate for the fleet all come from the SAME cached
+    # deliverability series (Smartlead day-wise), fetched once here.
+    _fleet_reply, _fleet_bounce = {}, {}
     if campaign:
         sent = bounded(sent_m)
     else:
         lookback = min(90, max(7, (today - start).days + 1))
         _tr, _ = deliv_trends_get(lookback)
-        _sentmap = dict(zip(((_tr or {}).get("series") or {}).get("days") or [],
-                            ((_tr or {}).get("series") or {}).get("sent") or []))
+        _ser = (_tr or {}).get("series") or {}
+        _days = _ser.get("days") or []
+        _sentmap = dict(zip(_days, _ser.get("sent") or []))
+        _fleet_reply = dict(zip(_days, _ser.get("reply_pct") or []))
+        _fleet_bounce = dict(zip(_days, _ser.get("bounce_pct") or []))
         sent = [_sentmap.get(d) for d in dates]
     leads_added = bounded(la_m)
     positives = bounded(pos_m)
     meetings = bounded(mtg_m)
 
-    # Reply rate is a fleet-level line only. The data layer has NO trustworthy
-    # per-campaign daily denominator: sent_messages under-mirrors older campaigns
-    # while the replies table is complete, so replies÷sent per campaign inflates
-    # to nonsense (60–80%). Rather than ship a misleading line, a per-campaign
-    # view renders reply-rate as a labelled ABSENT line — never a fabricated one.
-    reply_rate, bounce_rate = [], []
+    # Reply rate (and bounce) is a fleet-level line only, and it MIRRORS the
+    # deliverability tab exactly — Smartlead day-wise replied÷sent / bounced÷sent
+    # per day, from the same cached series as the sent line above (full history).
+    # A per-campaign view has NO trustworthy daily denominator (sent_messages
+    # under-mirrors older campaigns while the replies table is complete, so
+    # replies÷sent per campaign inflates to 60–80%), so it renders reply-rate as a
+    # labelled ABSENT line — never a fabricated one.
     if campaign:
         reply_rate = [None] * ndays
         bounce_rate = [None] * ndays
     else:
-        for d in dates:
-            s30 = s30_m.get(d, 0)
-            reply_rate.append(round(100.0 * r30_m.get(d, 0) / s30, 2) if s30 else None)
-            bounce_rate.append(round(100.0 * b30_m.get(d, 0) / s30, 2) if s30 else None)
+        reply_rate = [_fleet_reply.get(d) for d in dates]
+        bounce_rate = [_fleet_bounce.get(d) for d in dates]
 
     return {"days": dates, "campaign": campaign,
             "sent": sent, "leads_added": leads_added, "positives": positives,
@@ -5691,8 +5695,8 @@ def perf_daily(p: dict) -> dict:
                 "positives": "Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)",
                 "meetings": "Meetings/day (replies: Call Booked / Meeting Request)",
                 "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
-                               if campaign else "Reply rate % (fleet 30-day rolling — mailbox_stats_daily)"),
-                "bounce_rate": "Bounce rate % (fleet 30-day rolling — mailbox_stats_daily)"},
+                               if campaign else "Reply rate % (whole fleet — Smartlead day-wise analytics, same source as the deliverability tab)"),
+                "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise analytics, same source as the deliverability tab)"},
             "last_synced_day": max([d for d in dates if sent_m.get(d, 0)], default=None)}
 
 
