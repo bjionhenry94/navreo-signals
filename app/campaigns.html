@@ -1480,9 +1480,12 @@ function draftProspects(srcs) {
    Buckets whatever lead rows we have by pulled_at date. Degrades to dots when there's only one day. */
 function velocityChart(rows, srcs) {
   const days = {};  // "YYYY-MM-DD" -> { [sid]: count, __all: count }
+  // Cap the range to the last 30 days (matches the homepage performance graph's
+  // window) — anything older drops off so the chart tracks recent velocity.
+  const cutoff = new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10);
   (rows || []).forEach((r) => {
     const d = String(r.pulled_at || "").slice(0, 10);
-    if (!d) return;
+    if (!d || d < cutoff) return;
     const sid = r._sid == null ? "unknown" : r._sid;
     const bucket = (days[d] = days[d] || {});
     bucket[sid] = (bucket[sid] || 0) + 1;
