@@ -48,6 +48,22 @@
 .sc-ring .pv { position: relative; font-size: 12px; font-weight: 700; color: var(--ink); }
 .sc-ring.gated { background: var(--line); }
 .sc-muted { color: var(--ink-3); font-weight: 500; }
+/* Data grid — same look as the Lists page people grid (ported verbatim from
+   lists.html) so a campaign's "People" reads identically to a saved list. */
+.gridwrap { position: relative; border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; max-width: 100%; max-height: 68vh; }
+table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
+.datagrid th { position: sticky; top: 0; background: var(--bg-sunken); z-index: 5; text-align: left; padding: 0; border-bottom: 1px solid var(--line-2); }
+.datagrid th .thwrap { display: flex; align-items: center; gap: 5px; padding: 8px 10px; white-space: nowrap; }
+.datagrid th .thlbl { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
+.datagrid th.gutter, .datagrid td.gutter { position: sticky; left: 0; background: var(--bg-sunken); color: var(--ink-3); text-align: right; padding: 6px 10px; font-family: var(--font-mono); font-size: 11px; z-index: 4; }
+.datagrid th.gutter { z-index: 6; }
+.datagrid tr:hover td.gutter { background: var(--bg-sunken); }
+/* horizontal borders only — no vertical lines between data cells */
+.datagrid td { padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+.datagrid tr:hover td { background: var(--bg-sunken); }
+.datagrid td .celllink { color: inherit; text-decoration: none; }
+.datagrid td .celllink:hover { text-decoration: underline; }
+.datagrid td .pill { font-size: 10.5px; }
 
 /* detail */
 .dethead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -766,7 +782,7 @@ async function renderDraftCampaign(id) {
     // source, this campaign also grows an app-signal leads workflow (the branch
     // below), and it stops being `external`.
     window._extLeadsOffset = window._extLeadsOffset || 0;
-    el.innerHTML = '<div class="card panel"><h2 style="font-size:15px">People in this campaign</h2><div class="small muted" id="ext-leads-sub">Loading from ' + (platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead") + '…</div><div id="ext-leads-body"><div class="skel" style="height:200px;margin-top:10px"></div></div></div>';
+    el.innerHTML = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:2px 0 10px"><h2 style="font-size:15px;margin:0">People in this campaign</h2><span class="small muted" id="ext-leads-sub">Loading from ' + (platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead") + '…</span></div><div id="ext-leads-body"><div class="skel" style="height:200px"></div></div>';
     (async () => {
       const off = window._extLeadsOffset, lim = 50;
       let d = null;
@@ -776,27 +792,42 @@ async function renderDraftCampaign(id) {
       if (!d || d.error || !Array.isArray(d.leads)) { body.innerHTML = `<div class="small muted" style="padding:16px 4px">Couldn't load the people list${d && d.error ? ` — ${esc(d.error)}` : ""}. <button class="btn sm" onclick="bustCache('/api/campaign-platform-leads?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}&offset=${off}&limit=${lim}');renderDraftCampaign('${id}')">Retry</button></div>`; return; }
       const total = d.total;
       if (sub) sub.textContent = (total != null ? `${fmt(total)} people` : `${fmt(d.leads.length)} people`) + ` · already in this ${platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead"} campaign (read-only)`;
-      const statusPill = (s, replied) => replied ? '<span class="pill g">replied</span>'
+      const statusCell = (s, replied) => replied ? '<span class="pill g">replied</span>'
         : s === "COMPLETED" ? '<span class="pill">completed</span>'
         : s === "INPROGRESS" || s === "IN_PROGRESS" ? '<span class="pill g">in progress</span>'
         : s === "STARTED" ? '<span class="pill n">queued</span>'
-        : s ? `<span class="pill" style="opacity:.7">${esc(s.toLowerCase())}</span>` : "";
-      const rowsHtml = d.leads.map((l) => `
-        <div class="srcrow" style="padding:10px 14px">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:500">${esc(l.name || l.email || "—")}${l.company ? ` <span class="small muted">· ${esc(l.company)}</span>` : ""}</div>
-            <div class="small muted">${esc(l.email || l.linkedin || "")}${l.title ? ` · ${esc(String(l.title).slice(0, 60))}` : ""}</div>
-          </div>
-          ${statusPill(l.status, l.replied)}
-        </div>`).join("");
+        : s ? `<span class="pill" style="opacity:.7">${esc(String(s).toLowerCase())}</span>` : "";
+      // Same datagrid as the Lists page: sticky uppercase headers, monospace #
+      // gutter, quiet linkified cells, horizontal-only borders. Read-only here
+      // (these people already live in the platform campaign), so no select/sort.
+      const contactCol = platMeta.platform === "heyreach" ? "LinkedIn" : "Email";
+      const cols = ["Name", contactCol, "Company", "Title", "Status"];
+      const thead = `<thead><tr>
+        <th class="gutter">#</th>
+        ${cols.map((c) => `<th><div class="thwrap"><span class="thlbl">${esc(c)}</span></div></th>`).join("")}
+      </tr></thead>`;
+      const tbody = `<tbody>${d.leads.map((l, idx) => {
+        const link = l.email || l.linkedin || "";
+        return `<tr>
+          <td class="gutter" title="position in this campaign">${fmt(off + idx + 1)}</td>
+          <td title="${esc4attr(l.name || "")}" style="color:var(--ink);font-weight:500">${esc(l.name || "—")}</td>
+          <td title="${esc4attr(link)}">${linkifyCell(link)}</td>
+          <td title="${esc4attr(l.company || "")}">${esc(l.company || "")}</td>
+          <td title="${esc4attr(l.title || "")}">${esc(l.title || "")}</td>
+          <td>${statusCell(l.status, l.replied)}</td>
+        </tr>`;
+      }).join("")}</tbody>`;
+      const gridHtml = d.leads.length
+        ? `<div class="gridwrap"><table class="datagrid">${thead}${tbody}</table></div>`
+        : '<div class="empty" style="padding:24px;text-align:center;color:var(--ink-3)">No people in this campaign yet.</div>';
       const nextOff = off + lim, hasMore = total != null ? nextOff < total : d.leads.length === lim;
       const prevOff = Math.max(0, off - lim);
-      body.innerHTML = `<div class="card" style="margin-top:10px">${rowsHtml || '<div class="empty">No people in this campaign yet.</div>'}</div>
-        ${(off > 0 || hasMore) ? `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      body.innerHTML = gridHtml +
+        ((off > 0 || hasMore) ? `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">
           <button class="btn sm" ${off === 0 ? "disabled" : ""} onclick="window._extLeadsOffset=${prevOff};renderDraftCampaign('${id}')">← Prev</button>
           <span class="small muted">${fmt(off + 1)}–${fmt(off + d.leads.length)}${total != null ? ` of ${fmt(total)}` : ""}</span>
           <button class="btn sm" ${hasMore ? "" : "disabled"} onclick="window._extLeadsOffset=${nextOff};renderDraftCampaign('${id}')">Next →</button>
-        </div>` : ""}`;
+        </div>` : "");
       hydrateFade(body);
     })();
   } else if (dtab === "leads") {
@@ -1728,6 +1759,22 @@ function scRatio(sent, pos) {
 function scStat(cls, n, label, title) {
   return `<div class="sc-stat"${title ? ` title="${esc(title)}"` : ""}><div class="n ${cls}">${n}</div><div class="l">${esc(label)}</div></div>`;
 }
+/* Grid cell helpers — same behaviour as the Lists page: emails/URLs become quiet
+   links, everything else is escaped text. Kept identical so a campaign's People
+   grid renders cells exactly like a saved list's. */
+function esc4attr(s) { return esc(s).replace(/'/g, "&#39;"); }
+function linkifyCell(raw) {
+  const s = String(raw ?? "");
+  if (!s) return "";
+  const trimmed = s.trim();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed))
+    return `<a class="celllink" href="mailto:${esc4attr(trimmed)}">${esc(s)}</a>`;
+  let url = null;
+  if (/^https?:\/\//i.test(trimmed)) url = trimmed;
+  else if (/^(www\.)?linkedin\.com\//i.test(trimmed)) url = "https://" + trimmed;
+  if (url) return `<a class="celllink" href="${esc4attr(url)}" target="_blank" rel="noopener noreferrer">${esc(s)}</a>`;
+  return esc(s);
+}
 /* "Signals Sourced" — the count of people this campaign's SIGNALS surfaced.
    Only shown when it actually has signal-sourced leads; pinned to the far right. */
 function signalsTile(leadsSourced) {
@@ -1743,16 +1790,22 @@ function scRowHtml(m, leadsSourced) {
   const pcNum = (num, den) => (m && den) ? `${scPct(num, den).toFixed(1)}<span class="pc">%</span>` : (m ? `0<span class="pc">%</span>` : "–");
   const sent = m ? fmt(m.sent) : "–";
   const ratio = m ? scRatio(m.sent, m.positives) : "–";
+  // "Leads" = everyone currently in the campaign (Smartlead's own total), NOT the
+  // signals-sourced count (that's the far-right Signals Sourced tile).
+  const leadsIn = (m && m.total != null) ? fmt(m.total) : "–";
+  const pos = (m && m.positives != null) ? fmt(m.positives) : "–";
   const meet = (m && m.meetings != null) ? fmt(m.meetings)
     : `<span class="sc-muted" title="Meetings source not connected for this campaign">–</span>`;
   return `<div class="sc-row">
     ${ring}
     <div class="sc-cols" style="flex:1">
+      ${scStat("sc-c-people", leadsIn, "Leads", "People currently in this campaign")}
       ${scStat("sc-c-sent", sent, "Emails sent")}
       ${scStat("sc-c-reply", pcNum(m && m.replied, m && m.sent), "Reply rate")}
+      ${scStat("sc-c-pos", pos, "Positives", "Positive replies")}
       ${scStat("sc-c-sent", ratio, "Sends / positive", "Emails sent per positive reply")}
-      ${scStat("sc-c-meet", meet, "Meetings")}
       ${scStat("sc-c-bounce", pcNum(m && m.bounced, m && m.sent), "Bounce rate")}
+      ${scStat("sc-c-meet", meet, "Meetings")}
       ${signalsTile(leadsSourced)}
     </div>
   </div>`;
@@ -1778,35 +1831,36 @@ function scRowHtmlHeyReach(hr, leadsSourced) {
    (never averaged-of-averages). Meetings + leads gate to "—" when unknown. */
 function scCollectiveHtml(sc, leadCounts, drafts) {
   const camps = (sc && sc.campaigns) || {};
-  let sent = 0, replied = 0, positives = 0, bounced = 0, completed = 0, total = 0;
-  let meetings = 0, meetingsCovered = false, leads = 0, leadsKnown = false;
-  // ONLY the campaigns run in this tool (managed drafts) — the scorecard map now
-  // covers the whole account, so summing all of it would turn this "your tool"
-  // strip into a fleet total.
+  let sent = 0, replied = 0, positives = 0, bounced = 0, total = 0;
+  let meetings = 0, meetingsCovered = false;
+  // Top line across the WHOLE Smartlead account — every campaign the scorecard
+  // caches from Supabase, not just the ones managed in this tool. (Smartlead
+  // only for now; HeyReach has no comparable email funnel.)
+  Object.keys(camps).forEach((k) => {
+    const m = camps[k];
+    if (!m) return;
+    sent += m.sent || 0; replied += m.replied || 0; positives += m.positives || 0;
+    bounced += m.bounced || 0; total += m.total || 0;
+    if (m.meetings != null) { meetings += m.meetings; meetingsCovered = true; }
+  });
+  // "Signals Sourced" stays scoped to campaigns run in this tool — that's what a
+  // signal-sourced lead means — summed from the managed drafts' lead counts.
+  let leads = 0, leadsKnown = false;
   (drafts || []).forEach((dc) => {
     const lc = leadCounts && leadCounts[String(dc.id)];
     if (lc && typeof lc.leads === "number") { leads += lc.leads; leadsKnown = true; }
-    const d0 = dc.destination || {};
-    const sl = d0.smartlead_campaign_id || (dc.type === "smartlead" ? dc.campaign_id : "");
-    const m = sl ? camps[String(sl)] : null;
-    if (m) {
-      sent += m.sent || 0; replied += m.replied || 0; positives += m.positives || 0;
-      bounced += m.bounced || 0; completed += m.completed || 0; total += m.total || 0;
-      if (m.meetings != null) { meetings += m.meetings; meetingsCovered = true; }
-    }
   });
   const tile = (lab, val, sub) => `<div class="sc-tile"><div class="lab">${esc(lab)}</div><div class="val">${val}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
   const ratio = positives > 0 ? `1 per ${fmt(Math.round(sent / positives))}` : `<span class="sc-muted">–</span>`;
-  // Sent / reply-rate / bounce-rate live in the graph above (fleet-wide, daily)
-  // — showing them here too (managed-only, usually 0 for a tool full of drafts)
-  // read as a broken, self-contradicting chart. These tiles carry only the
-  // funnel metrics the graph doesn't: sourced → sent → positive → meetings.
+  const replyPct = sent ? `${(100 * replied / sent).toFixed(1)}%` : "–";
   return `<div class="sc-tiles">
-    ${tile("Signals Sourced", leadsKnown ? fmt(leads) : "–", "found by your signals")}
-    ${tile("Emails sent", fmt(sent), "from campaigns run here")}
-    ${tile("Completion", total ? `${Math.round(scPct(completed, total))}%` : "–", "finished the sequence")}
-    ${tile("Sends / positive", ratio, `${fmt(positives)} positive`)}
+    ${tile("Leads", fmt(total), "people across all campaigns")}
+    ${tile("Emails sent", fmt(sent), "all-time")}
+    ${tile("Reply rate", replyPct, `${fmt(replied)} replies`)}
+    ${tile("Positives", fmt(positives), "positive replies")}
+    ${tile("Sends / positive", ratio, "lower is better")}
     ${tile("Meetings", meetingsCovered ? fmt(meetings) : `<span class="sc-muted">–</span>`, meetingsCovered ? "booked" : "source not connected")}
+    ${tile("Signals Sourced", leadsKnown ? fmt(leads) : "–", "found by your signals")}
   </div>`;
 }
 /* Collective trend lines: how the aggregate metrics move over time. Real numbers
@@ -2046,7 +2100,7 @@ async function renderList() {
       <div class="small muted" style="margin-bottom:10px">Emails sent, reply rate and bounce rate per day across <b>every</b> campaign in the account — straight from the data layer.</div>
       <div id="perf-chart" style="min-height:240px"><div class="skel" style="height:210px"></div></div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-        <div class="small muted" style="margin-bottom:8px">Totals for the campaigns you run in this tool</div>
+        <div class="small muted" style="margin-bottom:8px">Top line across every Smartlead campaign in the account</div>
         <div id="sc-collective"><div class="skel" style="height:70px"></div></div>
       </div>
     </div>
