@@ -678,6 +678,19 @@ async function renderDraftCampaign(id) {
     <div id="dtabbody"></div>`;
   hydrateFade(main);  // ease the real detail view in over the skeleton
   const el = document.getElementById("dtabbody");
+  // The Leads tab count shows "…" for platform campaigns with no signal_leads
+  // entry (external / not-yet-adopted) — but we DO know how many people are in
+  // them. Backfill the tab with the campaign's real in-platform total (the same
+  // number the Leads tab body + scorecard show) on whichever tab is open, not
+  // just Leads. cachedGet dedupes with the Overview strip's identical call.
+  if (platMeta && countsUnavailable) (async () => {
+    let d = null;
+    try { d = await cachedGet(`/api/campaign-readonly?platform=${platMeta.platform}&id=${encodeURIComponent(platMeta.id)}`, SESSION_TTL); } catch {}
+    const tot = (d && !d.error && d.total != null) ? d.total : null;
+    if (tot == null) return;
+    const btn = [...document.querySelectorAll(".tab")].find((b) => b.textContent.trim().startsWith("Leads"));
+    if (btn) btn.textContent = `Leads (${fmt(tot)})`;
+  })();
   if (dtab === "overview") {
     // Funnel tiles (People found/Approved/Skipped/Sent) must read from the SAME
     // authoritative /api/leads rows as the Leads tab - NOT `people`/draftProspects,
