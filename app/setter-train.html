@@ -131,6 +131,14 @@
   border-radius: 10px; padding: 12px 16px; margin: 0 0 16px; font-size: 13px;
   display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; line-height: 1.5;
 }
+
+/* ── Public share-link mode: no login, one agent only ─────
+   The rail nav is simply never rendered in this mode (see boot()), and the
+   agent picker never appears (renderAgentPicker() is never called) - these
+   rules are just a defensive backstop so nothing that shouldn't be reachable
+   from a client link can ever show up. */
+body.share-mode .rail { display: none; }
+body.share-mode a[href="setter.html"] { display: none !important; }
 </style>
 </head>
 <body>
@@ -157,7 +165,23 @@
 
 <script src="shell.js"></script>
 <script>
-document.getElementById("rail").outerHTML = renderRail("training");
+/* ── Public share-link mode ────────────────────────────────────────────────
+   A ?share=<token> URL param means a client opened this page WITHOUT logging
+   in, to train exactly one agent - see setter.py's mint/verify_training_share
+   and server.py's _TRAIN_SHARE_GET/_AUTH_PUBLIC_POST. In this mode the page
+   never calls /api/setter/agents (that stays owner-only), never shows the
+   nav rail or the agent picker, never touches localStorage, and every
+   training call carries the token so the server can force+verify scope. */
+const SHARE_TOKEN = new URLSearchParams(location.search).get("share") || "";
+const SHARE_MODE = !!SHARE_TOKEN;
+let shareAgentName = "";
+
+if (SHARE_MODE) {
+  document.body.classList.add("share-mode");
+  document.getElementById("rail").outerHTML = "";
+} else {
+  document.getElementById("rail").outerHTML = renderRail("training");
+}
 
 /* ── State ─────────────────────────────────────────────── */
 let AGENTS = [];
@@ -167,6 +191,7 @@ let selectedAgentId = null;
 
 let CASES = [];
 let ANSWERS = {};
+let AGENT_MEMORY = [];
 let READINESS = { score: 0, decision_component: 0, reply_component: 0, coverage: 0, n_answers: 0,
                   explanation: "No answers yet. Answer a few training scenarios to start building a readiness score." };
 let usedCount = 0;
@@ -201,6 +226,7 @@ function clearError() { document.getElementById("errBanner").style.display = "no
 
 /* ── Load ──────────────────────────────────────────────── */
 async function boot() {
+  if (SHARE_MODE) { await bootShare(); return; }
   const [agentsRes, campaignsRes] = await Promise.all([
     fetchJson("/api/setter/agents"),
     fetchJson("/api/setter/campaigns"),
@@ -220,6 +246,46 @@ async function boot() {
   selectedAgentId = (saved && AGENTS.some((a) => String(a.id) === saved)) ? saved : String(AGENTS[0].id);
   document.getElementById("agentPicker").value = selectedAgentId;
   await loadTraining();
+}
+
+/* Share-link boot: no agents list, no campaigns list, no localStorage -
+   just "who am I training" (share-info) then straight into the same
+   scenario stream the owner uses. Campaign names aren't resolvable here
+   (campaignMap stays empty; campaignMap[c.campaign_id] falls back to
+   "Campaign <id>" in renderCase, which is fine - no campaign list leaks). */
+async function bootShare() {
+  const infoRes = await fetchJson(`/api/setter/training/share-info?share=${encodeURIComponent(SHARE_TOKEN)}`);
+  if (!infoRes.ok) { renderShareExpired(); return; }
+  clearError();
+  shareAgentName = (infoRes.data && infoRes.data.agent_name) || "your agent";
+  selectedAgentId = (infoRes.data && infoRes.data.agent_id) || null;
+  renderShareHeader();
+  await loadTraining();
+}
+
+function renderShareHeader() {
+  const title = document.querySelector(".sh-title");
+  if (title) title.textContent = `Train ${shareAgentName}`;
+  const sub = document.querySelector(".train-sub");
+  if (sub) sub.textContent = "Help train your AI appointment setter. Rate real replies from your "
+    + "campaigns - your answers teach it when to answer on its own and when to leave it to a person. "
+    + "Nothing here ever emails anyone.";
+}
+
+/* Full-page friendly state for an expired/invalid/tampered token - never
+   the raw 401 JSON, and nothing scenario-shaped stays on screen underneath. */
+function renderShareExpired() {
+  const title = document.querySelector(".sh-title");
+  if (title) title.textContent = "Training link expired";
+  const sub = document.querySelector(".train-sub");
+  if (sub) sub.style.display = "none";
+  document.getElementById("errBanner").style.display = "none";
+  document.getElementById("agentPickerRow").style.display = "none";
+  document.getElementById("readinessPanelHost").innerHTML = "";
+  document.getElementById("trainApp").innerHTML = `
+    <div class="done-banner">
+      <div class="db-msg">This training link has expired. Ask your Navreo contact for a fresh one.</div>
+    </div>`;
 }
 
 /* Stored outreach/reply bodies can be full HTML (Outlook divs, <br> runs).
@@ -246,14 +312,24 @@ function renderAgentPicker() {
   });
 }
 
+function trainingQS() {
+  return SHARE_MODE
+    ? `share=${encodeURIComponent(SHARE_TOKEN)}`
+    : `agent_id=${encodeURIComponent(selectedAgentId)}`;
+}
+
 async function loadTraining() {
   view = "loading"; render();
-  const res = await fetchJson(`/api/setter/training?agent_id=${encodeURIComponent(selectedAgentId)}`);
-  if (!res.ok) { showError("Couldn't load training scenarios: " + res.error); view = "empty"; render(); return; }
+  const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+  if (!res.ok) {
+    if (SHARE_MODE) { renderShareExpired(); return; }
+    showError("Couldn't load training scenarios: " + res.error); view = "empty"; render(); return;
+  }
   clearError();
   CASES = (res.data && res.data.cases) || [];
   ANSWERS = (res.data && res.data.answers) || {};
   usedCount = (res.data && res.data.used_count) || 0;
+  AGENT_MEMORY = (res.data && res.data.agent_memory) || [];
   applyReadiness((res.data && res.data.readiness) || READINESS, { animate: false });
 
   if (!CASES.length) { view = "empty"; render(); return; }
@@ -312,8 +388,10 @@ function renderReadinessPanel(animate) {
       ? ` (about ${Math.max(1, Math.ceil((90 * 20) / rawNow) - nAnswers)} more ratings to reach 90 if you keep agreeing at this rate)`
       : " (right now the agent needs to earn more of your agreement, not just more ratings, to reach 90)";
   }
-  const agentDoc = AGENTS.find((a) => String(a.id) === String(selectedAgentId)) || {};
-  const memory = Array.isArray(agentDoc.memory) ? agentDoc.memory : [];
+  const memory = Array.isArray(AGENT_MEMORY) ? AGENT_MEMORY : [];
+  const autopilotLine = SHARE_MODE
+    ? "At 90+ the Navreo team can switch the agent on."
+    : "At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.";
 
   host.innerHTML = `
     <div class="readiness-panel">
@@ -330,7 +408,7 @@ function renderReadinessPanel(animate) {
           <div class="rp-bar-marker"><span>Autopilot-ready at 90</span></div>
         </div>
       </div>
-      <div class="rp-formula">Score = agreement &times; coverage. Agreement blends the two stats below (right calls count a bit more than good drafts); skipped drafts don't count either way. Coverage fills up over your last 20 ratings, so a fresh agent starts low no matter how well it does${etaLine}. At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.</div>
+      <div class="rp-formula">Score = agreement &times; coverage. Agreement blends the two stats below (right calls count a bit more than good drafts); skipped drafts don't count either way. Coverage fills up over your last 20 ratings, so a fresh agent starts low no matter how well it does${etaLine}. ${autopilotLine}</div>
       <div class="rp-stats">
         <div class="rp-stat"><div class="rps-num">${decisionPct}%</div><div class="rps-lab">Right calls (recent)</div></div>
         <div class="rp-stat"><div class="rps-num">${replyPct}%</div><div class="rps-lab">Good drafts (recent)</div></div>
@@ -338,18 +416,21 @@ function renderReadinessPanel(animate) {
         <div class="rp-stat"><div class="rps-num">${nAnswers}</div><div class="rps-lab">Ratings so far</div></div>
       </div>
       <details class="tr-details rp-memory">
-        <summary>What this agent has remembered (${memory.length})${memory.length ? " - view or remove any lesson" : ""}</summary>
+        <summary>What this agent has remembered (${memory.length})${memory.length ? (SHARE_MODE ? " - every lesson you teach it lands here" : " - view or remove any lesson") : ""}</summary>
         <div class="tr-details-body">
           ${memory.length ? memory.map((m) => `
             <div class="rp-mem-row" data-at="${esc(m.at || "")}">
               <span class="rp-mem-text">${esc(m.text || "")}</span>
-              <button type="button" class="btn rp-mem-remove" data-at="${esc(m.at || "")}" data-text="${esc(m.text || "")}">Remove</button>
+              ${SHARE_MODE ? "" : `<button type="button" class="btn rp-mem-remove" data-at="${esc(m.at || "")}" data-text="${esc(m.text || "")}">Remove</button>`}
             </div>`).join("")
-          : `<div class="small">Nothing yet. When you pick "Remember going forward" on a rating, the note is saved here - and you can remove it any time.</div>`}
+          : `<div class="small">Nothing yet. When you pick "Remember going forward" on a rating, the note is saved here${SHARE_MODE ? "" : " - and you can remove it any time"}.</div>`}
         </div>
       </details>
     </div>
   `;
+  // route_agents_memory_delete is owner-only and never accepts a share token
+  // (see setter.py) - this handler is simply never wired up in share mode
+  // because no .rp-mem-remove buttons are rendered above.
   host.querySelectorAll(".rp-mem-remove").forEach((btn) => btn.addEventListener("click", async () => {
     btn.disabled = true;
     const res = await fetchJson("/api/setter/agents/memory/delete", {
@@ -357,8 +438,7 @@ function renderReadinessPanel(animate) {
       body: JSON.stringify({ agent_id: selectedAgentId, at: btn.dataset.at, text: btn.dataset.text }),
     });
     if (!res.ok) { btn.disabled = false; showError(res.error || "Couldn't remove that note."); return; }
-    const a = AGENTS.find((x) => String(x.id) === String(selectedAgentId));
-    if (a) a.memory = res.data.memory || [];
+    AGENT_MEMORY = res.data.memory || [];
     renderReadinessPanel(false);
   }));
   const numEl = document.getElementById("rpNum");
@@ -421,13 +501,18 @@ async function generateMore() {
   btns.forEach((b) => { const r = busyBtn(b, "Pulling real replies and running the agent on them - a minute or two…"); if (r) restores.push(r); });
   if (generating) return;
   generating = true;
+  const genBody = { agent_id: selectedAgentId, batch_size: 8 };
+  if (SHARE_MODE) genBody.share = SHARE_TOKEN;
   const res = await fetchJson("/api/setter/training/generate", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent_id: selectedAgentId, batch_size: 8 }),
+    body: JSON.stringify(genBody),
   });
   generating = false;
   restores.forEach((r) => r());
-  if (!res.ok) { showError("Couldn't generate scenarios: " + res.error); return; }
+  if (!res.ok) {
+    if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
+    showError("Couldn't generate scenarios: " + res.error); return;
+  }
   clearError();
   const newCases = (res.data && res.data.cases) || [];
   usedCount = (res.data && res.data.used_count) || usedCount;
@@ -630,22 +715,26 @@ async function submitAndAdvance(c, btn) {
 
   const restore = busyBtn(btn, "Saving…");
   if (!restore) return;
+  const answerBody = {
+    agent_id: selectedAgentId, case_id: c.id,
+    decision_ok: !!p.decision_ok,
+    reply_ok: (p.reply_ok === true || p.reply_ok === false) ? p.reply_ok : null,
+    note: p.note || "", scope: effectiveScope,
+  };
+  if (SHARE_MODE) answerBody.share = SHARE_TOKEN;
   const res = await fetchJson("/api/setter/training/answer", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      agent_id: selectedAgentId, case_id: c.id,
-      decision_ok: !!p.decision_ok,
-      reply_ok: (p.reply_ok === true || p.reply_ok === false) ? p.reply_ok : null,
-      note: p.note || "", scope: effectiveScope,
-    }),
+    body: JSON.stringify(answerBody),
   });
   restore();
-  if (!res.ok) { showError("Couldn't save that answer: " + res.error); return; }
+  if (!res.ok) {
+    if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
+    showError("Couldn't save that answer: " + res.error); return;
+  }
   clearError();
   ANSWERS[c.id] = { decision_ok: !!p.decision_ok, reply_ok: p.reply_ok, note: p.note || "", scope: effectiveScope };
   if (effectiveScope === "remember" && (p.note || "").trim()) {
-    const a = AGENTS.find((x) => String(x.id) === String(selectedAgentId));
-    if (a) (a.memory = a.memory || []).push({ text: p.note.trim(), at: new Date().toISOString() });
+    AGENT_MEMORY = AGENT_MEMORY.concat([{ text: p.note.trim(), at: new Date().toISOString() }]);
   }
   delete PENDING[c.id];
   applyReadiness((res.data && res.data.readiness) || READINESS, { animate: true });

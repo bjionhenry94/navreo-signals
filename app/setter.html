@@ -239,6 +239,9 @@
 .modal-b { padding: 12px 22px 4px; overflow-y: auto; }
 .modal-f { padding: 14px 22px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 10px; }
 .modal-err { font-size: 12px; color: var(--red); background: var(--red-bg); border: 1px solid var(--red-line); border-radius: 8px; padding: 8px 10px; margin: 4px 0 10px; }
+.share-url-row { display: flex; gap: 8px; }
+.share-url-row input { flex: 1; }
+.share-url-row .btn { flex: none; }
 </style>
 </head>
 <body>
@@ -373,6 +376,27 @@
     <div class="modal-f">
       <button class="btn" id="teachAgentCancelBtn" type="button">Cancel</button>
       <button class="btn primary" id="teachAgentSaveBtn" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share training: a no-login client link scoped to exactly one agent -->
+<div id="shareTrainModalOverlay" class="overlay">
+  <div class="modal">
+    <div class="modal-h"><h3>Share training link</h3></div>
+    <div class="modal-b">
+      <div id="shareTrainModalErr" class="modal-err" style="display:none"></div>
+      <div class="small muted" style="margin:0 0 12px">Anyone with this link can train this agent for 30 days - no login needed. They can only see and rate this agent's own campaign replies; nothing else in Navreo is reachable from it.</div>
+      <div class="field">
+        <label>Training link</label>
+        <div class="share-url-row">
+          <input type="text" id="shareTrainUrl" readonly placeholder="Generating…">
+          <button class="btn" id="shareTrainCopyBtn" type="button">Copy</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn primary" id="shareTrainCloseBtn" type="button">Done</button>
     </div>
   </div>
 </div>
@@ -1296,7 +1320,8 @@ document.addEventListener("keydown", (e) => {
     const tag = active.tagName;
     if (active.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   }
-  const overlaysOpen = ["agentsDrawerOverlay", "settingsDrawerOverlay", "tryItDrawerOverlay", "agentModalOverlay", "teachAgentModalOverlay"]
+  const overlaysOpen = ["agentsDrawerOverlay", "settingsDrawerOverlay", "tryItDrawerOverlay", "agentModalOverlay",
+                        "teachAgentModalOverlay", "shareTrainModalOverlay"]
     .some((id) => { const o = document.getElementById(id); return o && o.classList.contains("on"); });
   if (overlaysOpen) return;
   const rows = visibleInboxRows();
@@ -1468,13 +1493,20 @@ function renderAgents() {
       <div class="ac-name">${esc(a.name || "Untitled agent")} <span class="pill ${a.mode === "autopilot" ? "g" : "n"}">${agentModeLabel(a)}</span></div>
       <div class="ac-meta" title="${esc(namesFull)}">${esc(agentCampaignNamesLine(a))} · ${esc(a.resource_name || "No resource set yet")}</div>
       <div class="ac-intake">${esc(liveIntakeLine(a))}</div>
-      <div class="ac-actions"><button class="btn sm ac-duplicate-btn" type="button" data-id="${esc(a.id)}">Duplicate</button></div>
+      <div class="ac-actions">
+        <button class="btn sm ac-duplicate-btn" type="button" data-id="${esc(a.id)}">Duplicate</button>
+        <button class="btn sm ac-share-btn" type="button" data-id="${esc(a.id)}">Share training</button>
+      </div>
     </div>`;
   }).join("");
   el.querySelectorAll(".agent-card").forEach((card) => card.addEventListener("click", () => openAgentModal(card.getAttribute("data-id"))));
   el.querySelectorAll(".ac-duplicate-btn").forEach((btn) => btn.addEventListener("click", (e) => {
     e.stopPropagation();
     doDuplicateAgent(btn.getAttribute("data-id"), btn);
+  }));
+  el.querySelectorAll(".ac-share-btn").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openShareTrainModal(btn.getAttribute("data-id"), btn);
   }));
 }
 
@@ -1502,6 +1534,58 @@ async function doDuplicateAgent(agentId, btn) {
     setTimeout(() => { justDuplicatedAgentId = null; renderAgents(); }, 4000);
   }
 }
+
+/* Share training: mints a 30-day, one-agent, no-login link to
+   setter-train.html (route_training_share, owner-only) so a client can rate
+   real scenarios and correct this agent without ever touching the rest of
+   Navreo. The token itself is never shown separately - only the full URL. */
+async function openShareTrainModal(agentId, btn) {
+  const urlInput = document.getElementById("shareTrainUrl");
+  const errEl = document.getElementById("shareTrainModalErr");
+  errEl.style.display = "none";
+  urlInput.value = "";
+  urlInput.placeholder = "Generating…";
+  document.getElementById("shareTrainModalOverlay").classList.add("on");
+  const restore = btn ? busyBtn(btn, "Generating…") : null;
+  const res = await fetchJson("/api/setter/training/share", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_id: agentId }),
+  });
+  if (restore) restore();
+  if (!res.ok || !(res.data && res.data.url_path)) {
+    errEl.textContent = "Couldn't create a training link: " + (res.error || "unknown error");
+    errEl.style.display = "block";
+    urlInput.placeholder = "";
+    return;
+  }
+  urlInput.value = window.location.origin + res.data.url_path;
+}
+function closeShareTrainModal() {
+  document.getElementById("shareTrainModalOverlay").classList.remove("on");
+}
+document.getElementById("shareTrainCloseBtn").addEventListener("click", closeShareTrainModal);
+document.getElementById("shareTrainModalOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "shareTrainModalOverlay") closeShareTrainModal();
+});
+document.getElementById("shareTrainCopyBtn").addEventListener("click", async () => {
+  const urlInput = document.getElementById("shareTrainUrl");
+  const url = urlInput.value.trim();
+  if (!url) return;
+  const btn = document.getElementById("shareTrainCopyBtn");
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      urlInput.select();
+      document.execCommand("copy");
+    }
+    const orig = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+  } catch {
+    urlInput.select();
+    protoNote("Couldn't copy automatically - the link is selected, copy it manually");
+  }
+});
 
 /* Field order: name, campaigns, resource name/link/description, instructions,
    allowed intents, mode toggle, confidence, Calendly link. Voice examples,

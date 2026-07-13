@@ -10114,13 +10114,22 @@ AUTH_COOKIE = "navreo_session"
 AUTH_SESSION_DAYS = 30
 
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
-                    "/app/offer.html"}
+                    "/app/offer.html", "/app/setter-train.html", "/app/shell.js"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/cron/fleet-stats",
                      "/api/setter/poll", "/api/setter/inbound",
+                     "/api/setter/training/answer", "/api/setter/training/generate",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
+
+# GET endpoints the public /app/setter-train.html share page calls WITHOUT a
+# login - but only when the request carries a share=<token> query param. The
+# token itself is what's actually load-bearing (verified inside setter.py's
+# routes: verify_training_share); this set + the query check just decides
+# whether do_GET's normal login gate is allowed to let the request through
+# at all. No session, no share -> still gated exactly as before.
+_TRAIN_SHARE_GET = {"/api/setter/training", "/api/setter/training/share-info"}
 
 
 def _auth_secret() -> bytes:
@@ -11008,8 +11017,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/") and self._qa_token_ok():
             return self._qa_gate_get(path)
         if path not in _AUTH_PUBLIC_GET and not path.startswith(_AUTH_PUBLIC_GET_PREFIX):
-            if not self._gate(path):
-                return
+            # Public training-share reads: only when a share=<token> is
+            # actually present on the query string - the token's validity is
+            # then enforced inside setter.py's own routes (verify_training_share).
+            if not (path in _TRAIN_SHARE_GET and "share=" in self.path):
+                if not self._gate(path):
+                    return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
             return self._qa_gate_get(path)
         if path == "/api/insights":  # Today homepage: daily insight feed (generated on first request, cached per day)
@@ -11738,7 +11751,22 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
-            log_activity(path, payload, action=path.rsplit("/", 1)[-1], entity="setter")
+            # Only /api/setter/training/answer and /api/setter/training/generate
+            # are in _AUTH_PUBLIC_POST among the setter routes reaching this
+            # generic dispatch (poll/inbound are special-cased earlier), so this
+            # only ever fires for the two public training endpoints - never
+            # trust a client-supplied ___public, always set it from the actual
+            # session state so a public caller can't spoof owner scope. Guarded
+            # on isinstance so a malformed non-dict body (e.g. a bare JSON list)
+            # falls through to the route's own try/except exactly as it did
+            # before this flag existed, instead of a raw TypeError here.
+            if not self._authed_email() and isinstance(payload, dict):
+                payload["___public"] = True
+            # The training share token is a bearer credential - never persist
+            # it to the activity ledger, even truncated.
+            log_payload = {k: v for k, v in payload.items() if k != "share"} \
+                if isinstance(payload, dict) else payload
+            log_activity(path, log_payload, action=path.rsplit("/", 1)[-1], entity="setter")
             status, body = setter_route(payload)
             return self._json(body, status)
         lists_route = LISTS_POST_ROUTES.get(path)

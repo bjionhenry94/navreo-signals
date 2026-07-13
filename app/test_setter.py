@@ -2496,6 +2496,244 @@ def test_readiness_30_answer_scripted_simulation():
     check("readiness 30-sim: all-wrong -> score near 0", r_all_wrong["score"] <= 5, r_all_wrong)
 
 
+# ── public training share links ───────────────────────────────────────────────
+# The owner mints a per-agent, no-login link a client can use to train ONLY
+# that agent. Covers: mint/verify roundtrip and tamper/expiry rejection, the
+# owner-only mint route, the public share-info route, share-token enforcement
+# (force + mismatch 403 + invalid 401) across the three training routes, the
+# share-mode-only campaign filter and tighter (20 vs 40) unanswered cap, and
+# that memory delete refuses a share token in any form.
+
+def test_share_mint_verify_roundtrip():
+    sb, http = fresh_setter()
+    token = setter.mint_training_share("agent-shr0001", days=30)
+    check("share: mint returns a non-empty token", bool(token), token)
+    agent_id = setter.verify_training_share(token)
+    check("share: verify roundtrips to the same agent_id", agent_id == "agent-shr0001", agent_id)
+
+    tampered = token[:-1] + ("0" if token[-1] != "0" else "1")
+    check("share: a tampered signature -> None", setter.verify_training_share(tampered) is None, tampered)
+    check("share: a garbage string -> None", setter.verify_training_share("not-a-real-token") is None)
+    check("share: an empty token -> None", setter.verify_training_share("") is None)
+    check("share: None -> None", setter.verify_training_share(None) is None)
+
+    # Build an already-expired token directly (mint_training_share clamps
+    # days to >= 1, so this exercises the expiry check on its own).
+    import base64
+    import hashlib
+    import hmac
+    import time
+    payload = f"train|agent-shr0001|{int(time.time()) - 10}".encode()
+    sig = hmac.new(setter._share_secret(), payload, hashlib.sha256).hexdigest()
+    expired_token = base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+    check("share: an expired token -> None", setter.verify_training_share(expired_token) is None, expired_token)
+
+
+def test_route_training_share_mints_and_share_info():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-shr0002", "name": "Ada", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = setter.route_training_share({"agent_id": agent["id"]})
+    check("share mint: 200", status == 200, (status, resp))
+    check("share mint: url_path points at setter-train.html with a token",
+         str(resp.get("url_path") or "").startswith("/app/setter-train.html?share="), resp)
+    check("share mint: the minted token verifies to the right agent",
+         setter.verify_training_share(resp.get("token")) == agent["id"], resp)
+    check("share mint: expires_at is present", bool(resp.get("expires_at")), resp)
+
+    status2, resp2 = setter.route_training_share({"agent_id": "does-not-exist"})
+    check("share mint: unknown agent -> 404", status2 == 404, (status2, resp2))
+
+    status3, resp3 = setter.route_training_share({})
+    check("share mint: missing agent_id -> 400", status3 == 400, (status3, resp3))
+
+    status4, resp4 = setter.route_training_share_info({"share": resp["token"]})
+    check("share-info: 200 for a valid token", status4 == 200, (status4, resp4))
+    check("share-info: returns only agent_name + agent_id - no memory/instructions/campaigns leak",
+         set(resp4.keys()) == {"agent_name", "agent_id"}, resp4)
+    check("share-info: agent_name matches", resp4.get("agent_name") == "Ada", resp4)
+    check("share-info: agent_id matches", resp4.get("agent_id") == agent["id"], resp4)
+
+    status5, resp5 = setter.route_training_share_info({"share": "garbage"})
+    check("share-info: invalid token -> 401", status5 == 401, (status5, resp5))
+    status6, resp6 = setter.route_training_share_info({})
+    check("share-info: missing token -> 401", status6 == 401, (status6, resp6))
+
+
+def test_training_get_share_forces_agent_and_rejects_mismatch():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-shr0003", "name": "Ada", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"]}
+    other = {"id": "agent-shr0004", "name": "Bea", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.agents[other["id"]] = {"id": other["id"], "doc": other}
+    token = setter.mint_training_share(agent["id"])
+
+    status, resp = setter.route_training_get({"share": token})
+    check("training get share: no agent_id given - the share alone resolves the agent",
+         status == 200, (status, resp))
+
+    status2, resp2 = setter.route_training_get({"agent_id": agent["id"], "share": token})
+    check("training get share: matching agent_id + share -> 200", status2 == 200, (status2, resp2))
+
+    status3, resp3 = setter.route_training_get({"agent_id": other["id"], "share": token})
+    check("training get share: a share for a different agent than the payload asked for -> 403",
+         status3 == 403, (status3, resp3))
+
+    status4, resp4 = setter.route_training_get({"share": "garbage-token"})
+    check("training get share: invalid token -> 401 with a plain-English message",
+         status4 == 401 and "expired" in str(resp4.get("error") or "").lower(), (status4, resp4))
+
+
+def test_training_get_includes_minimal_agent_memory():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-shr0005", "name": "Ada", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"],
+             "memory": [{"text": "Always confirm the timezone.", "source": "manual", "scope": "remember",
+                        "at": "2026-07-01T00:00:00+00:00"}]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = setter.route_training_get({"agent_id": agent["id"]})
+    check("training get: 200", status == 200, (status, resp))
+    mem = resp.get("agent_memory") or []
+    check("training get: agent_memory carries the one lesson", len(mem) == 1, mem)
+    check("training get: agent_memory rows are text+at only - source/scope never leak through here",
+         bool(mem) and set(mem[0].keys()) == {"text", "at"}, mem)
+    check("training get: agent_memory text matches the agent's real memory",
+         bool(mem) and mem[0]["text"] == "Always confirm the timezone.", mem)
+
+    status2, resp2 = setter.route_training_get({"agent_id": "does-not-exist"})
+    check("training get: unknown agent -> 404", status2 == 404, (status2, resp2))
+
+
+def test_training_generate_share_forces_agent_campaign_filter_and_400_on_no_campaigns():
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=7001, start_id=1)
+    # a second campaign's replies - must never be drawn by this agent's link
+    _seed_training_corpus(sb, per_category=6, campaign_id=7002, start_id=1000)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-shr0006", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+             "campaign_ids": [7001]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    token = setter.mint_training_share(agent["id"])
+
+    status, resp = setter.route_training_generate({"share": token, "batch_size": 8})
+    check("training generate share: 200", status == 200, (status, resp))
+    check("training generate share: generates a full 8-case batch", resp.get("generated") == 8, resp)
+    campaign_ids_used = {c["campaign_id"] for c in resp["cases"]}
+    check("training generate share: every case is drawn from the agent's own campaign only, "
+         "never the other campaign's replies", campaign_ids_used <= {7001}, campaign_ids_used)
+
+    status2, resp2 = setter.route_training_generate(
+        {"share": token, "agent_id": "some-other-agent", "batch_size": 2})
+    check("training generate share: agent_id in the body disagreeing with the share -> 403",
+         status2 == 403, (status2, resp2))
+
+    status3, resp3 = setter.route_training_generate({"share": "garbage", "batch_size": 2})
+    check("training generate share: invalid token -> 401", status3 == 401, (status3, resp3))
+
+    status4, resp4 = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 2, "___public": True})
+    check("training generate: ___public flag with no share at all -> 401 "
+         "(the mechanism server.py uses to gate an unauthenticated caller)",
+         status4 == 401, (status4, resp4))
+
+    agent2 = {"id": "agent-shr0007", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+    token2 = setter.mint_training_share(agent2["id"])
+    status5, resp5 = setter.route_training_generate({"share": token2, "batch_size": 4})
+    check("training generate share: an agent with no campaigns assigned -> 400, plain-English",
+         status5 == 400 and "campaign" in str(resp5.get("error") or "").lower(), (status5, resp5))
+
+
+def test_training_generate_share_unanswered_cap_is_tighter_than_owner():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-shr0008", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"],
+             "campaign_ids": [7101]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": f"case-{i:04d}"} for i in range(21)], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    token = setter.mint_training_share(agent["id"])
+
+    status, resp = setter.route_training_generate({"share": token, "batch_size": 4})
+    check("training generate share: 21 unanswered already refuses (share cap is 20, not the owner's 40)",
+         status == 400, (status, resp))
+
+    # the exact same 21-unanswered backlog does NOT trip the owner's 40 cap
+    status2, resp2 = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
+    check("training generate owner: 21 unanswered is fine under the owner's 40 cap",
+         status2 == 200, (status2, resp2))
+
+
+def test_training_answer_share_forces_agent_rejects_mismatch_and_response_stays_scoped():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-shr0009", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    other = {"id": "agent-shr0010", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.agents[other["id"]] = {"id": other["id"], "doc": other}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    token = setter.mint_training_share(agent["id"])
+
+    status, resp = setter.route_training_answer({
+        "share": token, "case_id": "case-0000", "decision_ok": True, "reply_ok": True, "scope": "remember",
+        "note": "Client-taught lesson.",
+    })
+    check("training answer share: 200 - scope=remember still works from a share link", status == 200, (status, resp))
+    check("training answer share: response carries only this session's own stats, no cross-agent data",
+         set(resp.keys()) <= {"ok", "readiness", "answered_count", "unanswered_count"}, resp)
+    saved = setter._load_agent(agent["id"])
+    check("training answer share: the remembered note actually reached THIS agent's memory",
+         any(m.get("text") == "Client-taught lesson." for m in (saved.get("memory") or [])), saved)
+
+    status2, resp2 = setter.route_training_answer(
+        {"share": token, "agent_id": other["id"], "case_id": "case-0000", "decision_ok": True})
+    check("training answer share: agent_id in the body disagreeing with the share -> 403",
+         status2 == 403, (status2, resp2))
+
+    status3, resp3 = setter.route_training_answer({"share": "garbage", "case_id": "case-0000", "decision_ok": True})
+    check("training answer share: invalid token -> 401", status3 == 401, (status3, resp3))
+
+    status4, resp4 = setter.route_training_answer({"case_id": "case-0000", "decision_ok": True, "___public": True})
+    check("training answer: ___public flag with no share at all -> 401", status4 == 401, (status4, resp4))
+
+
+def test_memory_delete_never_accepts_share_token():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-shr0011", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"],
+             "memory": [{"text": "Old lesson.", "source": "manual", "scope": "remember",
+                        "at": "2026-01-01T00:00:00+00:00"}]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    token = setter.mint_training_share(agent["id"])
+
+    status, resp = setter.route_agents_memory_delete({
+        "agent_id": agent["id"], "at": "2026-01-01T00:00:00+00:00", "text": "Old lesson.", "share": token,
+    })
+    check("memory delete: a share token on the payload is rejected outright (403) - even a genuinely valid one",
+         status == 403, (status, resp))
+    saved = setter._load_agent(agent["id"])
+    check("memory delete: the lesson is untouched after the rejected attempt",
+         len(saved.get("memory") or []) == 1, saved.get("memory"))
+
+    status2, resp2 = setter.route_agents_memory_delete({
+        "agent_id": agent["id"], "at": "2026-01-01T00:00:00+00:00", "text": "Old lesson.", "___public": True,
+    })
+    check("memory delete: the ___public flag alone is also rejected", status2 == 403, (status2, resp2))
+
+    status3, resp3 = setter.route_agents_memory_delete({
+        "agent_id": agent["id"], "at": "2026-01-01T00:00:00+00:00", "text": "Old lesson.",
+    })
+    check("memory delete: the ordinary owner path (no share, no ___public) is unaffected",
+         status3 == 200, (status3, resp3))
+
+
 # ── run everything ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -2558,6 +2796,14 @@ if __name__ == "__main__":
     test_training_get_route()
     test_compute_readiness_pure_function()
     test_readiness_30_answer_scripted_simulation()
+    test_share_mint_verify_roundtrip()
+    test_route_training_share_mints_and_share_info()
+    test_training_get_share_forces_agent_and_rejects_mismatch()
+    test_training_get_includes_minimal_agent_memory()
+    test_training_generate_share_forces_agent_campaign_filter_and_400_on_no_campaigns()
+    test_training_generate_share_unanswered_cap_is_tighter_than_owner()
+    test_training_answer_share_forces_agent_rejects_mismatch_and_response_stays_scoped()
+    test_memory_delete_never_accepts_share_token()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

@@ -2027,9 +2027,16 @@ def route_agents_memory_delete(payload):
     """Removes one remembered correction from an agent's brain, matched by
     its timestamp (and text, defensively). The training page's memory viewer
     uses this so a bad lesson can always be taken back - remembered
-    corrections are never write-only."""
+    corrections are never write-only.
+
+    Owner-only, always - this route is never added to any public route list,
+    but it also never trusts a share token even if one is somehow forwarded
+    (e.g. a public caller replaying a captured request): a share only ever
+    grants training read/answer access to one agent, never memory edits."""
     try:
         payload = payload or {}
+        if payload.get("share") or payload.get("___public"):
+            return 403, {"error": "Memory cannot be edited from a training link."}
         agent_id = payload.get("agent_id")
         at = str(payload.get("at") or "")
         text = str(payload.get("text") or "")
@@ -2735,6 +2742,10 @@ REPLIES_TABLE = "replies"
 TRAINING_BATCH_DEFAULT = 8
 TRAINING_BATCH_MAX = 10
 TRAINING_MAX_UNANSWERED = 40
+# Public share-link trainers get a tighter unanswered-cases cap than the
+# owner - a client link left idle for weeks should not silently pile up a
+# huge backlog of scenarios.
+TRAINING_MAX_UNANSWERED_SHARE = 20
 TRAINING_ACTIONABLE_SHARE = 0.8
 
 # Real corpus counts (verified against the live DB 2026-07-13) for the
@@ -2752,6 +2763,93 @@ _TRAINING_CLEAR_NEGATIVE_CATEGORIES = ["Not Interested", "Do Not Contact", "Wron
 
 def _training_doc_id(agent_id: str) -> str:
     return f"{TRAINING_ID_PREFIX}{agent_id}"
+
+
+# ── public training share links ──────────────────────────────────────────────
+# The owner mints a per-agent link so a client can train ONE agent without a
+# Navreo login. Same stateless-HMAC idiom server.py uses for its own session
+# cookie (_mint_session/_session_email): a base64url payload plus a
+# hex-digest signature derived from SUPABASE_SERVICE_ROLE_KEY, so no new
+# secret is needed and the token survives deploys. A share token only ever
+# proves "this bearer may train agent <agent_id> until <exp>" - it carries no
+# other permission, and route_agents_memory_delete refuses it outright.
+
+def _share_secret() -> bytes:
+    import hashlib
+    srk = _KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+    return hashlib.sha256((srk + ":navreo-train-share-v1").encode()).digest()
+
+
+def mint_training_share(agent_id: str, days: int = 30) -> str:
+    import base64
+    import hashlib
+    import hmac
+    import time
+    exp = int(time.time()) + max(1, int(days or 30)) * 86400
+    payload = f"train|{agent_id}|{exp}".encode()
+    sig = hmac.new(_share_secret(), payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+def verify_training_share(token: str):
+    """The agent_id a share token is valid for, or None. Checks the HMAC
+    signature, the "train" prefix, and expiry - never raises, so a malformed
+    or tampered token is just treated as 'not valid' everywhere it is used."""
+    import base64
+    import hashlib
+    import hmac
+    import time
+    try:
+        token = str(token or "")
+        if not token or "." not in token:
+            return None
+        b64, _sep, sig = token.rpartition(".")
+        payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        expect = hmac.new(_share_secret(), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expect, sig):
+            return None
+        parts = payload.decode(errors="replace").split("|")
+        if len(parts) != 3 or parts[0] != "train":
+            return None
+        _prefix, agent_id, exp = parts
+        if not agent_id or not exp.isdigit() or int(exp) < time.time():
+            return None
+        return agent_id
+    except Exception:  # noqa: BLE001 - a bad token is just "not valid"
+        return None
+
+
+_SHARE_EXPIRED_MSG = "This training link has expired. Ask for a fresh one."
+
+
+def _resolve_share_scope(agent_id, share_token: str, public: bool = False):
+    """Common share-token enforcement shared by the three training routes
+    (get/generate/answer). Returns (resolved_agent_id, None) on success, or
+    (None, (status, body)) when the caller should stop and return that
+    response as-is.
+
+    - share_token present + valid  -> FORCES agent_id to the token's agent
+      (403 if the caller also passed a different agent_id - never silently
+      swap which agent a mismatched payload trains).
+    - share_token present + invalid/expired -> 401, plain-English.
+    - share_token absent + public (no owner session; see server.py's
+      ___public flag on unauthenticated POSTs) -> 401. A public caller must
+      always carry a valid share - there is no other way in.
+    - share_token absent + not public -> unchanged owner-session behaviour.
+    """
+    share_token = (share_token or "").strip()
+    if share_token:
+        share_agent = verify_training_share(share_token)
+        if not share_agent:
+            return None, (401, {"error": _SHARE_EXPIRED_MSG})
+        if agent_id and str(agent_id) != str(share_agent):
+            return None, (403, {"error": "This training link is for a different agent."})
+        return share_agent, None
+    if public:
+        return None, (401, {"error": _SHARE_EXPIRED_MSG})
+    if not agent_id:
+        return None, (400, {"error": "agent_id is required"})
+    return agent_id, None
 
 
 def _load_training(agent_id: str) -> dict:
@@ -2811,11 +2909,14 @@ def _weighted_category_targets(n: int) -> dict:
     return targets
 
 
-def _fetch_training_candidates(category: str, exclude_ids: list, want: int) -> list:
+def _fetch_training_candidates(category: str, exclude_ids: list, want: int,
+                               allowed_campaign_ids: list | None = None) -> list:
     """Real, unused `replies` rows for one category - excludes already-used
     ids and null/short bodies. Over-fetches a small multiple of `want` so the
     caller can randomly sample real variety instead of always drawing the
-    same handful of newest rows."""
+    same handful of newest rows. `allowed_campaign_ids`, when given (share
+    mode), restricts the pool to those campaigns only - a client training
+    link must never surface a reply from a campaign outside their own agent."""
     if not _SB or want <= 0:
         return []
     try:
@@ -2823,6 +2924,9 @@ def _fetch_training_candidates(category: str, exclude_ids: list, want: int) -> l
         filt = (f"workspace=eq.{WORKSPACE}&category=eq.{quote(str(category), safe='')}"
                 f"&order=replied_at.desc&limit={pool_size}"
                 f"&select=id,smartlead_campaign_id,email,replied_at,category,reply_subject,reply_body")
+        if allowed_campaign_ids is not None:
+            ids_csv = ",".join(quote(str(c), safe="") for c in allowed_campaign_ids)
+            filt += f"&smartlead_campaign_id=in.({ids_csv})"
         exclude_ids = list(exclude_ids or [])
         if exclude_ids:
             ids_csv = ",".join(str(i) for i in exclude_ids[-300:])
@@ -2845,12 +2949,13 @@ def _fetch_training_candidates(category: str, exclude_ids: list, want: int) -> l
         return []
 
 
-def _select_training_replies(doc: dict, batch_size: int) -> list:
+def _select_training_replies(doc: dict, batch_size: int, allowed_campaign_ids: list | None = None) -> list:
     """Weighted-real selection over the actionable + clear-negative category
     mix (see _weighted_category_targets). If a category legitimately runs
     dry (e.g. Contact Forward is a small slice of the corpus), a top-up pass
     spreads the shortfall across whichever categories still have real,
-    unused rows rather than handing back a short batch."""
+    unused rows rather than handing back a short batch. `allowed_campaign_ids`
+    is forwarded to every fetch (share mode only - see _fetch_training_candidates)."""
     used = list(doc.get("used_reply_ids") or [])
     targets = _weighted_category_targets(batch_size)
     selected = []
@@ -2860,7 +2965,7 @@ def _select_training_replies(doc: dict, batch_size: int) -> list:
         if want <= 0:
             return 0
         exclude = used + list(seen_ids)
-        candidates = _fetch_training_candidates(cat, exclude, want)
+        candidates = _fetch_training_candidates(cat, exclude, want, allowed_campaign_ids)
         random.shuffle(candidates)
         got = 0
         for c in candidates:
@@ -3084,17 +3189,30 @@ def compute_readiness(doc: dict) -> dict:
 def route_training_get(params):
     try:
         agent_id = _qp(params, "agent_id", "")
-        if not agent_id:
-            return 400, {"error": "agent_id is required"}
+        share_token = _qp(params, "share", "")
+        agent_id, err = _resolve_share_scope(agent_id, share_token)
+        if err:
+            return err
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
         doc = _load_training(agent_id)
         answers = dict(doc.get("answers") or {})
         cases = list(doc.get("cases") or [])
         unanswered = [c for c in cases if not _is_case_answered(c.get("id"), answers)]
         answered = [c for c in cases if _is_case_answered(c.get("id"), answers)]
+        # Minimal, name+text-only memory list (never the full agent doc) - the
+        # training page's "what this agent has remembered" viewer reads it
+        # from here rather than /api/setter/agents, which a share token must
+        # never be able to reach.
+        memory = [{"text": m.get("text") or "", "at": m.get("at") or ""}
+                 for m in (agent.get("memory") or []) if isinstance(m, dict)]
         return 200, {
             "cases": unanswered + answered, "answers": answers,
             "readiness": compute_readiness(doc),
             "used_count": len(doc.get("used_reply_ids") or []),
+            "agent_name": agent.get("name") or "",
+            "agent_memory": memory,
         }
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -3104,8 +3222,12 @@ def route_training_generate(payload):
     try:
         payload = payload or {}
         agent_id = payload.get("agent_id")
-        if not agent_id:
-            return 400, {"error": "agent_id is required"}
+        share_token = payload.get("share") or ""
+        public = bool(payload.get("___public"))
+        agent_id, err = _resolve_share_scope(agent_id, share_token, public)
+        if err:
+            return err
+        is_share_mode = bool(share_token)
         agent = _load_agent(agent_id)
         if not agent:
             return 404, {"error": "Agent not found."}
@@ -3115,15 +3237,22 @@ def route_training_generate(payload):
             batch_size = TRAINING_BATCH_DEFAULT
         batch_size = max(1, min(batch_size, TRAINING_BATCH_MAX))
 
+        allowed_campaign_ids = None
+        if is_share_mode:
+            allowed_campaign_ids = [str(c) for c in (agent.get("campaign_ids") or [])]
+            if not allowed_campaign_ids:
+                return 400, {"error": "This agent has no campaigns to draw replies from yet."}
+
         doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])
         answers = dict(doc.get("answers") or {})
         unanswered = [c for c in existing_cases if not _is_case_answered(c.get("id"), answers)]
-        if len(unanswered) > TRAINING_MAX_UNANSWERED:
+        max_unanswered = TRAINING_MAX_UNANSWERED_SHARE if is_share_mode else TRAINING_MAX_UNANSWERED
+        if len(unanswered) > max_unanswered:
             return 400, {"error": f"There are already {len(unanswered)} unanswered scenarios waiting - "
                                   "answer some before generating more."}
 
-        replies = _select_training_replies(doc, batch_size)
+        replies = _select_training_replies(doc, batch_size, allowed_campaign_ids=allowed_campaign_ids)
         used_ids = list(doc.get("used_reply_ids") or [])
         if not replies:
             return 200, {"cases": [], "generated": 0, "used_count": len(used_ids),
@@ -3163,9 +3292,12 @@ def route_training_answer(payload):
     try:
         payload = payload or {}
         agent_id = payload.get("agent_id")
+        share_token = payload.get("share") or ""
+        public = bool(payload.get("___public"))
+        agent_id, err = _resolve_share_scope(agent_id, share_token, public)
+        if err:
+            return err
         case_id = str(payload.get("case_id") or "")
-        if not agent_id:
-            return 400, {"error": "agent_id is required"}
         if not case_id:
             return 400, {"error": "case_id is required"}
         agent = _load_agent(agent_id)
@@ -3228,12 +3360,61 @@ def route_training_reset(payload):
         return 500, {"error": str(e)[:300]}
 
 
+def route_training_share(payload):
+    """OWNER-ONLY (reached through server.py's normal login gate - never
+    added to any public route list). Mints a 30-day-default share token for
+    one agent and returns the page URL a client can open without logging in."""
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        if not agent_id:
+            return 400, {"error": "agent_id is required"}
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+        try:
+            days = int(payload.get("days") or 30)
+        except (TypeError, ValueError):
+            days = 30
+        days = max(1, min(days, 365))
+        token = mint_training_share(agent_id, days)
+        # Decode the exp this exact token carries (rather than recomputing
+        # it) so expires_at can never drift from what verify_training_share
+        # will actually enforce.
+        import base64
+        b64 = token.rsplit(".", 1)[0]
+        exp_epoch = int(base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode().rsplit("|", 1)[1])
+        expires_at = _dt.datetime.fromtimestamp(exp_epoch, tz=_dt.timezone.utc).isoformat(timespec="seconds")
+        return 200, {"url_path": f"/app/setter-train.html?share={token}", "token": token,
+                    "expires_at": expires_at}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_training_share_info(params):
+    """PUBLIC (see server.py's _TRAIN_SHARE_GET). Returns only the agent name
+    and id for a valid share token - never instructions, memory, campaigns,
+    or anything else a client shouldn't see. 401 on an invalid/expired token."""
+    try:
+        share_token = _qp(params, "share", "")
+        agent_id = verify_training_share(share_token)
+        if not agent_id:
+            return 401, {"error": _SHARE_EXPIRED_MSG}
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+        return 200, {"agent_name": agent.get("name") or "", "agent_id": agent_id}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 GET_ROUTES = {
     "/api/setter/agents": route_agents_get,
     "/api/setter/campaigns": route_campaigns_get,
     "/api/setter/queue": route_queue_get,
     "/api/setter/grading": route_grading_get,
     "/api/setter/training": route_training_get,
+    "/api/setter/training/share-info": route_training_share_info,
 }
 
 POST_ROUTES = {
@@ -3251,5 +3432,6 @@ POST_ROUTES = {
     "/api/setter/training/generate": route_training_generate,
     "/api/setter/training/answer": route_training_answer,
     "/api/setter/training/reset": route_training_reset,
+    "/api/setter/training/share": route_training_share,
     "/api/setter/test/inject": route_test_inject,
 }
