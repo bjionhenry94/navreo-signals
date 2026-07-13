@@ -3018,7 +3018,7 @@ def compute_readiness(doc: dict) -> dict:
     n = len(items)
     if n == 0:
         return {"score": 0, "decision_component": 0.0, "reply_component": 0.0, "coverage": 0.0,
-                "n_answers": 0, "explanation": "No answers yet. Answer a few training scenarios "
+                "n_answers": 0, "explanation": "No ratings yet. Rate a few training scenarios "
                                                "to start building a readiness score."}
 
     decision_num = decision_den = 0.0
@@ -3043,10 +3043,10 @@ def compute_readiness(doc: dict) -> dict:
     score = round(raw * coverage)
 
     explanation = (
-        f"Based on your last {n} verdict{'s' if n != 1 else ''}, the agent's intervene-vs-leave calls "
-        f"were right {round(decision_component * 100)}% of the time (weighted toward your most recent "
-        f"answers), and its drafts were rated good {round(reply_component * 100)}% of the time. With "
-        f"{n} of the 20 answers that count toward full coverage, that gives a readiness score of {score}/100."
+        f"Across your {n} rating{'s' if n != 1 else ''} (recent ones count most), you agreed with the "
+        f"agent's answer-or-leave-it decision {round(decision_component * 100)}% of the time and rated "
+        f"its drafts good {round(reply_component * 100)}% of the time. Coverage is {n} of 20 ratings, "
+        f"so the readiness score is {score}/100 - keep rating and it climbs."
     )
     return {"score": score, "decision_component": round(decision_component, 4),
             "reply_component": round(reply_component, 4), "coverage": round(coverage, 4),
