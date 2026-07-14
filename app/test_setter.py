@@ -2829,6 +2829,20 @@ def _answer_and_wait(payload, agent_id=None, timeout=10):
     return status, resp
 
 
+def _recheck_and_wait(payload, agent_id=None, timeout=10):
+    """route_training_recheck (Review mode) is async like generate/retrain -
+    joins that agent's thread (setter._TRAINING_GEN_THREADS) before
+    returning, so callers can inspect the saved doc deterministically right
+    after, exactly like _generate_and_wait/_answer_and_wait do."""
+    status, resp = setter.route_training_recheck(payload)
+    aid = agent_id or payload.get("agent_id")
+    if status == 200 and resp.get("status") in ("started", "already_running") and aid:
+        thread = setter._TRAINING_GEN_THREADS.get(aid)
+        if thread is not None:
+            thread.join(timeout=timeout)
+    return status, resp
+
+
 def test_training_generate_weighted_excludes_used_and_batch_cap():
     sb, http = fresh_setter()
     _seed_training_corpus(sb, per_category=6)
@@ -4117,6 +4131,463 @@ def test_training_retrain_concurrent_answer_survives():
              cases_by_id["case-cc-02"].get("updated_by_feedback") is True, cases_by_id.get("case-cc-02"))
     finally:
         release_slow.set()
+
+
+# ── training review mode (owner request 2026-07-14): "go back through some of
+# the old scenarios and messaging, just to check that it's now been trained to
+# actually be good" - re-runs a batch of ANSWERED cases through today's brain
+# and stores the result under case["recheck"], never touching the frozen
+# original ─────────────────────────────────────────────────────────────────
+
+_RECHECK_CLASSIFY_OK = lambda body: {  # noqa: E731
+    "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+    "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+    "wants": "x", "rationale": "",
+}
+
+
+def test_training_recheck_picks_most_recently_answered_n():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk01", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_old1 = _fixed_training_case("case-rc-old1", body="oldest answered")
+    case_old2 = _fixed_training_case("case-rc-old2", body="second oldest answered")
+    case_new1 = _fixed_training_case("case-rc-new1", body="second newest answered")
+    case_new2 = _fixed_training_case("case-rc-new2", body="newest answered")
+    case_unanswered = _fixed_training_case("case-rc-unanswered", body="never answered")
+    doc = {
+        "cases": [case_old1, case_old2, case_new1, case_new2, case_unanswered],
+        "answers": {
+            "case-rc-old1": {"decision_ok": True, "reply_ok": True, "note": "", "at": "2026-07-01T00:00:00+00:00"},
+            "case-rc-old2": {"decision_ok": True, "reply_ok": True, "note": "", "at": "2026-07-02T00:00:00+00:00"},
+            "case-rc-new1": {"decision_ok": True, "reply_ok": True, "note": "", "at": "2026-07-10T00:00:00+00:00"},
+            "case-rc-new2": {"decision_ok": True, "reply_ok": True, "note": "", "at": "2026-07-11T00:00:00+00:00"},
+        },
+        "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    setter._save_training(agent["id"], doc)
+
+    http.classify_fn = _RECHECK_CLASSIFY_OK
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>rechecked</div><br><div>B</div>"}
+
+    status, resp = _recheck_and_wait({"agent_id": agent["id"], "count": 2})
+    check("recheck picks N: returns 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    cases_by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("recheck picks N: the two MOST RECENTLY answered cases got a recheck",
+         "recheck" in cases_by_id["case-rc-new1"] and "recheck" in cases_by_id["case-rc-new2"], cases_by_id)
+    check("recheck picks N: the two OLDER answered cases were left alone (no recheck key)",
+         "recheck" not in cases_by_id["case-rc-old1"] and "recheck" not in cases_by_id["case-rc-old2"], cases_by_id)
+    check("recheck picks N: the never-answered case was never touched",
+         "recheck" not in cases_by_id["case-rc-unanswered"], cases_by_id.get("case-rc-unanswered"))
+
+
+def test_training_recheck_writes_recheck_without_mutating_original():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk02", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_a = _fixed_training_case("case-rc2-00", body="answered case to recheck")
+    original_snapshot = copy.deepcopy(case_a)
+    doc = {
+        "cases": [case_a],
+        "answers": {"case-rc2-00": {"decision_ok": True, "reply_ok": True, "note": "",
+                                    "at": "2026-07-10T00:00:00+00:00"}},
+        "used_reply_ids": ["r-case-rc2-00"],
+        "readiness_history": [{"at": "2026-07-10T00:00:00+00:00", "score": 40, "n_answers": 1}],
+        "confirmed_examples": [{"gist": "answered case to recheck", "decision": "review",
+                               "at": "2026-07-10T00:00:00+00:00"}],
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    setter._save_training(agent["id"], doc)
+    original_answers = copy.deepcopy(doc["answers"])
+    original_readiness_history = copy.deepcopy(doc["readiness_history"])
+    original_confirmed = copy.deepcopy(doc["confirmed_examples"])
+    original_used = copy.deepcopy(doc["used_reply_ids"])
+
+    http.classify_fn = _RECHECK_CLASSIFY_OK
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>today's brain</div><br><div>B</div>"}
+
+    status, resp = _recheck_and_wait({"agent_id": agent["id"], "count": 6})
+    check("recheck no-mutate: returns 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    saved_case = next(c for c in saved.get("cases") or [] if c["id"] == "case-rc2-00")
+    check("recheck no-mutate: the ORIGINAL decision/decision_reason/draft_html/classification are byte-identical",
+         saved_case["decision"] == original_snapshot["decision"]
+         and saved_case["decision_reason"] == original_snapshot["decision_reason"]
+         and saved_case["draft_html"] == original_snapshot["draft_html"]
+         and saved_case["classification"] == original_snapshot["classification"], saved_case)
+    check("recheck no-mutate: no updated_by_feedback stamp (that's the retrain worker's own marker, "
+         "never recheck's)", "updated_by_feedback" not in saved_case, saved_case)
+    check("recheck no-mutate: a NEW recheck key was added with the expected shape",
+         set(saved_case.get("recheck", {}).keys()) == {"decision", "decision_reason", "draft_html", "at", "changed"},
+         saved_case.get("recheck"))
+    check("recheck no-mutate: doc answers/readiness_history/confirmed_examples/used_reply_ids untouched",
+         saved.get("answers") == original_answers and saved.get("readiness_history") == original_readiness_history
+         and saved.get("confirmed_examples") == original_confirmed and saved.get("used_reply_ids") == original_used,
+         (saved.get("answers"), saved.get("readiness_history"), saved.get("confirmed_examples"),
+          saved.get("used_reply_ids")))
+
+    get_status, get_resp = setter.route_training_get({"agent_id": agent["id"]})
+    get_case = next((c for c in (get_resp.get("cases") or []) if c["id"] == "case-rc2-00"), None)
+    check("recheck GET serialisation: the recheck field rides along on GET /api/setter/training",
+         get_status == 200 and get_case is not None and "recheck" in get_case, (get_status, get_case))
+    check("recheck GET serialisation: generating carries kind=recheck and a frontend-visible rechecked count",
+         (get_resp.get("generating") or {}).get("kind") == "recheck"
+         and (get_resp.get("generating") or {}).get("rechecked") == 1, get_resp.get("generating"))
+
+
+def test_training_recheck_changed_false_when_identical():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk03", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    same_html = "<div>Hi</div><br><div>identical draft</div><br><div>B</div>"
+    case_a = _fixed_training_case("case-rc3-00", body="unchanged case")
+    case_a["decision"] = "review"
+    case_a["draft_html"] = same_html
+    doc = {"cases": [case_a],
+          "answers": {"case-rc3-00": {"decision_ok": True, "reply_ok": True, "note": "",
+                                      "at": "2026-07-10T00:00:00+00:00"}},
+          "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    http.classify_fn = _RECHECK_CLASSIFY_OK
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": same_html}
+
+    real_decide = setter.decide
+    setter.decide = lambda cls, agent_, ctx: ("review", "forced review for test")
+    try:
+        status, resp = _recheck_and_wait({"agent_id": agent["id"], "count": 1})
+    finally:
+        setter.decide = real_decide
+    check("recheck changed=False: returns 200 and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    saved_case = next(c for c in saved.get("cases") or [] if c["id"] == "case-rc3-00")
+    check("recheck changed=False: identical decision + identical (proofread-echoed) draft text -> changed is False",
+         saved_case.get("recheck", {}).get("changed") is False, saved_case.get("recheck"))
+
+
+def test_training_recheck_changed_true_when_decision_differs():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk04", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    same_html = "<div>Hi</div><br><div>same text either way</div><br><div>B</div>"
+    case_a = _fixed_training_case("case-rc4-00", body="decision will move")
+    case_a["decision"] = "review"
+    case_a["draft_html"] = same_html
+    doc = {"cases": [case_a],
+          "answers": {"case-rc4-00": {"decision_ok": False, "reply_ok": None, "note": "",
+                                      "at": "2026-07-10T00:00:00+00:00"}},
+          "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    http.classify_fn = _RECHECK_CLASSIFY_OK
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": same_html}
+
+    real_decide = setter.decide
+    setter.decide = lambda cls, agent_, ctx: ("auto_send", "forced auto_send for test")
+    try:
+        status, resp = _recheck_and_wait({"agent_id": agent["id"], "count": 1})
+    finally:
+        setter.decide = real_decide
+    check("recheck changed=True (decision): returns 200 and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    saved_case = next(c for c in saved.get("cases") or [] if c["id"] == "case-rc4-00")
+    recheck = saved_case.get("recheck") or {}
+    check("recheck changed=True (decision): decision moved from 'review' to 'auto_send'",
+         recheck.get("decision") == "auto_send", recheck)
+    check("recheck changed=True (decision): a differing decision alone flips changed to True",
+         recheck.get("changed") is True, recheck)
+
+
+def test_training_recheck_changed_true_when_draft_text_differs():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk05", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_a = _fixed_training_case("case-rc5-00", body="draft text will move")
+    case_a["decision"] = "review"
+    case_a["draft_html"] = "<div>Hi</div><br><div>OLD completely different wording</div><br><div>B</div>"
+    doc = {"cases": [case_a],
+          "answers": {"case-rc5-00": {"decision_ok": True, "reply_ok": False, "note": "",
+                                      "at": "2026-07-10T00:00:00+00:00"}},
+          "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    http.classify_fn = _RECHECK_CLASSIFY_OK
+    http.draft_fn = lambda _b: {"subject": "Re: hi",
+                                "html": "<div>Hi</div><br><div>NEW today's-brain wording</div><br><div>B</div>"}
+
+    real_decide = setter.decide
+    setter.decide = lambda cls, agent_, ctx: ("review", "forced review for test")  # same as original decision
+    try:
+        status, resp = _recheck_and_wait({"agent_id": agent["id"], "count": 1})
+    finally:
+        setter.decide = real_decide
+    check("recheck changed=True (draft): returns 200 and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    saved_case = next(c for c in saved.get("cases") or [] if c["id"] == "case-rc5-00")
+    recheck = saved_case.get("recheck") or {}
+    check("recheck changed=True (draft): decision itself is unchanged ('review' both times)",
+         recheck.get("decision") == "review", recheck)
+    check("recheck changed=True (draft): a differing draft text alone flips changed to True",
+         recheck.get("changed") is True, recheck)
+
+
+def test_training_recheck_lock_contention_with_generate_already_running():
+    """Recheck acquires the EXACT SAME per-agent lock generate/retrain use
+    (setter._get_training_gen_lock), so the three kinds of background work
+    never overlap. If a generate() batch is already running for this agent,
+    calling recheck must return already_running (200), never start a second
+    worker."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk06", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_a = _fixed_training_case("case-rc6-00", body="already answered so recheck's own 400 gate never trips")
+    doc = {"cases": [case_a],
+          "answers": {"case-rc6-00": {"decision_ok": True, "reply_ok": True, "note": "",
+                                      "at": "2026-07-10T00:00:00+00:00"}},
+          "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    started_event = threading.Event()
+    release_event = threading.Event()
+    real_select = setter._select_training_replies
+
+    def fake_select(doc_, batch_size, allowed_campaign_ids=None):
+        started_event.set()
+        release_event.wait(timeout=10)
+        return []  # nothing new to build - generate finishes fast once released
+
+    setter._select_training_replies = fake_select
+    http.classify_fn = _RECHECK_CLASSIFY_OK
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>x</div><br><div>B</div>"}
+    try:
+        gstatus, gresp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 2})
+        check("recheck vs generate lock: generate starts immediately",
+             gstatus == 200 and gresp.get("status") == "started", (gstatus, gresp))
+        check("recheck vs generate lock: generate worker reached the blocked selection step",
+             started_event.wait(timeout=5), None)
+
+        rstatus, rresp = setter.route_training_recheck({"agent_id": agent["id"], "count": 1})
+        check("recheck vs generate lock: recheck while generate holds the lock -> already_running, "
+             "never a second worker", rstatus == 200 and rresp.get("status") == "already_running", (rstatus, rresp))
+
+        release_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        final_doc = setter._load_training(agent["id"])
+        check("recheck vs generate lock: generate's own marker settles idle, never overwritten by a "
+             "recheck marker that never actually ran", (final_doc.get("generating") or {}).get("kind") != "recheck",
+             final_doc.get("generating"))
+    finally:
+        setter._select_training_replies = real_select
+        release_event.set()
+
+
+def test_training_recheck_zero_answered_400():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk07", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    case_a = _fixed_training_case("case-rc7-00")
+    doc = {"cases": [case_a], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_recheck({"agent_id": agent["id"]})
+    check("recheck zero answered: 400, plain-English error", status == 400
+         and resp.get("error") == "Nothing answered yet to review.", (status, resp))
+
+    agent2 = {"id": "agent-rechk07b", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+    status2, resp2 = setter.route_training_recheck({"agent_id": agent2["id"]})
+    check("recheck zero answered: an agent with no training doc/cases at all also 400s",
+         status2 == 400, (status2, resp2))
+
+
+def test_training_recheck_share_scope_valid_forces_agent_invalid_401():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk08", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    case_a = _fixed_training_case("case-rc8-00")
+    doc = {"cases": [case_a],
+          "answers": {"case-rc8-00": {"decision_ok": True, "reply_ok": True, "note": "",
+                                      "at": "2026-07-10T00:00:00+00:00"}},
+          "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    http.classify_fn = _RECHECK_CLASSIFY_OK
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>share brain</div><br><div>B</div>"}
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = _recheck_and_wait({"share": token, "count": 1}, agent_id=agent["id"])
+    check("recheck share: valid token forces the agent and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
+    saved = setter._load_training(agent["id"])
+    saved_case = next(c for c in saved.get("cases") or [] if c["id"] == "case-rc8-00")
+    check("recheck share: the recheck actually landed for the agent the token names", "recheck" in saved_case,
+         saved_case)
+
+    status2, resp2 = setter.route_training_recheck({"share": token, "agent_id": "some-other-agent", "count": 1})
+    check("recheck share: agent_id in the body disagreeing with the share -> 403", status2 == 403, (status2, resp2))
+
+    status3, resp3 = setter.route_training_recheck({"share": "garbage-token", "count": 1})
+    check("recheck share: invalid/garbage token -> 401", status3 == 401, (status3, resp3))
+
+    status4, resp4 = setter.route_training_recheck({"agent_id": agent["id"], "count": 1, "___public": True})
+    check("recheck share: ___public with no share at all -> 401 (server.py's public-caller gate mechanism)",
+         status4 == 401, (status4, resp4))
+
+
+def test_training_recheck_concurrent_answer_survives():
+    """Lost-update protection: an answer that lands on a DIFFERENT (never
+    targeted) case while the recheck pass is still mid-flight on another
+    case must survive the worker's final save (reload-before-save)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk09", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_slow = _fixed_training_case("case-rc9-slow", body="slow answered case")
+    case_new = _fixed_training_case("case-rc9-new", body="brand new unanswered case")
+    doc = {"cases": [case_slow, case_new],
+          "answers": {"case-rc9-slow": {"decision_ok": True, "reply_ok": True, "note": "",
+                                        "at": "2026-07-10T00:00:00+00:00"}},
+          "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    started_slow = threading.Event()
+    release_slow = threading.Event()
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        if payload.get("reply_body") == "slow answered case":
+            started_slow.set()
+            release_slow.wait(timeout=10)
+        return {"primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "x", "rationale": ""}
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>new</div><br><div>B</div>"}
+
+    try:
+        status, resp = setter.route_training_recheck({"agent_id": agent["id"], "count": 1})
+        check("concurrent recheck: starts", status == 200 and resp.get("status") == "started", (status, resp))
+        check("concurrent recheck: worker reached the blocked (slow) case", started_slow.wait(timeout=5), None)
+
+        astatus, aresp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-rc9-new", "decision_ok": True, "reply_ok": True, "note": "",
+        })
+        check("concurrent recheck: the mid-recheck answer on a DIFFERENT case saves fine",
+             astatus == 200 and aresp.get("retrain") is None, (astatus, aresp))
+
+        release_slow.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        final_doc = setter._load_training(agent["id"])
+        check("concurrent recheck: the answer that landed mid-recheck survives the worker's final save",
+             final_doc.get("answers", {}).get("case-rc9-new", {}).get("decision_ok") is True,
+             final_doc.get("answers"))
+        cases_by_id = {c["id"]: c for c in final_doc.get("cases") or []}
+        check("concurrent recheck: the slow case still got its recheck written once released",
+             "recheck" in cases_by_id.get("case-rc9-slow", {}), cases_by_id.get("case-rc9-slow"))
+    finally:
+        release_slow.set()
+
+
+def test_training_recheck_failed_case_leaves_recheck_absent():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rechk10", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    good_case = _fixed_training_case("case-rc10-good", body="this one classifies fine")
+    bad_case = _fixed_training_case("case-rc10-bad", body="this one blows up")
+    doc = {"cases": [good_case, bad_case],
+          "answers": {
+              "case-rc10-good": {"decision_ok": True, "reply_ok": True, "note": "", "at": "2026-07-10T00:00:00+00:00"},
+              "case-rc10-bad": {"decision_ok": True, "reply_ok": True, "note": "", "at": "2026-07-11T00:00:00+00:00"},
+          },
+          "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        if payload.get("reply_body") == "this one blows up":
+            raise RuntimeError("simulated classify failure")
+        return {"primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "x", "rationale": ""}
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>new</div><br><div>B</div>"}
+
+    status, resp = _recheck_and_wait({"agent_id": agent["id"], "count": 2})
+    check("recheck failed case: returns 200 and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    cases_by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("recheck failed case: the case whose classify() raised has NO recheck key at all",
+         "recheck" not in cases_by_id.get("case-rc10-bad", {}), cases_by_id.get("case-rc10-bad"))
+    check("recheck failed case: the case whose classify() raised keeps its OLD content untouched",
+         cases_by_id["case-rc10-bad"]["draft_html"] == "<div>old draft</div>", cases_by_id.get("case-rc10-bad"))
+    check("recheck failed case: the OTHER case in the same batch still gets its recheck written",
+         "recheck" in cases_by_id.get("case-rc10-good", {}), cases_by_id.get("case-rc10-good"))
+    gen = saved.get("generating") or {}
+    check("recheck failed case: generating.rechecked counts only the SUCCESSFUL rechecks (1, not 2)",
+         gen.get("rechecked") == 1, gen)
+
+
+def test_correction_route_share_scope():
+    """Review mode's "Teach it more" posts straight to
+    /api/setter/agents/correction with scope=remember from setter-train.html,
+    which SHARE_MODE also uses - so this route now enforces the same
+    _resolve_share_scope every training route uses, purely as a second path
+    to a privilege a share token already had (merging into instructions via
+    a training-page "Remember going forward" note)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-corr-shr01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base instructions."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    http.merge_fn = None  # default fallback (append)
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = setter.route_agents_correction(
+        {"share": token, "text": "Always mention the trial from a review.", "scope": "remember",
+        "source": "review:case-99"})
+    check("correction share: a valid share token can teach this agent (Review mode's 'Teach it more')",
+         status == 200 and resp.get("agent_id") == agent["id"], (status, resp))
+    saved = setter._load_agent(agent["id"])
+    check("correction share: the correction actually reached this agent's instructions",
+         "Always mention the trial from a review." in saved.get("instructions", ""), saved.get("instructions"))
+    check("correction share: instruction_edits records the review:<case_id> source",
+         any(e.get("source") == "review:case-99" for e in (saved.get("instruction_edits") or [])),
+         saved.get("instruction_edits"))
+
+    status2, resp2 = setter.route_agents_correction(
+        {"share": "garbage-token", "text": "x", "scope": "remember"})
+    check("correction share: invalid token -> 401", status2 == 401, (status2, resp2))
+
+    status3, resp3 = setter.route_agents_correction(
+        {"share": token, "agent_id": "some-other-agent", "text": "x", "scope": "remember"})
+    check("correction share: agent_id in the body disagreeing with the share -> 403", status3 == 403, (status3, resp3))
+
+    status4, resp4 = setter.route_agents_correction({"agent_id": agent["id"], "text": "x", "scope": "remember",
+                                                     "___public": True})
+    check("correction share: ___public with no share at all -> 401", status4 == 401, (status4, resp4))
 
 
 # ── training answer latency fix (2026-07-14): merge moved to the background
@@ -6200,6 +6671,17 @@ if __name__ == "__main__":
     test_training_retrain_lock_contention_with_generate_queued_flag_honoured()
     test_training_retrain_failed_case_keeps_old_content()
     test_training_retrain_concurrent_answer_survives()
+    test_training_recheck_picks_most_recently_answered_n()
+    test_training_recheck_writes_recheck_without_mutating_original()
+    test_training_recheck_changed_false_when_identical()
+    test_training_recheck_changed_true_when_decision_differs()
+    test_training_recheck_changed_true_when_draft_text_differs()
+    test_training_recheck_lock_contention_with_generate_already_running()
+    test_training_recheck_zero_answered_400()
+    test_training_recheck_share_scope_valid_forces_agent_invalid_401()
+    test_training_recheck_concurrent_answer_survives()
+    test_training_recheck_failed_case_leaves_recheck_absent()
+    test_correction_route_share_scope()
     test_training_answer_remember_returns_fast_without_synchronous_merge()
     test_training_answer_remember_persists_pending_merge_in_same_write()
     test_training_retrain_worker_drains_pending_merges_in_order_across_queued_pass()

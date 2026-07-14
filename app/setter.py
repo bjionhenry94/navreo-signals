@@ -2441,21 +2441,34 @@ def route_agents_delete(payload):
 
 
 def route_agents_correction(payload):
-    """Persistent learning layer: one correction the owner gives while
+    """Persistent learning layer: one correction the owner (or, since Review
+    mode, a share-link trainer teaching from a rechecked case) gives while
     reviewing this agent's calls, outside the grading page's own per-case
     feedback_log. scope="remember" (owner ruling 2026-07-14) merges the
     correction straight into the agent's `instructions` text via
     merge_correction_into_instructions - the single living manual - instead
     of growing agent['memory']; scope="one_off" (the default) is audit-only
-    and never fed back into the model (agent['feedback_log'])."""
+    and never fed back into the model (agent['feedback_log']).
+
+    Share-scope enforcement (added for Review mode's "Teach it more", same
+    _resolve_share_scope helper the training routes already use) is a no-op
+    for every existing owner-session caller (setter.html's Teach-the-agent
+    modal never sends a share/___public field) - it only grants a valid
+    share token the same "merge into THIS agent's instructions" ability a
+    training-page "Remember going forward" note already has via
+    route_training_answer -> _kick_off_training_retrain, not a new
+    privilege."""
     try:
         payload = payload or {}
         agent_id = payload.get("agent_id")
+        share_token = payload.get("share") or ""
+        public = bool(payload.get("___public"))
+        agent_id, err = _resolve_share_scope(agent_id, share_token, public)
+        if err:
+            return err
         text = str(payload.get("text") or "").strip()
         scope = payload.get("scope") or "one_off"
         source = payload.get("source") or "manual"
-        if not agent_id:
-            return 400, {"error": "agent_id is required"}
         if not text:
             return 400, {"error": "text is required"}
         agent = _load_agent(agent_id)
@@ -2489,7 +2502,9 @@ def route_agents_memory_delete(payload):
     Owner-only, always - this route is never added to any public route list,
     but it also never trusts a share token even if one is somehow forwarded
     (e.g. a public caller replaying a captured request): a share only ever
-    grants training read/answer access to one agent, never memory edits."""
+    grants training read/answer/teach-a-correction access to one agent (see
+    route_training_answer and route_agents_correction), never a raw memory
+    edit like this route performs."""
     try:
         payload = payload or {}
         if payload.get("share") or payload.get("___public"):
@@ -3240,6 +3255,13 @@ TRAINING_MAX_UNANSWERED = 40
 # huge backlog of scenarios.
 TRAINING_MAX_UNANSWERED_SHARE = 20
 TRAINING_ACTIONABLE_SHARE = 0.8
+
+# Review mode (owner request 2026-07-14): "go back through some of the old
+# scenarios and messaging, just to check that it's now been trained to
+# actually be good" - re-runs a batch of already-ANSWERED cases through
+# today's brain, see route_training_recheck.
+TRAINING_RECHECK_DEFAULT = 6
+TRAINING_RECHECK_MAX = 10
 
 # Real corpus counts (verified against the live DB 2026-07-13) for the
 # actionable reply categories - used only to PROPORTION how many of each
@@ -4643,6 +4665,327 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         pass
 
 
+# ── training review mode (owner request 2026-07-14) ──────────────────────────
+# "go back through some of the old scenarios and messaging, just to check
+# that it's now been trained to actually be good" - answered training cases
+# are frozen historical records (old draft + the trainer's verdict). Review
+# mode re-runs a batch of them through TODAY'S brain (current instructions +
+# latest owner rules + proofread) and stores the result NEXT TO the original
+# under case["recheck"], so the trainer sees Then vs Now - proof the training
+# took, without touching history, answers, or readiness. Shares the SAME
+# per-agent lock as generate/retrain (_get_training_gen_lock) so the three
+# kinds of background work never interleave writes to the same doc.
+
+def _normalize_draft_text(html) -> str:
+    """Strips HTML tags and collapses whitespace, so two drafts that differ
+    only in formatting (a stray <br> vs a newline, doubled spaces) are never
+    flagged as "changed" by _recheck_one_training_case - only a genuine text
+    difference should light up the Changed badge."""
+    text = re.sub(r"<[^>]+>", " ", str(html or ""))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: dict, avail: list,
+                               slot_status0: str, now, digest: str):
+    """Review mode's per-case pipeline - re-runs classify -> decide ->
+    draft_reply -> proofread for ONE answered training case using the
+    agent's freshest instructions/rules, almost exactly
+    _retrain_one_training_case's own pipeline. Unlike that function, this
+    NEVER mutates `case` - it returns a fresh {decision, decision_reason,
+    draft_html, at, changed} dict for the caller to store under a new
+    case["recheck"] key, since a recheck must never touch the case's own
+    frozen decision/decision_reason/draft_html/classification (that's the
+    "Back then" record the trainer is comparing against). changed is True
+    when the decision differs from the case's original decision, OR the
+    normalised draft text (see _normalize_draft_text) differs from the
+    case's original draft_html. Returns None on any failure - a bad re-run
+    just leaves that case's recheck absent, never blocks the rest of the
+    batch (see _training_recheck_worker)."""
+    try:
+        inbound = case.get("inbound") or {}
+        body = inbound.get("body") or ""
+        subject = inbound.get("subject") or ""
+        outreach = case.get("original_outreach") or {}
+        first_outbound = outreach.get("body") or ""
+
+        cls = classify({"subject": subject, "body": body, "first_outbound": first_outbound,
+                        "last_outbound": "", "email_domain": ""}, agent_snapshot, owner_hints=digest)
+
+        hints = {"phone": _extract_phone(body), "body": body}
+        tz, tz_confident = resolve_timezone(hints, cls)
+
+        primary = cls.get("primary_intent")
+        try:
+            confidence = float(cls.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
+
+        slots, slot_status = [], "not_configured"
+        if not is_clear_neg:
+            if tz:
+                slot_status = slot_status0
+                if slot_status == "ok":
+                    eff_lead = dict(eff_settings)
+                    eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
+                    slots = pick_slots(avail, tz, eff_lead, now)
+                    if not slots:
+                        slot_status = "none_available"
+            else:
+                slot_status = "tz_unknown"
+
+        slots_fallback = slot_status != "ok"
+        needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
+
+        draft_html = None
+        lint_ok, lint_reason = False, "No draft was produced."
+        if not is_clear_neg:
+            try:
+                d = draft_reply({"first_name": "", "subject": subject, "body": body,
+                                 "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
+                                sender_first="Bjion", regen_feedback=digest)
+                draft_html = d.get("html")
+                if draft_html:
+                    # Second sweep (owner brief 2026-07-14) - BEFORE lint so
+                    # lint checks the final, proofread text.
+                    draft_html, _proofread_changed = proofread_draft(draft_html)
+                lint_ok, lint_reason = lint_draft(draft_html, {
+                    "subject": d.get("subject"), "first_name": "",
+                    "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
+                    "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                    "slot_labels": [s.get("label") for s in slots],
+                    "instructions": _agent_instructions(agent_snapshot),
+                    "booking_link": _booking_link(agent_snapshot), "thread_text": body,
+                    "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+                })
+            except Exception:  # noqa: BLE001
+                draft_html = None
+                lint_ok, lint_reason = False, "No draft was produced."
+
+        ctx = {
+            "red_flag_hits": lexicon_hits(body), "category": case.get("category"),
+            "first_touch": True, "slot_status": slot_status, "slots_fallback": slots_fallback,
+            "timezone": tz, "tz_confident": tz_confident, "lint_ok": lint_ok, "lint_reason": lint_reason,
+            "body_len": len(body), "hydrated": True, "answered_since_reply": False, "autopilot_enabled": True,
+            "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body))),
+            "first_outbound_present": bool(str(first_outbound or "").strip()),
+            "needs_availability_ask": needs_availability_ask,
+        }
+        decision, reason = decide(cls, agent_snapshot, ctx)
+
+        changed = (decision != case.get("decision")) or \
+                 (_normalize_draft_text(draft_html) != _normalize_draft_text(case.get("draft_html")))
+
+        return {
+            "decision": decision, "decision_reason": reason, "draft_html": draft_html,
+            "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "changed": changed,
+        }
+    except Exception:  # noqa: BLE001 - one bad case must never abort the whole recheck pass
+        return None
+
+
+def _finish_training_recheck(agent_id: str, rechecked: int = 0, error: str | None = None):
+    """Writes only doc["generating"], kind="recheck" - reloads the doc first
+    so this marker write never clobbers an answer that landed while the
+    worker was running. Used for the recheck worker's early-exit paths (no
+    answered cases somehow, agent gone, or an unexpected top-level failure);
+    the normal success path (_training_recheck_worker) writes its own final
+    marker alongside the `cases` merge, same discipline as
+    _training_generate_worker."""
+    try:
+        doc = _load_training(agent_id)
+        marker = {"status": "idle" if error is None else "failed", "kind": "recheck",
+                  "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                  "rechecked": rechecked}
+        if error is not None:
+            marker["error"] = error
+        doc["generating"] = marker
+        _save_training(agent_id, doc)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _training_recheck_worker(agent_id: str, count: int):
+    """Review mode's real work (see route_training_recheck) - runs off-
+    request on a daemon thread, same shape as _training_generate_worker /
+    _training_retrain_worker. Picks the `count` most-recently-ANSWERED cases
+    (by their answer's `at`, newest first), re-runs each through TODAY'S
+    pipeline concurrently (_recheck_one_training_case - classify -> decide ->
+    draft_reply -> proofread, with owner_hints/regen_feedback built from the
+    same LATEST OWNER RULES + session digest a live retrain pass gets), and
+    writes the result into a NEW case["recheck"] key - never the case's own
+    decision/decision_reason/draft_html/classification, never
+    doc["answers"], doc["readiness_history"], doc["confirmed_examples"] or
+    doc["used_reply_ids"]. A failed re-run just leaves that one case's
+    recheck absent (see _recheck_one_training_case's own try/except) - never
+    blocks the rest of the batch.
+
+    Lost-update protection: the cases to re-run are SELECTED from a doc
+    loaded at the top of this function (their inbound/original_outreach text
+    is frozen history, safe to read from a snapshot), but the final save
+    reloads the doc fresh and merges each result onto its copy of the
+    matching case by id - so an answer that lands on any case (including one
+    this pass is rechecking) while classify/draft round trips are in flight
+    is never lost. Only the `recheck` key on the cases this pass targeted,
+    plus `generating`, are ever written here."""
+    try:
+        doc = _load_training(agent_id)
+        cases = list(doc.get("cases") or [])
+        answers = dict(doc.get("answers") or {})
+        cases_by_id = {str(c.get("id")): c for c in cases}
+
+        answered_items = [(cid, str((answers.get(cid) or {}).get("at") or ""))
+                          for cid in cases_by_id if _is_case_answered(cid, answers)]
+        answered_items.sort(key=lambda kv: kv[1], reverse=True)  # newest answered first
+        target_ids = [cid for cid, _at in answered_items[:count]]
+
+        agent = _load_agent(agent_id)
+        if not agent or not target_ids:
+            _finish_training_recheck(agent_id, rechecked=0)
+            return
+        train_agent = {**agent, "mode": "autopilot", "enabled": True}
+
+        # Same digest a live pass, a fresh generate batch, and a retrain
+        # pass all get - LATEST OWNER RULES leads, then this training doc's
+        # own session digest (corrections and confirmed-exemplar
+        # confirmations) - so a recheck genuinely reflects TODAY's brain.
+        digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
+                                      _training_session_feedback_digest(doc))
+
+        settings = _load_settings()
+        now = _dt.datetime.now(_dt.timezone.utc)
+        eff = dict(settings)
+        eff["_agent"] = train_agent
+        slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+
+        results: dict = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(target_ids))) as pool:
+            future_to_id = {
+                pool.submit(_recheck_one_training_case, cases_by_id[cid], train_agent, eff, avail,
+                           slot_status0, now, digest): cid
+                for cid in target_ids if cid in cases_by_id
+            }
+            for fut in concurrent.futures.as_completed(future_to_id):
+                cid = future_to_id[fut]
+                try:
+                    result = fut.result()
+                except Exception as e:  # noqa: BLE001 - one bad case must never sink the batch
+                    result = None
+                    if _LOG:
+                        try:
+                            _LOG("/api/setter/training/recheck:case_failed",
+                                {"agent_id": agent_id, "case_id": cid, "error": str(e)[:200]}, actor="system")
+                        except Exception:  # noqa: BLE001
+                            pass
+                if result:
+                    results[cid] = result
+
+        # Lost-update protection (see docstring): reload fresh right before
+        # saving, and only merge `recheck` onto the specific cases this pass
+        # targeted.
+        fresh = _load_training(agent_id)
+        fresh_cases = list(fresh.get("cases") or [])
+        for c in fresh_cases:
+            cid = str(c.get("id"))
+            if cid in results:
+                c["recheck"] = results[cid]
+        fresh["cases"] = fresh_cases
+        fresh["generating"] = {
+            "status": "idle", "kind": "recheck",
+            "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "rechecked": len(results),
+        }
+        _save_training(agent_id, fresh)
+    except Exception as e:  # noqa: BLE001 - never raise out of a background thread
+        if _LOG:
+            try:
+                _LOG("/api/setter/training/recheck:worker_failed",
+                    {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+            except Exception:  # noqa: BLE001
+                pass
+        _finish_training_recheck(agent_id, rechecked=0,
+            error="Something went wrong while reviewing scenarios - try again in a minute.")
+
+
+def _training_recheck_threadmain(agent_id, count, lock):
+    try:
+        _training_recheck_worker(agent_id, count)
+        # A "remember" answer may have queued a retrain pass WHILE this
+        # recheck held the lock (see _kick_off_training_retrain) - run it
+        # now, still holding the same lock, same discipline as
+        # _training_generate_threadmain.
+        _maybe_run_queued_retrain(agent_id)
+    finally:
+        try:
+            lock.release()
+        except RuntimeError:  # noqa: BLE001 - lock wasn't held (shouldn't happen); never crash a bg thread
+            pass
+
+
+def route_training_recheck(payload):
+    """POST /api/setter/training/recheck - Review mode (see the section
+    doctrine above). Validates synchronously (share scope, agent existence,
+    "nothing answered yet" 400) exactly like route_training_generate, then
+    kicks the actual work off in a background daemon thread sharing the SAME
+    per-agent lock generate/retrain use, so the three kinds of work never
+    overlap. Lock already held by a generate/retrain/recheck pass for this
+    agent -> idempotent no-op, same "already_running" shape
+    route_training_generate returns."""
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        share_token = payload.get("share") or ""
+        public = bool(payload.get("___public"))
+        agent_id, err = _resolve_share_scope(agent_id, share_token, public)
+        if err:
+            return err
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+
+        try:
+            count = int(payload.get("count") or TRAINING_RECHECK_DEFAULT)
+        except (TypeError, ValueError):
+            count = TRAINING_RECHECK_DEFAULT
+        count = max(1, min(count, TRAINING_RECHECK_MAX))
+
+        doc = _load_training(agent_id)
+        cases = list(doc.get("cases") or [])
+        answers = dict(doc.get("answers") or {})
+        if not any(_is_case_answered(c.get("id"), answers) for c in cases):
+            return 400, {"error": "Nothing answered yet to review."}
+
+        lock = _get_training_gen_lock(agent_id)
+        if not lock.acquire(blocking=False):
+            # Already generating/retraining/rechecking for this agent -
+            # idempotent no-op, mirrors route_training_generate exactly.
+            return 200, {"ok": True, "status": "already_running"}
+
+        try:
+            marker_doc = _load_training(agent_id)
+            marker_doc["generating"] = {
+                "status": "running", "kind": "recheck",
+                "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                "count": count,
+            }
+            _save_training(agent_id, marker_doc)
+        except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
+            lock.release()
+            raise
+
+        thread = threading.Thread(
+            target=_training_recheck_threadmain,
+            args=(agent_id, count, lock),
+            daemon=True,
+        )
+        _TRAINING_GEN_THREADS[agent_id] = thread
+        thread.start()
+        return 200, {"ok": True, "status": "started"}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def _drain_pending_merges(agent_id: str) -> list:
     """Latency fix (2026-07-14): route_training_answer no longer merges a
     "remember" note into the agent's instructions inline - it queues
@@ -4962,6 +5305,7 @@ POST_ROUTES = {
     "/api/setter/grading/reset": route_grading_reset,
     "/api/setter/training/generate": route_training_generate,
     "/api/setter/training/answer": route_training_answer,
+    "/api/setter/training/recheck": route_training_recheck,
     "/api/setter/training/reset": route_training_reset,
     "/api/setter/training/share": route_training_share,
     "/api/setter/test/inject": route_test_inject,

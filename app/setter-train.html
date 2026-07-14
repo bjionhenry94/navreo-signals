@@ -142,6 +142,33 @@
   display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; line-height: 1.5;
 }
 
+/* ── Review mode (owner request 2026-07-14): re-test past scenarios with
+   today's brain, Then vs Now, without touching the frozen history ──────── */
+.rp-review-link { margin-top: 10px; font-size: 12.5px; }
+.rp-review-link a, .review-back-link { color: var(--orange-700); cursor: pointer; text-decoration: none; }
+.rp-review-link a:hover, .review-back-link:hover { text-decoration: underline; }
+.review-head-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
+.review-sub { font-size: 13px; color: var(--ink-3); margin: 0 0 16px; line-height: 1.5; }
+.review-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 18px; }
+.review-verdict-line { font-size: 12.5px; color: var(--ink-2); margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: var(--bg-sunken); }
+.review-verdict-line b { color: var(--ink); }
+.review-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 10px; }
+@media (max-width: 640px) { .review-compare { grid-template-columns: 1fr; } }
+.review-pane { border: 1px solid var(--line-2); border-radius: 10px; padding: 12px 14px; }
+.review-pane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.review-pane-lab { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+.pill.changed { background: var(--amber-bg); border: 1px solid var(--amber-line); color: #6B4A00; font-weight: 600; }
+.pill.same { background: transparent; border: 1px solid var(--line-2); color: var(--ink-3); }
+.review-teach { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 14px; }
+.review-teach label { display: block; font-size: 12px; color: var(--ink-3); font-weight: 500; margin-bottom: 6px; }
+.review-teach textarea {
+  width: 100%; min-height: 46px; resize: vertical; border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 11px;
+  font: 400 13px var(--font-sans); color: var(--ink); background: transparent; box-sizing: border-box; margin-bottom: 8px;
+}
+.review-teach textarea:focus { outline: none; box-shadow: var(--focus); }
+.review-empty { border: 1px solid var(--line); border-radius: var(--radius); padding: 24px 26px; text-align: center; }
+.review-empty p { font-size: 13.5px; color: var(--ink-2); line-height: 1.6; }
+
 /* ── Public share-link mode: no login, one agent only ─────
    The rail nav is simply never rendered in this mode (see boot()), and the
    agent picker never appears (renderAgentPicker() is never called) - these
@@ -207,14 +234,24 @@ let READINESS = { score: 0, decision_component: 0, reply_component: 0, coverage:
                   explanation: "No answers yet. Answer a few training scenarios to start building a readiness score." };
 let usedCount = 0;
 let lastRenderedScore = 0;
+// Latest known doc.generating marker - kept in sync by applyCasesSnapshot on
+// every load/poll, purely so startReview() can snapshot a "before" baseline
+// (see startReviewPoll) without an extra round trip.
+let GENERATING = { status: "idle" };
 
 /* per-case draft answer, held locally until Save & continue submits it -
    keyed by case id so browsing back and forth doesn't lose your picks */
 const PENDING = {};
 
-let view = "loading"; // loading | no_agents | empty | stream | done
+/* Review mode (owner request 2026-07-14): per-case "Teach it more" textarea
+   state, held locally exactly like PENDING above - keyed by case id so
+   switching cards (there's no navigation here, but a re-render mid-typing
+   must not lose a draft note) never loses what was typed. */
+const REVIEW_TEACH = {};
+
+let view = "loading"; // loading | no_agents | empty | stream | done | review
 let idx = 0;
-let generating = false; // guards the POST /training/generate call itself
+let generating = false; // guards the POST /training/generate and /training/recheck calls
 
 /* ── Background-generation polling state ──────────────────────────────────
    Scenario generation runs on the server in a background thread (see
@@ -465,6 +502,7 @@ function applyCasesSnapshot(data) {
   usedCount = (data && data.used_count) || usedCount;
   AGENT_MEMORY = (data && data.agent_memory) || [];
   INSTRUCTION_EDITS = (data && data.instruction_edits) || [];
+  GENERATING = (data && data.generating) || GENERATING;
   applyReadiness((data && data.readiness) || READINESS, { animate: false });
 }
 
@@ -479,6 +517,18 @@ function renderCasesOrEmpty() {
 
 function markGenerateButtonsBusy(label) {
   const btns = document.querySelectorAll("#emptyGenerateBtn, #doneGenerateBtn, #midGenerateBtn");
+  const restores = [];
+  btns.forEach((b) => { const r = busyBtn(b, label); if (r) restores.push(r); });
+  return restores;
+}
+
+/* Review mode's own "busy" buttons (see startReview) - a SEPARATE selector
+   from markGenerateButtonsBusy's, since a review can be kicked off from
+   either the readiness panel's link or the done-state button, and neither
+   should also freeze the generate buttons (a generate and a review are
+   different background passes, even though they share the server's lock). */
+function markReviewButtonsBusy(label) {
+  const btns = document.querySelectorAll("#panelReviewBtn, #doneReviewBtn");
   const restores = [];
   btns.forEach((b) => { const r = busyBtn(b, label); if (r) restores.push(r); });
   return restores;
@@ -539,6 +589,103 @@ async function pollGeneratingOnce() {
   // round here means this agent is already at its open-scenarios cap, not
   // that the well ran dry - never tell the trainer to wait.
   showError("You have open scenarios ready to rate. New ones, including practice scenarios, unlock as you answer.");
+}
+
+/* ── Review mode polling (owner request 2026-07-14) ───────────────────────
+   Mirrors the generate poll above exactly (same interval/deadline
+   constants, same busy-button dance), but the completion signal is
+   different: a recheck batch never changes CASES.length (it never adds
+   cases, only a `recheck` key on existing ones), so "done" can't be
+   detected by count growth. Instead this snapshots the PREVIOUS
+   generating.finished_at for kind "recheck" (see GENERATING, kept in sync
+   by applyCasesSnapshot) before firing the request, and polls until a
+   FRESH recheck marker (a different finished_at) shows up idle - so a
+   stale marker from an earlier review pass is never mistaken for this
+   one's completion, and a marker belonging to a concurrent generate/retrain
+   (kind != "recheck") is correctly never treated as "done" either. */
+let reviewPollHandle = null;
+let reviewPollDeadline = 0;
+let reviewPollRestores = [];
+let reviewBaselineFinishedAt = "";
+// Guards the WHOLE review pass (POST through to the poll landing), not just
+// the POST round trip - markReviewButtonsBusy's #panelReviewBtn is a link,
+// not a <button>, so the DOM disabled attribute alone never stops a second
+// click on it while a pass is already in flight (see startReview).
+let reviewInFlight = false;
+
+function startReviewPoll() {
+  stopReviewPoll();
+  reviewPollDeadline = Date.now() + POLL_MAX_MS;
+  reviewPollHandle = setInterval(pollReviewOnce, POLL_INTERVAL_MS);
+}
+
+function stopReviewPoll() {
+  if (reviewPollHandle) { clearInterval(reviewPollHandle); reviewPollHandle = null; }
+}
+
+function endReviewPoll() {
+  stopReviewPoll();
+  reviewInFlight = false;
+  reviewPollRestores.forEach((r) => r());
+  reviewPollRestores = [];
+}
+
+async function pollReviewOnce() {
+  if (Date.now() > reviewPollDeadline) {
+    endReviewPoll();
+    showError("Still reviewing in the background - refresh in a minute.");
+    return;
+  }
+  const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+  if (!res.ok) {
+    if (SHARE_MODE && res.status === 401) { endReviewPoll(); renderShareExpired(); return; }
+    return; // transient fetch error - just try again on the next tick
+  }
+  const gen = (res.data && res.data.generating) || { status: "idle" };
+  if (gen.status === "running") return; // still working (ours or someone else's) - keep polling
+
+  const isFreshRecheck = gen.kind === "recheck" && (gen.finished_at || "") !== reviewBaselineFinishedAt;
+  if (!isFreshRecheck) return; // whatever just went idle isn't OUR review pass yet - keep polling
+
+  applyCasesSnapshot(res.data);
+  endReviewPoll();
+  if (gen.status === "failed") {
+    showError(gen.error || "Couldn't review scenarios.");
+    return;
+  }
+  clearError();
+  view = "review";
+  render();
+  renderReadinessPanel(false); // hides the panel's own "Review what it's learned" link while already reviewing
+}
+
+async function startReview() {
+  if (reviewInFlight) return;
+  const restores = markReviewButtonsBusy("Re-running your rated scenarios through today's brain…");
+  reviewInFlight = true;
+  reviewBaselineFinishedAt = (GENERATING.kind === "recheck" ? GENERATING.finished_at : "") || "";
+  const body = { agent_id: selectedAgentId, count: 6 };
+  if (SHARE_MODE) body.share = SHARE_TOKEN;
+  const res = await fetchJson("/api/setter/training/recheck", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    reviewInFlight = false;
+    restores.forEach((r) => r());
+    if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
+    showError("Couldn't start the review: " + res.error); return;
+  }
+  clearError();
+  const genStatus = res.data && res.data.status;
+  if (genStatus === "started" || genStatus === "already_running") {
+    reviewPollRestores = restores;
+    startReviewPoll(); // reviewInFlight stays true until endReviewPoll() (success, failure, or timeout)
+    return;
+  }
+  reviewInFlight = false;
+  restores.forEach((r) => r());
+  showError((res.data && res.data.message) || "Couldn't start the review.");
 }
 
 function isAnswered(caseId) {
@@ -605,6 +752,14 @@ function renderReadinessPanel(animate) {
   const autopilotLine = SHARE_MODE
     ? "At 90+ the Navreo team can switch the agent on."
     : "At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.";
+  // Review mode (owner request 2026-07-14): "go back through some of the old
+  // scenarios and messaging, just to check that it's now been trained to
+  // actually be good" - only worth offering once at least one scenario has
+  // actually been rated, and not while already looking at the review list.
+  const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
+  const reviewLink = (answeredCount && view !== "review")
+    ? `<div class="rp-review-link"><a id="panelReviewBtn" role="button">Review what it's learned &rarr;</a></div>`
+    : "";
 
   host.innerHTML = `
     <div class="readiness-panel">
@@ -641,6 +796,7 @@ function renderReadinessPanel(animate) {
           <div class="small" style="margin-top:8px">${changes.length ? `To undo a lesson, edit this agent's instructions directly${SHARE_MODE ? "" : " in Setter &rarr; Agents"}.` : ""}</div>
         </div>
       </details>
+      ${reviewLink}
     </div>
   `;
   const numEl = document.getElementById("rpNum");
@@ -652,6 +808,8 @@ function renderReadinessPanel(animate) {
   }
   // one frame so the width transition actually animates from 0
   requestAnimationFrame(() => { fillEl.style.width = Math.max(0, Math.min(100, score)) + "%"; });
+  const panelReviewBtn = document.getElementById("panelReviewBtn");
+  if (panelReviewBtn) panelReviewBtn.addEventListener("click", () => startReview());
   lastRenderedScore = score;
 }
 
@@ -665,6 +823,7 @@ function render() {
   }
   if (view === "empty") { renderEmpty(); return; }
   if (view === "done") { renderDone(); return; }
+  if (view === "review") { renderReview(); return; }
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; renderDone(); return; }
   if (idx >= unanswered.length) idx = unanswered.length - 1;
@@ -692,9 +851,154 @@ function renderDone() {
       <div><b>All caught up.</b></div>
       <div class="db-msg">You've rated ${answeredCount} of ${CASES.length} scenarios for this agent. Get the next batch, drawn from real replies and topped up with practice scenarios when needed - everything you've taught it so far is applied to how it handles them, and any unrated scenarios always stay.</div>
       <button class="btn primary" id="doneGenerateBtn" type="button">Get more scenarios</button>
+      ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">Review what it's learned</button>` : ""}
     </div>
   `;
   document.getElementById("doneGenerateBtn").addEventListener("click", () => generateMore());
+  const reviewBtn = document.getElementById("doneReviewBtn");
+  if (reviewBtn) reviewBtn.addEventListener("click", () => startReview());
+}
+
+/* ── Review mode (owner request 2026-07-14) ────────────────────────────────
+   "go back through some of the old scenarios and messaging, just to check
+   that it's now been trained to actually be good" - lists every case that
+   carries a `recheck` (see setter.py route_training_recheck), newest
+   rechecked first, each showing the frozen original next to a fresh re-run
+   through today's brain. Never edits an answer, a case's original fields,
+   or the readiness score - purely a read (plus an optional "Teach it more"
+   correction, which is the SAME instructions-merge a training "Remember
+   going forward" note already does). */
+function backToTraining() {
+  renderCasesOrEmpty();
+  renderReadinessPanel(false); // the panel's own review link may need to reappear
+}
+
+function renderReview() {
+  const el = document.getElementById("trainApp");
+  const reviewed = CASES.filter((c) => c.recheck)
+    .slice()
+    .sort((a, b) => String((b.recheck || {}).at || "").localeCompare(String((a.recheck || {}).at || "")));
+
+  if (!reviewed.length) {
+    el.innerHTML = `
+      <div class="review-empty">
+        <p>Nothing's been reviewed yet.</p>
+        <button class="btn" id="reviewBackEmptyBtn" type="button">Back to training</button>
+      </div>
+    `;
+    document.getElementById("reviewBackEmptyBtn").addEventListener("click", () => backToTraining());
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="review-head-row">
+      <div>
+        <div class="sh-title" style="font-size:16px">Review: then vs now</div>
+        <div class="review-sub" style="margin:2px 0 0">${reviewed.length} recently-rated scenario${reviewed.length === 1 ? "" : "s"}, re-run through today's brain. This never changes your original ratings or the readiness score.</div>
+      </div>
+      <a class="review-back-link" id="reviewBackLink" role="button">&larr; Back to training</a>
+    </div>
+    ${reviewed.map((c) => renderReviewCard(c)).join("")}
+  `;
+  document.getElementById("reviewBackLink").addEventListener("click", () => backToTraining());
+  reviewed.forEach((c) => wireReviewCardEvents(c));
+}
+
+function renderReviewCard(c) {
+  const campaignName = campaignMap[c.campaign_id] || (c.campaign_id ? `Campaign ${c.campaign_id}` : "Unknown campaign");
+  const category = c.category || "Uncategorised";
+  const inbound = c.inbound || {};
+  const inboundBody = msgText(inbound.body) || "<i>No message text.</i>";
+  const recheck = c.recheck || {};
+
+  const ans = ANSWERS[c.id] || {};
+  const verdictBits = [];
+  if (ans.decision_ok === true) verdictBits.push("you said the right call was <b>Yes</b>");
+  else if (ans.decision_ok === false) verdictBits.push("you said the right call was <b>No</b>");
+  if (ans.reply_ok === true) verdictBits.push("the draft was <b>good</b>");
+  else if (ans.reply_ok === false) verdictBits.push("the draft was <b>not good</b>");
+  const verdictLine = (verdictBits.length ? verdictBits.join(", ") : "No verdict recorded.")
+    + (ans.note ? ` &mdash; note: &ldquo;${esc(ans.note)}&rdquo;` : "");
+
+  const back = callLineForDecision(c.decision, c.decision_reason);
+  const now_ = callLineForDecision(recheck.decision, recheck.decision_reason);
+  const changed = !!recheck.changed;
+  const teach = REVIEW_TEACH[c.id] || { text: "" };
+
+  return `
+    <div class="review-card" data-case-id="${esc(c.id)}">
+      <div class="tr-chips">
+        <span class="pill n">${esc(campaignName)}</span>
+        <span class="pill n">${esc(category)}</span>
+        <span class="pill ${changed ? "changed" : "same"}">${changed ? "Changed" : "Same"}</span>
+      </div>
+      <div class="tr-block inbound">
+        <div class="tr-block-lab">Their reply</div>
+        <div class="tr-msg big">${inboundBody}</div>
+      </div>
+      <div class="review-verdict-line">${verdictLine}</div>
+      <div class="review-compare">
+        <div class="review-pane">
+          <div class="review-pane-head"><span class="review-pane-lab">Back then</span></div>
+          <div class="tr-call ${back.cls}">${esc(back.text)}</div>
+          ${c.draft_html ? `<div class="qc-draft">${c.draft_html}</div>` : `<div class="small">No draft was produced.</div>`}
+        </div>
+        <div class="review-pane">
+          <div class="review-pane-head"><span class="review-pane-lab">With today's brain</span></div>
+          <div class="tr-call ${now_.cls}">${esc(now_.text)}</div>
+          ${recheck.draft_html ? `<div class="qc-draft">${recheck.draft_html}</div>` : `<div class="small">No draft was produced.</div>`}
+        </div>
+      </div>
+      <div class="review-teach">
+        <label>Teach it more (optional)</label>
+        <textarea class="review-teach-input" placeholder="Tell it what should have happened">${esc(teach.text || "")}</textarea>
+        <button class="btn review-teach-btn" type="button">Teach it</button>
+      </div>
+    </div>
+  `;
+}
+
+function wireReviewCardEvents(c) {
+  const card = document.querySelector(`.review-card[data-case-id="${CSS.escape(String(c.id))}"]`);
+  if (!card) return;
+  const textarea = card.querySelector(".review-teach-input");
+  const btn = card.querySelector(".review-teach-btn");
+  if (textarea) {
+    textarea.addEventListener("input", () => { REVIEW_TEACH[c.id] = { text: textarea.value }; });
+  }
+  if (btn) {
+    btn.addEventListener("click", () => teachFromReview(c.id, textarea, btn));
+  }
+}
+
+/* Posts straight to /api/setter/agents/correction (scope=remember) - the
+   SAME instructions-merge a training-page "Remember going forward" note
+   already triggers via route_training_answer, just reached from a
+   rechecked case instead of an in-stream answer. source is
+   "review:<case_id>" so the instruction-edits trail (see
+   renderReadinessPanel) can always be traced back to the case that
+   prompted it. Never touches the case's own answer/recheck/readiness -
+   this only ever changes the agent's instructions going forward. */
+async function teachFromReview(caseId, textarea, btn) {
+  const text = (textarea.value || "").trim();
+  if (!text) { showError("Write what it should learn first."); return; }
+  const restore = busyBtn(btn, "Saving…");
+  if (!restore) return;
+  const body = { agent_id: selectedAgentId, text, scope: "remember", source: `review:${caseId}` };
+  if (SHARE_MODE) body.share = SHARE_TOKEN;
+  const res = await fetchJson("/api/setter/agents/correction", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  restore();
+  if (!res.ok) {
+    if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
+    showError("Couldn't save this: " + res.error); return;
+  }
+  clearError();
+  textarea.value = "";
+  delete REVIEW_TEACH[caseId];
+  protoNote("The agent will remember this");
 }
 
 async function generateMore() {
@@ -732,11 +1036,15 @@ async function generateMore() {
 }
 
 /* ── Scenario card ─────────────────────────────────────── */
-function callLineFor(c) {
-  if (c.decision === "auto_send") return { cls: "g", text: `The agent's call: answer on its own. ${c.decision_reason || ""}`.trim() };
-  if (c.decision === "review") return { cls: "a", text: `The agent's call: leave it to a human. ${c.decision_reason || "It wants a person to look first."}` };
-  return { cls: "n", text: `The agent's call: leave it to a human, and it suggests no reply is needed. ${c.decision_reason || ""}`.trim() };
+// Shared by the live scenario stream (callLineFor) and Review mode's
+// "Back then" / "With today's brain" panes (renderReview), which have a
+// decision/decision_reason pair to describe but no case object of their own.
+function callLineForDecision(decision, reason) {
+  if (decision === "auto_send") return { cls: "g", text: `The agent's call: answer on its own. ${reason || ""}`.trim() };
+  if (decision === "review") return { cls: "a", text: `The agent's call: leave it to a human. ${reason || "It wants a person to look first."}` };
+  return { cls: "n", text: `The agent's call: leave it to a human, and it suggests no reply is needed. ${reason || ""}`.trim() };
 }
+function callLineFor(c) { return callLineForDecision(c.decision, c.decision_reason); }
 
 function renderCase(unanswered, i) {
   const el = document.getElementById("trainApp");

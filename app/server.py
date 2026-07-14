@@ -10121,6 +10121,7 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start
                      "/api/cron/fleet-stats",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
+                     "/api/setter/training/recheck", "/api/setter/agents/correction",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 # GET endpoints the public /app/setter-train.html share page calls WITHOUT a
@@ -11751,15 +11752,18 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
-            # Only /api/setter/training/answer and /api/setter/training/generate
+            # Only /api/setter/training/answer, /api/setter/training/generate,
+            # /api/setter/training/recheck (Review mode) and
+            # /api/setter/agents/correction (Review mode's "Teach it more")
             # are in _AUTH_PUBLIC_POST among the setter routes reaching this
-            # generic dispatch (poll/inbound are special-cased earlier), so this
-            # only ever fires for the two public training endpoints - never
-            # trust a client-supplied ___public, always set it from the actual
-            # session state so a public caller can't spoof owner scope. Guarded
-            # on isinstance so a malformed non-dict body (e.g. a bare JSON list)
-            # falls through to the route's own try/except exactly as it did
-            # before this flag existed, instead of a raw TypeError here.
+            # generic dispatch (poll/inbound are special-cased earlier), so
+            # this only ever fires for those public training endpoints -
+            # never trust a client-supplied ___public, always set it from the
+            # actual session state so a public caller can't spoof owner
+            # scope. Guarded on isinstance so a malformed non-dict body (e.g.
+            # a bare JSON list) falls through to the route's own try/except
+            # exactly as it did before this flag existed, instead of a raw
+            # TypeError here.
             if not self._authed_email() and isinstance(payload, dict):
                 payload["___public"] = True
             # The training share token is a bearer credential - never persist
