@@ -3007,6 +3007,45 @@ def route_queue_redraft(payload):
         settings = _load_settings()
         classification = row.get("classification") or {}
         tz = row.get("timezone")
+        fresh_classification = None
+        # Adopted/agentless rows reach Regenerate with NO stored classification
+        # (their intake deliberately skips the brain) - a redraft used to run
+        # blind: no intent routing and no original-outreach anchor, which is
+        # how a lead's "Sure." to "can I send it over?" drew a generic calendar
+        # reply instead of the resource (owner report 2026-07-15). Classify
+        # here exactly like the live pipeline and persist the result, so the
+        # draft (and the UI's Intent line) see what a pipeline row sees.
+        if not classification:
+            body_text = clean_body(row.get("reply_body") or "")
+            last_outbound = ""
+            for m in reversed(row.get("thread") or []):
+                if str(m.get("type") or "").upper() == "SENT":
+                    last_outbound = _TAG_RE.sub(" ", str(m.get("body") or ""))[:800]
+                    break
+            if not (row.get("first_outbound") or ""):
+                for m in (row.get("thread") or []):
+                    if str(m.get("type") or "").upper() == "SENT":
+                        row["first_outbound"] = clean_body(str(m.get("body") or ""))[:1500]
+                        break
+            domain = (row.get("company_domain") or "").lower()
+            comp_hints = _company_hints(domain)
+            company_location = ", ".join([v for v in (comp_hints.get("country"), comp_hints.get("state"),
+                                                      comp_hints.get("city")) if v])
+            mem_hints = _prefix_latest_rules(_latest_owner_rules(agent), _agent_memory_digest(agent))
+            try:
+                classification = classify({"subject": row.get("reply_subject"), "body": body_text,
+                                           "last_outbound": last_outbound,
+                                           "first_outbound": row.get("first_outbound") or "",
+                                           "email_domain": domain, "company_location": company_location},
+                                          agent, owner_hints=mem_hints)
+                fresh_classification = classification
+                if not tz:
+                    hints = {"country": comp_hints.get("country"), "state": comp_hints.get("state"),
+                             "city": comp_hints.get("city"), "phone": _extract_phone(body_text),
+                             "tld": ".".join(domain.split(".")[-2:]) if domain else "", "body": body_text}
+                    tz, _tz_confident = resolve_timezone(hints, classification)
+            except Exception:  # noqa: BLE001 - classify outage: the draft still runs, just without intent routing
+                classification = {}
         now = _dt.datetime.now(_dt.timezone.utc)
         eff_settings = dict(settings)
         eff_settings["_agent"] = agent
@@ -3034,6 +3073,7 @@ def route_queue_redraft(payload):
         # non-live surface. See owner bug report 2026-07-14.
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
+             "first_outbound": row.get("first_outbound") or "",
              "thread_text": thread_text},
             agent, classification, slots, slot_status, sender_first=_sender_first_for(agent),
             regen_feedback=combined_feedback)
@@ -3043,6 +3083,13 @@ def route_queue_redraft(payload):
             # regenerated draft is saved.
             draft_html, _proofread_changed = proofread_draft(draft_html)
         patch = {"draft_subject": d.get("subject"), "draft_body": draft_html, "slots": slots}
+        if fresh_classification is not None:
+            # Persist what the redraft-classify learned so the UI's Intent
+            # line updates and the next Regenerate doesn't re-classify.
+            patch["classification"] = fresh_classification
+            patch["first_outbound"] = row.get("first_outbound") or ""
+            if tz:
+                patch["timezone"] = tz
         _apply_patch(row, patch)
         return 200, {"row": {**row, **patch}}
     except Exception as e:  # noqa: BLE001

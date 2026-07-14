@@ -6994,6 +6994,70 @@ def test_queue_redraft_passes_agent_sender_first():
          captured.get("sender_first") == "Dana", captured)
 
 
+def test_queue_redraft_classifies_unclassified_rows():
+    """Adopted/agentless rows carry no classification - Regenerate must
+    classify first (owner report 2026-07-15: a lead's 'Sure.' drew a generic
+    calendar reply because the drafter had no intent and no original-outreach
+    anchor) and persist the result."""
+    sb, http = fresh_setter()
+    captured = {}
+
+    def draft_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured["primary_intent"] = payload.get("primary_intent")
+        captured["original_outreach"] = payload.get("original_outreach")
+        return {"subject": "Re: hi", "html": "<div>Hi Eric,</div><br><div>Here it is.</div><br><div>B</div>"}
+
+    http.draft_fn = draft_fn
+    http.classify_fn = _SF_CLASSIFY_FN  # -> primary_intent send_resource
+
+    agent = {"id": "agent-rdclass1", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Send the breakdown link when asked."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.queue.append({
+        "id": 802, "workspace": "navreo", "smartlead_campaign_id": 112, "agent_id": agent["id"],
+        "lead_email": "rd2@example.com", "lead_first_name": "Eric", "message_id": "m-rd2",
+        "reply_subject": "Re: hi", "reply_body": "Sure.", "company_domain": "example.com",
+        "classification": None, "timezone": None, "first_outbound": "",
+        "thread": [{"type": "SENT", "time": "2026-07-14T01:00:00+00:00",
+                    "body": "<div>We built a plan - can I send it over?</div>", "from_name": "Bjion"},
+                   {"type": "REPLY", "time": "2026-07-14T02:00:00+00:00", "body": "Sure."}],
+    })
+
+    status, resp = setter.route_queue_redraft({"id": 802})
+    check("redraft classify: returns 200", status == 200, (status, resp))
+    check("redraft classify: drafter received the classified intent",
+         captured.get("primary_intent") == "send_resource", captured)
+    check("redraft classify: drafter received the original outreach from the thread",
+         "can I send it over" in (captured.get("original_outreach") or ""), captured)
+    row = sb.queue[0]
+    check("redraft classify: classification persisted on the row",
+         (row.get("classification") or {}).get("primary_intent") == "send_resource", row.get("classification"))
+    check("redraft classify: first_outbound persisted on the row",
+         "can I send it over" in (row.get("first_outbound") or ""), row.get("first_outbound"))
+
+    # A row that already HAS a classification must not re-classify.
+    sb2, http2 = fresh_setter()
+    calls = {"classify": 0}
+
+    def classify_fn(b):
+        calls["classify"] += 1
+        return _SF_CLASSIFY_FN(b)
+
+    http2.classify_fn = classify_fn
+    http2.draft_fn = lambda b: {"subject": "Re: hi", "html": "<div>ok</div>"}
+    sb2.agents["agent-rdclass2"] = {"id": "agent-rdclass2", "doc": {"id": "agent-rdclass2", "enabled": True}}
+    sb2.queue.append({
+        "id": 803, "workspace": "navreo", "smartlead_campaign_id": 113, "agent_id": "agent-rdclass2",
+        "lead_email": "rd3@example.com", "message_id": "m-rd3", "reply_subject": "Re: hi",
+        "reply_body": "sure", "classification": {"primary_intent": "scheduling", "all_intents": ["scheduling"]},
+        "timezone": None, "thread": [],
+    })
+    status2, _resp2 = setter.route_queue_redraft({"id": 803})
+    check("redraft classify: already-classified row returns 200", status2 == 200, status2)
+    check("redraft classify: already-classified row is NOT re-classified", calls["classify"] == 0, calls)
+
+
 def test_process_reply_thread_name_wins_over_agent_identity():
     """Live pipeline (owner bug report 2026-07-14): the real Smartlead thread
     is per-lead ground truth, so it must win even when the agent has its own
@@ -7304,6 +7368,7 @@ if __name__ == "__main__":
     test_retrain_case_uses_agent_sender_first_not_hardcoded_bjion()
     test_recheck_case_uses_agent_sender_first_not_hardcoded_bjion()
     test_queue_redraft_passes_agent_sender_first()
+    test_queue_redraft_classifies_unclassified_rows()
     test_process_reply_thread_name_wins_over_agent_identity()
     test_process_reply_falls_back_to_agent_identity_when_hydration_yields_none()
     test_self_learning_stamp_persists_once_from_live_thread()
