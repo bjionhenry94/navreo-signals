@@ -45,6 +45,7 @@ import json
 import os
 import re
 import sys
+import threading
 from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -2443,6 +2444,22 @@ def _training_classify_fn(body):
     }
 
 
+def _generate_and_wait(payload, agent_id=None, timeout=10):
+    """route_training_generate is now async (see setter.py): a successful
+    call returns {status:"started"|"already_running"} almost instantly and
+    the real work happens on a background daemon thread. This joins that
+    agent's thread (setter._TRAINING_GEN_THREADS - production never reads
+    this map, it exists purely so tests can be deterministic) before
+    returning, so callers can inspect the saved doc right after."""
+    status, resp = setter.route_training_generate(payload)
+    aid = agent_id or payload.get("agent_id")
+    if status == 200 and resp.get("status") in ("started", "already_running") and aid:
+        thread = setter._TRAINING_GEN_THREADS.get(aid)
+        if thread is not None:
+            thread.join(timeout=timeout)
+    return status, resp
+
+
 def test_training_generate_weighted_excludes_used_and_batch_cap():
     sb, http = fresh_setter()
     _seed_training_corpus(sb, per_category=6)
@@ -2453,27 +2470,40 @@ def test_training_generate_weighted_excludes_used_and_batch_cap():
              "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
-    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 8})
-    check("training generate: returns 200", status == 200, (status, resp))
-    check("training generate: default-sized batch generates 8 real cases", resp.get("generated") == 8, resp)
-    check("training generate: used_count grew by 8", resp.get("used_count") == 8, resp)
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 8})
+    check("training generate: returns 200 and starts immediately",
+         status == 200 and resp.get("status") == "started", (status, resp))
 
-    first_reply_ids = {c["reply_id"] for c in resp["cases"]}
+    doc = setter._load_training(agent["id"])
+    gen = doc.get("generating") or {}
+    check("training generate: background worker marks generating idle once the batch lands",
+         gen.get("status") == "idle", gen)
+    check("training generate: default-sized batch generates 8 real cases and generating.added says so",
+         len(doc.get("cases") or []) == 8 and gen.get("added") == 8, (doc.get("cases"), gen))
+    check("training generate: used_count grew by 8", len(doc.get("used_reply_ids") or []) == 8,
+         doc.get("used_reply_ids"))
+
+    first_cases = list(doc.get("cases") or [])
+    first_reply_ids = {c["reply_id"] for c in first_cases}
     check("training generate: no duplicate reply_id within one batch",
-         len(first_reply_ids) == len(resp["cases"]), resp["cases"])
+         len(first_reply_ids) == len(first_cases), first_cases)
 
-    status2, resp2 = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 999})
+    status2, resp2 = _generate_and_wait({"agent_id": agent["id"], "batch_size": 999})
+    check("training generate: batch_size above the max is clamped to 10, not rejected (still starts)",
+         status2 == 200 and resp2.get("status") == "started", resp2)
+
+    doc2 = setter._load_training(agent["id"])
+    new_cases = list(doc2.get("cases") or [])[len(first_cases):]
     check("training generate: batch_size above the max is clamped to 10, not rejected",
-         status2 == 200 and resp2.get("generated") <= 10, resp2)
+         len(new_cases) <= 10, new_cases)
 
-    second_reply_ids = {c["reply_id"] for c in resp2["cases"]}
+    second_reply_ids = {c["reply_id"] for c in new_cases}
     check("training generate: a later batch never repeats a reply_id already used",
          first_reply_ids.isdisjoint(second_reply_ids), (first_reply_ids, second_reply_ids))
 
-    doc = setter._load_training(agent["id"])
     check("training generate: used_reply_ids accumulates across calls",
-         len(doc.get("used_reply_ids") or []) == len(first_reply_ids) + len(second_reply_ids),
-         doc.get("used_reply_ids"))
+         len(doc2.get("used_reply_ids") or []) == len(first_reply_ids) + len(second_reply_ids),
+         doc2.get("used_reply_ids"))
     check("training: the training-<agent_id> doc row never appears in _load_agents()",
          all(not str(a.get("id") or "").startswith(setter.TRAINING_ID_PREFIX) for a in setter._load_agents()),
          setter._load_agents())
@@ -2489,10 +2519,11 @@ def test_training_generate_stores_real_bodies_verbatim():
              "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
-    _, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 6})
+    _generate_and_wait({"agent_id": agent["id"], "batch_size": 6})
+    doc = setter._load_training(agent["id"])
     by_reply_id = {r["id"]: r for r in sb.replies}
     ok = True
-    for case in resp["cases"]:
+    for case in doc.get("cases") or []:
         original = by_reply_id[case["reply_id"]]
         if case["inbound"]["raw_body"] != original["reply_body"]:
             ok = False
@@ -2501,7 +2532,7 @@ def test_training_generate_stores_real_bodies_verbatim():
         if case["category"] != original["category"]:
             ok = False
     check("training generate: every case's inbound is the real reply verbatim (raw body, subject, category)",
-         ok, resp["cases"])
+         ok and bool(doc.get("cases")), doc.get("cases"))
 
 
 def test_training_case_includes_original_outreach_and_human_answer_when_present():
@@ -2571,8 +2602,8 @@ def test_training_generate_memory_digest_reaches_classify():
     }
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
-    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
-    check("training generate: 200", status == 200, (status, resp))
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    check("training generate: 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
     check("training generate: classify was actually called", len(captured) > 0, captured)
     check("training generate: agent memory digest reaches classify as owner_corrections",
          len(captured) > 0 and all("Never promise a specific onboarding date." in (c or "") for c in captured),
@@ -2628,14 +2659,17 @@ def test_training_generate_concurrent_preserves_selection_order():
     setter._select_training_replies = fake_select
     setter._build_training_case = fake_build
     try:
-        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 6})
+        status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 6})
     finally:
         setter._select_training_replies = real_select
         setter._build_training_case = real_build
 
-    check("training generate concurrent: 200 and all 6 cases built", status == 200 and resp.get("generated") == 6,
+    check("training generate concurrent: 200 and starts", status == 200 and resp.get("status") == "started",
          (status, resp))
-    got_order = [c["reply_id"] for c in resp.get("cases") or []]
+    doc = setter._load_training(agent["id"])
+    cases = doc.get("cases") or []
+    check("training generate concurrent: all 6 cases built", len(cases) == 6, cases)
+    got_order = [c["reply_id"] for c in cases]
     want_order = [r["id"] for r in fixed_replies]
     check("training generate concurrent: stored case order matches selection order, not completion order",
          got_order == want_order, (got_order, want_order))
@@ -2662,25 +2696,32 @@ def test_training_generate_one_worker_failure_drops_only_that_case():
     setter._select_training_replies = fake_select
     setter._build_training_case = fake_build
     try:
-        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
+        status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
     finally:
         setter._select_training_replies = real_select
         setter._build_training_case = real_build
 
-    check("training generate one-failure: still 200", status == 200, (status, resp))
-    check("training generate one-failure: exactly 3 of 4 cases survive", resp.get("generated") == 3, resp)
-    got_ids = [c["reply_id"] for c in resp.get("cases") or []]
+    check("training generate one-failure: still 200 and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
+    doc = setter._load_training(agent["id"])
+    cases = doc.get("cases") or []
+    check("training generate one-failure: exactly 3 of 4 cases survive", len(cases) == 3, cases)
+    got_ids = [c["reply_id"] for c in cases]
     check("training generate one-failure: the failing reply's case is absent, the other 3 present in order",
          got_ids == [r["id"] for r in fixed_replies if r["id"] != bad_id], got_ids)
 
-    doc = setter._load_training(agent["id"])
     used = list(doc.get("used_reply_ids") or [])
     check("training generate one-failure: used_reply_ids still records all 4 selected replies exactly once "
          "(including the one that failed to build a case), with no duplicates from concurrent workers",
          sorted(used) == sorted(r["id"] for r in fixed_replies) and len(used) == len(set(used)), used)
 
 
-def test_training_generate_all_workers_fail_returns_502_plain_english():
+def test_training_generate_all_workers_fail_marks_generating_failed_plain_english():
+    """The old synchronous route returned a 502 with the plain-English error
+    body directly. Now the route itself always starts (200/started) - a
+    total build failure surfaces as doc.generating = {status:"failed",
+    error:...} instead, which the training page shows via showError() once
+    a poll picks it up (see setter-train.html pollGeneratingOnce())."""
     sb, http = fresh_setter()
     agent = {"id": "agent-train-conc3", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
@@ -2698,17 +2739,20 @@ def test_training_generate_all_workers_fail_returns_502_plain_english():
     setter._select_training_replies = fake_select
     setter._build_training_case = fake_build
     try:
-        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 3})
+        status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 3})
     finally:
         setter._select_training_replies = real_select
         setter._build_training_case = real_build
 
-    check("training generate all-fail: 502", status == 502, (status, resp))
-    check("training generate all-fail: plain-English error, no em dash",
-         resp.get("error") == "Couldn't build any scenarios just now - try again in a minute."
-         and "—" not in (resp.get("error") or ""), resp)
+    check("training generate all-fail: still starts synchronously (200, async)",
+         status == 200 and resp.get("status") == "started", (status, resp))
 
     doc = setter._load_training(agent["id"])
+    gen = doc.get("generating") or {}
+    check("training generate all-fail: generating.status is failed with a plain-English error, no em dash",
+         gen.get("status") == "failed"
+         and gen.get("error") == "Couldn't build any scenarios just now - try again in a minute."
+         and "—" not in (gen.get("error") or ""), gen)
     check("training generate all-fail: nothing partially saved - used_reply_ids stays empty",
          (doc.get("used_reply_ids") or []) == [], doc.get("used_reply_ids"))
     check("training generate all-fail: nothing partially saved - cases list stays empty",
@@ -2730,10 +2774,12 @@ def test_training_generate_concurrent_batch_matches_sequential_case_count():
              "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
-    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 8})
-    check("training generate concurrent real pipeline: 200 with a full 8-case batch",
-         status == 200 and resp.get("generated") == 8, (status, resp))
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 8})
+    check("training generate concurrent real pipeline: 200 and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
     doc = setter._load_training(agent["id"])
+    check("training generate concurrent real pipeline: a full 8-case batch landed",
+         len(doc.get("cases") or []) == 8, doc.get("cases"))
     check("training generate concurrent real pipeline: used_reply_ids grew by exactly 8, no duplicates",
          len(doc.get("used_reply_ids") or []) == 8 and len(set(doc.get("used_reply_ids") or [])) == 8,
          doc.get("used_reply_ids"))
@@ -2750,6 +2796,128 @@ def test_training_generate_refuses_over_40_unanswered():
     status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
     check("training generate: refuses (400) with more than 40 unanswered cases already pending",
          status == 400, (status, resp))
+
+
+def test_training_generate_second_call_while_running_is_already_running():
+    """The route acquires a per-agent lock before starting the background
+    thread (see setter._get_training_gen_lock). A second call for the SAME
+    agent while that thread is still working must never start a second
+    thread - it's an idempotent no-op the page can treat exactly like
+    "started" (just keep polling)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train-async1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    fixed_replies = _fixed_training_replies(2, prefix="block")
+    started_event = threading.Event()
+    release_event = threading.Event()
+    real_select = setter._select_training_replies
+    real_build = setter._build_training_case
+
+    def fake_select(doc, batch_size, allowed_campaign_ids=None):
+        started_event.set()
+        release_event.wait(timeout=10)
+        return fixed_replies
+
+    def fake_build(reply_row, agent_, eff, avail, slot_status0, now, mem_digest, idx):
+        return _fixed_case(reply_row, idx)
+
+    setter._select_training_replies = fake_select
+    setter._build_training_case = fake_build
+    try:
+        status1, resp1 = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 2})
+        check("training generate async: the first call starts immediately (200/started)",
+             status1 == 200 and resp1.get("status") == "started", (status1, resp1))
+        check("training generate async: started_event fires - the worker actually reached the selection step",
+             started_event.wait(timeout=5), None)
+
+        doc_mid = setter._load_training(agent["id"])
+        check("training generate async: the doc shows generating.running right after the POST returns",
+             doc_mid.get("generating", {}).get("status") == "running", doc_mid.get("generating"))
+
+        status2, resp2 = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 2})
+        check("training generate async: a second call while the first is still running -> already_running, "
+             "not a second background batch", status2 == 200 and resp2.get("status") == "already_running",
+             (status2, resp2))
+
+        release_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        doc_final = setter._load_training(agent["id"])
+        check("training generate async: generating flips to idle once the background batch actually finishes",
+             doc_final.get("generating", {}).get("status") == "idle", doc_final.get("generating"))
+        check("training generate async: exactly one batch's worth of cases was saved (no duplicate run)",
+             len(doc_final.get("cases") or []) == 2, doc_final.get("cases"))
+    finally:
+        setter._select_training_replies = real_select
+        setter._build_training_case = real_build
+        release_event.set()
+
+
+def test_training_generate_lost_update_protection_answer_survives():
+    """An owner (or client, on a share link) can answer an EXISTING scenario
+    while a new batch is still generating in the background. The worker's
+    final save must reload the doc first, so that in-flight answer is never
+    silently overwritten by the generation thread's own stale in-memory
+    copy (see setter._training_generate_worker's fresh_doc reload)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train-async2", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    existing_doc = {"cases": [{"id": "case-pre-0000"}], "answers": {}, "used_reply_ids": [],
+                    "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], existing_doc)
+
+    fixed_replies = _fixed_training_replies(2, prefix="mid")
+    started_event = threading.Event()
+    release_event = threading.Event()
+    real_select = setter._select_training_replies
+    real_build = setter._build_training_case
+
+    def fake_select(doc, batch_size, allowed_campaign_ids=None):
+        started_event.set()
+        release_event.wait(timeout=10)
+        return fixed_replies
+
+    def fake_build(reply_row, agent_, eff, avail, slot_status0, now, mem_digest, idx):
+        return _fixed_case(reply_row, idx)
+
+    setter._select_training_replies = fake_select
+    setter._build_training_case = fake_build
+    try:
+        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 2})
+        check("lost-update: generation starts", status == 200 and resp.get("status") == "started", (status, resp))
+        check("lost-update: worker reached the (blocked) selection step",
+             started_event.wait(timeout=5), None)
+
+        # An answer lands on the ORIGINAL pre-existing case while the batch
+        # above is still stuck mid-generation (blocked on release_event).
+        astatus, aresp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-pre-0000", "decision_ok": True, "reply_ok": True,
+            "note": "", "scope": "one_off",
+        })
+        check("lost-update: the mid-generation answer itself saves fine", astatus == 200, (astatus, aresp))
+
+        release_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        final_doc = setter._load_training(agent["id"])
+        check("lost-update: the answer that landed mid-generation survives the worker's final save",
+             final_doc.get("answers", {}).get("case-pre-0000", {}).get("decision_ok") is True,
+             final_doc.get("answers"))
+        check("lost-update: the new batch's cases were appended on top, not lost",
+             len(final_doc.get("cases") or []) == 3, final_doc.get("cases"))
+        gen = final_doc.get("generating") or {}
+        check("lost-update: generating flips to idle with added=2",
+             gen.get("status") == "idle" and gen.get("added") == 2, gen)
+    finally:
+        setter._select_training_replies = real_select
+        setter._build_training_case = real_build
+        release_event.set()
 
 
 def test_training_answer_recomputes_readiness_and_counts():
@@ -2872,9 +3040,48 @@ def test_training_get_route():
     check("training get: readiness is present and freshly computed",
          resp["readiness"]["n_answers"] == 1, resp["readiness"])
     check("training get: used_count is reported", resp["used_count"] == 3, resp)
+    check("training get: generating defaults to idle when no batch has ever run",
+         resp.get("generating") == {"status": "idle"}, resp.get("generating"))
 
     status2, resp2 = setter.route_training_get({})
     check("training get: missing agent_id -> 400", status2 == 400, (status2, resp2))
+
+
+def test_training_get_self_heals_stale_running_marker():
+    """Mirrors route_grading_get's relearn self-heal: a "running" marker
+    left behind by a process restart mid-batch (the in-memory thread and
+    per-agent lock both die with the process) is healed to idle in the
+    RESPONSE once it's old enough - never persisted, exactly like relearn,
+    since the next real generate() call overwrites it anyway."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train-stale1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    old_started = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=900)).isoformat(timespec="seconds")
+    doc = {"cases": [], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "generating": {"status": "running", "started_at": old_started, "batch_size": 8},
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_get({"agent_id": agent["id"]})
+    check("training get: a stale running marker (900s old, no live lock) self-heals to idle in the response",
+         status == 200 and resp.get("generating", {}).get("status") == "idle"
+         and resp.get("generating", {}).get("stale_recovered") is True, resp.get("generating"))
+
+    persisted = setter._load_training(agent["id"])
+    check("training get: the self-heal is NOT persisted back to storage (mirrors route_grading_get's relearn heal)",
+         persisted.get("generating", {}).get("status") == "running", persisted.get("generating"))
+
+    # A recent (not stale) running marker is left running, not healed.
+    recent_started = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    doc2 = {"cases": [], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+           "generating": {"status": "running", "started_at": recent_started, "batch_size": 8},
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc2)
+    status2, resp2 = setter.route_training_get({"agent_id": agent["id"]})
+    check("training get: a fresh running marker (under 600s old) stays running, not healed",
+         status2 == 200 and resp2.get("generating", {}).get("status") == "running"
+         and "stale_recovered" not in (resp2.get("generating") or {}), resp2.get("generating"))
 
 
 def test_compute_readiness_pure_function():
@@ -3070,10 +3277,13 @@ def test_training_generate_share_forces_agent_campaign_filter_and_400_on_no_camp
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
     token = setter.mint_training_share(agent["id"])
 
-    status, resp = setter.route_training_generate({"share": token, "batch_size": 8})
-    check("training generate share: 200", status == 200, (status, resp))
-    check("training generate share: generates a full 8-case batch", resp.get("generated") == 8, resp)
-    campaign_ids_used = {c["campaign_id"] for c in resp["cases"]}
+    status, resp = _generate_and_wait({"share": token, "batch_size": 8}, agent_id=agent["id"])
+    check("training generate share: 200 and starts", status == 200 and resp.get("status") == "started",
+         (status, resp))
+    doc = setter._load_training(agent["id"])
+    cases = doc.get("cases") or []
+    check("training generate share: generates a full 8-case batch", len(cases) == 8, cases)
+    campaign_ids_used = {c["campaign_id"] for c in cases}
     check("training generate share: every case is drawn from the agent's own campaign only, "
          "never the other campaign's replies", campaign_ids_used <= {7001}, campaign_ids_used)
 
@@ -3113,9 +3323,9 @@ def test_training_generate_share_unanswered_cap_is_tighter_than_owner():
          status == 400, (status, resp))
 
     # the exact same 21-unanswered backlog does NOT trip the owner's 40 cap
-    status2, resp2 = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
-    check("training generate owner: 21 unanswered is fine under the owner's 40 cap",
-         status2 == 200, (status2, resp2))
+    status2, resp2 = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    check("training generate owner: 21 unanswered is fine under the owner's 40 cap (starts)",
+         status2 == 200 and resp2.get("status") == "started", (status2, resp2))
 
 
 def test_training_answer_share_forces_agent_rejects_mismatch_and_response_stays_scoped():
@@ -3418,13 +3628,16 @@ if __name__ == "__main__":
     test_training_generate_memory_digest_reaches_classify()
     test_training_generate_concurrent_preserves_selection_order()
     test_training_generate_one_worker_failure_drops_only_that_case()
-    test_training_generate_all_workers_fail_returns_502_plain_english()
+    test_training_generate_all_workers_fail_marks_generating_failed_plain_english()
     test_training_generate_concurrent_batch_matches_sequential_case_count()
     test_training_generate_refuses_over_40_unanswered()
+    test_training_generate_second_call_while_running_is_already_running()
+    test_training_generate_lost_update_protection_answer_survives()
     test_training_answer_recomputes_readiness_and_counts()
     test_training_answer_remember_grows_memory_one_off_does_not()
     test_training_reset_clears_answers_keeps_used_ids()
     test_training_get_route()
+    test_training_get_self_heals_stale_running_marker()
     test_compute_readiness_pure_function()
     test_readiness_30_answer_scripted_simulation()
     test_share_mint_verify_roundtrip()

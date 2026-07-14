@@ -203,7 +203,20 @@ const PENDING = {};
 
 let view = "loading"; // loading | no_agents | empty | stream | done
 let idx = 0;
-let generating = false;
+let generating = false; // guards the POST /training/generate call itself
+
+/* ── Background-generation polling state ──────────────────────────────────
+   Scenario generation runs on the server in a background thread (see
+   setter.py route_training_generate) because a full batch can outrun
+   Render's edge-proxy timeout - the POST returns almost instantly with
+   {status:"started"|"already_running"}, and this page polls GET
+   /api/setter/training every 4s until the batch shows up. */
+let pollHandle = null;
+let pollDeadline = 0;
+let pollRestores = [];
+let pollBaselineCount = 0;
+const POLL_INTERVAL_MS = 4000;
+const POLL_MAX_MS = 3 * 60 * 1000;
 
 /* ── Fetch helper (same shape as setter.html / setter-grade.html) ────────── */
 async function fetchJson(url, opts) {
@@ -319,6 +332,7 @@ function trainingQS() {
 }
 
 async function loadTraining() {
+  stopGeneratingPoll();
   view = "loading"; render();
   const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
   if (!res.ok) {
@@ -326,18 +340,100 @@ async function loadTraining() {
     showError("Couldn't load training scenarios: " + res.error); view = "empty"; render(); return;
   }
   clearError();
-  CASES = (res.data && res.data.cases) || [];
-  ANSWERS = (res.data && res.data.answers) || {};
-  usedCount = (res.data && res.data.used_count) || 0;
-  AGENT_MEMORY = (res.data && res.data.agent_memory) || [];
-  applyReadiness((res.data && res.data.readiness) || READINESS, { animate: false });
+  applyCasesSnapshot(res.data);
 
+  const genStatus = (res.data && res.data.generating && res.data.generating.status) || "idle";
+  if (genStatus === "running") {
+    // A page refresh landed mid-batch (this is exactly the old dead-end the
+    // Render edge-proxy 502 used to leave behind) - show whatever we have
+    // now, then resume polling automatically instead of a dead page.
+    renderCasesOrEmpty();
+    pollRestores = markGenerateButtonsBusy("Finishing a batch already running in the background…");
+    startGeneratingPoll(CASES.length);
+    return;
+  }
+  renderCasesOrEmpty();
+}
+
+/* Pulls the four training-page globals out of a /api/setter/training (or
+   equivalent) response payload - shared by the initial load and every poll
+   tick so they never drift out of sync with each other. */
+function applyCasesSnapshot(data) {
+  CASES = (data && data.cases) || [];
+  ANSWERS = (data && data.answers) || {};
+  usedCount = (data && data.used_count) || usedCount;
+  AGENT_MEMORY = (data && data.agent_memory) || [];
+  applyReadiness((data && data.readiness) || READINESS, { animate: false });
+}
+
+function renderCasesOrEmpty() {
   if (!CASES.length) { view = "empty"; render(); return; }
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; render(); return; }
   idx = 0;
   view = "stream";
   render();
+}
+
+function markGenerateButtonsBusy(label) {
+  const btns = document.querySelectorAll("#emptyGenerateBtn, #doneGenerateBtn, #midGenerateBtn");
+  const restores = [];
+  btns.forEach((b) => { const r = busyBtn(b, label); if (r) restores.push(r); });
+  return restores;
+}
+
+/* ── Background-generation polling ────────────────────────────────────────
+   baselineCount is the case count BEFORE this generation started - once a
+   poll sees status:"idle" with a higher count, the new batch has landed. */
+function startGeneratingPoll(baselineCount) {
+  stopGeneratingPoll();
+  pollBaselineCount = baselineCount;
+  pollDeadline = Date.now() + POLL_MAX_MS;
+  pollHandle = setInterval(pollGeneratingOnce, POLL_INTERVAL_MS);
+}
+
+function stopGeneratingPoll() {
+  if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+}
+
+function endGeneratingPoll() {
+  stopGeneratingPoll();
+  pollRestores.forEach((r) => r());
+  pollRestores = [];
+}
+
+async function pollGeneratingOnce() {
+  if (Date.now() > pollDeadline) {
+    endGeneratingPoll();
+    showError("Still working in the background - refresh in a minute.");
+    return;
+  }
+  const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+  if (!res.ok) {
+    if (SHARE_MODE && res.status === 401) { endGeneratingPoll(); renderShareExpired(); return; }
+    return; // transient fetch error - just try again on the next tick
+  }
+  const gen = (res.data && res.data.generating) || { status: "idle" };
+  if (gen.status === "running") return; // still working - keep polling
+
+  applyCasesSnapshot(res.data);
+
+  if (gen.status === "failed") {
+    endGeneratingPoll();
+    showError(gen.error || "Couldn't generate scenarios.");
+    return;
+  }
+  // status is "idle" - either the batch landed, or there was nothing new
+  // to build it from (e.g. a stale-running marker self-healed with no
+  // actual batch behind it).
+  if (CASES.length > pollBaselineCount) {
+    endGeneratingPoll();
+    clearError();
+    renderCasesOrEmpty();
+    return;
+  }
+  endGeneratingPoll();
+  showError("No new real replies were available to build scenarios from.");
 }
 
 function isAnswered(caseId) {
@@ -496,11 +592,10 @@ function renderDone() {
 }
 
 async function generateMore() {
-  const btns = document.querySelectorAll("#emptyGenerateBtn, #doneGenerateBtn, #midGenerateBtn");
-  const restores = [];
-  btns.forEach((b) => { const r = busyBtn(b, "Pulling real replies and running the agent on them - under a minute…"); if (r) restores.push(r); });
   if (generating) return;
+  const restores = markGenerateButtonsBusy("Pulling real replies and running the agent on them - under a minute…");
   generating = true;
+  const baselineCount = CASES.length;
   const genBody = { agent_id: selectedAgentId, batch_size: 8 };
   if (SHARE_MODE) genBody.share = SHARE_TOKEN;
   const res = await fetchJson("/api/setter/training/generate", {
@@ -508,22 +603,26 @@ async function generateMore() {
     body: JSON.stringify(genBody),
   });
   generating = false;
-  restores.forEach((r) => r());
   if (!res.ok) {
+    restores.forEach((r) => r());
     if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
     showError("Couldn't generate scenarios: " + res.error); return;
   }
   clearError();
-  const newCases = (res.data && res.data.cases) || [];
-  usedCount = (res.data && res.data.used_count) || usedCount;
-  if (!newCases.length) {
-    showError((res.data && res.data.message) || "No new real replies left to draw scenarios from right now.");
+  const genStatus = res.data && res.data.status;
+  if (genStatus === "started" || genStatus === "already_running") {
+    // The server kicked the batch off in the background (or one was
+    // already running) - poll GET /api/setter/training until it lands
+    // rather than waiting on this request, which can outrun Render's
+    // edge-proxy timeout on a full batch.
+    pollRestores = restores;
+    startGeneratingPoll(baselineCount);
     return;
   }
-  CASES = CASES.concat(newCases);
-  idx = 0;
-  view = "stream";
-  render();
+  // Defensive fallback in case the route ever answers with an unexpected
+  // shape - never leave the buttons stuck busy.
+  restores.forEach((r) => r());
+  showError((res.data && res.data.message) || "Couldn't generate scenarios.");
 }
 
 /* ── Scenario card ─────────────────────────────────────── */

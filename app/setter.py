@@ -2876,6 +2876,27 @@ def _training_doc_id(agent_id: str) -> str:
     return f"{TRAINING_ID_PREFIX}{agent_id}"
 
 
+# Per-agent generation locks (mirrors _GRADING_RELEARN_LOCK's single global
+# lock, but keyed by agent since two different agents' batches never
+# conflict with each other - see route_training_generate). Guarded by their
+# own lock purely for the get-or-create race on first use; the per-agent
+# lock itself is what serialises actual generation work.
+_TRAINING_GEN_LOCKS: dict = {}
+_TRAINING_GEN_LOCKS_GUARD = threading.Lock()
+# agent_id -> Thread. Production code never reads this map (the route
+# returns before the thread finishes); tests join() it for determinism.
+_TRAINING_GEN_THREADS: dict = {}
+
+
+def _get_training_gen_lock(agent_id: str) -> threading.Lock:
+    with _TRAINING_GEN_LOCKS_GUARD:
+        lock = _TRAINING_GEN_LOCKS.get(agent_id)
+        if lock is None:
+            lock = threading.Lock()
+            _TRAINING_GEN_LOCKS[agent_id] = lock
+        return lock
+
+
 # ── public training share links ──────────────────────────────────────────────
 # The owner mints a per-agent link so a client can train ONE agent without a
 # Navreo login. Same stateless-HMAC idiom server.py uses for its own session
@@ -2965,6 +2986,7 @@ def _resolve_share_scope(agent_id, share_token: str, public: bool = False):
 
 def _load_training(agent_id: str) -> dict:
     default = {"cases": [], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+               "generating": {"status": "idle"},
                "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
     if not _SB or not agent_id:
         return default
@@ -2976,6 +2998,7 @@ def _load_training(agent_id: str) -> dict:
             doc.setdefault("answers", {})
             doc.setdefault("used_reply_ids", [])
             doc.setdefault("readiness_history", [])
+            doc.setdefault("generating", {"status": "idle"})
             doc.setdefault("created_at", default["created_at"])
             return doc
     except Exception:  # noqa: BLE001
@@ -3327,18 +3350,50 @@ def route_training_get(params):
         # never be able to reach.
         memory = [{"text": m.get("text") or "", "at": m.get("at") or ""}
                  for m in (agent.get("memory") or []) if isinstance(m, dict)]
+
+        generating = doc.get("generating") or {"status": "idle"}
+        # Self-heal a stale "running" left behind by a process restart
+        # mid-batch (the in-memory thread and lock die with the process) -
+        # mirrors route_grading_get's relearn self-heal. A batch of up to
+        # TRAINING_BATCH_MAX cases never legitimately runs past 10 minutes.
+        # Healed in the RESPONSE only, same as relearn - never persisted
+        # here, since the next real generate() call overwrites it anyway.
+        if generating.get("status") == "running" and not _get_training_gen_lock(agent_id).locked():
+            try:
+                started = _parse_iso(generating.get("started_at"))
+                age = (_dt.datetime.now(_dt.timezone.utc) - started).total_seconds()
+                if age > 600:
+                    generating = {**generating, "status": "idle", "stale_recovered": True}
+            except (TypeError, ValueError):
+                generating = {**generating, "status": "idle", "stale_recovered": True}
+
         return 200, {
             "cases": unanswered + answered, "answers": answers,
             "readiness": compute_readiness(doc),
             "used_count": len(doc.get("used_reply_ids") or []),
             "agent_name": agent.get("name") or "",
             "agent_memory": memory,
+            "generating": generating,
         }
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
 
 def route_training_generate(payload):
+    """Validates synchronously (share scope, agent existence, unanswered
+    cap, share-mode campaign check, batch_size clamp) so callers still get
+    an instant 4xx on a bad request, then kicks the actual generation work
+    off in a background daemon thread and returns immediately.
+
+    Why: a full batch (Supabase pulls + classify() + draft_reply() per
+    case, even pooled) can run past Render's edge-proxy timeout (~100s),
+    which returns a 502 to the browser while the server thread keeps going
+    and finishes the save anyway - the trainer sees an error though cases
+    actually landed. The page polls GET /api/setter/training until the new
+    batch shows up (see setter-train.html generateMore()). Mirrors the
+    RELEARN background-thread precedent (_kick_off_relearn /
+    _GRADING_RELEARN_LOCK), except the lock is per-agent - two different
+    agents' batches never conflict."""
     try:
         payload = payload or {}
         agent_id = payload.get("agent_id")
@@ -3372,11 +3427,81 @@ def route_training_generate(payload):
             return 400, {"error": f"There are already {len(unanswered)} unanswered scenarios waiting - "
                                   "answer some before generating more."}
 
+        lock = _get_training_gen_lock(agent_id)
+        if not lock.acquire(blocking=False):
+            # Already generating for this agent - idempotent no-op, the
+            # page just keeps polling GET /api/setter/training.
+            return 200, {"ok": True, "status": "already_running"}
+
+        try:
+            marker_doc = _load_training(agent_id)
+            marker_doc["generating"] = {
+                "status": "running",
+                "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                "batch_size": batch_size,
+            }
+            _save_training(agent_id, marker_doc)
+        except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
+            lock.release()
+            raise
+
+        thread = threading.Thread(
+            target=_training_generate_threadmain,
+            args=(agent_id, agent, allowed_campaign_ids, batch_size, lock),
+            daemon=True,
+        )
+        _TRAINING_GEN_THREADS[agent_id] = thread
+        thread.start()
+        return 200, {"ok": True, "status": "started"}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def _training_generate_threadmain(agent_id, agent, allowed_campaign_ids, batch_size, lock):
+    try:
+        _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
+    finally:
+        try:
+            lock.release()
+        except RuntimeError:  # noqa: BLE001 - lock wasn't held (shouldn't happen); never crash a bg thread
+            pass
+
+
+def _finish_training_generation(agent_id: str, status: str, error: str | None = None, added: int | None = None):
+    """Writes only doc["generating"] - reloads the doc first so this marker
+    write (a failure, or the initial-selection-empty case) never clobbers an
+    answer that landed in Supabase while the batch was building. Used for
+    every outcome that does NOT also need to append cases/used_reply_ids;
+    the success path merges those itself (see _training_generate_worker)
+    since it needs the same fresh-reload-then-append protection."""
+    try:
+        doc = _load_training(agent_id)
+        marker = {"status": status, "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
+        if error is not None:
+            marker["error"] = error
+        if added is not None:
+            marker["added"] = added
+        doc["generating"] = marker
+        _save_training(agent_id, doc)
+    except Exception:  # noqa: BLE001 - never raise out of a background thread
+        pass
+
+
+def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size):
+    """The real generation work - unchanged from the old synchronous route
+    body, except it runs off-request on a daemon thread and its own final
+    save RE-LOADS the doc first (lost-update protection: an answer may have
+    landed in Supabase while this batch was being built, and a save from a
+    doc snapshot captured at the top of this function would silently
+    discard it)."""
+    try:
+        doc = _load_training(agent_id)
+        existing_cases = list(doc.get("cases") or [])
         replies = _select_training_replies(doc, batch_size, allowed_campaign_ids=allowed_campaign_ids)
-        used_ids = list(doc.get("used_reply_ids") or [])
         if not replies:
-            return 200, {"cases": [], "generated": 0, "used_count": len(used_ids),
-                        "message": "No new real replies left to draw scenarios from right now."}
+            _finish_training_generation(agent_id, "failed",
+                error="No new real replies were available to build scenarios from.")
+            return
 
         # Force-on, same as generate_grading.py: the training question is
         # "how would this agent have handled this", not "is autopilot on
@@ -3399,8 +3524,7 @@ def route_training_generate(payload):
         # gpt-5-mini round trips into roughly one round trip's worth of wall
         # time. Selection order is preserved by writing each result into a
         # pre-sized list at its own index rather than trusting completion
-        # order; used_reply_ids is appended in selection order AFTER the
-        # pool joins, so it is never touched from a worker thread.
+        # order.
         start_idx = len(existing_cases)
         results: list = [None] * len(replies)
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(replies))) as pool:
@@ -3423,18 +3547,36 @@ def route_training_generate(payload):
                     results[i] = None
 
         new_cases = [c for c in results if c]
-        for r in replies:
-            used_ids.append(r.get("id"))
-
         if not new_cases:
-            return 502, {"error": "Couldn't build any scenarios just now - try again in a minute."}
+            _finish_training_generation(agent_id, "failed",
+                error="Couldn't build any scenarios just now - try again in a minute.")
+            return
 
-        doc["cases"] = existing_cases + new_cases
-        doc["used_reply_ids"] = used_ids
-        _save_training(agent_id, doc)
-        return 200, {"cases": new_cases, "generated": len(new_cases), "used_count": len(used_ids)}
-    except Exception as e:  # noqa: BLE001
-        return 500, {"error": str(e)[:300]}
+        new_used_ids = [r.get("id") for r in replies]
+
+        # Lost-update protection: reload the doc fresh right before saving.
+        # classify()/draft_reply() round trips for a full batch can run past
+        # a minute, and an answer may have been written to this same doc row
+        # in the meantime - appending onto a stale in-memory copy would
+        # silently drop it.
+        fresh_doc = _load_training(agent_id)
+        fresh_doc["cases"] = list(fresh_doc.get("cases") or []) + new_cases
+        fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
+        fresh_doc["generating"] = {
+            "status": "idle",
+            "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "added": len(new_cases),
+        }
+        _save_training(agent_id, fresh_doc)
+    except Exception as e:  # noqa: BLE001 - never raise out of a background thread
+        if _LOG:
+            try:
+                _LOG("/api/setter/training/generate:worker_failed",
+                    {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+            except Exception:  # noqa: BLE001
+                pass
+        _finish_training_generation(agent_id, "failed",
+            error="Something went wrong while generating scenarios - try again in a minute.")
 
 
 def route_training_answer(payload):
