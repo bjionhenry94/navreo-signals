@@ -1426,6 +1426,7 @@ def _agent_for_campaign(campaign_id, require_enabled: bool = True, agents=None):
 
 def _save_agent(doc: dict) -> dict:
     doc = dict(doc or {})
+    existing = None
     if not doc.get("id"):
         doc["id"] = f"agent-{uuid.uuid4().hex[:8]}"
     else:
@@ -1466,7 +1467,15 @@ def _save_agent(doc: dict) -> dict:
     # Stamp when each campaign was first assigned - the poll only processes
     # replies received after this, so activating an agent never sweeps an
     # already-handled backlog into the queue.
-    stamps = dict(doc.get("campaign_assigned_at") or {})
+    # The ORIGINAL stored stamp wins over anything the incoming payload carries:
+    # an editor that round-trips an empty/stale campaign_assigned_at, or a caller
+    # that re-saves only the instructions, must NEVER re-stamp a pre-existing
+    # campaign. A re-stamp silently disqualifies every reply received before the
+    # re-save (run_poll only intakes replies newer than the stamp) - this is the
+    # leak that re-stamped all 30 of an agent's campaigns to one timestamp. Only
+    # genuinely-new campaigns get `now`.
+    prior_stamps = dict((existing or {}).get("campaign_assigned_at") or {})
+    stamps = {**(doc.get("campaign_assigned_at") or {}), **prior_stamps}
     for cid in (doc.get("campaign_ids") or []):
         stamps.setdefault(str(cid), now)
     doc["campaign_assigned_at"] = {k: v for k, v in stamps.items()
@@ -2161,11 +2170,22 @@ def run_poll() -> dict:
         settings = _load_settings()
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=48)).isoformat()
         ids_csv = ",".join(campaign_ids)
+        # quote(): `since` ends in "+00:00" and sb() sends the query string
+        # raw, so an unencoded "+" reaches PostgREST as a space - the timestamp
+        # then fails its timestamptz cast, the GET 400s, _SB returns None, and
+        # every tick silently reported checked=0 while eligible replies piled up
+        # (same "+"-as-space bug class d38a301 fixed for _existing_row).
         replies = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({ids_csv})"
-                             f"&replied_at=gte.{since}&order=replied_at.asc&limit=200"
+                             f"&replied_at=gte.{quote(since, safe='')}&order=replied_at.asc&limit=200"
                              f"&select=id,smartlead_campaign_id,email,replied_at,category,"
                              f"reply_subject,reply_body,smartlead_message_id")
         if not isinstance(replies, list):
+            # A failed replies GET must never masquerade as a clean "checked 0"
+            # sweep - record an error so the poll log shows the trouble instead
+            # of a false all-zero success.
+            summary["errors"] += 1
+            print(f"[setter] run_poll: replies GET returned {type(replies).__name__}, not a "
+                  f"list (campaigns={len(campaign_ids)}) - PostgREST query failed", file=sys.stderr)
             return summary
         processed = 0
         for r in replies:
@@ -2643,7 +2663,7 @@ def _compute_kpis() -> dict:
             kpis[out_key] = len(rows) if isinstance(rows, list) else 0
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat()
         rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(auto_sent,sent)&is_test=eq.false"
-                          f"&sent_at=gte.{since}&select=replied_at,sent_at")
+                          f"&sent_at=gte.{quote(since, safe='')}&select=replied_at,sent_at")
         mins = []
         if isinstance(rows, list):
             for r in rows:
