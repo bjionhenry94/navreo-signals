@@ -709,6 +709,75 @@ def test_lint_draft_url_discipline():
     check("url discipline: a URL already present in the thread is allowed", ok, reason)
 
 
+# ── 4b. Calendly fallback lint (owner ruling 2026-07-14) ────────────────────
+
+FALLBACK_LINT_CTX = {
+    "subject": "Re: hi", "first_name": "Jane", "needs_resource_link": False,
+    "instructions": "Resource: The guide - https://navreo.notion.site/guide - send on request.",
+    "slot_status": "not_configured", "slot_links": [], "slot_labels": [], "thread_text": "",
+    "booking_link": "https://calendly.com/navreo/book-a-call",
+    "slots_fallback": True, "needs_availability_ask": True,
+}
+
+
+def test_lint_draft_calendly_fallback_booking_link():
+    """When Calendly can't offer real times (slots_fallback) and the ask is
+    scheduling-relevant (needs_availability_ask), the draft must link the
+    booking page as a REAL <a href> hyperlink - never bare text - and never
+    invent a specific slot-time deep link (already caught by the existing
+    URL allow-list, since slot_links is empty in fallback mode)."""
+    ok_html = ('<div>Hi Jane,</div><br><div>When would be a good time for us to talk? '
+              'Here is <a href="https://calendly.com/navreo/book-a-call">my availability</a>.</div><br>'
+              '<div>Sam</div>')
+    ok, reason = setter.lint_draft(ok_html, FALLBACK_LINT_CTX)
+    check("lint: fallback draft with a proper hyperlinked booking link passes", ok, reason)
+
+    bare_html = ('<div>Hi Jane,</div><br><div>When would be a good time for us to talk? '
+                'Here is my availability: https://calendly.com/navreo/book-a-call</div><br><div>Sam</div>')
+    ok, reason = setter.lint_draft(bare_html, FALLBACK_LINT_CTX)
+    check("lint: fallback draft with a bare (non-hyperlinked) booking URL fails",
+         not ok and reason == "The draft doesn't link the calendar for the lead to pick a time.", reason)
+
+    no_link_html = '<div>Hi Jane,</div><br><div>When would be a good time for us to talk?</div><br><div>Sam</div>'
+    ok, reason = setter.lint_draft(no_link_html, FALLBACK_LINT_CTX)
+    check("lint: fallback draft missing the booking link entirely fails",
+         not ok and reason == "The draft doesn't link the calendar for the lead to pick a time.", reason)
+
+    slot_time_html = ('<div>Hi Jane,</div><br><div>Would you be free on '
+                      '<a href="https://calendly.com/navreo/book-a-call/2026-07-15T09:00">Wednesday at 9am</a>?'
+                      '</div><br><div>Sam</div>')
+    ok, reason = setter.lint_draft(slot_time_html, FALLBACK_LINT_CTX)
+    check("lint: fallback draft with an invented slot-time deep link fails via the URL allow-list",
+         not ok and reason == "The draft contains a link that isn't in the instructions.", reason)
+
+    # non-scheduling ask (needs_availability_ask False): the new requirement
+    # doesn't apply even though slots_fallback is still true
+    non_sched_ctx = {**FALLBACK_LINT_CTX, "needs_availability_ask": False, "needs_resource_link": True}
+    resource_only_html = ('<div>Hi Jane,</div><br><div>Here you go: '
+                          '<a href="https://navreo.notion.site/guide">the guide</a>.</div><br><div>Sam</div>')
+    ok, reason = setter.lint_draft(resource_only_html, non_sched_ctx)
+    check("lint: fallback ctx but non-scheduling ask doesn't require the booking hyperlink", ok, reason)
+
+
+def test_lint_draft_slot_status_ok_unchanged_by_fallback_rules():
+    """slots_fallback/needs_availability_ask are irrelevant when slot_status
+    is "ok" - the pre-existing two-slots + booking-link behaviour is exactly
+    as before (regression guard for the gate-7/lint rework)."""
+    ok_ctx = {
+        "subject": "Re: hello", "first_name": "Jane", "needs_resource_link": False,
+        "instructions": "", "slot_status": "ok",
+        "slot_links": ["https://calendly.com/x/1"], "slot_labels": ["Monday, 13th July at 10:00 AM BST"],
+        "thread_text": "", "booking_link": "https://calendly.com/navreo/book-a-call",
+        # even if these were mistakenly left set, slot_status == "ok" must
+        # take priority and the fallback hyperlink rule must not fire
+        "slots_fallback": True, "needs_availability_ask": True,
+    }
+    html = ('<div>Hi Jane,</div><br><div>Would you be free on '
+           '<a href="https://calendly.com/x/1">Monday, 13th July at 10:00 AM BST</a>?</div><br><div>Sam</div>')
+    ok, reason = setter.lint_draft(html, ok_ctx)
+    check("lint: slot_status ok always wins over stray slots_fallback/needs_availability_ask flags", ok, reason)
+
+
 # ── 5. decision matrix ───────────────────────────────────────────────────────
 
 def _cls(primary, all_intents=None, simple_ask=True, confidence=0.95, red_flags=None):
@@ -757,11 +826,17 @@ def test_decide_matrix():
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "first_touch": False})
     check("decide: second reply, simple + allowed ask -> auto_send (multi-turn autonomy)", d == "auto_send", r)
 
+    # Calendly fallback, owner ruling 2026-07-14: no free slots / Calendly not
+    # connected no longer holds the reply - the drafter proposes no times at
+    # all (the fallback availability-ask instead), so timezone/slot risk is
+    # zero and these now auto-send exactly like any other clean gate-7 pass.
+    # (Previously these asserted "review"; see test_decide_gate7_calendly_
+    # fallback_skips_holds below for the full gate-7 rework coverage.)
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "slot_status": "none_available"})
-    check("decide: no Calendly slots available -> review", d == "review", r)
+    check("decide: no Calendly slots available -> calendly fallback -> auto_send", d == "auto_send", r)
 
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "slot_status": "not_configured"})
-    check("decide: Calendly not connected -> review", d == "review", r)
+    check("decide: Calendly not connected -> calendly fallback -> auto_send", d == "auto_send", r)
 
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "timezone": None})
     check("decide: unresolved timezone -> review", d == "review", r)
@@ -830,6 +905,90 @@ def test_decide_matrix():
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "red_flag_hits": hits})
     check("decide: 'Remove <Name>' lexicon pattern vetoes even a naive send_resource classification",
          d == "review", r)
+
+
+# ── 5b. gate 7 rework: Calendly fallback (owner ruling 2026-07-14) ─────────
+#
+# When real call times can't be offered for ANY reason (Calendly not
+# connected, an API error, no free slots, or the lead's timezone couldn't be
+# worked out), the agent no longer holds the reply for review - it drafts
+# the fallback ask ("When would be a good time for us to talk? Here is my
+# availability", hyperlinked to the booking link) instead, and that draft
+# may auto-send if every other gate passes. slots_fallback = (slot_status !=
+# "ok") is set at every ctx build site; decide() also derives it from
+# slot_status alone when the key is absent, so direct decide() callers that
+# never set it (like most of this file) keep working unchanged.
+
+def test_decide_gate7_calendly_fallback_skips_holds():
+    """Every reason real times aren't available (not_configured, error,
+    none_available, tz_unknown) now skips the timezone-None hold, the
+    tz_confident hold, and the old per-status hold entirely - a simple
+    scheduling ask with everything else green auto_sends."""
+    for bad_status in ("error", "not_configured", "none_available", "tz_unknown"):
+        ctx = {**CTX_ALL_GOOD, "slot_status": bad_status, "timezone": None,
+              "tz_confident": False, "slots_fallback": True}
+        d, r = setter.decide(_cls("scheduling"), AGENT_AUTO, ctx)
+        check(f"decide: calendly fallback ({bad_status}) + unresolved timezone -> auto_send, not held",
+             d == "auto_send", (d, r))
+
+
+def test_decide_gate7_calendly_fallback_ignores_tz_confidence():
+    """A known-but-unconfident timezone guess is also irrelevant under
+    fallback mode - the draft proposes no times at all, so tz_confident=False
+    can't veto it any more."""
+    d, r = setter.decide(_cls("scheduling"), AGENT_AUTO,
+                         {**CTX_ALL_GOOD, "slot_status": "not_configured", "timezone": "America/New_York",
+                          "tz_confident": False, "slots_fallback": True})
+    check("decide: calendly fallback ignores tz_confident=False -> auto_send", d == "auto_send", r)
+
+
+def test_decide_gate7_slot_status_ok_keeps_holds_unchanged():
+    """When slot_status IS "ok" (slots_fallback False), gate 7 behaves
+    exactly as before the rework - an unresolved timezone or a low-confidence
+    guess still holds, real times are actually being proposed."""
+    d, r = setter.decide(_cls("send_resource"), AGENT_AUTO,
+                         {**CTX_ALL_GOOD, "slot_status": "ok", "timezone": None, "slots_fallback": False})
+    check("decide: slot_status ok + unresolved timezone still holds, unchanged",
+         d == "review" and r == "Held for review: couldn't work out the lead's timezone.", r)
+
+    d, r = setter.decide(_cls("send_resource"), AGENT_AUTO,
+                         {**CTX_ALL_GOOD, "slot_status": "ok", "timezone": "Europe/London",
+                          "tz_confident": False, "slots_fallback": False})
+    check("decide: slot_status ok + low-confidence timezone still holds, unchanged",
+         d == "review" and "not sure enough of the lead's timezone" in r, r)
+
+
+def test_decide_gate_3b_same_day_ask_still_holds_under_fallback():
+    """The same-day-scheduling gate (3b) runs BEFORE gate 7 and is untouched
+    by the calendly-fallback rework - an urgent same-day ask still needs a
+    human, even when Calendly is down (fallback mode would otherwise
+    auto-send)."""
+    d, r = setter.decide(_cls("scheduling"), AGENT_AUTO, {**CTX_ALL_GOOD, "same_day_ask": True})
+    check("decide: same-day scheduling ask still holds for a person", d == "review", r)
+    check("decide: same-day hold reason unchanged",
+         r == "Held for review: the lead wants to talk today, which needs a person right now.", r)
+
+    d2, r2 = setter.decide(_cls("scheduling"), AGENT_AUTO,
+                           {**CTX_ALL_GOOD, "same_day_ask": True, "slot_status": "error",
+                            "timezone": None, "slots_fallback": True})
+    check("decide: same-day gate still wins even when calendly fallback would otherwise auto-send",
+         d2 == "review", r2)
+
+
+def test_decide_gate7_master_switch_still_last_under_fallback():
+    """Mode + the global master switch are still checked LAST, even for a
+    calendly-fallback draft that would otherwise auto-send."""
+    d, r = setter.decide(_cls("scheduling"), AGENT_AUTO,
+                         {**CTX_ALL_GOOD, "slot_status": "not_configured", "timezone": None,
+                          "slots_fallback": True, "autopilot_enabled": False})
+    check("decide: master switch off still overrides a calendly-fallback auto_send", d == "review", r)
+    check("decide: master switch off reason unchanged even under fallback", r ==
+         "Held for review: every check passed, but the autopilot master switch is off.", r)
+
+    d2, r2 = setter.decide(_cls("scheduling"), {**AGENT_AUTO, "mode": "draft_only"},
+                           {**CTX_ALL_GOOD, "slot_status": "not_configured", "timezone": None,
+                            "slots_fallback": True})
+    check("decide: draft_only mode still overrides a calendly-fallback auto_send", d2 == "review", r2)
 
 
 # ── 6. fixtures-driven decision pass ────────────────────────────────────────
@@ -1363,7 +1522,16 @@ def _future_weekday_avail(count=6):
     return out
 
 
-def test_tz_none_still_builds_tentative_slots_but_vetoes_auto():
+def test_tz_none_calendly_fallback_no_slots_but_auto_sends():
+    """Owner ruling 2026-07-14: an unresolved timezone alone no longer holds
+    the reply for review. slot_status still resolves to "tz_unknown" and NO
+    real call times are ever fabricated for an unknown timezone (that part
+    is unchanged - see the assertions below) - but decide()'s gate 7 now
+    treats "no real times available for any reason" as calendly-fallback
+    mode, where timezone risk is zero because no time is being proposed at
+    all. A simple send_resource ask with everything else green now
+    auto-sends instead of holding (previously: test_tz_none_still_builds_
+    tentative_slots_but_vetoes_auto asserted review here)."""
     sb, http = fresh_setter()
     http.calendly_avail = _future_weekday_avail()
     http.message_history = [{
@@ -1376,11 +1544,13 @@ def test_tz_none_still_builds_tentative_slots_but_vetoes_auto():
         "wants": "wants the resource", "rationale": "unqualified yes",
     }
     http.draft_fn = lambda _b: {"subject": "Re: hi",
-                               "html": 'Hi There, <a href="https://x.example/r">Here it is</a>. Best, Sam'}
+                               "html": '<div>Hi Test,</div><br><div><a href="https://x.example/r">'
+                                       'Here it is</a>.</div><br><div>Sam</div>'}
 
     agent = {
         "id": "agent-tzNone01", "mode": "autopilot", "enabled": True, "campaign_ids": [909],
-        "allowed_intents": ["send_resource", "pricing", "scheduling"], "pricing_notes": "x",
+        "allowed_intents": ["send_resource", "pricing", "scheduling"],
+        "instructions": "Resource: The guide - https://x.example/r - send when they want more info.",
         "confidence_threshold": 0.9, "resource_link": "https://x.example/r",
         "calendly_event_url": "https://calendly.com/navreo/book-a-call-with-us-clone-2",
     }
@@ -1400,11 +1570,8 @@ def test_tz_none_still_builds_tentative_slots_but_vetoes_auto():
          len(row.get("slots") or []) == 0, row.get("slots"))
     check("tz-none: no draft slot uses a Europe/London zone abbreviation",
          not any((s.get("label") or "")[-3:] in ("GMT", "BST") for s in (row.get("slots") or [])), row.get("slots"))
-    check("tz-none: decide() vetoes auto-send because the timezone is unresolved",
-         row.get("decision") == "review", row)
-    check("tz-none: veto reason is the timezone gate specifically",
-         row.get("decision_reason") == "Held for review: couldn't work out the lead's timezone.",
-         row.get("decision_reason"))
+    check("tz-none: calendly fallback (owner ruling 2026-07-14) - unresolved timezone no longer holds",
+         row.get("decision") == "auto_send", row)
 
 
 def test_tz_guessed_low_confidence_shows_local_times_but_holds():
@@ -1453,6 +1620,49 @@ def test_tz_confidence_gate_in_decide():
     d_hi, r_hi = setter.decide(_cls("send_resource"),
                               AGENT_AUTO, {**CTX_ALL_GOOD, "timezone": "America/New_York", "tz_confident": True})
     check("tz-decide: confident guess is eligible to auto-send", d_hi == "auto_send", (d_hi, r_hi))
+
+
+def test_process_reply_calendly_not_connected_scheduling_ask_auto_sends():
+    """End-to-end (owner ruling 2026-07-14): a flexible scheduling ask, with
+    a confidently-resolved timezone but NO Calendly token configured
+    (slot_status resolves to "not_configured"), no longer holds for review -
+    the fallback draft ("When would be a good time for us to talk? Here is
+    my availability", hyperlinked to the booking link) auto-sends because
+    every other gate passes."""
+    sb, http = fresh_setter()
+    http.message_history = [{
+        "type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+        "email_body": "Happy to chat, whenever suits you next week", "message_id": "m-fb1", "stats_id": "st-fb1",
+    }]
+    http.classify_fn = lambda _b: {
+        "primary_intent": "scheduling", "all_intents": ["scheduling"], "simple_ask": True,
+        "confidence": 0.97, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants to book a call", "rationale": "flexible on timing",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi",
+                               "html": ('<div>Hi Test,</div><br><div>When would be a good time for us to talk? '
+                                        'Here is <a href="https://calendly.com/navreo/book-a-call">my availability'
+                                        '</a>.</div><br><div>Bjion</div>')}
+    agent = {
+        "id": "agent-fallback01", "mode": "autopilot", "enabled": True, "campaign_ids": [909],
+        "allowed_intents": ["send_resource", "pricing", "scheduling"],
+        "confidence_threshold": 0.9, "calendly_event_url": "https://calendly.com/navreo/book-a-call",
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    settings = {"autopilot_enabled": True}  # no calendly_token -> get_calendly_availability returns not_configured
+    reply = {
+        "workspace": "navreo", "campaign_id": 909, "email": "there@example.co.uk",
+        "first_name": "There", "message_id": "m-fb1", "body": "Happy to chat, whenever suits you next week",
+        "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False,
+    }
+    row = setter.process_reply(reply, agent, settings)
+
+    check("calendly fallback: timezone resolved confidently from the .co.uk domain",
+         row.get("timezone") == "Europe/London", row.get("timezone"))
+    check("calendly fallback: slot_status resolves to not_configured (no token), not held on it",
+         row.get("slots") == [], row.get("slots"))
+    check("calendly fallback: decision is auto_send, not held for a Calendly-down reason",
+         row.get("decision") == "auto_send", (row.get("decision"), row.get("decision_reason")))
 
 
 # ── handle_inbound: Smartlead EMAIL_REPLY webhook -> pipeline ───────────────
@@ -2917,6 +3127,34 @@ def test_draft_payload_carries_instructions_no_resources_key():
          "resource_description" not in payload, payload)
 
 
+def test_draft_reply_payload_carries_slot_status_and_booking_link_unchanged():
+    """No regression from the calendly-fallback rework (owner ruling
+    2026-07-14): draft_reply()'s payload still carries slot_status, the
+    booking link, and the (possibly empty) slots list through to the model
+    exactly as before, whatever slot_status is."""
+    sb, http = fresh_setter()
+    captured = {}
+
+    def draft_fn(body):
+        captured["body"] = body
+        return {"subject": "Re: hi", "html": '<div>Hi There,</div><br><div>Here it is.</div>'}
+
+    http.draft_fn = draft_fn
+    agent = {"id": "agent-fallback-payload", "instructions": "",
+             "calendly_event_url": "https://calendly.com/navreo/book-a-call"}
+    classification = {"primary_intent": "scheduling", "all_intents": ["scheduling"], "wants": "wants a call"}
+    setter.draft_reply({"first_name": "There", "subject": "Re: hi", "body": "sure"}, agent,
+                       classification, [], "not_configured", "Bjion")
+
+    payload = json.loads(captured["body"]["messages"][1]["content"])
+    check("draft_reply payload: slot_status still passed through unchanged",
+         payload.get("slot_status") == "not_configured", payload.get("slot_status"))
+    check("draft_reply payload: booking_link still passed through unchanged",
+         payload.get("booking_link") == "https://calendly.com/navreo/book-a-call", payload.get("booking_link"))
+    check("draft_reply payload: slots list still passed through (empty in fallback mode)",
+         payload.get("slots") == [], payload.get("slots"))
+
+
 def test_decide_gate_6b_instruction_link_ambiguity():
     """Gate 6b (v3): send_resource + the instructions offering 2+ distinct
     links + no original outreach loaded -> a person should pick."""
@@ -2962,7 +3200,14 @@ if __name__ == "__main__":
     test_pick_slots()
     test_lint_draft()
     test_lint_draft_url_discipline()
+    test_lint_draft_calendly_fallback_booking_link()
+    test_lint_draft_slot_status_ok_unchanged_by_fallback_rules()
     test_decide_matrix()
+    test_decide_gate7_calendly_fallback_skips_holds()
+    test_decide_gate7_calendly_fallback_ignores_tz_confidence()
+    test_decide_gate7_slot_status_ok_keeps_holds_unchanged()
+    test_decide_gate_3b_same_day_ask_still_holds_under_fallback()
+    test_decide_gate7_master_switch_still_last_under_fallback()
     test_fixtures()
     test_idempotent_intake()
     test_inject_never_sends()
@@ -2980,9 +3225,10 @@ if __name__ == "__main__":
     test_subsequence_ambiguous_multiple_subsequences_needs_override()
     test_claim_race_returns_existing_row_without_classifying()
     test_hydrate_lead_answered_since_reply()
-    test_tz_none_still_builds_tentative_slots_but_vetoes_auto()
+    test_tz_none_calendly_fallback_no_slots_but_auto_sends()
     test_tz_guessed_low_confidence_shows_local_times_but_holds()
     test_tz_confidence_gate_in_decide()
+    test_process_reply_calendly_not_connected_scheduling_ask_auto_sends()
     test_handle_inbound_field_mapping()
     test_handle_inbound_non_reply_event_ignored()
     test_handle_inbound_missing_message_id_ignored()
@@ -3029,6 +3275,7 @@ if __name__ == "__main__":
     test_instruction_urls_helper()
     test_classify_payload_carries_instructions_no_resources_key()
     test_draft_payload_carries_instructions_no_resources_key()
+    test_draft_reply_payload_carries_slot_status_and_booking_link_unchanged()
     test_decide_gate_6b_instruction_link_ambiguity()
 
     failed = run_report()

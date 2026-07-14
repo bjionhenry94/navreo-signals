@@ -532,6 +532,7 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
 _TAG_RE = re.compile(r"<[^>]+>")
 _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _BLOCK_TAG_RE = re.compile(r"<(?:div|p)\b", re.IGNORECASE)
+_ANCHOR_HREF_RE = re.compile(r'<a\b[^>]*\bhref\s*=\s*"([^"]*)"', re.IGNORECASE)
 
 
 def lint_draft(html: str, ctx: dict):
@@ -584,6 +585,17 @@ def lint_draft(html: str, ctx: dict):
         for link in (ctx.get("slot_links") or []):
             if link and link not in text:
                 return False, "The draft is missing one of the suggested call times."
+    elif ctx.get("slots_fallback") and ctx.get("needs_availability_ask"):
+        # Owner ruling 2026-07-14: when Calendly can't offer real times, the
+        # fallback draft must still give the lead a way to pick a time -
+        # the booking link, as a REAL hyperlink (not just bare text pasted
+        # into the body). A slot-time deep link invented anyway is already
+        # caught by the URL allow-list check above (slot_links is empty in
+        # fallback mode, so any calendly.com/.../<iso> anchor isn't allowed).
+        anchor_hrefs = {_norm_url(h) for h in _ANCHOR_HREF_RE.findall(text)}
+        booking_norm = _norm_url(booking) if booking else ""
+        if not booking_norm or booking_norm not in anchor_hrefs:
+            return False, "The draft doesn't link the calendar for the lead to pick a time."
 
     allowed_text = " ".join([
         str(ctx.get("instructions") or ""),
@@ -616,8 +628,10 @@ _INTENT_REASON = {
 def decide(classification: dict, agent: dict, ctx: dict):
     """The gate. Returns (decision, plain_english_reason).
     decision in {"auto_send", "review", "no_action"}.
-    ctx: {red_flag_hits, category, first_touch, slot_status, timezone, lint_ok,
-          lint_reason, body_len, hydrated}."""
+    ctx: {red_flag_hits, category, first_touch, slot_status, slots_fallback, timezone, lint_ok,
+          lint_reason, body_len, hydrated}. slots_fallback (owner ruling 2026-07-14) means
+          real call times aren't available for any reason, so the drafter proposes no times
+          and gate 7's timezone/slot holds don't apply."""
     classification = classification or {}
     agent = agent or {}
     ctx = ctx or {}
@@ -711,22 +725,28 @@ def decide(classification: dict, agent: dict, ctx: dict):
         return "review", ("Held for review: the instructions offer more than one link and the "
                           "original outreach couldn't be loaded, so a person should pick.")
 
-    # 7. slots + timezone must both be ready. A guessed timezone is fine for
-    # showing a draft, but auto-sending needs to be CONFIDENT of the hour, or
-    # we might propose 2pm when it is 2am for them.
-    if ctx.get("timezone") is None:
-        return "review", "Held for review: couldn't work out the lead's timezone."
-    if not ctx.get("tz_confident", True):
-        return "review", "Held for review: not sure enough of the lead's timezone to pick a time for them."
+    # 7. slots + timezone. A guessed timezone is fine for showing a draft,
+    # but PROPOSING actual times needs to be CONFIDENT of the hour, or we
+    # might offer 2pm when it is 2am for them. Owner ruling 2026-07-14:
+    # when real call times aren't available for ANY reason (Calendly not
+    # connected, an API error, no free slots, or the lead's timezone
+    # couldn't be worked out at all), the agent no longer holds the reply -
+    # it drafts the fallback ask instead ("When would be a good time for us
+    # to talk? Here is my availability", hyperlinked to the booking link).
+    # That fallback proposes zero times, so the timezone-risk this gate
+    # exists to catch is zero too, and none of the three holds below apply.
+    # slots_fallback is set at every ctx build site as (slot_status != "ok");
+    # falling back to deriving it here keeps direct decide() calls (tests,
+    # older callers) that never set the key working exactly as before.
     slot_status = ctx.get("slot_status")
-    if slot_status != "ok":
-        reason_map = {
-            "not_configured": "Held for review: Calendly is not connected.",
-            "none_available": "Held for review: no free Calendly slots coming up.",
-            "error": "Held for review: couldn't load Calendly availability.",
-            "tz_unknown": "Held for review: couldn't work out the lead's timezone.",
-        }
-        return "review", reason_map.get(slot_status, "Held for review: call times aren't ready.")
+    slots_fallback = ctx.get("slots_fallback")
+    if slots_fallback is None:
+        slots_fallback = slot_status != "ok"
+    if not slots_fallback:
+        if ctx.get("timezone") is None:
+            return "review", "Held for review: couldn't work out the lead's timezone."
+        if not ctx.get("tz_confident", True):
+            return "review", "Held for review: not sure enough of the lead's timezone to pick a time for them."
 
     # 8. length + lint
     if int(ctx.get("body_len") or 0) > 1500:
@@ -873,6 +893,9 @@ PRICING (quote the instructions verbatim):
 A QUESTION WE CAN'T FULLY ANSWER IN AN EMAIL:
 <div>Hi Gustavo,</div><br><div>Good question. That's exactly what I'd walk you through on a quick call, where I could show how it applies to you.</div><br><div>If you're open to it, feel free to <a href="BOOKING_LINK">book a call here</a>.</div><br><div>Bjion</div>
 
+CALL ASK, NO TIMES AVAILABLE (fallback - slot_status is anything but "ok"):
+<div>Hi Priya,</div><br><div>Would love to find a time that works for you.</div><br><div>When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>.</div><br><div>Bjion</div>
+
 Rules:
 - Every draft must be built from short <div> paragraphs separated by <br>, exactly like the examples above. A single-line reply with no paragraph breaks will be rejected.
 - Use the team's exact recurring phrases where they fit: the resource anchor is "Here's the breakdown I prepared." (or "Here's a case study I put together." when it's a case study); the call ask is "Would you be free for a call on {day, date at time TZ} or {day2, date2 at time2 TZ}, where I could share how I would implement our strategy for you?"; the fallback is "If those times aren't suitable, feel free to book a call here." with the link on "book a call here".
@@ -889,7 +912,7 @@ Rules:
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
-- Only include the two call-time paragraph (as anchors on the day/time text) when slots are supplied and slot_status is "ok"; otherwise skip the specific times and instead write "Would you be open to a quick call? Feel free to book a call here." with the link on "book a call here".
+- Only include the two call-time paragraph (as anchors on the day/time text) when slots are supplied and slot_status is "ok". When call times are NOT available (slot_status is anything but "ok"): do not invent or promise any times. Instead ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
 - If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
@@ -1769,6 +1792,13 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
                 row["error"] = f"draft failed: {type(e).__name__}"
     row["draft_subject"], row["draft_body"] = draft_subject, draft_body
 
+    # Calendly fallback (owner ruling 2026-07-14): whenever real call times
+    # aren't available for any reason, slot_status is something other than
+    # "ok" and the drafter is asked for the fallback availability-ask
+    # instead of two fixed times - see decide() gate 7 and lint_draft().
+    slots_fallback = slot_status != "ok"
+    needs_availability_ask = "scheduling" in (classification.get("all_intents") or [])
+
     lint_ok, lint_reason = False, "No draft was produced."
     if draft_body:
         needs_resource_link = "send_resource" in (classification.get("all_intents") or [])
@@ -1779,18 +1809,21 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             "slot_labels": [s.get("label") for s in slots],
             "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
             "thread_text": f"{body_text} {thread_text}",
+            "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
         }
         lint_ok, lint_reason = lint_draft(draft_body, ctx_lint)
 
     ctx = {
         "red_flag_hits": lex_hits, "category": category, "first_touch": first_touch,
-        "slot_status": slot_status, "timezone": tz, "tz_confident": tz_confident,
+        "slot_status": slot_status, "slots_fallback": slots_fallback,
+        "timezone": tz, "tz_confident": tz_confident,
         "lint_ok": lint_ok, "lint_reason": lint_reason,
         "body_len": len(body_text or ""), "hydrated": hydrated,
         "answered_since_reply": answered_since_reply,
         "autopilot_enabled": bool(settings.get("autopilot_enabled")),
         "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body_text or ""))),
         "first_outbound_present": bool((first_outbound or "").strip()),
+        "needs_availability_ask": needs_availability_ask,
     }
     decision, reason = decide(classification, agent, ctx)
     row["decision"], row["decision_reason"] = decision, reason
@@ -2664,6 +2697,10 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
         slots = []
         if slot_status == "ok":
             slots = _extract_calendly_slots(case.get("draft_html") or "")
+        # Calendly fallback (owner ruling 2026-07-14) - see decide() gate 7
+        # and lint_draft().
+        slots_fallback = slot_status != "ok"
+        needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
 
         primary = cls.get("primary_intent")
         try:
@@ -2688,6 +2725,7 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
                     "slot_labels": [s.get("label") for s in slots],
                     "instructions": _agent_instructions(agent_snapshot),
                     "booking_link": _booking_link(agent_snapshot), "thread_text": inbound,
+                    "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
@@ -2695,13 +2733,15 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
 
         ctx = {
             "red_flag_hits": lexicon_hits(inbound), "category": ctx_src.get("category"),
-            "first_touch": True, "slot_status": slot_status, "timezone": tz,
+            "first_touch": True, "slot_status": slot_status, "slots_fallback": slots_fallback,
+            "timezone": tz,
             "tz_confident": ctx_src.get("tz_confident", tz is not None),
             "lint_ok": lint_ok, "lint_reason": lint_reason,
             "body_len": ctx_src.get("body_len") if ctx_src.get("body_len") is not None else len(inbound),
             "hydrated": True, "answered_since_reply": False, "autopilot_enabled": True,
             "same_day_ask": bool(ctx_src.get("same_day_ask")),
             "first_outbound_present": bool(str(first_outbound or "").strip()),
+            "needs_availability_ask": needs_availability_ask,
         }
         decision, reason = decide(cls, agent_snapshot, ctx)
 
@@ -3162,6 +3202,11 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
             else:
                 slot_status = "tz_unknown"
 
+        # Calendly fallback (owner ruling 2026-07-14) - see decide() gate 7
+        # and lint_draft().
+        slots_fallback = slot_status != "ok"
+        needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
+
         draft_html = None
         lint_ok, lint_reason = False, "No draft was produced."
         if not is_clear_neg:
@@ -3180,6 +3225,7 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
                     "slot_labels": [s.get("label") for s in slots],
                     "instructions": _agent_instructions(agent),
                     "booking_link": _booking_link(agent), "thread_text": body,
+                    "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
@@ -3187,12 +3233,14 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
 
         ctx = {
             "red_flag_hits": lexicon_hits(body), "category": category,
-            "first_touch": True, "slot_status": slot_status, "timezone": tz,
+            "first_touch": True, "slot_status": slot_status, "slots_fallback": slots_fallback,
+            "timezone": tz,
             "tz_confident": tz_confident, "lint_ok": lint_ok, "lint_reason": lint_reason,
             "body_len": len(body), "hydrated": True, "answered_since_reply": False,
             "autopilot_enabled": True,
             "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body))),
             "first_outbound_present": bool(str(first_outbound or "").strip()),
+            "needs_availability_ask": needs_availability_ask,
         }
         decision, reason = decide(cls, agent, ctx)
 
