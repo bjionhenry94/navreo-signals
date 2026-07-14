@@ -237,9 +237,24 @@ const POLL_MAX_MS = 3 * 60 * 1000;
    poll from the one above: it never blocks Save & continue or disables any
    button - the trainer keeps moving through cases while a small notice runs
    alongside, and once the pass lands, the current card's data is quietly
-   refreshed in place. */
+   refreshed in place.
+
+   Instant-advance latency fix (2026-07-14, part 2): the SAME one-line area
+   (#trRetrainNotice) also doubles as the "Saving…" indicator for whichever
+   answer POST(s) are currently in flight in the background - see
+   submitAndAdvance/markSaving/unmarkSaving below. indicatorState() decides
+   what the line shows: the retrain message wins if a retrain pass is
+   running, otherwise "Saving…" shows while any answer is still in flight,
+   otherwise the line is hidden. */
 let retrainNoticeVisible = false;
 let retrainPollHandle = null;
+let pendingSaveCount = 0; // answer POSTs currently in flight (instant advance can outrun the network)
+
+function indicatorState() {
+  if (retrainNoticeVisible) return { visible: true, text: "Updating the remaining scenarios with your feedback…" };
+  if (pendingSaveCount > 0) return { visible: true, text: "Saving…" };
+  return { visible: false, text: "" };
+}
 
 function startRetrainNotice() {
   retrainNoticeVisible = true;
@@ -254,9 +269,15 @@ function stopRetrainNotice() {
   renderRetrainNotice();
 }
 
+function markSaving() { pendingSaveCount++; renderRetrainNotice(); }
+function unmarkSaving() { pendingSaveCount = Math.max(0, pendingSaveCount - 1); renderRetrainNotice(); }
+
 function renderRetrainNotice() {
   const el = document.getElementById("trRetrainNotice");
-  if (el) el.style.display = retrainNoticeVisible ? "" : "none";
+  if (!el) return;
+  const s = indicatorState();
+  el.style.display = s.visible ? "" : "none";
+  el.textContent = s.text;
 }
 
 /* The case id currently on screen (stream view only) - used to re-find the
@@ -743,10 +764,11 @@ function renderCase(unanswered, i) {
 
   const call = callLineFor(c);
   const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
+  const indicator = indicatorState();
 
   el.innerHTML = `
     <div class="train-progress">Rated ${answeredCount} of ${CASES.length} in this batch &middot; shortcuts: <b>Y</b>/<b>N</b> answer, <b>S</b> skip draft, <b>Enter</b> save</div>
-    <div class="retrain-notice" id="trRetrainNotice" style="display:${retrainNoticeVisible ? "" : "none"}">Updating the remaining scenarios with your feedback&hellip;</div>
+    <div class="retrain-notice" id="trRetrainNotice" style="display:${indicator.visible ? "" : "none"}">${esc(indicator.text)}</div>
     <div class="train-card">
       <div class="tr-chips">
         <span class="pill n">${esc(campaignName)}</span>
@@ -873,7 +895,7 @@ function wireCaseEvents(c, unanswered, i) {
     midGenBtn.addEventListener("click", () => generateMore());
   }
   const nextBtn = document.getElementById("trNextBtn");
-  if (nextBtn) nextBtn.addEventListener("click", () => submitAndAdvance(c, nextBtn));
+  if (nextBtn) nextBtn.addEventListener("click", () => submitAndAdvance(c));
 }
 
 function setScopeButtons(scope) {
@@ -894,15 +916,34 @@ function hideNudge() {
   if (el) el.style.display = "none";
 }
 
-async function submitAndAdvance(c, btn) {
+/* Case ids with an answer POST currently in flight - guards a repeat
+   "Save & continue" (click or Enter) on the SAME case before its own
+   request resolves. Instant advance means several DIFFERENT cases can be
+   in flight at once (rate one, move on, rate the next before the first
+   response lands) - that's fine and expected; this only blocks re-firing
+   the same case's request twice. */
+const IN_FLIGHT_ANSWERS = new Set();
+
+/* Latency fix (2026-07-14, part 2): Save & continue no longer waits on the
+   network. It records the answer locally, advances the card immediately,
+   and fires the POST in the background:
+     - on success: the readiness panel updates whenever the response lands
+       (~1-2s later) - never faked/precomputed client-side in the meantime -
+       and a "started"/"queued" retrain kicks off the usual notice+poll.
+     - on failure: the optimistic answer is undone, the note/verdicts are
+       restored into PENDING so nothing typed is lost, an error banner
+       explains what happened, and the case reappears in the unanswered
+       stream at its natural position (reusing restoreViewAfterRefresh, the
+       same "find this case id in the fresh unanswered list" logic the
+       retrain poll already relies on). */
+function submitAndAdvance(c) {
   const p = pendingFor(c.id);
   if (p.decision_ok === undefined) { showNudge("Answer \"Right call?\" first."); return; }
+  if (IN_FLIGHT_ANSWERS.has(c.id)) return; // already saving this case - ignore the repeat click/Enter
   const noteEl = document.getElementById("trNote");
   if (noteEl) p.note = noteEl.value.trim();
   const effectiveScope = p.note ? (p.scope || "one_off") : "one_off";
 
-  const restore = busyBtn(btn, "Saving…");
-  if (!restore) return;
   const answerBody = {
     agent_id: selectedAgentId, case_id: c.id,
     decision_ok: !!p.decision_ok,
@@ -910,38 +951,48 @@ async function submitAndAdvance(c, btn) {
     note: p.note || "", scope: effectiveScope,
   };
   if (SHARE_MODE) answerBody.share = SHARE_TOKEN;
-  const res = await fetchJson("/api/setter/training/answer", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(answerBody),
-  });
-  restore();
-  if (!res.ok) {
-    if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
-    showError("Couldn't save that answer: " + res.error); return;
-  }
-  clearError();
-  ANSWERS[c.id] = { decision_ok: !!p.decision_ok, reply_ok: p.reply_ok, note: p.note || "", scope: effectiveScope };
-  // The instructions merge itself (Feature A) already happened server-side
-  // inside this same request - the "What training has changed" panel picks
-  // it up next time CASES/AGENT_MEMORY/INSTRUCTION_EDITS refresh (the retrain
-  // poll below does that as soon as the background pass lands).
-  delete PENDING[c.id];
-  applyReadiness((res.data && res.data.readiness) || READINESS, { animate: true });
+  // Snapshot of exactly what the trainer picked, so a failure restores this
+  // (not whatever happens to be on screen by the time the response lands).
+  const restoreSnapshot = { decision_ok: p.decision_ok, reply_ok: p.reply_ok, note: p.note, scope: p.scope };
 
-  // Feature B: ANY feedback (a note, or a "No" on either question) kicks off
-  // a background retrain of the remaining unanswered scenarios. Save &
-  // continue stays instant - the trainer moves on right away; this just
-  // starts a quiet notice + poll alongside, never blocking anything above.
-  const retrainStatus = res.data && res.data.retrain;
-  if (retrainStatus === "started" || retrainStatus === "queued") {
-    startRetrainNotice();
-  }
+  IN_FLIGHT_ANSWERS.add(c.id);
+  ANSWERS[c.id] = { decision_ok: !!p.decision_ok, reply_ok: p.reply_ok, note: p.note || "", scope: effectiveScope };
+  delete PENDING[c.id];
+  clearError();
+  markSaving();
 
   const unanswered = currentUnanswered();
-  if (!unanswered.length) { view = "done"; render(); return; }
-  if (idx >= unanswered.length) idx = unanswered.length - 1;
-  view = "stream";
+  if (!unanswered.length) { view = "done"; } else {
+    if (idx >= unanswered.length) idx = unanswered.length - 1;
+    view = "stream";
+  }
   render();
+
+  fetchJson("/api/setter/training/answer", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(answerBody),
+  }).then((res) => {
+    IN_FLIGHT_ANSWERS.delete(c.id);
+    unmarkSaving();
+    if (!res.ok) {
+      if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
+      const prevCaseId = currentCaseId(); // stay put on whatever the trainer is looking at now
+      delete ANSWERS[c.id];
+      PENDING[c.id] = restoreSnapshot;
+      showError("Couldn't save that rating - it's back in your queue. " + res.error);
+      restoreViewAfterRefresh(prevCaseId);
+      return;
+    }
+    clearError();
+    // Readiness only ever updates once the response actually lands - left
+    // exactly as-is in the meantime, never fake-computed client-side.
+    applyReadiness((res.data && res.data.readiness) || READINESS, { animate: true });
+
+    // Feature B: ANY feedback (a note, or a "No" on either question) kicks
+    // off a background retrain of the remaining unanswered scenarios.
+    const retrainStatus = res.data && res.data.retrain;
+    if (retrainStatus === "started" || retrainStatus === "queued") startRetrainNotice();
+  });
 }
 
 /* ── Keyboard shortcuts: Y/N answer the first unanswered question on the

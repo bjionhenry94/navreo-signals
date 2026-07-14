@@ -2642,10 +2642,22 @@ def _answer_and_wait(payload, agent_id=None, timeout=10):
     joins that agent's thread before returning - whether the response was
     "started" (a fresh pass) or "queued" (an already-running pass that will
     pick up the fresher digest) - so callers can inspect the saved doc
-    deterministically right after, exactly like _generate_and_wait does."""
+    deterministically right after, exactly like _generate_and_wait does.
+
+    Latency fix (2026-07-14, part 2): a "queued" response no longer means
+    the request thread already persisted retrain_queued=True itself - a
+    tiny daemon "flagger" thread does that off-thread now (see
+    setter._kick_off_training_retrain), registered under
+    _TRAINING_GEN_THREADS[f"{aid}:flag"]. Join that FIRST so the flag is
+    guaranteed persisted before joining the (still-running) main worker
+    thread that's supposed to consume it."""
     status, resp = setter.route_training_answer(payload)
     aid = agent_id or payload.get("agent_id")
     if status == 200 and resp.get("retrain") in ("started", "queued") and aid:
+        if resp.get("retrain") == "queued":
+            flagger = setter._TRAINING_GEN_THREADS.get(f"{aid}:flag")
+            if flagger is not None:
+                flagger.join(timeout=timeout)
         thread = setter._TRAINING_GEN_THREADS.get(aid)
         if thread is not None:
             thread.join(timeout=timeout)
@@ -3739,6 +3751,14 @@ def test_training_retrain_lock_contention_with_generate_queued_flag_honoured():
         check("retrain lock contention: answering while generate holds the lock -> queued, not started",
              astatus == 200 and aresp.get("retrain") == "queued", (astatus, aresp))
 
+        # The "queued" flag is persisted off the request thread now, by a
+        # tiny daemon flagger (see setter._kick_off_training_retrain) -
+        # join it before inspecting the doc so this assertion is
+        # deterministic rather than racing the flagger's own write.
+        flagger = setter._TRAINING_GEN_THREADS.get(f"{agent['id']}:flag")
+        if flagger is not None:
+            flagger.join(timeout=10)
+
         mid_doc = setter._load_training(agent["id"])
         check("retrain lock contention: doc shows retrain_queued while generate is still running",
              bool((mid_doc.get("generating") or {}).get("retrain_queued")), mid_doc.get("generating"))
@@ -4190,6 +4210,259 @@ def test_training_retrain_worker_retrain_step_uses_freshly_merged_instructions()
          len(seen_instructions) >= 1
          and all("Always confirm budget before pricing." in s for s in seen_instructions),
          seen_instructions)
+
+
+# ── training answer/retrain instant-advance latency fix (2026-07-14, part 2)
+# ─────────────────────────────────────────────────────────────────────────
+# _kick_off_training_retrain no longer does ANY Supabase round trip on the
+# request thread itself - both the "running" marker (lock free) and the
+# retrain_queued flag (lock held) moved into background threads - and
+# route_training_answer skips the AGENT load entirely once the case_id is
+# found in the training doc's own cases. The six tests below prove each
+# piece directly against the FakeSB call log / a blocked worker thread.
+
+def test_kick_off_training_retrain_request_thread_makes_no_save_before_worker_runs():
+    """Lock-free path: _kick_off_training_retrain itself must do zero
+    Supabase round trips of its own - only the spawned worker thread does,
+    starting with its own first action (_load_training, then the running-
+    marker _save_training). Proven deterministically by blocking the
+    worker's FIRST _load_training call itself (not the save after it) on an
+    Event: since _save_training can only ever be reached AFTER that load
+    returns, this guarantees zero _save_training calls have happened by the
+    time _kick_off_training_retrain returns "started" - regardless of how
+    the OS happens to schedule the two threads - rather than relying on a
+    narrow, scheduler-dependent timing window."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-kickfree01", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    real_load_training = setter._load_training
+    real_save_training = setter._save_training
+    load_calls = []
+    save_calls = []
+    started_event = threading.Event()
+    release_event = threading.Event()
+
+    def fake_load_training(agent_id_):
+        load_calls.append(agent_id_)
+        if len(load_calls) == 1:  # only the worker's very first load blocks
+            started_event.set()
+            release_event.wait(timeout=10)
+        return real_load_training(agent_id_)
+
+    def fake_save_training(agent_id_, doc_):
+        save_calls.append((agent_id_, copy.deepcopy(doc_)))
+        real_save_training(agent_id_, doc_)
+
+    setter._load_training = fake_load_training
+    setter._save_training = fake_save_training
+    try:
+        status = setter._kick_off_training_retrain(agent["id"])
+        check("kick off retrain (lock free): returns 'started' immediately", status == "started", status)
+        check("kick off retrain (lock free): the REQUEST thread itself made zero _save_training calls",
+             len(save_calls) == 0, save_calls)
+
+        check("kick off retrain (lock free): the worker thread reached its own (blocked) first load",
+             started_event.wait(timeout=5), None)
+        check("kick off retrain (lock free): still zero saves while the worker sits blocked on that load",
+             len(save_calls) == 0, save_calls)
+
+        release_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+        check("kick off retrain (lock free): once released, the worker's own save eventually lands",
+             len(save_calls) >= 1, save_calls)
+    finally:
+        setter._load_training = real_load_training
+        setter._save_training = real_save_training
+        release_event.set()
+
+
+def test_kick_off_training_retrain_worker_first_action_writes_running_marker():
+    """The retrain worker's very FIRST action on every pass - before it
+    drains pending_merges, loads the agent, or does any retrain work - is
+    persisting doc.generating = {status: running, kind: retrain}. Proven by
+    blocking the first _save_training call and inspecting exactly what it
+    was about to write: a pending_merges entry seeded up front is still
+    sitting there untouched at that point, since the drain (which would
+    clear it) only runs AFTER this save."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-kickfree02", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00",
+          "pending_merges": [{"note": "Should not merge before the marker write.",
+                              "source": "training:case-0000", "at": "2026-01-01T00:00:00+00:00"}]}
+    setter._save_training(agent["id"], doc)
+
+    real_save_training = setter._save_training
+    save_calls = []
+    started_event = threading.Event()
+    release_event = threading.Event()
+
+    def fake_save_training(agent_id_, doc_):
+        save_calls.append((agent_id_, copy.deepcopy(doc_)))
+        started_event.set()
+        release_event.wait(timeout=10)
+        real_save_training(agent_id_, doc_)
+
+    setter._save_training = fake_save_training
+    try:
+        status = setter._kick_off_training_retrain(agent["id"])
+        check("kick off retrain: returns started", status == "started", status)
+        check("kick off retrain: worker reached its first (blocked) save",
+             started_event.wait(timeout=5), None)
+        check("kick off retrain: the worker's first save is exactly the running marker",
+             len(save_calls) == 1
+             and (save_calls[0][1].get("generating") or {}).get("status") == "running"
+             and (save_calls[0][1].get("generating") or {}).get("kind") == "retrain",
+             save_calls)
+        check("kick off retrain: pending_merges is untouched at that point - the drain runs AFTER this save",
+             len(save_calls[0][1].get("pending_merges") or []) == 1, save_calls)
+
+        release_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+    finally:
+        setter._save_training = real_save_training
+        release_event.set()
+
+
+def test_kick_off_training_retrain_lock_held_flagger_persists_queued_flag():
+    """Lock-held path (a generate() batch or another retrain already running
+    for this agent): _kick_off_training_retrain spawns a tiny daemon
+    "flagger" thread - registered under _TRAINING_GEN_THREADS[f"{agent_id}:
+    flag"], a separate key from the running worker's own entry - to persist
+    generating.retrain_queued=True, rather than writing it itself. The
+    response is "queued" immediately regardless of whether the flagger has
+    finished."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-flagger01", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    lock = setter._get_training_gen_lock(agent["id"])
+    lock.acquire()
+    try:
+        status = setter._kick_off_training_retrain(agent["id"])
+        check("kick off retrain (lock held): returns 'queued'", status == "queued", status)
+
+        flagger = setter._TRAINING_GEN_THREADS.get(f"{agent['id']}:flag")
+        check("kick off retrain (lock held): a flagger thread is registered under the ':flag' key",
+             flagger is not None, list(setter._TRAINING_GEN_THREADS.keys()))
+        if flagger is not None:
+            flagger.join(timeout=10)
+
+        saved = setter._load_training(agent["id"])
+        check("kick off retrain (lock held): the flagger thread persisted retrain_queued=True",
+             bool((saved.get("generating") or {}).get("retrain_queued")), saved.get("generating"))
+    finally:
+        lock.release()
+
+
+def test_training_answer_existing_doc_skips_agent_load():
+    """Latency fix (2026-07-14, part 2): when case_id is found in the
+    training doc's own cases, route_training_answer never fetches the agent
+    row at all - a training doc's cases only ever came from a real agent's
+    generate()/retrain pass, so finding the case there is already proof
+    enough. Proven directly against the FakeSB call log: no GET without an
+    id filter (the shape _load_agents() always issues) ever fires, and the
+    whole request costs exactly one read + one write."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-skiploadA1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    sb.calls.clear()
+    status, resp = setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": True, "reply_ok": True,
+        "note": "", "scope": "one_off",
+    })
+    check("answer (existing doc): still returns 200", status == 200, (status, resp))
+    check("answer (existing doc): no note/wrong mark -> retrain never kicked off (isolates this call count)",
+         resp.get("retrain") is None, resp)
+
+    agent_list_gets = [c for c in sb.calls if c[0] == "GET" and c[1].startswith(setter.AGENTS_TABLE)
+                       and "id=eq." not in c[1]]
+    check("answer (existing doc): the agent row (a full agents-table list load) was never fetched",
+         agent_list_gets == [], sb.calls)
+    check("answer (existing doc): exactly 2 Supabase round trips total - one training-doc read, one save",
+         len(sb.calls) == 2 and sb.calls[0][0] == "GET" and sb.calls[1][0] == "POST", sb.calls)
+
+
+def test_training_answer_404_when_neither_doc_nor_agent_exists():
+    """A case_id lookup miss falls back to loading the agent purely to tell
+    apart "the agent itself is gone" (404 Agent not found) from "this
+    training doc just doesn't have this case_id" (404 Training scenario not
+    found). With no training doc AND no agent row at all for this id, it
+    must be the former."""
+    sb, http = fresh_setter()
+    status, resp = setter.route_training_answer({
+        "agent_id": "agent-never-existed-01", "case_id": "case-0000", "decision_ok": True,
+    })
+    check("answer: 404 when neither the training doc nor the agent exists",
+         status == 404, (status, resp))
+    check("answer: the error is specifically 'Agent not found', not 'Training scenario not found'",
+         resp.get("error") == "Agent not found.", resp)
+
+
+def test_training_answer_note_path_still_returns_started_without_agent_load():
+    """The note (or wrong-mark) path that triggers a retrain must still
+    report retrain:"started" (lock free) exactly as before, AND must skip
+    the agent load on its own synchronous path just like the no-note path.
+    scope="remember" is used here (not "one_off") specifically so the note
+    goes onto pending_merges - the pre-existing one_off feedback_log path
+    (_append_agent_feedback_log) does its own separate agent load/save and
+    is untouched by this latency fix, so mixing it in here would test the
+    wrong thing. The background worker's own _load_agent call (a separate,
+    expected read - already covered by the retrain-worker tests) is blocked
+    out here so it can't race into the call log this test inspects."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-noteA1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    real_threadmain = setter._training_retrain_threadmain
+    block_event = threading.Event()
+
+    def blocked_threadmain(agent_id_, lock_):
+        block_event.wait(timeout=10)
+        real_threadmain(agent_id_, lock_)
+
+    setter._training_retrain_threadmain = blocked_threadmain
+    try:
+        sb.calls.clear()
+        status, resp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": False,
+            "note": "Always confirm timezone.", "scope": "remember",
+        })
+        check("answer (note path): still returns 200 and retrain:'started'",
+             status == 200 and resp.get("retrain") == "started", (status, resp))
+
+        agent_list_gets = [c for c in sb.calls if c[0] == "GET" and c[1].startswith(setter.AGENTS_TABLE)
+                           and "id=eq." not in c[1]]
+        check("answer (note path): the request thread never fetched the agent row either",
+             agent_list_gets == [], sb.calls)
+        check("answer (note path): exactly 2 Supabase round trips in the request thread - "
+             "the retrain kick adds none of its own",
+             len(sb.calls) == 2 and sb.calls[0][0] == "GET" and sb.calls[1][0] == "POST", sb.calls)
+    finally:
+        setter._training_retrain_threadmain = real_threadmain
+        block_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
 
 
 def test_training_pending_merges_survive_and_drain_on_next_kick_after_dead_worker():
@@ -5155,6 +5428,12 @@ if __name__ == "__main__":
     test_training_get_reports_pending_merges_count()
     test_training_answer_one_off_note_never_enters_pending_merges()
     test_training_retrain_worker_retrain_step_uses_freshly_merged_instructions()
+    test_kick_off_training_retrain_request_thread_makes_no_save_before_worker_runs()
+    test_kick_off_training_retrain_worker_first_action_writes_running_marker()
+    test_kick_off_training_retrain_lock_held_flagger_persists_queued_flag()
+    test_training_answer_existing_doc_skips_agent_load()
+    test_training_answer_404_when_neither_doc_nor_agent_exists()
+    test_training_answer_note_path_still_returns_started_without_agent_load()
     test_training_pending_merges_survive_and_drain_on_next_kick_after_dead_worker()
     test_draft_system_fallback_ladder_text()
     test_training_reset_clears_answers_keeps_used_ids()

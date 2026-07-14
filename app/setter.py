@@ -4175,33 +4175,54 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
 # rewrite the same training doc's `cases` list.
 
 def _kick_off_training_retrain(agent_id: str) -> str:
-    """Starts a background retrain pass for one agent's training doc if
-    nothing else holds that agent's generation lock, else just flags
-    doc.generating.retrain_queued so whichever pass currently holds the lock
-    (a generate() batch or another retrain) runs one more retrain pass
-    before releasing it - see _training_retrain_worker's own queued loop and
-    _training_generate_threadmain's _maybe_run_queued_retrain call. Never
-    blocks on the actual work. Returns "started" or "queued"."""
+    """Latency fix (2026-07-14, part 2): the REQUEST thread does ZERO doc
+    round trips here now - it only makes the lock.acquire(blocking=False)
+    bookkeeping decision and starts a thread. Every Supabase write this used
+    to do inline (the "running" marker on acquire, the retrain_queued flag
+    on contention) now happens OFF the request thread:
+
+      - lock acquired -> spawn the retrain worker itself. Its very FIRST
+        action (see _training_retrain_worker) is persisting the running
+        marker, before it drains pending_merges or touches anything else -
+        so "started" really does mean "a worker is about to mark itself
+        running", not "the request thread already did".
+      - lock held (another generate()/retrain already running for this
+        agent) -> spawn a tiny daemon "flagger" thread that does the
+        load + set retrain_queued=True + save, registered under
+        _TRAINING_GEN_THREADS[f"{agent_id}:flag"] (a separate key from the
+        running worker's own _TRAINING_GEN_THREADS[agent_id] entry) purely
+        so tests can join it deterministically - production never reads
+        this map. This trades a small window (the flagger theoretically
+        losing the race against the currently-running pass's own
+        end-of-loop queued check) for the request thread never blocking on
+        Supabase; in practice a single doc load+save is nowhere near as
+        slow as the classify/draft work a real retrain pass is busy with.
+
+    Response semantics unchanged - still returns "started" or "queued"."""
     lock = _get_training_gen_lock(agent_id)
     if lock.acquire(blocking=False):
-        try:
-            doc = _load_training(agent_id)
-            gen = dict(doc.get("generating") or {})
-            gen.update({"status": "running", "kind": "retrain",
-                       "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")})
-            gen.pop("retrain_queued", None)
-            doc["generating"] = gen
-            _save_training(agent_id, doc)
-        except Exception:  # noqa: BLE001
-            lock.release()
-            raise
         thread = threading.Thread(target=_training_retrain_threadmain, args=(agent_id, lock), daemon=True)
         _TRAINING_GEN_THREADS[agent_id] = thread
         thread.start()
         return "started"
 
     # Already generating or retraining for this agent - flag another pass is
-    # wanted once the current one finishes, never start a second one.
+    # wanted once the current one finishes, via a tiny daemon thread so the
+    # REQUEST thread itself never touches Supabase. Never starts a second
+    # worker.
+    flagger = threading.Thread(target=_flag_training_retrain_queued, args=(agent_id,), daemon=True)
+    _TRAINING_GEN_THREADS[f"{agent_id}:flag"] = flagger
+    flagger.start()
+    return "queued"
+
+
+def _flag_training_retrain_queued(agent_id: str):
+    """The flagger thread's entire job (see _kick_off_training_retrain's
+    lock-held branch): reload the training doc fresh and persist
+    generating.retrain_queued=True, so whichever pass is currently running
+    for this agent loops once more at the end of its current cycle (see
+    _training_retrain_worker's own queued check). Never raises out of a
+    background thread."""
     try:
         doc = _load_training(agent_id)
         gen = dict(doc.get("generating") or {})
@@ -4210,7 +4231,6 @@ def _kick_off_training_retrain(agent_id: str) -> str:
         _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001
         pass
-    return "queued"
 
 
 def _training_retrain_threadmain(agent_id, lock):
@@ -4379,9 +4399,12 @@ def _drain_pending_merges(agent_id: str) -> list:
 
 
 def _training_retrain_worker(agent_id: str):
-    """FIRST drains and merges any queued pending_merges (see
-    _drain_pending_merges) - in submission order, each via
-    merge_correction_into_instructions, which already does its own safe
+    """Latency fix (2026-07-14, part 2): this worker's FIRST action, on
+    every pass (including the very first), is persisting the "running"
+    marker itself - _kick_off_training_retrain no longer writes it from the
+    request thread. Only THEN does it drain and merge any queued
+    pending_merges (see _drain_pending_merges) - in submission order, each
+    via merge_correction_into_instructions, which already does its own safe
     agent reload/save and always falls back to a dumb append on any
     failure, so a bad merge never blocks the retrain below. THEN reloads
     the agent fresh (picking up whatever the drain just merged), builds a
@@ -4393,12 +4416,18 @@ def _training_retrain_worker(agent_id: str):
     save so an answer that lands mid-pass is never lost (lost-update
     protection, same discipline as _training_generate_worker and
     _grading_relearn). If another trigger queued a fresh pass while this one
-    ran - including a fresh "remember" note that landed mid-pass - loops
-    once more, draining pending_merges again at the TOP of that follow-on
-    pass before its own retrain work, mirroring _grading_relearn exactly.
-    Never raises."""
+    ran - including a fresh "remember" note that landed mid-pass, or the
+    tiny flagger thread from _kick_off_training_retrain's lock-held branch -
+    loops once more, writing a fresh running marker and draining
+    pending_merges again at the TOP of that follow-on pass before its own
+    retrain work, mirroring _grading_relearn exactly. Never raises."""
     try:
         while True:
+            started_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            marker_doc = _load_training(agent_id)
+            marker_doc["generating"] = {"status": "running", "kind": "retrain", "started_at": started_at}
+            _save_training(agent_id, marker_doc)
+
             for entry in _drain_pending_merges(agent_id):
                 note = str((entry or {}).get("note") or "").strip()
                 if not note:
@@ -4419,11 +4448,6 @@ def _training_retrain_worker(agent_id: str):
             cases = list(doc.get("cases") or [])
             answers = dict(doc.get("answers") or {})
             digest = _training_session_feedback_digest(doc)
-
-            started_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
-            marker_doc = _load_training(agent_id)
-            marker_doc["generating"] = {"status": "running", "kind": "retrain", "started_at": started_at}
-            _save_training(agent_id, marker_doc)
 
             settings = _load_settings()
             now = _dt.datetime.now(_dt.timezone.utc)
@@ -4493,13 +4517,21 @@ def route_training_answer(payload):
         case_id = str(payload.get("case_id") or "")
         if not case_id:
             return 400, {"error": "case_id is required"}
-        agent = _load_agent(agent_id)
-        if not agent:
-            return 404, {"error": "Agent not found."}
 
+        # Latency fix (2026-07-14, part 2): skip the AGENT load entirely on
+        # the common path. A training doc only ever gets its cases from a
+        # real agent's own generate()/retrain pass, so finding case_id among
+        # them is already proof the agent existed - no separate 404 check
+        # needed. Only fall back to loading the agent when the case lookup
+        # misses, purely to tell "the agent itself is gone" (404 Agent not
+        # found) apart from "this agent's doc just doesn't have this
+        # case_id" (404 Training scenario not found). Saves one Supabase
+        # round trip on every answer, note or not.
         doc = _load_training(agent_id)
         cases = list(doc.get("cases") or [])
         if not any(str(c.get("id")) == case_id for c in cases):
+            if not _load_agent(agent_id):
+                return 404, {"error": "Agent not found."}
             return 404, {"error": "Training scenario not found."}
 
         decision_ok = payload.get("decision_ok")
