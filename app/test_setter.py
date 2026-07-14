@@ -2278,6 +2278,92 @@ def test_merge_correction_into_instructions_success_and_fallbacks():
          ok5 and new_instructions5 == "Flat $200/mo.", (ok5, new_instructions5, detail5))
 
 
+# ── general_rule generalisation (Feature C, incident 2026-07-14): a raw
+# correction note is often case-specific ("this reply was in Spanish, so the
+# whole answer must be in Spanish") and _latest_owner_rules injects
+# instruction_edits entries VERBATIM as top-priority rules - so a
+# case-specific fragment must never generalise into "always answer in
+# Spanish". merge_correction_into_instructions now also asks the model for
+# general_rule (a timeless, situation-general restatement) and stores it as
+# `rule` on the instruction_edits entry, separate from the raw `note`. ────
+
+def test_merge_correction_general_rule_generalisation():
+    sb, http = fresh_setter()
+
+    # Success path: the model returns both instructions and a proper,
+    # case-specific-reference-free general_rule -> stored as `rule`,
+    # distinct from the raw `note`.
+    agent = {"id": "agent-genrule01", "name": "Ada",
+             "instructions": "Resource: the guide is available on request. Pricing: flat $500/mo."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    http.merge_fn = lambda body: {
+        "instructions": "Resource: the guide is available on request. Pricing: flat $500/mo. "
+                        "Reply in the same language as the lead's most recent message.",
+        "general_rule": "Reply in the same language as the lead's most recent message.",
+    }
+    ok, new_instructions, detail = setter.merge_correction_into_instructions(
+        agent, "this reply was in Spanish, so the whole answer must be in Spanish", source="manual")
+    check("general_rule: merge success", ok and detail == "merged", (ok, detail))
+    saved = setter._load_agent(agent["id"])
+    edits = saved.get("instruction_edits") or []
+    check("general_rule: instruction_edits has exactly one entry", len(edits) == 1, edits)
+    check("general_rule: note carries the owner's raw words verbatim (audit trail)",
+         edits[0]["note"] == "this reply was in Spanish, so the whole answer must be in Spanish", edits)
+    check("general_rule: rule carries the model's timeless restatement, not the raw note",
+         edits[0]["rule"] == "Reply in the same language as the lead's most recent message."
+         and edits[0]["rule"] != edits[0]["note"], edits)
+
+    # general_rule still contains a case-specific token ("this reply") -> the
+    # generalisation is untrustworthy, falls back to the raw note exactly
+    # like a missing/empty general_rule would.
+    agent2 = {"id": "agent-genrule02", "name": "Ada", "instructions": "Flat $500/mo."}
+    sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+    http.merge_fn = lambda body: {
+        "instructions": "Flat $500/mo. Reply in Spanish for this reply.",
+        "general_rule": "Reply in Spanish for this reply.",
+    }
+    ok2, _new2, detail2 = setter.merge_correction_into_instructions(
+        agent2, "this reply was in Spanish, so the whole answer must be in Spanish")
+    check("general_rule: merge still succeeds (instructions rewrite is independent)",
+         ok2 and detail2 == "merged", detail2)
+    saved2 = setter._load_agent(agent2["id"])
+    edits2 = saved2.get("instruction_edits") or []
+    check("general_rule: a general_rule containing 'this reply' falls back to the raw note",
+         edits2[0]["rule"] == "this reply was in Spanish, so the whole answer must be in Spanish",
+         edits2)
+
+    # Missing general_rule entirely (model response omits the key) -> same
+    # fallback to the raw note.
+    agent3 = {"id": "agent-genrule03", "name": "Ada", "instructions": "Flat $500/mo."}
+    sb.agents[agent3["id"]] = {"id": agent3["id"], "doc": agent3}
+    http.merge_fn = lambda body: {"instructions": "Flat $500/mo. Some other unrelated update."}
+    ok3, _new3, detail3 = setter.merge_correction_into_instructions(agent3, "Always confirm timezone first.")
+    check("general_rule: merge succeeds even with no general_rule key at all",
+         ok3 and detail3 == "merged", detail3)
+    saved3 = setter._load_agent(agent3["id"])
+    check("general_rule: missing general_rule key falls back to the raw note",
+         saved3["instruction_edits"][0]["rule"] == "Always confirm timezone first.",
+         saved3.get("instruction_edits"))
+
+    # Append-fallback path (URL dropped by the model's rewrite) -> rule is
+    # always the raw note, general_rule is never even consulted.
+    agent4 = {"id": "agent-genrule04", "name": "Ada",
+             "instructions": "Resource: the guide - https://x.example/guide - send on request."}
+    sb.agents[agent4["id"]] = {"id": agent4["id"], "doc": agent4}
+    http.merge_fn = lambda body: {
+        "instructions": "Resource: the guide is available on request.",
+        "general_rule": "This should never be used - the merge falls back before reading it.",
+    }
+    ok4, new_instructions4, detail4 = setter.merge_correction_into_instructions(
+        agent4, "this reply was in Spanish, so the whole answer must be in Spanish")
+    check("general_rule: URL-drop still falls back to append", ok4 and detail4 == "appended", detail4)
+    saved4 = setter._load_agent(agent4["id"])
+    check("general_rule: append-fallback path sets rule = the raw note",
+         saved4["instruction_edits"][0]["rule"] == saved4["instruction_edits"][0]["note"]
+         == "this reply was in Spanish, so the whole answer must be in Spanish",
+         saved4.get("instruction_edits"))
+
+
 def test_correction_one_off_does_not_touch_memory():
     sb, http = fresh_setter()
     agent = {"id": "agent-corr0001", "mode": "draft_only", "enabled": True,
@@ -5544,6 +5630,59 @@ def test_latest_owner_rules_helper():
          setter._latest_owner_rules({}) == "", None)
 
 
+def test_latest_owner_rules_prefers_rule_over_note():
+    """Feature C (incident 2026-07-14): _latest_owner_rules must inject the
+    generalised `rule` field, not the raw case-specific `note`, so a
+    correction like "this reply was in Spanish, so the whole answer must be
+    in Spanish" never surfaces verbatim as a top-priority rule for an
+    unrelated (English) lead. Legacy entries saved before Feature C carry no
+    `rule` key at all and must keep falling back to `note` unchanged."""
+    agent = {
+        "id": "agent-rules-prefer01",
+        "instruction_edits": [
+            {"note": "this reply was in Spanish, so the whole answer must be in Spanish",
+             "rule": "Reply in the same language as the lead's most recent message.",
+             "at": "2026-07-14T00:00:00+00:00", "source": "manual", "how": "merged"},
+        ],
+    }
+    block = setter._latest_owner_rules(agent)
+    check("latest rules prefer-rule: the generalised rule text is injected",
+         "Reply in the same language as the lead's most recent message." in block, block)
+    check("latest rules prefer-rule: the raw case-specific note is NOT injected verbatim",
+         "this reply was in Spanish" not in block, block)
+
+    # Legacy entry, no `rule` key at all -> falls back to `note`, same as
+    # every pre-Feature-C instruction_edits entry already stored.
+    legacy_agent = {
+        "id": "agent-rules-prefer02",
+        "instruction_edits": [
+            {"note": "Always mention the free trial.", "at": "2026-06-01T00:00:00+00:00",
+             "source": "manual", "how": "merged"},
+        ],
+    }
+    legacy_block = setter._latest_owner_rules(legacy_agent)
+    check("latest rules prefer-rule: a legacy entry with no rule key falls back to note",
+         "Always mention the free trial." in legacy_block, legacy_block)
+
+
+def test_latest_owner_rules_header_carries_scoping_caveat():
+    """The header itself now warns the model that a rule mentioning a
+    specific reply must not be generalised to every reply - a second line
+    of defence alongside preferring `rule` over `note` in
+    _latest_owner_rules, for any instruction_edits entry (or training-doc
+    answer note) that still slips through case-specific."""
+    caveat = ("A rule that mentions a specific reply applies only to closely similar "
+              "situations, never to every reply.")
+    check("latest rules header: carries the new scoping caveat line",
+         caveat in setter._LATEST_RULES_HEADER, setter._LATEST_RULES_HEADER)
+    agent = {"id": "agent-rules-caveat01", "instruction_edits": [
+        {"note": "Some note.", "at": "2026-07-01T00:00:00+00:00"},
+    ]}
+    block = setter._latest_owner_rules(agent)
+    check("latest rules header: the caveat reaches the actual block a live call builds",
+         caveat in block, block)
+
+
 def test_latest_owner_rules_reaches_process_reply_classify_and_draft():
     sb, http = fresh_setter()
     captured = {}
@@ -6022,6 +6161,7 @@ if __name__ == "__main__":
     test_memory_digest_reaches_classify_and_draft()
     test_memory_digest_empty_is_byte_identical()
     test_merge_correction_into_instructions_success_and_fallbacks()
+    test_merge_correction_general_rule_generalisation()
     test_correction_one_off_does_not_touch_memory()
     test_correction_remember_route_merges_instructions()
     test_agents_memory_delete()
@@ -6101,6 +6241,8 @@ if __name__ == "__main__":
     test_backfill_dry_run_zero_writes()
 
     test_latest_owner_rules_helper()
+    test_latest_owner_rules_prefers_rule_over_note()
+    test_latest_owner_rules_header_carries_scoping_caveat()
     test_latest_owner_rules_reaches_process_reply_classify_and_draft()
     test_latest_owner_rules_reaches_retrain()
     test_latest_owner_rules_reaches_training_generation()

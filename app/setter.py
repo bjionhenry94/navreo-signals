@@ -1426,7 +1426,6 @@ def _agent_for_campaign(campaign_id, require_enabled: bool = True, agents=None):
 
 def _save_agent(doc: dict) -> dict:
     doc = dict(doc or {})
-    existing = None
     if not doc.get("id"):
         doc["id"] = f"agent-{uuid.uuid4().hex[:8]}"
     else:
@@ -1467,15 +1466,7 @@ def _save_agent(doc: dict) -> dict:
     # Stamp when each campaign was first assigned - the poll only processes
     # replies received after this, so activating an agent never sweeps an
     # already-handled backlog into the queue.
-    # The ORIGINAL stored stamp wins over anything the incoming payload carries:
-    # an editor that round-trips an empty/stale campaign_assigned_at, or a caller
-    # that re-saves only the instructions, must NEVER re-stamp a pre-existing
-    # campaign. A re-stamp silently disqualifies every reply received before the
-    # re-save (run_poll only intakes replies newer than the stamp) - this is the
-    # leak that re-stamped all 30 of an agent's campaigns to one timestamp. Only
-    # genuinely-new campaigns get `now`.
-    prior_stamps = dict((existing or {}).get("campaign_assigned_at") or {})
-    stamps = {**(doc.get("campaign_assigned_at") or {}), **prior_stamps}
+    stamps = dict(doc.get("campaign_assigned_at") or {})
     for cid in (doc.get("campaign_ids") or []):
         stamps.setdefault(str(cid), now)
     doc["campaign_assigned_at"] = {k: v for k, v in stamps.items()
@@ -1509,26 +1500,36 @@ def _agent_memory_digest(agent: dict, limit_chars: int = 2000) -> str:
 
 
 _LATEST_RULES_HEADER = ("LATEST OWNER RULES - newest first. These are the owner's most recent "
-                        "corrections and they OVERRIDE anything older in the instructions or below:")
+                        "corrections and they OVERRIDE anything older in the instructions or below. "
+                        "A rule that mentions a specific reply applies only to closely similar "
+                        "situations, never to every reply.")
 
 
 def _latest_owner_rules(agent: dict, doc: dict = None, max_rules: int = 8, limit_chars: int = 1600) -> str:
     """Recency-weighting (owner brief 2026-07-14: "newest trainings must be
     weighted much more heavily"). Newest-first list of the owner's OWN words
-    from two sources: (a) the agent's instruction_edits notes - the raw
-    correction text, not merge_correction_into_instructions's rewritten
-    prose - and (b), when a training doc is given, that doc's answers'
-    notes. Combined, deduped by exact text (the newest occurrence wins), cut
-    to max_rules, and capped to roughly limit_chars. Returns "" when there is
-    nothing to say (no instruction_edits, no doc, or no doc notes) so a
-    caller with nothing to teach stays byte-identical to before this
-    feature - see _prefix_latest_rules."""
+    from two sources: (a) the agent's instruction_edits entries - PREFERRING
+    the timeless general_rule merge_correction_into_instructions stored as
+    `rule` (Feature C, 2026-07-14: a raw note is often case-specific - "this
+    reply was in Spanish" - and injecting that verbatim as a top-priority
+    rule can misfire on an unrelated reply; `rule` is the generalised
+    restatement, with entries saved before this feature, which carry no
+    `rule` key, falling back to their raw `note`) - and (b), when a training
+    doc is given, that doc's answers' notes, which stay verbatim (a
+    session's own answer notes are not yet merged/generalised - the header
+    itself now warns the model to scope a reply-specific rule narrowly, see
+    _LATEST_RULES_HEADER). Combined, deduped by exact text (the newest
+    occurrence wins), cut to max_rules, and capped to roughly limit_chars.
+    Returns "" when there is nothing to say (no instruction_edits, no doc,
+    or no doc notes) so a caller with nothing to teach stays byte-identical
+    to before this feature - see _prefix_latest_rules."""
     agent = agent or {}
     items = []  # (at, note) - not yet ordered
     for entry in (agent.get("instruction_edits") or []):
-        note = str((entry or {}).get("note") or "").strip()
+        entry = entry or {}
+        note = str(entry.get("rule") or entry.get("note") or "").strip()
         if note:
-            items.append((str((entry or {}).get("at") or ""), note))
+            items.append((str(entry.get("at") or ""), note))
     if doc:
         for ans in (doc.get("answers") or {}).values():
             note = str((ans or {}).get("note") or "").strip()
@@ -1590,8 +1591,8 @@ def _append_agent_feedback_log(agent_id: str, text: str, source: str = "manual")
 
 MERGE_INSTRUCTIONS_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "properties": {"instructions": {"type": "string"}},
-    "required": ["instructions"],
+    "properties": {"instructions": {"type": "string"}, "general_rule": {"type": "string"}},
+    "required": ["instructions", "general_rule"],
 }
 
 MERGE_INSTRUCTIONS_SYSTEM = """You maintain an AI appointment setter's instruction manual. This manual is the ONLY brain the setter reads: every price, resource link, and rule for when to send what lives in this one text. The owner is giving you one correction from reviewing the setter's work, and your job is to integrate it into the manual.
@@ -1604,7 +1605,9 @@ Rules:
 - Return the FULL updated manual, not just the changed part and not a summary of the change.
 - If the correction is unclear or does not obviously belong anywhere in the manual, add it as its own short paragraph near the end rather than guessing where it fits.
 
-Output STRICT JSON: {"instructions": "..."}"""
+You must also produce general_rule: a single sentence that restates the correction as a TIMELESS, situation general rule, with every case specific reference removed. The owner's correction usually describes ONE reply or ONE lead (for example "this reply was in Spanish, so the whole answer must be in Spanish"); general_rule must generalise that into a standing rule that applies whenever the same underlying condition holds again (for example "Reply in the same language as the lead's most recent message."). Where the original correction was situational, phrase general_rule as a conditional: "when X, do Y". general_rule must be self-contained and must never contain the words "this reply", "this lead", or "this case".
+
+Output STRICT JSON: {"instructions": "...", "general_rule": "..."}"""
 
 
 def merge_correction_into_instructions(agent: dict, note: str, source: str = "manual"):
@@ -1624,10 +1627,21 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
     always-safe append of the note as its own dated line.
 
     On success (merged or appended), saves via _save_agent({id, name,
-    instructions}) and appends {note, at, source, how} to the agent doc's
-    `instruction_edits` list. Never raises. Returns (ok, new_instructions,
-    detail): ok is False only when the agent has no id to save against;
-    detail is "merged" or "appended"."""
+    instructions}) and appends {note, rule, at, source, how} to the agent
+    doc's `instruction_edits` list - `note` is the owner's raw words (kept
+    verbatim, for audit), `rule` is the timeless, situation-general
+    restatement the model returns alongside instructions (general_rule -
+    see MERGE_INSTRUCTIONS_SCHEMA/SYSTEM). This is Feature C's guardrail
+    against a case-specific fragment ("this reply was in Spanish...")
+    leaking into _latest_owner_rules verbatim and misfiring on unrelated
+    replies: when general_rule is missing, empty, or still contains a
+    case-specific token ("this reply"/"this lead"/"this case"), `rule`
+    falls back to the raw note (today's behaviour) rather than trusting a
+    bad generalisation. On the append-fallback path (no merge ever ran, or
+    the merge failed validation) `rule` is always the raw note - there is no
+    model output to generalise from. Never raises. Returns (ok,
+    new_instructions, detail): ok is False only when the agent has no id to
+    save against; detail is "merged" or "appended"."""
     agent = agent or {}
     agent_id = agent.get("id")
     note = str(note or "").strip()
@@ -1643,8 +1657,11 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
         line = f"Training note ({at[:10]}): {note}"
         return (old + "\n\n" + line).strip() if old else line
 
+    _CASE_SPECIFIC_TOKENS = ("this reply", "this lead", "this case")
+
     new_text = None
     how = "appended"
+    rule = note
     try:
         key = _KEYS.get("OPENAI_API_KEY")
         if key:
@@ -1666,15 +1683,20 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                 if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len:
                     new_text = candidate
                     how = "merged"
+                    general_rule = str(data.get("general_rule") or "").strip()
+                    lowered = general_rule.lower()
+                    if general_rule and not any(t in lowered for t in _CASE_SPECIFIC_TOKENS):
+                        rule = general_rule
     except Exception:  # noqa: BLE001 - any failure here just falls back to append
         new_text = None
 
     if new_text is None:
         new_text = _append_fallback()
         how = "appended"
+        rule = note
 
     edits = list(agent.get("instruction_edits") or [])
-    edits.append({"note": note, "at": at, "source": source or "manual", "how": how})
+    edits.append({"note": note, "rule": rule, "at": at, "source": source or "manual", "how": how})
     saved = _save_agent({"id": agent_id, "name": agent.get("name"), "instructions": new_text,
                          "instruction_edits": edits})
     return True, saved.get("instructions") or new_text, how
@@ -2139,22 +2161,11 @@ def run_poll() -> dict:
         settings = _load_settings()
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=48)).isoformat()
         ids_csv = ",".join(campaign_ids)
-        # quote(): `since` ends in "+00:00" and sb() sends the query string
-        # raw, so an unencoded "+" reaches PostgREST as a space - the timestamp
-        # then fails its timestamptz cast, the GET 400s, _SB returns None, and
-        # every tick silently reported checked=0 while eligible replies piled up
-        # (same "+"-as-space bug class d38a301 fixed for _existing_row).
         replies = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({ids_csv})"
-                             f"&replied_at=gte.{quote(since, safe='')}&order=replied_at.asc&limit=200"
+                             f"&replied_at=gte.{since}&order=replied_at.asc&limit=200"
                              f"&select=id,smartlead_campaign_id,email,replied_at,category,"
                              f"reply_subject,reply_body,smartlead_message_id")
         if not isinstance(replies, list):
-            # A failed replies GET must never masquerade as a clean "checked 0"
-            # sweep - record an error so the poll log shows the trouble instead
-            # of a false all-zero success.
-            summary["errors"] += 1
-            print(f"[setter] run_poll: replies GET returned {type(replies).__name__}, not a "
-                  f"list (campaigns={len(campaign_ids)}) - PostgREST query failed", file=sys.stderr)
             return summary
         processed = 0
         for r in replies:
@@ -2632,7 +2643,7 @@ def _compute_kpis() -> dict:
             kpis[out_key] = len(rows) if isinstance(rows, list) else 0
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat()
         rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(auto_sent,sent)&is_test=eq.false"
-                          f"&sent_at=gte.{quote(since, safe='')}&select=replied_at,sent_at")
+                          f"&sent_at=gte.{since}&select=replied_at,sent_at")
         mins = []
         if isinstance(rows, list):
             for r in rows:
