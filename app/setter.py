@@ -1883,10 +1883,12 @@ def _intake_agentless(reply: dict) -> dict:
     should come in regardless." A core-four reply on a campaign with no
     agent still reaches setter_queue, just flagged for manual review - the
     UI is responsible for surfacing the missing-agent state subtly, not this
-    pipeline. Deliberately skips classify/draft/decide/hydrate: there is no
-    agent brain to run those with, and hydration cost stays off this cheap
-    path. Shared by run_poll and handle_inbound so both intake paths insert
-    the identical row shape. Never raises - mirrors process_reply."""
+    pipeline. Deliberately skips classify/draft/decide: there is no agent
+    brain to run those with. It DOES hydrate the Smartlead thread (owner
+    follow-up 2026-07-14) - manual review needs the conversation context and
+    the original outreach just as much as the agented path does. Shared by
+    run_poll and handle_inbound so both intake paths insert the identical
+    row shape. Never raises - mirrors process_reply."""
     try:
         workspace = reply.get("workspace") or WORKSPACE
         campaign_id = reply.get("campaign_id")
@@ -1918,6 +1920,33 @@ def _intake_agentless(reply: dict) -> dict:
             "added_to_subsequence": False, "sent_at": None, "sent_body": None, "error": None,
             "is_test": is_test,
         }
+        # Context hydration (owner follow-up 2026-07-14): a review-only row is
+        # useless without the thread - "send the video, I'll look at it" can't
+        # be answered manually when the original outreach isn't shown, which is
+        # exactly what the reviewer sees on every agentless row. classify/
+        # draft/decide stay skipped (there is no agent brain to run them), but
+        # the Smartlead history is agent-independent, so fetch it here just
+        # like the agented pipeline does. Best-effort: hydration failure never
+        # blocks the intake - the reply still lands, just without the thread.
+        if not is_test:
+            try:
+                ok, hyd, _herr = hydrate_lead(campaign_id, email, message_id)
+                if ok:
+                    row["smartlead_lead_id"] = hyd.get("smartlead_lead_id")
+                    row["email_stats_id"] = hyd.get("email_stats_id")
+                    # Real RFC Message-ID replaces the synthetic claim key;
+                    # source_message_id keeps the original so _existing_row's
+                    # two-key dedupe (d38a301) still recognises this row.
+                    row["message_id"] = str(hyd.get("reply_message_id") or message_id)
+                    row["reply_subject"] = hyd.get("reply_subject") or row["reply_subject"]
+                    row["reply_body"] = hyd.get("reply_email_body") or row["reply_body"]
+                    row["replied_at"] = hyd.get("reply_email_time") or row["replied_at"]
+                    row["thread"] = hyd.get("thread") or []
+                    row["lead_first_name"] = hyd.get("first_name") or row["lead_first_name"]
+                    row["lead_last_name"] = hyd.get("last_name") or row["lead_last_name"]
+                    row["first_outbound"] = hyd.get("first_outbound") or ""
+            except Exception:  # noqa: BLE001 - context is a nice-to-have, intake is the job
+                pass
         return _finalize_row(row)
     except Exception as e:  # noqa: BLE001 - agentless intake must never crash its caller
         reply = reply or {}

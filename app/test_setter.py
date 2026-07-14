@@ -6010,8 +6010,13 @@ def test_run_poll_agentless_campaign_queues_needs_review():
          "No agent is assigned" in (row.get("decision_reason") or ""), row)
     check("run_poll agentless: source_message_id is set (same claim pattern as process_reply)",
          row.get("source_message_id") == "agentless-1", row)
-    check("run_poll agentless: no classify/draft (or any) HTTP call was made - no agent brain to run",
-         http.calls == [], http.calls)
+    # Hydration (Smartlead lead lookup + message-history GETs) is allowed -
+    # owner follow-up 2026-07-14: the reviewer needs the thread. What must
+    # never fire without an agent brain is classify/draft (OpenAI).
+    check("run_poll agentless: no classify/draft (OpenAI) call was made - no agent brain to run",
+         all("openai" not in str(c).lower() for c in http.calls), http.calls)
+    check("run_poll agentless: only Smartlead hydration GETs were made",
+         all(c[0] == "GET" and "smartlead" in str(c[1]).lower() for c in http.calls), http.calls)
 
 
 def test_run_poll_agentless_campaign_non_core_four_stays_out():
@@ -6046,7 +6051,10 @@ def test_handle_inbound_no_agent_core_four_is_agentless():
     check("handle_inbound agentless: exactly one row queued", len(sb.queue) == 1, sb.queue)
     row = sb.queue[0] if sb.queue else {}
     check("handle_inbound agentless: agent_id is None", row.get("agent_id") is None, row)
-    check("handle_inbound agentless: no classify/draft HTTP call was made", http.calls == [], http.calls)
+    check("handle_inbound agentless: no classify/draft (OpenAI) call was made",
+         all("openai" not in str(c).lower() for c in http.calls), http.calls)
+    check("handle_inbound agentless: only Smartlead hydration GETs were made",
+         all(c[0] == "GET" and "smartlead" in str(c[1]).lower() for c in http.calls), http.calls)
 
     # uncategorised on an agentless campaign is still deferred to the poll,
     # not treated as agentless-eligible just because there's no agent.
