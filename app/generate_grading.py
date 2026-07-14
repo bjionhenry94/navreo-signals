@@ -162,10 +162,10 @@ def main():
                 lint_ok, lint_reason = setter.lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": first,
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
-                    "resource_link": agent.get("resource_link") or "",
                     "slot_status": st, "slot_links": [s.get("link") for s in slots],
                     "slot_labels": [s.get("label") for s in slots],
-                    "pricing_notes": setter._agent_instructions(agent), "thread_text": body,
+                    "instructions": setter._agent_instructions(agent),
+                    "booking_link": setter._booking_link(agent), "thread_text": body,
                 })
             except Exception as e:  # noqa: BLE001
                 print(f"  case {i:02d}: draft failed {e}")

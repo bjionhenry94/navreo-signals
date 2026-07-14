@@ -575,9 +575,11 @@ def test_pick_slots():
 
 def test_lint_draft():
     ctx = {"subject": "Re: hello", "first_name": "Jane", "needs_resource_link": True,
-           "resource_link": "https://navreo.notion.site/abc", "slot_status": "ok",
+           "instructions": "Resource: The breakdown - https://navreo.notion.site/abc - "
+                           "send when they want more info.",
+           "slot_status": "ok",
            "slot_links": ["https://calendly.com/x/1"], "slot_labels": ["Monday, 13th July at 10:00 AM BST"],
-           "instructions": "", "thread_text": ""}
+           "thread_text": ""}
     # email-shaped (v2): short <div> paragraphs separated by <br>, matching
     # the real house shape the drafter is now asked to produce.
     html_ok = ('<div>Hi Jane,</div><br><div>Of course.</div><br>'
@@ -614,7 +616,8 @@ def test_lint_draft():
     check("lint: unfilled placeholder fails", not ok and "placeholder" in reason, reason)
 
     ok, reason = setter.lint_draft(html_ok.replace('href="https://navreo.notion.site/abc"', 'href="https://x.example"'), ctx)
-    check("lint: missing resource link fails", not ok and "resource link" in reason, reason)
+    check("lint: a link the instructions don't contain fails",
+         not ok and reason == "The draft contains a link that isn't in the instructions.", reason)
 
     ok, reason = setter.lint_draft(html_ok + "<br><div>call us on 55512 now</div>", ctx)
     check("lint: invented number fails", not ok and "invents a number" in reason, reason)
@@ -630,7 +633,80 @@ def test_lint_draft():
 
     ok, reason = setter.lint_draft(html_ok.replace('<div><a href="https://navreo.notion.site/abc">Here is the breakdown</a></div><br>', ''),
                                    ctx)
-    check("lint: resource link entirely absent fails", not ok, reason)
+    check("lint: resource link entirely absent fails",
+         not ok and reason == "The draft is missing the resource link from the instructions.", reason)
+
+
+def test_lint_draft_url_discipline():
+    """New instructions-only URL allow-list (v3): every link the draft uses
+    must come from the instructions, the offered call-time slot links
+    (Calendly deep links count as slot links), the booking link, or a URL
+    already present in the thread - anything else is an invented/wrong link."""
+    base_ctx = {
+        "subject": "Re: hi", "first_name": "Jane", "needs_resource_link": False,
+        "instructions": "Resource: The guide - https://navreo.notion.site/guide - send on request. "
+                        "Pricing: flat $500/mo.",
+        "slot_status": "not_configured", "slot_links": [], "slot_labels": [], "thread_text": "",
+    }
+
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Here you go: '
+        '<a href="https://navreo.notion.site/guide">the guide</a>.</div><br><div>Sam</div>', base_ctx)
+    check("url discipline: a link straight from the instructions passes", ok, reason)
+
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Here you go: '
+        '<a href="https://evil.example/phish">a link</a>.</div><br><div>Sam</div>', base_ctx)
+    check("url discipline: a link the instructions never mention fails",
+         not ok and reason == "The draft contains a link that isn't in the instructions.", reason)
+
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Here you go: '
+        'https://evil.example/bare-in-text (no anchor tag at all).</div><br><div>Sam</div>', base_ctx)
+    check("url discipline: a BARE (non-anchor) foreign URL in the text also fails",
+         not ok and reason == "The draft contains a link that isn't in the instructions.", reason)
+
+    # a trailing slash or trailing prose punctuation must not defeat the match
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Here you go: '
+        '<a href="https://navreo.notion.site/guide/">the guide</a>.</div><br><div>Sam</div>', base_ctx)
+    check("url discipline: trailing slash on an otherwise-known link still passes", ok, reason)
+
+    # send_resource in play: at least one instructions link must appear
+    needs_link_ctx = {**base_ctx, "needs_resource_link": True}
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Happy to help.</div><br><div>Sam</div>', needs_link_ctx)
+    check("url discipline: send_resource draft with no instructions link fails",
+         not ok and reason == "The draft is missing the resource link from the instructions.", reason)
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Here you go: '
+        '<a href="https://navreo.notion.site/guide">the guide</a>.</div><br><div>Sam</div>', needs_link_ctx)
+    check("url discipline: send_resource draft WITH an instructions link passes", ok, reason)
+
+    # a slot link and a booking link are both allowed even though neither is
+    # mentioned in the instructions text
+    slot_ctx = {**base_ctx, "slot_status": "ok", "slot_links": ["https://calendly.com/navreo/call/2026-07-15T09:00"],
+               "slot_labels": ["Wed 9am"]}
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Free on '
+        '<a href="https://calendly.com/navreo/call/2026-07-15T09:00">Wed 9am</a>?</div><br><div>Sam</div>',
+        slot_ctx)
+    check("url discipline: a Calendly slot deep link is always allowed", ok, reason)
+
+    booking_ctx = {**base_ctx, "booking_link": "https://calendly.com/navreo/book-a-call"}
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Feel free to '
+        '<a href="https://calendly.com/navreo/book-a-call">book a call here</a>.</div><br><div>Sam</div>',
+        booking_ctx)
+    check("url discipline: the booking link is always allowed", ok, reason)
+
+    # a URL already present in the thread (e.g. the lead's own prior message)
+    # is allowed even though it's not in the instructions
+    thread_ctx = {**base_ctx, "thread_text": "as discussed at https://partner.example/deck"}
+    ok, reason = setter.lint_draft(
+        '<div>Hi Jane,</div><br><div>Here is '
+        '<a href="https://partner.example/deck">the deck</a> again.</div><br><div>Sam</div>', thread_ctx)
+    check("url discipline: a URL already present in the thread is allowed", ok, reason)
 
 
 # ── 5. decision matrix ───────────────────────────────────────────────────────
@@ -2037,8 +2113,9 @@ def test_grading_relearn_updates_unanswered_cases():
     agent_snapshot = {
         "id": "agent-grading-test", "mode": "autopilot", "enabled": True,
         "allowed_intents": ["send_resource", "pricing", "scheduling"],
-        "instructions": "Flat $500/mo.", "confidence_threshold": 0.9,
-        "resource_link": "https://x.example/r",
+        "instructions": "Flat $500/mo. Resource: The breakdown - https://x.example/r - "
+                        "send when they want more info.",
+        "confidence_threshold": 0.9,
     }
     case_answered = {
         "id": "case-00", "bucket": "b", "inbound": "Sure, send it over.",
@@ -2734,110 +2811,65 @@ def test_memory_delete_never_accepts_share_token():
          status3 == 200, (status3, resp3))
 
 
-# ── multi-resource support (2026-07-14) ──────────────────────────────────────
-# An agent's copy variants can each pitch a different offer/resource, so an
-# agent doc now carries agent["resources"] - a list of {name, link,
-# description, when} - instead of (or alongside, for back-compat) the single
-# resource_name/resource_link/resource_description trio. Every read of an
-# agent's resource(s) goes through _agent_resources().
+# ── instructions-only brain (v3, owner ruling 2026-07-14) ────────────────────
+# Agents have NO resource fields at all any more - the `instructions` text is
+# the single brain, holding pricing, resource links, and plain-English
+# when-to-send-which rules. _extract_urls/_norm_url/_instruction_urls are the
+# new single-source-of-truth reads every URL-aware check goes through.
 
-def test_agent_resources_helper():
-    check("_agent_resources: a non-empty resources list wins outright",
-         setter._agent_resources({"resources": [{"name": "A", "link": "https://x.example/a",
-                                                 "description": "descA", "when": "whenA"}]}) ==
-         [{"name": "A", "link": "https://x.example/a", "description": "descA", "when": "whenA"}])
+def test_extract_urls_helper():
+    check("_extract_urls: a bare URL in prose is found",
+         setter._extract_urls("Resource: https://x.example/guide - send on request.") ==
+         ["https://x.example/guide"])
 
-    check("_agent_resources: legacy trio falls back to a one-item list with when=''",
-         setter._agent_resources({"resource_name": "Guide", "resource_link": "https://x.example/g",
-                                  "resource_description": "A guide"}) ==
-         [{"name": "Guide", "link": "https://x.example/g", "description": "A guide", "when": ""}])
+    check("_extract_urls: an href attribute value is found",
+         setter._extract_urls('<a href="https://x.example/a">click</a>') == ["https://x.example/a"])
 
-    check("_agent_resources: empty resources list still falls back to the legacy trio",
-         setter._agent_resources({"resources": [], "resource_link": "https://x.example/g"}) ==
-         [{"name": "", "link": "https://x.example/g", "description": "", "when": ""}])
+    check("_extract_urls: both an href and a bare URL in the same text are both found, order preserved",
+         setter._extract_urls('<a href="https://x.example/a">click</a> or see https://x.example/b directly') ==
+         ["https://x.example/a", "https://x.example/b"])
 
-    check("_agent_resources: link-only legacy doc still yields one resource",
-         len(setter._agent_resources({"resource_link": "https://x.example/only-link"})) == 1)
+    check("_extract_urls: trailing prose punctuation is stripped",
+         setter._extract_urls("See https://x.example/guide, or https://x.example/other.") ==
+         ["https://x.example/guide", "https://x.example/other"])
 
-    check("_agent_resources: nothing set at all -> empty list",
-         setter._agent_resources({}) == [])
+    check("_extract_urls: a trailing slash is stripped so it compares equal to the same URL without one",
+         setter._extract_urls("https://x.example/guide/") == ["https://x.example/guide"])
 
-    check("_agent_resources: None agent -> empty list", setter._agent_resources(None) == [])
+    check("_extract_urls: de-duplicates case-insensitively (values normalised to lowercase)",
+         setter._extract_urls("https://x.example/Guide and again https://X.EXAMPLE/Guide") ==
+         ["https://x.example/guide"])
 
-
-def test_save_agent_resources_mirror_and_cap():
-    sb, http = fresh_setter()
-
-    # a linkless and a nameless entry must both be stripped before saving
-    doc = {
-        "name": "Multi-resource agent",
-        "resources": [
-            {"name": "Guide A", "link": "https://x.example/a", "description": "descA", "when": "whenA"},
-            {"name": "", "link": "https://x.example/no-name"},
-            {"name": "No link", "link": ""},
-            {"name": "Guide C", "link": "https://x.example/c", "description": "descC", "when": "whenC"},
-        ],
-    }
-    saved = setter._save_agent(doc)
-    check("save: linkless/nameless resource entries are stripped before saving",
-         [r["name"] for r in saved["resources"]] == ["Guide A", "Guide C"], saved["resources"])
-    check("save: resources[0] is mirrored onto the legacy resource_name key",
-         saved.get("resource_name") == "Guide A", saved.get("resource_name"))
-    check("save: resources[0] is mirrored onto the legacy resource_link key",
-         saved.get("resource_link") == "https://x.example/a", saved.get("resource_link"))
-    check("save: resources[0] is mirrored onto the legacy resource_description key",
-         saved.get("resource_description") == "descA", saved.get("resource_description"))
-
-    reloaded = setter._load_agent(saved["id"])
-    check("save: the mirrored legacy trio actually persisted, not just the return value",
-         reloaded.get("resource_name") == "Guide A" and reloaded.get("resource_link") == "https://x.example/a",
-         reloaded)
-
-    # cap at 6 - an 8-resource payload is trimmed on save
-    doc8 = {
-        "name": "Eight resources",
-        "resources": [{"name": f"R{i}", "link": f"https://x.example/r{i}"} for i in range(8)],
-    }
-    saved8 = setter._save_agent(doc8)
-    check("save: resources list is capped at 6", len(saved8["resources"]) == 6, len(saved8["resources"]))
-    check("save: the cap keeps the first 6 entries in order",
-         [r["name"] for r in saved8["resources"]] == [f"R{i}" for i in range(6)], saved8["resources"])
-
-    # a partial re-save (mode-only, no resources key sent) must not wipe an
-    # existing agent's resources - _save_agent's own merge-onto-existing
-    # pattern already covers this for every other field; this is the same
-    # guarantee applied to the new key.
-    resaved = setter._save_agent({"id": saved["id"], "mode": "autopilot"})
-    check("save: a partial re-save with no resources key leaves existing resources untouched",
-         [r["name"] for r in resaved["resources"]] == ["Guide A", "Guide C"], resaved["resources"])
-
-    # a single-resource legacy-style save (only resource_name/link/description,
-    # no resources key at all) must behave exactly as before - no resources
-    # key gets invented on the doc.
-    legacy_doc = {"name": "Legacy single-resource agent", "resource_name": "Old Guide",
-                 "resource_link": "https://x.example/old", "resource_description": "The old one"}
-    legacy_saved = setter._save_agent(legacy_doc)
-    check("save: a legacy single-resource save never gains a resources key",
-         "resources" not in legacy_saved, legacy_saved)
-    check("save: legacy single-resource fields are unchanged by the save",
-         legacy_saved.get("resource_name") == "Old Guide" and
-         legacy_saved.get("resource_link") == "https://x.example/old", legacy_saved)
+    check("_extract_urls: no URLs at all -> empty list", setter._extract_urls("just plain text, no links") == [])
+    check("_extract_urls: empty/None text -> empty list",
+         setter._extract_urls("") == [] and setter._extract_urls(None) == [])
 
 
-AGENT_MULTI_RES = {
-    "id": "agent-multi0001", "mode": "autopilot", "enabled": True,
-    "allowed_intents": ["send_resource", "pricing", "scheduling"],
-    "pricing_notes": "Flat $500/mo, 3 seats included.", "confidence_threshold": 0.9,
-    "resources": [
-        {"name": "AEO/GEO teardown", "link": "https://x.example/aeo", "description": "AEO/GEO breakdown",
-         "when": "Use when the original outreach offered the AEO/GEO teardown."},
-        {"name": "Clay to Claude guide", "link": "https://x.example/clay", "description": "Migration guide",
-         "when": "Use when the original outreach offered the Clay-to-Claude guide."},
-    ],
+def test_instruction_urls_helper():
+    check("_instruction_urls: pulls every URL out of the agent's instructions text",
+         setter._instruction_urls({"instructions": "Pricing: $500/mo. Resource: the guide - "
+                                                    "https://x.example/guide - send on request."}) ==
+         ["https://x.example/guide"])
+    check("_instruction_urls: two distinct links in the instructions both come back",
+         len(setter._instruction_urls({"instructions": "A: https://x.example/a. B: https://x.example/b."})) == 2)
+    check("_instruction_urls: no instructions -> empty list", setter._instruction_urls({}) == [])
+    check("_instruction_urls: None agent -> empty list", setter._instruction_urls(None) == [])
+    check("_instruction_urls: falls back to legacy pricing_notes like _agent_instructions does",
+         setter._instruction_urls({"pricing_notes": "See https://x.example/legacy for details."}) ==
+         ["https://x.example/legacy"])
+
+
+AGENT_TWO_LINKS = {
+    "id": "agent-twolink0001", "mode": "autopilot", "enabled": True,
+    "allowed_intents": ["send_resource", "pricing", "scheduling"], "confidence_threshold": 0.9,
+    "instructions": "Pricing: flat $500/mo, 3 seats included. "
+                    "Resource: AEO/GEO teardown - https://x.example/aeo - send when the outreach "
+                    "offered the AEO/GEO teardown. Clay to Claude guide - https://x.example/clay - "
+                    "send when the outreach offered the Clay-to-Claude guide.",
 }
 
 
-def test_classify_payload_carries_resources_array():
+def test_classify_payload_carries_instructions_no_resources_key():
     sb, http = fresh_setter()
     captured = {}
 
@@ -2850,25 +2882,20 @@ def test_classify_payload_carries_resources_array():
         }
 
     http.classify_fn = classify_fn
-    setter.classify({"subject": "Re: hi", "body": "sure, send it over"}, AGENT_MULTI_RES)
+    setter.classify({"subject": "Re: hi", "body": "sure, send it over"}, AGENT_TWO_LINKS)
 
     payload = json.loads(captured["body"]["messages"][1]["content"])
-    resources = payload.get("agent", {}).get("resources")
-    check("classify payload: carries a resources array (not the old singular fields)",
-         isinstance(resources, list) and len(resources) == 2, resources)
-    check("classify payload: each resource carries name/description/when, no link",
-         resources == [
-             {"name": "AEO/GEO teardown", "description": "AEO/GEO breakdown",
-              "when": "Use when the original outreach offered the AEO/GEO teardown."},
-             {"name": "Clay to Claude guide", "description": "Migration guide",
-              "when": "Use when the original outreach offered the Clay-to-Claude guide."},
-         ], resources)
-    check("classify payload: no legacy resource_name/resource_description keys leak through",
+    check("classify payload: agent.instructions carries the FULL instructions text (pricing rides on it)",
+         payload.get("agent", {}).get("instructions") == AGENT_TWO_LINKS["instructions"],
+         payload.get("agent"))
+    check("classify payload: no resources array at all any more",
+         "resources" not in payload.get("agent", {}), payload.get("agent"))
+    check("classify payload: no legacy resource_name/resource_description keys either",
          "resource_name" not in payload["agent"] and "resource_description" not in payload["agent"],
          payload["agent"])
 
 
-def test_draft_payload_carries_resources_with_when_rules():
+def test_draft_payload_carries_instructions_no_resources_key():
     sb, http = fresh_setter()
     captured = {}
 
@@ -2878,93 +2905,52 @@ def test_draft_payload_carries_resources_with_when_rules():
 
     http.draft_fn = draft_fn
     classification = {"primary_intent": "send_resource", "all_intents": ["send_resource"], "wants": "wants it"}
-    setter.draft_reply({"first_name": "There", "subject": "Re: hi", "body": "sure"}, AGENT_MULTI_RES,
+    setter.draft_reply({"first_name": "There", "subject": "Re: hi", "body": "sure"}, AGENT_TWO_LINKS,
                        classification, [], "not_configured", "Bjion")
 
     payload = json.loads(captured["body"]["messages"][1]["content"])
-    resources = payload.get("resources")
-    check("draft payload: carries the full resources list", isinstance(resources, list) and len(resources) == 2,
-         resources)
-    check("draft payload: each resource carries name/link/description/when",
-         resources == [
-             {"name": "AEO/GEO teardown", "link": "https://x.example/aeo", "description": "AEO/GEO breakdown",
-              "when": "Use when the original outreach offered the AEO/GEO teardown."},
-             {"name": "Clay to Claude guide", "link": "https://x.example/clay", "description": "Migration guide",
-              "when": "Use when the original outreach offered the Clay-to-Claude guide."},
-         ], resources)
-    check("draft payload: legacy resource_name/resource_link/resource_description still present too",
-         payload.get("resource_name") == "" and payload.get("resource_link") == "", payload)
+    check("draft payload: instructions carries the full text",
+         payload.get("instructions") == AGENT_TWO_LINKS["instructions"], payload.get("instructions"))
+    check("draft payload: no resources key", "resources" not in payload, payload)
+    check("draft payload: no legacy resource_name/resource_link/resource_description keys",
+         "resource_name" not in payload and "resource_link" not in payload and
+         "resource_description" not in payload, payload)
 
 
-def test_lint_multi_resource_links():
-    ctx = {"subject": "Re: hi", "first_name": "Jane", "needs_resource_link": True,
-          "resource_links": ["https://x.example/a", "https://x.example/b"],
-          "slot_status": "not_configured", "slot_links": [], "slot_labels": [],
-          "instructions": "", "thread_text": ""}
-
-    html_a = ('<div>Hi Jane,</div><br><div><a href="https://x.example/a">Here is the breakdown</a></div><br>'
-             '<div>Thanks.</div>')
-    ok, reason = setter.lint_draft(html_a, ctx)
-    check("lint multi-resource: exactly one known link (A) passes", ok, reason)
-
-    html_b = ('<div>Hi Jane,</div><br><div><a href="https://x.example/b">Here is the guide</a></div><br>'
-             '<div>Thanks.</div>')
-    ok, reason = setter.lint_draft(html_b, ctx)
-    check("lint multi-resource: exactly one known link (B) also passes", ok, reason)
-
-    html_none = '<div>Hi Jane,</div><br><div>Thanks for reaching out.</div><br><div>More soon.</div>'
-    ok, reason = setter.lint_draft(html_none, ctx)
-    check("lint multi-resource: no known link fails with the plain-English reason",
-         not ok and reason == "The draft is missing a resource link.", reason)
-
-    html_both = ('<div>Hi Jane,</div><br><div><a href="https://x.example/a">Here is A</a></div><br>'
-                '<div><a href="https://x.example/b">Here is B</a></div>')
-    ok, reason = setter.lint_draft(html_both, ctx)
-    check("lint multi-resource: two distinct known links fails - a person should pick",
-         not ok and reason == "The draft sends more than one resource, a person should pick.", reason)
-
-    # back-compat: a caller that still only passes the legacy singular
-    # resource_link (no resource_links key at all) must keep working exactly
-    # as before - the old ctx shape is folded into the same check.
-    legacy_ctx = {**ctx, "resource_links": None, "resource_link": "https://x.example/a"}
-    ok, reason = setter.lint_draft(html_a, legacy_ctx)
-    check("lint multi-resource: legacy singular resource_link key alone still passes", ok, reason)
-    ok, reason = setter.lint_draft(html_none, legacy_ctx)
-    check("lint multi-resource: legacy singular resource_link key alone still fails when absent", not ok, reason)
-
-
-def test_decide_multi_resource_ambiguity_gate():
+def test_decide_gate_6b_instruction_link_ambiguity():
+    """Gate 6b (v3): send_resource + the instructions offering 2+ distinct
+    links + no original outreach loaded -> a person should pick."""
     cls_send = _cls("send_resource")
 
-    d, r = setter.decide(cls_send, AGENT_MULTI_RES, {**CTX_ALL_GOOD, "first_outbound_present": False})
-    check("decide: 2+ resources + send_resource + no original outreach -> review", d == "review", r)
-    check("decide: exact plain-English reason for the multi-resource ambiguity gate",
-         r == ("Held for review: this agent has several resources and the original outreach couldn't "
-              "be loaded, so a person should pick which one to send."), r)
+    d, r = setter.decide(cls_send, AGENT_TWO_LINKS, {**CTX_ALL_GOOD, "first_outbound_present": False})
+    check("decide: 2-URL instructions + send_resource + no original outreach -> review", d == "review", r)
+    check("decide: exact plain-English reason for the instruction-link ambiguity gate",
+         r == ("Held for review: the instructions offer more than one link and the original outreach "
+              "couldn't be loaded, so a person should pick."), r)
 
-    d, r = setter.decide(cls_send, AGENT_MULTI_RES, {**CTX_ALL_GOOD, "first_outbound_present": True})
-    check("decide: 2+ resources + send_resource + original outreach present -> auto_send", d == "auto_send", r)
+    d, r = setter.decide(cls_send, AGENT_TWO_LINKS, {**CTX_ALL_GOOD, "first_outbound_present": True})
+    check("decide: 2-URL instructions + send_resource + original outreach present -> auto_send",
+         d == "auto_send", r)
 
-    # the gate is scoped to send_resource - a pricing-only ask on the same
-    # multi-resource agent is unaffected by a missing original outreach.
-    d, r = setter.decide(_cls("pricing"), AGENT_MULTI_RES, {**CTX_ALL_GOOD, "first_outbound_present": False})
-    check("decide: multi-resource gate never fires when send_resource isn't in play", d == "auto_send", r)
+    # scoped to send_resource - a pricing-only ask on the same two-link agent
+    # is unaffected by a missing original outreach.
+    d, r = setter.decide(_cls("pricing"), AGENT_TWO_LINKS, {**CTX_ALL_GOOD, "first_outbound_present": False})
+    check("decide: gate never fires when send_resource isn't in play", d == "auto_send", r)
 
-    # a single-resource agent (the pre-existing shape) is never held by this
-    # gate, first_outbound_present or not - existing single-resource agents
-    # and fixtures must see byte-identical decide() behaviour.
+    # a single-URL (or no-URL) agent's instructions are never held by this
+    # gate, first_outbound_present or not.
     d, r = setter.decide(cls_send, AGENT_AUTO, {**CTX_ALL_GOOD, "first_outbound_present": False})
-    check("decide: single-resource (legacy) agent is unaffected by the missing-outreach gate", d == "auto_send", r)
+    check("decide: single-URL (or no-URL) instructions are unaffected by the missing-outreach gate",
+         d == "auto_send", r)
 
-    single_res_agent = {**AGENT_AUTO, "resources": [{"name": "Only one", "link": "https://x.example/only",
-                                                     "description": "", "when": ""}]}
-    d, r = setter.decide(cls_send, single_res_agent, {**CTX_ALL_GOOD, "first_outbound_present": False})
-    check("decide: an agent with exactly one resources[] entry is also unaffected", d == "auto_send", r)
+    single_link_agent = {**AGENT_AUTO, "instructions": "Resource: https://x.example/only - send on request."}
+    d, r = setter.decide(cls_send, single_link_agent, {**CTX_ALL_GOOD, "first_outbound_present": False})
+    check("decide: an agent whose instructions carry exactly one URL is also unaffected", d == "auto_send", r)
 
     # default (key entirely absent) is treated as falsy, same as every other
     # ctx.get(...) boolean gate in decide()
     ctx_no_key = {k: v for k, v in CTX_ALL_GOOD.items() if k != "first_outbound_present"}
-    d, r = setter.decide(cls_send, AGENT_MULTI_RES, ctx_no_key)
+    d, r = setter.decide(cls_send, AGENT_TWO_LINKS, ctx_no_key)
     check("decide: first_outbound_present absent entirely defaults to falsy -> review", d == "review", r)
 
 
@@ -2975,6 +2961,7 @@ if __name__ == "__main__":
     test_guess_timezone()
     test_pick_slots()
     test_lint_draft()
+    test_lint_draft_url_discipline()
     test_decide_matrix()
     test_fixtures()
     test_idempotent_intake()
@@ -3038,12 +3025,11 @@ if __name__ == "__main__":
     test_training_generate_share_unanswered_cap_is_tighter_than_owner()
     test_training_answer_share_forces_agent_rejects_mismatch_and_response_stays_scoped()
     test_memory_delete_never_accepts_share_token()
-    test_agent_resources_helper()
-    test_save_agent_resources_mirror_and_cap()
-    test_classify_payload_carries_resources_array()
-    test_draft_payload_carries_resources_with_when_rules()
-    test_lint_multi_resource_links()
-    test_decide_multi_resource_ambiguity_gate()
+    test_extract_urls_helper()
+    test_instruction_urls_helper()
+    test_classify_payload_carries_instructions_no_resources_key()
+    test_draft_payload_carries_instructions_no_resources_key()
+    test_decide_gate_6b_instruction_link_ambiguity()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

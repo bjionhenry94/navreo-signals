@@ -85,28 +85,37 @@ def _booking_link(agent: dict) -> str:
     return calendly.rstrip("/") if calendly else ""
 
 
-def _agent_resources(agent: dict) -> list:
-    """Every resource this agent may offer - the single source of truth every
-    other read of an agent's resource(s) goes through. Returns agent["resources"]
-    (a list of {name, link, description, when}) when it's a non-empty list;
-    otherwise falls back to the legacy single resource_name/resource_link/
-    resource_description trio as a one-item list (when="" - a pre-multi-resource
-    doc never recorded a send rule, so there's nothing to fall back to there);
-    otherwise an empty list."""
-    agent = agent or {}
-    resources = agent.get("resources")
-    if isinstance(resources, list) and resources:
-        return resources
-    name = str(agent.get("resource_name") or "").strip()
-    link = str(agent.get("resource_link") or "").strip()
-    if name or link:
-        return [{
-            "name": name,
-            "link": link,
-            "description": str(agent.get("resource_description") or "").strip(),
-            "when": "",
-        }]
-    return []
+_URL_RE = re.compile(r'https?://[^\s"\'<>]+', re.IGNORECASE)
+
+
+def _norm_url(url: str) -> str:
+    """Lowercase, trailing-slash/punctuation-stripped form of a URL, so the
+    same link written with or without a trailing slash, or with trailing
+    prose punctuation stuck to it, still compares equal."""
+    return str(url or "").strip().rstrip(".,;:!?)]}\"'/").lower()
+
+
+def _extract_urls(text: str) -> list:
+    """Every distinct http(s) URL in text, normalised. One regex catches both
+    href="..." attributes and bare URLs in plain text (an href value is just
+    quoted text, so the same pattern matches it too). Order preserved,
+    de-duplicated case-insensitively."""
+    seen = []
+    seen_set = set()
+    for m in _URL_RE.findall(text or ""):
+        norm = _norm_url(m)
+        if norm and norm not in seen_set:
+            seen_set.add(norm)
+            seen.append(norm)
+    return seen
+
+
+def _instruction_urls(agent: dict) -> list:
+    """Every distinct http(s) URL the agent's instructions mention - the v3
+    single-source-of-truth read used by lint_draft's URL allow-list and by
+    decide()'s gate 6b (send_resource + 2+ links + no original outreach ->
+    a person should pick)."""
+    return _extract_urls(_agent_instructions(agent))
 
 
 INTENTS = [
@@ -552,22 +561,25 @@ def lint_draft(html: str, ctx: dict):
     # found in the reply's signature instead.
     if first and first.lower() != "there" and first.lower() not in text.lower():
         return False, "The draft doesn't greet the lead by their first name."
-    if ctx.get("needs_resource_link"):
-        # Multi-resource support: ctx["resource_links"] is every link this
-        # agent knows about (the legacy singular ctx["resource_link"] is
-        # folded in too, for back-compat with any caller/fixture that still
-        # only passes the old key). A pass needs AT LEAST ONE of them in the
-        # text; MORE THAN ONE distinct known link means the drafter picked
-        # two resources instead of one, which needs a person to sort out.
-        known_links = list(ctx.get("resource_links") or [])
-        legacy_link = ctx.get("resource_link") or ""
-        if legacy_link and legacy_link not in known_links:
-            known_links.append(legacy_link)
-        found = {link for link in known_links if link and link in text}
-        if not found:
-            return False, "The draft is missing a resource link."
-        if len(found) > 1:
-            return False, "The draft sends more than one resource, a person should pick."
+    # URL discipline (instructions-only brain, v3): the ONLY links a draft may
+    # ever contain are ones already known to the pipeline - every URL the
+    # agent's instructions mention, the call-time slot links (Calendly deep
+    # links count as slot links), the booking link, or a URL already present
+    # in the thread. Anything else is an invented or wrong link.
+    instruction_urls = set(_extract_urls(str(ctx.get("instructions") or "")))
+    allowed_urls = set(instruction_urls)
+    allowed_urls.update(_norm_url(u) for u in (ctx.get("slot_links") or []) if u)
+    booking = str(ctx.get("booking_link") or "").strip()
+    if booking:
+        allowed_urls.add(_norm_url(booking))
+    allowed_urls.update(_extract_urls(str(ctx.get("thread_text") or "")))
+
+    draft_urls = _extract_urls(text)
+    for u in draft_urls:
+        if u not in allowed_urls:
+            return False, "The draft contains a link that isn't in the instructions."
+    if ctx.get("needs_resource_link") and not (set(draft_urls) & instruction_urls):
+        return False, "The draft is missing the resource link from the instructions."
     if ctx.get("slot_status") == "ok":
         for link in (ctx.get("slot_links") or []):
             if link and link not in text:
@@ -690,13 +702,14 @@ def decide(classification: dict, agent: dict, ctx: dict):
             return "review", ("Held for review: this lead has replied before and the ask "
                               "isn't simple enough to answer alone.")
 
-    # 6b. multi-resource ambiguity: this agent knows more than one resource
-    # and send_resource is in play, but the original outreach (the offer the
+    # 6b. multi-link ambiguity: the instructions offer more than one link and
+    # send_resource is in play, but the original outreach (the offer the
     # lead's reply is actually answering) couldn't be loaded - there's no
-    # reliable way to tell WHICH resource they mean, so a person picks.
-    if "send_resource" in all_intents and len(_agent_resources(agent)) >= 2 and not ctx.get("first_outbound_present"):
-        return "review", ("Held for review: this agent has several resources and the original "
-                          "outreach couldn't be loaded, so a person should pick which one to send.")
+    # reliable way to tell WHICH link they mean, so a person picks.
+    if ("send_resource" in all_intents and len(_instruction_urls(agent)) >= 2
+            and not ctx.get("first_outbound_present")):
+        return "review", ("Held for review: the instructions offer more than one link and the "
+                          "original outreach couldn't be loaded, so a person should pick.")
 
     # 7. slots + timezone must both be ready. A guessed timezone is fine for
     # showing a draft, but auto-sending needs to be CONFIDENT of the hour, or
@@ -755,10 +768,10 @@ CLASSIFY_SCHEMA = {
 CLASSIFY_SYSTEM = """You classify one inbound cold-email reply for an appointment-setter agent that can ONLY do three things: send one of the agent's fixed resources, quote fixed pricing text verbatim, or propose two fixed call-time slots plus a booking link. Nothing else is answerable without a human.
 
 Intents (pick exactly one primary_intent; list every intent that genuinely applies in all_intents):
-- send_resource: the lead wants more info, wants the resource, or gave an unqualified yes ("sure", "send it", "interested", "know more"). The resource IS the "more info".
+- send_resource: the lead wants more info or the resource/link the agent's instructions provide, or gave an unqualified yes ("sure", "send it", "interested", "know more"). The resource IS the "more info".
 - pricing: a pricing question, ONLY when the agent's instructions (given to you below) literally already contains the answer. If instructions is empty, or doesn't cover what's specifically asked, this is objection_or_question instead, not pricing. A plain, unconditional "what's the price?" / "how much does it cost?" with non-empty instructions IS pricing with simple_ask=true - quoting the instructions verbatim answers it fully.
 - scheduling: wants to book a call, gave availability, or asked to schedule, AND a plain two-slot-plus-booking-link answer would be a faithful reply. Scheduling is a simple ask ONLY when the lead is flexible about timing (several days offered, "sometime next week", "send me some options" with no date named). If they name ONE specific day, date, or time ("Friday after 2:30", "the 24th", "next Thursday"), or ask for TODAY/tonight/"earlier"/"asap", set simple_ask=false - our two fixed slots may not match what they asked for.
-- bespoke_request: wants something made specifically for them - a Loom or video recorded for them, an audit or breakdown OF THEIR company or website, anything "specific to us". EXCEPTION: if any of the agent's resources below already IS that video/audit, sending it is send_resource, not bespoke_request.
+- bespoke_request: wants something made specifically for them - a Loom or video recorded for them, an audit or breakdown OF THEIR company or website, anything "specific to us". EXCEPTION: if the agent's instructions say the offered resource already IS that video/audit, sending it is send_resource, not bespoke_request.
 - objection_or_question: needs judgement or nuance - a direct question not answerable purely from instructions, a fit/commission/industry question, "where are you based", a conditional commitment ("if X then we'd try it" - a CONDITION anywhere always means simple_ask=false, even when instructions seems to answer it), or ANY report that a link, video, or resource did not work or arrive ("link didn't work", "couldn't watch the video", "can you send it again?" after a failure) - something may genuinely be broken, so a person must check before anything is re-sent.
 - not_interested: a plain no or decline, not hostile.
 - unsubscribe_dnc: asks to be removed, to stop contacting them, to cease, or is hostile/legal in tone (lawyer, GDPR, complaint). ALWAYS this intent even if the message is short and looks polite, e.g. "kindly cease" or "remove me" - never send_resource just because it reads politely.
@@ -790,7 +803,7 @@ Never invent facts. Examples of the exact reasoning to apply (do not copy their 
 - "sure!" -> send_resource, simple_ask=true, high confidence.
 - "Kindly cease" -> unsubscribe_dnc, simple_ask=false, even though it is short and polite.
 - "No thanks, Bjion." -> not_interested.
-- "Can you share the video?" -> send_resource ONLY if one of the agent's resources already is that video; otherwise bespoke_request.
+- "Can you share the video?" -> send_resource ONLY if the agent's instructions say the offered resource already is that video; otherwise bespoke_request.
 - "Could you record a quick Loom walking through how this would work for our agency specifically?" -> bespoke_request, simple_ask=false.
 - "So you work on commission?" -> objection_or_question, UNLESS instructions literally answers commission structure, then pricing.
 - "Your message ... couldn't be delivered ... spam block list" -> bounce_or_system.
@@ -816,11 +829,10 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
         # a bare "Yes" against what was actually offered
         "last_outbound": (reply.get("last_outbound") or "")[:800],
         "agent": {
-            # Classification never needs the link, just enough to tell what
-            # each resource is and whether it already IS the thing being
-            # asked for (see the bespoke_request exception above).
-            "resources": [{"name": r.get("name") or "", "description": r.get("description") or "",
-                          "when": r.get("when") or ""} for r in _agent_resources(agent)],
+            # The single brain: pricing, resource links, and when-to-send
+            # rules all live in the instructions text, passed in full so the
+            # model can answer pricing and judge the bespoke_request
+            # exception (see CLASSIFY_SYSTEM) from it directly.
             "instructions": _agent_instructions(agent),
             "allowed_intents": agent.get("allowed_intents") or [],
         },
@@ -868,7 +880,7 @@ Rules:
 - No emoji.
 - Plain English, under 150 words total. The team's replies are short - do not pad.
 - Only include the resource link/anchor when send_resource is one of the intents to answer.
-- The agent may know several resources. Pick EXACTLY ONE - the one whose "when" rule matches the original_outreach and what the lead is asking for. Quote its link exactly. If only one resource exists, use it. Never send two resources in one reply, never invent a link.
+- Resource links and when to send each one are in the instructions. When the lead should get a link, use the exact link from the instructions that matches the original_outreach and their ask. Never invent a link, never paste a link the instructions don't contain.
 - Anchor text reads like the examples above - natural, first-person, never the bare resource title.
 - When the intent is bespoke_request, objection_or_question, or wrong_person, the ack paragraph must acknowledge the lead's SPECIFIC ask honestly (e.g. "Happy to put a video together for you.") - never a generic "Of course." that ignores what they asked for, and never a promise of a date or deadline for the bespoke work.
 - Never say you are sharing, attaching, or sending something the draft does not actually contain. If the asked-for asset is not the agent's fixed resource, acknowledge the ask ("Happy to get that over to you.") without implying it is included in this email.
@@ -904,17 +916,9 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "wants": classification.get("wants") or "",
         "primary_intent": classification.get("primary_intent") or "",
         "all_intents": classification.get("all_intents") or [],
-        "resource_name": agent.get("resource_name") or "",
-        "resource_link": agent.get("resource_link") or "",
-        "resource_description": agent.get("resource_description") or "",
-        # Multi-resource support: the agent's full resource list, each with
-        # its own "when" send-rule. resource_name/link/description above are
-        # kept for back-compat (a single-resource agent's legacy payload
-        # shape is unchanged); a multi-resource agent's drafter picks from
-        # this list instead - see the new DRAFT_SYSTEM rule below.
-        "resources": [{"name": r.get("name") or "", "link": r.get("link") or "",
-                      "description": r.get("description") or "", "when": r.get("when") or ""}
-                     for r in _agent_resources(agent)],
+        # The single brain: pricing, resource links, and when-to-send-which
+        # rules all live in the instructions text (see the DRAFT_SYSTEM rule
+        # above), passed in full - never a separate resource/resources field.
         "instructions": _agent_instructions(agent),
         "booking_link": _booking_link(agent),
         "slots": slots or [],
@@ -1347,33 +1351,12 @@ def _save_agent(doc: dict) -> dict:
         stamps.setdefault(str(cid), now)
     doc["campaign_assigned_at"] = {k: v for k, v in stamps.items()
                                    if k in {str(c) for c in (doc.get("campaign_ids") or [])}}
-    # Multi-resource support: normalise + cap the resources list (an entry
-    # missing a name or a link can never actually be sent, so it's dropped
-    # before saving), then mirror resources[0] onto the legacy
-    # resource_name/resource_link/resource_description trio - generate_grading.py,
-    # older code paths, and the agent-card meta line all still read those keys
-    # directly, so a multi-resource save must keep them populated too.
-    raw_resources = doc.get("resources")
-    if isinstance(raw_resources, list):
-        cleaned = []
-        for r in raw_resources:
-            r = r or {}
-            name = str(r.get("name") or "").strip()
-            link = str(r.get("link") or "").strip()
-            if not name or not link:
-                continue
-            cleaned.append({
-                "name": name, "link": link,
-                "description": str(r.get("description") or "").strip(),
-                "when": str(r.get("when") or "").strip(),
-            })
-            if len(cleaned) >= 6:
-                break
-        doc["resources"] = cleaned
-        if cleaned:
-            doc["resource_name"] = cleaned[0]["name"]
-            doc["resource_link"] = cleaned[0]["link"]
-            doc["resource_description"] = cleaned[0]["description"]
+    # v3 simplification (owner ruling 2026-07-14): agents have no resource
+    # fields at all - instructions is the single brain. A doc saved before
+    # this ruling may still CARRY legacy resources/resource_name/resource_link/
+    # resource_description keys; they are left exactly as given (never
+    # normalised, capped, or mirrored here) and every read of an agent
+    # elsewhere in this file ignores them.
     if _SB:
         _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": doc["id"], "doc": doc},
            prefer="resolution=merge-duplicates,return=minimal")
@@ -1791,11 +1774,10 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         needs_resource_link = "send_resource" in (classification.get("all_intents") or [])
         ctx_lint = {
             "subject": draft_subject, "first_name": row["lead_first_name"],
-            "needs_resource_link": needs_resource_link, "resource_link": agent.get("resource_link") or "",
-            "resource_links": [r.get("link") for r in _agent_resources(agent)],
+            "needs_resource_link": needs_resource_link,
             "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
             "slot_labels": [s.get("label") for s in slots],
-            "instructions": _agent_instructions(agent),
+            "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
             "thread_text": f"{body_text} {thread_text}",
         }
         lint_ok, lint_reason = lint_draft(draft_body, ctx_lint)
@@ -2702,11 +2684,10 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": case.get("lead_first_name") or "",
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
-                    "resource_link": agent_snapshot.get("resource_link") or "",
-                    "resource_links": [r.get("link") for r in _agent_resources(agent_snapshot)],
                     "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                     "slot_labels": [s.get("label") for s in slots],
-                    "instructions": _agent_instructions(agent_snapshot), "thread_text": inbound,
+                    "instructions": _agent_instructions(agent_snapshot),
+                    "booking_link": _booking_link(agent_snapshot), "thread_text": inbound,
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
@@ -3195,11 +3176,10 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": "",
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
-                    "resource_link": agent.get("resource_link") or "",
-                    "resource_links": [r.get("link") for r in _agent_resources(agent)],
                     "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                     "slot_labels": [s.get("label") for s in slots],
-                    "instructions": _agent_instructions(agent), "thread_text": body,
+                    "instructions": _agent_instructions(agent),
+                    "booking_link": _booking_link(agent), "thread_text": body,
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
