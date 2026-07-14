@@ -56,6 +56,11 @@ GRADING_ID = "__grading__"
 SMARTLEAD_BASE = "https://server.smartlead.ai/api/v1"
 OPENAI_MODEL = "gpt-5-mini"
 
+# Only these Smartlead/Make categories may enter setter_queue (ruling
+# 2026-07-14) - everything else (Call Booked, Contact Forward, Contact In
+# Future, all negatives, uncategorised) stays out of both intake paths.
+CORE_FOUR = frozenset({"Interested", "Information Request", "Meeting Request", "positive-re-reply"})
+
 # Internal search window for Calendly availability, in working days. v2:
 # no longer a settings-drawer field - the slot rule is fixed (earliest
 # qualifying slots inside work hours), so this is just how far ahead the
@@ -1880,6 +1885,14 @@ def run_poll() -> dict:
             mid = str(r.get("smartlead_message_id") or r.get("message_id") or r.get("id") or "")
             if not cid or not email or not mid:
                 continue
+            # Positive-only intake gate (ruling 2026-07-14): checked before the
+            # 15-per-tick budget is spent, so a flood of non-positive replies
+            # never crowds out the ones that actually belong in the queue.
+            # Uncategorised (None/empty) falls out here too - the 48h poll
+            # window means it gets retried on a later tick once Make fills
+            # replies.category in.
+            if r.get("category") not in CORE_FOUR:
+                continue
             agent = _agent_for_campaign(cid, require_enabled=True, agents=enabled_agents)
             if not agent:
                 continue
@@ -1967,6 +1980,27 @@ def handle_inbound(payload: dict) -> dict:
         mid = str(rm.get("message_id") or payload.get("message_id") or "")
         if not mid:
             return {"ignored": "no message id in payload - the poll sweep will pick this reply up"}
+        # Positive-only intake gate (ruling 2026-07-14): payload["lead_category"]
+        # is Smartlead's own label, NOT the Make categoriser's verdict - the
+        # verified source is replies.category, so look that row up by the same
+        # key the poll matches on (workspace/campaign/message id) instead of
+        # trusting the webhook's own label. A fresh reply's row is often still
+        # uncategorised at webhook time (~15min Make lag); a lookup exception
+        # is treated exactly like "not found yet" so a transient Supabase
+        # hiccup never blocks it - either way the poll sweep retries later.
+        cat = None
+        try:
+            if _SB:
+                rows = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&smartlead_campaign_id=eq.{cid}"
+                                  f"&smartlead_message_id=eq.{mid}&select=category&limit=1")
+                if isinstance(rows, list) and rows:
+                    cat = (rows[0] or {}).get("category")
+        except Exception:  # noqa: BLE001 - a lookup hiccup is left for the poll, not a crash
+            cat = None
+        if not cat:
+            return {"ignored": "awaiting categorisation - the poll sweep will pick this reply up"}
+        if cat not in CORE_FOUR:
+            return {"ignored": f"category '{cat}' is not a positive category"}
         reply = {
             "workspace": WORKSPACE, "campaign_id": cid, "email": email,
             "first_name": lead.get("first_name") or payload.get("to_first_name"),
@@ -1974,7 +2008,7 @@ def handle_inbound(payload: dict) -> dict:
             "subject": payload.get("subject") or rm.get("subject") or "",
             "body": body,
             "replied_at": rm.get("time") or payload.get("event_timestamp") or None,
-            "message_id": mid, "category": payload.get("lead_category") or None, "is_test": False,
+            "message_id": mid, "category": cat, "is_test": False,
         }
         row = process_reply(reply, agent, _load_settings())
         return {"processed": True, "status": (row or {}).get("status"), "id": (row or {}).get("id")}

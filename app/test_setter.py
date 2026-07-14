@@ -50,6 +50,7 @@ from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import setter  # noqa: E402
+import setter_backfill  # noqa: E402 - one-time backfill script; see its own module docstring
 
 
 FIXTURES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setter_fixtures.json")
@@ -1195,7 +1196,7 @@ def test_poll_batching_cap():
             "workspace": "navreo", "smartlead_campaign_id": 444, "email": f"lead{i}@example.com",
             "first_name": "Lead", "last_name": str(i), "company_domain": "example.com",
             "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
-            "message_id": f"m-{i}", "category": None,
+            "message_id": f"m-{i}", "category": "Interested",  # core-four, or the intake gate would skip all 20
         })
 
     summary = setter.run_poll()
@@ -1239,12 +1240,12 @@ def test_run_poll_assigned_at_filter():
     sb.replies.append({
         "workspace": "navreo", "smartlead_campaign_id": 700, "email": "old@example.com",
         "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-01T00:00:00+00:00",
-        "smartlead_message_id": "old-1", "category": None,
+        "smartlead_message_id": "old-1", "category": "Interested",  # core-four so assigned_at is the only gate at play
     })
     sb.replies.append({
         "workspace": "navreo", "smartlead_campaign_id": 700, "email": "new@example.com",
         "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
-        "smartlead_message_id": "new-1", "category": None,
+        "smartlead_message_id": "new-1", "category": "Interested",
     })
 
     summary = setter.run_poll()
@@ -1672,6 +1673,11 @@ def test_handle_inbound_field_mapping():
     sb, http = fresh_setter()
     agent = {"id": "agent-wh0001", "mode": "draft_only", "enabled": True, "campaign_ids": [777]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    # handle_inbound now looks the reply up in `replies` for the verified
+    # Make category rather than trusting the webhook's own lead_category -
+    # this row is what makes the gate pass so field mapping can be checked.
+    sb.replies.append({"workspace": "navreo", "smartlead_campaign_id": 777,
+                       "smartlead_message_id": "wh-msg-1", "category": "Interested"})
 
     captured = {}
     real_process_reply = setter.process_reply
@@ -3562,6 +3568,205 @@ def test_decide_gate_6b_instruction_link_ambiguity():
     check("decide: first_outbound_present absent entirely defaults to falsy -> review", d == "review", r)
 
 
+# ── positive-only intake gate (CORE_FOUR) ───────────────────────────────────
+# ruling 2026-07-14: only Interested / Information Request / Meeting Request /
+# positive-re-reply may ever reach process_reply, via either intake path.
+
+def test_core_four_categories_enter_queue_both_paths():
+    real_process_reply = setter.process_reply
+    try:
+        for cat in sorted(setter.CORE_FOUR):
+            # -- run_poll path --
+            sb, http = fresh_setter()
+            agent = {"id": "agent-core-poll", "mode": "draft_only", "enabled": True, "campaign_ids": [9001]}
+            sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+            sb.replies.append({
+                "workspace": "navreo", "smartlead_campaign_id": 9001, "email": "lead@example.com",
+                "subject": "Re: hi", "reply_body": "sounds good", "replied_at": "2026-07-10T00:00:00+00:00",
+                "smartlead_message_id": "core-poll-1", "category": cat,
+            })
+            captured = {}
+            setter.process_reply = lambda reply, agent_, settings_, _c=captured: (
+                _c.__setitem__("reply", reply) or {"status": "needs_review", "id": 1})
+            summary = setter.run_poll()
+            check(f"run_poll: category {cat!r} reaches process_reply",
+                 captured.get("reply", {}).get("category") == cat, (cat, summary, captured))
+
+            # -- handle_inbound path --
+            sb2, http2 = fresh_setter()
+            agent2 = {"id": "agent-core-wh", "mode": "draft_only", "enabled": True, "campaign_ids": [9002]}
+            sb2.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+            sb2.replies.append({"workspace": "navreo", "smartlead_campaign_id": 9002,
+                                "smartlead_message_id": "core-wh-1", "category": cat})
+            captured2 = {}
+            setter.process_reply = lambda reply, agent_, settings_, _c=captured2: (
+                _c.__setitem__("reply", reply) or {"status": "needs_review", "id": 2})
+            resp = setter.handle_inbound({
+                "event_type": "EMAIL_REPLY", "campaign_id": 9002, "sl_lead_email": "lead2@example.com",
+                "reply_message": {"text": "sounds good", "message_id": "core-wh-1",
+                                  "time": "2026-07-10T00:00:00+00:00"},
+            })
+            check(f"handle_inbound: category {cat!r} reaches process_reply",
+                 captured2.get("reply", {}).get("category") == cat, (cat, resp, captured2))
+    finally:
+        setter.process_reply = real_process_reply
+
+
+def test_non_core_categories_stay_out_both_paths():
+    non_core = ["Call Booked", "Contact Forward", "Contact In Future", "Not Interested", None]
+    real_process_reply = setter.process_reply
+    try:
+        for cat in non_core:
+            # -- run_poll path --
+            sb, http = fresh_setter()
+            agent = {"id": "agent-noncore-poll", "mode": "draft_only", "enabled": True, "campaign_ids": [9101]}
+            sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+            sb.replies.append({
+                "workspace": "navreo", "smartlead_campaign_id": 9101, "email": "lead@example.com",
+                "subject": "Re: hi", "reply_body": "no thanks", "replied_at": "2026-07-10T00:00:00+00:00",
+                "smartlead_message_id": "noncore-poll-1", "category": cat,
+            })
+            called = {"n": 0}
+            setter.process_reply = lambda reply, agent_, settings_, _c=called: (
+                _c.__setitem__("n", _c["n"] + 1) or {"status": "needs_review", "id": 1})
+            summary = setter.run_poll()
+            check(f"run_poll: category {cat!r} never reaches process_reply, no queue row",
+                 called["n"] == 0 and len(sb.queue) == 0, (cat, summary, sb.queue))
+
+            # -- handle_inbound path --
+            sb2, http2 = fresh_setter()
+            agent2 = {"id": "agent-noncore-wh", "mode": "draft_only", "enabled": True, "campaign_ids": [9102]}
+            sb2.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+            if cat is not None:
+                # None/uncategorised means the replies row itself is missing or
+                # blank category - nothing to seed. A real (but non-core) label
+                # does have a replies row, just one the gate must still reject.
+                sb2.replies.append({"workspace": "navreo", "smartlead_campaign_id": 9102,
+                                    "smartlead_message_id": "noncore-wh-1", "category": cat})
+            called2 = {"n": 0}
+            setter.process_reply = lambda reply, agent_, settings_, _c=called2: (
+                _c.__setitem__("n", _c["n"] + 1) or {"status": "needs_review", "id": 2})
+            resp = setter.handle_inbound({
+                "event_type": "EMAIL_REPLY", "campaign_id": 9102, "sl_lead_email": "lead2@example.com",
+                "reply_message": {"text": "no thanks", "message_id": "noncore-wh-1",
+                                  "time": "2026-07-10T00:00:00+00:00"},
+            })
+            check(f"handle_inbound: category {cat!r} never reaches process_reply, ignored instead",
+                 called2["n"] == 0 and "ignored" in resp and len(sb2.queue) == 0, (cat, resp, sb2.queue))
+    finally:
+        setter.process_reply = real_process_reply
+
+
+def test_handle_inbound_uncategorised_then_poll_catches_up():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-catchup", "mode": "draft_only", "enabled": True, "campaign_ids": [9201]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    payload = {"event_type": "EMAIL_REPLY", "campaign_id": 9201, "sl_lead_email": "lead@example.com",
+              "reply_message": {"text": "sounds good", "message_id": "catchup-1",
+                                "time": "2026-07-10T00:00:00+00:00"}}
+    # No matching `replies` row yet - the Make categoriser hasn't landed on
+    # this fresh webhook reply (its usual ~15min lag).
+    resp = setter.handle_inbound(payload)
+    check("handle_inbound: uncategorised reply is ignored pending categorisation",
+         resp.get("ignored", "").startswith("awaiting categorisation"), resp)
+    check("handle_inbound: uncategorised reply creates no queue row", len(sb.queue) == 0, sb.queue)
+
+    # Make lands the category a little later - the next poll tick now sees a
+    # categorised row and picks it up (the 48h window covers the lag).
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9201, "email": "lead@example.com",
+        "subject": "Re: hi", "reply_body": "sounds good", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "catchup-1", "category": "Interested",
+    })
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
+    summary = setter.run_poll()
+    check("run_poll: the now-categorised reply is picked up on the next tick",
+         summary.get("checked") == 1 and len(sb.queue) == 1, (summary, sb.queue))
+
+
+# ── one-time backfill script (app/setter_backfill.py) ──────────────────────
+
+def test_backfill_assigned_at_bypass_only_in_backfill():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-bypass", "mode": "draft_only", "enabled": True, "campaign_ids": [9301],
+             "campaign_assigned_at": {"9301": "2026-07-05T00:00:00+00:00"}}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9301, "email": "old@example.com",
+        "subject": "Re: hi", "reply_body": "sounds good", "replied_at": "2026-07-01T00:00:00+00:00",
+        "smartlead_message_id": "bypass-old-1", "category": "Interested",
+    })
+
+    # run_poll: this core-four reply predates campaign_assigned_at -> skipped.
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
+    summary = setter.run_poll()
+    check("run_poll: a core-four reply older than campaign_assigned_at is still skipped",
+         summary.get("checked") == 0 and len(sb.queue) == 0, (summary, sb.queue))
+
+    # setter_backfill.select_candidates: same reply, same agent - but the
+    # backfill's own docstring says it deliberately reaches back past the
+    # assignment stamp, so it must select this row where run_poll would not.
+    real_sb = setter_backfill._SB
+    try:
+        setter_backfill._SB = setter._SB  # mirror main()'s post-configure rebind
+        agents = setter._load_agents()
+        enabled = [a for a in agents if a.get("enabled", True) and (a.get("campaign_ids") or [])]
+        campaign_ids = sorted({str(c) for a in enabled for c in (a.get("campaign_ids") or [])})
+        candidates, skipped_dupe, total_seen = setter_backfill.select_candidates(enabled, campaign_ids)
+    finally:
+        setter_backfill._SB = real_sb
+
+    emails = {c[2] for c in candidates}
+    check("backfill: the pre-assignment reply IS selected (the bypass is only here)",
+         "old@example.com" in emails, (emails, skipped_dupe, total_seen))
+    check("backfill: nothing was already queued for it (dedupe count is 0)", skipped_dupe == 0, skipped_dupe)
+
+
+def test_backfill_dry_run_zero_writes():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-dryrun", "mode": "draft_only", "enabled": True, "campaign_ids": [9401]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9401, "email": "dry@example.com",
+        "subject": "Re: hi", "reply_body": "sounds good", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "dry-1", "category": "Interested",
+    })
+
+    real_load_keys, real_make_sb = setter_backfill.load_keys, setter_backfill.make_sb
+    real_process_reply = setter.process_reply
+    real_argv = sys.argv
+    called = {"n": 0}
+    setter_backfill.load_keys = lambda: {}
+    setter_backfill.make_sb = lambda keys: sb  # never hits real Supabase - reuses this test's FakeSB
+    setter.process_reply = lambda *a, **k: (called.__setitem__("n", called["n"] + 1)
+                                            or {"status": "needs_review", "id": 1})
+    calls_before = len(sb.calls)
+    sys.argv = ["setter_backfill.py"]  # no flags at all -> dry run is the default
+    try:
+        rc = setter_backfill.main()
+    finally:
+        sys.argv = real_argv
+        setter_backfill.load_keys = real_load_keys
+        setter_backfill.make_sb = real_make_sb
+        setter.process_reply = real_process_reply
+
+    check("backfill --dry-run (default, no flags): exits cleanly", rc == 0, rc)
+    check("backfill --dry-run: process_reply is never called", called["n"] == 0, called)
+    writes = [c for c in sb.calls[calls_before:] if c[0] in ("POST", "PATCH")]
+    check("backfill --dry-run: zero POST/PATCH writes to Supabase", writes == [], writes)
+
+
 # ── run everything ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -3654,6 +3859,11 @@ if __name__ == "__main__":
     test_draft_payload_carries_instructions_no_resources_key()
     test_draft_reply_payload_carries_slot_status_and_booking_link_unchanged()
     test_decide_gate_6b_instruction_link_ambiguity()
+    test_core_four_categories_enter_queue_both_paths()
+    test_non_core_categories_stay_out_both_paths()
+    test_handle_inbound_uncategorised_then_poll_catches_up()
+    test_backfill_assigned_at_bypass_only_in_backfill()
+    test_backfill_dry_run_zero_writes()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
