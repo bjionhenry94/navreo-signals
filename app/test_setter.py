@@ -2750,7 +2750,9 @@ def test_training_generate_weighted_excludes_used_and_batch_cap():
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
     agent = {"id": "agent-train0001", "mode": "draft_only", "enabled": True,
-             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+             # campaign scoping, owner ruling 2026-07-14: must match _seed_training_corpus's default campaign_id
+             "campaign_ids": [8001]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 8})
@@ -2799,7 +2801,9 @@ def test_training_generate_stores_real_bodies_verbatim():
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
     agent = {"id": "agent-train0002", "mode": "draft_only", "enabled": True,
-             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+             # campaign scoping, owner ruling 2026-07-14: must match the seed's campaign_id=8010
+             "campaign_ids": [8010]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     _generate_and_wait({"agent_id": agent["id"], "batch_size": 6})
@@ -3054,7 +3058,9 @@ def test_training_generate_concurrent_batch_matches_sequential_case_count():
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
     agent = {"id": "agent-train-conc4", "mode": "draft_only", "enabled": True,
-             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+             # campaign scoping, owner ruling 2026-07-14: must match the seed's campaign_id=8200
+             "campaign_ids": [8200]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 8})
@@ -3066,6 +3072,74 @@ def test_training_generate_concurrent_batch_matches_sequential_case_count():
     check("training generate concurrent real pipeline: used_reply_ids grew by exactly 8, no duplicates",
          len(doc.get("used_reply_ids") or []) == 8 and len(set(doc.get("used_reply_ids") or [])) == 8,
          doc.get("used_reply_ids"))
+
+
+def test_training_generate_owner_mode_scopes_real_replies_to_agent_campaigns():
+    """campaign scoping, owner ruling 2026-07-14: owner-mode generation now
+    scopes real-reply selection to the agent's own campaign_ids exactly like
+    share mode always did - a corpus seeded across two campaigns (A and B)
+    must never let an agent assigned to only campaign A draw a reply from
+    campaign B."""
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=8300, start_id=1)     # campaign A
+    _seed_training_corpus(sb, per_category=6, campaign_id=8301, start_id=1000)  # campaign B
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-scope-a", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+             "campaign_ids": [8300]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 8})
+    check("owner-mode scoping: 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
+
+    doc = setter._load_training(agent["id"])
+    cases = doc.get("cases") or []
+    check("owner-mode scoping: a full 8-case batch landed, entirely real (campaign A alone has plenty)",
+         len(cases) == 8 and all(not c.get("synthetic") for c in cases), cases)
+
+    by_reply_id = {r["id"]: r for r in sb.replies}
+    real_cases = [c for c in cases if c.get("reply_id") is not None]
+    check("owner-mode scoping: every stored case's reply_id resolves to a real reply row",
+         bool(real_cases) and all(c["reply_id"] in by_reply_id for c in real_cases), real_cases)
+    check("owner-mode scoping: every stored case's reply comes from campaign A (8300) only, never campaign B (8301)",
+         all(by_reply_id[c["reply_id"]]["smartlead_campaign_id"] == 8300 for c in real_cases),
+         [(c["reply_id"], by_reply_id[c["reply_id"]]["smartlead_campaign_id"]) for c in real_cases])
+
+
+def test_training_generate_owner_mode_no_campaign_ids_is_fully_synthetic():
+    """campaign scoping, owner ruling 2026-07-14: an agent with NO
+    campaign_ids assigned draws zero real replies even in owner mode (before
+    the ruling, owner mode sampled the whole corpus regardless of
+    assignment) - a real corpus exists elsewhere in Supabase, but this
+    unassigned agent's whole batch must fall back to synthetic Practice
+    scenarios instead of erroring."""
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=8400)  # real corpus exists, but for no agent's campaign
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-scope-none", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 6})
+    check("owner-mode unassigned: 200 and starts, never errors despite a real corpus existing elsewhere",
+         status == 200 and resp.get("status") == "started", (status, resp))
+
+    doc = setter._load_training(agent["id"])
+    gen = doc.get("generating") or {}
+    check("owner-mode unassigned: generating settles to idle, not failed",
+         gen.get("status") == "idle", gen)
+
+    cases = doc.get("cases") or []
+    check("owner-mode unassigned: a full batch still lands (synthetic top-up fills it entirely)",
+         len(cases) == 6, cases)
+    check("owner-mode unassigned: every case is synthetic (synthetic true, reply_id None)",
+         all(c.get("synthetic") is True and c.get("reply_id") is None for c in cases), cases)
+    check("owner-mode unassigned: used_reply_ids stays empty - no real reply was ever drawn",
+         (doc.get("used_reply_ids") or []) == [], doc.get("used_reply_ids"))
 
 
 def test_training_generate_refuses_over_40_unanswered():
@@ -5965,6 +6039,8 @@ if __name__ == "__main__":
     test_training_generate_one_worker_failure_drops_only_that_case()
     test_training_generate_all_workers_fail_marks_generating_failed_plain_english()
     test_training_generate_concurrent_batch_matches_sequential_case_count()
+    test_training_generate_owner_mode_scopes_real_replies_to_agent_campaigns()
+    test_training_generate_owner_mode_no_campaign_ids_is_fully_synthetic()
     test_training_generate_refuses_over_40_unanswered()
     test_training_generate_second_call_while_running_is_already_running()
     test_training_generate_lost_update_protection_answer_survives()

@@ -3417,6 +3417,9 @@ def _fetch_training_candidates(category: str, exclude_ids: list, want: int,
     link must never surface a reply from a campaign outside their own agent."""
     if not _SB or want <= 0:
         return []
+    if allowed_campaign_ids is not None and not allowed_campaign_ids:
+        # Scoped to an agent with no campaigns: no real replies are eligible.
+        return []
     try:
         pool_size = max(want * 5, 20)
         filt = (f"workspace=eq.{WORKSPACE}&category=eq.{quote(str(category), safe='')}"
@@ -3552,6 +3555,9 @@ def _fetch_reply_tone_sample(allowed_campaign_ids: list | None = None, limit: in
     an empty sample as "this agent has zero replies anywhere" and fall back
     to brain/campaign context instead (see _invent_training_scenarios)."""
     if not _SB:
+        return []
+    if allowed_campaign_ids is not None and not allowed_campaign_ids:
+        # Scoped to an agent with no campaigns: nothing is eligible.
         return []
     try:
         pool_size = max(limit * 4, 40)
@@ -4052,11 +4058,15 @@ def route_training_generate(payload):
             batch_size = TRAINING_BATCH_DEFAULT
         batch_size = max(1, min(batch_size, TRAINING_BATCH_MAX))
 
-        allowed_campaign_ids = None
-        if is_share_mode:
-            allowed_campaign_ids = [str(c) for c in (agent.get("campaign_ids") or [])]
-            if not allowed_campaign_ids:
-                return 400, {"error": "This agent has no campaigns to draw replies from yet."}
+        # Training always draws real replies ONLY from the agent's own
+        # campaigns (owner ruling 2026-07-14: an agent must never train on
+        # campaigns it isn't assigned to). An unassigned agent still trains -
+        # real selection comes back empty and the synthetic Practice top-up
+        # fills the batch. Share links additionally require an assignment so
+        # a client link is never minted for an unconfigured agent.
+        allowed_campaign_ids = [str(c) for c in (agent.get("campaign_ids") or [])]
+        if is_share_mode and not allowed_campaign_ids:
+            return 400, {"error": "This agent has no campaigns to draw replies from yet."}
 
         doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])
