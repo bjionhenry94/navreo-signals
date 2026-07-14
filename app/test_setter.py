@@ -104,6 +104,11 @@ class FakeSB:
         self.companies = {}    # domain -> {city, state, country}
         self.replies = []      # list of raw reply rows for run_poll() / training generation
         self.sent_messages = []  # list of raw sent_messages rows for training's outreach/human-answer join
+        self.provider_usage = []  # list of posted provider_usage rows (setter_synthetic ledger)
+        # When set, a POST to provider_usage raises instead of recording -
+        # simulates a Supabase write failure so tests can prove a failed
+        # usage log never fails generation itself.
+        self.provider_usage_post_error = None
         self._next_id = 1
         self.calls = []
 
@@ -159,7 +164,17 @@ class FakeSB:
             return self._replies_table(params)
         if table == "sent_messages":
             return self._sent_messages_table(params)
+        if table == "provider_usage":
+            return self._provider_usage_table(method, body)
         return []
+
+    def _provider_usage_table(self, method, body):
+        if method == "POST":
+            if self.provider_usage_post_error is not None:
+                raise self.provider_usage_post_error
+            self.provider_usage.append(dict(body or {}))
+            return []
+        return list(self.provider_usage)
 
     def _agents_table(self, method, params, body):
         if method == "GET":
@@ -291,6 +306,12 @@ class FakeHTTP:
         # response, which always trips merge_correction_into_instructions's
         # own fallback-to-append path - tests that want a real merge set this.
         self.merge_fn = None
+        # invent_fn(body) -> {"scenarios": [...]} for
+        # _invent_training_scenarios()'s OpenAI call (schema
+        # "setter_training_scenarios"). None -> a default that returns one
+        # generic scenario per entry in the requested scenario_plan, so
+        # tests that don't care about content still get a full batch.
+        self.invent_fn = None
         self.calendly_avail = []
         self.smartlead_calls = []
         self.calls = []
@@ -330,6 +351,18 @@ class FakeHTTP:
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_instructions_merge":
                 data = self.merge_fn(body) if self.merge_fn else {"instructions": ""}
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "setter_training_scenarios":
+                if self.invent_fn:
+                    data = self.invent_fn(body)
+                else:
+                    payload = json.loads(body["messages"][1]["content"])
+                    plan = payload.get("scenario_plan") or []
+                    data = {"scenarios": [
+                        {"lead_first_name": "Pat", "lead_company": "Acme Co",
+                         "subject": "Re: our email", "body": f"Synthetic {cat} reply body #{i}. Thanks."}
+                        for i, cat in enumerate(plan)
+                    ]}
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             return {"choices": [{"message": {"content": "{}"}}]}
         if "calendly.com" in url:
@@ -3079,6 +3112,402 @@ def test_training_generate_lost_update_protection_answer_survives():
         release_event.set()
 
 
+# ── synthetic training scenarios (shortfall top-up) ─────────────────────────
+# See the doctrine comment above setter._TRAINING_ID_PREFIX: when the real
+# replies table can't fill a requested batch, the remainder is invented as
+# lead-side-only synthetic scenarios and built through the exact same live
+# classify/decide/draft_reply/lint_draft pipeline as a real case.
+
+def test_training_generate_shortfall_top_up_real_plus_synthetic():
+    """3 selectable real replies, batch 8 -> 8 cases: 3 real (synthetic
+    falsy, reply_id set) + 5 synthetic (synthetic:true, reply_id null), and
+    exactly the 3 real replies land in used_reply_ids."""
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-synth0001", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "campaign_ids": ["9500"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    real_replies = _fixed_training_replies(3, prefix="realshort")
+    for r in real_replies:
+        sb.replies.append(dict(r, workspace="navreo"))
+
+    real_select = setter._select_training_replies
+
+    def fake_select(doc, batch_size, allowed_campaign_ids=None):
+        return list(real_replies)
+
+    setter._select_training_replies = fake_select
+    try:
+        status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 8})
+    finally:
+        setter._select_training_replies = real_select
+
+    check("shortfall: 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
+    doc = setter._load_training(agent["id"])
+    cases = doc.get("cases") or []
+    check("shortfall: exactly 8 cases total", len(cases) == 8, cases)
+
+    real_cases = [c for c in cases if not c.get("synthetic")]
+    synth_cases = [c for c in cases if c.get("synthetic") is True]
+    check("shortfall: exactly 3 real cases, no synthetic flag, reply_id set",
+         len(real_cases) == 3 and all(c.get("reply_id") is not None for c in real_cases), real_cases)
+    check("shortfall: exactly 5 synthetic cases, reply_id null",
+         len(synth_cases) == 5 and all(c.get("reply_id") is None for c in synth_cases), synth_cases)
+
+    used = list(doc.get("used_reply_ids") or [])
+    check("shortfall: exactly 3 new used_reply_ids, matching the 3 real replies only",
+         sorted(str(u) for u in used) == sorted(str(r["id"]) for r in real_replies), used)
+
+
+def test_training_generate_pure_synthetic_zero_replies():
+    """An agent with zero replies anywhere: batch 8 -> 8 synthetic cases,
+    used_reply_ids untouched, and the invention prompt falls back to the
+    agent's own brain/campaign/offer context."""
+    sb, http = fresh_setter()
+    captured = []
+
+    def invent_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured.append(payload)
+        plan = payload.get("scenario_plan") or []
+        return {"scenarios": [
+            {"lead_first_name": "Jamie", "lead_company": "Roke Ltd",
+             "subject": "Re: our note", "body": f"Synthetic {cat} body #{i}."}
+            for i, cat in enumerate(plan)
+        ]}
+
+    http.invent_fn = invent_fn
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    campaign_id = "9600"
+    sb.sent_messages.append({
+        "smartlead_campaign_id": campaign_id, "email": "seed@example.com", "email_seq_number": 1,
+        "is_manual_reply": False, "subject": "Our outreach", "body": "Hi, wanted to share our breakdown.",
+        "sent_at": "2026-06-01T09:00:00+00:00",
+    })
+    agent = {
+        "id": "agent-synth0002", "mode": "draft_only", "enabled": True,
+        "allowed_intents": ["send_resource"], "campaign_ids": [campaign_id],
+        "instructions": "Our pricing is $500/mo flat. Resource: https://x.example/breakdown",
+        "extra_instructions": "Always mention the free audit.",
+        "pricing_notes": "Legacy pricing note.",
+        "resources": "https://x.example/breakdown",
+        "voice_examples": ["Hi there, thanks for reaching out!"],
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    doc_before = setter._load_training(agent["id"])
+    used_before = list(doc_before.get("used_reply_ids") or [])
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 8})
+    check("zero-replies: 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
+
+    doc = setter._load_training(agent["id"])
+    cases = doc.get("cases") or []
+    check("zero-replies: 8 cases, all synthetic",
+         len(cases) == 8 and all(c.get("synthetic") is True for c in cases), cases)
+    check("zero-replies: no reply_id anywhere", all(c.get("reply_id") is None for c in cases), cases)
+
+    used_after = list(doc.get("used_reply_ids") or [])
+    check("zero-replies: used_reply_ids byte-identical before/after",
+         used_after == used_before, (used_before, used_after))
+
+    check("zero-replies: invent prompt was actually called", len(captured) == 1, captured)
+    payload = captured[0] if captured else {}
+    fb = payload.get("fallback_context") or {}
+    check("zero-replies: prompt fallback_context carries the agent's brain/campaign/offer context",
+         "500" in fb.get("instructions", "") and fb.get("extra_instructions") == "Always mention the free audit."
+         and fb.get("pricing_notes") == "Legacy pricing note." and fb.get("resources")
+         and fb.get("voice_examples") and fb.get("sample_outreach"), fb)
+
+
+def test_training_generate_synthetic_only_preserves_existing_used_reply_ids():
+    """Provenance + purity: after a synthetic-only generation, every new
+    case carries synthetic:true and used_reply_ids is exactly what it was
+    before (not merely empty-to-empty - a non-empty pre-existing list must
+    also survive byte-identical)."""
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-synth0003", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    existing_doc = {"cases": [{"id": "case-0000", "reply_id": 101, "category": "Interested",
+                               "inbound": {"subject": "", "body": "old real case", "raw_body": "old real case"}}],
+                    "answers": {}, "used_reply_ids": [101, 102],
+                    "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], existing_doc)
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    check("purity: 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
+
+    doc = setter._load_training(agent["id"])
+    all_cases = doc.get("cases") or []
+    new_cases = [c for c in all_cases if c.get("id") != "case-0000"]
+    check("purity: exactly 4 new cases, every one synthetic",
+         len(new_cases) == 4 and all(c.get("synthetic") is True for c in new_cases), new_cases)
+    check("purity: used_reply_ids is exactly what it was before (no reply ever marked used)",
+         list(doc.get("used_reply_ids") or []) == [101, 102], doc.get("used_reply_ids"))
+
+
+def test_training_synthetic_category_mix_80_20():
+    """A batch of 10 synthetic scenarios honours 80/20 within rounding: 8
+    actionable spread across Interested/Information Request/Meeting
+    Request, 2 negatives from Not Interested/Out Of Office - and the exact
+    counts the code computes are what get sent to the model as
+    scenario_plan."""
+    from collections import Counter
+
+    targets = setter._synthetic_category_targets(10)
+    actionable = {"Interested", "Information Request", "Meeting Request"}
+    negative = {"Not Interested", "Out Of Office"}
+    total_actionable = sum(v for k, v in targets.items() if k in actionable)
+    total_negative = sum(v for k, v in targets.items() if k in negative)
+    check("category mix: 8 actionable across the 3 simple categories", total_actionable == 8, targets)
+    check("category mix: 2 negatives across Not Interested/Out Of Office", total_negative == 2, targets)
+    check("category mix: no category outside the simple/common synthetic set",
+         set(targets.keys()) <= (actionable | negative), targets)
+    check("category mix: total sums to 10", sum(targets.values()) == 10, targets)
+
+    sb, http = fresh_setter()
+    captured = []
+
+    def invent_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured.append(payload.get("scenario_plan"))
+        plan = payload.get("scenario_plan") or []
+        return {"scenarios": [{"lead_first_name": "A", "lead_company": "B", "subject": "s", "body": f"body {i}"}
+                              for i, _ in enumerate(plan)]}
+
+    http.invent_fn = invent_fn
+    agent = {"id": "agent-mix0001"}
+    scenarios = setter._invent_training_scenarios(agent, {"cases": [], "answers": {}}, 10)
+
+    check("category mix prompt: invent was actually called", len(captured) == 1, captured)
+    plan = captured[0] if captured else []
+    check("category mix prompt: scenario_plan sent to the model matches the computed per-category counts",
+         dict(Counter(plan)) == targets, (dict(Counter(plan)), targets))
+    check("category mix: returned scenarios carry the same category the code assigned, in plan order",
+         [s["category"] for s in scenarios] == plan, (scenarios, plan))
+
+
+def test_training_invent_prompt_includes_reference_sample_gists_and_law():
+    """With real replies present, the captured prompt contains the
+    reply-sample text and the unanswered-case gists, and the system message
+    states the lead-side-only law."""
+    sb, http = fresh_setter()
+    sb.replies.append({"id": "ref1", "workspace": "navreo", "smartlead_campaign_id": 9700,
+                       "email": "lead@example.com", "replied_at": "2026-06-10T09:00:00+00:00",
+                       "category": "Interested", "reply_subject": "Re: our email",
+                       "reply_body": "Sounds great, tell me more about pricing please."})
+    captured = []
+
+    def invent_fn(body):
+        captured.append(body)
+        payload = json.loads(body["messages"][1]["content"])
+        plan = payload.get("scenario_plan") or []
+        return {"scenarios": [{"lead_first_name": "A", "lead_company": "B", "subject": "s", "body": f"body {i}"}
+                              for i, _ in enumerate(plan)]}
+
+    http.invent_fn = invent_fn
+    agent = {"id": "agent-prompt0001"}
+    doc = {"cases": [{"id": "case-0000", "category": "Information Request",
+                      "inbound": {"body": "Can you send the pricing sheet over please, thanks a lot."}}],
+          "answers": {}}
+    setter._invent_training_scenarios(agent, doc, 5)
+
+    check("prompt inputs: invent call happened", len(captured) == 1, captured)
+    body = captured[0] if captured else {}
+    system_msg = (body.get("messages") or [{}])[0].get("content", "")
+    user_payload = json.loads(body["messages"][1]["content"]) if captured else {}
+    check("prompt inputs: system prompt states the lead-side-only law",
+         "LEAD-SIDE-ONLY LAW" in system_msg and "NEVER state, as a fact, any agent-side detail" in system_msg,
+         system_msg[:200])
+    check("prompt inputs: user payload carries the real reply-sample text",
+         any("pricing" in (r.get("body") or "") for r in user_payload.get("reference_replies") or []),
+         user_payload.get("reference_replies"))
+    check("prompt inputs: user payload carries the unanswered-case gist",
+         any("Can you send the pricing sheet" in g for g in user_payload.get("avoid_duplicating") or []),
+         user_payload.get("avoid_duplicating"))
+
+
+def test_training_generate_synthetic_never_bypasses_unanswered_cap():
+    """An agent already over its unanswered cap (owner 40, share 20)
+    refuses the whole generate call before any synthetic top-up ever
+    runs - the 40/20 caps stay the only throttle, real or synthetic."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-synth-cap1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": f"case-{i:04d}"} for i in range(41)], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 8})
+    check("cap: owner over the 40 cap refuses with 400 before any synthetic top-up runs",
+         status == 400, (status, resp))
+    doc_after = setter._load_training(agent["id"])
+    check("cap: no cases were added (no real, no synthetic)",
+         len(doc_after.get("cases") or []) == 41, doc_after.get("cases"))
+    check("cap: no provider_usage row was posted", sb.provider_usage == [], sb.provider_usage)
+
+    agent2 = {"id": "agent-synth-cap2", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"],
+             "campaign_ids": [7200]}
+    sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+    doc2 = {"cases": [{"id": f"case-{i:04d}"} for i in range(21)], "answers": {}, "used_reply_ids": [],
+           "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent2["id"], doc2)
+    token = setter.mint_training_share(agent2["id"])
+
+    status2, resp2 = setter.route_training_generate({"share": token, "batch_size": 8})
+    check("cap: share link over the 20 cap refuses with 400 before any synthetic top-up runs",
+         status2 == 400, (status2, resp2))
+    doc2_after = setter._load_training(agent2["id"])
+    check("cap: share agent's cases untouched", len(doc2_after.get("cases") or []) == 21, doc2_after.get("cases"))
+
+
+def test_training_generate_synthetic_lost_update_protection_answer_survives():
+    """Same lost-update guarantee as
+    test_training_generate_lost_update_protection_answer_survives, but with
+    a synthetic top-up in play (the whole batch is synthetic, since the
+    mocked selection returns zero real replies) - the worker's
+    fresh-reload-before-save must still protect an answer that lands
+    mid-batch."""
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-synth-lu1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    existing_doc = {"cases": [{"id": "case-pre-0000"}], "answers": {}, "used_reply_ids": [],
+                    "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], existing_doc)
+
+    started_event = threading.Event()
+    release_event = threading.Event()
+    real_select = setter._select_training_replies
+
+    def fake_select(doc, batch_size, allowed_campaign_ids=None):
+        started_event.set()
+        release_event.wait(timeout=10)
+        return []  # forces the entire batch to be synthetic
+
+    setter._select_training_replies = fake_select
+    try:
+        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 3})
+        check("synthetic lost-update: generation starts", status == 200 and resp.get("status") == "started",
+             (status, resp))
+        check("synthetic lost-update: worker reached the (blocked) selection step",
+             started_event.wait(timeout=5), None)
+
+        astatus, aresp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-pre-0000", "decision_ok": True, "reply_ok": True,
+            "note": "", "scope": "one_off",
+        })
+        check("synthetic lost-update: the mid-generation answer itself saves fine", astatus == 200, (astatus, aresp))
+
+        release_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        final_doc = setter._load_training(agent["id"])
+        check("synthetic lost-update: the answer that landed mid-generation survives the worker's final save",
+             final_doc.get("answers", {}).get("case-pre-0000", {}).get("decision_ok") is True,
+             final_doc.get("answers"))
+        cases = final_doc.get("cases") or []
+        new_cases = [c for c in cases if c.get("id") != "case-pre-0000"]
+        check("synthetic lost-update: the new synthetic batch was appended on top, not lost",
+             len(new_cases) == 3 and all(c.get("synthetic") is True for c in new_cases), cases)
+    finally:
+        setter._select_training_replies = real_select
+        release_event.set()
+
+
+def test_training_answer_readiness_moves_identically_for_synthetic_case():
+    """Rating a synthetic case via the same answer path as a real one moves
+    the readiness inputs (n_answers / score) exactly as it would for a real
+    case - no weighting, no exclusion; compute_readiness only ever reads
+    doc['answers'], never the case's own synthetic flag."""
+    sb, http = fresh_setter()
+    real_agent_id = "agent-real-ready1"
+    synth_agent_id = "agent-synth-ready1"
+    sb.agents[real_agent_id] = {"id": real_agent_id, "doc": {"id": real_agent_id}}
+    sb.agents[synth_agent_id] = {"id": synth_agent_id, "doc": {"id": synth_agent_id}}
+
+    real_doc = {"cases": [{"id": "case-real-0000", "reply_id": 55}], "answers": {}, "used_reply_ids": [55],
+               "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    synth_doc = {"cases": [{"id": "case-synth-0000", "synthetic": True, "reply_id": None}], "answers": {},
+                "used_reply_ids": [], "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(real_agent_id, real_doc)
+    setter._save_training(synth_agent_id, synth_doc)
+
+    status_r, resp_r = setter.route_training_answer({
+        "agent_id": real_agent_id, "case_id": "case-real-0000", "decision_ok": True, "reply_ok": True,
+        "note": "", "scope": "one_off",
+    })
+    status_s, resp_s = setter.route_training_answer({
+        "agent_id": synth_agent_id, "case_id": "case-synth-0000", "decision_ok": True, "reply_ok": True,
+        "note": "", "scope": "one_off",
+    })
+    check("readiness: both answer calls succeed", status_r == 200 and status_s == 200, (status_r, status_s))
+    check("readiness: n_answers identical for one rating on a real vs a synthetic case",
+         resp_r["readiness"]["n_answers"] == resp_s["readiness"]["n_answers"] == 1,
+         (resp_r["readiness"], resp_s["readiness"]))
+    check("readiness: score identical for the same rating, real vs synthetic (no special-casing)",
+         resp_r["readiness"]["score"] == resp_s["readiness"]["score"],
+         (resp_r["readiness"]["score"], resp_s["readiness"]["score"]))
+
+
+def test_training_generate_synthetic_logs_provider_usage_and_failure_is_swallowed():
+    """A generation run that builds >=1 synthetic case attempts exactly one
+    provider_usage POST with the correct provider/source_id/credits/
+    endpoint shape; a mocked failed POST never fails generation itself."""
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-synth-usage1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    check("usage log: generation starts (zero real replies -> fully synthetic)",
+         status == 200 and resp.get("status") == "started", (status, resp))
+
+    doc = setter._load_training(agent["id"])
+    cases = doc.get("cases") or []
+    synth_count = sum(1 for c in cases if c.get("synthetic") is True)
+    check("usage log: some synthetic cases were built", synth_count > 0, cases)
+
+    check("usage log: exactly one provider_usage row posted", len(sb.provider_usage) == 1, sb.provider_usage)
+    row = sb.provider_usage[0] if sb.provider_usage else {}
+    check("usage log: row shape is correct (provider/source_id/credits/endpoint)",
+         row.get("provider") == "setter_synthetic" and row.get("source_id") == agent["id"]
+         and row.get("credits") == synth_count and row.get("endpoint") == "zero_replies:owner", row)
+
+    sb2, http2 = fresh_setter()
+    http2.classify_fn = _training_classify_fn
+    http2.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+    sb2.provider_usage_post_error = RuntimeError("simulated Supabase outage")
+    agent2 = {"id": "agent-synth-usage2", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb2.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+
+    status2, resp2 = _generate_and_wait({"agent_id": agent2["id"], "batch_size": 4})
+    check("usage log: generation still succeeds even when the usage POST raises",
+         status2 == 200 and resp2.get("status") == "started", (status2, resp2))
+    doc2 = setter._load_training(agent2["id"])
+    gen2 = doc2.get("generating") or {}
+    check("usage log: generating still flips to idle (not failed) despite the logging error",
+         gen2.get("status") == "idle" and (gen2.get("added") or 0) > 0, gen2)
+    check("usage log: no provider_usage row recorded when the POST raised (helper swallows it)",
+         sb2.provider_usage == [], sb2.provider_usage)
+
+
 def test_training_answer_recomputes_readiness_and_counts():
     sb, http = fresh_setter()
     agent = {"id": "agent-train0006", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
@@ -3429,6 +3858,394 @@ def test_training_retrain_concurrent_answer_survives():
              cases_by_id["case-cc-02"].get("updated_by_feedback") is True, cases_by_id.get("case-cc-02"))
     finally:
         release_slow.set()
+
+
+# ── training answer latency fix (2026-07-14): merge moved to the background
+# retrain worker via pending_merges, so route_training_answer never blocks
+# "Save & continue" on a gpt-5-mini call any more ─────────────────────────
+
+def test_training_answer_remember_returns_fast_without_synchronous_merge():
+    """The merge_correction_into_instructions call (gpt-5-mini, 5-15s in
+    production) must never run inside route_training_answer's own request
+    thread any more - it's deferred to the background retrain worker via
+    pending_merges. Proven deterministically: the FakeHTTP merge call blocks
+    on an Event this test only releases well after the request already
+    returned. If the merge were still synchronous, route_training_answer
+    itself would block on that same Event and badly miss the "well under a
+    second" bar; instead it must return almost immediately regardless."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-async01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base instructions."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    release_event = threading.Event()
+    merge_calls = []
+
+    def merge_fn(body):
+        merge_calls.append(body)
+        release_event.wait(timeout=10)
+        payload = json.loads(body["messages"][1]["content"])
+        return {"instructions": ((payload.get("current_instructions") or "") + "\n\n"
+                                 + (payload.get("correction") or "")).strip()}
+    http.merge_fn = merge_fn
+
+    import time as _time
+    started = _time.monotonic()
+    status, resp = setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": False,
+        "note": "Always mention the trial.", "scope": "remember",
+    })
+    elapsed = _time.monotonic() - started
+    try:
+        check("answer remember: returns 200 and kicks off a background retrain",
+             status == 200 and resp.get("retrain") == "started", (status, resp))
+        check("answer remember: request returns in well under a second even though the merge "
+             "call (fired only in the background worker) is still blocked on the release event",
+             elapsed < 1.0, elapsed)
+    finally:
+        release_event.set()
+
+    thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+    if thread is not None:
+        thread.join(timeout=10)
+
+    check("answer remember: the merge eventually fired exactly once, in the background",
+         len(merge_calls) == 1, merge_calls)
+    saved_agent = setter._load_agent(agent["id"])
+    check("answer remember: instructions eventually merged with the note",
+         "Always mention the trial." in (saved_agent.get("instructions") or ""), saved_agent.get("instructions"))
+    saved_doc = setter._load_training(agent["id"])
+    check("answer remember: pending_merges drained to empty after the worker finished",
+         (saved_doc.get("pending_merges") or []) == [], saved_doc.get("pending_merges"))
+
+
+def test_training_answer_remember_persists_pending_merge_in_same_write():
+    """The queued pending_merges entry is written by the SAME _save_training
+    call that stores the answer itself - no extra round trip. Proven by
+    holding the agent's own retrain lock BEFORE answering, so
+    _kick_off_training_retrain can only queue (never start a worker that
+    would immediately drain it), letting the persisted doc be inspected
+    deterministically right after the request returns, with the merge
+    itself still nowhere near having run."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-async02", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}, {"id": "case-0001"}], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    lock = setter._get_training_gen_lock(agent["id"])
+    lock.acquire()
+    try:
+        status, resp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": False,
+            "note": "Always confirm timezone first.", "scope": "remember",
+        })
+        check("answer remember: with the lock already held, retrain is queued, not started",
+             status == 200 and resp.get("retrain") == "queued", (status, resp))
+
+        saved = setter._load_training(agent["id"])
+        pending = saved.get("pending_merges") or []
+        check("answer remember: pending_merges holds exactly the queued note",
+             len(pending) == 1 and pending[0]["note"] == "Always confirm timezone first."
+             and pending[0]["source"] == "training:case-0000", pending)
+        check("answer remember: the answer itself landed in the SAME persisted doc (one write)",
+             saved.get("answers", {}).get("case-0000", {}).get("decision_ok") is False,
+             saved.get("answers"))
+        check("answer remember: agent instructions NOT yet touched (merge deferred to the worker)",
+             setter._load_agent(agent["id"]).get("instructions") == "Base.",
+             setter._load_agent(agent["id"]).get("instructions"))
+    finally:
+        lock.release()
+
+
+def test_training_retrain_worker_drains_pending_merges_in_order_across_queued_pass():
+    """Two rapid "remember" answers: the second lands while the first's
+    retrain pass is still busy on an unrelated case, so it must queue
+    (retrain_queued) rather than start a second worker. Both notes must
+    still end up merged into instructions in submission order - the first
+    during the initial pass's own top-of-loop drain, the second during the
+    follow-on queued pass's drain (see _training_retrain_worker /
+    _drain_pending_merges - the drain always runs at the TOP of every
+    pass)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-drain01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    case_a = _fixed_training_case("case-d-00", body="trigger one")
+    case_b = _fixed_training_case("case-d-01", body="trigger two")
+    case_target = _fixed_training_case("case-d-02", body="target case")
+    doc = {"cases": [case_a, case_b, case_target], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    started_slow = threading.Event()
+    release_slow = threading.Event()
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        if payload.get("reply_body") == "target case":
+            started_slow.set()
+            release_slow.wait(timeout=10)
+        return {"primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "x", "rationale": ""}
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>ok</div><br><div>B</div>"}
+
+    def merge_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        old = payload.get("current_instructions") or ""
+        note = payload.get("correction") or ""
+        return {"instructions": (old + "\n\n" + note).strip()}
+    http.merge_fn = merge_fn
+
+    try:
+        status, resp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-d-00", "decision_ok": False,
+            "note": "First note.", "scope": "remember",
+        })
+        check("drain order: first remember answer starts the retrain worker",
+             status == 200 and resp.get("retrain") == "started", (status, resp))
+        check("drain order: worker reached the blocked target case (drain + first merge already ran)",
+             started_slow.wait(timeout=5), None)
+
+        # The drain-then-merge step for "First note." runs strictly BEFORE the
+        # retrain-classify loop that's now blocked on case-d-02, so it must
+        # already be on the agent's instructions.
+        mid_agent = setter._load_agent(agent["id"])
+        check("drain order: the first note is merged into instructions before the retrain step even starts",
+             "First note." in (mid_agent.get("instructions") or ""), mid_agent.get("instructions"))
+
+        status2, resp2 = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-d-01", "decision_ok": False,
+            "note": "Second note.", "scope": "remember",
+        })
+        check("drain order: second remember answer while the worker is busy -> queued, not a second worker",
+             status2 == 200 and resp2.get("retrain") == "queued", (status2, resp2))
+
+        mid_doc = setter._load_training(agent["id"])
+        pending = mid_doc.get("pending_merges") or []
+        check("drain order: the second note is queued on the doc, not yet merged",
+             len(pending) == 1 and pending[0]["note"] == "Second note.", pending)
+        mid_agent2 = setter._load_agent(agent["id"])
+        check("drain order: the second note is NOT yet in instructions while the worker is still on pass one",
+             "Second note." not in (mid_agent2.get("instructions") or ""), mid_agent2.get("instructions"))
+
+        release_slow.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        final_agent = setter._load_agent(agent["id"])
+        instr = final_agent.get("instructions") or ""
+        check("drain order: both notes ended up merged", "First note." in instr and "Second note." in instr, instr)
+        check("drain order: submission order preserved (First before Second)",
+             instr.index("First note.") < instr.index("Second note."), instr)
+        check("drain order: instruction_edits logged both, in order",
+             [e.get("note") for e in (final_agent.get("instruction_edits") or [])]
+             == ["First note.", "Second note."], final_agent.get("instruction_edits"))
+
+        final_doc = setter._load_training(agent["id"])
+        check("drain order: pending_merges drained to empty after the follow-on pass",
+             (final_doc.get("pending_merges") or []) == [], final_doc.get("pending_merges"))
+        gen = final_doc.get("generating") or {}
+        check("drain order: generating settles idle with the queued flag consumed",
+             gen.get("status") == "idle" and not gen.get("retrain_queued"), gen)
+    finally:
+        release_slow.set()
+
+
+def test_training_retrain_merge_failure_falls_back_to_append_and_retrain_still_runs():
+    """A garbage merge response (no usable "instructions" key) must fall
+    back to a dumb, always-safe append - exactly what
+    merge_correction_into_instructions already guarantees - and must never
+    block the retrain pass that runs right after it in the same worker
+    loop."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-drain02", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base instructions."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    trigger_case = _fixed_training_case("case-mf-00", body="trigger")
+    target_case = _fixed_training_case("case-mf-01", body="unanswered target")
+    doc = {"cases": [trigger_case, target_case], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    http.merge_fn = lambda body: {"unexpected_field": "garbage - no instructions key at all"}
+    http.classify_fn = lambda _b: {"primary_intent": "send_resource", "all_intents": ["send_resource"],
+                                   "simple_ask": True, "confidence": 0.9, "red_flags": [],
+                                   "timezone_guess": None, "tz_confidence": 0.0, "wants": "x", "rationale": ""}
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>new</div><br><div>B</div>"}
+
+    _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-mf-00", "decision_ok": False,
+        "note": "Never overpromise turnaround time.", "scope": "remember",
+    })
+
+    saved_agent = setter._load_agent(agent["id"])
+    check("merge failure: falls back to a dumb append (garbage merge response never trusted)",
+         "Training note (" in (saved_agent.get("instructions") or "")
+         and "Never overpromise turnaround time." in (saved_agent.get("instructions") or ""),
+         saved_agent.get("instructions"))
+    check("merge failure: original instructions text preserved",
+         "Base instructions." in (saved_agent.get("instructions") or ""), saved_agent.get("instructions"))
+    edits = saved_agent.get("instruction_edits") or []
+    check("merge failure: instruction_edits logged how=appended",
+         len(edits) == 1 and edits[0]["how"] == "appended", edits)
+
+    saved_doc = setter._load_training(agent["id"])
+    cases_by_id = {c["id"]: c for c in saved_doc.get("cases") or []}
+    check("merge failure: the retrain pass still ran on the unanswered case despite the merge failure",
+         cases_by_id["case-mf-01"].get("updated_by_feedback") is True, cases_by_id.get("case-mf-01"))
+    check("merge failure: pending_merges drained regardless of the merge outcome",
+         (saved_doc.get("pending_merges") or []) == [], saved_doc.get("pending_merges"))
+
+
+def test_training_get_reports_pending_merges_count():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-pmget01", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status0, resp0 = setter.route_training_get({"agent_id": agent["id"]})
+    check("training get: pending_merges defaults to 0 count", resp0.get("pending_merges") == 0, resp0)
+
+    lock = setter._get_training_gen_lock(agent["id"])
+    lock.acquire()
+    try:
+        setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": False,
+            "note": "A note stuck behind a busy worker.", "scope": "remember",
+        })
+        status, resp = setter.route_training_get({"agent_id": agent["id"]})
+        check("training get: pending_merges surfaces the queued (not-yet-drained) note count",
+             status == 200 and resp.get("pending_merges") == 1, resp)
+    finally:
+        lock.release()
+
+
+def test_training_answer_one_off_note_never_enters_pending_merges():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-oneoff01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [{"id": "case-0000"}], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": True,
+        "note": "Just a heads up, no change needed.", "scope": "one_off",
+    })
+    saved_doc = setter._load_training(agent["id"])
+    check("answer one_off: note never enters pending_merges",
+         (saved_doc.get("pending_merges") or []) == [], saved_doc.get("pending_merges"))
+    saved_agent = setter._load_agent(agent["id"])
+    check("answer one_off: instructions untouched", saved_agent.get("instructions", "") == "Base.",
+         saved_agent.get("instructions"))
+
+
+def test_training_retrain_worker_retrain_step_uses_freshly_merged_instructions():
+    """The worker's retrain step must see the instructions the drain step
+    JUST merged (drain-then-reload-agent-fresh, per
+    _training_retrain_worker), not a stale pre-merge snapshot."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-freshinstr01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Flat $300/mo."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    trigger_case = _fixed_training_case("case-fi-00", body="trigger")
+    target_case = _fixed_training_case("case-fi-01", body="unanswered target")
+    doc = {"cases": [trigger_case, target_case], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    seen_instructions = []
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        seen_instructions.append((payload.get("agent") or {}).get("instructions") or "")
+        return {"primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "x", "rationale": ""}
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>new</div><br><div>B</div>"}
+    http.merge_fn = lambda body: {
+        "instructions": (json.loads(body["messages"][1]["content"]).get("current_instructions") or "")
+                        + "\n\nAlways confirm budget before pricing."
+    }
+
+    _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-fi-00", "decision_ok": False,
+        "note": "Always confirm budget before pricing.", "scope": "remember",
+    })
+
+    check("retrain uses fresh instructions: classify() for the unanswered case saw the just-merged note",
+         len(seen_instructions) >= 1
+         and all("Always confirm budget before pricing." in s for s in seen_instructions),
+         seen_instructions)
+
+
+def test_training_pending_merges_survive_and_drain_on_next_kick_after_dead_worker():
+    """Crash-safety: pending_merges lives on the persisted training doc, so a
+    note queued right before a process restart (simulated here by a stale
+    "running" marker with no live lock/thread - exactly what
+    route_training_get's self-heal already detects) is drained by the next
+    answer's own kick-off, not lost."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-crash01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    case_a = _fixed_training_case("case-cr-00", body="already answered before restart")
+    case_b = _fixed_training_case("case-cr-01", body="still unanswered")
+    old_started = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=900)).isoformat(timespec="seconds")
+    doc = {
+        "cases": [case_a, case_b],
+        "answers": {"case-cr-00": {"decision_ok": False, "reply_ok": None,
+                                   "note": "Queued right before the crash.", "scope": "remember",
+                                   "at": old_started}},
+        "pending_merges": [{"note": "Queued right before the crash.", "source": "training:case-cr-00",
+                            "at": old_started}],
+        "used_reply_ids": [], "readiness_history": [],
+        # Stale "running" marker - the process died mid-pass, no live lock/thread.
+        "generating": {"status": "running", "kind": "retrain", "started_at": old_started},
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    setter._save_training(agent["id"], doc)
+
+    status_get, resp_get = setter.route_training_get({"agent_id": agent["id"]})
+    check("crash-safety: pending_merges count is visible even behind a stale running marker",
+         status_get == 200 and resp_get.get("pending_merges") == 1, resp_get)
+
+    http.merge_fn = lambda body: {
+        "instructions": (json.loads(body["messages"][1]["content"]).get("current_instructions") or "")
+                        + "\n\nQueued right before the crash."
+    }
+    http.classify_fn = lambda _b: {"primary_intent": "send_resource", "all_intents": ["send_resource"],
+                                   "simple_ask": True, "confidence": 0.9, "red_flags": [],
+                                   "timezone_guess": None, "tz_confidence": 0.0, "wants": "x", "rationale": ""}
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>new</div><br><div>B</div>"}
+
+    # The next answer's own kick-off starts a FRESH worker (this process
+    # never held the old lock - it died with the old process), which drains
+    # the leftover pending_merges before doing anything else.
+    _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-cr-01", "decision_ok": False, "reply_ok": True, "note": "",
+    })
+
+    saved_agent = setter._load_agent(agent["id"])
+    check("crash-safety: the note queued before the crash was eventually merged",
+         "Queued right before the crash." in (saved_agent.get("instructions") or ""),
+         saved_agent.get("instructions"))
+    saved_doc = setter._load_training(agent["id"])
+    check("crash-safety: pending_merges drained to empty",
+         (saved_doc.get("pending_merges") or []) == [], saved_doc.get("pending_merges"))
 
 
 def test_draft_system_fallback_ladder_text():
@@ -4315,6 +5132,15 @@ if __name__ == "__main__":
     test_training_generate_refuses_over_40_unanswered()
     test_training_generate_second_call_while_running_is_already_running()
     test_training_generate_lost_update_protection_answer_survives()
+    test_training_generate_shortfall_top_up_real_plus_synthetic()
+    test_training_generate_pure_synthetic_zero_replies()
+    test_training_generate_synthetic_only_preserves_existing_used_reply_ids()
+    test_training_synthetic_category_mix_80_20()
+    test_training_invent_prompt_includes_reference_sample_gists_and_law()
+    test_training_generate_synthetic_never_bypasses_unanswered_cap()
+    test_training_generate_synthetic_lost_update_protection_answer_survives()
+    test_training_answer_readiness_moves_identically_for_synthetic_case()
+    test_training_generate_synthetic_logs_provider_usage_and_failure_is_swallowed()
     test_training_answer_recomputes_readiness_and_counts()
     test_training_answer_remember_merges_instructions_one_off_does_not()
     test_training_retrain_note_updates_unanswered_leaves_answered()
@@ -4322,6 +5148,14 @@ if __name__ == "__main__":
     test_training_retrain_lock_contention_with_generate_queued_flag_honoured()
     test_training_retrain_failed_case_keeps_old_content()
     test_training_retrain_concurrent_answer_survives()
+    test_training_answer_remember_returns_fast_without_synchronous_merge()
+    test_training_answer_remember_persists_pending_merge_in_same_write()
+    test_training_retrain_worker_drains_pending_merges_in_order_across_queued_pass()
+    test_training_retrain_merge_failure_falls_back_to_append_and_retrain_still_runs()
+    test_training_get_reports_pending_merges_count()
+    test_training_answer_one_off_note_never_enters_pending_merges()
+    test_training_retrain_worker_retrain_step_uses_freshly_merged_instructions()
+    test_training_pending_merges_survive_and_drain_on_next_kick_after_dead_worker()
     test_draft_system_fallback_ladder_text()
     test_training_reset_clears_answers_keeps_used_ids()
     test_training_get_route()

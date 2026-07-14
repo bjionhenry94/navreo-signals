@@ -68,6 +68,11 @@
 .scope-hint { color: var(--ink-3); margin: -4px 0 10px; line-height: 1.45; }
 .train-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
 .tr-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+/* subtle badge on synthetic (practice) scenarios - outlined, not filled, so
+   it visibly demotes below the campaign/category pills without competing
+   for attention; renders identically in SHARE_MODE since renderCase() has
+   no share-specific branch. */
+.pill.practice { background: transparent; border: 1px solid var(--line-2); color: var(--ink-3); font-weight: 500; }
 
 .tr-details { border: 1px solid var(--line-2); border-radius: 8px; margin-bottom: 10px; }
 .tr-details summary { padding: 9px 13px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; list-style: none; }
@@ -113,6 +118,8 @@
 }
 .field textarea:focus { outline: none; box-shadow: var(--focus); }
 
+.scope-row { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
+.scope-row .scope-lab { font-size: 12px; color: var(--ink-3); }
 .mode-toggle { display: flex; gap: 8px; }
 .mode-toggle .btn { flex: 1; justify-content: center; }
 .mode-toggle .btn.primary.sel { background: var(--orange); border-color: var(--orange); color: var(--cream); }
@@ -152,7 +159,7 @@ body.share-mode a[href="setter.html"] { display: none !important; }
       <h1 class="sh-title">Training</h1>
       <div class="sh-spacer"></div>
     </div>
-    <div class="train-sub">Rate real replies from your campaigns so this agent learns when to answer on its own and when to leave it to a human. Batches mirror the mix of replies your campaigns actually receive. Nothing here ever emails a lead.</div>
+    <div class="train-sub">Rate scenarios so this agent learns when to answer on its own and when to leave it to a human. Batches are drawn from real replies your campaigns have received, topped up with practice scenarios when real ones run low. Nothing here ever emails a lead.</div>
 
     <div id="errBanner" class="err-banner" style="display:none"></div>
 
@@ -351,8 +358,9 @@ function renderShareHeader() {
   const title = document.querySelector(".sh-title");
   if (title) title.textContent = `Train ${shareAgentName}`;
   const sub = document.querySelector(".train-sub");
-  if (sub) sub.textContent = "Help train your AI appointment setter. Rate real replies from your "
-    + "campaigns - your answers teach it when to answer on its own and when to leave it to a person. "
+  if (sub) sub.textContent = "Help train your AI appointment setter. Rate scenarios drawn from real "
+    + "replies your campaigns have received, topped up with practice scenarios when real ones run low - "
+    + "your answers teach it when to answer on its own and when to leave it to a person. "
     + "Nothing here ever emails anyone.";
 }
 
@@ -506,7 +514,10 @@ async function pollGeneratingOnce() {
     return;
   }
   endGeneratingPoll();
-  showError("No new real replies were available to build scenarios from.");
+  // The worker tops up every round with practice scenarios, so a 0-added
+  // round here means this agent is already at its open-scenarios cap, not
+  // that the well ran dry - never tell the trainer to wait.
+  showError("You have open scenarios ready to rate. New ones, including practice scenarios, unlock as you answer.");
 }
 
 function isAnswered(caseId) {
@@ -515,7 +526,7 @@ function isAnswered(caseId) {
 }
 function currentUnanswered() { return CASES.filter((c) => !isAnswered(c.id)); }
 function pendingFor(caseId) {
-  if (!PENDING[caseId]) PENDING[caseId] = { decision_ok: undefined, reply_ok: null, note: "" };
+  if (!PENDING[caseId]) PENDING[caseId] = { decision_ok: undefined, reply_ok: null, note: "", scope: "one_off" };
   return PENDING[caseId];
 }
 
@@ -605,7 +616,7 @@ function renderReadinessPanel(animate) {
                 : (c.how ? ` <i>(${c.how === "merged" ? "merged into instructions" : "appended to instructions"})</i>` : "")}
                 ${c.at ? `<br><span class="small">${pulledAgo(c.at)}</span>` : ""}</span>
             </div>`).join("")
-          : `<div class="small">Nothing yet. When you leave feedback on a rating, the correction is merged straight into this agent's instructions${SHARE_MODE ? "" : " (Setter &rarr; Agents)"}.</div>`}
+          : `<div class="small">Nothing yet. When you pick "Remember going forward" on a rating, the correction is merged straight into this agent's instructions${SHARE_MODE ? "" : " (Setter &rarr; Agents)"}.</div>`}
           <div class="small" style="margin-top:8px">${changes.length ? `To undo a lesson, edit this agent's instructions directly${SHARE_MODE ? "" : " in Setter &rarr; Agents"}.` : ""}</div>
         </div>
       </details>
@@ -644,8 +655,8 @@ function renderEmpty() {
   const el = document.getElementById("trainApp");
   el.innerHTML = `
     <div class="empty-flow">
-      <p>This agent has no training scenarios yet. Pull a batch of real replies your campaigns have already received - the agent makes its call on each one, and you say whether it was right. Nothing here ever emails a lead.</p>
-      <button class="btn primary" id="emptyGenerateBtn" type="button">Pull real replies to rate</button>
+      <p>This agent has no training scenarios yet. You'll get a batch to rate, drawn from real replies your campaigns have received and topped up with practice scenarios when real ones run out - the agent makes its call on each one, and you say whether it was right. Nothing here ever emails a lead.</p>
+      <button class="btn primary" id="emptyGenerateBtn" type="button">Get scenarios to rate</button>
     </div>
   `;
   document.getElementById("emptyGenerateBtn").addEventListener("click", () => generateMore());
@@ -658,8 +669,8 @@ function renderDone() {
     <div class="done-banner">
       <div class="db-icon">✓</div>
       <div><b>All caught up.</b></div>
-      <div class="db-msg">You've rated ${answeredCount} of ${CASES.length} scenarios for this agent. Pull the next batch of real replies - everything you've taught it so far is applied to how it handles them, and any unrated scenarios always stay.</div>
-      <button class="btn primary" id="doneGenerateBtn" type="button">Pull more real replies</button>
+      <div class="db-msg">You've rated ${answeredCount} of ${CASES.length} scenarios for this agent. Get the next batch, drawn from real replies and topped up with practice scenarios when needed - everything you've taught it so far is applied to how it handles them, and any unrated scenarios always stay.</div>
+      <button class="btn primary" id="doneGenerateBtn" type="button">Get more scenarios</button>
     </div>
   `;
   document.getElementById("doneGenerateBtn").addEventListener("click", () => generateMore());
@@ -667,7 +678,7 @@ function renderDone() {
 
 async function generateMore() {
   if (generating) return;
-  const restores = markGenerateButtonsBusy("Pulling real replies and running the agent on them - under a minute…");
+  const restores = markGenerateButtonsBusy("Building new scenarios and running the agent on them - under a minute…");
   generating = true;
   const baselineCount = CASES.length;
   const genBody = { agent_id: selectedAgentId, batch_size: 8 };
@@ -720,7 +731,9 @@ function renderCase(unanswered, i) {
   const hasOutreach = !!(outreach && outreach.body);
   const outreachBody = hasOutreach
     ? `${outreach.subject ? `<div class="tr-subj">${esc(outreach.subject)}</div>` : ""}${msgText(outreach.body)}`
-    : "<i>The original outreach could not be loaded for this one.</i>";
+    : (c.synthetic
+        ? "<i>Practice scenario: an invented reply in the style your campaigns receive, so there is no original email behind it. The agent's call and draft below are real.</i>"
+        : "<i>The original outreach could not be loaded for this one.</i>");
 
   const humanHist = c.human_answer_history || {};
   const hasHumanHist = !!(humanHist && humanHist.body);
@@ -738,6 +751,7 @@ function renderCase(unanswered, i) {
       <div class="tr-chips">
         <span class="pill n">${esc(campaignName)}</span>
         <span class="pill n">${esc(category)}</span>
+        ${c.synthetic ? `<span class="pill practice">Practice</span>` : ""}
       </div>
       <details class="tr-details" open>
         <summary>The original outreach we sent</summary>
@@ -781,11 +795,20 @@ function renderCase(unanswered, i) {
         <label>Feedback (optional)</label>
         <textarea id="trNote" placeholder="Tell it what should have happened, e.g. this should have gone to review because pricing was asked">${esc(p.note || "")}</textarea>
       </div>
-      <div class="small scope-hint">Anything you type here is merged into this agent's instructions and changes how it replies from now on. Leave it blank and just the rating counts.</div>
+      <div class="scope-row">
+        <span class="scope-lab">Apply this feedback</span>
+        <div class="mode-toggle">
+          <button type="button" class="btn ${p.scope === "one_off" ? "primary sel" : ""}" id="scopeOneOff" data-scope="one_off">One-off</button>
+          <button type="button" class="btn ${p.scope === "remember" ? "primary sel" : ""}" id="scopeRemember" data-scope="remember" ${p.note ? "" : "disabled"}>Remember going forward</button>
+        </div>
+      </div>
+      <div class="small scope-hint">${p.note
+        ? "One-off: your note isn't saved (the rating itself still counts). Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on - you can view or remove it any time under the readiness panel."
+        : "Type feedback above to unlock “Remember going forward”."}</div>
       <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
       <div class="grade-nav">
         <button type="button" class="btn" id="trPrevBtn" ${i === 0 ? "disabled" : ""}>&lsaquo; Previous</button>
-        <button type="button" class="btn" id="midGenerateBtn" style="display:none">Pull more real replies</button>
+        <button type="button" class="btn" id="midGenerateBtn" style="display:none">Get more scenarios</button>
         <button type="button" class="btn primary" id="trNextBtn">Save & continue &rsaquo;</button>
       </div>
     </div>
@@ -819,9 +842,28 @@ function wireCaseEvents(c, unanswered, i) {
     });
   }
   const noteEl = document.getElementById("trNote");
+  const scopeOneOffBtn = document.getElementById("scopeOneOff");
+  const scopeRememberBtn = document.getElementById("scopeRemember");
   if (noteEl) {
-    noteEl.addEventListener("input", () => { p.note = noteEl.value; });
+    noteEl.addEventListener("input", () => {
+      p.note = noteEl.value;
+      const hasNote = !!p.note.trim();
+      if (scopeRememberBtn) scopeRememberBtn.disabled = !hasNote;
+      const hintEl = document.querySelector(".scope-hint");
+      if (hintEl) hintEl.textContent = hasNote
+        ? "One-off: your note isn't saved (the rating itself still counts). Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on - you can view or remove it any time under the readiness panel."
+        : "Type feedback above to unlock “Remember going forward”.";
+      if (!hasNote && p.scope === "remember") {
+        p.scope = "one_off";
+        setScopeButtons(p.scope);
+      }
+    });
   }
+  if (scopeOneOffBtn) scopeOneOffBtn.addEventListener("click", () => { p.scope = "one_off"; setScopeButtons(p.scope); });
+  if (scopeRememberBtn) scopeRememberBtn.addEventListener("click", () => {
+    if (scopeRememberBtn.disabled) return;
+    p.scope = "remember"; setScopeButtons(p.scope);
+  });
 
   const prevBtn = document.getElementById("trPrevBtn");
   if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
@@ -832,6 +874,15 @@ function wireCaseEvents(c, unanswered, i) {
   }
   const nextBtn = document.getElementById("trNextBtn");
   if (nextBtn) nextBtn.addEventListener("click", () => submitAndAdvance(c, nextBtn));
+}
+
+function setScopeButtons(scope) {
+  const oneOff = document.getElementById("scopeOneOff");
+  const remember = document.getElementById("scopeRemember");
+  if (oneOff) oneOff.classList.toggle("sel", scope === "one_off");
+  if (oneOff) oneOff.classList.toggle("primary", scope === "one_off");
+  if (remember) remember.classList.toggle("sel", scope === "remember");
+  if (remember) remember.classList.toggle("primary", scope === "remember");
 }
 
 function showNudge(msg) {
@@ -848,10 +899,7 @@ async function submitAndAdvance(c, btn) {
   if (p.decision_ok === undefined) { showNudge("Answer \"Right call?\" first."); return; }
   const noteEl = document.getElementById("trNote");
   if (noteEl) p.note = noteEl.value.trim();
-  // Typing feedback IS teaching: any note always persists (scope "remember");
-  // no note = the rating alone counts (scope one_off is a no-op server-side
-  // when the note is empty).
-  const effectiveScope = p.note ? "remember" : "one_off";
+  const effectiveScope = p.note ? (p.scope || "one_off") : "one_off";
 
   const restore = busyBtn(btn, "Saving…");
   if (!restore) return;

@@ -2988,15 +2988,31 @@ def _grading_relearn():
 
 # ── training engine (per-agent, permanent) ──────────────────────────────────
 # Turns real archived replies into scenarios one agent can be trained on, in
-# the open-ended batches. Every scenario's inbound text is a REAL reply
+# the open-ended batches. Every REAL scenario's inbound text is a real reply
 # verbatim - the eval realism law applies here exactly like grading: no
-# invented pricing, resources, or facts. Doc row id "training-<agent_id>" in
-# the same reserved-row pattern as __settings__/__grading__ (see
-# _load_agents's exclusion filter above). Uses the exact same classify/
-# decide/draft_reply/lint_draft pipeline pieces as generate_grading.py, run
-# as-if the master switch and this agent's mode were both ON (the question
-# is "how would this agent have handled this", not "is autopilot on right
-# now") - no send path exists anywhere in this section.
+# invented pricing, resources, or facts.
+#
+# SYNTHETIC scenarios (added 2026-07-14, built only when the real corpus
+# can't fill a requested batch - see _invent_training_scenarios and
+# _training_generate_worker's shortfall top-up) may invent the LEAD side of
+# a scenario ONLY: the lead's name, company, and the wording/subject of
+# their inbound reply. They must NEVER fabricate an agent-side fact - no
+# price, no discount, no specific resource, no link, no availability
+# window, no promised date. Every synthetic scenario's decision and draft
+# still run through the exact same live classify/decide/draft_reply/
+# lint_draft pipeline, with this agent's real brain (instructions) and
+# memory, exactly like a real one - only the inbound text is made up.
+# Synthetic cases carry "synthetic": true, NEVER touch used_reply_ids
+# (there is no real reply to mark used), and never mint a fake reply_id
+# (reply_id is always None on a synthetic case).
+#
+# Doc row id "training-<agent_id>" in the same reserved-row pattern as
+# __settings__/__grading__ (see _load_agents's exclusion filter above).
+# Uses the exact same classify/decide/draft_reply/lint_draft pipeline
+# pieces as generate_grading.py, run as-if the master switch and this
+# agent's mode were both ON (the question is "how would this agent have
+# handled this", not "is autopilot on right now") - no send path exists
+# anywhere in this section, real or synthetic.
 
 TRAINING_ID_PREFIX = "training-"
 SENT_MESSAGES_TABLE = "sent_messages"
@@ -3022,6 +3038,16 @@ _TRAINING_ACTIONABLE_WEIGHTS = {
 # every batch so a trainer also teaches the agent when to correctly LEAVE a
 # reply alone, not just when to intervene.
 _TRAINING_CLEAR_NEGATIVE_CATEGORIES = ["Not Interested", "Do Not Contact", "Wrong Person", "Out Of Office"]
+
+# Synthetic scenarios (see the doctrine comment above) only ever invent the
+# simple, common categories - Contact Forward and positive-re-reply are
+# real-corpus-only categories, deliberately excluded here to keep invented
+# scenarios simple and common rather than covering every edge case a real
+# archived reply might. Not Interested and Out Of Office are the two
+# clear-negative categories a synthetic scenario may represent.
+_SYNTHETIC_ACTIONABLE_WEIGHTS = {cat: w for cat, w in _TRAINING_ACTIONABLE_WEIGHTS.items()
+                                 if cat in ("Interested", "Information Request", "Meeting Request")}
+_SYNTHETIC_NEGATIVE_CATEGORIES = ["Not Interested", "Out Of Office"]
 
 
 def _training_doc_id(agent_id: str) -> str:
@@ -3138,7 +3164,7 @@ def _resolve_share_scope(agent_id, share_token: str, public: bool = False):
 
 def _load_training(agent_id: str) -> dict:
     default = {"cases": [], "answers": {}, "used_reply_ids": [], "readiness_history": [],
-               "generating": {"status": "idle"},
+               "generating": {"status": "idle"}, "pending_merges": [],
                "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
     if not _SB or not agent_id:
         return default
@@ -3151,6 +3177,13 @@ def _load_training(agent_id: str) -> dict:
             doc.setdefault("used_reply_ids", [])
             doc.setdefault("readiness_history", [])
             doc.setdefault("generating", {"status": "idle"})
+            # Latency fix (2026-07-14): "remember" corrections from the
+            # training-answer route no longer call merge_correction_into_
+            # instructions (a gpt-5-mini call, 5-15s) inline - they queue
+            # here instead, and the background retrain worker drains this
+            # list first thing on every pass. See route_training_answer and
+            # _training_retrain_worker.
+            doc.setdefault("pending_merges", [])
             doc.setdefault("created_at", default["created_at"])
             return doc
     except Exception:  # noqa: BLE001
@@ -3165,34 +3198,50 @@ def _save_training(agent_id: str, doc: dict):
        prefer="resolution=merge-duplicates,return=minimal")
 
 
-def _weighted_category_targets(n: int) -> dict:
-    """Splits a training batch size into per-category targets: ~80% across
-    the actionable categories proportional to their real corpus weights
-    (largest-remainder rounding, so the counts always sum exactly to the
-    actionable share), ~20% split evenly across the clear-negative
-    categories. This only decides HOW MANY of each real category to ask
-    Supabase for - it never invents a scenario."""
+def _weighted_category_targets(n: int, weights: dict | None = None,
+                               negative_categories: list | None = None) -> dict:
+    """Splits a batch size of `n` into per-category targets: ~80% across
+    the actionable categories proportional to `weights` (largest-remainder
+    rounding, so the counts always sum exactly to the actionable share),
+    ~20% split evenly across `negative_categories`. Defaults to the real
+    corpus weights/categories (_TRAINING_ACTIONABLE_WEIGHTS /
+    _TRAINING_CLEAR_NEGATIVE_CATEGORIES) when the caller doesn't override
+    them - see _synthetic_category_targets for the synthetic-scenario
+    override. This only decides HOW MANY of each category to draw/invent -
+    it never picks a real row or writes a scenario itself."""
     n = max(0, int(n or 0))
+    weights = weights if weights is not None else _TRAINING_ACTIONABLE_WEIGHTS
+    negative_categories = negative_categories if negative_categories is not None else _TRAINING_CLEAR_NEGATIVE_CATEGORIES
     n_actionable = round(n * TRAINING_ACTIONABLE_SHARE)
     n_negative = n - n_actionable
     targets = {}
-    if n_actionable:
-        total_w = sum(_TRAINING_ACTIONABLE_WEIGHTS.values()) or 1
-        raw = {cat: (w / total_w) * n_actionable for cat, w in _TRAINING_ACTIONABLE_WEIGHTS.items()}
+    if n_actionable and weights:
+        total_w = sum(weights.values()) or 1
+        raw = {cat: (w / total_w) * n_actionable for cat, w in weights.items()}
         floors = {cat: int(v) for cat, v in raw.items()}
         remainder = n_actionable - sum(floors.values())
         order = sorted(raw, key=lambda c: raw[c] - floors[c], reverse=True)
         for cat in order[:remainder]:
             floors[cat] += 1
         targets.update({cat: c for cat, c in floors.items() if c})
-    if n_negative:
-        cats = _TRAINING_CLEAR_NEGATIVE_CATEGORIES
+    if n_negative and negative_categories:
+        cats = negative_categories
         base, extra = divmod(n_negative, len(cats))
         for i, cat in enumerate(cats):
             c = base + (1 if i < extra else 0)
             if c:
                 targets[cat] = targets.get(cat, 0) + c
     return targets
+
+
+def _synthetic_category_targets(n: int) -> dict:
+    """_weighted_category_targets restricted to the simple, common
+    categories a SYNTHETIC scenario may represent (see the doctrine comment
+    above and _SYNTHETIC_ACTIONABLE_WEIGHTS/_SYNTHETIC_NEGATIVE_CATEGORIES).
+    Still 80% actionable / 20% clear-negative overall, per
+    TRAINING_ACTIONABLE_SHARE."""
+    return _weighted_category_targets(n, weights=_SYNTHETIC_ACTIONABLE_WEIGHTS,
+                                      negative_categories=_SYNTHETIC_NEGATIVE_CATEGORIES)
 
 
 def _fetch_training_candidates(category: str, exclude_ids: list, want: int,
@@ -3324,6 +3373,309 @@ def _fetch_human_answer_history(campaign_id, email: str, replied_at: str) -> dic
     return {}
 
 
+# ── synthetic scenario invention (shortfall top-up, see the doctrine
+# comment above _TRAINING_ID_PREFIX) ────────────────────────────────────────
+
+def _fetch_reply_tone_sample(allowed_campaign_ids: list | None = None, limit: int = 12) -> list:
+    """A small sample of this agent's REAL archived replies, for TONE AND
+    SHAPE reference only when inventing synthetic scenarios - deliberately
+    IGNORES used_reply_ids (an already-used reply is perfectly fine to show
+    the model what a real lead here actually sounds like; this is not
+    selecting a case, just describing a voice). Adapts
+    _fetch_training_candidates's query shape but pools across every
+    category rather than one at a time. `allowed_campaign_ids`, when given
+    (share mode), scopes the sample exactly like every other training
+    query. Returns [] (never raises) when nothing is found - callers treat
+    an empty sample as "this agent has zero replies anywhere" and fall back
+    to brain/campaign context instead (see _invent_training_scenarios)."""
+    if not _SB:
+        return []
+    try:
+        pool_size = max(limit * 4, 40)
+        filt = (f"workspace=eq.{WORKSPACE}&order=replied_at.desc&limit={pool_size}"
+                f"&select=id,smartlead_campaign_id,email,replied_at,category,reply_subject,reply_body")
+        if allowed_campaign_ids is not None:
+            ids_csv = ",".join(quote(str(c), safe="") for c in allowed_campaign_ids)
+            filt += f"&smartlead_campaign_id=in.({ids_csv})"
+        rows = _SB("GET", f"{REPLIES_TABLE}?{filt}")
+        if not isinstance(rows, list):
+            return []
+        candidates = [r for r in rows if isinstance(r, dict)
+                     and len(str(r.get("reply_body") or "").strip()) >= 10]
+        random.shuffle(candidates)
+        return candidates[:limit]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _fetch_agent_outreach_sample(campaign_ids: list, limit: int = 3) -> list:
+    """A few real seq-1 outbound emails (subject+body) across this agent's
+    own campaigns - the zero-replies fallback context so the model can
+    invent a plausible inbound reply to what this agent's outreach actually
+    says, instead of guessing blind. Never invents or returns an agent-side
+    fact itself; this is just showing the model the pitch a lead would be
+    reacting to."""
+    campaign_ids = [str(c) for c in (campaign_ids or []) if c]
+    if not _SB or not campaign_ids:
+        return []
+    try:
+        ids_csv = ",".join(quote(c, safe="") for c in campaign_ids)
+        rows = _SB("GET", f"{SENT_MESSAGES_TABLE}?smartlead_campaign_id=in.({ids_csv})"
+                          f"&email_seq_number=eq.1&select=subject,body&limit={limit}")
+        if isinstance(rows, list):
+            return [{"subject": r.get("subject") or "", "body": r.get("body") or ""}
+                   for r in rows if isinstance(r, dict) and str(r.get("body") or "").strip()]
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
+TRAINING_SCENARIO_ITEM_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "lead_first_name": {"type": "string"}, "lead_company": {"type": "string"},
+        "subject": {"type": "string"}, "body": {"type": "string"},
+    },
+    "required": ["lead_first_name", "lead_company", "subject", "body"],
+}
+
+TRAINING_SCENARIO_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"scenarios": {"type": "array", "items": TRAINING_SCENARIO_ITEM_SCHEMA}},
+    "required": ["scenarios"],
+}
+
+TRAINING_SCENARIO_SYSTEM = """You invent PRACTICE scenarios for training an AI appointment-setter agent. Each scenario is a made-up inbound reply from a made-up lead, used only to rehearse how the agent classifies, decides, and drafts a response - it is never sent to anyone.
+
+LEAD-SIDE-ONLY LAW (hard rule): you may invent the lead's first name, their company, and the wording and subject of their inbound reply ONLY. You must NEVER state, as a fact, any agent-side detail - no price, no discount, no specific resource, no link, no availability window, no promised date. The lead may ASK about pricing, a resource, or availability in their own wording (that is normal lead-side content and is fine); they must never assert one, as if they already know it, in their own reply.
+
+You are given scenario_plan, an ordered list of category labels. Produce exactly one scenario per position in that list, in the same order, so scenario i must read like a reply in category scenario_plan[i]. The categories mean:
+- Interested: the lead is engaged and wants to move forward or learn more.
+- Information Request: the lead is asking a question before they decide (pricing, how it works, a resource, timing).
+- Meeting Request: the lead is directly asking to get on a call or find a time.
+- Not Interested: the lead is politely declining, or saying now is not a good time.
+- Out Of Office: an automated or lead-written away message (on leave, back on a date, or forward to a colleague instead).
+
+reference_replies, when given, are REAL replies this exact agent has actually received before (for tone and shape reference only, never to copy) - match how real leads at this ICP actually write: length, formality, punctuation habits, how a sign-off looks. Never reuse a name, company, or sentence from reference_replies verbatim; invent new ones with a similar feel.
+
+fallback_context, when given instead (no reference replies exist yet), is the agent's own brain plus a sample of the real outreach it sends - use it only to understand what a lead would plausibly be reacting to. Never turn any instructions/pricing/resource/voice_examples content into something the LEAD states as fact in their own reply.
+
+avoid_duplicating lists short gists (category plus the start of the inbound text) of scenarios already waiting to be answered - do not repeat any of these angles, names, or companies.
+
+Output STRICT JSON: {"scenarios": [{"lead_first_name": "...", "lead_company": "...", "subject": "...", "body": "..."}, ...]}, one object per scenario_plan position, in the same order. subject and body should read like a short, real inbound email reply - plain text, a couple of sentences, the way a busy person actually replies, never polished marketing copy."""
+
+
+def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campaign_ids: list | None = None,
+                               reference_sample: list | None = None) -> list:
+    """ONE gpt-5-mini call inventing `count` lead-side-only synthetic
+    training scenarios (see the doctrine comment above), used only to top
+    up a batch the real replies table can't fill (see
+    _training_generate_worker's shortfall handling). Returns a list of
+    {category, lead_first_name, lead_company, subject, body} dicts, in the
+    exact category mix _synthetic_category_targets computed for `count` -
+    the model never chooses the mix, only writes the lead-side content for
+    the category slot it is given.
+
+    `reference_sample`, when given, is a pre-fetched _fetch_reply_tone_
+    sample() result (the worker fetches it once to also decide the
+    shortfall/zero_replies trigger label - see there); when None, this
+    fetches its own. An empty sample means this agent has zero real
+    replies anywhere reachable in this scope, so the prompt falls back to
+    the agent's own brain, extra instructions, pricing notes, resources,
+    voice examples, and a sample of its real campaign outreach instead.
+
+    Returns [] on any failure (missing API key, a bad/empty count, the
+    OpenAI call erroring, or unparsable JSON) - the caller degrades to
+    whatever real cases it already has and never raises."""
+    count = max(0, int(count or 0))
+    if count <= 0:
+        return []
+    key = _KEYS.get("OPENAI_API_KEY")
+    if not key:
+        return []
+
+    targets = _synthetic_category_targets(count)
+    ordered_cats = list(_SYNTHETIC_ACTIONABLE_WEIGHTS.keys()) + _SYNTHETIC_NEGATIVE_CATEGORIES
+    scenario_plan = []
+    for cat in ordered_cats:
+        scenario_plan.extend([cat] * targets.get(cat, 0))
+    # Largest-remainder rounding always sums exactly to `count`, but pad
+    # defensively (falling back to the last negative category) so a future
+    # weighting change can never silently short the plan below `count`.
+    fallback_cat = (_SYNTHETIC_NEGATIVE_CATEGORIES or ordered_cats or ["Interested"])[-1]
+    while len(scenario_plan) < count:
+        scenario_plan.append(fallback_cat)
+    scenario_plan = scenario_plan[:count]
+
+    reference = reference_sample if reference_sample is not None else \
+        _fetch_reply_tone_sample(allowed_campaign_ids=allowed_campaign_ids)
+    payload = {"scenario_plan": scenario_plan}
+    if reference:
+        payload["reference_replies"] = [
+            {"category": r.get("category") or "", "subject": clean_body(r.get("reply_subject") or "")[:200],
+             "body": clean_body(r.get("reply_body") or "")[:600]}
+            for r in reference
+        ]
+    else:
+        campaign_ids = allowed_campaign_ids if allowed_campaign_ids is not None else (agent.get("campaign_ids") or [])
+        payload["fallback_context"] = {
+            "instructions": _agent_instructions(agent)[:3000],
+            "extra_instructions": str((agent or {}).get("extra_instructions") or "")[:1500],
+            "pricing_notes": str((agent or {}).get("pricing_notes") or "")[:1500],
+            "resources": (agent or {}).get("resources") or (agent or {}).get("resource_link") or "",
+            "voice_examples": list((agent or {}).get("voice_examples") or [])[:5],
+            "sample_outreach": _fetch_agent_outreach_sample(campaign_ids, limit=3),
+        }
+
+    existing_cases = list((doc or {}).get("cases") or [])
+    answers = dict((doc or {}).get("answers") or {})
+    unanswered_gists = []
+    for c in existing_cases:
+        if _is_case_answered(c.get("id"), answers):
+            continue
+        body_text = ((c.get("inbound") or {}).get("body") or "").strip()
+        unanswered_gists.append(f"{c.get('category') or ''}: {body_text[:80]}")
+    if unanswered_gists:
+        payload["avoid_duplicating"] = unanswered_gists[:60]
+
+    try:
+        r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                 {"Authorization": f"Bearer {key}"},
+                 {"model": OPENAI_MODEL,
+                  "messages": [{"role": "system", "content": TRAINING_SCENARIO_SYSTEM},
+                              {"role": "user", "content": json.dumps(payload)}],
+                  "response_format": {"type": "json_schema", "json_schema": {
+                      "name": "setter_training_scenarios", "strict": True,
+                      "schema": TRAINING_SCENARIO_SCHEMA}}})
+        if not isinstance(r, dict) or r.get("error"):
+            return []
+        data = json.loads(r["choices"][0]["message"]["content"])
+        raw_scenarios = data.get("scenarios") or []
+        if not isinstance(raw_scenarios, list):
+            return []
+    except Exception:  # noqa: BLE001 - inventing a scenario must never crash generation
+        return []
+
+    scenarios = []
+    for i, cat in enumerate(scenario_plan):
+        item = raw_scenarios[i] if i < len(raw_scenarios) else {}
+        if not isinstance(item, dict):
+            item = {}
+        body = str(item.get("body") or "").strip()
+        if not body:
+            continue
+        scenarios.append({
+            "category": cat,
+            "lead_first_name": str(item.get("lead_first_name") or "").strip(),
+            "lead_company": str(item.get("lead_company") or "").strip(),
+            "subject": str(item.get("subject") or "").strip(),
+            "body": body,
+        })
+    return scenarios
+
+
+def _build_case_core(*, subject: str, body: str, raw_body: str, category, campaign_id, email_domain: str,
+                     original_outreach: dict, human_answer_history: dict, agent: dict, eff_settings: dict,
+                     avail: list, slot_status0: str, now, mem_digest: str, idx: int, reply_id,
+                     synthetic: bool) -> dict:
+    """Shared core of _build_training_case (real archived replies) and
+    _build_synthetic_training_case (invented lead-side-only scenarios, see
+    the doctrine comment above _TRAINING_ID_PREFIX): runs the exact
+    classify -> decide -> draft_reply -> lint_draft pipeline pieces and
+    shapes the resulting case dict. The two callers differ only in WHERE
+    subject/body/category/campaign_id/original_outreach/human_answer_
+    history come from - a real archived reply row vs an invented scenario -
+    everything downstream of that, including the live brain and memory, is
+    identical, so a real and a synthetic case are graded by the exact same
+    pipeline. Costs at most 2 gpt-5-mini calls (one classify, one draft - a
+    clear-negative reply skips the draft call entirely). Never raises - a
+    bad input just yields no case (caller's job to catch and return None)."""
+    first_outbound = original_outreach.get("body") or ""
+    comp = _company_hints(email_domain) if email_domain else {}
+    hints = {"phone": _extract_phone(body), "tld": ".".join(email_domain.split(".")[-2:]) if email_domain else "",
+             "body": body, "country": comp.get("country"), "state": comp.get("state"), "city": comp.get("city")}
+
+    cls = classify({"subject": subject, "body": body, "first_outbound": first_outbound,
+                    "last_outbound": "", "email_domain": email_domain}, agent, owner_hints=mem_digest)
+
+    tz, tz_confident = resolve_timezone(hints, cls)
+
+    primary = cls.get("primary_intent")
+    try:
+        confidence = float(cls.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
+
+    slots, slot_status = [], "not_configured"
+    if not is_clear_neg:
+        if tz:
+            slot_status = slot_status0
+            if slot_status == "ok":
+                eff_lead = dict(eff_settings)
+                eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
+                slots = pick_slots(avail, tz, eff_lead, now)
+                if not slots:
+                    slot_status = "none_available"
+        else:
+            slot_status = "tz_unknown"
+
+    # Calendly fallback (owner ruling 2026-07-14) - see decide() gate 7
+    # and lint_draft().
+    slots_fallback = slot_status != "ok"
+    needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
+
+    draft_html = None
+    lint_ok, lint_reason = False, "No draft was produced."
+    if not is_clear_neg:
+        try:
+            # No hydration, so no real sender name to draw on - "Bjion"
+            # matches the same non-hydrated fallback generate_grading.py
+            # and the grading relearn pass already use.
+            d = draft_reply({"first_name": "", "subject": subject, "body": body,
+                             "first_outbound": first_outbound}, agent, cls, slots, slot_status,
+                            sender_first="Bjion", regen_feedback=mem_digest)
+            draft_html = d.get("html")
+            lint_ok, lint_reason = lint_draft(draft_html, {
+                "subject": d.get("subject"), "first_name": "",
+                "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
+                "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                "slot_labels": [s.get("label") for s in slots],
+                "instructions": _agent_instructions(agent),
+                "booking_link": _booking_link(agent), "thread_text": body,
+                "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+            })
+        except Exception:  # noqa: BLE001
+            draft_html = None
+            lint_ok, lint_reason = False, "No draft was produced."
+
+    ctx = {
+        "red_flag_hits": lexicon_hits(body), "category": category,
+        "first_touch": True, "slot_status": slot_status, "slots_fallback": slots_fallback,
+        "timezone": tz,
+        "tz_confident": tz_confident, "lint_ok": lint_ok, "lint_reason": lint_reason,
+        "body_len": len(body), "hydrated": True, "answered_since_reply": False,
+        "autopilot_enabled": True,
+        "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body))),
+        "first_outbound_present": bool(str(first_outbound or "").strip()),
+        "needs_availability_ask": needs_availability_ask,
+    }
+    decision, reason = decide(cls, agent, ctx)
+
+    case = {
+        "id": f"case-{idx:04d}", "reply_id": reply_id, "campaign_id": campaign_id,
+        "category": category,
+        "inbound": {"subject": subject, "body": body, "raw_body": raw_body},
+        "original_outreach": original_outreach, "human_answer_history": human_answer_history,
+        "classification": cls, "decision": decision, "decision_reason": reason,
+        "draft_html": draft_html,
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+    if synthetic:
+        case["synthetic"] = True
+    return case
+
+
 def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail: list, slot_status0: str,
                          now, mem_digest: str, idx: int) -> dict:
     """Runs the real classify -> decide -> draft_reply pipeline pieces over
@@ -3331,9 +3683,8 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
     (decisions computed as-if the master switch and autopilot were ON, real
     Calendly availability resolved once per batch, no live Smartlead call).
     The inbound text is the real reply verbatim; nothing here invents a
-    scenario. Costs at most 2 gpt-5-mini calls (one classify, one draft - a
-    clear-negative reply skips the draft call entirely). Never raises - a
-    bad reply just yields no case."""
+    scenario. See _build_case_core for the shared pipeline. Never raises -
+    a bad reply just yields no case."""
     try:
         reply_id = reply_row.get("id")
         campaign_id = reply_row.get("smartlead_campaign_id")
@@ -3346,90 +3697,41 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
 
         outreach = _fetch_original_outreach(campaign_id, email)
         human_answer = _fetch_human_answer_history(campaign_id, email, replied_at)
-        first_outbound = outreach.get("body") or ""
-
         domain = email.split("@", 1)[1] if "@" in email else ""
-        comp = _company_hints(domain)
-        hints = {"phone": _extract_phone(body), "tld": ".".join(domain.split(".")[-2:]) if domain else "",
-                 "body": body, "country": comp.get("country"), "state": comp.get("state"), "city": comp.get("city")}
 
-        cls = classify({"subject": subject, "body": body, "first_outbound": first_outbound,
-                        "last_outbound": "", "email_domain": domain}, agent, owner_hints=mem_digest)
-
-        tz, tz_confident = resolve_timezone(hints, cls)
-
-        primary = cls.get("primary_intent")
-        try:
-            confidence = float(cls.get("confidence") or 0)
-        except (TypeError, ValueError):
-            confidence = 0.0
-        is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
-
-        slots, slot_status = [], "not_configured"
-        if not is_clear_neg:
-            if tz:
-                slot_status = slot_status0
-                if slot_status == "ok":
-                    eff_lead = dict(eff_settings)
-                    eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": email}
-                    slots = pick_slots(avail, tz, eff_lead, now)
-                    if not slots:
-                        slot_status = "none_available"
-            else:
-                slot_status = "tz_unknown"
-
-        # Calendly fallback (owner ruling 2026-07-14) - see decide() gate 7
-        # and lint_draft().
-        slots_fallback = slot_status != "ok"
-        needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
-
-        draft_html = None
-        lint_ok, lint_reason = False, "No draft was produced."
-        if not is_clear_neg:
-            try:
-                # No hydration, so no real sender name to draw on - "Bjion"
-                # matches the same non-hydrated fallback generate_grading.py
-                # and the grading relearn pass already use.
-                d = draft_reply({"first_name": "", "subject": subject, "body": body,
-                                 "first_outbound": first_outbound}, agent, cls, slots, slot_status,
-                                sender_first="Bjion", regen_feedback=mem_digest)
-                draft_html = d.get("html")
-                lint_ok, lint_reason = lint_draft(draft_html, {
-                    "subject": d.get("subject"), "first_name": "",
-                    "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
-                    "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
-                    "slot_labels": [s.get("label") for s in slots],
-                    "instructions": _agent_instructions(agent),
-                    "booking_link": _booking_link(agent), "thread_text": body,
-                    "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
-                })
-            except Exception:  # noqa: BLE001
-                draft_html = None
-                lint_ok, lint_reason = False, "No draft was produced."
-
-        ctx = {
-            "red_flag_hits": lexicon_hits(body), "category": category,
-            "first_touch": True, "slot_status": slot_status, "slots_fallback": slots_fallback,
-            "timezone": tz,
-            "tz_confident": tz_confident, "lint_ok": lint_ok, "lint_reason": lint_reason,
-            "body_len": len(body), "hydrated": True, "answered_since_reply": False,
-            "autopilot_enabled": True,
-            "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body))),
-            "first_outbound_present": bool(str(first_outbound or "").strip()),
-            "needs_availability_ask": needs_availability_ask,
-        }
-        decision, reason = decide(cls, agent, ctx)
-
-        return {
-            "id": f"case-{idx:04d}", "reply_id": reply_id, "campaign_id": campaign_id,
-            "category": category,
-            "inbound": {"subject": subject, "body": body, "raw_body": raw_body},
-            "original_outreach": outreach, "human_answer_history": human_answer,
-            "classification": cls, "decision": decision, "decision_reason": reason,
-            "draft_html": draft_html,
-            "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-        }
+        return _build_case_core(subject=subject, body=body, raw_body=raw_body, category=category,
+                                campaign_id=campaign_id, email_domain=domain,
+                                original_outreach=outreach, human_answer_history=human_answer,
+                                agent=agent, eff_settings=eff_settings, avail=avail, slot_status0=slot_status0,
+                                now=now, mem_digest=mem_digest, idx=idx, reply_id=reply_id, synthetic=False)
     except Exception:  # noqa: BLE001 - a single bad reply must never abort the whole batch
+        return None
+
+
+def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: dict, avail: list, slot_status0: str,
+                                   now, mem_digest: str, idx: int, campaign_id=None) -> dict:
+    """Turns one invented lead-side scenario (see _invent_training_scenarios)
+    into a full training case through the EXACT SAME classify -> decide ->
+    draft_reply -> lint_draft pipeline as a real archived reply
+    (_build_case_core) - so its decision and draft are graded by the live
+    brain and memory exactly like a real case. Only the inbound text is
+    made up, and only on the lead's side (see the doctrine comment above).
+    reply_id is always None (a synthetic case never mints a fake one);
+    campaign_id is a real campaign of this agent when the caller has one to
+    give, else None. Never raises - a bad scenario just yields no case,
+    same discipline as _build_training_case."""
+    try:
+        category = scenario.get("category")
+        raw_body = str(scenario.get("body") or "")
+        body = clean_body(raw_body)
+        subject = str(scenario.get("subject") or "")
+
+        return _build_case_core(subject=subject, body=body, raw_body=raw_body, category=category,
+                                campaign_id=campaign_id, email_domain="",
+                                original_outreach={}, human_answer_history={},
+                                agent=agent, eff_settings=eff_settings, avail=avail, slot_status0=slot_status0,
+                                now=now, mem_digest=mem_digest, idx=idx, reply_id=None, synthetic=True)
+    except Exception:  # noqa: BLE001 - a single bad scenario must never abort the whole batch
         return None
 
 
@@ -3537,6 +3839,12 @@ def route_training_get(params):
             "agent_memory": memory,
             "instruction_edits": instruction_edits,
             "generating": generating,
+            # Latency fix (2026-07-14): "remember" notes queue here instead
+            # of merging inline (see route_training_answer /
+            # _training_retrain_worker). Surfaced so a note waiting on a
+            # dead/self-healed worker (see the stale-running heal just
+            # above) is never invisible to the trainer.
+            "pending_merges": len(doc.get("pending_merges") or []),
         }
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -3610,7 +3918,7 @@ def route_training_generate(payload):
 
         thread = threading.Thread(
             target=_training_generate_threadmain,
-            args=(agent_id, agent, allowed_campaign_ids, batch_size, lock),
+            args=(agent_id, agent, allowed_campaign_ids, batch_size, lock, is_share_mode),
             daemon=True,
         )
         _TRAINING_GEN_THREADS[agent_id] = thread
@@ -3620,9 +3928,9 @@ def route_training_generate(payload):
         return 500, {"error": str(e)[:300]}
 
 
-def _training_generate_threadmain(agent_id, agent, allowed_campaign_ids, batch_size, lock):
+def _training_generate_threadmain(agent_id, agent, allowed_campaign_ids, batch_size, lock, is_share_mode=False):
     try:
-        _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
+        _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size, is_share_mode=is_share_mode)
         # A "remember" answer may have queued a retrain pass WHILE this
         # generate batch held the lock (see _kick_off_training_retrain) -
         # run it now, still holding the same lock, so the two kinds of work
@@ -3662,18 +3970,75 @@ def _finish_training_generation(agent_id: str, status: str, error: str | None = 
         pass
 
 
-def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size):
-    """The real generation work - unchanged from the old synchronous route
-    body, except it runs off-request on a daemon thread and its own final
-    save RE-LOADS the doc first (lost-update protection: an answer may have
-    landed in Supabase while this batch was being built, and a save from a
-    doc snapshot captured at the top of this function would silently
-    discard it)."""
+def _log_synthetic_usage(agent_id: str, count: int, trigger: str, is_share_mode: bool):
+    """Best-effort provider_usage row for a generation run that invented one
+    or more synthetic scenarios (never for a run that only used real
+    replies) - mirrors server.py's _meter_verify_calls idiom exactly, over
+    the same sb() REST helper this module already uses via _SB. Never
+    allowed to fail generation. Table columns: id, provider, source_id,
+    credits, endpoint, called_at (called_at defaults server-side).
+    endpoint is "<trigger>:<owner|share>", e.g. "shortfall:owner" or
+    "zero_replies:share".
+
+    lilly-data query example:
+    SELECT source_id, SUM(credits) FROM provider_usage
+    WHERE provider = 'setter_synthetic' AND called_at > now() - interval '7 days'
+    GROUP BY source_id;"""
+    if not _SB or not count:
+        return
+    try:
+        _SB("POST", "provider_usage",
+           {"provider": "setter_synthetic", "source_id": str(agent_id or ""),
+            "credits": int(count), "endpoint": f"{trigger or 'shortfall'}:{'share' if is_share_mode else 'owner'}"})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size, is_share_mode=False):
+    """The real generation work - runs off-request on a daemon thread and
+    its own final save RE-LOADS the doc first (lost-update protection: an
+    answer may have landed in Supabase while this batch was being built,
+    and a save from a doc snapshot captured at the top of this function
+    would silently discard it).
+
+    Shortfall top-up (see the doctrine comment above _TRAINING_ID_PREFIX):
+    when _select_training_replies can't fill the requested batch_size from
+    real replies, the remainder is invented as synthetic, lead-side-only
+    scenarios via _invent_training_scenarios and built through the exact
+    same pipeline as a real case. Synthetic cases NEVER touch
+    used_reply_ids and never mint a fake reply_id - only the real replies
+    selected above ever do that."""
     try:
         doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])
         replies = _select_training_replies(doc, batch_size, allowed_campaign_ids=allowed_campaign_ids)
-        if not replies:
+
+        shortfall = batch_size - len(replies)
+        scenarios = []
+        synthetic_trigger = None
+        if shortfall > 0:
+            # A pre-fetched, unscoped-by-used tone sample both feeds the
+            # invention prompt AND tells us whether this agent has real
+            # replies anywhere reachable in this scope - "zero_replies"
+            # only when that sample comes back genuinely empty, "shortfall"
+            # whenever some real replies exist (this batch or the wider
+            # corpus) but not enough to fill it.
+            reference_sample = _fetch_reply_tone_sample(allowed_campaign_ids=allowed_campaign_ids)
+            synthetic_trigger = "shortfall" if (replies or reference_sample) else "zero_replies"
+            try:
+                scenarios = _invent_training_scenarios(agent, doc, shortfall,
+                                                       allowed_campaign_ids=allowed_campaign_ids,
+                                                       reference_sample=reference_sample)
+            except Exception as e:  # noqa: BLE001 - inventing scenarios must never crash the worker
+                if _LOG:
+                    try:
+                        _LOG("/api/setter/training/generate:invent_failed",
+                            {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+                    except Exception:  # noqa: BLE001
+                        pass
+                scenarios = []
+
+        if not replies and not scenarios:
             _finish_training_generation(agent_id, "failed",
                 error="No new real replies were available to build scenarios from.")
             return
@@ -3702,31 +4067,67 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
         # order.
         start_idx = len(existing_cases)
         results: list = [None] * len(replies)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(replies))) as pool:
-            future_to_idx = {
-                pool.submit(_build_training_case, r, train_agent, eff, avail, slot_status0, now,
-                           mem_digest, start_idx + i): i
-                for i, r in enumerate(replies)
-            }
-            for fut in concurrent.futures.as_completed(future_to_idx):
-                i = future_to_idx[fut]
-                try:
-                    results[i] = fut.result()
-                except Exception as e:  # noqa: BLE001 - one bad case must never sink the batch
-                    if _LOG:
-                        try:
-                            _LOG("/api/setter/training/generate:case_failed",
-                                {"reply_id": replies[i].get("id"), "error": str(e)[:200]}, actor="system")
-                        except Exception:  # noqa: BLE001
-                            pass
-                    results[i] = None
+        if replies:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(replies))) as pool:
+                future_to_idx = {
+                    pool.submit(_build_training_case, r, train_agent, eff, avail, slot_status0, now,
+                               mem_digest, start_idx + i): i
+                    for i, r in enumerate(replies)
+                }
+                for fut in concurrent.futures.as_completed(future_to_idx):
+                    i = future_to_idx[fut]
+                    try:
+                        results[i] = fut.result()
+                    except Exception as e:  # noqa: BLE001 - one bad case must never sink the batch
+                        if _LOG:
+                            try:
+                                _LOG("/api/setter/training/generate:case_failed",
+                                    {"reply_id": replies[i].get("id"), "error": str(e)[:200]}, actor="system")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        results[i] = None
 
         new_cases = [c for c in results if c]
-        if not new_cases:
+
+        # Synthetic top-up cases, built through the exact same pipeline -
+        # appended AFTER the real cases so case-id numbering stays
+        # contiguous with start_idx and every answer still keys correctly.
+        agent_campaign_ids = agent.get("campaign_ids") or []
+        synthetic_campaign_id = agent_campaign_ids[0] if agent_campaign_ids else None
+        synth_start = start_idx + len(new_cases)
+        synthetic_results: list = [None] * len(scenarios)
+        if scenarios:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(scenarios))) as pool:
+                future_to_idx = {
+                    pool.submit(_build_synthetic_training_case, s, train_agent, eff, avail, slot_status0, now,
+                               mem_digest, synth_start + i, campaign_id=synthetic_campaign_id): i
+                    for i, s in enumerate(scenarios)
+                }
+                for fut in concurrent.futures.as_completed(future_to_idx):
+                    i = future_to_idx[fut]
+                    try:
+                        synthetic_results[i] = fut.result()
+                    except Exception as e:  # noqa: BLE001 - one bad scenario must never sink the batch
+                        if _LOG:
+                            try:
+                                _LOG("/api/setter/training/generate:synthetic_case_failed",
+                                    {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        synthetic_results[i] = None
+
+        new_synthetic_cases = [c for c in synthetic_results if c]
+
+        if not new_cases and not new_synthetic_cases:
             _finish_training_generation(agent_id, "failed",
                 error="Couldn't build any scenarios just now - try again in a minute.")
             return
 
+        # Only real replies selected above ever touch used_reply_ids -
+        # synthetic scenarios never mark a reply used (there is no real
+        # reply behind them). This mirrors the old behaviour exactly:
+        # every SELECTED real reply is recorded here regardless of whether
+        # its own case build succeeded (see the one-worker-failure test).
         new_used_ids = [r.get("id") for r in replies]
 
         # Lost-update protection: reload the doc fresh right before saving.
@@ -3735,12 +4136,12 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
         # in the meantime - appending onto a stale in-memory copy would
         # silently drop it.
         fresh_doc = _load_training(agent_id)
-        fresh_doc["cases"] = list(fresh_doc.get("cases") or []) + new_cases
+        fresh_doc["cases"] = list(fresh_doc.get("cases") or []) + new_cases + new_synthetic_cases
         fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
         gen_marker = {
             "status": "idle",
             "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-            "added": len(new_cases),
+            "added": len(new_cases) + len(new_synthetic_cases),
         }
         # Carry retrain_queued forward if a "remember" answer set it while
         # this batch was building - see _finish_training_generation's own
@@ -3749,6 +4150,9 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
             gen_marker["retrain_queued"] = True
         fresh_doc["generating"] = gen_marker
         _save_training(agent_id, fresh_doc)
+
+        if new_synthetic_cases:
+            _log_synthetic_usage(agent_id, len(new_synthetic_cases), synthetic_trigger, is_share_mode)
     except Exception as e:  # noqa: BLE001 - never raise out of a background thread
         if _LOG:
             try:
@@ -3952,20 +4356,59 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         pass
 
 
+def _drain_pending_merges(agent_id: str) -> list:
+    """Latency fix (2026-07-14): route_training_answer no longer merges a
+    "remember" note into the agent's instructions inline - it queues
+    {note, source, at} onto the training doc's own `pending_merges` list
+    instead (see route_training_answer). This is the other half: reloads
+    the training doc fresh, pops every queued entry, and persists the empty
+    list immediately (before any of the actual gpt-5-mini merge calls run)
+    so a note is never double-applied and a fresh "remember" answer that
+    lands mid-drain just queues its own new entry for the NEXT pass to pick
+    up. Only `pending_merges` is ours to write here - reloading right before
+    saving mirrors the same lost-update discipline the worker's own final
+    save already uses, so an answer/cases write that lands concurrently is
+    never clobbered. Returns the popped entries in submission order (empty
+    list if nothing was queued)."""
+    doc = _load_training(agent_id)
+    pending = list(doc.get("pending_merges") or [])
+    if pending:
+        doc["pending_merges"] = []
+        _save_training(agent_id, doc)
+    return pending
+
+
 def _training_retrain_worker(agent_id: str):
-    """Reloads the agent (fresh instructions), builds a session feedback
-    digest from this training doc's own answers, then re-runs every currently
-    UNANSWERED case in position order, concurrently (ThreadPoolExecutor,
-    max 6 - same worker hygiene as _training_generate_worker: cases touch no
-    shared mutable state besides their own dict). Persists with a fresh
-    reload right before the final save so an answer that lands mid-pass is
-    never lost (lost-update protection, same discipline as
-    _training_generate_worker and _grading_relearn). If another trigger
-    queued a fresh pass while this one ran, loops once more with the fuller
-    digest before finishing - mirrors _grading_relearn exactly. Never
-    raises."""
+    """FIRST drains and merges any queued pending_merges (see
+    _drain_pending_merges) - in submission order, each via
+    merge_correction_into_instructions, which already does its own safe
+    agent reload/save and always falls back to a dumb append on any
+    failure, so a bad merge never blocks the retrain below. THEN reloads
+    the agent fresh (picking up whatever the drain just merged), builds a
+    session feedback digest from this training doc's own answers, and
+    re-runs every currently UNANSWERED case in position order, concurrently
+    (ThreadPoolExecutor, max 6 - same worker hygiene as
+    _training_generate_worker: cases touch no shared mutable state besides
+    their own dict). Persists with a fresh reload right before the final
+    save so an answer that lands mid-pass is never lost (lost-update
+    protection, same discipline as _training_generate_worker and
+    _grading_relearn). If another trigger queued a fresh pass while this one
+    ran - including a fresh "remember" note that landed mid-pass - loops
+    once more, draining pending_merges again at the TOP of that follow-on
+    pass before its own retrain work, mirroring _grading_relearn exactly.
+    Never raises."""
     try:
         while True:
+            for entry in _drain_pending_merges(agent_id):
+                note = str((entry or {}).get("note") or "").strip()
+                if not note:
+                    continue
+                merge_agent = _load_agent(agent_id)
+                if not merge_agent:
+                    break
+                merge_correction_into_instructions(
+                    merge_agent, note, source=(entry or {}).get("source") or "training")
+
             agent = _load_agent(agent_id)
             if not agent:
                 _finish_training_generation(agent_id, "idle")
@@ -4070,15 +4513,24 @@ def route_training_answer(payload):
                             "scope": scope, "at": at}
         doc["answers"] = answers
 
-        # scope="remember" (owner ruling 2026-07-14) merges the note straight
-        # into the agent's own `instructions` text via
+        # scope="remember" (owner ruling 2026-07-14) is meant to merge the
+        # note straight into the agent's own `instructions` text via
         # merge_correction_into_instructions - the single living manual, feeds
         # every future classify()/draft_reply() call and every future
         # training generation, exactly the same helper the inbox correction/
-        # redraft flows now use. scope="one_off" (or an empty note) is
-        # audit-only and changes nothing but feedback_log.
+        # redraft flows still use synchronously. But that helper calls
+        # gpt-5-mini (5-15s), and this route must return in well under a
+        # second so "Save & continue" never blocks the trainer waiting for
+        # the next card. So here the note is only QUEUED onto the training
+        # doc's own `pending_merges` list (written by the SAME _save_training
+        # call below that stores the answer - one write, no extra round
+        # trip); the background retrain worker kicked off further down
+        # drains and merges it. scope="one_off" (or an empty note) is
+        # audit-only and changes nothing but feedback_log, exactly as before.
         if note and scope == "remember":
-            merge_correction_into_instructions(agent, note, source=f"training:{case_id}")
+            pending_merges = list(doc.get("pending_merges") or [])
+            pending_merges.append({"note": note, "source": f"training:{case_id}", "at": at})
+            doc["pending_merges"] = pending_merges
         elif note:
             _append_agent_feedback_log(agent_id, note, source=f"training:{case_id}")
 
@@ -4096,9 +4548,9 @@ def route_training_answer(payload):
         # explicit wrong mark on either question - re-runs every remaining
         # unanswered scenario with the updated brain, in the background, so
         # the owner never has to repeat a correction case after case. Kicked
-        # off AFTER the answer/merge above are both saved, so the retrain
-        # pass's reload sees this case as answered (excluded) and the
-        # freshest instructions.
+        # off AFTER the answer (and any queued pending_merges entry) are
+        # saved, so the retrain worker's own drain-then-reload sees this
+        # case as answered (excluded) and picks up the just-queued note.
         triggers_retrain = bool(note) or decision_ok is False or reply_ok is False
         retrain = _kick_off_training_retrain(agent_id) if triggers_retrain else None
 
