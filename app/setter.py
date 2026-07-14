@@ -1445,6 +1445,14 @@ def _save_agent(doc: dict) -> dict:
     doc.setdefault("allowed_intents", [])
     doc.setdefault("confidence_threshold", 0.9)
     doc.setdefault("instructions", "")
+    # Canonical sign-off identity (owner bug report 2026-07-14: the agent was
+    # signing off with three different names depending on which code path
+    # drafted the reply). A first name only, e.g. "Kevin" - see
+    # _sender_first_for, the single resolver every draft_reply call site uses.
+    # Left empty until either the owner sets it in the agent modal, or the
+    # live pipeline self-learns it from the campaign's own sent emails
+    # (process_reply's hydrate handling).
+    doc.setdefault("sender_first", "")
     # Legacy fields kept so agent docs saved before the v2 simplification keep
     # working (pricing_notes is still read as the instructions fallback) -
     # just no longer shown or written to by the v2 editor UI.
@@ -1490,6 +1498,28 @@ def _save_agent(doc: dict) -> dict:
         _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": doc["id"], "doc": doc},
            prefer="resolution=merge-duplicates,return=minimal")
     return doc
+
+
+def _sender_first_for(agent: dict, thread_name: str = "") -> str:
+    """Single canonical resolver for whose first name a draft signs off with -
+    every draft_reply call site (live pipeline, queue redraft, training real-
+    case building, synthetic training, retrain, recheck, grading relearn)
+    routes through this one function instead of deriving or hardcoding its
+    own value (owner bug report 2026-07-14: the same agent was signing off
+    with three different names - thread-derived, hardcoded "Bjion", or a
+    blank sign-off - depending on which surface drafted the reply).
+
+    Precedence: a non-empty `thread_name` (the live Smartlead thread's last
+    SENT from_name - per-lead ground truth, since the sending mailbox may not
+    literally be the agent owner) always wins. Otherwise falls back to the
+    agent's own configured `sender_first`. Otherwise "" - draft_reply's
+    DRAFT_SYSTEM rule ("If SenderFirst is empty, end with no sign-off line at
+    all") already handles that case correctly; this resolver never invents a
+    name."""
+    thread_name = str(thread_name or "").strip()
+    if thread_name:
+        return thread_name
+    return str((agent or {}).get("sender_first") or "").strip()
 
 
 def _agent_memory_digest(agent: dict, limit_chars: int = 2000) -> str:
@@ -1959,6 +1989,23 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         sender_first = hyd.get("sender_first") or sender_first
         answered_since_reply = bool(hyd.get("answered_since_reply"))
         first_outbound = hyd.get("first_outbound") or first_outbound
+        # Self-learning (owner bug report 2026-07-14): the thread's real SENT
+        # from_name is per-lead ground truth for this agent's sign-off. The
+        # first time it shows up for an agent with no sender_first configured
+        # yet, stamp it onto the agent doc ONCE so every other surface -
+        # training, redraft, retrain, recheck, none of which have a thread to
+        # read - inherits the same identity via _sender_first_for instead of
+        # guessing or hardcoding "Bjion". Never overwrites a name the owner
+        # (or an earlier stamp) already set - _save_agent's merge semantics
+        # only fill in fields, they never blank an existing value here since
+        # we gate on agent.get("sender_first") being empty first.
+        thread_name = hyd.get("sender_first") or ""
+        if thread_name and not agent.get("sender_first") and agent.get("id"):
+            try:
+                _save_agent({"id": agent["id"], "sender_first": thread_name})
+                agent["sender_first"] = thread_name
+            except Exception:  # noqa: BLE001 - the stamp is a nice-to-have, never worth failing the pipeline
+                pass
         # Hydration can resolve a different (real) message id than the one we
         # claimed under. If another row already owns the real key, the other
         # intake path (webhook vs poll) got here first - stand down rather
@@ -1975,6 +2022,12 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
                     except Exception:  # noqa: BLE001 - a leftover husk is not worth a crash
                         pass
                 return other
+
+    # Canonical identity resolution (see _sender_first_for): the thread-
+    # derived name (or, for a test-injected reply, whatever the caller passed
+    # in reply["sender_first"]) always wins when present; an empty hydration
+    # falls back to the agent's own configured identity instead of "".
+    sender_first = _sender_first_for(agent, sender_first)
 
     # Everything the pipeline READS uses the cleaned text (HTML stripped) -
     # a two-word Outlook reply must not fail the length veto because of its
@@ -2836,10 +2889,14 @@ def route_queue_redraft(payload):
         mem_digest = _agent_memory_digest(agent)
         combined_feedback = "\n".join([x for x in (mem_digest, feedback_text) if x])
         combined_feedback = _prefix_latest_rules(_latest_owner_rules(agent), combined_feedback)
+        # No live thread re-read on a redraft (the row doesn't keep a from_name
+        # separate from its stored thread) - resolves to the agent's own
+        # configured identity via _sender_first_for, same as every other
+        # non-live surface. See owner bug report 2026-07-14.
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
              "thread_text": thread_text},
-            agent, classification, slots, slot_status, sender_first="",
+            agent, classification, slots, slot_status, sender_first=_sender_first_for(agent),
             regen_feedback=combined_feedback)
         draft_html = d.get("html")
         if draft_html:
@@ -3098,7 +3155,8 @@ def _relearn_one_case(case: dict, agent_snapshot: dict, digest: str):
                 d = draft_reply(
                     {"first_name": case.get("lead_first_name") or "", "subject": ctx_src.get("subject") or "",
                      "body": inbound, "first_outbound": first_outbound},
-                    agent_snapshot, cls, slots, slot_status, sender_first="Bjion", regen_feedback=digest)
+                    agent_snapshot, cls, slots, slot_status,
+                    sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
                 draft_html = d.get("html")
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": case.get("lead_first_name") or "",
@@ -3871,12 +3929,13 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
     lint_ok, lint_reason = False, "No draft was produced."
     if not is_clear_neg:
         try:
-            # No hydration, so no real sender name to draw on - "Bjion"
-            # matches the same non-hydrated fallback generate_grading.py
-            # and the grading relearn pass already use.
+            # No hydration, so no real sender name to draw on - resolves to
+            # the agent's own configured identity via _sender_first_for, same
+            # as every other non-live surface (owner bug report 2026-07-14:
+            # this used to hardcode "Bjion" regardless of which agent it was).
             d = draft_reply({"first_name": "", "subject": subject, "body": body,
                              "first_outbound": first_outbound}, agent, cls, slots, slot_status,
-                            sender_first="Bjion", regen_feedback=mem_digest)
+                            sender_first=_sender_first_for(agent), regen_feedback=mem_digest)
             draft_html = d.get("html")
             if draft_html:
                 # Second sweep (owner brief 2026-07-14) - runs BEFORE
@@ -4624,9 +4683,12 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         lint_ok, lint_reason = False, "No draft was produced."
         if not is_clear_neg:
             try:
+                # No hydration in a retrain pass either - resolves to the
+                # agent's own configured identity via _sender_first_for (owner
+                # bug report 2026-07-14: this used to hardcode "Bjion").
                 d = draft_reply({"first_name": "", "subject": subject, "body": body,
                                  "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
-                                sender_first="Bjion", regen_feedback=digest)
+                                sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
                 draft_html = d.get("html")
                 if draft_html:
                     # Second sweep (owner brief 2026-07-14) - BEFORE lint so
@@ -4741,9 +4803,12 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         lint_ok, lint_reason = False, "No draft was produced."
         if not is_clear_neg:
             try:
+                # No hydration in a recheck pass either - resolves to the
+                # agent's own configured identity via _sender_first_for (owner
+                # bug report 2026-07-14: this used to hardcode "Bjion").
                 d = draft_reply({"first_name": "", "subject": subject, "body": body,
                                  "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
-                                sender_first="Bjion", regen_feedback=digest)
+                                sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
                 draft_html = d.get("html")
                 if draft_html:
                     # Second sweep (owner brief 2026-07-14) - BEFORE lint so

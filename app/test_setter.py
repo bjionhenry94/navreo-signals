@@ -6575,6 +6575,262 @@ def test_proofread_wired_into_queue_redraft():
          "thank you" in saved_draft and "thankyou thankyou" not in saved_draft, saved_draft)
 
 
+# ── sign-off identity resolver (owner bug report 2026-07-14) ────────────────
+# "it keeps switching the name it signs off with" - draft_reply's sender_first
+# used to be derived differently per surface: the live pipeline read the real
+# Smartlead thread (correct, per-lead), but training real-case building,
+# grading relearn, the retrain worker, and the recheck worker all hardcoded
+# "Bjion", and route_queue_redraft passed "" (no sign-off at all). Every one
+# of those call sites now routes through _sender_first_for, the single
+# resolver: thread-derived name (live ground truth) wins when present,
+# otherwise the agent's own configured `sender_first`, otherwise "".
+
+def _draft_capture(html_name="Bjion"):
+    """Returns (captured_dict, draft_fn) - draft_fn parses the OpenAI request
+    body draft_reply() actually sent and stashes its sender_first field into
+    captured["sender_first"], so a test can assert on exactly what the
+    resolver produced without caring about the drafted content itself."""
+    captured = {}
+
+    def draft_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured["sender_first"] = payload.get("sender_first")
+        return {"subject": "Re: hi",
+                "html": f"<div>Hi there,</div><br><div>Sounds good.</div><br><div>{html_name}</div>"}
+
+    return captured, draft_fn
+
+
+_SF_CLASSIFY_FN = lambda _b: {  # noqa: E731 - tiny fixture, matches the style of _training_classify_fn above
+    "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+    "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+    "wants": "wants info", "rationale": "",
+}
+
+
+def test_sender_first_for_resolver_precedence():
+    check("_sender_first_for: a non-empty thread name wins over the agent's own configured identity",
+         setter._sender_first_for({"sender_first": "Kevin"}, "Priya") == "Priya")
+    check("_sender_first_for: falls back to the agent's configured identity when the thread name is empty",
+         setter._sender_first_for({"sender_first": "Kevin"}, "") == "Kevin")
+    check("_sender_first_for: '' when neither the thread nor the agent has a name",
+         setter._sender_first_for({}, "") == "")
+    check("_sender_first_for: tolerates a None agent (never crashes)",
+         setter._sender_first_for(None, "") == "")
+    check("_sender_first_for: whitespace-only inputs on both sides resolve to ''",
+         setter._sender_first_for({"sender_first": "   "}, "   ") == "")
+
+
+def test_relearn_uses_agent_sender_first_not_hardcoded_bjion():
+    sb, http = fresh_setter()
+    captured, draft_fn = _draft_capture("Kevin")
+    http.draft_fn = draft_fn
+    http.classify_fn = _SF_CLASSIFY_FN
+
+    agent_snapshot = {"id": "agent-relearnsf1", "sender_first": "Kevin", "resource_link": "https://x.example/r"}
+    case = {"inbound": "Sure, send it over.", "_ctx": {"subject": "Re: hi"}, "lead_first_name": "Pat"}
+    setter._relearn_one_case(case, agent_snapshot, "")
+    check("grading relearn: draft_reply gets the agent's own sender_first, not a hardcoded 'Bjion'",
+         captured.get("sender_first") == "Kevin", captured)
+
+
+def test_build_training_case_uses_agent_sender_first_not_hardcoded_bjion():
+    sb, http = fresh_setter()
+    captured, draft_fn = _draft_capture("Priya")
+    http.draft_fn = draft_fn
+    http.classify_fn = _SF_CLASSIFY_FN
+
+    agent = {"id": "agent-trainsf1", "sender_first": "Priya", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    reply_row = {"id": 9401, "smartlead_campaign_id": 1, "email": "sf1@example.com",
+                "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+                "reply_subject": "Re: our email", "reply_body": "Sounds great, send more info please."}
+    setter._build_training_case(reply_row, agent, {}, [], "not_configured", now, "", idx=0)
+    check("training real-case building: draft_reply gets the agent's own sender_first, not a hardcoded 'Bjion'",
+         captured.get("sender_first") == "Priya", captured)
+
+
+def test_retrain_case_uses_agent_sender_first_not_hardcoded_bjion():
+    sb, http = fresh_setter()
+    captured, draft_fn = _draft_capture("Sam")
+    http.draft_fn = draft_fn
+    http.classify_fn = _SF_CLASSIFY_FN
+
+    agent_snapshot = {"id": "agent-retrainsf1", "sender_first": "Sam", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    case = {"inbound": {"subject": "Re: hi", "body": "Sounds great, send more info please."},
+           "original_outreach": {}, "category": "Interested"}
+    setter._retrain_one_training_case(case, agent_snapshot, {}, [], "not_configured", now, "")
+    check("retrain worker: draft_reply gets the agent's own sender_first, not a hardcoded 'Bjion'",
+         captured.get("sender_first") == "Sam", captured)
+
+
+def test_recheck_case_uses_agent_sender_first_not_hardcoded_bjion():
+    sb, http = fresh_setter()
+    captured, draft_fn = _draft_capture("Noor")
+    http.draft_fn = draft_fn
+    http.classify_fn = _SF_CLASSIFY_FN
+
+    agent_snapshot = {"id": "agent-rechecksf1", "sender_first": "Noor", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    case = {"inbound": {"subject": "Re: hi", "body": "Sounds great, send more info please."},
+           "original_outreach": {}, "category": "Interested", "decision": "review", "draft_html": ""}
+    setter._recheck_one_training_case(case, agent_snapshot, {}, [], "not_configured", now, "")
+    check("recheck worker: draft_reply gets the agent's own sender_first, not a hardcoded 'Bjion'",
+         captured.get("sender_first") == "Noor", captured)
+
+
+def test_queue_redraft_passes_agent_sender_first():
+    sb, http = fresh_setter()
+    captured, draft_fn = _draft_capture("Dana")
+    http.draft_fn = draft_fn
+
+    agent = {"id": "agent-redraftsf1", "mode": "draft_only", "enabled": True, "sender_first": "Dana",
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.queue.append({
+        "id": 801, "workspace": "navreo", "smartlead_campaign_id": 111, "agent_id": agent["id"],
+        "lead_email": "rd1@example.com", "lead_first_name": "There", "message_id": "m-rd1",
+        "reply_subject": "Re: hi", "reply_body": "sure, send it",
+        "classification": {"primary_intent": "send_resource", "all_intents": ["send_resource"]},
+        "timezone": None, "thread": [],
+    })
+    status, resp = setter.route_queue_redraft({"id": 801, "feedback": "shorter please"})
+    check("queue redraft: returns 200", status == 200, (status, resp))
+    check("queue redraft: draft_reply gets the agent's own configured sender_first (not blank)",
+         captured.get("sender_first") == "Dana", captured)
+
+
+def test_process_reply_thread_name_wins_over_agent_identity():
+    """Live pipeline (owner bug report 2026-07-14): the real Smartlead thread
+    is per-lead ground truth, so it must win even when the agent has its own
+    (different) sender_first configured - e.g. a shared mailbox sent under a
+    colleague's name for this one lead."""
+    sb, http = fresh_setter()
+    http.message_history = [
+        {"type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+         "email_body": "sure, send it over", "message_id": "m-sf1", "stats_id": "st-sf1"},
+        {"type": "SENT", "time": "2026-07-09T09:00:00+00:00", "subject": "hi", "email_body": "intro",
+         "from_name": "Priya Shah"},
+    ]
+    http.classify_fn = _SF_CLASSIFY_FN
+    captured, draft_fn = _draft_capture("Priya")
+    http.draft_fn = draft_fn
+
+    agent = {"id": "agent-threadwins1", "mode": "draft_only", "enabled": True,
+             "sender_first": "Kevin",  # deliberately different from the thread's real sender
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    reply = {"workspace": "navreo", "campaign_id": 111, "email": "sf1@example.com",
+             "first_name": "There", "message_id": "m-sf1", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    setter.process_reply(reply, agent, {})
+    check("live pipeline: thread-derived sender name wins over the agent's own configured identity",
+         captured.get("sender_first") == "Priya", captured)
+
+
+def test_process_reply_falls_back_to_agent_identity_when_hydration_yields_none():
+    """Same live pipeline, but the thread has no SENT message at all (a genuine
+    first-touch or a thin fixture) - hydrate_lead's sender_first is "", and the
+    draft must fall back to the agent's own identity instead of going out with
+    no sign-off at all."""
+    sb, http = fresh_setter()
+    http.message_history = [
+        {"type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+         "email_body": "sure, send it over", "message_id": "m-sf2", "stats_id": "st-sf2"},
+    ]
+    http.classify_fn = _SF_CLASSIFY_FN
+    captured, draft_fn = _draft_capture("Kevin")
+    http.draft_fn = draft_fn
+
+    agent = {"id": "agent-fallback1", "mode": "draft_only", "enabled": True, "sender_first": "Kevin",
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    reply = {"workspace": "navreo", "campaign_id": 111, "email": "sf2@example.com",
+             "first_name": "There", "message_id": "m-sf2", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    setter.process_reply(reply, agent, {})
+    check("live pipeline: an empty hydration falls back to the agent's own configured identity, not a blank sign-off",
+         captured.get("sender_first") == "Kevin", captured)
+
+
+def test_self_learning_stamp_persists_once_from_live_thread():
+    """The first time an agent with no sender_first configured drafts a live
+    reply, the thread's real SENT from_name gets stamped onto the agent doc
+    (via _save_agent's merge, so nothing else on the doc is touched) - so
+    every other surface (training/redraft/retrain/recheck), which has no
+    thread to read, inherits the same identity from then on."""
+    sb, http = fresh_setter()
+    http.message_history = [
+        {"type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+         "email_body": "sure, send it over", "message_id": "m-learn1", "stats_id": "st-learn1"},
+        {"type": "SENT", "time": "2026-07-09T09:00:00+00:00", "subject": "hi", "email_body": "intro",
+         "from_name": "Noor Malik"},
+    ]
+    http.classify_fn = _SF_CLASSIFY_FN
+    http.draft_fn = _draft_capture("Noor")[1]
+
+    agent = {"id": "agent-learn1", "mode": "draft_only", "enabled": True, "sender_first": "",
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": copy.deepcopy(agent)}
+
+    reply = {"workspace": "navreo", "campaign_id": 111, "email": "learn1@example.com",
+             "first_name": "There", "message_id": "m-learn1", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    setter.process_reply(reply, agent, {})
+
+    saved_doc = sb.agents[agent["id"]]["doc"]
+    check("self-learning stamp: the agent's sender_first self-heals from the live thread's real sender",
+         saved_doc.get("sender_first") == "Noor", saved_doc)
+    check("self-learning stamp: every other field on the agent doc survives the stamp untouched",
+         saved_doc.get("resource_link") == "https://x.example/r" and saved_doc.get("mode") == "draft_only",
+         saved_doc)
+
+
+def test_self_learning_stamp_never_overwrites_existing_identity():
+    sb, http = fresh_setter()
+    http.message_history = [
+        {"type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+         "email_body": "sure, send it over", "message_id": "m-learn2", "stats_id": "st-learn2"},
+        {"type": "SENT", "time": "2026-07-09T09:00:00+00:00", "subject": "hi", "email_body": "intro",
+         "from_name": "Someone Else"},
+    ]
+    http.classify_fn = _SF_CLASSIFY_FN
+    http.draft_fn = _draft_capture("Kevin")[1]
+
+    agent = {"id": "agent-learn2", "mode": "draft_only", "enabled": True, "sender_first": "Kevin",
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": copy.deepcopy(agent)}
+
+    reply = {"workspace": "navreo", "campaign_id": 111, "email": "learn2@example.com",
+             "first_name": "There", "message_id": "m-learn2", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    setter.process_reply(reply, agent, {})
+
+    saved_doc = sb.agents[agent["id"]]["doc"]
+    check("self-learning stamp: never overwrites a sender_first the owner (or an earlier stamp) already set",
+         saved_doc.get("sender_first") == "Kevin", saved_doc)
+
+
+def test_agents_save_sender_first_round_trips_and_survives_partial_resave():
+    """The agent modal's new 'Sign off as (first name)' field must round-trip
+    through route_agents_save, AND a later partial re-save that omits the key
+    entirely (a wizard tab that only sends what it changed) must never wipe
+    it - the same merge contract _save_agent already guarantees for
+    instructions/pricing_notes (see the "additive, never replace" ruling)."""
+    sb, http = fresh_setter()
+    status, resp = setter.route_agents_save({"doc": {"name": "Kevin's setter", "sender_first": "Kevin"}})
+    check("agents save: sender_first round-trips on first save",
+         status == 200 and resp.get("doc", {}).get("sender_first") == "Kevin", resp)
+    agent_id = resp["doc"]["id"]
+
+    status2, resp2 = setter.route_agents_save({"doc": {"id": agent_id, "name": "Kevin's setter (renamed)"}})
+    check("agents save: a partial re-save that omits sender_first never wipes the stored value",
+         status2 == 200 and resp2.get("doc", {}).get("sender_first") == "Kevin", resp2)
+
+
 # ── run everything ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -6741,6 +6997,18 @@ if __name__ == "__main__":
     test_proofread_wired_into_process_reply_after_draft_before_lint()
     test_proofread_wired_into_build_training_case_real_and_synthetic()
     test_proofread_wired_into_queue_redraft()
+
+    test_sender_first_for_resolver_precedence()
+    test_relearn_uses_agent_sender_first_not_hardcoded_bjion()
+    test_build_training_case_uses_agent_sender_first_not_hardcoded_bjion()
+    test_retrain_case_uses_agent_sender_first_not_hardcoded_bjion()
+    test_recheck_case_uses_agent_sender_first_not_hardcoded_bjion()
+    test_queue_redraft_passes_agent_sender_first()
+    test_process_reply_thread_name_wins_over_agent_identity()
+    test_process_reply_falls_back_to_agent_identity_when_hydration_yields_none()
+    test_self_learning_stamp_persists_once_from_live_thread()
+    test_self_learning_stamp_never_overwrites_existing_identity()
+    test_agents_save_sender_first_round_trips_and_survives_partial_resave()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

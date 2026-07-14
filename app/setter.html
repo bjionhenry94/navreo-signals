@@ -1748,6 +1748,11 @@ function agentFormHtml(agent) {
       <input type="text" id="agName" value="${esc(agent.name || "")}" placeholder="e.g. Clay migration setter">
     </div>
     <div class="field">
+      <label>Sign off as (first name)</label>
+      <input type="text" id="agSenderFirst" value="${esc(agent.sender_first || "")}" placeholder="e.g. Kevin - the name replies are signed with. Left empty, it's learned from the campaign's own sent emails.">
+      <div class="hint">Every draft this agent writes signs off with this name, everywhere - live replies, redrafts, and training. Leave it blank and the agent learns it automatically the first time it reads a real sent email in this campaign's thread.</div>
+    </div>
+    <div class="field">
       <label>Campaigns</label>
       <input type="text" id="agCampaignSearch" placeholder="Search campaigns…">
       <div class="checklist" id="agCampaignList" style="margin-top:8px"></div>
@@ -1885,6 +1890,10 @@ document.getElementById("agentSaveBtn").addEventListener("click", async () => {
     name,
     mode: currentAgentMode,
     enabled: currentAgentEnabled,
+    // Canonical sign-off identity (owner bug report 2026-07-14) - see
+    // _sender_first_for in setter.py. Left "" round-trips to the backend's
+    // own self-learning fallback rather than forcing a blank sign-off.
+    sender_first: document.getElementById("agSenderFirst").value.trim(),
     campaign_ids: Array.from(selectedCampaignIds).map(Number).filter((n) => !isNaN(n)),
     // Instructions-only brain (owner ruling 2026-07-14): no resource fields
     // at all. Pricing, resource links, and when-to-send-which rules all live
