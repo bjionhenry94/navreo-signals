@@ -1549,6 +1549,71 @@ def test_claim_race_returns_existing_row_without_classifying():
     check("claim race: exactly one row ends up in the queue", len(inner_sb.queue) == 1, len(inner_sb.queue))
 
 
+# ── intake dedupe: source_message_id + percent-encoding ─────────────────────
+
+def test_existing_row_percent_encodes_plus_in_keys():
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 9101, "workspace": "navreo", "smartlead_campaign_id": 700,
+                     "lead_email": "plus@example.com", "message_id": "123-2026-07-08T13:16:23+00:00",
+                     "status": "needs_review"})
+    row = setter._existing_row("navreo", 700, "plus@example.com", "123-2026-07-08T13:16:23+00:00")
+    check("_existing_row: a message id containing '+' still matches (value percent-encoded)",
+         bool(row) and row.get("id") == 9101, row)
+    gets = [p for m, p, *_ in sb.calls if m == "GET" and p.startswith(setter.QUEUE_TABLE)]
+    check("_existing_row: no raw '+' ever reaches the query string (PostgREST reads it as a space)",
+         bool(gets) and all("+" not in g for g in gets), gets)
+
+
+def test_existing_row_falls_back_to_source_message_id():
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 9102, "workspace": "navreo", "smartlead_campaign_id": 700,
+                     "lead_email": "swap@example.com", "message_id": "<real-rfc-id@mail.example>",
+                     "source_message_id": "999-2026-07-08T13:16:23+00:00", "status": "no_action"})
+    row = setter._existing_row("navreo", 700, "swap@example.com", "999-2026-07-08T13:16:23+00:00")
+    check("_existing_row: a row whose message_id was hydration-swapped is still found via source_message_id",
+         bool(row) and row.get("id") == 9102, row)
+
+
+def test_run_poll_skips_reply_already_queued_under_swapped_mid():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-dedupe01", "mode": "draft_only", "enabled": True, "campaign_ids": [700],
+             "allowed_intents": ["send_resource"], "pricing_notes": ""}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 700, "email": "swap@example.com",
+        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "999-2026-07-10T00:00:00+00:00", "category": "Interested",
+    })
+    sb.queue.append({"id": 9103, "workspace": "navreo", "smartlead_campaign_id": 700,
+                     "lead_email": "swap@example.com", "message_id": "<real@mail.example>",
+                     "source_message_id": "999-2026-07-10T00:00:00+00:00", "status": "needs_review"})
+    summary = setter.run_poll()
+    check("run_poll: a reply whose queue row carries the hydration-swapped mid is NOT re-intaken",
+         summary.get("checked") == 0 and len(sb.queue) == 1, (summary, len(sb.queue)))
+
+
+def test_claim_rows_carry_source_message_id():
+    sb, http = fresh_setter()
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
+    agent = {"id": "agent-dedupe02", "mode": "draft_only", "enabled": True, "campaign_ids": [700],
+             "allowed_intents": ["send_resource"], "pricing_notes": ""}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 700, "email": "fresh@example.com",
+        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "777-2026-07-10T00:00:00+00:00", "category": "Interested",
+    })
+    setter.run_poll()
+    srcs = [r.get("source_message_id") for r in sb.queue]
+    check("intake: the claimed row preserves the intake key in source_message_id",
+         srcs == ["777-2026-07-10T00:00:00+00:00"], srcs)
+
+
 # ── hydrate_lead: answered_since_reply ───────────────────────────────────────
 
 def test_hydrate_lead_answered_since_reply():
@@ -5365,6 +5430,10 @@ if __name__ == "__main__":
     test_subsequence_uncheck_makes_no_smartlead_call()
     test_subsequence_ambiguous_multiple_subsequences_needs_override()
     test_claim_race_returns_existing_row_without_classifying()
+    test_existing_row_percent_encodes_plus_in_keys()
+    test_existing_row_falls_back_to_source_message_id()
+    test_run_poll_skips_reply_already_queued_under_swapped_mid()
+    test_claim_rows_carry_source_message_id()
     test_hydrate_lead_answered_since_reply()
     test_tz_none_calendly_fallback_no_slots_but_auto_sends()
     test_tz_guessed_low_confidence_shows_local_times_but_holds()

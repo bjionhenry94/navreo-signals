@@ -1545,8 +1545,21 @@ def _existing_row(workspace: str, campaign_id, email: str, message_id: str):
     if not _SB:
         return None
     try:
-        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{workspace}&smartlead_campaign_id=eq.{campaign_id}"
-                          f"&lead_email=eq.{email}&message_id=eq.{message_id}&select=*&limit=1")
+        # quote(): both key values routinely carry "+" (synthetic ids embed
+        # "+00:00", real Message-IDs allow it), and an unencoded "+" reaches
+        # PostgREST as a space - the filter then never matches and intake
+        # re-claims the same reply every poll tick.
+        em, mid = quote(str(email), safe=""), quote(str(message_id), safe="")
+        base = (f"{QUEUE_TABLE}?workspace=eq.{workspace}&smartlead_campaign_id=eq.{campaign_id}"
+                f"&lead_email=eq.{em}")
+        rows = _SB("GET", f"{base}&message_id=eq.{mid}&select=*&limit=1")
+        if isinstance(rows, list) and rows:
+            return rows[0]
+        # Hydration swaps message_id to the real RFC Message-ID from the
+        # thread, so the key the row was CLAIMED under survives only in
+        # source_message_id - without this second check the poll re-intakes
+        # every already-processed reply on every tick.
+        rows = _SB("GET", f"{base}&source_message_id=eq.{mid}&select=*&limit=1")
         return rows[0] if isinstance(rows, list) and rows else None
     except Exception:  # noqa: BLE001
         return None
@@ -1716,7 +1729,8 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         "workspace": workspace, "smartlead_campaign_id": campaign_id, "agent_id": agent.get("id"),
         "lead_email": email, "lead_first_name": reply.get("first_name") or "",
         "lead_last_name": reply.get("last_name") or "", "company_domain": domain,
-        "message_id": message_id, "reply_subject": reply.get("subject") or "",
+        "message_id": message_id, "source_message_id": message_id,
+        "reply_subject": reply.get("subject") or "",
         "reply_body": reply.get("body") or "", "replied_at": reply.get("replied_at") or now_iso,
         "category": reply.get("category"), "thread": [], "smartlead_lead_id": None,
         "email_stats_id": None, "classification": None, "guardrails": None,
@@ -1734,8 +1748,8 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         try:
             claim = {k: row[k] for k in (
                 "workspace", "smartlead_campaign_id", "agent_id", "lead_email", "lead_first_name",
-                "lead_last_name", "company_domain", "message_id", "reply_subject", "reply_body",
-                "replied_at", "category", "is_test")}
+                "lead_last_name", "company_domain", "message_id", "source_message_id",
+                "reply_subject", "reply_body", "replied_at", "category", "is_test")}
             claim["status"] = "new"
             ins = _SB("POST", f"{QUEUE_TABLE}?on_conflict=workspace,smartlead_campaign_id,lead_email,message_id",
                       claim, prefer="resolution=ignore-duplicates,return=representation")
@@ -1782,9 +1796,14 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         if row["message_id"] != message_id:
             other = _existing_row(workspace, campaign_id, email, row["message_id"])
             if other and other.get("id") != row.get("id"):
+                # Delete our own claim rather than leaving a dismissed husk -
+                # the claim row exists only as this invocation's lock, and a
+                # husk per race pollutes the queue forever.
                 if row.get("id") is not None:
-                    _apply_patch(row, {"status": "dismissed", "decision": "no_action",
-                                       "decision_reason": "Duplicate intake of the same reply."})
+                    try:
+                        _SB("DELETE", f"{QUEUE_TABLE}?id=eq.{row['id']}")
+                    except Exception:  # noqa: BLE001 - a leftover husk is not worth a crash
+                        pass
                 return other
 
     # Everything the pipeline READS uses the cleaned text (HTML stripped) -
