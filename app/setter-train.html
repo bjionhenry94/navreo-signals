@@ -113,8 +113,6 @@
 }
 .field textarea:focus { outline: none; box-shadow: var(--focus); }
 
-.scope-row { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
-.scope-row .scope-lab { font-size: 12px; color: var(--ink-3); }
 .mode-toggle { display: flex; gap: 8px; }
 .mode-toggle .btn { flex: 1; justify-content: center; }
 .mode-toggle .btn.primary.sel { background: var(--orange); border-color: var(--orange); color: var(--cream); }
@@ -517,7 +515,7 @@ function isAnswered(caseId) {
 }
 function currentUnanswered() { return CASES.filter((c) => !isAnswered(c.id)); }
 function pendingFor(caseId) {
-  if (!PENDING[caseId]) PENDING[caseId] = { decision_ok: undefined, reply_ok: null, note: "", scope: "one_off" };
+  if (!PENDING[caseId]) PENDING[caseId] = { decision_ok: undefined, reply_ok: null, note: "" };
   return PENDING[caseId];
 }
 
@@ -607,7 +605,7 @@ function renderReadinessPanel(animate) {
                 : (c.how ? ` <i>(${c.how === "merged" ? "merged into instructions" : "appended to instructions"})</i>` : "")}
                 ${c.at ? `<br><span class="small">${pulledAgo(c.at)}</span>` : ""}</span>
             </div>`).join("")
-          : `<div class="small">Nothing yet. When you pick "Remember going forward" on a rating, the correction is merged straight into this agent's instructions${SHARE_MODE ? "" : " (Setter &rarr; Agents)"}.</div>`}
+          : `<div class="small">Nothing yet. When you leave feedback on a rating, the correction is merged straight into this agent's instructions${SHARE_MODE ? "" : " (Setter &rarr; Agents)"}.</div>`}
           <div class="small" style="margin-top:8px">${changes.length ? `To undo a lesson, edit this agent's instructions directly${SHARE_MODE ? "" : " in Setter &rarr; Agents"}.` : ""}</div>
         </div>
       </details>
@@ -783,16 +781,7 @@ function renderCase(unanswered, i) {
         <label>Feedback (optional)</label>
         <textarea id="trNote" placeholder="Tell it what should have happened, e.g. this should have gone to review because pricing was asked">${esc(p.note || "")}</textarea>
       </div>
-      <div class="scope-row">
-        <span class="scope-lab">Apply this feedback</span>
-        <div class="mode-toggle">
-          <button type="button" class="btn ${p.scope === "one_off" ? "primary sel" : ""}" id="scopeOneOff" data-scope="one_off">One-off</button>
-          <button type="button" class="btn ${p.scope === "remember" ? "primary sel" : ""}" id="scopeRemember" data-scope="remember" ${p.note ? "" : "disabled"}>Remember going forward</button>
-        </div>
-      </div>
-      <div class="small scope-hint">${p.note
-        ? "One-off: your note isn't saved (the rating itself still counts). Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on - you can view or remove it any time under the readiness panel."
-        : "Type feedback above to unlock “Remember going forward”."}</div>
+      <div class="small scope-hint">Anything you type here is merged into this agent's instructions and changes how it replies from now on. Leave it blank and just the rating counts.</div>
       <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
       <div class="grade-nav">
         <button type="button" class="btn" id="trPrevBtn" ${i === 0 ? "disabled" : ""}>&lsaquo; Previous</button>
@@ -830,28 +819,9 @@ function wireCaseEvents(c, unanswered, i) {
     });
   }
   const noteEl = document.getElementById("trNote");
-  const scopeOneOffBtn = document.getElementById("scopeOneOff");
-  const scopeRememberBtn = document.getElementById("scopeRemember");
   if (noteEl) {
-    noteEl.addEventListener("input", () => {
-      p.note = noteEl.value;
-      const hasNote = !!p.note.trim();
-      if (scopeRememberBtn) scopeRememberBtn.disabled = !hasNote;
-      const hintEl = document.querySelector(".scope-hint");
-      if (hintEl) hintEl.textContent = hasNote
-        ? "One-off: your note isn't saved (the rating itself still counts). Remember: your note is saved to this agent's brain (this agent only) and changes how it replies from now on - you can view or remove it any time under the readiness panel."
-        : "Type feedback above to unlock “Remember going forward”.";
-      if (!hasNote && p.scope === "remember") {
-        p.scope = "one_off";
-        setScopeButtons(p.scope);
-      }
-    });
+    noteEl.addEventListener("input", () => { p.note = noteEl.value; });
   }
-  if (scopeOneOffBtn) scopeOneOffBtn.addEventListener("click", () => { p.scope = "one_off"; setScopeButtons(p.scope); });
-  if (scopeRememberBtn) scopeRememberBtn.addEventListener("click", () => {
-    if (scopeRememberBtn.disabled) return;
-    p.scope = "remember"; setScopeButtons(p.scope);
-  });
 
   const prevBtn = document.getElementById("trPrevBtn");
   if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
@@ -862,15 +832,6 @@ function wireCaseEvents(c, unanswered, i) {
   }
   const nextBtn = document.getElementById("trNextBtn");
   if (nextBtn) nextBtn.addEventListener("click", () => submitAndAdvance(c, nextBtn));
-}
-
-function setScopeButtons(scope) {
-  const oneOff = document.getElementById("scopeOneOff");
-  const remember = document.getElementById("scopeRemember");
-  if (oneOff) oneOff.classList.toggle("sel", scope === "one_off");
-  if (oneOff) oneOff.classList.toggle("primary", scope === "one_off");
-  if (remember) remember.classList.toggle("sel", scope === "remember");
-  if (remember) remember.classList.toggle("primary", scope === "remember");
 }
 
 function showNudge(msg) {
@@ -887,7 +848,10 @@ async function submitAndAdvance(c, btn) {
   if (p.decision_ok === undefined) { showNudge("Answer \"Right call?\" first."); return; }
   const noteEl = document.getElementById("trNote");
   if (noteEl) p.note = noteEl.value.trim();
-  const effectiveScope = p.note ? (p.scope || "one_off") : "one_off";
+  // Typing feedback IS teaching: any note always persists (scope "remember");
+  // no note = the rating alone counts (scope one_off is a no-op server-side
+  // when the note is empty).
+  const effectiveScope = p.note ? "remember" : "one_off";
 
   const restore = busyBtn(btn, "Saving…");
   if (!restore) return;

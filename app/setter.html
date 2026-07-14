@@ -174,7 +174,6 @@
 .qc-split .qc-regen-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 10px; }
 .qc-feedback { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
 .qc-feedback .qc-feedback-input { flex: 1; min-width: 200px; }
-.qc-remember-chk { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
 .detail-err { margin: 10px 0; }
 
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
@@ -368,17 +367,10 @@
     <div class="modal-h"><h3>Teach the agent</h3></div>
     <div class="modal-b">
       <div id="teachAgentModalErr" class="modal-err" style="display:none"></div>
-      <div class="small muted" style="margin:0 0 12px">Tell it what it should learn from this one. This is saved to the agent, separate from the reply itself.</div>
+      <div class="small muted" style="margin:0 0 12px">Tell it what it should learn from this one. It's merged into this agent's instructions and changes how it replies from now on - you can review or edit it any time under Agents.</div>
       <div class="field">
         <label>What should it learn?</label>
         <textarea id="teachAgentText" style="min-height:90px" placeholder="e.g. When a lead asks about integrations, always mention the Zapier connector"></textarea>
-      </div>
-      <div class="field">
-        <label>Apply this</label>
-        <div class="mode-toggle">
-          <button type="button" class="btn" id="teachScopeRemember" data-scope="remember">Remember going forward</button>
-          <button type="button" class="btn" id="teachScopeOneOff" data-scope="one_off">One-off</button>
-        </div>
       </div>
     </div>
     <div class="modal-f">
@@ -1119,8 +1111,7 @@ function composerActionsHtml(row) {
 function composerFeedbackHtml(row) {
   if (!needsComposerActions(row)) return "";
   return `<div class="qc-feedback" id="fb-${esc(row.id)}" style="display:none">
-    <input type="text" class="qc-feedback-input" data-id="${esc(row.id)}" placeholder="Tell it what to change, e.g. shorter, or do not offer times">
-    <label class="qc-remember-chk"><input type="checkbox" class="qc-remember" data-id="${esc(row.id)}"> Remember going forward</label>
+    <input type="text" class="qc-feedback-input" data-id="${esc(row.id)}" placeholder="Tell it what to change - it'll remember going forward">
     <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">Regenerate with feedback</button>
   </div>`;
 }
@@ -1180,10 +1171,8 @@ function wireDetailEvents(root, row) {
   root.querySelectorAll(".qc-regen-fb").forEach((btn) => btn.addEventListener("click", () => {
     const id = btn.getAttribute("data-id");
     const inp = document.querySelector(`.qc-feedback-input[data-id="${CSS.escape(id)}"]`);
-    const rememberChk = document.querySelector(`.qc-remember[data-id="${CSS.escape(id)}"]`);
     const feedback = inp ? inp.value.trim() : "";
-    const scope = (rememberChk && rememberChk.checked && feedback) ? "remember" : undefined;
-    doRedraft(btn, feedback, scope);
+    doRedraft(btn, feedback, feedback ? "remember" : undefined);
   }));
   root.querySelectorAll(".qc-feedback-input").forEach((inp) => inp.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -1879,22 +1868,12 @@ document.getElementById("agentDeleteBtn").addEventListener("click", async () => 
   await loadAgentsAndCampaigns();
 });
 
-/* ── Teach the agent: a standing correction given from the thread pane,
-   separate from the per-reply feedback in the regenerate flow. Defaults to
-   "remember" here (unlike the regenerate flow's default one-off) because
-   opening this dialog is the user explicitly setting out to teach it
-   something, not just fixing one draft. ────────────────────────────────── */
+/* ── Teach the agent: a standing correction given from the thread pane.
+   Giving feedback IS teaching, so there is no one-off/remember choice -
+   anything saved here is always merged into the agent's instructions.
+   One-off adjustments are made by editing the draft directly. ──────────── */
 let teachAgentId = null;
 let teachRowId = null;
-let teachScope = "remember";
-
-function setTeachScope(scope) {
-  teachScope = scope;
-  const rememberBtn = document.getElementById("teachScopeRemember");
-  const oneOffBtn = document.getElementById("teachScopeOneOff");
-  if (rememberBtn) rememberBtn.classList.toggle("primary", scope === "remember");
-  if (oneOffBtn) oneOffBtn.classList.toggle("primary", scope === "one_off");
-}
 
 function openTeachAgentModal(agentId, rowId) {
   if (!agentId) return;
@@ -1902,7 +1881,6 @@ function openTeachAgentModal(agentId, rowId) {
   teachRowId = rowId;
   document.getElementById("teachAgentText").value = "";
   document.getElementById("teachAgentModalErr").style.display = "none";
-  setTeachScope("remember");
   document.getElementById("teachAgentModalOverlay").classList.add("on");
 }
 function closeTeachAgentModal() {
@@ -1913,8 +1891,6 @@ function showTeachAgentErr(msg) {
   el.textContent = msg; el.style.display = "block";
 }
 
-document.getElementById("teachScopeRemember").addEventListener("click", () => setTeachScope("remember"));
-document.getElementById("teachScopeOneOff").addEventListener("click", () => setTeachScope("one_off"));
 document.getElementById("teachAgentCancelBtn").addEventListener("click", closeTeachAgentModal);
 document.getElementById("teachAgentModalOverlay").addEventListener("click", (e) => {
   if (e.target.id === "teachAgentModalOverlay") closeTeachAgentModal();
@@ -1927,12 +1903,12 @@ document.getElementById("teachAgentSaveBtn").addEventListener("click", async () 
   if (!restore) return;
   const res = await fetchJson("/api/setter/agents/correction", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent_id: teachAgentId, text, scope: teachScope, source: teachRowId ? String(teachRowId) : "manual" }),
+    body: JSON.stringify({ agent_id: teachAgentId, text, scope: "remember", source: teachRowId ? String(teachRowId) : "manual" }),
   });
   restore();
   if (!res.ok) { showTeachAgentErr("Couldn't save this: " + res.error); return; }
   closeTeachAgentModal();
-  protoNote(teachScope === "remember" ? "The agent will remember this" : "Saved as a one-off note");
+  protoNote("The agent will remember this");
 });
 
 /* ── Settings ──────────────────────────────────────────── */
