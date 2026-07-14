@@ -1505,6 +1505,26 @@ def _save_agent(doc: dict) -> dict:
     if _SB:
         _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": doc["id"], "doc": doc},
            prefer="resolution=merge-duplicates,return=minimal")
+        # Adopt orphaned agentless rows (owner follow-up 2026-07-14): assigning
+        # a campaign to an agent must also claim the campaign's already-intaken
+        # agentless queue rows - otherwise they keep the "No agent" pill and
+        # the assign-an-agent decision_reason forever, telling the reviewer to
+        # do something they already did. agent_id + reason only: status,
+        # decision, drafts and bodies stay untouched (backlog never auto-
+        # drafts, let alone auto-sends - Regenerate runs the brain on demand).
+        # Idempotent (agent_id=is.null filter) and best-effort: adoption
+        # failing must never fail the save.
+        if doc.get("enabled") and doc.get("campaign_ids"):
+            try:
+                ids_csv = ",".join(str(c) for c in doc["campaign_ids"])
+                _SB("PATCH", f"{QUEUE_TABLE}?agent_id=is.null&status=eq.needs_review"
+                             f"&is_test=eq.false&smartlead_campaign_id=in.({ids_csv})",
+                    {"agent_id": doc["id"],
+                     "decision_reason": "Agent assigned after intake - hit Regenerate for a "
+                                        "drafted reply, or reply manually.",
+                     "updated_at": now})
+            except Exception:  # noqa: BLE001 - adoption is follow-through, not the save itself
+                pass
     return doc
 
 

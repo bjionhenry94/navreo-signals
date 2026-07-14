@@ -134,7 +134,13 @@ class FakeSB:
 
     @staticmethod
     def _match_eq(value, op_value):
+        if op_value == "is.null":
+            return value is None
         if op_value.startswith("eq."):
+            # PostgREST booleans are lowercase (eq.false); Python str(False)
+            # is "False" - compare case-insensitively for the boolean literals.
+            if op_value[3:] in ("true", "false"):
+                return str(value).lower() == op_value[3:]
             return str(value) == op_value[3:]
         if op_value.startswith("neq."):
             return str(value) != op_value[4:]
@@ -200,7 +206,8 @@ class FakeSB:
         return []
 
     def _queue_row_matches(self, row, params):
-        for key in ("id", "workspace", "smartlead_campaign_id", "lead_email", "message_id", "status", "is_test"):
+        for key in ("id", "workspace", "smartlead_campaign_id", "lead_email", "message_id", "status",
+                    "is_test", "agent_id"):
             if key in params and not self._match_eq(row.get(key), params[key]):
                 return False
         return True
@@ -232,15 +239,24 @@ class FakeSB:
             self.queue.append(row)
             return [copy.deepcopy(row)]
         if method == "PATCH":
-            val = params.get("id", "")
-            target_id = None
-            if val.startswith("eq."):
-                try:
-                    target_id = int(val[3:])
-                except ValueError:
-                    target_id = val[3:]
+            if "id" in params:
+                val = params.get("id", "")
+                target_id = None
+                if val.startswith("eq."):
+                    try:
+                        target_id = int(val[3:])
+                    except ValueError:
+                        target_id = val[3:]
+                for r in self.queue:
+                    if str(r.get("id")) == str(target_id):
+                        r.update(body or {})
+                return []
+            # Filtered bulk PATCH (e.g. the agent-save adoption sweep:
+            # agent_id=is.null&status=eq.needs_review&is_test=eq.false&
+            # smartlead_campaign_id=in.(...)) - update every matching row,
+            # PostgREST-style.
             for r in self.queue:
-                if str(r.get("id")) == str(target_id):
+                if self._queue_row_matches(r, params):
                     r.update(body or {})
             return []
         return []
@@ -6067,6 +6083,55 @@ def test_handle_inbound_no_agent_core_four_is_agentless():
          "ignored" in resp2 and len(sb2.queue) == 0, (resp2, sb2.queue))
 
 
+def test_agent_save_adopts_orphaned_agentless_rows():
+    """Assigning a campaign to an agent must claim the campaign's already-
+    intaken agentless rows (owner follow-up 2026-07-14) - agent_id + reason
+    only, everything else untouched."""
+    sb, http = fresh_setter()
+    stale_reason = "No agent is assigned to this campaign yet - review and reply manually, or assign an agent."
+    sb.queue.append({"id": 501, "workspace": "navreo", "smartlead_campaign_id": 9601,
+                     "lead_email": "orphan@example.com", "message_id": "m-501", "agent_id": None,
+                     "status": "needs_review", "is_test": False, "decision": "review",
+                     "decision_reason": stale_reason, "draft_body": None})
+    sb.queue.append({"id": 502, "workspace": "navreo", "smartlead_campaign_id": 9601,
+                     "lead_email": "done@example.com", "message_id": "m-502", "agent_id": None,
+                     "status": "dismissed", "is_test": False, "decision_reason": stale_reason})
+    sb.queue.append({"id": 503, "workspace": "navreo", "smartlead_campaign_id": 9601,
+                     "lead_email": "owned@example.com", "message_id": "m-503", "agent_id": "agent-other",
+                     "status": "needs_review", "is_test": False, "decision": "review",
+                     "decision_reason": "Held for review"})
+    sb.queue.append({"id": 504, "workspace": "navreo", "smartlead_campaign_id": 9699,
+                     "lead_email": "other-campaign@example.com", "message_id": "m-504", "agent_id": None,
+                     "status": "needs_review", "is_test": False, "decision_reason": stale_reason})
+
+    saved = setter._save_agent({"name": "Adopter", "enabled": True, "campaign_ids": [9601]})
+
+    rows = {r["id"]: r for r in sb.queue}
+    check("adoption: orphaned needs_review row on the assigned campaign gets the agent",
+         rows[501].get("agent_id") == saved["id"], rows[501])
+    check("adoption: adopted row's reason no longer tells the reviewer to assign an agent",
+         "Regenerate" in (rows[501].get("decision_reason") or ""), rows[501])
+    check("adoption: adopted row keeps status/decision/draft untouched",
+         rows[501].get("status") == "needs_review" and rows[501].get("decision") == "review"
+         and rows[501].get("draft_body") is None, rows[501])
+    check("adoption: non-actionable (dismissed) row is left alone",
+         rows[502].get("agent_id") is None and rows[502].get("decision_reason") == stale_reason, rows[502])
+    check("adoption: a row another agent already owns is never re-claimed",
+         rows[503].get("agent_id") == "agent-other" and rows[503].get("decision_reason") == "Held for review",
+         rows[503])
+    check("adoption: rows on campaigns NOT assigned to this agent are left alone",
+         rows[504].get("agent_id") is None, rows[504])
+
+    # A disabled agent's save must not adopt anything.
+    sb2, _http2 = fresh_setter()
+    sb2.queue.append({"id": 601, "workspace": "navreo", "smartlead_campaign_id": 9601,
+                      "lead_email": "orphan2@example.com", "message_id": "m-601", "agent_id": None,
+                      "status": "needs_review", "is_test": False, "decision_reason": stale_reason})
+    setter._save_agent({"name": "Disabled", "enabled": False, "campaign_ids": [9601]})
+    check("adoption: a disabled agent never adopts rows",
+         sb2.queue[0].get("agent_id") is None, sb2.queue[0])
+
+
 def test_run_poll_agented_campaigns_unaffected_by_agentless_change():
     """Existing agented-path tests (test_run_poll_assigned_at_filter, the
     core-four/non-core-four matrix, the batching cap, etc.) already exercise
@@ -7206,6 +7271,7 @@ if __name__ == "__main__":
     test_run_poll_agentless_campaign_queues_needs_review()
     test_run_poll_agentless_campaign_non_core_four_stays_out()
     test_handle_inbound_no_agent_core_four_is_agentless()
+    test_agent_save_adopts_orphaned_agentless_rows()
     test_run_poll_agented_campaigns_unaffected_by_agentless_change()
     test_fake_sb_match_eq_in_strips_double_quotes()
     test_backfill_assigned_at_bypass_only_in_backfill()
