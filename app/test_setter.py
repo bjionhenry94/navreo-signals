@@ -285,6 +285,12 @@ class FakeHTTP:
     def __init__(self):
         self.classify_fn = None
         self.draft_fn = None
+        # merge_fn(body) -> {"instructions": "..."} for the
+        # merge_correction_into_instructions() OpenAI call (schema
+        # "setter_instructions_merge"). None -> the default empty-string
+        # response, which always trips merge_correction_into_instructions's
+        # own fallback-to-append path - tests that want a real merge set this.
+        self.merge_fn = None
         self.calendly_avail = []
         self.smartlead_calls = []
         self.calls = []
@@ -321,6 +327,9 @@ class FakeHTTP:
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_draft":
                 data = self.draft_fn(body) if self.draft_fn else {"subject": "Re: hi", "html": "<p>hi</p>"}
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "setter_instructions_merge":
+                data = self.merge_fn(body) if self.merge_fn else {"instructions": ""}
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             return {"choices": [{"message": {"content": "{}"}}]}
         if "calendly.com" in url:
@@ -738,12 +747,12 @@ def test_lint_draft_calendly_fallback_booking_link():
                 'Here is my availability: https://calendly.com/navreo/book-a-call</div><br><div>Sam</div>')
     ok, reason = setter.lint_draft(bare_html, FALLBACK_LINT_CTX)
     check("lint: fallback draft with a bare (non-hyperlinked) booking URL fails",
-         not ok and reason == "The draft doesn't link the calendar for the lead to pick a time.", reason)
+         not ok and reason == "The draft doesn't link a calendar for the lead to pick a time.", reason)
 
     no_link_html = '<div>Hi Jane,</div><br><div>When would be a good time for us to talk?</div><br><div>Sam</div>'
     ok, reason = setter.lint_draft(no_link_html, FALLBACK_LINT_CTX)
     check("lint: fallback draft missing the booking link entirely fails",
-         not ok and reason == "The draft doesn't link the calendar for the lead to pick a time.", reason)
+         not ok and reason == "The draft doesn't link a calendar for the lead to pick a time.", reason)
 
     slot_time_html = ('<div>Hi Jane,</div><br><div>Would you be free on '
                       '<a href="https://calendly.com/navreo/book-a-call/2026-07-15T09:00">Wednesday at 9am</a>?'
@@ -759,6 +768,34 @@ def test_lint_draft_calendly_fallback_booking_link():
                           '<a href="https://navreo.notion.site/guide">the guide</a>.</div><br><div>Sam</div>')
     ok, reason = setter.lint_draft(resource_only_html, non_sched_ctx)
     check("lint: fallback ctx but non-scheduling ask doesn't require the booking hyperlink", ok, reason)
+
+
+def test_lint_draft_calendly_fallback_instructions_link():
+    """Feature C / owner ruling 2026-07-14: the fallback ladder's step ONE
+    lets a draft propose a meeting using a scheduling/calendar link the
+    INSTRUCTIONS themselves state, with no booking_link set at all - the
+    loosened lint check (any anchor into the allow-list, not specifically
+    booking_link) must accept that."""
+    ctx_no_booking_link = {
+        "subject": "Re: hi", "first_name": "Jane", "needs_resource_link": False,
+        "instructions": "I'm generally free weekday afternoons UK time. You can also grab a slot "
+                        "directly on my calendar: https://calendly.com/navreo/discovery-call",
+        "slot_status": "not_configured", "slot_links": [], "slot_labels": [], "thread_text": "",
+        "slots_fallback": True, "needs_availability_ask": True,
+        # no booking_link key at all - the old check would have hard-failed here
+    }
+    html = ('<div>Hi Jane,</div><br><div>Would love to find a time that works for you.</div><br>'
+           '<div>I\'m generally free weekday afternoons UK time, or grab a slot on '
+           '<a href="https://calendly.com/navreo/discovery-call">my calendar</a>.</div><br><div>Sam</div>')
+    ok, reason = setter.lint_draft(html, ctx_no_booking_link)
+    check("lint: fallback draft anchored to an INSTRUCTIONS calendar link (no booking_link set) passes",
+         ok, reason)
+
+    no_anchor_html = ('<div>Hi Jane,</div><br><div>Would love to find a time that works for you.</div><br>'
+                      '<div>I\'m generally free weekday afternoons UK time.</div><br><div>Sam</div>')
+    ok, reason = setter.lint_draft(no_anchor_html, ctx_no_booking_link)
+    check("lint: fallback draft with no anchor at all still fails, even mentioning a window in prose",
+         not ok and reason == "The draft doesn't link a calendar for the lead to pick a time.", reason)
 
 
 def test_lint_draft_slot_status_ok_unchanged_by_fallback_rules():
@@ -2050,6 +2087,85 @@ def test_memory_digest_empty_is_byte_identical():
          "reviewer_feedback" not in draft_payload, draft_payload)
 
 
+# ── instructions merge (Feature A, owner ruling 2026-07-14) ─────────────────
+# A "remember" correction is no longer appended to a separate memory list -
+# it is merged straight into the agent's own instructions text, the single
+# living manual every classify()/draft_reply() call already reads in full.
+
+def test_merge_correction_into_instructions_success_and_fallbacks():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-merge0001", "name": "Ada",
+             "instructions": "Resource: The guide - https://x.example/guide - send on request. "
+                             "Pricing: flat $500/mo."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    # Success path: the model rewrites the manual, keeping every existing URL.
+    http.merge_fn = lambda body: {
+        "instructions": "Resource: The guide - https://x.example/guide - send on request. "
+                        "Pricing: flat $500/mo, no setup fee for referrals. "
+                        "Never offer a discount over email."
+    }
+    ok, new_instructions, detail = setter.merge_correction_into_instructions(
+        agent, "Never offer a discount over email.", source="manual")
+    check("merge success: ok is True", ok, (ok, new_instructions, detail))
+    check("merge success: detail is merged", detail == "merged", detail)
+    check("merge success: instructions actually rewritten",
+         "Never offer a discount over email." in new_instructions, new_instructions)
+    check("merge success: the original resource URL survives",
+         "https://x.example/guide" in new_instructions, new_instructions)
+
+    saved = setter._load_agent(agent["id"])
+    check("merge success: saved doc's instructions match what was returned",
+         saved.get("instructions") == new_instructions, saved.get("instructions"))
+    check("merge success: instruction_edits logged how=merged",
+         len(saved.get("instruction_edits") or []) == 1 and saved["instruction_edits"][0]["how"] == "merged",
+         saved.get("instruction_edits"))
+    check("merge success: instruction_edits carries the note verbatim",
+         saved["instruction_edits"][0]["note"] == "Never offer a discount over email.",
+         saved.get("instruction_edits"))
+    check("merge success: agent memory is untouched (nothing writes memory any more)",
+         (saved.get("memory") or []) == [], saved.get("memory"))
+
+    # URL-drop: the model's rewrite silently loses the existing resource link
+    # -> falls back to a dumb, always-safe append instead of trusting it.
+    agent2 = {"id": "agent-merge0002", "name": "Ada",
+             "instructions": "Resource: The guide - https://x.example/guide - send on request."}
+    sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+    http.merge_fn = lambda body: {"instructions": "Resource: the guide is available on request. "
+                                                  "Never offer a discount over email."}
+    ok2, new_instructions2, detail2 = setter.merge_correction_into_instructions(
+        agent2, "Never offer a discount over email.")
+    check("merge URL-drop: falls back to append", detail2 == "appended", detail2)
+    check("merge URL-drop: old text is preserved verbatim at the start",
+         new_instructions2.startswith(agent2["instructions"]), new_instructions2)
+    check("merge URL-drop: the note is appended as a dated Training note line",
+         "Training note (" in new_instructions2 and "Never offer a discount over email." in new_instructions2,
+         new_instructions2)
+    saved2 = setter._load_agent(agent2["id"])
+    check("merge URL-drop: instruction_edits logged how=appended",
+         saved2["instruction_edits"][0]["how"] == "appended", saved2.get("instruction_edits"))
+
+    # Empty LLM response (schema returned {}  ->  instructions "") -> the
+    # same append fallback, never an empty/blank instructions text.
+    agent3 = {"id": "agent-merge0003", "name": "Ada", "instructions": "Flat $200/mo."}
+    sb.agents[agent3["id"]] = {"id": agent3["id"], "doc": agent3}
+    http.merge_fn = None  # default FakeHTTP response is {"instructions": ""}
+    ok3, new_instructions3, detail3 = setter.merge_correction_into_instructions(agent3, "Always mention the trial.")
+    check("merge empty response: falls back to append", ok3 and detail3 == "appended", (ok3, detail3))
+    check("merge empty response: old text preserved, note appended",
+         new_instructions3.startswith("Flat $200/mo.") and "Always mention the trial." in new_instructions3,
+         new_instructions3)
+
+    # No agent id at all -> never crashes, reports failure honestly.
+    ok4, new_instructions4, detail4 = setter.merge_correction_into_instructions({}, "some note")
+    check("merge no agent id: ok is False", ok4 is False, (ok4, new_instructions4, detail4))
+
+    # Blank note -> no-op, instructions returned unchanged.
+    ok5, new_instructions5, detail5 = setter.merge_correction_into_instructions(agent3, "   ")
+    check("merge blank note: no-op, original instructions returned unchanged",
+         ok5 and new_instructions5 == "Flat $200/mo.", (ok5, new_instructions5, detail5))
+
+
 def test_correction_one_off_does_not_touch_memory():
     sb, http = fresh_setter()
     agent = {"id": "agent-corr0001", "mode": "draft_only", "enabled": True,
@@ -2076,23 +2192,35 @@ def test_correction_one_off_does_not_touch_memory():
          saved["feedback_log"][0]["text"] == "typo in the resource link", saved["feedback_log"])
 
 
-def test_correction_remember_route_grows_memory():
+def test_correction_remember_route_merges_instructions():
+    """Owner ruling 2026-07-14: scope="remember" now merges into the agent's
+    instructions text (the single living manual) instead of growing
+    agent['memory']."""
     sb, http = fresh_setter()
-    agent = {"id": "agent-corr0002", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    agent = {"id": "agent-corr0002", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"],
+             "instructions": "Flat $500/mo."}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    http.merge_fn = None  # default fallback (append) - no LLM shape needed for this test
 
     status, resp = setter.route_agents_correction(
         {"agent_id": agent["id"], "text": "Always offer the case study.", "scope": "remember", "source": "manual"})
     check("correction remember: returns 200", status == 200, (status, resp))
-    check("correction remember: memory_count reported back is 1", resp.get("memory_count") == 1, resp)
+    check("correction remember: response reports how", resp.get("how") in ("merged", "appended"), resp)
+    check("correction remember: response reports instruction_edits_count 1", resp.get("instruction_edits_count") == 1,
+         resp)
 
     saved = setter._load_agent(agent["id"])
-    check("correction remember: memory grew by one", len(saved.get("memory") or []) == 1, saved.get("memory"))
+    check("correction remember: memory is NOT touched (nothing writes memory any more)",
+         (saved.get("memory") or []) == [], saved.get("memory"))
     check("correction remember: feedback_log untouched (empty)", (saved.get("feedback_log") or []) == [],
          saved.get("feedback_log"))
-    digest = setter._agent_memory_digest(saved)
-    check("correction remember: digest contains the remembered text",
-         "Always offer the case study." in digest, digest)
+    check("correction remember: instructions actually changed and contain the correction",
+         "Always offer the case study." in saved.get("instructions", ""), saved.get("instructions"))
+    check("correction remember: original instructions text is preserved",
+         "Flat $500/mo." in saved.get("instructions", ""), saved.get("instructions"))
+    check("correction remember: instruction_edits grew by one, how=appended (default FakeHTTP merge_fn)",
+         len(saved.get("instruction_edits") or []) == 1 and saved["instruction_edits"][0]["how"] == "appended",
+         saved.get("instruction_edits"))
 
     status2, resp2 = setter.route_agents_correction(
         {"agent_id": "agent-doesnotexist", "text": "x", "scope": "remember"})
@@ -2135,10 +2263,13 @@ def test_agents_memory_delete():
     check("memory delete: unknown agent -> 404", status4 == 404, (status4, resp4))
 
 
-def test_redraft_scope_remember_persists_to_memory():
+def test_redraft_scope_remember_merges_instructions():
+    """Owner ruling 2026-07-14: a redraft's scope="remember" feedback now
+    merges into the agent's instructions instead of growing agent['memory'],
+    and the redraft itself runs with the freshly merged instructions."""
     sb, http = fresh_setter()
     agent = {"id": "agent-redraft01", "mode": "draft_only", "enabled": True,
-             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+             "allowed_intents": ["send_resource"], "instructions": "Resource: https://x.example/r"}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
     sb.queue.append({
         "id": 601, "workspace": "navreo", "smartlead_campaign_id": 111, "agent_id": agent["id"],
@@ -2148,16 +2279,21 @@ def test_redraft_scope_remember_persists_to_memory():
         "timezone": None, "thread": [],
     })
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi There, thanks. Best, Sam"}
+    http.merge_fn = None  # default append fallback
 
     status, resp = setter.route_queue_redraft({"id": 601, "feedback": "shorter please", "scope": "remember"})
     check("redraft remember: returns 200", status == 200, (status, resp))
 
     saved = setter._load_agent(agent["id"])
-    check("redraft remember: memory grew by one", len(saved.get("memory") or []) == 1, saved.get("memory"))
-    check("redraft remember: memory text is the feedback text",
-         saved["memory"][0]["text"] == "shorter please", saved.get("memory"))
-    check("redraft remember: memory source is the queue row id",
-         saved["memory"][0]["source"] == "601", saved.get("memory"))
+    check("redraft remember: memory is NOT touched (nothing writes memory any more)",
+         (saved.get("memory") or []) == [], saved.get("memory"))
+    check("redraft remember: instructions changed and contain the feedback text",
+         "shorter please" in saved.get("instructions", ""), saved.get("instructions"))
+    check("redraft remember: original instructions text is preserved",
+         "https://x.example/r" in saved.get("instructions", ""), saved.get("instructions"))
+    check("redraft remember: instruction_edits grew by one, source is the queue row id",
+         len(saved.get("instruction_edits") or []) == 1 and saved["instruction_edits"][0]["source"] == "601",
+         saved.get("instruction_edits"))
 
 
 def test_redraft_without_scope_does_not_persist():
@@ -2460,6 +2596,23 @@ def _generate_and_wait(payload, agent_id=None, timeout=10):
     status, resp = setter.route_training_generate(payload)
     aid = agent_id or payload.get("agent_id")
     if status == 200 and resp.get("status") in ("started", "already_running") and aid:
+        thread = setter._TRAINING_GEN_THREADS.get(aid)
+        if thread is not None:
+            thread.join(timeout=timeout)
+    return status, resp
+
+
+def _answer_and_wait(payload, agent_id=None, timeout=10):
+    """route_training_answer (Feature B) may kick off a background RETRAIN
+    pass sharing the exact same per-agent lock/thread map generation uses
+    (setter._get_training_gen_lock / setter._TRAINING_GEN_THREADS). This
+    joins that agent's thread before returning - whether the response was
+    "started" (a fresh pass) or "queued" (an already-running pass that will
+    pick up the fresher digest) - so callers can inspect the saved doc
+    deterministically right after, exactly like _generate_and_wait does."""
+    status, resp = setter.route_training_answer(payload)
+    aid = agent_id or payload.get("agent_id")
+    if status == 200 and resp.get("retrain") in ("started", "queued") and aid:
         thread = setter._TRAINING_GEN_THREADS.get(aid)
         if thread is not None:
             thread.join(timeout=timeout)
@@ -2964,36 +3117,344 @@ def test_training_answer_recomputes_readiness_and_counts():
     check("training answer: missing agent_id -> 400", status4 == 400, (status4, resp4))
 
 
-def test_training_answer_remember_grows_memory_one_off_does_not():
+def test_training_answer_remember_merges_instructions_one_off_does_not():
+    """Owner ruling 2026-07-14: scope="remember" on a training answer merges
+    into the agent's instructions (never grows agent['memory'] any more);
+    scope="one_off" stays audit-only in feedback_log."""
     sb, http = fresh_setter()
-    agent = {"id": "agent-train0007", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    agent = {"id": "agent-train0007", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"],
+             "instructions": "Flat $200/mo."}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
     doc = {"cases": [{"id": "case-0000"}, {"id": "case-0001"}], "answers": {}, "used_reply_ids": [],
           "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
     setter._save_training(agent["id"], doc)
+    http.merge_fn = None  # default append fallback
 
-    setter.route_training_answer({
+    _answer_and_wait({
         "agent_id": agent["id"], "case_id": "case-0000", "decision_ok": False,
         "note": "Always offer the case study before pricing.", "scope": "remember",
     })
     saved = setter._load_agent(agent["id"])
-    check("training answer remember: agent memory grew by one",
-         len(saved.get("memory") or []) == 1, saved.get("memory"))
+    check("training answer remember: agent memory is NOT touched (nothing writes memory any more)",
+         (saved.get("memory") or []) == [], saved.get("memory"))
     check("training answer remember: feedback_log untouched", (saved.get("feedback_log") or []) == [],
          saved.get("feedback_log"))
-    digest = setter._agent_memory_digest(saved)
-    check("training answer remember: digest contains the remembered note",
-         "Always offer the case study before pricing." in digest, digest)
+    check("training answer remember: instructions changed and contain the note",
+         "Always offer the case study before pricing." in saved.get("instructions", ""), saved.get("instructions"))
+    check("training answer remember: original instructions text is preserved",
+         "Flat $200/mo." in saved.get("instructions", ""), saved.get("instructions"))
+    edits_after_first = list(saved.get("instruction_edits") or [])
+    check("training answer remember: instruction_edits grew by one",
+         len(edits_after_first) == 1, edits_after_first)
 
-    setter.route_training_answer({
+    _answer_and_wait({
         "agent_id": agent["id"], "case_id": "case-0001", "decision_ok": True,
         "note": "This one was fine, just a heads up.", "scope": "one_off",
     })
     saved2 = setter._load_agent(agent["id"])
-    check("training answer one_off: agent memory unchanged (still 1)",
-         len(saved2.get("memory") or []) == 1, saved2.get("memory"))
+    check("training answer one_off: agent memory still untouched",
+         (saved2.get("memory") or []) == [], saved2.get("memory"))
     check("training answer one_off: feedback_log grew by one",
          len(saved2.get("feedback_log") or []) == 1, saved2.get("feedback_log"))
+    check("training answer one_off: instruction_edits unchanged (still 1) - a one_off note never merges",
+         len(saved2.get("instruction_edits") or []) == 1, saved2.get("instruction_edits"))
+
+
+# ── training retrain (Feature B, owner ruling 2026-07-14) ───────────────────
+
+def _fixed_training_case(cid, body="Sounds interesting, tell me more", campaign_id=1):
+    return {
+        "id": cid, "reply_id": f"r-{cid}", "campaign_id": campaign_id,
+        "category": "Interested",
+        "inbound": {"subject": "Re: our email", "body": body, "raw_body": body},
+        "original_outreach": {}, "human_answer_history": {},
+        "classification": {"primary_intent": "objection_or_question", "all_intents": ["objection_or_question"],
+                           "confidence": 0.5},
+        "decision": "review", "decision_reason": "old reason", "draft_html": "<div>old draft</div>",
+        "generated_at": "2026-07-01T00:00:00+00:00",
+    }
+
+
+def test_training_retrain_note_updates_unanswered_leaves_answered():
+    """ANY feedback re-runs the remaining unanswered training cases with the
+    updated brain (owner ruling 2026-07-14): a note left on one case must
+    reach classify() as owner_hints for every still-unanswered case, and the
+    answered case must be left byte-for-byte untouched."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-retrain01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "instructions": "Flat $400/mo."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_a = _fixed_training_case("case-r-00", body="answered trigger case")
+    case_b = _fixed_training_case("case-r-01", body="unanswered case")
+    doc = {"cases": [case_a, case_b], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    captured_hints = []
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured_hints.append(payload.get("owner_corrections"))
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.97, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+            "wants": "wants info", "rationale": "",
+        }
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi",
+                                "html": '<div>Hi there,</div><br><div>Sure thing.</div><br><div>Bjion</div>'}
+
+    status, resp = _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-r-00", "decision_ok": False,
+        "note": "Always mention the free trial when they ask for more info.", "scope": "one_off",
+    })
+    check("retrain: answering with a note returns 200 and kicks off retrain",
+         status == 200 and resp.get("retrain") == "started", (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    gen = saved.get("generating") or {}
+    check("retrain: generating settles back to idle with kind retrain and an updated count",
+         gen.get("status") == "idle" and gen.get("kind") == "retrain" and gen.get("updated") == 1, gen)
+
+    check("retrain: the owner's note reached classify() as owner_hints for the unanswered case",
+         len(captured_hints) >= 1 and all(
+             "Always mention the free trial when they ask for more info." in (h or "") for h in captured_hints),
+         captured_hints)
+
+    cases_by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("retrain: the ANSWERED case is left completely untouched",
+         cases_by_id["case-r-00"]["draft_html"] == "<div>old draft</div>"
+         and not cases_by_id["case-r-00"].get("updated_by_feedback"), cases_by_id.get("case-r-00"))
+    check("retrain: the UNANSWERED case got re-classified and re-drafted with the new brain",
+         cases_by_id["case-r-01"].get("updated_by_feedback") is True
+         and cases_by_id["case-r-01"]["classification"].get("primary_intent") == "send_resource"
+         and "Sure thing" in (cases_by_id["case-r-01"]["draft_html"] or ""), cases_by_id.get("case-r-01"))
+
+
+def test_training_retrain_trigger_conditions():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-retrain02", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-t-00"), _fixed_training_case("case-t-01"),
+                     _fixed_training_case("case-t-02")],
+          "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    http.classify_fn = lambda _b: {"primary_intent": "send_resource", "all_intents": ["send_resource"],
+                                   "simple_ask": True, "confidence": 0.5, "red_flags": [],
+                                   "timezone_guess": None, "tz_confidence": 0.0, "wants": "x", "rationale": ""}
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>ok</div><br><div>B</div>"}
+
+    status, resp = setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-t-00", "decision_ok": True, "reply_ok": True, "note": "",
+    })
+    check("retrain trigger: an all-good answer with no note never kicks off retrain",
+         status == 200 and resp.get("retrain") is None, resp)
+
+    status2, resp2 = _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-t-01", "decision_ok": False, "reply_ok": True, "note": "",
+    })
+    check("retrain trigger: a noteless wrong-decision answer still kicks off retrain",
+         status2 == 200 and resp2.get("retrain") == "started", resp2)
+
+    status3, resp3 = _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-t-02", "decision_ok": True, "reply_ok": False, "note": "",
+    })
+    check("retrain trigger: a noteless wrong-draft answer still kicks off retrain",
+         status3 == 200 and resp3.get("retrain") == "started", resp3)
+
+
+def test_training_retrain_lock_contention_with_generate_queued_flag_honoured():
+    """The retrain pass uses the EXACT SAME per-agent lock route_training_
+    generate uses, so the two kinds of background work never overlap. If a
+    generate() batch is already running for this agent, kicking off a
+    retrain must flag doc.generating.retrain_queued instead of starting a
+    second worker - and that queued retrain must actually run (and be
+    consumed - not left stuck true) once the generate batch finishes."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-retrain03", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    case_trigger = _fixed_training_case("case-lc-00", body="trigger case")
+    case_target = _fixed_training_case("case-lc-01", body="target case")
+    doc = {"cases": [case_trigger, case_target], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    started_event = threading.Event()
+    release_event = threading.Event()
+    real_select = setter._select_training_replies
+
+    def fake_select(doc_, batch_size, allowed_campaign_ids=None):
+        started_event.set()
+        release_event.wait(timeout=10)
+        return []  # nothing new to build - generate finishes fast once released
+
+    setter._select_training_replies = fake_select
+    http.classify_fn = lambda _b: {"primary_intent": "send_resource", "all_intents": ["send_resource"],
+                                   "simple_ask": True, "confidence": 0.5, "red_flags": [],
+                                   "timezone_guess": None, "tz_confidence": 0.0, "wants": "x", "rationale": ""}
+    http.draft_fn = lambda _b: {"subject": "Re: hi",
+                                "html": "<div>Hi</div><br><div>Updated by retrain.</div><br><div>B</div>"}
+    try:
+        gstatus, gresp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
+        check("retrain lock contention: generate starts and grabs the agent's lock",
+             gstatus == 200 and gresp.get("status") == "started", (gstatus, gresp))
+        check("retrain lock contention: generate worker reached its blocked selection step",
+             started_event.wait(timeout=5), None)
+
+        astatus, aresp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-lc-00", "decision_ok": False,
+            "note": "Never promise same-day availability.", "scope": "one_off",
+        })
+        check("retrain lock contention: answering while generate holds the lock -> queued, not started",
+             astatus == 200 and aresp.get("retrain") == "queued", (astatus, aresp))
+
+        mid_doc = setter._load_training(agent["id"])
+        check("retrain lock contention: doc shows retrain_queued while generate is still running",
+             bool((mid_doc.get("generating") or {}).get("retrain_queued")), mid_doc.get("generating"))
+
+        release_event.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        final_doc = setter._load_training(agent["id"])
+        gen = final_doc.get("generating") or {}
+        check("retrain lock contention: once generate finishes, the queued retrain actually ran (kind retrain, idle)",
+             gen.get("status") == "idle" and gen.get("kind") == "retrain", gen)
+        check("retrain lock contention: retrain_queued flag consumed, not left stuck true",
+             not gen.get("retrain_queued"), gen)
+        cases_by_id = {c["id"]: c for c in final_doc.get("cases") or []}
+        check("retrain lock contention: the target case was actually reprocessed by the follow-on retrain pass",
+             cases_by_id["case-lc-01"].get("updated_by_feedback") is True
+             and "Updated by retrain." in (cases_by_id["case-lc-01"].get("draft_html") or ""),
+             cases_by_id.get("case-lc-01"))
+    finally:
+        setter._select_training_replies = real_select
+        release_event.set()
+
+
+def test_training_retrain_failed_case_keeps_old_content():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-retrain04", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    good_case = _fixed_training_case("case-f-00", body="This one classifies fine")
+    bad_case = _fixed_training_case("case-f-01", body="This one blows up")
+    trigger_case = _fixed_training_case("case-f-02", body="answered trigger")
+    doc = {"cases": [good_case, bad_case, trigger_case], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        if payload.get("reply_body") == "This one blows up":
+            raise RuntimeError("simulated classify failure")
+        return {"primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "x", "rationale": ""}
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>new</div><br><div>B</div>"}
+
+    _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-f-02", "decision_ok": False,
+        "note": "test note", "scope": "one_off",
+    })
+
+    saved = setter._load_training(agent["id"])
+    cases_by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("retrain failed case: the case whose classify() raised keeps its OLD content",
+         cases_by_id["case-f-01"]["draft_html"] == "<div>old draft</div>"
+         and not cases_by_id["case-f-01"].get("updated_by_feedback"), cases_by_id.get("case-f-01"))
+    check("retrain failed case: the OTHER unanswered case still gets updated normally",
+         cases_by_id["case-f-00"].get("updated_by_feedback") is True, cases_by_id.get("case-f-00"))
+
+
+def test_training_retrain_concurrent_answer_survives():
+    """Lost-update protection: an answer that lands on a DIFFERENT case while
+    the retrain pass is still mid-flight on another case must survive the
+    worker's final save (reload-before-save)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-retrain05", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_trigger = _fixed_training_case("case-cc-00", body="trigger case")
+    case_fast = _fixed_training_case("case-cc-01", body="fast case")
+    case_slow = _fixed_training_case("case-cc-02", body="slow case")
+    doc = {"cases": [case_trigger, case_fast, case_slow], "answers": {}, "used_reply_ids": [],
+          "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    started_slow = threading.Event()
+    release_slow = threading.Event()
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        if payload.get("reply_body") == "slow case":
+            started_slow.set()
+            release_slow.wait(timeout=10)
+        return {"primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "x", "rationale": ""}
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>Hi</div><br><div>new</div><br><div>B</div>"}
+
+    try:
+        status, resp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-cc-00", "decision_ok": False,
+            "note": "test note", "scope": "one_off",
+        })
+        check("concurrent answer: triggering answer returns 200 and kicks off retrain",
+             status == 200 and resp.get("retrain") == "started", (status, resp))
+        check("concurrent answer: retrain worker reached the blocked (slow) case",
+             started_slow.wait(timeout=5), None)
+
+        astatus, aresp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": "case-cc-01", "decision_ok": True, "reply_ok": True, "note": "",
+        })
+        check("concurrent answer: the mid-retrain answer itself saves fine", astatus == 200, (astatus, aresp))
+
+        release_slow.set()
+        thread = setter._TRAINING_GEN_THREADS.get(agent["id"])
+        if thread is not None:
+            thread.join(timeout=10)
+
+        final_doc = setter._load_training(agent["id"])
+        check("concurrent answer: the answer that landed mid-retrain survives the worker's final save",
+             final_doc.get("answers", {}).get("case-cc-01", {}).get("decision_ok") is True,
+             final_doc.get("answers"))
+        cases_by_id = {c["id"]: c for c in final_doc.get("cases") or []}
+        check("concurrent answer: the slow case still got updated once released",
+             cases_by_id["case-cc-02"].get("updated_by_feedback") is True, cases_by_id.get("case-cc-02"))
+    finally:
+        release_slow.set()
+
+
+def test_draft_system_fallback_ladder_text():
+    """Feature C: DRAFT_SYSTEM's fallback ladder - step ONE (propose a
+    meeting using what the instructions say) must appear before step TWO
+    (the existing plain availability-ask), and the never-invent / never-
+    mention-a-failure rules must still be present."""
+    check("draft ladder: step ONE example block present (instructions-stated availability)",
+         "NO LIVE SLOTS BUT THE INSTRUCTIONS GIVE AVAILABILITY" in setter.DRAFT_SYSTEM, None)
+    check("draft ladder: step TWO example block present (no availability anywhere)",
+         "NO TIMES AVAILABLE ANYWHERE" in setter.DRAFT_SYSTEM, None)
+    check("draft ladder: the FIRST/SECOND ordering rule is spelled out in the rules section",
+         "FIRST, if the instructions state an availability window" in setter.DRAFT_SYSTEM
+         and "SECOND, only when the instructions say nothing at all about availability" in setter.DRAFT_SYSTEM,
+         None)
+    check("draft ladder: never-invent-a-time rule present",
+         "Never invent a time, day, or window that isn't in the slots you were given or literally stated "
+         "in the instructions." in setter.DRAFT_SYSTEM, None)
+    check("draft ladder: never-mention-a-failed-tool rule still present",
+         "Never mention that a calendar, tool, or booking system failed or wasn't available" in setter.DRAFT_SYSTEM,
+         None)
+    idx_one = setter.DRAFT_SYSTEM.index("NO LIVE SLOTS BUT THE INSTRUCTIONS GIVE AVAILABILITY")
+    idx_two = setter.DRAFT_SYSTEM.index("NO TIMES AVAILABLE ANYWHERE")
+    check("draft ladder: step ONE's example precedes step TWO's example in the prompt", idx_one < idx_two,
+         (idx_one, idx_two))
+    check("draft ladder: no em dashes anywhere in DRAFT_SYSTEM", "—" not in setter.DRAFT_SYSTEM, None)
 
 
 def test_training_reset_clears_answers_keeps_used_ids():
@@ -3253,7 +3714,9 @@ def test_training_get_includes_minimal_agent_memory():
     agent = {"id": "agent-shr0005", "name": "Ada", "mode": "draft_only", "enabled": True,
              "allowed_intents": ["send_resource"],
              "memory": [{"text": "Always confirm the timezone.", "source": "manual", "scope": "remember",
-                        "at": "2026-07-01T00:00:00+00:00"}]}
+                        "at": "2026-07-01T00:00:00+00:00"}],
+             "instruction_edits": [{"note": "Always mention the trial.", "at": "2026-07-05T00:00:00+00:00",
+                                    "source": "training:case-01", "how": "merged"}]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     status, resp = setter.route_training_get({"agent_id": agent["id"]})
@@ -3264,6 +3727,13 @@ def test_training_get_includes_minimal_agent_memory():
          bool(mem) and set(mem[0].keys()) == {"text", "at"}, mem)
     check("training get: agent_memory text matches the agent's real memory",
          bool(mem) and mem[0]["text"] == "Always confirm the timezone.", mem)
+
+    edits = resp.get("instruction_edits") or []
+    check("training get: instruction_edits (item 9) carries the one edit", len(edits) == 1, edits)
+    check("training get: instruction_edits rows are note+how+at only - source never leaks through here",
+         bool(edits) and set(edits[0].keys()) == {"note", "how", "at"}, edits)
+    check("training get: instruction_edits note/how match the agent's real edit",
+         bool(edits) and edits[0]["note"] == "Always mention the trial." and edits[0]["how"] == "merged", edits)
 
     status2, resp2 = setter.route_training_get({"agent_id": "does-not-exist"})
     check("training get: unknown agent -> 404", status2 == 404, (status2, resp2))
@@ -3345,16 +3815,21 @@ def test_training_answer_share_forces_agent_rejects_mismatch_and_response_stays_
     setter._save_training(agent["id"], doc)
     token = setter.mint_training_share(agent["id"])
 
-    status, resp = setter.route_training_answer({
+    http.merge_fn = None  # default append fallback
+
+    status, resp = _answer_and_wait({
         "share": token, "case_id": "case-0000", "decision_ok": True, "reply_ok": True, "scope": "remember",
         "note": "Client-taught lesson.",
-    })
+    }, agent_id=agent["id"])
     check("training answer share: 200 - scope=remember still works from a share link", status == 200, (status, resp))
     check("training answer share: response carries only this session's own stats, no cross-agent data",
-         set(resp.keys()) <= {"ok", "readiness", "answered_count", "unanswered_count"}, resp)
+         set(resp.keys()) <= {"ok", "readiness", "answered_count", "unanswered_count", "retrain"}, resp)
     saved = setter._load_agent(agent["id"])
-    check("training answer share: the remembered note actually reached THIS agent's memory",
-         any(m.get("text") == "Client-taught lesson." for m in (saved.get("memory") or [])), saved)
+    check("training answer share: the client's note reached THIS agent's instructions (single living manual, "
+         "owner ruling 2026-07-14 - remember no longer writes memory)",
+         "Client-taught lesson." in saved.get("instructions", ""), saved)
+    check("training answer share: agent memory is NOT touched", (saved.get("memory") or []) == [],
+         saved.get("memory"))
 
     status2, resp2 = setter.route_training_answer(
         {"share": token, "agent_id": other["id"], "case_id": "case-0000", "decision_ok": True})
@@ -3776,6 +4251,7 @@ if __name__ == "__main__":
     test_lint_draft()
     test_lint_draft_url_discipline()
     test_lint_draft_calendly_fallback_booking_link()
+    test_lint_draft_calendly_fallback_instructions_link()
     test_lint_draft_slot_status_ok_unchanged_by_fallback_rules()
     test_decide_matrix()
     test_decide_gate7_calendly_fallback_skips_holds()
@@ -3818,10 +4294,11 @@ if __name__ == "__main__":
     test_draft_reply_thread_continuity()
     test_memory_digest_reaches_classify_and_draft()
     test_memory_digest_empty_is_byte_identical()
+    test_merge_correction_into_instructions_success_and_fallbacks()
     test_correction_one_off_does_not_touch_memory()
-    test_correction_remember_route_grows_memory()
+    test_correction_remember_route_merges_instructions()
     test_agents_memory_delete()
-    test_redraft_scope_remember_persists_to_memory()
+    test_redraft_scope_remember_merges_instructions()
     test_redraft_without_scope_does_not_persist()
     test_agent_duplicate()
     test_grading_endpoints()
@@ -3839,7 +4316,13 @@ if __name__ == "__main__":
     test_training_generate_second_call_while_running_is_already_running()
     test_training_generate_lost_update_protection_answer_survives()
     test_training_answer_recomputes_readiness_and_counts()
-    test_training_answer_remember_grows_memory_one_off_does_not()
+    test_training_answer_remember_merges_instructions_one_off_does_not()
+    test_training_retrain_note_updates_unanswered_leaves_answered()
+    test_training_retrain_trigger_conditions()
+    test_training_retrain_lock_contention_with_generate_queued_flag_honoured()
+    test_training_retrain_failed_case_keeps_old_content()
+    test_training_retrain_concurrent_answer_survives()
+    test_draft_system_fallback_ladder_text()
     test_training_reset_clears_answers_keeps_used_ids()
     test_training_get_route()
     test_training_get_self_heals_stale_running_marker()

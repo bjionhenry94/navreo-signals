@@ -53,12 +53,17 @@
 
 /* ── Scenario stream ───────────────────────────────────── */
 .train-progress { font-size: 12.5px; color: var(--ink-3); margin-bottom: 10px; }
+.retrain-notice {
+  font-size: 12.5px; color: var(--orange-700, #9a4b00); background: var(--amber-bg); border: 1px solid var(--amber-line);
+  border-radius: 8px; padding: 7px 12px; margin: -2px 0 12px; display: flex; align-items: center; gap: 8px;
+}
+.retrain-notice::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; animation: trPulse 1.2s ease-in-out infinite; }
+@keyframes trPulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 .rp-formula { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; margin: 8px 0 2px; }
 .rp-memory { margin-top: 10px; }
 .rp-mem-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line, #eee); }
 .rp-mem-row:last-child { border-bottom: none; }
 .rp-mem-text { flex: 1; font-size: 13px; line-height: 1.45; }
-.rp-mem-remove { flex: none; font-size: 12px; padding: 2px 10px; }
 .grade-q-hint { font-weight: 400; font-size: 12.5px; color: var(--ink-3); }
 .scope-hint { color: var(--ink-3); margin: -4px 0 10px; line-height: 1.45; }
 .train-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
@@ -191,7 +196,8 @@ let selectedAgentId = null;
 
 let CASES = [];
 let ANSWERS = {};
-let AGENT_MEMORY = [];
+let AGENT_MEMORY = [];        // legacy per-agent memory entries (pre owner-ruling 2026-07-14)
+let INSTRUCTION_EDITS = [];   // {note, how, at} - the single living manual's own audit trail
 let READINESS = { score: 0, decision_component: 0, reply_component: 0, coverage: 0, n_answers: 0,
                   explanation: "No answers yet. Answer a few training scenarios to start building a readiness score." };
 let usedCount = 0;
@@ -217,6 +223,73 @@ let pollRestores = [];
 let pollBaselineCount = 0;
 const POLL_INTERVAL_MS = 4000;
 const POLL_MAX_MS = 3 * 60 * 1000;
+
+/* ── Retrain notice polling (Feature B, owner ruling 2026-07-14) ──────────
+   ANY feedback on an answer (a note, or a "No") re-runs the remaining
+   unanswered scenarios with the updated brain, in the background, on the
+   SAME server-side worker/lock scenario generation uses (see setter.py
+   route_training_answer's "retrain" field). This is a SEPARATE, lighter
+   poll from the one above: it never blocks Save & continue or disables any
+   button - the trainer keeps moving through cases while a small notice runs
+   alongside, and once the pass lands, the current card's data is quietly
+   refreshed in place. */
+let retrainNoticeVisible = false;
+let retrainPollHandle = null;
+
+function startRetrainNotice() {
+  retrainNoticeVisible = true;
+  renderRetrainNotice();
+  if (retrainPollHandle) return; // already polling from an earlier answer
+  retrainPollHandle = setInterval(pollRetrainOnce, POLL_INTERVAL_MS);
+}
+
+function stopRetrainNotice() {
+  retrainNoticeVisible = false;
+  if (retrainPollHandle) { clearInterval(retrainPollHandle); retrainPollHandle = null; }
+  renderRetrainNotice();
+}
+
+function renderRetrainNotice() {
+  const el = document.getElementById("trRetrainNotice");
+  if (el) el.style.display = retrainNoticeVisible ? "" : "none";
+}
+
+/* The case id currently on screen (stream view only) - used to re-find the
+   same scenario by id, not by index, after a background refresh. */
+function currentCaseId() {
+  if (view !== "stream") return null;
+  const unanswered = currentUnanswered();
+  return unanswered[idx] ? unanswered[idx].id : null;
+}
+
+/* Re-renders after CASES/ANSWERS have been refreshed from the server: keeps
+   the answered set as the server now reports it, and finds the same case
+   (by id) the trainer was looking at, instead of trusting the old index -
+   the retrain pass may have removed, reordered, or simply updated the
+   draft/decision behind whichever case that id points to. */
+function restoreViewAfterRefresh(prevCaseId) {
+  if (!CASES.length) { view = "empty"; render(); return; }
+  const unanswered = currentUnanswered();
+  if (!unanswered.length) { view = "done"; render(); return; }
+  const found = prevCaseId ? unanswered.findIndex((c) => c.id === prevCaseId) : -1;
+  idx = found >= 0 ? found : 0;
+  view = "stream";
+  render();
+}
+
+async function pollRetrainOnce() {
+  const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+  if (!res.ok) {
+    if (SHARE_MODE && res.status === 401) { stopRetrainNotice(); renderShareExpired(); return; }
+    return; // transient fetch error - just try again on the next tick
+  }
+  const gen = (res.data && res.data.generating) || { status: "idle" };
+  if (gen.status === "running") return; // still working - keep polling
+  stopRetrainNotice();
+  const prevCaseId = currentCaseId();
+  applyCasesSnapshot(res.data);
+  restoreViewAfterRefresh(prevCaseId);
+}
 
 /* ── Fetch helper (same shape as setter.html / setter-grade.html) ────────── */
 async function fetchJson(url, opts) {
@@ -333,6 +406,7 @@ function trainingQS() {
 
 async function loadTraining() {
   stopGeneratingPoll();
+  stopRetrainNotice();
   view = "loading"; render();
   const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
   if (!res.ok) {
@@ -363,6 +437,7 @@ function applyCasesSnapshot(data) {
   ANSWERS = (data && data.answers) || {};
   usedCount = (data && data.used_count) || usedCount;
   AGENT_MEMORY = (data && data.agent_memory) || [];
+  INSTRUCTION_EDITS = (data && data.instruction_edits) || [];
   applyReadiness((data && data.readiness) || READINESS, { animate: false });
 }
 
@@ -484,7 +559,19 @@ function renderReadinessPanel(animate) {
       ? ` (about ${Math.max(1, Math.ceil((90 * 20) / rawNow) - nAnswers)} more ratings to reach 90 if you keep agreeing at this rate)`
       : " (right now the agent needs to earn more of your agreement, not just more ratings, to reach 90)";
   }
-  const memory = Array.isArray(AGENT_MEMORY) ? AGENT_MEMORY : [];
+  // Owner ruling 2026-07-14: a "remember" correction merges straight into
+  // this agent's instructions (the single living manual) instead of growing
+  // a separate memory list - see setter.py merge_correction_into_instructions.
+  // This panel now shows that merged-edit trail, newest first, plus any
+  // OLD memory entries an agent saved before this ruling (marked legacy so
+  // it's clear those never became part of the manual).
+  const edits = (Array.isArray(INSTRUCTION_EDITS) ? INSTRUCTION_EDITS : []).map((e) => ({
+    text: e.note || "", how: e.how || "", at: e.at || "", legacy: false,
+  }));
+  const legacyMemory = (Array.isArray(AGENT_MEMORY) ? AGENT_MEMORY : []).map((m) => ({
+    text: m.text || "", how: "", at: m.at || "", legacy: true,
+  }));
+  const changes = edits.concat(legacyMemory).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
   const autopilotLine = SHARE_MODE
     ? "At 90+ the Navreo team can switch the agent on."
     : "At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.";
@@ -512,31 +599,20 @@ function renderReadinessPanel(animate) {
         <div class="rp-stat"><div class="rps-num">${nAnswers}</div><div class="rps-lab">Ratings so far</div></div>
       </div>
       <details class="tr-details rp-memory">
-        <summary>What this agent has remembered (${memory.length})${memory.length ? (SHARE_MODE ? " - every lesson you teach it lands here" : " - view or remove any lesson") : ""}</summary>
+        <summary>What training has changed in the instructions (${changes.length})</summary>
         <div class="tr-details-body">
-          ${memory.length ? memory.map((m) => `
-            <div class="rp-mem-row" data-at="${esc(m.at || "")}">
-              <span class="rp-mem-text">${esc(m.text || "")}</span>
-              ${SHARE_MODE ? "" : `<button type="button" class="btn rp-mem-remove" data-at="${esc(m.at || "")}" data-text="${esc(m.text || "")}">Remove</button>`}
+          ${changes.length ? changes.map((c) => `
+            <div class="rp-mem-row">
+              <span class="rp-mem-text">${esc(c.text)}${c.legacy ? " <i>(legacy note)</i>"
+                : (c.how ? ` <i>(${c.how === "merged" ? "merged into instructions" : "appended to instructions"})</i>` : "")}
+                ${c.at ? `<br><span class="small">${pulledAgo(c.at)}</span>` : ""}</span>
             </div>`).join("")
-          : `<div class="small">Nothing yet. When you pick "Remember going forward" on a rating, the note is saved here${SHARE_MODE ? "" : " - and you can remove it any time"}.</div>`}
+          : `<div class="small">Nothing yet. When you pick "Remember going forward" on a rating, the correction is merged straight into this agent's instructions${SHARE_MODE ? "" : " (Setter &rarr; Agents)"}.</div>`}
+          <div class="small" style="margin-top:8px">${changes.length ? `To undo a lesson, edit this agent's instructions directly${SHARE_MODE ? "" : " in Setter &rarr; Agents"}.` : ""}</div>
         </div>
       </details>
     </div>
   `;
-  // route_agents_memory_delete is owner-only and never accepts a share token
-  // (see setter.py) - this handler is simply never wired up in share mode
-  // because no .rp-mem-remove buttons are rendered above.
-  host.querySelectorAll(".rp-mem-remove").forEach((btn) => btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    const res = await fetchJson("/api/setter/agents/memory/delete", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_id: selectedAgentId, at: btn.dataset.at, text: btn.dataset.text }),
-    });
-    if (!res.ok) { btn.disabled = false; showError(res.error || "Couldn't remove that note."); return; }
-    AGENT_MEMORY = res.data.memory || [];
-    renderReadinessPanel(false);
-  }));
   const numEl = document.getElementById("rpNum");
   const fillEl = document.getElementById("rpBarFill");
   if (animate) {
@@ -659,6 +735,7 @@ function renderCase(unanswered, i) {
 
   el.innerHTML = `
     <div class="train-progress">Rated ${answeredCount} of ${CASES.length} in this batch &middot; shortcuts: <b>Y</b>/<b>N</b> answer, <b>S</b> skip draft, <b>Enter</b> save</div>
+    <div class="retrain-notice" id="trRetrainNotice" style="display:${retrainNoticeVisible ? "" : "none"}">Updating the remaining scenarios with your feedback&hellip;</div>
     <div class="train-card">
       <div class="tr-chips">
         <span class="pill n">${esc(campaignName)}</span>
@@ -832,11 +909,21 @@ async function submitAndAdvance(c, btn) {
   }
   clearError();
   ANSWERS[c.id] = { decision_ok: !!p.decision_ok, reply_ok: p.reply_ok, note: p.note || "", scope: effectiveScope };
-  if (effectiveScope === "remember" && (p.note || "").trim()) {
-    AGENT_MEMORY = AGENT_MEMORY.concat([{ text: p.note.trim(), at: new Date().toISOString() }]);
-  }
+  // The instructions merge itself (Feature A) already happened server-side
+  // inside this same request - the "What training has changed" panel picks
+  // it up next time CASES/AGENT_MEMORY/INSTRUCTION_EDITS refresh (the retrain
+  // poll below does that as soon as the background pass lands).
   delete PENDING[c.id];
   applyReadiness((res.data && res.data.readiness) || READINESS, { animate: true });
+
+  // Feature B: ANY feedback (a note, or a "No" on either question) kicks off
+  // a background retrain of the remaining unanswered scenarios. Save &
+  // continue stays instant - the trainer moves on right away; this just
+  // starts a quiet notice + poll alongside, never blocking anything above.
+  const retrainStatus = res.data && res.data.retrain;
+  if (retrainStatus === "started" || retrainStatus === "queued") {
+    startRetrainNotice();
+  }
 
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; render(); return; }

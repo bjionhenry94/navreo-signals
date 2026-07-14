@@ -593,15 +593,18 @@ def lint_draft(html: str, ctx: dict):
                 return False, "The draft is missing one of the suggested call times."
     elif ctx.get("slots_fallback") and ctx.get("needs_availability_ask"):
         # Owner ruling 2026-07-14: when Calendly can't offer real times, the
-        # fallback draft must still give the lead a way to pick a time -
-        # the booking link, as a REAL hyperlink (not just bare text pasted
-        # into the body). A slot-time deep link invented anyway is already
-        # caught by the URL allow-list check above (slot_links is empty in
-        # fallback mode, so any calendly.com/.../<iso> anchor isn't allowed).
-        anchor_hrefs = {_norm_url(h) for h in _ANCHOR_HREF_RE.findall(text)}
-        booking_norm = _norm_url(booking) if booking else ""
-        if not booking_norm or booking_norm not in anchor_hrefs:
-            return False, "The draft doesn't link the calendar for the lead to pick a time."
+        # fallback draft must still give the lead a real hyperlink to pick a
+        # time - never just bare text pasted into the body. The fallback
+        # ladder (see DRAFT_SYSTEM) means that link may be EITHER the fixed
+        # booking_link OR a scheduling/calendar link the instructions
+        # themselves state - so this only requires at least one anchor whose
+        # href normalises into the SAME allow-list the URL discipline check
+        # above already enforces (instructions/booking/thread - never a slot
+        # deep-link, since slot_links is empty in fallback mode, so any
+        # calendly.com/.../<iso> anchor is already caught above, not here).
+        anchor_hrefs = {_norm_url(h) for h in _ANCHOR_HREF_RE.findall(text) if h}
+        if not (anchor_hrefs & allowed_urls):
+            return False, "The draft doesn't link a calendar for the lead to pick a time."
 
     allowed_text = " ".join([
         str(ctx.get("instructions") or ""),
@@ -899,7 +902,10 @@ PRICING (quote the instructions verbatim):
 A QUESTION WE CAN'T FULLY ANSWER IN AN EMAIL:
 <div>Hi Gustavo,</div><br><div>Good question. That's exactly what I'd walk you through on a quick call, where I could show how it applies to you.</div><br><div>If you're open to it, feel free to <a href="BOOKING_LINK">book a call here</a>.</div><br><div>Bjion</div>
 
-CALL ASK, NO TIMES AVAILABLE (fallback - slot_status is anything but "ok"):
+CALL ASK, NO LIVE SLOTS BUT THE INSTRUCTIONS GIVE AVAILABILITY (fallback ladder step ONE - slot_status is anything but "ok" AND the instructions state a window, specific times, or a scheduling/calendar link):
+<div>Hi Priya,</div><br><div>Would love to find a time that works for you.</div><br><div>I'm generally free weekday afternoons UK time, or you're welcome to grab a slot directly on <a href="INSTRUCTIONS_CALENDAR_LINK">my calendar</a>.</div><br><div>Bjion</div>
+
+CALL ASK, NO TIMES AVAILABLE ANYWHERE (fallback ladder step TWO - slot_status is anything but "ok" AND the instructions say nothing at all about availability):
 <div>Hi Priya,</div><br><div>Would love to find a time that works for you.</div><br><div>When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>.</div><br><div>Bjion</div>
 
 Rules:
@@ -918,7 +924,7 @@ Rules:
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
-- Only include the two call-time paragraph (as anchors on the day/time text) when slots are supplied and slot_status is "ok". When call times are NOT available (slot_status is anything but "ok"): do not invent or promise any times. Instead ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
+- Only include the two call-time paragraph (as anchors on the day/time text) when slots are supplied and slot_status is "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip straight to step TWO if step ONE applies: FIRST, if the instructions state an availability window (e.g. "generally free weekday afternoons"), specific times, or contain a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window or times, and hyperlink the calendar link the instructions give, as its own paragraph. SECOND, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions. Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
 - If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
@@ -1366,12 +1372,19 @@ def _save_agent(doc: dict) -> dict:
     doc.setdefault("voice_examples", [])
     doc.setdefault("pricing_notes", "")
     doc.setdefault("extra_instructions", "")
-    # Persistent learning layer: standing corrections the owner wants applied
-    # to every future pipeline pass (memory), versus one-off corrections kept
-    # only for audit (feedback_log, never fed back into the model - see
-    # _agent_memory_digest).
+    # Persistent learning layer, v3 (owner ruling 2026-07-14): a "remember"
+    # correction is merged straight into `instructions` (the single living
+    # manual - see merge_correction_into_instructions) instead of growing a
+    # separate memory list. `memory` and `feedback_log` are kept only so
+    # agent docs saved before this ruling keep reading correctly (memory
+    # still feeds _agent_memory_digest into every pipeline call; feedback_log
+    # is still audit-only) - nothing writes NEW entries into memory any more.
     doc.setdefault("memory", [])
     doc.setdefault("feedback_log", [])
+    # Audit trail for every instructions edit merge_correction_into_instructions
+    # makes (or falls back to appending) - {note, at, source, how} newest last.
+    # The training page's memory viewer reads this (route_training_get).
+    doc.setdefault("instruction_edits", [])
     # Stamp when each campaign was first assigned - the poll only processes
     # replies received after this, so activating an agent never sweeps an
     # already-handled backlog into the queue.
@@ -1432,6 +1445,100 @@ def _append_agent_feedback_log(agent_id: str, text: str, source: str = "manual")
         "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
     })
     return _save_agent({"id": agent_id, "feedback_log": log})
+
+
+# ── instructions merge (owner ruling 2026-07-14, single living manual) ──────
+
+MERGE_INSTRUCTIONS_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"instructions": {"type": "string"}},
+    "required": ["instructions"],
+}
+
+MERGE_INSTRUCTIONS_SYSTEM = """You maintain an AI appointment setter's instruction manual. This manual is the ONLY brain the setter reads: every price, resource link, and rule for when to send what lives in this one text. The owner is giving you one correction from reviewing the setter's work, and your job is to integrate it into the manual.
+
+Rules:
+- Make the SMALLEST edit that makes future replies obey the correction. Do not rewrite paragraphs that are not affected.
+- Keep every existing link, price, and rule in the manual unless the correction explicitly overrides one of them.
+- Never invent a new link, price, or rule that the correction did not state.
+- Write in plain text, short paragraphs. No em dashes anywhere, ever, use a comma or period instead.
+- Return the FULL updated manual, not just the changed part and not a summary of the change.
+- If the correction is unclear or does not obviously belong anywhere in the manual, add it as its own short paragraph near the end rather than guessing where it fits.
+
+Output STRICT JSON: {"instructions": "..."}"""
+
+
+def merge_correction_into_instructions(agent: dict, note: str, source: str = "manual"):
+    """Feature A (owner ruling 2026-07-14): a "remember" correction no longer
+    grows a separate memory list - it is merged straight into the agent's own
+    `instructions` text, so instructions stays the single living manual every
+    classify()/draft_reply() call already reads in full. Calls gpt-5-mini
+    (same _HTTP/OpenAI idiom as classify()) to rewrite the manual with the
+    smallest edit that makes the correction stick.
+
+    SAFETY VALIDATION on the model's answer: every URL already in the old
+    instructions must still be present in the new text (via _extract_urls -
+    a merge must never silently drop a real link), the new text must be
+    non-empty, and it must not have grown past max(20000, old_len*1.5) chars
+    (an unbounded rewrite is a bug, not a correction). Any validation
+    failure - including the call itself failing - falls back to a dumb,
+    always-safe append of the note as its own dated line.
+
+    On success (merged or appended), saves via _save_agent({id, name,
+    instructions}) and appends {note, at, source, how} to the agent doc's
+    `instruction_edits` list. Never raises. Returns (ok, new_instructions,
+    detail): ok is False only when the agent has no id to save against;
+    detail is "merged" or "appended"."""
+    agent = agent or {}
+    agent_id = agent.get("id")
+    note = str(note or "").strip()
+    old = _agent_instructions(agent)
+    if not agent_id:
+        return False, old, "agent has no id"
+    if not note:
+        return True, old, "empty note"
+
+    at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+    def _append_fallback():
+        line = f"Training note ({at[:10]}): {note}"
+        return (old + "\n\n" + line).strip() if old else line
+
+    new_text = None
+    how = "appended"
+    try:
+        key = _KEYS.get("OPENAI_API_KEY")
+        if key:
+            payload = {"current_instructions": old, "correction": note}
+            r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                     {"Authorization": f"Bearer {key}"},
+                     {"model": OPENAI_MODEL,
+                      "messages": [{"role": "system", "content": MERGE_INSTRUCTIONS_SYSTEM},
+                                  {"role": "user", "content": json.dumps(payload)}],
+                      "response_format": {"type": "json_schema", "json_schema": {
+                          "name": "setter_instructions_merge", "strict": True,
+                          "schema": MERGE_INSTRUCTIONS_SCHEMA}}})
+            if isinstance(r, dict) and not r.get("error"):
+                data = json.loads(r["choices"][0]["message"]["content"])
+                candidate = str(data.get("instructions") or "").strip()
+                old_urls = set(_extract_urls(old))
+                cand_urls = set(_extract_urls(candidate))
+                max_len = max(20000, int(len(old) * 1.5))
+                if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len:
+                    new_text = candidate
+                    how = "merged"
+    except Exception:  # noqa: BLE001 - any failure here just falls back to append
+        new_text = None
+
+    if new_text is None:
+        new_text = _append_fallback()
+        how = "appended"
+
+    edits = list(agent.get("instruction_edits") or [])
+    edits.append({"note": note, "at": at, "source": source or "manual", "how": how})
+    saved = _save_agent({"id": agent_id, "name": agent.get("name"), "instructions": new_text,
+                         "instruction_edits": edits})
+    return True, saved.get("instructions") or new_text, how
 
 
 def _existing_row(workspace: str, campaign_id, email: str, message_id: str):
@@ -2130,10 +2237,11 @@ def route_agents_delete(payload):
 def route_agents_correction(payload):
     """Persistent learning layer: one correction the owner gives while
     reviewing this agent's calls, outside the grading page's own per-case
-    feedback_log. scope="remember" is a standing correction applied to every
-    future classify()/draft_reply() call (agent['memory']); scope="one_off"
-    (the default) is audit-only and never fed back into the model
-    (agent['feedback_log'])."""
+    feedback_log. scope="remember" (owner ruling 2026-07-14) merges the
+    correction straight into the agent's `instructions` text via
+    merge_correction_into_instructions - the single living manual - instead
+    of growing agent['memory']; scope="one_off" (the default) is audit-only
+    and never fed back into the model (agent['feedback_log'])."""
     try:
         payload = payload or {}
         agent_id = payload.get("agent_id")
@@ -2148,9 +2256,15 @@ def route_agents_correction(payload):
         if not agent:
             return 404, {"error": "Agent not found."}
         if scope == "remember":
-            saved = _append_agent_memory(agent_id, text, source)
-        else:
-            saved = _append_agent_feedback_log(agent_id, text, source)
+            _ok, _new_instructions, how = merge_correction_into_instructions(agent, text, source)
+            saved = _load_agent(agent_id) or agent
+            return 200, {
+                "ok": True, "agent_id": agent_id, "scope": scope, "how": how,
+                "memory_count": len(saved.get("memory") or []),
+                "feedback_log_count": len(saved.get("feedback_log") or []),
+                "instruction_edits_count": len(saved.get("instruction_edits") or []),
+            }
+        saved = _append_agent_feedback_log(agent_id, text, source)
         return 200, {
             "ok": True, "agent_id": agent_id, "scope": scope,
             "memory_count": len(saved.get("memory") or []),
@@ -2466,13 +2580,17 @@ def route_queue_redraft(payload):
             return 404, {"error": "Queue row not found."}
         agent = _load_agent(row.get("agent_id")) or {}
         feedback_text = str(payload.get("feedback") or "").strip()
-        # Persistent learning layer: only when the caller explicitly opts in
-        # with scope="remember" does this feedback get written to the
-        # agent's memory (so every FUTURE pass applies it too, not just this
-        # regeneration). Default/absent scope ("one_off") persists nothing,
-        # matching pre-existing behaviour exactly.
+        # Persistent learning layer (owner ruling 2026-07-14): only when the
+        # caller explicitly opts in with scope="remember" does this feedback
+        # get merged into the agent's instructions (so every FUTURE pass
+        # applies it too, not just this regeneration) via
+        # merge_correction_into_instructions - the single living manual.
+        # Default/absent scope ("one_off") persists nothing, matching
+        # pre-existing behaviour exactly. The reload picks up the freshly
+        # merged instructions for THIS regeneration too.
         if payload.get("scope") == "remember" and feedback_text and agent.get("id"):
-            agent = _append_agent_memory(agent.get("id"), feedback_text, source=str(qid))
+            merge_correction_into_instructions(agent, feedback_text, source=str(qid))
+            agent = _load_agent(agent.get("id")) or agent
         settings = _load_settings()
         classification = row.get("classification") or {}
         tz = row.get("timezone")
@@ -3384,6 +3502,16 @@ def route_training_get(params):
         # never be able to reach.
         memory = [{"text": m.get("text") or "", "at": m.get("at") or ""}
                  for m in (agent.get("memory") or []) if isinstance(m, dict)]
+        # Feature A/9: the single living manual's own audit trail - every
+        # merge_correction_into_instructions call, newest last, minimal shape
+        # (never the full agent doc, same discipline as `memory` above - a
+        # share token must never see anything but note/how/date). Read in
+        # both owner and share mode; share mode is read-only anyway (no
+        # "remove" affordance is ever wired up for it in the frontend).
+        instruction_edits = [
+            {"note": e.get("note") or "", "how": e.get("how") or "", "at": e.get("at") or ""}
+            for e in (agent.get("instruction_edits") or []) if isinstance(e, dict)
+        ]
 
         generating = doc.get("generating") or {"status": "idle"}
         # Self-heal a stale "running" left behind by a process restart
@@ -3407,6 +3535,7 @@ def route_training_get(params):
             "used_count": len(doc.get("used_reply_ids") or []),
             "agent_name": agent.get("name") or "",
             "agent_memory": memory,
+            "instruction_edits": instruction_edits,
             "generating": generating,
         }
     except Exception as e:  # noqa: BLE001
@@ -3494,6 +3623,11 @@ def route_training_generate(payload):
 def _training_generate_threadmain(agent_id, agent, allowed_campaign_ids, batch_size, lock):
     try:
         _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
+        # A "remember" answer may have queued a retrain pass WHILE this
+        # generate batch held the lock (see _kick_off_training_retrain) -
+        # run it now, still holding the same lock, so the two kinds of work
+        # never overlap and no queued correction is silently dropped.
+        _maybe_run_queued_retrain(agent_id)
     finally:
         try:
             lock.release()
@@ -3515,6 +3649,13 @@ def _finish_training_generation(agent_id: str, status: str, error: str | None = 
             marker["error"] = error
         if added is not None:
             marker["added"] = added
+        # A "remember" answer may have set retrain_queued on the CURRENT
+        # generating marker while this batch was building (see
+        # _kick_off_training_retrain) - carry it forward so
+        # _maybe_run_queued_retrain (checked right after this worker returns)
+        # still sees it, even when the batch itself failed or found nothing.
+        if (doc.get("generating") or {}).get("retrain_queued"):
+            marker["retrain_queued"] = True
         doc["generating"] = marker
         _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001 - never raise out of a background thread
@@ -3596,11 +3737,17 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
         fresh_doc = _load_training(agent_id)
         fresh_doc["cases"] = list(fresh_doc.get("cases") or []) + new_cases
         fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
-        fresh_doc["generating"] = {
+        gen_marker = {
             "status": "idle",
             "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
             "added": len(new_cases),
         }
+        # Carry retrain_queued forward if a "remember" answer set it while
+        # this batch was building - see _finish_training_generation's own
+        # matching comment and _maybe_run_queued_retrain.
+        if (fresh_doc.get("generating") or {}).get("retrain_queued"):
+            gen_marker["retrain_queued"] = True
+        fresh_doc["generating"] = gen_marker
         _save_training(agent_id, fresh_doc)
     except Exception as e:  # noqa: BLE001 - never raise out of a background thread
         if _LOG:
@@ -3611,6 +3758,284 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size)
                 pass
         _finish_training_generation(agent_id, "failed",
             error="Something went wrong while generating scenarios - try again in a minute.")
+
+
+# ── training retrain (Feature B, owner ruling 2026-07-14) ───────────────────
+# ANY feedback on a training answer - a note, or an explicit wrong mark on
+# either question - re-runs every remaining unanswered scenario with the
+# updated brain, in the background, so the owner never repeats a correction
+# case after case. Mirrors the grading page's _kick_off_relearn/
+# _grading_relearn precedent exactly, except the lock is the SAME per-agent
+# lock route_training_generate uses (_get_training_gen_lock) - a retrain and
+# a generate() for one agent must never run concurrently, since both append/
+# rewrite the same training doc's `cases` list.
+
+def _kick_off_training_retrain(agent_id: str) -> str:
+    """Starts a background retrain pass for one agent's training doc if
+    nothing else holds that agent's generation lock, else just flags
+    doc.generating.retrain_queued so whichever pass currently holds the lock
+    (a generate() batch or another retrain) runs one more retrain pass
+    before releasing it - see _training_retrain_worker's own queued loop and
+    _training_generate_threadmain's _maybe_run_queued_retrain call. Never
+    blocks on the actual work. Returns "started" or "queued"."""
+    lock = _get_training_gen_lock(agent_id)
+    if lock.acquire(blocking=False):
+        try:
+            doc = _load_training(agent_id)
+            gen = dict(doc.get("generating") or {})
+            gen.update({"status": "running", "kind": "retrain",
+                       "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")})
+            gen.pop("retrain_queued", None)
+            doc["generating"] = gen
+            _save_training(agent_id, doc)
+        except Exception:  # noqa: BLE001
+            lock.release()
+            raise
+        thread = threading.Thread(target=_training_retrain_threadmain, args=(agent_id, lock), daemon=True)
+        _TRAINING_GEN_THREADS[agent_id] = thread
+        thread.start()
+        return "started"
+
+    # Already generating or retraining for this agent - flag another pass is
+    # wanted once the current one finishes, never start a second one.
+    try:
+        doc = _load_training(agent_id)
+        gen = dict(doc.get("generating") or {})
+        gen["retrain_queued"] = True
+        doc["generating"] = gen
+        _save_training(agent_id, doc)
+    except Exception:  # noqa: BLE001
+        pass
+    return "queued"
+
+
+def _training_retrain_threadmain(agent_id, lock):
+    try:
+        _training_retrain_worker(agent_id)
+    finally:
+        try:
+            lock.release()
+        except RuntimeError:  # noqa: BLE001 - lock wasn't held (shouldn't happen); never crash a bg thread
+            pass
+
+
+def _maybe_run_queued_retrain(agent_id):
+    """Called by _training_generate_threadmain right after a generate batch
+    finishes, still holding the lock: if a 'remember' answer queued a
+    retrain while the batch was building, run it now instead of leaving a
+    stale retrain_queued flag with no worker left to honour it."""
+    try:
+        doc = _load_training(agent_id)
+        gen = dict(doc.get("generating") or {})
+        if gen.get("retrain_queued"):
+            gen["retrain_queued"] = False
+            doc["generating"] = gen
+            _save_training(agent_id, doc)
+            _training_retrain_worker(agent_id)
+    except Exception:  # noqa: BLE001 - never raise out of a background thread
+        pass
+
+
+def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str:
+    """Plain-English digest built from THIS training doc's own answers -
+    every note plus every explicit wrong mark, newest first, capped to
+    roughly limit_chars. Same shape and purpose as _feedback_digest (the
+    grading page's version), adapted to the training doc's answers dict
+    (keyed by case_id) instead of a flat feedback_log."""
+    doc = doc or {}
+    answers = dict(doc.get("answers") or {})
+    cases_by_id = {str(c.get("id")): c for c in (doc.get("cases") or [])}
+    items = sorted(answers.items(), key=lambda kv: (kv[1] or {}).get("at") or "")
+    lines = []
+    for case_id, ans in reversed(items):
+        ans = ans or {}
+        note = str(ans.get("note") or "").strip()
+        if note:
+            lines.append(f"- {note}")
+            continue
+        if ans.get("decision_ok") is False or ans.get("reply_ok") is False:
+            case = cases_by_id.get(str(case_id)) or {}
+            inbound_snip = str((case.get("inbound") or {}).get("body") or "")[:80]
+            if ans.get("decision_ok") is False:
+                lines.append(f"- The owner said the '{case.get('decision') or 'call'}' call was wrong for a "
+                             f"reply like: '{inbound_snip}'")
+            else:
+                lines.append(f"- The owner disliked the draft written for: '{inbound_snip}'")
+    return "\n".join(lines)[:limit_chars]
+
+
+def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: dict, avail: list,
+                               slot_status0: str, now, digest: str):
+    """Re-runs classify -> decide -> draft_reply for one UNANSWERED training
+    case using the agent's freshest instructions (a 'remember' correction may
+    have just rewritten them - see merge_correction_into_instructions) plus
+    this session's feedback digest, mutating `case` in place. Reads from the
+    case's own stored inbound/original_outreach fields (mirrors
+    _build_training_case's pipeline) rather than re-fetching from Supabase -
+    the case already carries everything the pipeline needs. Never raises - a
+    failure here just leaves the case exactly as it was (old content
+    survives), mirroring _relearn_one_case's contract."""
+    try:
+        inbound = case.get("inbound") or {}
+        body = inbound.get("body") or ""
+        subject = inbound.get("subject") or ""
+        outreach = case.get("original_outreach") or {}
+        first_outbound = outreach.get("body") or ""
+
+        cls = classify({"subject": subject, "body": body, "first_outbound": first_outbound,
+                        "last_outbound": "", "email_domain": ""}, agent_snapshot, owner_hints=digest)
+
+        hints = {"phone": _extract_phone(body), "body": body}
+        tz, tz_confident = resolve_timezone(hints, cls)
+
+        primary = cls.get("primary_intent")
+        try:
+            confidence = float(cls.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
+
+        slots, slot_status = [], "not_configured"
+        if not is_clear_neg:
+            if tz:
+                slot_status = slot_status0
+                if slot_status == "ok":
+                    eff_lead = dict(eff_settings)
+                    eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
+                    slots = pick_slots(avail, tz, eff_lead, now)
+                    if not slots:
+                        slot_status = "none_available"
+            else:
+                slot_status = "tz_unknown"
+
+        slots_fallback = slot_status != "ok"
+        needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
+
+        draft_html = None
+        lint_ok, lint_reason = False, "No draft was produced."
+        if not is_clear_neg:
+            try:
+                d = draft_reply({"first_name": "", "subject": subject, "body": body,
+                                 "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
+                                sender_first="Bjion", regen_feedback=digest)
+                draft_html = d.get("html")
+                lint_ok, lint_reason = lint_draft(draft_html, {
+                    "subject": d.get("subject"), "first_name": "",
+                    "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
+                    "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                    "slot_labels": [s.get("label") for s in slots],
+                    "instructions": _agent_instructions(agent_snapshot),
+                    "booking_link": _booking_link(agent_snapshot), "thread_text": body,
+                    "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+                })
+            except Exception:  # noqa: BLE001
+                draft_html = None
+                lint_ok, lint_reason = False, "No draft was produced."
+
+        ctx = {
+            "red_flag_hits": lexicon_hits(body), "category": case.get("category"),
+            "first_touch": True, "slot_status": slot_status, "slots_fallback": slots_fallback,
+            "timezone": tz, "tz_confident": tz_confident, "lint_ok": lint_ok, "lint_reason": lint_reason,
+            "body_len": len(body), "hydrated": True, "answered_since_reply": False, "autopilot_enabled": True,
+            "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body))),
+            "first_outbound_present": bool(str(first_outbound or "").strip()),
+            "needs_availability_ask": needs_availability_ask,
+        }
+        decision, reason = decide(cls, agent_snapshot, ctx)
+
+        case["classification"] = cls
+        case["decision"] = decision
+        case["decision_reason"] = reason
+        case["draft_html"] = draft_html
+        case["updated_by_feedback"] = True
+    except Exception:  # noqa: BLE001 - one bad case must never abort the whole retrain pass
+        pass
+
+
+def _training_retrain_worker(agent_id: str):
+    """Reloads the agent (fresh instructions), builds a session feedback
+    digest from this training doc's own answers, then re-runs every currently
+    UNANSWERED case in position order, concurrently (ThreadPoolExecutor,
+    max 6 - same worker hygiene as _training_generate_worker: cases touch no
+    shared mutable state besides their own dict). Persists with a fresh
+    reload right before the final save so an answer that lands mid-pass is
+    never lost (lost-update protection, same discipline as
+    _training_generate_worker and _grading_relearn). If another trigger
+    queued a fresh pass while this one ran, loops once more with the fuller
+    digest before finishing - mirrors _grading_relearn exactly. Never
+    raises."""
+    try:
+        while True:
+            agent = _load_agent(agent_id)
+            if not agent:
+                _finish_training_generation(agent_id, "idle")
+                return
+            train_agent = {**agent, "mode": "autopilot", "enabled": True}
+
+            doc = _load_training(agent_id)
+            cases = list(doc.get("cases") or [])
+            answers = dict(doc.get("answers") or {})
+            digest = _training_session_feedback_digest(doc)
+
+            started_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            marker_doc = _load_training(agent_id)
+            marker_doc["generating"] = {"status": "running", "kind": "retrain", "started_at": started_at}
+            _save_training(agent_id, marker_doc)
+
+            settings = _load_settings()
+            now = _dt.datetime.now(_dt.timezone.utc)
+            eff = dict(settings)
+            eff["_agent"] = train_agent
+            slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+
+            cases_by_id = {str(c.get("id")): c for c in cases}
+            unanswered_ids = [c.get("id") for c in cases if not _is_case_answered(c.get("id"), answers)]
+
+            updated = 0
+            if unanswered_ids:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(unanswered_ids))) as pool:
+                    futs = []
+                    for cid in unanswered_ids:
+                        case = cases_by_id.get(cid)
+                        if not isinstance(case, dict):
+                            continue
+                        futs.append(pool.submit(_retrain_one_training_case, case, train_agent, eff, avail,
+                                               slot_status0, now, digest))
+                    for fut in concurrent.futures.as_completed(futs):
+                        try:
+                            fut.result()
+                            updated += 1
+                        except Exception:  # noqa: BLE001 - one bad case must never sink the pass
+                            pass
+
+            # Lost-update protection: reload the doc fresh right before the
+            # final save. Only `cases` and `generating` are ours to write -
+            # answers/used_reply_ids/readiness_history are left exactly as
+            # the fresh reload shows, so an answer that landed on any case
+            # (including one this pass just rewrote) while classify/draft
+            # round trips were in flight is never lost.
+            fresh = _load_training(agent_id)
+            fresh["cases"] = cases
+            queued = bool((fresh.get("generating") or {}).get("retrain_queued"))
+            finished_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            fresh["generating"] = {"status": "idle", "kind": "retrain", "started_at": started_at,
+                                   "finished_at": finished_at, "updated": updated}
+            _save_training(agent_id, fresh)
+
+            if not queued:
+                break
+            # else: more feedback landed while this pass ran - loop again
+            # with the fresher digest, mirroring _grading_relearn.
+    except Exception:  # noqa: BLE001 - a background thread must never raise
+        try:
+            doc = _load_training(agent_id)
+            gen = dict(doc.get("generating") or {})
+            gen["status"] = "idle"
+            gen["finished_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            doc["generating"] = gen
+            _save_training(agent_id, doc)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def route_training_answer(payload):
@@ -3645,14 +4070,15 @@ def route_training_answer(payload):
                             "scope": scope, "at": at}
         doc["answers"] = answers
 
-        # scope="remember" writes a standing correction into the agent's own
-        # live memory (feeds every future classify()/draft_reply() call, and
-        # every future training generation via _agent_memory_digest) -
-        # exactly the same persistent-learning-layer helpers the inbox
-        # correction/redraft flows already use. scope="one_off" (or an empty
-        # note) is audit-only and changes nothing.
+        # scope="remember" (owner ruling 2026-07-14) merges the note straight
+        # into the agent's own `instructions` text via
+        # merge_correction_into_instructions - the single living manual, feeds
+        # every future classify()/draft_reply() call and every future
+        # training generation, exactly the same helper the inbox correction/
+        # redraft flows now use. scope="one_off" (or an empty note) is
+        # audit-only and changes nothing but feedback_log.
         if note and scope == "remember":
-            _append_agent_memory(agent_id, note, source=f"training:{case_id}")
+            merge_correction_into_instructions(agent, note, source=f"training:{case_id}")
         elif note:
             _append_agent_feedback_log(agent_id, note, source=f"training:{case_id}")
 
@@ -3665,8 +4091,20 @@ def route_training_answer(payload):
 
         answered_count = sum(1 for c in cases if _is_case_answered(c.get("id"), answers))
         unanswered_count = len(cases) - answered_count
+
+        # Feature B (owner ruling 2026-07-14): ANY feedback - a note, or an
+        # explicit wrong mark on either question - re-runs every remaining
+        # unanswered scenario with the updated brain, in the background, so
+        # the owner never has to repeat a correction case after case. Kicked
+        # off AFTER the answer/merge above are both saved, so the retrain
+        # pass's reload sees this case as answered (excluded) and the
+        # freshest instructions.
+        triggers_retrain = bool(note) or decision_ok is False or reply_ok is False
+        retrain = _kick_off_training_retrain(agent_id) if triggers_retrain else None
+
         return 200, {"ok": True, "readiness": readiness,
-                    "answered_count": answered_count, "unanswered_count": unanswered_count}
+                    "answered_count": answered_count, "unanswered_count": unanswered_count,
+                    "retrain": retrain}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
