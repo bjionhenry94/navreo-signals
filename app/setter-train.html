@@ -498,7 +498,7 @@ function renderDone() {
 async function generateMore() {
   const btns = document.querySelectorAll("#emptyGenerateBtn, #doneGenerateBtn, #midGenerateBtn");
   const restores = [];
-  btns.forEach((b) => { const r = busyBtn(b, "Pulling real replies and running the agent on them - a minute or two…"); if (r) restores.push(r); });
+  btns.forEach((b) => { const r = busyBtn(b, "Pulling real replies and running the agent on them - under a minute…"); if (r) restores.push(r); });
   if (generating) return;
   generating = true;
   const genBody = { agent_id: selectedAgentId, batch_size: 8 };

@@ -16,6 +16,7 @@ server.py wiring and app/test_setter.py agree on the contract):
   pick_slots, lint_draft, lexicon_hits, run_poll.
 """
 
+import concurrent.futures
 import copy
 import datetime as _dt
 import json
@@ -3390,14 +3391,43 @@ def route_training_generate(payload):
         eff["_agent"] = train_agent
         slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
 
-        new_cases = []
+        # Cases are independent - each one is a self-contained pull (two
+        # Supabase context fetches) + classify() + draft_reply() over its
+        # own reply row, touching no shared mutable state (workers only read
+        # module globals set once at configure() time: _SB, _HTTP, _KEYS).
+        # Running them on a small thread pool turns a batch of N sequential
+        # gpt-5-mini round trips into roughly one round trip's worth of wall
+        # time. Selection order is preserved by writing each result into a
+        # pre-sized list at its own index rather than trusting completion
+        # order; used_reply_ids is appended in selection order AFTER the
+        # pool joins, so it is never touched from a worker thread.
         start_idx = len(existing_cases)
-        for i, r in enumerate(replies):
-            case = _build_training_case(r, train_agent, eff, avail, slot_status0, now, mem_digest,
-                                        idx=start_idx + i)
-            if case:
-                new_cases.append(case)
+        results: list = [None] * len(replies)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(replies))) as pool:
+            future_to_idx = {
+                pool.submit(_build_training_case, r, train_agent, eff, avail, slot_status0, now,
+                           mem_digest, start_idx + i): i
+                for i, r in enumerate(replies)
+            }
+            for fut in concurrent.futures.as_completed(future_to_idx):
+                i = future_to_idx[fut]
+                try:
+                    results[i] = fut.result()
+                except Exception as e:  # noqa: BLE001 - one bad case must never sink the batch
+                    if _LOG:
+                        try:
+                            _LOG("/api/setter/training/generate:case_failed",
+                                {"reply_id": replies[i].get("id"), "error": str(e)[:200]}, actor="system")
+                        except Exception:  # noqa: BLE001
+                            pass
+                    results[i] = None
+
+        new_cases = [c for c in results if c]
+        for r in replies:
             used_ids.append(r.get("id"))
+
+        if not new_cases:
+            return 502, {"error": "Couldn't build any scenarios just now - try again in a minute."}
 
         doc["cases"] = existing_cases + new_cases
         doc["used_reply_ids"] = used_ids

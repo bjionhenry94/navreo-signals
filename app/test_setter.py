@@ -2579,6 +2579,166 @@ def test_training_generate_memory_digest_reaches_classify():
          captured)
 
 
+def _fixed_case(reply_row, idx):
+    """Minimal, cheap stand-in for what _build_training_case would have
+    returned - used to isolate route_training_generate's own concurrency/
+    ordering/error-handling logic from the real classify/draft pipeline."""
+    return {
+        "id": f"case-{idx:04d}", "reply_id": reply_row.get("id"), "campaign_id": reply_row.get("smartlead_campaign_id"),
+        "category": reply_row.get("category"),
+        "inbound": {"subject": reply_row.get("reply_subject") or "", "body": reply_row.get("reply_body") or "",
+                   "raw_body": reply_row.get("reply_body") or ""},
+        "original_outreach": {}, "human_answer_history": {}, "classification": {},
+        "decision": "left_alone", "decision_reason": "test", "draft_html": None,
+        "generated_at": "2026-07-14T00:00:00+00:00",
+    }
+
+
+def _fixed_training_replies(n, prefix="r"):
+    return [{"id": f"{prefix}{i}", "smartlead_campaign_id": 1, "email": f"lead{i}@example.com",
+            "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+            "reply_subject": "Re: our email", "reply_body": f"Real archived reply body {i}. Thanks."}
+           for i in range(n)]
+
+
+def test_training_generate_concurrent_preserves_selection_order():
+    """Workers race (deliberately slowest-first by submission order below),
+    but the STORED case order must still match the order _select_training_
+    replies returned - never completion order."""
+    import time as _time
+
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train-conc1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    fixed_replies = _fixed_training_replies(6, prefix="ord")
+    real_select = setter._select_training_replies
+    real_build = setter._build_training_case
+
+    def fake_select(doc, batch_size, allowed_campaign_ids=None):
+        return fixed_replies
+
+    def fake_build(reply_row, agent_, eff, avail, slot_status0, now, mem_digest, idx):
+        # Later-submitted replies (higher idx) finish FIRST. If the route
+        # trusted completion order instead of the index each worker was
+        # given, the stored order would come out reversed.
+        _time.sleep(0.03 * (len(fixed_replies) - idx))
+        return _fixed_case(reply_row, idx)
+
+    setter._select_training_replies = fake_select
+    setter._build_training_case = fake_build
+    try:
+        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 6})
+    finally:
+        setter._select_training_replies = real_select
+        setter._build_training_case = real_build
+
+    check("training generate concurrent: 200 and all 6 cases built", status == 200 and resp.get("generated") == 6,
+         (status, resp))
+    got_order = [c["reply_id"] for c in resp.get("cases") or []]
+    want_order = [r["id"] for r in fixed_replies]
+    check("training generate concurrent: stored case order matches selection order, not completion order",
+         got_order == want_order, (got_order, want_order))
+
+
+def test_training_generate_one_worker_failure_drops_only_that_case():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train-conc2", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    fixed_replies = _fixed_training_replies(4, prefix="bad")
+    bad_id = fixed_replies[2]["id"]
+    real_select = setter._select_training_replies
+    real_build = setter._build_training_case
+
+    def fake_select(doc, batch_size, allowed_campaign_ids=None):
+        return fixed_replies
+
+    def fake_build(reply_row, agent_, eff, avail, slot_status0, now, mem_digest, idx):
+        if reply_row.get("id") == bad_id:
+            raise RuntimeError("simulated classify/draft failure")
+        return _fixed_case(reply_row, idx)
+
+    setter._select_training_replies = fake_select
+    setter._build_training_case = fake_build
+    try:
+        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 4})
+    finally:
+        setter._select_training_replies = real_select
+        setter._build_training_case = real_build
+
+    check("training generate one-failure: still 200", status == 200, (status, resp))
+    check("training generate one-failure: exactly 3 of 4 cases survive", resp.get("generated") == 3, resp)
+    got_ids = [c["reply_id"] for c in resp.get("cases") or []]
+    check("training generate one-failure: the failing reply's case is absent, the other 3 present in order",
+         got_ids == [r["id"] for r in fixed_replies if r["id"] != bad_id], got_ids)
+
+    doc = setter._load_training(agent["id"])
+    used = list(doc.get("used_reply_ids") or [])
+    check("training generate one-failure: used_reply_ids still records all 4 selected replies exactly once "
+         "(including the one that failed to build a case), with no duplicates from concurrent workers",
+         sorted(used) == sorted(r["id"] for r in fixed_replies) and len(used) == len(set(used)), used)
+
+
+def test_training_generate_all_workers_fail_returns_502_plain_english():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train-conc3", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    fixed_replies = _fixed_training_replies(3, prefix="allbad")
+    real_select = setter._select_training_replies
+    real_build = setter._build_training_case
+
+    def fake_select(doc, batch_size, allowed_campaign_ids=None):
+        return fixed_replies
+
+    def fake_build(reply_row, agent_, eff, avail, slot_status0, now, mem_digest, idx):
+        raise RuntimeError("simulated total outage")
+
+    setter._select_training_replies = fake_select
+    setter._build_training_case = fake_build
+    try:
+        status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 3})
+    finally:
+        setter._select_training_replies = real_select
+        setter._build_training_case = real_build
+
+    check("training generate all-fail: 502", status == 502, (status, resp))
+    check("training generate all-fail: plain-English error, no em dash",
+         resp.get("error") == "Couldn't build any scenarios just now - try again in a minute."
+         and "—" not in (resp.get("error") or ""), resp)
+
+    doc = setter._load_training(agent["id"])
+    check("training generate all-fail: nothing partially saved - used_reply_ids stays empty",
+         (doc.get("used_reply_ids") or []) == [], doc.get("used_reply_ids"))
+    check("training generate all-fail: nothing partially saved - cases list stays empty",
+         (doc.get("cases") or []) == [], doc.get("cases"))
+
+
+def test_training_generate_concurrent_batch_matches_sequential_case_count():
+    """Sanity check over the REAL (non-monkeypatched) pipeline: a normal
+    weighted batch built concurrently still yields the same case count and
+    reply-id set shape as the pre-concurrency sequential version did - see
+    test_training_generate_weighted_excludes_used_and_batch_cap for the
+    original assertions this mirrors."""
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=8200)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {"id": "agent-train-conc4", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = setter.route_training_generate({"agent_id": agent["id"], "batch_size": 8})
+    check("training generate concurrent real pipeline: 200 with a full 8-case batch",
+         status == 200 and resp.get("generated") == 8, (status, resp))
+    doc = setter._load_training(agent["id"])
+    check("training generate concurrent real pipeline: used_reply_ids grew by exactly 8, no duplicates",
+         len(doc.get("used_reply_ids") or []) == 8 and len(set(doc.get("used_reply_ids") or [])) == 8,
+         doc.get("used_reply_ids"))
+
+
 def test_training_generate_refuses_over_40_unanswered():
     sb, http = fresh_setter()
     agent = {"id": "agent-train0005", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
@@ -3256,6 +3416,10 @@ if __name__ == "__main__":
     test_training_generate_stores_real_bodies_verbatim()
     test_training_case_includes_original_outreach_and_human_answer_when_present()
     test_training_generate_memory_digest_reaches_classify()
+    test_training_generate_concurrent_preserves_selection_order()
+    test_training_generate_one_worker_failure_drops_only_that_case()
+    test_training_generate_all_workers_fail_returns_502_plain_english()
+    test_training_generate_concurrent_batch_matches_sequential_case_count()
     test_training_generate_refuses_over_40_unanswered()
     test_training_answer_recomputes_readiness_and_counts()
     test_training_answer_remember_grows_memory_one_off_does_not()
