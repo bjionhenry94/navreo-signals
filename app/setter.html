@@ -514,8 +514,40 @@ function statusPillClass(status) {
   if (status === "auto_sent" || status === "sent") return "g";
   return "n";
 }
+/* Render-time HTML->text, a faithful port of setter.py clean_body(): strip
+   <style>/<script>/<head> blocks and every tag, unescape entities, collapse
+   horizontal whitespace but KEEP line breaks. Gmail/Outlook replies arrive as
+   full HTML documents; the DB keeps them raw (raw fidelity stays) and this is
+   the ONLY place they become readable. Never pass draft_body through here -
+   drafts are intentionally HTML and render as-is. */
+function unescapeEntities(s) {
+  const el = document.createElement("textarea");
+  el.innerHTML = String(s == null ? "" : s);
+  return el.value;
+}
+function cleanBody(s) {
+  let text = String(s == null ? "" : s);
+  if (text.indexOf("<") !== -1 && /<[^>]+>/.test(text)) {
+    text = text.replace(/<(style|script|head)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+               .replace(/<[^>]+>/g, " ");
+    text = unescapeEntities(text);
+  }
+  return text.replace(/[ \t\r\f\v]+/g, " ").trim();
+}
+/* Local-part of an email ("daniel" from "daniel@leadhq.io"), or "". */
+function emailLocalPart(email) {
+  const s = String(email || "");
+  const at = s.indexOf("@");
+  return at > 0 ? s.slice(0, at) : "";
+}
 function leadName(row) {
-  const n = [row.lead_first_name, row.lead_last_name].filter(Boolean).join(" ");
+  // Default (owner ruling): when the first name is the generic fallback
+  // "there" or empty, show the email local-part instead of a hollow greeting.
+  const fn = String(row.lead_first_name || "").trim();
+  if (!fn || fn.toLowerCase() === "there") {
+    return emailLocalPart(row.lead_email) || row.lead_email || "Unknown lead";
+  }
+  const n = [fn, row.lead_last_name].filter(Boolean).join(" ");
   return n || row.lead_email || "Unknown lead";
 }
 function truncate(s, n) {
@@ -839,7 +871,7 @@ function ageBadgeHtml(row) {
    moved into the detail pane's "How this was decided" panel. */
 function inboxItemHtml(row) {
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
-  const snippet = esc(String(row.reply_body || "").trim().replace(/\s+/g, " "));
+  const snippet = esc(cleanBody(row.reply_body).replace(/\s+/g, " "));
   const selected = String(row.id) === String(selectedRowId) ? "selected" : "";
   const holdLabel = (row.status === "needs_review" && row.decision_reason) ? holdReasonLabel(row.decision_reason, row) : "";
   // Status pill shows under "All" AND while a search is active - search spans
@@ -1060,7 +1092,7 @@ function wireLeadPanelEvents(root) {
    reply" card and "What we sent earlier" details. Test rows carry no real
    thread, so that case naturally falls back to just the current reply. */
 function convoMsgHtml(who, when, body, emphasize) {
-  const text = String(body || "").trim();
+  const text = cleanBody(body);
   return `<div class="thread-msg${emphasize ? " current" : ""}">
     <div class="tm-head">${esc(who)} · ${pulledAgo(when)}</div>
     <div class="tm-body">${esc(text).replace(/\n/g, "<br>") || "<i>No content.</i>"}</div>
