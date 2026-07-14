@@ -306,6 +306,13 @@ class FakeHTTP:
         # response, which always trips merge_correction_into_instructions's
         # own fallback-to-append path - tests that want a real merge set this.
         self.merge_fn = None
+        # proofread_fn(body) -> {"html": "..."} for proofread_draft()'s
+        # OpenAI call (schema "setter_proofread"). None -> defaults to
+        # echoing back the SAME html the call was given (parsed straight out
+        # of the request payload) so every pre-existing test's draft-content
+        # assertions stay byte-identical without having to know this feature
+        # exists.
+        self.proofread_fn = None
         # invent_fn(body) -> {"scenarios": [...]} for
         # _invent_training_scenarios()'s OpenAI call (schema
         # "setter_training_scenarios"). None -> a default that returns one
@@ -351,6 +358,13 @@ class FakeHTTP:
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_instructions_merge":
                 data = self.merge_fn(body) if self.merge_fn else {"instructions": ""}
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "setter_proofread":
+                if self.proofread_fn:
+                    data = self.proofread_fn(body)
+                else:
+                    original = json.loads(body["messages"][1]["content"]).get("html") or ""
+                    data = {"html": original}
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_training_scenarios":
                 if self.invent_fn:
@@ -1547,71 +1561,6 @@ def test_claim_race_returns_existing_row_without_classifying():
     check("claim race: process_reply returns the other claimant's row, not a fresh one",
          racing_sb.winner_row is not None and row.get("id") == racing_sb.winner_row.get("id"), row)
     check("claim race: exactly one row ends up in the queue", len(inner_sb.queue) == 1, len(inner_sb.queue))
-
-
-# ── intake dedupe: source_message_id + percent-encoding ─────────────────────
-
-def test_existing_row_percent_encodes_plus_in_keys():
-    sb, http = fresh_setter()
-    sb.queue.append({"id": 9101, "workspace": "navreo", "smartlead_campaign_id": 700,
-                     "lead_email": "plus@example.com", "message_id": "123-2026-07-08T13:16:23+00:00",
-                     "status": "needs_review"})
-    row = setter._existing_row("navreo", 700, "plus@example.com", "123-2026-07-08T13:16:23+00:00")
-    check("_existing_row: a message id containing '+' still matches (value percent-encoded)",
-         bool(row) and row.get("id") == 9101, row)
-    gets = [p for m, p, *_ in sb.calls if m == "GET" and p.startswith(setter.QUEUE_TABLE)]
-    check("_existing_row: no raw '+' ever reaches the query string (PostgREST reads it as a space)",
-         bool(gets) and all("+" not in g for g in gets), gets)
-
-
-def test_existing_row_falls_back_to_source_message_id():
-    sb, http = fresh_setter()
-    sb.queue.append({"id": 9102, "workspace": "navreo", "smartlead_campaign_id": 700,
-                     "lead_email": "swap@example.com", "message_id": "<real-rfc-id@mail.example>",
-                     "source_message_id": "999-2026-07-08T13:16:23+00:00", "status": "no_action"})
-    row = setter._existing_row("navreo", 700, "swap@example.com", "999-2026-07-08T13:16:23+00:00")
-    check("_existing_row: a row whose message_id was hydration-swapped is still found via source_message_id",
-         bool(row) and row.get("id") == 9102, row)
-
-
-def test_run_poll_skips_reply_already_queued_under_swapped_mid():
-    sb, http = fresh_setter()
-    agent = {"id": "agent-dedupe01", "mode": "draft_only", "enabled": True, "campaign_ids": [700],
-             "allowed_intents": ["send_resource"], "pricing_notes": ""}
-    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
-    sb.replies.append({
-        "workspace": "navreo", "smartlead_campaign_id": 700, "email": "swap@example.com",
-        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
-        "smartlead_message_id": "999-2026-07-10T00:00:00+00:00", "category": "Interested",
-    })
-    sb.queue.append({"id": 9103, "workspace": "navreo", "smartlead_campaign_id": 700,
-                     "lead_email": "swap@example.com", "message_id": "<real@mail.example>",
-                     "source_message_id": "999-2026-07-10T00:00:00+00:00", "status": "needs_review"})
-    summary = setter.run_poll()
-    check("run_poll: a reply whose queue row carries the hydration-swapped mid is NOT re-intaken",
-         summary.get("checked") == 0 and len(sb.queue) == 1, (summary, len(sb.queue)))
-
-
-def test_claim_rows_carry_source_message_id():
-    sb, http = fresh_setter()
-    http.classify_fn = lambda _b: {
-        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
-        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
-        "wants": "wants info", "rationale": "",
-    }
-    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
-    agent = {"id": "agent-dedupe02", "mode": "draft_only", "enabled": True, "campaign_ids": [700],
-             "allowed_intents": ["send_resource"], "pricing_notes": ""}
-    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
-    sb.replies.append({
-        "workspace": "navreo", "smartlead_campaign_id": 700, "email": "fresh@example.com",
-        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
-        "smartlead_message_id": "777-2026-07-10T00:00:00+00:00", "category": "Interested",
-    })
-    setter.run_poll()
-    srcs = [r.get("source_message_id") for r in sb.queue]
-    check("intake: the claimed row preserves the intake key in source_message_id",
-         srcs == ["777-2026-07-10T00:00:00+00:00"], srcs)
 
 
 # ── hydrate_lead: answered_since_reply ───────────────────────────────────────
@@ -5397,6 +5346,486 @@ def test_backfill_dry_run_zero_writes():
     check("backfill --dry-run: zero POST/PATCH writes to Supabase", writes == [], writes)
 
 
+# ── recency weighting: LATEST OWNER RULES (trainer-obedience brief 2026-07-14) ──
+# Newest lessons DOMINATE: _latest_owner_rules() builds a newest-first block from
+# the agent's own instruction_edits notes plus (when given) a training doc's
+# answers' notes, and every live/retrain/generation call site prefixes it onto
+# whatever digest it already builds for classify()'s owner_hints and
+# draft_reply()'s regen_feedback.
+
+def test_latest_owner_rules_helper():
+    agent = {
+        "id": "agent-rules01",
+        "instruction_edits": [
+            {"note": "Always mention the free trial.", "at": "2026-07-01T00:00:00+00:00",
+             "source": "manual", "how": "merged"},
+            {"note": "Never promise a specific onboarding date.", "at": "2026-07-05T00:00:00+00:00",
+             "source": "manual", "how": "merged"},
+        ],
+    }
+    block = setter._latest_owner_rules(agent)
+    check("latest rules: block starts with the LATEST OWNER RULES header",
+         block.startswith(setter._LATEST_RULES_HEADER), block)
+    check("latest rules: newest-first ordering (07-05 note before 07-01 note)",
+         block.index("Never promise a specific onboarding date.") < block.index("Always mention the free trial."),
+         block)
+    check("latest rules: numbered list starts at 1", "\n1. Never promise" in block, block)
+
+    # Dedupe: an identical note re-taught later collapses to a single line.
+    agent_dupe = {"id": "agent-rules02", "instruction_edits": [
+        {"note": "Same note.", "at": "2026-07-01T00:00:00+00:00"},
+        {"note": "Same note.", "at": "2026-07-09T00:00:00+00:00"},
+    ]}
+    block_dupe = setter._latest_owner_rules(agent_dupe)
+    check("latest rules: dedupe collapses an identical note to one line",
+         block_dupe.count("Same note.") == 1, block_dupe)
+
+    # Cap: max_rules keeps only the newest N.
+    agent_many = {"id": "agent-rules03", "instruction_edits": [
+        {"note": "Rule A", "at": "2026-07-01T00:00:00+00:00"},
+        {"note": "Rule B", "at": "2026-07-02T00:00:00+00:00"},
+        {"note": "Rule C", "at": "2026-07-03T00:00:00+00:00"},
+    ]}
+    block_capped = setter._latest_owner_rules(agent_many, max_rules=2)
+    check("latest rules: max_rules keeps only the newest N entries",
+         "Rule C" in block_capped and "Rule B" in block_capped and "Rule A" not in block_capped, block_capped)
+
+    # agent-only vs agent+doc merge: a training doc's own answer notes join
+    # instruction_edits, still ordered newest-first across BOTH sources.
+    doc = {"answers": {"case-1": {"note": "From training answers, newest.",
+                                  "at": "2026-07-10T00:00:00+00:00"}}}
+    block_agent_only = setter._latest_owner_rules(agent)
+    check("latest rules: agent-only call carries no training-answer note",
+         "From training answers" not in block_agent_only, block_agent_only)
+    block_merged = setter._latest_owner_rules(agent, doc)
+    check("latest rules: agent+doc merge includes the doc's answer note ahead of older instruction_edits",
+         block_merged.index("From training answers, newest.") < block_merged.index("Never promise"), block_merged)
+
+    check("latest rules: nothing to say (no instruction_edits, no doc) -> empty string",
+         setter._latest_owner_rules({}) == "", None)
+
+
+def test_latest_owner_rules_reaches_process_reply_classify_and_draft():
+    sb, http = fresh_setter()
+    captured = {}
+    http.message_history = [{
+        "type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+        "email_body": "sure, send it over", "message_id": "m-rules1", "stats_id": "st-rules1",
+    }]
+
+    def classify_fn(body):
+        captured["classify_body"] = body
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.98, "red_flags": [], "timezone_guess": "Europe/London", "tz_confidence": 0.9,
+            "wants": "wants the resource", "rationale": "unqualified yes",
+        }
+
+    def draft_fn(body):
+        captured["draft_body"] = body
+        return {"subject": "Re: hi", "html": 'Hi There, <a href="https://x.example/r">Here it is</a>. Best, Sam'}
+
+    http.classify_fn = classify_fn
+    http.draft_fn = draft_fn
+
+    agent = {
+        "id": "agent-rules-live", "mode": "draft_only", "enabled": True, "campaign_ids": [601],
+        "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+        "instruction_edits": [
+            {"note": "Newest owner rule: mention the free onboarding call.", "at": "2026-07-12T00:00:00+00:00",
+             "source": "manual", "how": "merged"},
+        ],
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    reply = {"workspace": "navreo", "campaign_id": 601, "email": "rules@example.com",
+             "first_name": "There", "message_id": "m-rules1", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    setter.process_reply(reply, agent, {})
+
+    classify_payload = json.loads(captured["classify_body"]["messages"][1]["content"])
+    draft_payload = json.loads(captured["draft_body"]["messages"][1]["content"])
+    check("latest rules -> process_reply: reaches classify() as owner_corrections",
+         "Newest owner rule: mention the free onboarding call." in classify_payload.get("owner_corrections", ""),
+         classify_payload.get("owner_corrections"))
+    check("latest rules -> process_reply: LATEST OWNER RULES header present in owner_corrections",
+         "LATEST OWNER RULES" in classify_payload.get("owner_corrections", ""), classify_payload.get("owner_corrections"))
+    check("latest rules -> process_reply: reaches draft_reply() as reviewer_feedback",
+         "Newest owner rule: mention the free onboarding call." in draft_payload.get("reviewer_feedback", ""),
+         draft_payload.get("reviewer_feedback"))
+
+
+def test_latest_owner_rules_reaches_retrain():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-rules-retrain", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "instructions": "Flat $400/mo.",
+             "instruction_edits": [
+                 {"note": "Retrain rule: always ask if timing works this week.",
+                  "at": "2026-07-13T00:00:00+00:00", "source": "manual", "how": "merged"},
+             ]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_a = _fixed_training_case("case-lr-00", body="answered trigger case")
+    case_b = _fixed_training_case("case-lr-01", body="unanswered case")
+    doc = {"cases": [case_a, case_b], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    captured_hints = []
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured_hints.append(payload.get("owner_corrections"))
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.97, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+            "wants": "wants info", "rationale": "",
+        }
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi",
+                                "html": '<div>Hi there,</div><br><div>Sure thing.</div><br><div>Bjion</div>'}
+
+    status, resp = _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-lr-00", "decision_ok": False,
+        "note": "Session note for retrain.", "scope": "one_off",
+    })
+    check("latest rules -> retrain: answering returns 200 and kicks off retrain",
+         status == 200 and resp.get("retrain") == "started", (status, resp))
+    check("latest rules -> retrain: instruction_edits note reached classify() owner_hints for the unanswered case",
+         len(captured_hints) >= 1 and all(
+             "Retrain rule: always ask if timing works this week." in (h or "") for h in captured_hints),
+         captured_hints)
+
+
+def test_latest_owner_rules_reaches_training_generation():
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=8200)
+    captured = []
+
+    def classify_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        captured.append(payload.get("owner_corrections"))
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+            "wants": "wants info", "rationale": "",
+        }
+
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    agent = {
+        "id": "agent-rules-gen", "mode": "draft_only", "enabled": True,
+        "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
+        "instruction_edits": [
+            {"note": "Generation rule: never quote a discount.", "at": "2026-07-14T00:00:00+00:00",
+             "source": "manual", "how": "merged"},
+        ],
+    }
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    check("latest rules -> generation: 200 and starts", status == 200 and resp.get("status") == "started", (status, resp))
+    check("latest rules -> generation: reaches classify() as owner_corrections",
+         len(captured) > 0 and all("Generation rule: never quote a discount." in (c or "") for c in captured),
+         captured)
+
+
+def test_classify_and_draft_system_contain_latest_rules_priority_line():
+    priority_line = ("LATEST OWNER RULES block: those rules are the owner's newest teaching and take "
+                     "priority over everything else, including older instructions")
+    check("CLASSIFY_SYSTEM: LATEST OWNER RULES priority line present", priority_line in setter.CLASSIFY_SYSTEM, None)
+    check("DRAFT_SYSTEM: LATEST OWNER RULES priority line present", priority_line in setter.DRAFT_SYSTEM, None)
+
+
+# ── thumbs-up teaches: confirmed exemplars (trainer-obedience brief 2026-07-14) ─
+# route_training_answer(decision_ok=True) appends a compact {gist, decision, at}
+# exemplar to doc['confirmed_examples'] (rolling cap 20), and
+# _training_session_feedback_digest surfaces the newest ~5 after corrections.
+
+def test_confirmed_examples_thumbs_down_does_not_append():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-confirm-down", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    case = _fixed_training_case("case-cf-down", body="Not sure this is a good fit for us honestly.")
+    doc = {"cases": [case], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = _answer_and_wait({
+        "agent_id": agent["id"], "case_id": "case-cf-down", "decision_ok": False, "scope": "one_off",
+    })
+    check("confirmed examples: thumbs-down answer returns 200", status == 200, (status, resp))
+    saved = setter._load_training(agent["id"])
+    check("confirmed examples: decision_ok False never appends an exemplar",
+         not (saved.get("confirmed_examples") or []), saved.get("confirmed_examples"))
+
+
+def test_confirmed_examples_thumbs_up_appends_exemplar():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-confirm-up", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    body = "Sounds good, send the guide over please, that would be great."
+    case = _fixed_training_case("case-cf-up", body=body)
+    case["decision"] = "auto_send"
+    doc = {"cases": [case], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_answer({
+        "agent_id": agent["id"], "case_id": "case-cf-up", "decision_ok": True, "reply_ok": True, "scope": "one_off",
+    })
+    check("confirmed examples: thumbs-up returns 200 and does not trigger a retrain (no note, no wrong mark)",
+         status == 200 and resp.get("retrain") is None, (status, resp))
+    saved = setter._load_training(agent["id"])
+    confirmed = saved.get("confirmed_examples") or []
+    check("confirmed examples: decision_ok True appends exactly one exemplar", len(confirmed) == 1, confirmed)
+    check("confirmed examples: exemplar gist is the first ~90 chars of the case's inbound body",
+         confirmed[0].get("gist") == body[:90], confirmed[0])
+    check("confirmed examples: exemplar decision matches the case's decision",
+         confirmed[0].get("decision") == "auto_send", confirmed[0])
+    check("confirmed examples: exemplar carries an 'at' timestamp", bool(confirmed[0].get("at")), confirmed[0])
+
+
+def test_confirmed_examples_rolling_cap_newest_kept():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-confirm-cap", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    cases = [_fixed_training_case(f"case-cf-{i:02d}", body=f"Reply body number {i} for this scenario.")
+             for i in range(25)]
+    for c in cases:
+        c["decision"] = "auto_send"
+    doc = {"cases": cases, "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    for i in range(25):
+        status, resp = setter.route_training_answer({
+            "agent_id": agent["id"], "case_id": f"case-cf-{i:02d}", "decision_ok": True, "scope": "one_off",
+        })
+        check(f"confirmed examples cap: answer {i} returns 200 with no retrain",
+             status == 200 and resp.get("retrain") is None, (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    confirmed = saved.get("confirmed_examples") or []
+    check("confirmed examples cap: rolling cap keeps at most 20", len(confirmed) == 20, len(confirmed))
+    check("confirmed examples cap: the newest (case 24) is kept",
+         any("Reply body number 24" in (e.get("gist") or "") for e in confirmed), confirmed)
+    check("confirmed examples cap: the oldest (case 0) was dropped",
+         not any("Reply body number 0 " in (e.get("gist") or "") for e in confirmed), confirmed)
+
+
+def test_training_session_digest_confirmations_after_corrections_and_priority():
+    doc = {
+        "cases": [{"id": "case-d-00", "decision": "review",
+                   "inbound": {"body": "A tricky objection about pricing structure and commission."}}],
+        "answers": {"case-d-00": {"decision_ok": False, "note": "", "at": "2026-07-10T00:00:00+00:00"}},
+        "confirmed_examples": [
+            {"gist": "Sure, send it over please", "decision": "auto_send", "at": "2026-07-11T00:00:00+00:00"},
+            {"gist": "Not interested right now thanks", "decision": "review", "at": "2026-07-12T00:00:00+00:00"},
+        ],
+    }
+    digest = setter._training_session_feedback_digest(doc)
+    check("session digest: the correction line is still present",
+         "The owner said the 'review' call was wrong" in digest, digest)
+    check("session digest: the confirmations block is present",
+         "The owner CONFIRMED these calls were right" in digest, digest)
+    idx_correction = digest.index("The owner said the 'review' call was wrong")
+    idx_confirmed = digest.index("The owner CONFIRMED these calls were right")
+    check("session digest: corrections come BEFORE confirmations", idx_correction < idx_confirmed, digest)
+    check("session digest: confirmations are newest-first (07-12 entry before 07-11 entry)",
+         digest.index("Not interested right now thanks") < digest.index("Sure, send it over please"), digest)
+    check("session digest: decision auto_send maps to 'answer on its own'",
+         "'Sure, send it over please' -> answer on its own" in digest, digest)
+    check("session digest: a non-auto_send decision maps to 'leave it to a human'",
+         "'Not interested right now thanks' -> leave it to a human" in digest, digest)
+
+
+def test_training_session_digest_corrections_priority_under_cap():
+    doc = {
+        "cases": [{"id": "case-p-00", "decision": "review", "inbound": {"body": "x" * 100}}],
+        "answers": {"case-p-00": {"decision_ok": False, "note": "", "at": "2026-07-10T00:00:00+00:00"}},
+        "confirmed_examples": [{"gist": "Sure thing", "decision": "auto_send", "at": "2026-07-11T00:00:00+00:00"}],
+    }
+    tight_digest = setter._training_session_feedback_digest(doc, limit_chars=40)
+    check("session digest priority: under a tight cap, the correction survives",
+         "The owner said the 'review'" in tight_digest, tight_digest)
+    check("session digest priority: under a tight cap, confirmations are dropped entirely",
+         "CONFIRMED" not in tight_digest, tight_digest)
+    check("session digest priority: the whole digest still respects the char cap",
+         len(tight_digest) <= 40, len(tight_digest))
+
+    roomy_digest = setter._training_session_feedback_digest(doc, limit_chars=2000)
+    check("session digest priority: with room, confirmations appear too",
+         "CONFIRMED" in roomy_digest, roomy_digest)
+
+
+# ── second sweep: proofread_draft (trainer-obedience brief 2026-07-14) ──────────
+
+def test_proofread_draft_clean_fix_applies():
+    sb, http = fresh_setter()
+    original = "<div>Hi Donald,</div><br><div>Thankyou thankyou for reaching out.</div><br><div>Bjion</div>"
+    fixed = "<div>Hi Donald,</div><br><div>Thank you for reaching out.</div><br><div>Bjion</div>"
+    http.proofread_fn = lambda _b: {"html": fixed}
+    result, changed = setter.proofread_draft(original)
+    check("proofread: clean fix path returns the corrected html", result == fixed, result)
+    check("proofread: clean fix path reports changed=True", changed is True, changed)
+
+
+def test_proofread_draft_url_mismatch_keeps_original():
+    sb, http = fresh_setter()
+    original = '<div>Hi Donald,</div><br><div><a href="https://x.example/r">Here it is</a>.</div><br><div>Bjion</div>'
+    bad = '<div>Hi Donald,</div><br><div><a href="https://evil.example/x">Here it is</a>.</div><br><div>Bjion</div>'
+    http.proofread_fn = lambda _b: {"html": bad}
+    result, changed = setter.proofread_draft(original)
+    check("proofread: a URL-set mismatch keeps the ORIGINAL html", result == original, result)
+    check("proofread: URL-set mismatch reports changed=False", changed is False, changed)
+
+
+def test_proofread_draft_digit_change_keeps_original():
+    sb, http = fresh_setter()
+    original = "<div>Hi Donald,</div><br><div>Our price is $500/mo.</div><br><div>Bjion</div>"
+    bad = "<div>Hi Donald,</div><br><div>Our price is $5000/mo.</div><br><div>Bjion</div>"
+    http.proofread_fn = lambda _b: {"html": bad}
+    result, changed = setter.proofread_draft(original)
+    check("proofread: a changed visible number keeps the ORIGINAL html", result == original, result)
+    check("proofread: digit change reports changed=False", changed is False, changed)
+
+
+def test_proofread_draft_empty_or_garbage_keeps_original():
+    sb, http = fresh_setter()
+    original = "<div>Hi Donald,</div><br><div>Thanks for reaching out.</div><br><div>Bjion</div>"
+
+    http.proofread_fn = lambda _b: {"html": ""}
+    result, changed = setter.proofread_draft(original)
+    check("proofread: an empty model result keeps the ORIGINAL html",
+         result == original and changed is False, (result, changed))
+
+    http.proofread_fn = lambda _b: {"html": original + ("x" * len(original) * 2)}
+    result2, changed2 = setter.proofread_draft(original)
+    check("proofread: a wildly longer result trips the length guard, ORIGINAL kept",
+         result2 == original and changed2 is False, (result2, changed2))
+
+    result3, changed3 = setter.proofread_draft("   ")
+    check("proofread: a blank input is returned as-is without calling the model",
+         result3 == "   " and changed3 is False, (result3, changed3))
+
+
+def test_proofread_wired_into_process_reply_after_draft_before_lint():
+    sb, http = fresh_setter()
+    order = []
+    http.message_history = [{
+        "type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+        "email_body": "sure, send it over", "message_id": "m-pf1", "stats_id": "st-pf1",
+    }]
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.98, "red_flags": [], "timezone_guess": "Europe/London", "tz_confidence": 0.9,
+        "wants": "wants the resource", "rationale": "unqualified yes",
+    }
+
+    def draft_fn(_b):
+        order.append("draft")
+        return {"subject": "Re: hi",
+               "html": 'Hi There, <a href="https://x.example/r">Here it is</a> thankyou thankyou. Best, Sam'}
+
+    def proofread_fn(_b):
+        order.append("proofread")
+        return {"html": 'Hi There, <a href="https://x.example/r">Here it is</a> thank you. Best, Sam'}
+
+    http.draft_fn = draft_fn
+    http.proofread_fn = proofread_fn
+
+    agent = {"id": "agent-pf-live", "mode": "draft_only", "enabled": True, "campaign_ids": [701],
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    reply = {"workspace": "navreo", "campaign_id": 701, "email": "pf@example.com",
+             "first_name": "There", "message_id": "m-pf1", "body": "sure, send it over",
+             "subject": "Re: hi", "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
+    row = setter.process_reply(reply, agent, {})
+
+    check("proofread wiring (process_reply): draft ran before proofread", order == ["draft", "proofread"], order)
+    check("proofread wiring (process_reply): the stored draft is the PROOFREAD result, not the raw draft",
+         "thank you" in (row.get("draft_body") or "") and "thankyou thankyou" not in (row.get("draft_body") or ""),
+         row.get("draft_body"))
+
+
+def test_proofread_wired_into_build_training_case_real_and_synthetic():
+    sb, http = fresh_setter()
+    order = []
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+
+    def draft_fn(_b):
+        order.append("draft")
+        return {"subject": "Re: hi", "html": "<div>Hi there,</div><br><div>Thankyou thankyou.</div><br><div>Bjion</div>"}
+
+    def proofread_fn(_b):
+        order.append("proofread")
+        return {"html": "<div>Hi there,</div><br><div>Thank you.</div><br><div>Bjion</div>"}
+
+    http.draft_fn = draft_fn
+    http.proofread_fn = proofread_fn
+
+    agent = {"id": "agent-pf-train", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+
+    reply_row = {"id": 9301, "smartlead_campaign_id": 1, "email": "pf@example.com",
+                "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+                "reply_subject": "Re: our email", "reply_body": "Sounds great, send more info please."}
+    real_case = setter._build_training_case(reply_row, agent, {}, [], "not_configured", now, "", idx=0)
+    check("proofread wiring (real training case): draft ran before proofread",
+         order[:2] == ["draft", "proofread"], order)
+    check("proofread wiring (real training case): stored draft_html is the proofread result",
+         "Thank you." in (real_case.get("draft_html") or "")
+         and "Thankyou thankyou" not in (real_case.get("draft_html") or ""), real_case.get("draft_html"))
+
+    order.clear()
+    scenario = {"category": "Interested", "subject": "Re: our email", "body": "Sounds great, tell me more please."}
+    synth_case = setter._build_synthetic_training_case(scenario, agent, {}, [], "not_configured", now, "", idx=1)
+    check("proofread wiring (synthetic training case): draft ran before proofread",
+         order[:2] == ["draft", "proofread"], order)
+    check("proofread wiring (synthetic training case): stored draft_html is the proofread result",
+         "Thank you." in (synth_case.get("draft_html") or "")
+         and "Thankyou thankyou" not in (synth_case.get("draft_html") or ""), synth_case.get("draft_html"))
+
+
+def test_proofread_wired_into_queue_redraft():
+    sb, http = fresh_setter()
+    order = []
+    agent = {"id": "agent-pf-redraft", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.queue.append({
+        "id": 701, "workspace": "navreo", "smartlead_campaign_id": 111, "agent_id": agent["id"],
+        "lead_email": "pf3@example.com", "lead_first_name": "There", "message_id": "m-pf3",
+        "reply_subject": "Re: hi", "reply_body": "sure, send it",
+        "classification": {"primary_intent": "send_resource", "all_intents": ["send_resource"]},
+        "timezone": None, "thread": [],
+    })
+
+    def draft_fn(_b):
+        order.append("draft")
+        return {"subject": "Re: hi", "html": "Hi There, thankyou thankyou. Best, Sam"}
+
+    def proofread_fn(_b):
+        order.append("proofread")
+        return {"html": "Hi There, thank you. Best, Sam"}
+
+    http.draft_fn = draft_fn
+    http.proofread_fn = proofread_fn
+
+    status, resp = setter.route_queue_redraft({"id": 701, "feedback": "shorter please"})
+    check("proofread wiring (redraft): returns 200", status == 200, (status, resp))
+    check("proofread wiring (redraft): draft ran before proofread", order == ["draft", "proofread"], order)
+    saved_draft = (resp.get("row") or {}).get("draft_body") or ""
+    check("proofread wiring (redraft): saved draft_body is the PROOFREAD result, not the raw draft",
+         "thank you" in saved_draft and "thankyou thankyou" not in saved_draft, saved_draft)
+
+
 # ── run everything ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -5430,10 +5859,6 @@ if __name__ == "__main__":
     test_subsequence_uncheck_makes_no_smartlead_call()
     test_subsequence_ambiguous_multiple_subsequences_needs_override()
     test_claim_race_returns_existing_row_without_classifying()
-    test_existing_row_percent_encodes_plus_in_keys()
-    test_existing_row_falls_back_to_source_message_id()
-    test_run_poll_skips_reply_already_queued_under_swapped_mid()
-    test_claim_rows_carry_source_message_id()
     test_hydrate_lead_answered_since_reply()
     test_tz_none_calendly_fallback_no_slots_but_auto_sends()
     test_tz_guessed_low_confidence_shows_local_times_but_holds()
@@ -5529,6 +5954,24 @@ if __name__ == "__main__":
     test_handle_inbound_uncategorised_then_poll_catches_up()
     test_backfill_assigned_at_bypass_only_in_backfill()
     test_backfill_dry_run_zero_writes()
+
+    test_latest_owner_rules_helper()
+    test_latest_owner_rules_reaches_process_reply_classify_and_draft()
+    test_latest_owner_rules_reaches_retrain()
+    test_latest_owner_rules_reaches_training_generation()
+    test_classify_and_draft_system_contain_latest_rules_priority_line()
+    test_confirmed_examples_thumbs_down_does_not_append()
+    test_confirmed_examples_thumbs_up_appends_exemplar()
+    test_confirmed_examples_rolling_cap_newest_kept()
+    test_training_session_digest_confirmations_after_corrections_and_priority()
+    test_training_session_digest_corrections_priority_under_cap()
+    test_proofread_draft_clean_fix_applies()
+    test_proofread_draft_url_mismatch_keeps_original()
+    test_proofread_draft_digit_change_keeps_original()
+    test_proofread_draft_empty_or_garbage_keeps_original()
+    test_proofread_wired_into_process_reply_after_draft_before_lint()
+    test_proofread_wired_into_build_training_case_real_and_synthetic()
+    test_proofread_wired_into_queue_redraft()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

@@ -824,6 +824,7 @@ wants: one plain-English line - what the lead is actually asking for.
 rationale: one line - why you chose this intent.
 original_outreach is the first email we sent this lead - the offer their reply is answering. ALWAYS read it first: it tells you what "sure", "send it", "yes please", "how much", or "not interested" actually refers to. A bare "yes" is only a simple send_resource ask when the outreach (or last_outbound) offered exactly that one thing; if the outreach pitched a call, "yes" is scheduling; if it asked a question, "yes" answers that question and may need a person. When original_outreach is empty, judge from the reply alone and lean toward review on anything ambiguous.
 owner_corrections, when present, are standing corrections the business owner has given while reviewing this tool's calls - apply them faithfully when judging intent and simple_ask (they refine, never loosen, the safety rules above).
+owner_corrections/feedback may contain a LATEST OWNER RULES block: those rules are the owner's newest teaching and take priority over everything else, including older instructions - obey them exactly.
 
 Replies in ANY language get the same rules ("Oui pourquoi ne pas essayer, mais je n'ai pas encore le site web" contains a caveat - simple_ask=false). If you cannot fully understand the reply, simple_ask=false.
 
@@ -932,6 +933,7 @@ Rules:
 - original_outreach is the first email we sent this lead. Keep the reply consistent with what it actually offered - answer the thing they were pitched, and echo the lead's own wording where natural, so the message reads like a real continuation of that thread, not a generic template.
 - recent_thread, when present, is the last few messages in this thread (our sends and their replies, oldest first) - a later-turn reply must read as a natural continuation of it, never repeating something already said or re-introducing yourself.
 - reviewer_feedback, when present, is the human reviewer's instruction for THIS regeneration ("shorter", "don't offer times", "mention the guide is free") - follow it faithfully while keeping every rule above. It never overrides the never-invent rules.
+- reviewer_feedback/owner_corrections may contain a LATEST OWNER RULES block: those rules are the owner's newest teaching and take priority over everything else, including older instructions - obey them exactly.
 - Output STRICT JSON: {"subject": "...", "html": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
 
 
@@ -970,7 +972,11 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         if thread_clean:
             payload["recent_thread"] = thread_clean
     if (regen_feedback or "").strip():
-        payload["reviewer_feedback"] = regen_feedback.strip()[:500]
+        # 4000, not 500: the feedback carries the LATEST OWNER RULES block
+        # (~1600 chars) plus the session digest (~2000). The old 500-char cap
+        # silently discarded almost all teaching before the drafter saw it -
+        # the root cause of "it keeps repeating the same mistakes".
+        payload["reviewer_feedback"] = regen_feedback.strip()[:4000]
     user = json.dumps(payload)
     r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
              {"Authorization": f"Bearer {key}"},
@@ -993,6 +999,78 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
     return {"subject": subject, "html": html_body}
+
+
+PROOFREAD_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"html": {"type": "string"}},
+    "required": ["html"],
+}
+
+PROOFREAD_SYSTEM = ("You are a meticulous copy editor for short sales emails. Fix grammar, spelling, "
+                    "duplicated words or sentences, awkward or broken phrasing, and formatting slips. "
+                    "Keep the meaning, structure, every link href, every number, every date and time, "
+                    "and every name EXACTLY as they are. Keep the same div/br HTML shape. No em dashes. "
+                    "Return the full corrected HTML.")
+
+
+def _visible_digit_runs(html: str) -> set:
+    """Digit runs found in the VISIBLE text only (tags/hrefs stripped first)
+    - the same discipline lint_draft's own invented-number check uses, reused
+    here so a proofread pass can never silently change a number, date, or
+    time even though its wording changed."""
+    plain = _TAG_RE.sub(" ", html or "")
+    return set(re.findall(r"\d+", plain))
+
+
+def proofread_draft(html: str):
+    """Second sweep (owner brief 2026-07-14: "drafts need a second sweep so
+    they read correctly without errors") - one extra gpt-5-mini call that
+    proofreads an already-drafted email body for grammar, spelling,
+    duplicated words/sentences, and formatting slips, without touching its
+    meaning. Called right after draft_reply() and BEFORE lint_draft(), at
+    every draft call site, so lint checks the FINAL text.
+
+    SAFETY GUARDS - any failure at all returns the ORIGINAL html unchanged
+    (changed=False): the OpenAI call must succeed and return a non-empty
+    result; the result's URL set must equal the original's URL set exactly
+    (_extract_urls, as sets - a proofread must never add, drop, or rewrite a
+    link); the result's visible-text digit-run set must equal the
+    original's (_visible_digit_runs - never a changed number, date, or
+    time); and the result's length must fall within 0.5x-1.6x of the
+    original's length (a wildly shorter or longer result is a bad edit, not
+    a proofread). Never raises. Returns (html, changed): changed is True
+    only when the (guard-passed) result actually differs from the input."""
+    original = html or ""
+    if not original.strip():
+        return original, False
+    try:
+        key = _KEYS.get("OPENAI_API_KEY")
+        if not key:
+            return original, False
+        r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                 {"Authorization": f"Bearer {key}"},
+                 {"model": OPENAI_MODEL,
+                  "messages": [{"role": "system", "content": PROOFREAD_SYSTEM},
+                              {"role": "user", "content": json.dumps({"html": original})}],
+                  "response_format": {"type": "json_schema", "json_schema": {
+                      "name": "setter_proofread", "strict": True, "schema": PROOFREAD_SCHEMA}}})
+        if not isinstance(r, dict) or r.get("error"):
+            return original, False
+        data = json.loads(r["choices"][0]["message"]["content"])
+        result = str(data.get("html") or "").strip()
+        if not result:
+            return original, False
+        if set(_extract_urls(result)) != set(_extract_urls(original)):
+            return original, False
+        if _visible_digit_runs(result) != _visible_digit_runs(original):
+            return original, False
+        orig_len = len(original)
+        if orig_len and not (0.5 * orig_len <= len(result) <= 1.6 * orig_len):
+            return original, False
+        return result, result != original
+    except Exception:  # noqa: BLE001 - a proofread outage must degrade to the original draft, never crash
+        return original, False
 
 
 # ── Smartlead helpers ────────────────────────────────────────────────────────
@@ -1421,6 +1499,58 @@ def _agent_memory_digest(agent: dict, limit_chars: int = 2000) -> str:
     return "\n".join(lines)[:limit_chars]
 
 
+_LATEST_RULES_HEADER = ("LATEST OWNER RULES - newest first. These are the owner's most recent "
+                        "corrections and they OVERRIDE anything older in the instructions or below:")
+
+
+def _latest_owner_rules(agent: dict, doc: dict = None, max_rules: int = 8, limit_chars: int = 1600) -> str:
+    """Recency-weighting (owner brief 2026-07-14: "newest trainings must be
+    weighted much more heavily"). Newest-first list of the owner's OWN words
+    from two sources: (a) the agent's instruction_edits notes - the raw
+    correction text, not merge_correction_into_instructions's rewritten
+    prose - and (b), when a training doc is given, that doc's answers'
+    notes. Combined, deduped by exact text (the newest occurrence wins), cut
+    to max_rules, and capped to roughly limit_chars. Returns "" when there is
+    nothing to say (no instruction_edits, no doc, or no doc notes) so a
+    caller with nothing to teach stays byte-identical to before this
+    feature - see _prefix_latest_rules."""
+    agent = agent or {}
+    items = []  # (at, note) - not yet ordered
+    for entry in (agent.get("instruction_edits") or []):
+        note = str((entry or {}).get("note") or "").strip()
+        if note:
+            items.append((str((entry or {}).get("at") or ""), note))
+    if doc:
+        for ans in (doc.get("answers") or {}).values():
+            note = str((ans or {}).get("note") or "").strip()
+            if note:
+                items.append((str((ans or {}).get("at") or ""), note))
+
+    items.sort(key=lambda kv: kv[0], reverse=True)  # newest first
+    seen = set()
+    newest_first = []
+    for _at, note in items:
+        if note in seen:
+            continue
+        seen.add(note)
+        newest_first.append(note)
+        if len(newest_first) >= max_rules:
+            break
+
+    if not newest_first:
+        return ""
+    lines = [f"{i}. {note}" for i, note in enumerate(newest_first, start=1)]
+    block = _LATEST_RULES_HEADER + "\n" + "\n".join(lines)
+    return block[:limit_chars]
+
+
+def _prefix_latest_rules(rules_block: str, digest: str) -> str:
+    """Joins the LATEST OWNER RULES block (when there is one) as a PREFIX
+    onto an existing feedback/memory digest (when there is one) - block
+    first, digest after, the ordering every call site below uses."""
+    return "\n\n".join([x for x in (rules_block, digest) if x])
+
+
 def _append_agent_memory(agent_id: str, text: str, source: str = "manual") -> dict:
     """Appends one standing correction to agent['memory'] via _save_agent's
     own partial-payload merge (only the 'memory' key is sent, so every other
@@ -1545,21 +1675,8 @@ def _existing_row(workspace: str, campaign_id, email: str, message_id: str):
     if not _SB:
         return None
     try:
-        # quote(): both key values routinely carry "+" (synthetic ids embed
-        # "+00:00", real Message-IDs allow it), and an unencoded "+" reaches
-        # PostgREST as a space - the filter then never matches and intake
-        # re-claims the same reply every poll tick.
-        em, mid = quote(str(email), safe=""), quote(str(message_id), safe="")
-        base = (f"{QUEUE_TABLE}?workspace=eq.{workspace}&smartlead_campaign_id=eq.{campaign_id}"
-                f"&lead_email=eq.{em}")
-        rows = _SB("GET", f"{base}&message_id=eq.{mid}&select=*&limit=1")
-        if isinstance(rows, list) and rows:
-            return rows[0]
-        # Hydration swaps message_id to the real RFC Message-ID from the
-        # thread, so the key the row was CLAIMED under survives only in
-        # source_message_id - without this second check the poll re-intakes
-        # every already-processed reply on every tick.
-        rows = _SB("GET", f"{base}&source_message_id=eq.{mid}&select=*&limit=1")
+        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{workspace}&smartlead_campaign_id=eq.{campaign_id}"
+                          f"&lead_email=eq.{email}&message_id=eq.{message_id}&select=*&limit=1")
         return rows[0] if isinstance(rows, list) and rows else None
     except Exception:  # noqa: BLE001
         return None
@@ -1729,8 +1846,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         "workspace": workspace, "smartlead_campaign_id": campaign_id, "agent_id": agent.get("id"),
         "lead_email": email, "lead_first_name": reply.get("first_name") or "",
         "lead_last_name": reply.get("last_name") or "", "company_domain": domain,
-        "message_id": message_id, "source_message_id": message_id,
-        "reply_subject": reply.get("subject") or "",
+        "message_id": message_id, "reply_subject": reply.get("subject") or "",
         "reply_body": reply.get("body") or "", "replied_at": reply.get("replied_at") or now_iso,
         "category": reply.get("category"), "thread": [], "smartlead_lead_id": None,
         "email_stats_id": None, "classification": None, "guardrails": None,
@@ -1748,8 +1864,8 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         try:
             claim = {k: row[k] for k in (
                 "workspace", "smartlead_campaign_id", "agent_id", "lead_email", "lead_first_name",
-                "lead_last_name", "company_domain", "message_id", "source_message_id",
-                "reply_subject", "reply_body", "replied_at", "category", "is_test")}
+                "lead_last_name", "company_domain", "message_id", "reply_subject", "reply_body",
+                "replied_at", "category", "is_test")}
             claim["status"] = "new"
             ins = _SB("POST", f"{QUEUE_TABLE}?on_conflict=workspace,smartlead_campaign_id,lead_email,message_id",
                       claim, prefer="resolution=ignore-duplicates,return=representation")
@@ -1796,14 +1912,9 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         if row["message_id"] != message_id:
             other = _existing_row(workspace, campaign_id, email, row["message_id"])
             if other and other.get("id") != row.get("id"):
-                # Delete our own claim rather than leaving a dismissed husk -
-                # the claim row exists only as this invocation's lock, and a
-                # husk per race pollutes the queue forever.
                 if row.get("id") is not None:
-                    try:
-                        _SB("DELETE", f"{QUEUE_TABLE}?id=eq.{row['id']}")
-                    except Exception:  # noqa: BLE001 - a leftover husk is not worth a crash
-                        pass
+                    _apply_patch(row, {"status": "dismissed", "decision": "no_action",
+                                       "decision_reason": "Duplicate intake of the same reply."})
                 return other
 
     # Everything the pipeline READS uses the cleaned text (HTML stripped) -
@@ -1850,8 +1961,10 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     # remember, fed automatically into every live classify()/draft_reply()
     # call. Empty memory -> empty digest -> classify()/draft_reply() add
     # nothing to their payload, so behaviour is byte-identical to before this
-    # feature existed.
-    mem_digest = _agent_memory_digest(agent)
+    # feature existed. The LATEST OWNER RULES block (recency weighting -
+    # owner brief 2026-07-14) is always the PREFIX, so the newest corrections
+    # dominate even when the standing memory digest is long.
+    mem_digest = _prefix_latest_rules(_latest_owner_rules(agent), _agent_memory_digest(agent))
 
     row["first_outbound"] = first_outbound
     try:
@@ -1919,6 +2032,10 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
                  "first_outbound": first_outbound, "thread_text": thread_text},
                 agent, classification, slots, slot_status, sender_first, regen_feedback=mem_digest)
             draft_subject, draft_body = d.get("subject"), d.get("html")
+            if draft_body:
+                # Second sweep (owner brief 2026-07-14): proofread the draft
+                # BEFORE lint_draft below, so lint checks the final text.
+                draft_body, _proofread_changed = proofread_draft(draft_body)
         except Exception as e:  # noqa: BLE001 - a draft outage falls back to no draft -> lint fails -> review
             if not row.get("error"):
                 row["error"] = f"draft failed: {type(e).__name__}"
@@ -2628,15 +2745,23 @@ def route_queue_redraft(payload):
         thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
         # Standing memory always applies first, then this specific redraft's
         # feedback on top of it - same order Feature 1's spec sets for every
-        # live classify()/draft_reply() call.
+        # live classify()/draft_reply() call. The LATEST OWNER RULES block
+        # (recency weighting) is the outermost prefix, ahead of even the
+        # standing memory digest.
         mem_digest = _agent_memory_digest(agent)
         combined_feedback = "\n".join([x for x in (mem_digest, feedback_text) if x])
+        combined_feedback = _prefix_latest_rules(_latest_owner_rules(agent), combined_feedback)
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
              "thread_text": thread_text},
             agent, classification, slots, slot_status, sender_first="",
             regen_feedback=combined_feedback)
-        patch = {"draft_subject": d.get("subject"), "draft_body": d.get("html"), "slots": slots}
+        draft_html = d.get("html")
+        if draft_html:
+            # Second sweep (owner brief 2026-07-14): proofread before this
+            # regenerated draft is saved.
+            draft_html, _proofread_changed = proofread_draft(draft_html)
+        patch = {"draft_subject": d.get("subject"), "draft_body": draft_html, "slots": slots}
         _apply_patch(row, patch)
         return 200, {"row": {**row, **patch}}
     except Exception as e:  # noqa: BLE001
@@ -3655,6 +3780,12 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                              "first_outbound": first_outbound}, agent, cls, slots, slot_status,
                             sender_first="Bjion", regen_feedback=mem_digest)
             draft_html = d.get("html")
+            if draft_html:
+                # Second sweep (owner brief 2026-07-14) - runs BEFORE
+                # lint_draft below, so lint checks the final text. Shared by
+                # both real (_build_training_case) and synthetic
+                # (_build_synthetic_training_case) cases.
+                draft_html, _proofread_changed = proofread_draft(draft_html)
             lint_ok, lint_reason = lint_draft(draft_html, {
                 "subject": d.get("subject"), "first_name": "",
                 "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
@@ -4067,7 +4198,15 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # right now" - the master switch and mode are simulated ON purely
         # for this generation pass. No send path exists anywhere here.
         train_agent = {**agent, "mode": "autopilot", "enabled": True}
-        mem_digest = _agent_memory_digest(train_agent)
+        # Same digest/rules a live pass and a retrain pass get, so a fresh
+        # batch of scenarios is graded with the owner's newest teaching too
+        # (owner brief 2026-07-14): LATEST OWNER RULES leads, then this
+        # training doc's own session digest (corrections AND confirmed-
+        # exemplar confirmations - see _training_session_feedback_digest),
+        # then the standing agent memory digest.
+        session_digest = _training_session_feedback_digest(doc)
+        mem_digest = "\n\n".join([x for x in (session_digest, _agent_memory_digest(train_agent)) if x])
+        mem_digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc), mem_digest)
 
         settings = _load_settings()
         now = _dt.datetime.now(_dt.timezone.utc)
@@ -4284,7 +4423,16 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str
     every note plus every explicit wrong mark, newest first, capped to
     roughly limit_chars. Same shape and purpose as _feedback_digest (the
     grading page's version), adapted to the training doc's answers dict
-    (keyed by case_id) instead of a flat feedback_log."""
+    (keyed by case_id) instead of a flat feedback_log.
+
+    Thumbs-up teaches too (owner brief 2026-07-14: "when I give a thumbs up
+    it doesn't learn from it"): after the corrections above, appends a
+    second block built from doc['confirmed_examples'] (see
+    route_training_answer) naming the newest ~5 calls the owner explicitly
+    confirmed were right, so a future pass treats a similar reply the same
+    way. Corrections always take space priority - the confirmations block is
+    only added if it still fits under limit_chars, and the whole return
+    value is capped to limit_chars regardless."""
     doc = doc or {}
     answers = dict(doc.get("answers") or {})
     cases_by_id = {str(c.get("id")): c for c in (doc.get("cases") or [])}
@@ -4304,7 +4452,23 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str
                              f"reply like: '{inbound_snip}'")
             else:
                 lines.append(f"- The owner disliked the draft written for: '{inbound_snip}'")
-    return "\n".join(lines)[:limit_chars]
+    digest = "\n".join(lines)
+
+    confirmed = list(doc.get("confirmed_examples") or [])
+    if confirmed and len(digest) < limit_chars:
+        conf_lines = []
+        for entry in reversed(confirmed[-5:]):  # newest ~5, newest first
+            entry = entry or {}
+            gist = str(entry.get("gist") or "").strip()
+            if not gist:
+                continue
+            verb = "answer on its own" if entry.get("decision") == "auto_send" else "leave it to a human"
+            conf_lines.append(f"- '{gist}' -> {verb}")
+        if conf_lines:
+            conf_block = ("The owner CONFIRMED these calls were right - treat similar replies the same "
+                          "way:\n" + "\n".join(conf_lines))
+            digest = (digest + "\n\n" + conf_block) if digest else conf_block
+    return digest[:limit_chars]
 
 
 def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: dict, avail: list,
@@ -4362,6 +4526,10 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                                  "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
                                 sender_first="Bjion", regen_feedback=digest)
                 draft_html = d.get("html")
+                if draft_html:
+                    # Second sweep (owner brief 2026-07-14) - BEFORE lint so
+                    # lint checks the final, proofread text.
+                    draft_html, _proofread_changed = proofread_draft(draft_html)
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": "",
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
@@ -4466,7 +4634,10 @@ def _training_retrain_worker(agent_id: str):
             doc = _load_training(agent_id)
             cases = list(doc.get("cases") or [])
             answers = dict(doc.get("answers") or {})
-            digest = _training_session_feedback_digest(doc)
+            # LATEST OWNER RULES (recency weighting) always leads, then this
+            # session's own corrections/confirmations digest.
+            digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
+                                          _training_session_feedback_digest(doc))
 
             settings = _load_settings()
             now = _dt.datetime.now(_dt.timezone.utc)
@@ -4563,6 +4734,20 @@ def route_training_answer(payload):
         answers[case_id] = {"decision_ok": decision_ok, "reply_ok": reply_ok, "note": note,
                             "scope": scope, "at": at}
         doc["answers"] = answers
+
+        # Thumbs-up teaches too (owner brief 2026-07-14: "when I give a
+        # thumbs up it doesn't learn from it"): a confirmed decision_ok=True
+        # becomes a compact exemplar {gist, decision, at} the training/
+        # retrain digests can point future passes at (see
+        # _training_session_feedback_digest). Rolling cap 20, newest kept.
+        # Same single doc write as the answer below - no extra round trip.
+        if decision_ok is True:
+            case = next((c for c in cases if str(c.get("id")) == case_id), None)
+            gist = str(((case or {}).get("inbound") or {}).get("body") or "").strip()[:90]
+            if gist:
+                confirmed = list(doc.get("confirmed_examples") or [])
+                confirmed.append({"gist": gist, "decision": (case or {}).get("decision"), "at": at})
+                doc["confirmed_examples"] = confirmed[-20:]
 
         # scope="remember" (owner ruling 2026-07-14) is meant to merge the
         # note straight into the agent's own `instructions` text via
