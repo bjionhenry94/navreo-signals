@@ -242,6 +242,13 @@
 .share-url-row { display: flex; gap: 8px; }
 .share-url-row input { flex: 1; }
 .share-url-row .btn { flex: none; }
+
+.resource-row { border: 1px solid var(--line-2); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+.resource-row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.resource-row-head .rr-label { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.resource-row .field { margin-bottom: 8px; }
+.resource-row .field:last-child { margin-bottom: 0; }
+.resources-add-row { margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -422,6 +429,29 @@ let editingAgentId = null;
 let currentAgentMode = "draft_only";
 let currentAgentEnabled = true;
 let selectedCampaignIds = new Set();
+/* Multi-resource support: the modal's own working copy of the resources
+   repeater ({name, link, description, when} rows), rebuilt from the agent
+   doc each time the modal opens (see agentResourcesOf below) and mutated in
+   place by the Add/Remove row buttons - resourcesRepeaterHtml just re-renders
+   whatever's in here. Max 6 rows, same cap the backend enforces on save. */
+let currentAgentResources = [];
+const AGENT_RESOURCES_MAX = 6;
+
+/* Client-side mirror of setter.py's _agent_resources(): the agent's
+   resources list when it's a non-empty array, else the legacy single
+   resource_name/resource_link/resource_description trio as a one-item list,
+   else empty. Every place that reads an agent's resource(s) in this file
+   goes through this helper. */
+function agentResourcesOf(agent) {
+  agent = agent || {};
+  if (Array.isArray(agent.resources) && agent.resources.length) return agent.resources;
+  const name = (agent.resource_name || "").trim();
+  const link = (agent.resource_link || "").trim();
+  if (name || link) {
+    return [{ name, link, description: (agent.resource_description || "").trim(), when: "" }];
+  }
+  return [];
+}
 
 /* inbox-specific state */
 let selectedRowId = null;
@@ -1158,9 +1188,12 @@ async function doSend(btn) {
   const row = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
               ALL_ROWS.find((r) => String(r.id) === String(id));
   const agent = row ? AGENTS.find((a) => String(a.id) === String(row.agent_id)) : null;
-  const link = agent && agent.resource_link;
-  const linkWasThere = link && row && (row.draft_body || "").includes(link);
-  if (draftEl && linkWasThere && !draftEl.innerHTML.includes(link) && sendGuardArmedId !== id) {
+  // Multi-resource support: check every resource this agent knows, not just
+  // the legacy single link, so the guard still fires for an agent that sent
+  // its second/third resource instead of the first.
+  const draftHadLink = row ? agentResourcesOf(agent).map((r) => r.link).find((l) => l && (row.draft_body || "").includes(l)) : null;
+  const linkWasThere = !!draftHadLink;
+  if (draftEl && linkWasThere && !draftEl.innerHTML.includes(draftHadLink) && sendGuardArmedId !== id) {
     sendGuardArmedId = id;
     showDetailError("The resource link is no longer in this draft. Click Approve again to send without it.");
     setTimeout(() => { if (sendGuardArmedId === id) sendGuardArmedId = null; }, 6000);
@@ -1478,6 +1511,16 @@ function agentCampaignNamesLine(agent) {
   return names.length > 2 ? `${shown}, +${names.length - 2} more` : shown;
 }
 
+/* Multi-resource support: the agent-card meta line shows a count once an
+   agent knows more than one resource ("3 resources"), same as it always
+   showed the single resource's name before. */
+function agentResourceMetaLabel(agent) {
+  const resources = agentResourcesOf(agent);
+  if (!resources.length) return "No resource set yet";
+  if (resources.length === 1) return resources[0].name || "No resource set yet";
+  return `${resources.length} resources`;
+}
+
 function renderAgents() {
   const el = document.getElementById("agentsList");
   if (!AGENTS.length) {
@@ -1491,7 +1534,7 @@ function renderAgents() {
     return `
     <div class="agent-card ${justDup ? "just-duplicated" : ""}" data-id="${esc(a.id)}">
       <div class="ac-name">${esc(a.name || "Untitled agent")} <span class="pill ${a.mode === "autopilot" ? "g" : "n"}">${agentModeLabel(a)}</span></div>
-      <div class="ac-meta" title="${esc(namesFull)}">${esc(agentCampaignNamesLine(a))} · ${esc(a.resource_name || "No resource set yet")}</div>
+      <div class="ac-meta" title="${esc(namesFull)}">${esc(agentCampaignNamesLine(a))} · ${esc(agentResourceMetaLabel(a))}</div>
       <div class="ac-intake">${esc(liveIntakeLine(a))}</div>
       <div class="ac-actions">
         <button class="btn sm ac-duplicate-btn" type="button" data-id="${esc(a.id)}">Duplicate</button>
@@ -1587,12 +1630,13 @@ document.getElementById("shareTrainCopyBtn").addEventListener("click", async () 
   }
 });
 
-/* Field order: name, campaigns, resource name/link/description, instructions,
-   allowed intents, mode toggle, confidence, Calendly link. Voice examples,
-   extra instructions, and the separate booking-link field are gone from the
-   UI (still tolerated on older agent docs, just not shown or re-saved) -
-   house style lives in DRAFT_SYSTEM's own few-shot examples now, and
-   booking_link is derived server-side from the Calendly link. */
+/* Field order: name, campaigns, resources (repeater - name/link/description/
+   when per row), instructions, allowed intents, mode toggle, confidence,
+   Calendly link. Voice examples, extra instructions, and the separate
+   booking-link field are gone from the UI (still tolerated on older agent
+   docs, just not shown or re-saved) - house style lives in DRAFT_SYSTEM's own
+   few-shot examples now, and booking_link is derived server-side from the
+   Calendly link. */
 function agentFormHtml(agent) {
   currentAgentMode = agent.mode === "autopilot" ? "autopilot" : "draft_only";
   currentAgentEnabled = agent.enabled !== false;
@@ -1601,6 +1645,11 @@ function agentFormHtml(agent) {
   // instructions is the new field; older agent docs only have pricing_notes.
   const instructions = agent.instructions != null ? agent.instructions : (agent.pricing_notes || "");
   const calendlyLink = agent.calendly_event_url || agent.booking_link || "";
+  // Working copy for the repeater - a fresh array so editing it never mutates
+  // the AGENTS list itself before Save actually posts.
+  currentAgentResources = agentResourcesOf(agent).map((r) => ({
+    name: r.name || "", link: r.link || "", description: r.description || "", when: r.when || "",
+  }));
   return `
     <div class="field">
       <label>Name</label>
@@ -1612,16 +1661,12 @@ function agentFormHtml(agent) {
       <div class="checklist" id="agCampaignList" style="margin-top:8px"></div>
     </div>
     <div class="field">
-      <label>Resource name</label>
-      <input type="text" id="agResourceName" value="${esc(agent.resource_name || "")}" placeholder="e.g. Clay to Claude transition breakdown">
-    </div>
-    <div class="field">
-      <label>Resource link</label>
-      <input type="text" id="agResourceLink" value="${esc(agent.resource_link || "")}" placeholder="https://…">
-    </div>
-    <div class="field">
-      <label>Resource description</label>
-      <textarea id="agResourceDesc" placeholder="1-2 lines: what it is and the value line used to pitch the call">${esc(agent.resource_description || "")}</textarea>
+      <label>Resources</label>
+      <div class="hint" style="margin:0 0 8px">Everything this agent can send, and when to send each one. Add a "when" rule per resource so the agent knows which one fits a given reply, e.g. "Only when the outreach offered the AEO/GEO teardown - check the original email above the reply".</div>
+      <div id="agResourcesList"></div>
+      <div class="resources-add-row">
+        <button type="button" class="btn sm" id="agAddResourceBtn">+ Add another resource</button>
+      </div>
     </div>
     <div class="field">
       <label>Instructions - what this agent may share (and what it may not)</label>
@@ -1676,6 +1721,66 @@ function renderCampaignChecklist() {
   ).join("");
 }
 
+/* Multi-resource repeater: each row is Name / Link / "When should the agent
+   send this?" plus a per-row Remove button, capped at AGENT_RESOURCES_MAX.
+   currentAgentResources is the working array; this just re-renders it and
+   re-wires the row-local inputs/buttons after every render (add/remove
+   rebuild the DOM, so a plain innerHTML input listener would go stale). */
+function renderResourcesRepeater() {
+  const list = document.getElementById("agResourcesList");
+  if (!list) return;
+  if (!currentAgentResources.length) {
+    list.innerHTML = `<div class="small muted" style="padding:4px 0 8px">No resources yet. Add one below.</div>`;
+  } else {
+    list.innerHTML = currentAgentResources.map((r, i) => `
+      <div class="resource-row" data-idx="${i}">
+        <div class="resource-row-head">
+          <span class="rr-label">Resource ${i + 1}</span>
+          <button type="button" class="btn sm ag-res-remove" data-idx="${i}">Remove</button>
+        </div>
+        <div class="field">
+          <label>Name</label>
+          <input type="text" class="ag-res-name" data-idx="${i}" value="${esc(r.name || "")}" placeholder="e.g. Clay to Claude transition breakdown">
+        </div>
+        <div class="field">
+          <label>Link</label>
+          <input type="text" class="ag-res-link" data-idx="${i}" value="${esc(r.link || "")}" placeholder="https://…">
+        </div>
+        <div class="field">
+          <label>Description</label>
+          <textarea class="ag-res-desc" data-idx="${i}" placeholder="1-2 lines: what it is and the value line used to pitch the call">${esc(r.description || "")}</textarea>
+        </div>
+        <div class="field">
+          <label>When should the agent send this?</label>
+          <textarea class="ag-res-when" data-idx="${i}" placeholder="e.g. Only when the outreach offered the AEO/GEO teardown - check the original email above the reply">${esc(r.when || "")}</textarea>
+        </div>
+      </div>
+    `).join("");
+  }
+  const addBtn = document.getElementById("agAddResourceBtn");
+  if (addBtn) addBtn.disabled = currentAgentResources.length >= AGENT_RESOURCES_MAX;
+  wireResourceRowEvents();
+}
+
+function wireResourceRowEvents() {
+  document.querySelectorAll(".ag-res-name").forEach((el) => el.addEventListener("input", () => {
+    currentAgentResources[Number(el.getAttribute("data-idx"))].name = el.value;
+  }));
+  document.querySelectorAll(".ag-res-link").forEach((el) => el.addEventListener("input", () => {
+    currentAgentResources[Number(el.getAttribute("data-idx"))].link = el.value;
+  }));
+  document.querySelectorAll(".ag-res-desc").forEach((el) => el.addEventListener("input", () => {
+    currentAgentResources[Number(el.getAttribute("data-idx"))].description = el.value;
+  }));
+  document.querySelectorAll(".ag-res-when").forEach((el) => el.addEventListener("input", () => {
+    currentAgentResources[Number(el.getAttribute("data-idx"))].when = el.value;
+  }));
+  document.querySelectorAll(".ag-res-remove").forEach((el) => el.addEventListener("click", () => {
+    currentAgentResources.splice(Number(el.getAttribute("data-idx")), 1);
+    renderResourcesRepeater();
+  }));
+}
+
 function wireAgentModalEvents() {
   document.getElementById("agModeDraft").addEventListener("click", () => setAgentMode("draft_only"));
   document.getElementById("agModeAuto").addEventListener("click", () => setAgentMode("autopilot"));
@@ -1687,6 +1792,12 @@ function wireAgentModalEvents() {
   });
   const conf = document.getElementById("agConfidence");
   conf.addEventListener("input", () => { document.getElementById("agConfidenceVal").textContent = conf.value + "%"; });
+  renderResourcesRepeater();
+  document.getElementById("agAddResourceBtn").addEventListener("click", () => {
+    if (currentAgentResources.length >= AGENT_RESOURCES_MAX) return;
+    currentAgentResources.push({ name: "", link: "", description: "", when: "" });
+    renderResourcesRepeater();
+  });
 }
 
 function setAgentMode(mode) {
@@ -1757,9 +1868,14 @@ document.getElementById("agentSaveBtn").addEventListener("click", async () => {
     mode: currentAgentMode,
     enabled: currentAgentEnabled,
     campaign_ids: Array.from(selectedCampaignIds).map(Number).filter((n) => !isNaN(n)),
-    resource_name: document.getElementById("agResourceName").value.trim(),
-    resource_link: document.getElementById("agResourceLink").value.trim(),
-    resource_description: document.getElementById("agResourceDesc").value.trim(),
+    // The mirrored legacy resource_name/resource_link/resource_description
+    // trio (for generate_grading.py, older code paths, and the drawer meta
+    // line) is written server-side from resources[0] - see _save_agent.
+    resources: currentAgentResources
+      .map((r) => ({ name: (r.name || "").trim(), link: (r.link || "").trim(),
+                     description: (r.description || "").trim(), when: (r.when || "").trim() }))
+      .filter((r) => r.name && r.link)
+      .slice(0, AGENT_RESOURCES_MAX),
     instructions: document.getElementById("agInstructions").value,
     allowed_intents,
     confidence_threshold: Number(document.getElementById("agConfidence").value) / 100,

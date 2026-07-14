@@ -2734,6 +2734,240 @@ def test_memory_delete_never_accepts_share_token():
          status3 == 200, (status3, resp3))
 
 
+# ── multi-resource support (2026-07-14) ──────────────────────────────────────
+# An agent's copy variants can each pitch a different offer/resource, so an
+# agent doc now carries agent["resources"] - a list of {name, link,
+# description, when} - instead of (or alongside, for back-compat) the single
+# resource_name/resource_link/resource_description trio. Every read of an
+# agent's resource(s) goes through _agent_resources().
+
+def test_agent_resources_helper():
+    check("_agent_resources: a non-empty resources list wins outright",
+         setter._agent_resources({"resources": [{"name": "A", "link": "https://x.example/a",
+                                                 "description": "descA", "when": "whenA"}]}) ==
+         [{"name": "A", "link": "https://x.example/a", "description": "descA", "when": "whenA"}])
+
+    check("_agent_resources: legacy trio falls back to a one-item list with when=''",
+         setter._agent_resources({"resource_name": "Guide", "resource_link": "https://x.example/g",
+                                  "resource_description": "A guide"}) ==
+         [{"name": "Guide", "link": "https://x.example/g", "description": "A guide", "when": ""}])
+
+    check("_agent_resources: empty resources list still falls back to the legacy trio",
+         setter._agent_resources({"resources": [], "resource_link": "https://x.example/g"}) ==
+         [{"name": "", "link": "https://x.example/g", "description": "", "when": ""}])
+
+    check("_agent_resources: link-only legacy doc still yields one resource",
+         len(setter._agent_resources({"resource_link": "https://x.example/only-link"})) == 1)
+
+    check("_agent_resources: nothing set at all -> empty list",
+         setter._agent_resources({}) == [])
+
+    check("_agent_resources: None agent -> empty list", setter._agent_resources(None) == [])
+
+
+def test_save_agent_resources_mirror_and_cap():
+    sb, http = fresh_setter()
+
+    # a linkless and a nameless entry must both be stripped before saving
+    doc = {
+        "name": "Multi-resource agent",
+        "resources": [
+            {"name": "Guide A", "link": "https://x.example/a", "description": "descA", "when": "whenA"},
+            {"name": "", "link": "https://x.example/no-name"},
+            {"name": "No link", "link": ""},
+            {"name": "Guide C", "link": "https://x.example/c", "description": "descC", "when": "whenC"},
+        ],
+    }
+    saved = setter._save_agent(doc)
+    check("save: linkless/nameless resource entries are stripped before saving",
+         [r["name"] for r in saved["resources"]] == ["Guide A", "Guide C"], saved["resources"])
+    check("save: resources[0] is mirrored onto the legacy resource_name key",
+         saved.get("resource_name") == "Guide A", saved.get("resource_name"))
+    check("save: resources[0] is mirrored onto the legacy resource_link key",
+         saved.get("resource_link") == "https://x.example/a", saved.get("resource_link"))
+    check("save: resources[0] is mirrored onto the legacy resource_description key",
+         saved.get("resource_description") == "descA", saved.get("resource_description"))
+
+    reloaded = setter._load_agent(saved["id"])
+    check("save: the mirrored legacy trio actually persisted, not just the return value",
+         reloaded.get("resource_name") == "Guide A" and reloaded.get("resource_link") == "https://x.example/a",
+         reloaded)
+
+    # cap at 6 - an 8-resource payload is trimmed on save
+    doc8 = {
+        "name": "Eight resources",
+        "resources": [{"name": f"R{i}", "link": f"https://x.example/r{i}"} for i in range(8)],
+    }
+    saved8 = setter._save_agent(doc8)
+    check("save: resources list is capped at 6", len(saved8["resources"]) == 6, len(saved8["resources"]))
+    check("save: the cap keeps the first 6 entries in order",
+         [r["name"] for r in saved8["resources"]] == [f"R{i}" for i in range(6)], saved8["resources"])
+
+    # a partial re-save (mode-only, no resources key sent) must not wipe an
+    # existing agent's resources - _save_agent's own merge-onto-existing
+    # pattern already covers this for every other field; this is the same
+    # guarantee applied to the new key.
+    resaved = setter._save_agent({"id": saved["id"], "mode": "autopilot"})
+    check("save: a partial re-save with no resources key leaves existing resources untouched",
+         [r["name"] for r in resaved["resources"]] == ["Guide A", "Guide C"], resaved["resources"])
+
+    # a single-resource legacy-style save (only resource_name/link/description,
+    # no resources key at all) must behave exactly as before - no resources
+    # key gets invented on the doc.
+    legacy_doc = {"name": "Legacy single-resource agent", "resource_name": "Old Guide",
+                 "resource_link": "https://x.example/old", "resource_description": "The old one"}
+    legacy_saved = setter._save_agent(legacy_doc)
+    check("save: a legacy single-resource save never gains a resources key",
+         "resources" not in legacy_saved, legacy_saved)
+    check("save: legacy single-resource fields are unchanged by the save",
+         legacy_saved.get("resource_name") == "Old Guide" and
+         legacy_saved.get("resource_link") == "https://x.example/old", legacy_saved)
+
+
+AGENT_MULTI_RES = {
+    "id": "agent-multi0001", "mode": "autopilot", "enabled": True,
+    "allowed_intents": ["send_resource", "pricing", "scheduling"],
+    "pricing_notes": "Flat $500/mo, 3 seats included.", "confidence_threshold": 0.9,
+    "resources": [
+        {"name": "AEO/GEO teardown", "link": "https://x.example/aeo", "description": "AEO/GEO breakdown",
+         "when": "Use when the original outreach offered the AEO/GEO teardown."},
+        {"name": "Clay to Claude guide", "link": "https://x.example/clay", "description": "Migration guide",
+         "when": "Use when the original outreach offered the Clay-to-Claude guide."},
+    ],
+}
+
+
+def test_classify_payload_carries_resources_array():
+    sb, http = fresh_setter()
+    captured = {}
+
+    def classify_fn(body):
+        captured["body"] = body
+        return {
+            "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+            "confidence": 0.95, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+            "live_lead": False, "wants": "wants the guide", "rationale": "unqualified yes",
+        }
+
+    http.classify_fn = classify_fn
+    setter.classify({"subject": "Re: hi", "body": "sure, send it over"}, AGENT_MULTI_RES)
+
+    payload = json.loads(captured["body"]["messages"][1]["content"])
+    resources = payload.get("agent", {}).get("resources")
+    check("classify payload: carries a resources array (not the old singular fields)",
+         isinstance(resources, list) and len(resources) == 2, resources)
+    check("classify payload: each resource carries name/description/when, no link",
+         resources == [
+             {"name": "AEO/GEO teardown", "description": "AEO/GEO breakdown",
+              "when": "Use when the original outreach offered the AEO/GEO teardown."},
+             {"name": "Clay to Claude guide", "description": "Migration guide",
+              "when": "Use when the original outreach offered the Clay-to-Claude guide."},
+         ], resources)
+    check("classify payload: no legacy resource_name/resource_description keys leak through",
+         "resource_name" not in payload["agent"] and "resource_description" not in payload["agent"],
+         payload["agent"])
+
+
+def test_draft_payload_carries_resources_with_when_rules():
+    sb, http = fresh_setter()
+    captured = {}
+
+    def draft_fn(body):
+        captured["body"] = body
+        return {"subject": "Re: hi", "html": '<div>Hi There,</div><br><div>Here it is.</div>'}
+
+    http.draft_fn = draft_fn
+    classification = {"primary_intent": "send_resource", "all_intents": ["send_resource"], "wants": "wants it"}
+    setter.draft_reply({"first_name": "There", "subject": "Re: hi", "body": "sure"}, AGENT_MULTI_RES,
+                       classification, [], "not_configured", "Bjion")
+
+    payload = json.loads(captured["body"]["messages"][1]["content"])
+    resources = payload.get("resources")
+    check("draft payload: carries the full resources list", isinstance(resources, list) and len(resources) == 2,
+         resources)
+    check("draft payload: each resource carries name/link/description/when",
+         resources == [
+             {"name": "AEO/GEO teardown", "link": "https://x.example/aeo", "description": "AEO/GEO breakdown",
+              "when": "Use when the original outreach offered the AEO/GEO teardown."},
+             {"name": "Clay to Claude guide", "link": "https://x.example/clay", "description": "Migration guide",
+              "when": "Use when the original outreach offered the Clay-to-Claude guide."},
+         ], resources)
+    check("draft payload: legacy resource_name/resource_link/resource_description still present too",
+         payload.get("resource_name") == "" and payload.get("resource_link") == "", payload)
+
+
+def test_lint_multi_resource_links():
+    ctx = {"subject": "Re: hi", "first_name": "Jane", "needs_resource_link": True,
+          "resource_links": ["https://x.example/a", "https://x.example/b"],
+          "slot_status": "not_configured", "slot_links": [], "slot_labels": [],
+          "instructions": "", "thread_text": ""}
+
+    html_a = ('<div>Hi Jane,</div><br><div><a href="https://x.example/a">Here is the breakdown</a></div><br>'
+             '<div>Thanks.</div>')
+    ok, reason = setter.lint_draft(html_a, ctx)
+    check("lint multi-resource: exactly one known link (A) passes", ok, reason)
+
+    html_b = ('<div>Hi Jane,</div><br><div><a href="https://x.example/b">Here is the guide</a></div><br>'
+             '<div>Thanks.</div>')
+    ok, reason = setter.lint_draft(html_b, ctx)
+    check("lint multi-resource: exactly one known link (B) also passes", ok, reason)
+
+    html_none = '<div>Hi Jane,</div><br><div>Thanks for reaching out.</div><br><div>More soon.</div>'
+    ok, reason = setter.lint_draft(html_none, ctx)
+    check("lint multi-resource: no known link fails with the plain-English reason",
+         not ok and reason == "The draft is missing a resource link.", reason)
+
+    html_both = ('<div>Hi Jane,</div><br><div><a href="https://x.example/a">Here is A</a></div><br>'
+                '<div><a href="https://x.example/b">Here is B</a></div>')
+    ok, reason = setter.lint_draft(html_both, ctx)
+    check("lint multi-resource: two distinct known links fails - a person should pick",
+         not ok and reason == "The draft sends more than one resource, a person should pick.", reason)
+
+    # back-compat: a caller that still only passes the legacy singular
+    # resource_link (no resource_links key at all) must keep working exactly
+    # as before - the old ctx shape is folded into the same check.
+    legacy_ctx = {**ctx, "resource_links": None, "resource_link": "https://x.example/a"}
+    ok, reason = setter.lint_draft(html_a, legacy_ctx)
+    check("lint multi-resource: legacy singular resource_link key alone still passes", ok, reason)
+    ok, reason = setter.lint_draft(html_none, legacy_ctx)
+    check("lint multi-resource: legacy singular resource_link key alone still fails when absent", not ok, reason)
+
+
+def test_decide_multi_resource_ambiguity_gate():
+    cls_send = _cls("send_resource")
+
+    d, r = setter.decide(cls_send, AGENT_MULTI_RES, {**CTX_ALL_GOOD, "first_outbound_present": False})
+    check("decide: 2+ resources + send_resource + no original outreach -> review", d == "review", r)
+    check("decide: exact plain-English reason for the multi-resource ambiguity gate",
+         r == ("Held for review: this agent has several resources and the original outreach couldn't "
+              "be loaded, so a person should pick which one to send."), r)
+
+    d, r = setter.decide(cls_send, AGENT_MULTI_RES, {**CTX_ALL_GOOD, "first_outbound_present": True})
+    check("decide: 2+ resources + send_resource + original outreach present -> auto_send", d == "auto_send", r)
+
+    # the gate is scoped to send_resource - a pricing-only ask on the same
+    # multi-resource agent is unaffected by a missing original outreach.
+    d, r = setter.decide(_cls("pricing"), AGENT_MULTI_RES, {**CTX_ALL_GOOD, "first_outbound_present": False})
+    check("decide: multi-resource gate never fires when send_resource isn't in play", d == "auto_send", r)
+
+    # a single-resource agent (the pre-existing shape) is never held by this
+    # gate, first_outbound_present or not - existing single-resource agents
+    # and fixtures must see byte-identical decide() behaviour.
+    d, r = setter.decide(cls_send, AGENT_AUTO, {**CTX_ALL_GOOD, "first_outbound_present": False})
+    check("decide: single-resource (legacy) agent is unaffected by the missing-outreach gate", d == "auto_send", r)
+
+    single_res_agent = {**AGENT_AUTO, "resources": [{"name": "Only one", "link": "https://x.example/only",
+                                                     "description": "", "when": ""}]}
+    d, r = setter.decide(cls_send, single_res_agent, {**CTX_ALL_GOOD, "first_outbound_present": False})
+    check("decide: an agent with exactly one resources[] entry is also unaffected", d == "auto_send", r)
+
+    # default (key entirely absent) is treated as falsy, same as every other
+    # ctx.get(...) boolean gate in decide()
+    ctx_no_key = {k: v for k, v in CTX_ALL_GOOD.items() if k != "first_outbound_present"}
+    d, r = setter.decide(cls_send, AGENT_MULTI_RES, ctx_no_key)
+    check("decide: first_outbound_present absent entirely defaults to falsy -> review", d == "review", r)
+
+
 # ── run everything ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -2804,6 +3038,12 @@ if __name__ == "__main__":
     test_training_generate_share_unanswered_cap_is_tighter_than_owner()
     test_training_answer_share_forces_agent_rejects_mismatch_and_response_stays_scoped()
     test_memory_delete_never_accepts_share_token()
+    test_agent_resources_helper()
+    test_save_agent_resources_mirror_and_cap()
+    test_classify_payload_carries_resources_array()
+    test_draft_payload_carries_resources_with_when_rules()
+    test_lint_multi_resource_links()
+    test_decide_multi_resource_ambiguity_gate()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
