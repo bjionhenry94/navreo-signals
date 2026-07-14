@@ -544,42 +544,38 @@ const MIME_HEADER_RE = /^(?:received|from|to|cc|bcc|subject|date|message-id|refe
 /* A multipart boundary line ("--BOUNDARY" / "--BOUNDARY--"), dropped
    wherever it appears - it's a MIME delivery artifact, never message text. */
 const MIME_BOUNDARY_RE = /^--[\w'()+,.\/:=?-]+-{0,2}\s*$/;
-/* Strips leading RFC-822 header blocks before any tag/entity stripping runs:
-   the first non-blank line at the top of the message, and again right after
-   every multipart boundary (each part repeats its own mini header block).
-   A block only counts - and only then gets stripped - once it has at least 2
-   contiguous header-pattern lines (folded continuation lines starting with
-   whitespace count toward the same block, not against it); that guards a
-   short real reply like "Kevin: thanks for reaching out" from ever being
-   eaten. The block runs through the first blank line (consumed too), or
-   through wherever header-pattern lines stop if no blank line follows. */
+/* Strips RFC-822 header blocks WHEREVER they appear, before any tag/entity
+   stripping runs. Leading blocks are the classic case, but read-receipts and
+   delivery reports open with a human sentence ("Your message to ... was
+   read.") and dump the original headers mid-body - anchoring to the top of
+   the message missed those (live bug, 2026-07-14). A run of lines only
+   counts as a header block - and only then gets stripped - once it has at
+   least 2 contiguous KNOWN-header-name lines (folded continuation lines
+   starting with whitespace count toward the same block, not against it);
+   the known-name whitelist plus that 2-line floor guards a real reply like
+   "Kevin: thanks for reaching out" from ever being eaten. Each block runs
+   through its terminating blank line (consumed too). */
 function stripMimeHeaders(text) {
   const lines = String(text == null ? "" : text).replace(/\r\n?/g, "\n").split("\n");
   const out = [];
   let i = 0;
-  let expectHeaders = true; // true at the very top, and again right after a boundary line
   while (i < lines.length) {
     const line = lines[i];
     const trimmed = line.trim();
     if (MIME_BOUNDARY_RE.test(trimmed)) {
-      i++; // drop the boundary line itself - the next part's headers may follow
-      expectHeaders = true;
+      i++; // drop the boundary line itself - a MIME artifact, never message text
       continue;
     }
-    if (expectHeaders) {
-      if (trimmed === "") { i++; continue; } // blank line(s) before a possible header block
-      if (MIME_HEADER_RE.test(line)) {
-        let j = i, headerCount = 0;
-        while (j < lines.length) {
-          const l = lines[j];
-          if (l.trim() === "") { j++; break; } // blank terminator - consume it, stop scanning
-          if (MIME_HEADER_RE.test(l)) { headerCount++; j++; continue; }
-          if (/^[ \t]/.test(l)) { j++; continue; } // folded continuation of the previous header
-          break; // real content with no blank separator - block ends here
-        }
-        if (headerCount >= 2) { i = j; continue; } // strip the whole block, keep looking (e.g. after a boundary)
+    if (MIME_HEADER_RE.test(line)) {
+      let j = i, headerCount = 0;
+      while (j < lines.length) {
+        const l = lines[j];
+        if (l.trim() === "") { j++; break; } // blank terminator - consume it, stop scanning
+        if (MIME_HEADER_RE.test(l)) { headerCount++; j++; continue; }
+        if (/^[ \t]/.test(l)) { j++; continue; } // folded continuation of the previous header
+        break; // real content with no blank separator - block ends here
       }
-      expectHeaders = false; // not a header block after all - the body starts here
+      if (headerCount >= 2) { i = j; continue; } // strip the whole block, wherever it sits
     }
     out.push(line);
     i++;
