@@ -438,6 +438,7 @@ let currentClient = "";
    managed yet - clientForRow() then degrades to the old prefix parser for
    every row instead of showing a broken/empty dropdown. */
 let campaignClientMap = {};
+let clientRegistryNames = [];   // canonical client names from /api/clients (campaigns-section source of truth)
 
 let editingAgentId = null;
 let currentAgentMode = "draft_only";
@@ -642,7 +643,18 @@ function clientFromCampaignName(name) {
 function clientForRow(row) {
   const sid = row.smartlead_campaign_id;
   const mapped = sid != null ? campaignClientMap[String(sid)] : undefined;
-  return mapped || clientFromCampaignName(campaignNameFor(row));
+  if (mapped) return mapped;
+  // Most campaigns predate the campaigns tool and have no registry link, so
+  // match the canonical client names (the same set the campaigns section
+  // filters by) against the campaign name - longest name first so a client
+  // called "Navreo Labs" wins over "Navreo". Only when no registry client
+  // appears in the name at all do we fall back to the raw prefix parse,
+  // which itself buckets no-name rows into "Other".
+  const cname = String(campaignNameFor(row) || "").toLowerCase();
+  for (const n of clientRegistryNames) {
+    if (n && cname.includes(n.toLowerCase())) return n;
+  }
+  return clientFromCampaignName(campaignNameFor(row));
 }
 /* {smartlead_campaign_id (string) -> client display name}, joining
    /api/campaigns-unified's rows (platform="smartlead", client_id set only
@@ -660,6 +672,8 @@ function buildCampaignClientMap(unifiedRes, clientsRes) {
     const name = nameById[String(r.client_id)];
     if (name) map[String(r.platform_id)] = name;
   });
+  clientRegistryNames = clients.map((c) => c && c.name).filter(Boolean)
+    .sort((a, b) => b.length - a.length);
   return map;
 }
 
