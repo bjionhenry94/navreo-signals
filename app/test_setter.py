@@ -39,8 +39,10 @@ bugs this suite used to XFAIL are both fixed in setter.py and are now plain
 passing checks.
 """
 
+import contextlib
 import copy
 import datetime as dt
+import io
 import json
 import os
 import re
@@ -138,11 +140,16 @@ class FakeSB:
             return str(value) != op_value[4:]
         if op_value.startswith("not.in."):
             inner = op_value[7:].strip("()")
-            opts = [o for o in inner.split(",") if o != ""]
+            opts = [o.strip('"') for o in inner.split(",") if o != ""]
             return str(value) not in opts
         if op_value.startswith("in."):
+            # PostgREST semantics: an in.() option may be double-quoted (the
+            # real setter.py query does this for category values that carry
+            # spaces, e.g. "Information Request") - strip the surrounding
+            # quotes from each option so quoted and unquoted values match the
+            # same way a real PostgREST server would resolve them.
             inner = op_value[3:].strip("()")
-            opts = [o for o in inner.split(",") if o != ""]
+            opts = [o.strip('"') for o in inner.split(",") if o != ""]
             return str(value) in opts
         if op_value.startswith("gt."):
             return str(value) > op_value[3:]
@@ -1303,7 +1310,8 @@ def test_poll_never_raises_on_bad_agent_config():
     # no agents at all -> run_poll must return a summary, not raise
     summary = setter.run_poll()
     check("poll: no agents configured -> returns empty summary without raising",
-         summary == {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0, "errors": 0},
+         summary == {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0,
+                    "errors": 0, "agentless": 0},
          summary)
 
 
@@ -1880,11 +1888,17 @@ def test_handle_inbound_missing_message_id_ignored():
 
 
 def test_handle_inbound_unassigned_campaign_ignored():
+    # Agentless intake (ruling 2026-07-14) only fires once a core-four
+    # category is confirmed; with no matching `replies` row at all here the
+    # category gate defers to the poll first, same as an agented campaign
+    # would - see test_handle_inbound_no_agent_core_four_is_agentless below
+    # for the case where the category IS already known.
     sb, http = fresh_setter()  # no agents registered at all
     payload = {"event_type": "EMAIL_REPLY", "campaign_id": 999, "sl_lead_email": "a@b.com",
               "reply_message": {"text": "hi", "message_id": "m1"}}
     resp = setter.handle_inbound(payload)
-    check("handle_inbound: campaign with no agent assigned is ignored", "ignored" in resp, resp)
+    check("handle_inbound: campaign with no agent and no known category is ignored (left for the poll)",
+         "ignored" in resp, resp)
 
 
 def test_handle_inbound_missing_campaign_or_email_ignored():
@@ -5965,6 +5979,159 @@ def test_handle_inbound_uncategorised_then_poll_catches_up():
          summary.get("checked") == 1 and len(sb.queue) == 1, (summary, sb.queue))
 
 
+# ── agentless intake (owner ruling 2026-07-14) ──────────────────────────────
+# "We shouldn't need to assign an agent to a campaign to be able to receive
+# the positives. It should come in regardless. It just needs to be shown on
+# the UI very subtly that it doesn't have an assigned campaign [agent]."
+# A core-four reply on a campaign with NO agent still reaches setter_queue,
+# just flagged agent_id=None/status=needs_review instead of running the full
+# classify/draft/decide pipeline.
+
+def test_run_poll_agentless_campaign_queues_needs_review():
+    sb, http = fresh_setter()  # no agents registered at all - every campaign is agentless
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9501, "email": "noagent@example.com",
+        "first_name": "Noa", "last_name": "Gent", "company_domain": "example.com",
+        "subject": "Re: hi", "reply_body": "sounds good, let's talk", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "agentless-1", "category": "Interested",
+    })
+
+    summary = setter.run_poll()
+
+    check("run_poll agentless: counted in checked", summary.get("checked") == 1, summary)
+    check("run_poll agentless: counted in the new agentless key", summary.get("agentless") == 1, summary)
+    check("run_poll agentless: counted in needs_review", summary.get("needs_review") == 1, summary)
+    check("run_poll agentless: exactly one row queued", len(sb.queue) == 1, sb.queue)
+    row = sb.queue[0] if sb.queue else {}
+    check("run_poll agentless: agent_id is None", row.get("agent_id") is None, row)
+    check("run_poll agentless: status is needs_review", row.get("status") == "needs_review", row)
+    check("run_poll agentless: decision is review", row.get("decision") == "review", row)
+    check("run_poll agentless: decision_reason names the missing agent",
+         "No agent is assigned" in (row.get("decision_reason") or ""), row)
+    check("run_poll agentless: source_message_id is set (same claim pattern as process_reply)",
+         row.get("source_message_id") == "agentless-1", row)
+    check("run_poll agentless: no classify/draft (or any) HTTP call was made - no agent brain to run",
+         http.calls == [], http.calls)
+
+
+def test_run_poll_agentless_campaign_non_core_four_stays_out():
+    sb, http = fresh_setter()  # no agents - agentless campaign
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9502, "email": "noagent2@example.com",
+        "subject": "Re: hi", "reply_body": "not interested", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "agentless-noncore-1", "category": "Not Interested",
+    })
+
+    summary = setter.run_poll()
+
+    check("run_poll agentless non-core-four: never counted as checked", summary.get("checked", 0) == 0, summary)
+    check("run_poll agentless non-core-four: agentless counter stays 0", summary.get("agentless", 0) == 0, summary)
+    check("run_poll agentless non-core-four: no queue row created", len(sb.queue) == 0, sb.queue)
+
+
+def test_handle_inbound_no_agent_core_four_is_agentless():
+    sb, http = fresh_setter()  # no agents registered at all
+    sb.replies.append({"workspace": "navreo", "smartlead_campaign_id": 9503,
+                       "smartlead_message_id": "wh-agentless-1", "category": "Meeting Request"})
+
+    resp = setter.handle_inbound({
+        "event_type": "EMAIL_REPLY", "campaign_id": 9503, "sl_lead_email": "noagent3@example.com",
+        "reply_message": {"text": "sounds good, when works?", "message_id": "wh-agentless-1",
+                          "time": "2026-07-10T00:00:00+00:00"},
+    })
+
+    check("handle_inbound agentless: processed true", resp.get("processed") is True, resp)
+    check("handle_inbound agentless: status needs_review", resp.get("status") == "needs_review", resp)
+    check("handle_inbound agentless: agentless flag true in the response", resp.get("agentless") is True, resp)
+    check("handle_inbound agentless: exactly one row queued", len(sb.queue) == 1, sb.queue)
+    row = sb.queue[0] if sb.queue else {}
+    check("handle_inbound agentless: agent_id is None", row.get("agent_id") is None, row)
+    check("handle_inbound agentless: no classify/draft HTTP call was made", http.calls == [], http.calls)
+
+    # uncategorised on an agentless campaign is still deferred to the poll,
+    # not treated as agentless-eligible just because there's no agent.
+    sb2, http2 = fresh_setter()
+    resp2 = setter.handle_inbound({
+        "event_type": "EMAIL_REPLY", "campaign_id": 9504, "sl_lead_email": "noagent4@example.com",
+        "reply_message": {"text": "hi", "message_id": "wh-agentless-2"},
+    })
+    check("handle_inbound agentless: uncategorised reply is still deferred to the poll, not agentless-inserted",
+         "ignored" in resp2 and len(sb2.queue) == 0, (resp2, sb2.queue))
+
+
+def test_run_poll_agented_campaigns_unaffected_by_agentless_change():
+    """Existing agented-path tests (test_run_poll_assigned_at_filter, the
+    core-four/non-core-four matrix, the batching cap, etc.) already exercise
+    this end to end - this is a focused smoke test that a campaign WITH an
+    enabled agent still runs the full classify/draft/decide pipeline and is
+    never mistaken for agentless just because agentless campaigns now also
+    exist in the same sweep."""
+    sb, http = fresh_setter()
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
+    agent = {"id": "agent-mixed-sweep", "mode": "draft_only", "enabled": True, "campaign_ids": [9601],
+             "allowed_intents": ["send_resource"], "pricing_notes": ""}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    # one agented reply, one agentless reply, same tick
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9601, "email": "agented@example.com",
+        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "mixed-agented-1", "category": "Interested",
+    })
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9602, "email": "agentless@example.com",
+        "subject": "Re: hi", "reply_body": "sounds good", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "mixed-agentless-1", "category": "Interested",
+    })
+    # Only the agented lead's hydration needs to succeed here - the agentless
+    # path never calls hydrate_lead at all, which is exactly what this test
+    # is proving via the "no draft" assertion below.
+    http.message_history = [
+        {"type": "REPLY", "time": "2026-07-10T00:00:00+00:00", "subject": "Re: hi",
+         "email_body": "sure, send it", "message_id": "mixed-agented-1", "stats_id": "mixed-agented-1"},
+    ]
+
+    summary = setter.run_poll()
+
+    check("mixed sweep: both replies checked", summary.get("checked") == 2, summary)
+    check("mixed sweep: exactly one agentless", summary.get("agentless") == 1, summary)
+    check("mixed sweep: two rows queued total", len(sb.queue) == 2, sb.queue)
+    by_email = {r.get("lead_email"): r for r in sb.queue}
+    agented_row = by_email.get("agented@example.com") or {}
+    agentless_row = by_email.get("agentless@example.com") or {}
+    check("mixed sweep: agented row has the agent id and a draft (full pipeline ran)",
+         agented_row.get("agent_id") == "agent-mixed-sweep" and bool(agented_row.get("draft_body")),
+         agented_row)
+    check("mixed sweep: agentless row has no agent id and no draft",
+         agentless_row.get("agent_id") is None and not agentless_row.get("draft_body"),
+         agentless_row)
+
+
+# ── FakeSB in.() quote-stripping (mirrors real PostgREST semantics) ─────────
+
+def test_fake_sb_match_eq_in_strips_double_quotes():
+    """setter.py's CORE_FOUR_CATEGORY_FILTER sends double-quoted, percent-
+    encoded values inside in.() because category labels carry spaces (e.g.
+    "Information Request"). FakeSB._split() percent-decodes the query value
+    before _match_eq ever sees it, so _match_eq must strip the surviving
+    double quotes itself, the same way a real PostgREST server resolves a
+    quoted in.() option."""
+    quoted_in = 'in.("Interested","Information Request")'
+    check("FakeSB._match_eq: quoted value matches once quotes are stripped",
+         FakeSB._match_eq("Interested", quoted_in) is True)
+    check("FakeSB._match_eq: quoted value with an internal space matches",
+         FakeSB._match_eq("Information Request", quoted_in) is True)
+    check("FakeSB._match_eq: a value not in the quoted list does not match",
+         FakeSB._match_eq("Not Interested", quoted_in) is False)
+    # unquoted values still work exactly as before (e.g. numeric campaign ids)
+    check("FakeSB._match_eq: unquoted in.() options are unaffected",
+         FakeSB._match_eq("700", "in.(700,701)") is True)
+
+
 # ── one-time backfill script (app/setter_backfill.py) ──────────────────────
 
 def test_backfill_assigned_at_bypass_only_in_backfill():
@@ -5996,9 +6163,7 @@ def test_backfill_assigned_at_bypass_only_in_backfill():
     try:
         setter_backfill._SB = setter._SB  # mirror main()'s post-configure rebind
         agents = setter._load_agents()
-        enabled = [a for a in agents if a.get("enabled", True) and (a.get("campaign_ids") or [])]
-        campaign_ids = sorted({str(c) for a in enabled for c in (a.get("campaign_ids") or [])})
-        candidates, skipped_dupe, total_seen = setter_backfill.select_candidates(enabled, campaign_ids)
+        candidates, skipped_dupe, total_seen = setter_backfill.select_candidates(agents)
     finally:
         setter_backfill._SB = real_sb
 
@@ -6040,6 +6205,61 @@ def test_backfill_dry_run_zero_writes():
     check("backfill --dry-run: process_reply is never called", called["n"] == 0, called)
     writes = [c for c in sb.calls[calls_before:] if c[0] in ("POST", "PATCH")]
     check("backfill --dry-run: zero POST/PATCH writes to Supabase", writes == [], writes)
+
+
+def test_backfill_dry_run_lists_agentless_candidates():
+    """Owner ruling 2026-07-14: the backfill no longer restricts itself to
+    enabled-agents' campaigns - a core-four reply on a campaign with NO agent
+    is still a candidate, dry-run-listed with AGENT column "(none)", and the
+    per-campaign summary line breaks out covered vs agentless counts. Still
+    zero writes in dry-run mode."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-backfill-covered", "mode": "draft_only", "enabled": True, "campaign_ids": [9701]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9701, "email": "covered@example.com",
+        "subject": "Re: hi", "reply_body": "sounds good", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "backfill-covered-1", "category": "Interested",
+    })
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 9702, "email": "agentless@example.com",
+        "subject": "Re: hi", "reply_body": "sounds good", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "backfill-agentless-1", "category": "Interested",
+    })
+
+    real_load_keys, real_make_sb = setter_backfill.load_keys, setter_backfill.make_sb
+    real_process_reply = setter.process_reply
+    real_argv = sys.argv
+    called = {"n": 0}
+    setter_backfill.load_keys = lambda: {}
+    setter_backfill.make_sb = lambda keys: sb
+    setter.process_reply = lambda *a, **k: (called.__setitem__("n", called["n"] + 1)
+                                            or {"status": "needs_review", "id": 1})
+    calls_before = len(sb.calls)
+    sys.argv = ["setter_backfill.py"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = setter_backfill.main()
+    finally:
+        sys.argv = real_argv
+        setter_backfill.load_keys = real_load_keys
+        setter_backfill.make_sb = real_make_sb
+        setter.process_reply = real_process_reply
+
+    out = buf.getvalue()
+    check("backfill dry-run (agentless): exits cleanly", rc == 0, rc)
+    check("backfill dry-run (agentless): process_reply is never called", called["n"] == 0, called)
+    writes = [c for c in sb.calls[calls_before:] if c[0] in ("POST", "PATCH")]
+    check("backfill dry-run (agentless): zero POST/PATCH writes to Supabase", writes == [], writes)
+    check("backfill dry-run (agentless): both replies listed as candidates", "2 actionable" in out, out)
+    check("backfill dry-run (agentless): agentless candidate prints AGENT column as (none)",
+         "campaign=9702" in out and "agent=(none)" in out, out)
+    check("backfill dry-run (agentless): covered candidate still prints its agent id",
+         "agent=agent-backfill-covered" in out, out)
+    check("backfill dry-run (agentless): per-campaign summary breaks out covered vs agentless",
+         "campaign=9701  covered=1  agentless=0" in out and "campaign=9702  covered=0  agentless=1" in out,
+         out)
 
 
 # ── recency weighting: LATEST OWNER RULES (trainer-obedience brief 2026-07-14) ──
@@ -6975,8 +7195,14 @@ if __name__ == "__main__":
     test_core_four_categories_enter_queue_both_paths()
     test_non_core_categories_stay_out_both_paths()
     test_handle_inbound_uncategorised_then_poll_catches_up()
+    test_run_poll_agentless_campaign_queues_needs_review()
+    test_run_poll_agentless_campaign_non_core_four_stays_out()
+    test_handle_inbound_no_agent_core_four_is_agentless()
+    test_run_poll_agented_campaigns_unaffected_by_agentless_change()
+    test_fake_sb_match_eq_in_strips_double_quotes()
     test_backfill_assigned_at_bypass_only_in_backfill()
     test_backfill_dry_run_zero_writes()
+    test_backfill_dry_run_lists_agentless_candidates()
 
     test_latest_owner_rules_helper()
     test_latest_owner_rules_prefers_rule_over_note()

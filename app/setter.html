@@ -426,9 +426,18 @@ let ALL_ROWS = [];
 let KPIS = {};
 let currentStatus = "needs_review";
 let campaignMap = {};
-/* "" = All clients. Selected client-name prefix (see clientFromCampaignName)
-   for the queue header's client filter dropdown. */
+/* "" = All clients. Selected client display name (see clientForRow) for the
+   queue header's client filter dropdown. */
 let currentClient = "";
+/* Owner ruling 2026-07-14: the client list must mirror the campaigns section
+   of the tool, i.e. the campaign_drafts client system, not a name-prefix
+   guess. smartlead_campaign_id (string) -> client display name, built in
+   loadAgentsAndCampaigns from /api/campaigns-unified (platform="smartlead"
+   rows carry a client_id when the campaign is managed) joined against
+   /api/clients (id -> name). Left {} when either fetch fails or nothing is
+   managed yet - clientForRow() then degrades to the old prefix parser for
+   every row instead of showing a broken/empty dropdown. */
+let campaignClientMap = {};
 
 let editingAgentId = null;
 let currentAgentMode = "draft_only";
@@ -515,9 +524,10 @@ function statusPillClass(status) {
   return "n";
 }
 /* Render-time HTML->text, a faithful port of setter.py clean_body(): strip
-   <style>/<script>/<head> blocks and every tag, unescape entities, collapse
-   horizontal whitespace but KEEP line breaks. Gmail/Outlook replies arrive as
-   full HTML documents; the DB keeps them raw (raw fidelity stays) and this is
+   MIME/RFC-822 header walls, strip <style>/<script>/<head> blocks and every
+   tag, unescape entities, collapse horizontal whitespace but KEEP line
+   breaks. Gmail/Outlook replies arrive as full raw email messages (or full
+   HTML documents); the DB keeps them raw (raw fidelity stays) and this is
    the ONLY place they become readable. Never pass draft_body through here -
    drafts are intentionally HTML and render as-is. */
 function unescapeEntities(s) {
@@ -525,8 +535,58 @@ function unescapeEntities(s) {
   el.innerHTML = String(s == null ? "" : s);
   return el.value;
 }
+/* Known RFC-822/MIME header names, matched case-insensitively at the start of
+   a line, "X-" and "ARC-" as prefixes (custom/authentication headers). Only
+   these names count - an unlisted word before ":" (e.g. "Kevin:") never
+   matches, so a real reply is never mistaken for a header line. */
+const MIME_HEADER_RE = /^(?:received|from|to|cc|bcc|subject|date|message-id|references|in-reply-to|reply-to|return-path|mime-version|content-type|content-transfer-encoding|content-language|accept-language|thread-topic|thread-index|authentication-results|dkim-signature|arc-[\w-]*|x-[\w-]*)\s*:/i;
+/* A multipart boundary line ("--BOUNDARY" / "--BOUNDARY--"), dropped
+   wherever it appears - it's a MIME delivery artifact, never message text. */
+const MIME_BOUNDARY_RE = /^--[\w'()+,.\/:=?-]+-{0,2}\s*$/;
+/* Strips leading RFC-822 header blocks before any tag/entity stripping runs:
+   the first non-blank line at the top of the message, and again right after
+   every multipart boundary (each part repeats its own mini header block).
+   A block only counts - and only then gets stripped - once it has at least 2
+   contiguous header-pattern lines (folded continuation lines starting with
+   whitespace count toward the same block, not against it); that guards a
+   short real reply like "Kevin: thanks for reaching out" from ever being
+   eaten. The block runs through the first blank line (consumed too), or
+   through wherever header-pattern lines stop if no blank line follows. */
+function stripMimeHeaders(text) {
+  const lines = String(text == null ? "" : text).replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+  let expectHeaders = true; // true at the very top, and again right after a boundary line
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (MIME_BOUNDARY_RE.test(trimmed)) {
+      i++; // drop the boundary line itself - the next part's headers may follow
+      expectHeaders = true;
+      continue;
+    }
+    if (expectHeaders) {
+      if (trimmed === "") { i++; continue; } // blank line(s) before a possible header block
+      if (MIME_HEADER_RE.test(line)) {
+        let j = i, headerCount = 0;
+        while (j < lines.length) {
+          const l = lines[j];
+          if (l.trim() === "") { j++; break; } // blank terminator - consume it, stop scanning
+          if (MIME_HEADER_RE.test(l)) { headerCount++; j++; continue; }
+          if (/^[ \t]/.test(l)) { j++; continue; } // folded continuation of the previous header
+          break; // real content with no blank separator - block ends here
+        }
+        if (headerCount >= 2) { i = j; continue; } // strip the whole block, keep looking (e.g. after a boundary)
+      }
+      expectHeaders = false; // not a header block after all - the body starts here
+    }
+    out.push(line);
+    i++;
+  }
+  return out.join("\n");
+}
 function cleanBody(s) {
-  let text = String(s == null ? "" : s);
+  let text = stripMimeHeaders(s);
   if (text.indexOf("<") !== -1 && /<[^>]+>/.test(text)) {
     text = text.replace(/<(style|script|head)[^>]*>[\s\S]*?<\/\1>/gi, " ")
                .replace(/<[^>]+>/g, " ");
@@ -570,6 +630,38 @@ function clientFromCampaignName(name) {
   const prefix = s.slice(0, m.index).trim();
   return prefix || "Other";
 }
+/* Owner ruling 2026-07-14: the real client for a row, mirroring the campaigns
+   section of the tool - campaignClientMap (built in loadAgentsAndCampaigns
+   from /api/campaigns-unified + /api/clients) wins when this row's Smartlead
+   campaign is a MANAGED one with a client assigned; otherwise this falls back
+   to the old name-prefix parse, which keeps older/unmanaged campaigns (e.g.
+   the Amplifyy fleet) filterable. clientFromCampaignName already buckets
+   "no name at all" into "Other", so that terminal case needs no extra code
+   here. Used everywhere a client label is needed (queue filter dropdown +
+   row filtering below). */
+function clientForRow(row) {
+  const sid = row.smartlead_campaign_id;
+  const mapped = sid != null ? campaignClientMap[String(sid)] : undefined;
+  return mapped || clientFromCampaignName(campaignNameFor(row));
+}
+/* {smartlead_campaign_id (string) -> client display name}, joining
+   /api/campaigns-unified's rows (platform="smartlead", client_id set only
+   when the campaign is managed by this tool) against /api/clients (id ->
+   name). Returns {} - never throws - so a fetch failure just means every row
+   falls back to the prefix parser instead of a broken dropdown. */
+function buildCampaignClientMap(unifiedRes, clientsRes) {
+  const map = {};
+  const rows = (unifiedRes.ok && Array.isArray(unifiedRes.data.rows)) ? unifiedRes.data.rows : [];
+  const clients = (clientsRes.ok && Array.isArray(clientsRes.data)) ? clientsRes.data : [];
+  const nameById = {};
+  clients.forEach((c) => { if (c && c.id != null && c.name) nameById[String(c.id)] = c.name; });
+  rows.forEach((r) => {
+    if (!r || r.platform !== "smartlead" || r.platform_id == null || r.client_id == null) return;
+    const name = nameById[String(r.client_id)];
+    if (name) map[String(r.platform_id)] = name;
+  });
+  return map;
+}
 
 /* ── Fetch helper (never throws to the caller) ────────────── */
 async function fetchJson(url, opts) {
@@ -601,9 +693,14 @@ function showDetailError(msg) {
 
 /* ── Load ──────────────────────────────────────────────── */
 async function loadAgentsAndCampaigns() {
-  const [agentsRes, campaignsRes] = await Promise.all([
+  // campaigns-unified + clients ride along in the same parallel batch (Change
+  // 3): they power campaignClientMap, not AGENTS/CAMPAIGNS, but there's no
+  // reason to wait for them separately or block the page on either one.
+  const [agentsRes, campaignsRes, unifiedRes, clientsRes] = await Promise.all([
     fetchJson("/api/setter/agents"),
     fetchJson("/api/setter/campaigns"),
+    fetchJson("/api/campaigns-unified"),
+    fetchJson("/api/clients"),
   ]);
   if (agentsRes.ok) {
     AGENTS = agentsRes.data.agents || [];
@@ -619,6 +716,7 @@ async function loadAgentsAndCampaigns() {
   }
   campaignMap = {};
   CAMPAIGNS.forEach((c) => { campaignMap[c.id] = c.name; });
+  campaignClientMap = buildCampaignClientMap(unifiedRes, clientsRes);
   renderAutopilotSwitch();
   renderAgents();
   renderSettings();
@@ -700,14 +798,15 @@ function renderQueueFilters() {
 }
 
 /* Client filter dropdown: repopulated on every queue reload from the
-   distinct client prefixes present in QUEUE_ROWS (see clientFromCampaignName),
+   distinct clients present in QUEUE_ROWS (see clientForRow - mapped name from
+   the campaign_drafts client system, falling back to the name-prefix parse),
    alphabetical, with "All clients" first. Preserves the current selection if
    it's still present in the fresh row set; otherwise falls back to "All
    clients" so the dropdown never shows a stale/vanished option as selected. */
 function renderClientFilter() {
   const sel = document.getElementById("clientFilterSel");
   if (!sel) return;
-  const clients = Array.from(new Set(QUEUE_ROWS.map((r) => clientFromCampaignName(campaignNameFor(r)))))
+  const clients = Array.from(new Set(QUEUE_ROWS.map((r) => clientForRow(r))))
     .sort((a, b) => a.localeCompare(b));
   sel.innerHTML = `<option value="">All clients</option>` +
     clients.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
@@ -735,7 +834,7 @@ function visibleInboxRows() {
   const source = q ? ALL_ROWS : QUEUE_ROWS;
   let rows = showTest ? source : source.filter((r) => !r.is_test);
   if (currentClient) {
-    rows = rows.filter((r) => clientFromCampaignName(campaignNameFor(r)) === currentClient);
+    rows = rows.filter((r) => clientForRow(r) === currentClient);
   }
   if (q) {
     rows = rows.filter((r) => {
@@ -878,6 +977,10 @@ function inboxItemHtml(row) {
   // every filter, so without the pill a mixed result list would be unreadable.
   const statusChip = (currentStatus === "" || inboxSearchQuery.trim())
     ? `<span class="pill ${statusPillClass(row.status)}">${statusLabel(row.status)}</span>` : "";
+  // Owner ruling 2026-07-14: intaken rows may carry agent_id = null (a positive
+  // from a campaign with no assigned agent). Same subtle neutral pill as the
+  // status chip above - no colour shouting, just a flag that no brain is set.
+  const noAgentChip = row.agent_id ? "" : `<span class="pill n">No agent</span>`;
   return `<div class="inbox-item ${selected}" data-id="${esc(row.id)}">
     <div class="ii-line1">${esc(leadName(row))} ${testChip}</div>
     <div class="ii-snippet">${snippet || "No reply text."}</div>
@@ -885,6 +988,7 @@ function inboxItemHtml(row) {
       ${ageBadgeHtml(row)}
       ${holdLabel ? `<span class="ii-hold">${esc(holdLabel)}</span>` : ""}
       ${statusChip}
+      ${noAgentChip}
       <span class="ii-time">${pulledAgo(row.replied_at)}</span>
     </div>
   </div>`;
@@ -1063,6 +1167,10 @@ function leadPanelHtml(row) {
   const websiteHtml = row.company_domain
     ? `<div class="lp-line"><a href="https://${esc(row.company_domain)}" target="_blank" rel="noopener">${esc(row.company_domain)}</a></div>`
     : "";
+  // Owner ruling 2026-07-14: same "no agent" fact as the list row's pill,
+  // spelled out here as one muted line - agent_id = null means the campaign
+  // this reply came in on has nobody assigned to draft/send for it.
+  const noAgentHtml = row.agent_id ? "" : `<div class="lp-line muted">No agent is assigned to this campaign.</div>`;
   return `
     ${subChkHtml}
     <div class="lp-section">
@@ -1074,6 +1182,7 @@ function leadPanelHtml(row) {
     <div class="lp-section">
       <div class="lp-label">Campaign</div>
       <div class="lp-line">${esc(campaignNameFor(row))}</div>
+      ${noAgentHtml}
     </div>
     <div class="lp-section">
       <div class="lp-label">The decision</div>

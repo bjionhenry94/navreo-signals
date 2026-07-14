@@ -1,16 +1,19 @@
 """One-time backfill: sweep the last 7 days of `replies` rows in the four
-core-four categories for campaigns assigned to ENABLED setter agents, and
-queue any of them run_poll never saw because they arrived before the agent's
-campaign was assigned (see setter.py's campaign_assigned_at skip in
-run_poll).
+core-four categories across EVERY campaign in the workspace (owner ruling
+2026-07-14: a positive must reach setter_queue even without an agent
+assigned), and queue any of them run_poll never saw - either because they
+arrived before their agent's campaign was assigned (see setter.py's
+campaign_assigned_at skip in run_poll), or because the campaign has no agent
+at all (agentless intake, same ruling).
 
 BUILD ONLY. This script is standalone - it is never imported by server.py,
 never wired to a route, and never run automatically. A human runs it once,
 by hand, after reading the --dry-run output. It reuses setter.py's own
 helpers (_SB, _load_agents, _load_settings, _agent_for_campaign,
-_existing_row, process_reply, CORE_FOUR) so the queueing logic is identical
-to run_poll's - the only deliberate difference is the campaign_assigned_at
-bypass documented on select_candidates() below (ruling 2026-07-14).
+_existing_row, process_reply, _intake_agentless, CORE_FOUR) so the queueing
+logic is identical to run_poll's - the only deliberate difference is the
+campaign_assigned_at bypass documented on select_candidates() below (ruling
+2026-07-14).
 
 Idempotent: every candidate is checked against setter_queue via
 _existing_row before it is queued, so re-running this script (even after a
@@ -42,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import setter  # noqa: E402
 from setter import (  # noqa: E402
     WORKSPACE, _load_agents, _load_settings, _agent_for_campaign, _existing_row,
-    process_reply, CORE_FOUR, _SB,
+    process_reply, _intake_agentless, CORE_FOUR, _SB,
 )
 
 LOOKBACK_DAYS = 7
@@ -105,40 +108,44 @@ def make_sb(keys: dict):
     return sb
 
 
-def select_candidates(enabled_agents: list, campaign_ids: list):
+def select_candidates(agents: list):
     """Pulls `replies` rows from the last LOOKBACK_DAYS days, category in
-    CORE_FOUR, for the given campaign ids - same agent/campaign selection
-    run_poll uses, ordered by replied_at asc, with NO 15-row cap (a backfill
-    has to actually finish in one pass).
+    CORE_FOUR, across EVERY campaign in the workspace (owner ruling
+    2026-07-14: drop the enabled-agents campaign restriction - a positive
+    must reach setter_queue whether or not a campaign has an agent), ordered
+    by replied_at asc, with NO 15-row cap (a backfill has to actually finish
+    in one pass).
 
-    Deliberately SKIPS the campaign_assigned_at check run_poll enforces
-    (ruling 2026-07-14): this one-time pass intentionally reaches back past
-    assignment stamps to sweep up positive replies that arrived before an
-    agent was assigned to their campaign - exactly the backlog run_poll's own
-    assigned_at rule is designed to leave alone. This bypass exists ONLY
-    here; run_poll must never adopt it.
+    Deliberately SKIPS the campaign_assigned_at check run_poll enforces for
+    AGENTED rows (ruling 2026-07-14): this one-time pass intentionally
+    reaches back past assignment stamps to sweep up positive replies that
+    arrived before an agent was assigned to their campaign - exactly the
+    backlog run_poll's own assigned_at rule is designed to leave alone. This
+    bypass exists ONLY here; run_poll must never adopt it. Agentless
+    candidates have no assigned_at concept at all, so there is nothing to
+    bypass for them.
 
     Returns (candidates, skipped_dupe, total_seen) where `candidates` is the
-    de-duped (via _existing_row) list of (reply_dict, agent) tuples actually
-    actionable, `skipped_dupe` is how many otherwise-matching rows were
-    already in setter_queue, and `total_seen` is candidates + skipped_dupe.
+    de-duped (via _existing_row) list of (reply_dict, cid, email, mid, agent)
+    tuples actually actionable - `agent` is None for an agentless candidate -
+    `skipped_dupe` is how many otherwise-matching rows were already in
+    setter_queue, and `total_seen` is candidates + skipped_dupe.
     """
-    if not campaign_ids:
-        return [], 0, 0
     # "Z" instead of "+00:00": this script's raw http_json doesn't URL-encode
     # the query string, and an unencoded "+" reaches PostgREST as a space.
     since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=LOOKBACK_DAYS)).isoformat().replace("+00:00", "Z")
-    ids_csv = ",".join(campaign_ids)
-    # category filtered client-side below (like run_poll does), not pushed
-    # into the query - category names contain spaces ("Information Request"),
-    # which would need PostgREST's own quote-the-value-then-percent-encode
-    # dance to filter on server-side; simpler and just as cheap to pull the
-    # window and check membership in CORE_FOUR here. limit is generous (not
-    # the poll's 15-per-tick cap) since a backfill has to actually finish.
-    # Exactly run_poll's column list - replies has no first_name/last_name/
-    # company_domain columns, and asking PostgREST for a missing column 400s
-    # the whole request (which is how the first dry run silently saw 0 rows).
-    rows = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({ids_csv})"
+    # category filtered client-side below (like run_poll's belt-and-braces
+    # guard), not pushed into the query - category names contain spaces
+    # ("Information Request"), which would need PostgREST's own quote-the-
+    # value-then-percent-encode dance to filter on server-side, and this
+    # script's raw http_json doesn't URL-encode anything; simpler and just as
+    # cheap to pull the window and check membership in CORE_FOUR here. limit
+    # is generous (not the poll's 15-per-tick cap) since a backfill has to
+    # actually finish. Exactly run_poll's column list - replies has no
+    # first_name/last_name/company_domain columns, and asking PostgREST for a
+    # missing column 400s the whole request (which is how the first dry run
+    # silently saw 0 rows).
+    rows = _SB("GET", f"replies?workspace=eq.{WORKSPACE}"
                       f"&replied_at=gte.{since}&order=replied_at.asc&limit=5000"
                       f"&select=id,smartlead_campaign_id,email,replied_at,category,"
                       f"reply_subject,reply_body,smartlead_message_id")
@@ -159,9 +166,7 @@ def select_candidates(enabled_agents: list, campaign_ids: list):
         mid = str(r.get("smartlead_message_id") or r.get("message_id") or r.get("id") or "")
         if not cid or not email or not mid:
             continue
-        agent = _agent_for_campaign(cid, require_enabled=True, agents=enabled_agents)
-        if not agent:
-            continue
+        agent = _agent_for_campaign(cid, require_enabled=True, agents=agents)
         total_seen += 1
         if _existing_row(WORKSPACE, cid, email, mid):
             skipped_dupe += 1
@@ -204,20 +209,22 @@ def main():
     _SB = setter._SB
 
     agents = _load_agents()
-    enabled_agents = [a for a in agents if a.get("enabled", True) and (a.get("campaign_ids") or [])]
-    campaign_ids = sorted({str(c) for a in enabled_agents for c in (a.get("campaign_ids") or [])})
     settings = _load_settings()
 
-    candidates, skipped_dupe, total_seen = select_candidates(enabled_agents, campaign_ids)
+    candidates, skipped_dupe, total_seen = select_candidates(agents)
 
-    print(f"[setter_backfill] lookback={LOOKBACK_DAYS}d  campaigns={len(campaign_ids)}  "
+    print(f"[setter_backfill] lookback={LOOKBACK_DAYS}d  scope=all workspace campaigns  "
          f"mode={'EXECUTE' if execute else 'DRY-RUN'}")
     print(f"[setter_backfill] {total_seen} matching replies found, {skipped_dupe} already in "
          f"setter_queue, {len(candidates)} actionable\n")
 
+    per_campaign = {}  # cid -> {"covered": n, "agentless": n}
     for r, cid, email, mid, agent in candidates:
+        agent_label = agent.get("id") if agent else "(none)"
         print(f"  {r.get('replied_at')}  campaign={cid}  email={email}  "
-             f"category={r.get('category')}  message_id={mid}  agent={agent.get('id')}")
+             f"category={r.get('category')}  message_id={mid}  agent={agent_label}")
+        bucket = per_campaign.setdefault(cid, {"covered": 0, "agentless": 0})
+        bucket["covered" if agent else "agentless"] += 1
 
     queued = 0
     errors = 0
@@ -225,7 +232,11 @@ def main():
         for r, cid, email, mid, agent in candidates:
             reply = _reply_dict(r, cid, email, mid)
             try:
-                row = process_reply(reply, agent, settings)
+                # Covered campaigns keep the existing process_reply path (the
+                # assigned_at bypass above is what makes these candidates in
+                # the first place); uncovered campaigns get the same
+                # agentless insert run_poll and handle_inbound now use.
+                row = process_reply(reply, agent, settings) if agent else _intake_agentless(reply)
                 if (row or {}).get("status") == "error":
                     errors += 1
                 else:
@@ -236,6 +247,11 @@ def main():
 
     print(f"\n[setter_backfill] summary: candidates={len(candidates)} "
          f"skipped_as_duplicate={skipped_dupe} queued={queued} errors={errors}")
+    print("[setter_backfill] per-campaign candidate counts (covered = agent assigned, "
+         "agentless = no agent assigned):")
+    for cid in sorted(per_campaign, key=str):
+        b = per_campaign[cid]
+        print(f"  campaign={cid}  covered={b['covered']}  agentless={b['agentless']}")
     if not execute:
         print("[setter_backfill] dry run - nothing was written. Re-run with --execute to queue the candidates above.")
     return 0

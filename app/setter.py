@@ -61,6 +61,14 @@ OPENAI_MODEL = "gpt-5-mini"
 # Future, all negatives, uncategorised) stays out of both intake paths.
 CORE_FOUR = frozenset({"Interested", "Information Request", "Meeting Request", "positive-re-reply"})
 
+# PostgREST `category=in.(...)` filter built FROM CORE_FOUR (sorted for a
+# deterministic query string) instead of hardcoding the label list a second
+# time. Values contain spaces, so each option is double-quoted THEN percent-
+# encoded (quote() turns the quote marks into %22 and the spaces into %20) -
+# PostgREST needs the quotes to treat "Information Request" as one value
+# instead of splitting on its internal space.
+CORE_FOUR_CATEGORY_FILTER = "in.(" + ",".join(quote(f'"{c}"', safe="") for c in sorted(CORE_FOUR)) + ")"
+
 # Internal search window for Calendly availability, in working days. v2:
 # no longer a settings-drawer field - the slot rule is fixed (earliest
 # qualifying slots inside work hours), so this is just how far ahead the
@@ -1869,6 +1877,65 @@ def _finalize_row(row: dict) -> dict:
         return row
 
 
+def _intake_agentless(reply: dict) -> dict:
+    """Agentless intake (owner ruling 2026-07-14): "we shouldn't need to
+    assign an agent to a campaign to be able to receive the positives - it
+    should come in regardless." A core-four reply on a campaign with no
+    agent still reaches setter_queue, just flagged for manual review - the
+    UI is responsible for surfacing the missing-agent state subtly, not this
+    pipeline. Deliberately skips classify/draft/decide/hydrate: there is no
+    agent brain to run those with, and hydration cost stays off this cheap
+    path. Shared by run_poll and handle_inbound so both intake paths insert
+    the identical row shape. Never raises - mirrors process_reply."""
+    try:
+        workspace = reply.get("workspace") or WORKSPACE
+        campaign_id = reply.get("campaign_id")
+        email = (reply.get("email") or "").strip().lower()
+        message_id = str(reply.get("message_id") or "")
+        is_test = bool(reply.get("is_test"))
+
+        if not is_test:
+            existing = _existing_row(workspace, campaign_id, email, message_id)
+            if existing:
+                return existing
+
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        domain = (reply.get("company_domain") or (email.split("@", 1)[1] if "@" in email else "")).lower()
+        row = {
+            "workspace": workspace, "smartlead_campaign_id": campaign_id, "agent_id": None,
+            "lead_email": email, "lead_first_name": reply.get("first_name") or "",
+            "lead_last_name": reply.get("last_name") or "", "company_domain": domain,
+            "message_id": message_id, "source_message_id": message_id,
+            "reply_subject": reply.get("subject") or "",
+            "reply_body": reply.get("body") or "", "replied_at": reply.get("replied_at") or now_iso,
+            "category": reply.get("category"), "thread": [], "smartlead_lead_id": None,
+            "email_stats_id": None, "classification": None, "guardrails": None,
+            "timezone": None, "slots": [], "draft_subject": None, "draft_body": None,
+            "decision": "review",
+            "decision_reason": "No agent is assigned to this campaign yet - review and reply "
+                               "manually, or assign an agent.",
+            "status": "needs_review",
+            "added_to_subsequence": False, "sent_at": None, "sent_body": None, "error": None,
+            "is_test": is_test,
+        }
+        return _finalize_row(row)
+    except Exception as e:  # noqa: BLE001 - agentless intake must never crash its caller
+        reply = reply or {}
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        return {
+            "workspace": reply.get("workspace") or WORKSPACE,
+            "smartlead_campaign_id": reply.get("campaign_id"), "agent_id": None,
+            "lead_email": (reply.get("email") or "").strip().lower(),
+            "message_id": str(reply.get("message_id") or ""),
+            "reply_body": reply.get("body") or "",
+            "status": "error", "decision": "review",
+            "decision_reason": "Held for review: something went wrong processing this reply.",
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+            "is_test": bool(reply.get("is_test")),
+            "created_at": now_iso, "updated_at": now_iso,
+        }
+
+
 # ── the pipeline ─────────────────────────────────────────────────────────────
 
 def process_reply(reply: dict, agent: dict, settings: dict) -> dict:
@@ -2208,27 +2275,29 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
 # ── poll (cron + "check now") ────────────────────────────────────────────────
 
 def run_poll() -> dict:
-    """Sweeps recent `replies` rows across every enabled agent's campaigns,
-    skips anything already queued, and runs process_reply on up to 15 per
-    tick. Never raises."""
-    summary = {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0, "errors": 0}
+    """Sweeps recent core-four `replies` rows across EVERY campaign in the
+    workspace (owner ruling 2026-07-14: a positive must reach the queue even
+    on a campaign with no agent assigned yet), skips anything already
+    queued, and runs process_reply (agented) or the agentless intake
+    (unassigned) on up to 15 per tick. Never raises."""
+    summary = {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0,
+               "errors": 0, "agentless": 0}
     try:
         if not _SB:
             return summary
         agents = _load_agents()
-        enabled_agents = [a for a in agents if a.get("enabled", True) and (a.get("campaign_ids") or [])]
-        campaign_ids = sorted({str(c) for a in enabled_agents for c in (a.get("campaign_ids") or [])})
-        if not campaign_ids:
-            return summary
         settings = _load_settings()
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=48)).isoformat()
-        ids_csv = ",".join(campaign_ids)
         # quote(): `since` ends in "+00:00" and sb() sends the query string
         # raw, so an unencoded "+" reaches PostgREST as a space - the timestamp
         # then fails its timestamptz cast, the GET 400s, _SB returns None, and
         # every tick silently reported checked=0 while eligible replies piled up
-        # (same "+"-as-space bug class d38a301 fixed for _existing_row).
-        replies = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({ids_csv})"
+        # (same "+"-as-space bug class d38a301 fixed for _existing_row). The
+        # category filter (CORE_FOUR_CATEGORY_FILTER) replaces the old
+        # campaign_ids=in.(...) filter - agentless campaigns have no agent
+        # doc to source campaign ids from, so the workspace itself is the
+        # only scope left; the category gate keeps the sweep to positives.
+        replies = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&category={CORE_FOUR_CATEGORY_FILTER}"
                              f"&replied_at=gte.{quote(since, safe='')}&order=replied_at.asc&limit=200"
                              f"&select=id,smartlead_campaign_id,email,replied_at,category,"
                              f"reply_subject,reply_body,smartlead_message_id")
@@ -2238,7 +2307,7 @@ def run_poll() -> dict:
             # of a false all-zero success.
             summary["errors"] += 1
             print(f"[setter] run_poll: replies GET returned {type(replies).__name__}, not a "
-                  f"list (campaigns={len(campaign_ids)}) - PostgREST query failed", file=sys.stderr)
+                  f"list - PostgREST query failed", file=sys.stderr)
             return summary
         processed = 0
         for r in replies:
@@ -2251,31 +2320,13 @@ def run_poll() -> dict:
             mid = str(r.get("smartlead_message_id") or r.get("message_id") or r.get("id") or "")
             if not cid or not email or not mid:
                 continue
-            # Positive-only intake gate (ruling 2026-07-14): checked before the
-            # 15-per-tick budget is spent, so a flood of non-positive replies
-            # never crowds out the ones that actually belong in the queue.
-            # Uncategorised (None/empty) falls out here too - the 48h poll
-            # window means it gets retried on a later tick once Make fills
-            # replies.category in.
+            # Belt-and-braces (the server-side category filter above already
+            # scopes the query to CORE_FOUR): guard again client-side in case
+            # the filter is ever loosened. Uncategorised (None/empty) falls
+            # out here too - the 48h poll window means it gets retried on a
+            # later tick once Make fills replies.category in.
             if r.get("category") not in CORE_FOUR:
                 continue
-            agent = _agent_for_campaign(cid, require_enabled=True, agents=enabled_agents)
-            if not agent:
-                continue
-            # Only replies received AFTER this campaign was assigned to the
-            # agent. Without this, first activation would sweep up to 48h of
-            # already-humanly-handled backlog into the queue.
-            assigned_at = (agent.get("campaign_assigned_at") or {}).get(str(cid))
-            if assigned_at and r.get("replied_at"):
-                try:
-                    if _parse_iso(r["replied_at"]) < _parse_iso(assigned_at):
-                        continue
-                except (ValueError, TypeError):
-                    pass
-            if _existing_row(WORKSPACE, cid, email, mid):
-                continue
-            processed += 1
-            summary["checked"] += 1
             reply = {
                 "workspace": WORKSPACE, "campaign_id": cid, "email": email,
                 "first_name": r.get("first_name"), "last_name": r.get("last_name"),
@@ -2284,19 +2335,50 @@ def run_poll() -> dict:
                 "replied_at": r.get("replied_at"), "message_id": mid,
                 "category": r.get("category"), "is_test": False,
             }
-            try:
-                row = process_reply(reply, agent, settings)
-                summary["queued"] += 1
-                status = (row or {}).get("status")
-                if status == "auto_sent":
-                    summary["auto_sent"] += 1
-                elif status == "needs_review":
-                    summary["needs_review"] += 1
-                elif status == "no_action":
-                    summary["no_action"] += 1
-            except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
-                summary["errors"] += 1
-                print(f"[setter] poll error for {email}/{cid}: {e}", file=sys.stderr)
+            agent = _agent_for_campaign(cid, require_enabled=True, agents=agents)
+            if agent:
+                # Only replies received AFTER this campaign was assigned to
+                # the agent. Without this, first activation would sweep up
+                # to 48h of already-humanly-handled backlog into the queue.
+                assigned_at = (agent.get("campaign_assigned_at") or {}).get(str(cid))
+                if assigned_at and r.get("replied_at"):
+                    try:
+                        if _parse_iso(r["replied_at"]) < _parse_iso(assigned_at):
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                if _existing_row(WORKSPACE, cid, email, mid):
+                    continue
+                processed += 1
+                summary["checked"] += 1
+                try:
+                    row = process_reply(reply, agent, settings)
+                    summary["queued"] += 1
+                    status = (row or {}).get("status")
+                    if status == "auto_sent":
+                        summary["auto_sent"] += 1
+                    elif status == "needs_review":
+                        summary["needs_review"] += 1
+                    elif status == "no_action":
+                        summary["no_action"] += 1
+                except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
+                    summary["errors"] += 1
+                    print(f"[setter] poll error for {email}/{cid}: {e}", file=sys.stderr)
+            else:
+                # Agentless intake (owner ruling 2026-07-14): no campaign_assigned_at
+                # concept without an agent doc - the reply just goes straight in.
+                if _existing_row(WORKSPACE, cid, email, mid):
+                    continue
+                processed += 1
+                summary["checked"] += 1
+                try:
+                    row = _intake_agentless(reply)
+                    summary["agentless"] += 1
+                    if (row or {}).get("status") == "needs_review":
+                        summary["needs_review"] += 1
+                except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
+                    summary["errors"] += 1
+                    print(f"[setter] poll agentless-intake error for {email}/{cid}: {e}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 - run_poll itself must never raise
         summary["errors"] += 1
         print(f"[setter] run_poll crashed: {e}", file=sys.stderr)
@@ -2335,9 +2417,6 @@ def handle_inbound(payload: dict) -> dict:
                  or payload.get("to_email") or "").strip().lower()
         if not cid or not email:
             return {"ignored": "missing campaign or lead email"}
-        agent = _agent_for_campaign(cid)
-        if not agent:
-            return {"ignored": "no agent assigned to this campaign"}
         rm = payload.get("reply_message") if isinstance(payload.get("reply_message"), dict) else {}
         body = rm.get("text") or _TAG_RE.sub(" ", str(rm.get("html") or "")) or payload.get("reply_body") or ""
         # Key on the email Message-ID (what the poll's `replies` rows also
@@ -2376,6 +2455,17 @@ def handle_inbound(payload: dict) -> dict:
             "replied_at": rm.get("time") or payload.get("event_timestamp") or None,
             "message_id": mid, "category": cat, "is_test": False,
         }
+        agent = _agent_for_campaign(cid)
+        if not agent:
+            # Agentless intake (owner ruling 2026-07-14): "we shouldn't need
+            # to assign an agent to a campaign to be able to receive the
+            # positives - it should come in regardless." Same category gate
+            # as the agented path above already ran; this just skips the
+            # agent brain (classify/draft/decide/hydrate) and queues the
+            # reply straight into manual review.
+            row = _intake_agentless(reply)
+            return {"processed": True, "status": (row or {}).get("status"), "agentless": True,
+                    "id": (row or {}).get("id")}
         row = process_reply(reply, agent, _load_settings())
         return {"processed": True, "status": (row or {}).get("status"), "id": (row or {}).get("id")}
     except Exception as e:  # noqa: BLE001 - a webhook must never take the server down
