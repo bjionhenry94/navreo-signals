@@ -32,6 +32,24 @@ _STYLE = """
 _SCRIPT = """
 const RUN_ID = "__RUN_ID__";
 let selected = new Set();
+let lastBucketsJobId = null;
+
+/* Long computes run as server-side background jobs and get polled here -
+   a plain long POST is killed by the proxy timeout and by every redeploy
+   (both observed live 2026-07-15). Resolves with the finished job object,
+   or {error} after a failure / lost job. */
+async function pollJob(jobId) {
+  for (;;) {
+    await new Promise(function (res) { setTimeout(res, 2500); });
+    const r = await callApi('/api/recontact/job?id=' + encodeURIComponent(jobId));
+    if (!r.ok || !r.body) continue;             // transient poll hiccup - keep going
+    if (r.body.error) return { error: r.body.error };
+    if (r.body.status === 'done') return r.body;
+    if (r.body.status === 'failed') return { error: r.body.error || 'The job failed.' };
+    if (r.body.status === 'interrupted') return { error:
+      'An app update interrupted this run - click the button again to re-run it.' };
+  }
+}
 
 function escHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -116,16 +134,21 @@ document.getElementById('buckets-btn').onclick = async () => {
   if (!selected.size) { status.textContent = 'Pick at least one campaign first.'; return; }
   startTicker(status, 'Computing');
   const include_repliers = document.getElementById('include-repliers').checked;
-  const r = await callApi('/api/recontact/buckets', { method: 'POST',
+  const start = await callApi('/api/recontact/buckets', { method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ campaign_ids: [...selected], include_repliers, run_id: RUN_ID }) });
-  stopTicker();
-  if (!r.ok || !r.body || r.body.error) {
-    status.textContent = (r.body && r.body.error) || 'Could not compute buckets.';
+  if (!start.ok || !start.body || !start.body.job_id) {
+    stopTicker();
+    status.textContent = (start.body && (start.body.message || start.body.error)) ||
+      'Could not start the compute.';
     return;
   }
+  const job = await pollJob(start.body.job_id);
+  stopTicker();
+  if (job.error) { status.textContent = job.error; return; }
+  lastBucketsJobId = start.body.job_id;
   status.textContent = '';
-  const b = r.body;
+  const b = job.counts;
   document.getElementById('bucket-tiles').style.display = '';
   document.getElementById('bucket-tiles').innerHTML =
     tile('Eligible', b.eligible) + tile('Still in progress', b.in_progress) +
@@ -156,16 +179,21 @@ document.getElementById('create-btn').onclick = async () => {
   const name = document.getElementById('draft-name').value.trim();
   const include_repliers = document.getElementById('include-repliers').checked;
   startTicker(status, 'Creating the draft');
-  const r = await callApi('/api/recontact/create', { method: 'POST',
+  const start = await callApi('/api/recontact/create', { method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ campaign_ids: [...selected], include_repliers, name, run_id: RUN_ID }) });
-  stopTicker();
-  if (!r.ok || !r.body || !r.body.ok) {
-    status.textContent = (r.body && r.body.message) || 'Could not create the draft.';
+    body: JSON.stringify({ campaign_ids: [...selected], include_repliers, name,
+                           run_id: RUN_ID, buckets_job_id: lastBucketsJobId }) });
+  if (!start.ok || !start.body || !start.body.job_id) {
+    stopTicker();
+    status.textContent = (start.body && start.body.message) || 'Could not start the draft.';
     return;
   }
-  status.innerHTML = 'Draft created with ' + escHtml(r.body.eligible) + ' eligible leads &mdash; ' +
-    '<a href="/app/campaigns.html#' + escHtml(r.body.id) + '"><b>open it in Campaigns</b></a>. ' +
+  const job = await pollJob(start.body.job_id);
+  stopTicker();
+  if (job.error) { status.textContent = job.error; return; }
+  const c = job.counts;
+  status.innerHTML = 'Draft created with ' + escHtml(c.eligible) + ' eligible leads &mdash; ' +
+    '<a href="/app/campaigns.html#' + escHtml(c.draft_id) + '"><b>open it in Campaigns</b></a>. ' +
     'It stays a draft until you launch it there.';
 };
 """

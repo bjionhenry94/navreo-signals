@@ -6956,14 +6956,21 @@ def _recontact_resolve_sl_id(campaign_id) -> str | None:
 
 def _batched_in_matches(table: str, col: str, values, select: str | None = None, chunk: int = 180) -> list:
     """PostgREST `in.()` filter, chunked so a large candidate set never blows
-    the URL length limit. Returns every matching row across all chunks."""
-    out = []
+    the URL length limit. Chunks fetch concurrently (pool of 6 - same budget
+    as the scan's candidate fan-out); at 20k emails the serial version alone
+    took ~40s per table, which is most of why buckets ran minutes."""
     vals = sorted({str(v) for v in values if v})
     sel = select or col
-    for i in range(0, len(vals), chunk):
-        part = ",".join(vals[i:i + chunk])
+    parts = [",".join(vals[i:i + chunk]) for i in range(0, len(vals), chunk)]
+    if not parts:
+        return []
+    def _fetch(part):
         rows = sb("GET", f"{table}?{col}=in.({part})&select={sel}")
-        if isinstance(rows, list):
+        return rows if isinstance(rows, list) else []
+    from concurrent.futures import ThreadPoolExecutor
+    out = []
+    with ThreadPoolExecutor(max_workers=min(6, len(parts))) as ex:
+        for rows in ex.map(_fetch, parts):
             out.extend(rows)
     return out
 
@@ -7133,13 +7140,17 @@ def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> tuple[lis
         rrows = _batched_in_matches("replies", "email", emails, "email")
         replied_emails = {(r.get("email") or "").strip().lower() for r in rrows}
 
-    other_rows = []
-    for i in range(0, len(emails), 180):
-        chunk = ",".join(emails[i:i + 180])
+    chunks = [",".join(emails[i:i + 180]) for i in range(0, len(emails), 180)]
+    def _fetch_other(chunk):
         r = sb("GET", f"contact_history?email=in.({chunk})&smartlead_campaign_id=not.in.({ids_csv})"
                       "&status=in.(INPROGRESS,STARTED,PAUSED)&select=email,smartlead_campaign_id")
-        if isinstance(r, list):
-            other_rows.extend(r)
+        return r if isinstance(r, list) else []
+    from concurrent.futures import ThreadPoolExecutor
+    other_rows = []
+    if chunks:
+        with ThreadPoolExecutor(max_workers=min(6, len(chunks))) as ex:
+            for r in ex.map(_fetch_other, chunks):
+                other_rows.extend(r)
     active_elsewhere: dict = {}
     for r in other_rows:
         em = (r.get("email") or "").strip().lower()
@@ -7173,13 +7184,20 @@ def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> tuple[lis
     return out, len(rows)
 
 
-def api_recontact_buckets(p: dict) -> dict:
+def _recontact_resolve_ids(p: dict) -> tuple[list, str | None]:
     raw_ids = [str(x).strip() for x in (p.get("campaign_ids") or []) if str(x).strip()]
     ids = [x for x in (_recontact_resolve_sl_id(x) for x in raw_ids) if x]
     if not ids:
-        return {"error": ("None of the given campaign ids could be resolved to a "
-                          "Smartlead campaign." if raw_ids else "campaign_ids is required")}
-    include_repliers = bool(p.get("include_repliers"))
+        return [], ("None of the given campaign ids could be resolved to a "
+                    "Smartlead campaign." if raw_ids else "campaign_ids is required")
+    return ids, None
+
+
+def _recontact_buckets_summary(ids: list, include_repliers: bool) -> tuple[dict, list]:
+    """The full bucket computation. Runs MINUTES on big sets, so it only ever
+    executes inside a background job thread - a synchronous handler here gets
+    killed by Render's edge timeout and by every redeploy (both observed live
+    2026-07-15: the owner's first-ever click died exactly this way)."""
     verdicts, rows_fetched = _recontact_verdicts(ids, include_repliers)
     counts = {"eligible": 0, "in_progress": 0, "suppressed": 0, "replied": 0}
     active_elsewhere_counts: dict = {}
@@ -7193,26 +7211,107 @@ def api_recontact_buckets(p: dict) -> dict:
                         for k, n in sorted(active_elsewhere_counts.items(), key=lambda x: -x[1])]
     total = len(verdicts)
     # honest-cap disclosure: when the campaigns hold more contact rows than the
-    # bounded read, say so - a silent 20k sample must never read as "everyone"
-    true_total = sb_count(f"contact_history?smartlead_campaign_id=in.({','.join(ids)})") or rows_fetched
-    return {"eligible": counts["eligible"], "in_progress": counts["in_progress"],
-           "active_elsewhere": active_elsewhere, "suppressed": counts["suppressed"],
-           "replied": counts["replied"], "total": total,
-           "rows_scanned": rows_fetched, "total_contact_rows": true_total,
-           "capped": true_total > rows_fetched,
-           "sample": [{"email": v["email"], "verdict": v["verdict"]} for v in verdicts[:20]]}
+    # bounded read, say so - a silent 20k sample must never read as "everyone".
+    # sb_count has no built-in retry; a transient None here would silently
+    # erase the "reviewed X of Y" note, so try twice before falling back.
+    true_total = sb_count(f"contact_history?smartlead_campaign_id=in.({','.join(ids)})")
+    if true_total is None:
+        time.sleep(0.4)
+        true_total = sb_count(f"contact_history?smartlead_campaign_id=in.({','.join(ids)})")
+    true_total = true_total or rows_fetched
+    summary = {"eligible": counts["eligible"], "in_progress": counts["in_progress"],
+               "active_elsewhere": active_elsewhere, "suppressed": counts["suppressed"],
+               "replied": counts["replied"], "total": total,
+               "rows_scanned": rows_fetched, "total_contact_rows": true_total,
+               "capped": true_total > rows_fetched,
+               "sample": [{"email": v["email"], "verdict": v["verdict"]} for v in verdicts[:20]]}
+    return summary, verdicts
 
 
-def api_recontact_create(p: dict):
-    raw_ids = [str(x).strip() for x in (p.get("campaign_ids") or []) if str(x).strip()]
-    ids = [x for x in (_recontact_resolve_sl_id(x) for x in raw_ids) if x]
-    if not ids:
-        return {"ok": False, "message": ("None of the given campaign ids could be resolved "
-                                         "to a Smartlead campaign." if raw_ids
-                                         else "campaign_ids is required")}, 400
+# Finished buckets keep their full verdict list here so Create can reuse it
+# (seconds of writes instead of re-running the minutes-long compute). Memory
+# only - a redeploy between Compute and Create just means Create recomputes.
+_RECONTACT_RESULTS: dict = {}
+_RECONTACT_RESULTS_CAP = 8
+
+
+def _recontact_stash(job_id: str, ids: list, include_repliers: bool, verdicts: list):
+    _RECONTACT_RESULTS[job_id] = {"ids": sorted(ids), "include_repliers": include_repliers,
+                                  "verdicts": verdicts}
+    while len(_RECONTACT_RESULTS) > _RECONTACT_RESULTS_CAP:
+        _RECONTACT_RESULTS.pop(next(iter(_RECONTACT_RESULTS)))
+
+
+def api_recontact_buckets_start(p: dict):
+    """Returns {job_id} immediately; the page polls /api/recontact/job."""
+    ids, err = _recontact_resolve_ids(p)
+    if err:
+        return {"ok": False, "message": err}, 400
+    include_repliers = bool(p.get("include_repliers"))
+    run_id = str(p.get("run_id") or "")
+    job = _new_job("recontact_buckets", f"Recontact buckets ({len(ids)} campaigns)", ids[0])
+    def _run():
+        _job_started(job)
+        try:
+            summary, verdicts = _recontact_buckets_summary(ids, include_repliers)
+            _recontact_stash(job["id"], ids, include_repliers, verdicts)
+            with JOBS_LOCK:
+                job["counts"] = summary
+            _job_finished(job, "done")
+            if run_id:
+                sb("PATCH", f"recontact_runs?id=eq.{run_id}",
+                   {"payload": {"campaign_ids": ids, "include_repliers": include_repliers,
+                                "buckets": summary}})
+        except Exception as e:  # noqa: BLE001 - job must record ANY failure, never die silently
+            _job_finished(job, "failed", f"{type(e).__name__}: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "job_id": job["id"]}, 200
+
+
+def api_recontact_job(jid: str) -> dict:
+    job = _job_get(jid)
+    if not job:
+        return {"error": "job not found (it may have been lost to an app update - run the step again)"}
+    return {"status": job.get("status"), "counts": job.get("counts") or {},
+           "error": job.get("error")}
+
+
+def api_recontact_create_start(p: dict):
+    """Returns {job_id} immediately. Reuses the buckets job's verdicts when
+    still in memory; recomputes inside the job thread when not."""
+    ids, err = _recontact_resolve_ids(p)
+    if err:
+        return {"ok": False, "message": err}, 400
     include_repliers = bool(p.get("include_repliers"))
     name = (p.get("name") or "").strip() or f"Recontact - {len(ids)} campaign(s)"
-    verdicts, _rows_fetched = _recontact_verdicts(ids, include_repliers)
+    cached = _RECONTACT_RESULTS.get(str(p.get("buckets_job_id") or ""))
+    if cached and (cached["ids"] != sorted(ids) or cached["include_repliers"] != include_repliers):
+        cached = None  # selection changed since the compute - never reuse stale verdicts
+    run_id = str(p.get("run_id") or "")
+    job = _new_job("recontact_create", f"Recontact draft: {name}"[:80], ids[0])
+    def _run():
+        _job_started(job)
+        try:
+            verdicts = cached["verdicts"] if cached \
+                else _recontact_buckets_summary(ids, include_repliers)[1]
+            result, code = _recontact_create_draft(ids, include_repliers, name, verdicts)
+            if code == 200:
+                with JOBS_LOCK:
+                    job["counts"] = result
+                _job_finished(job, "done")
+                if run_id:
+                    sb("PATCH", f"recontact_runs?id=eq.{run_id}",
+                       {"payload": {"campaign_ids": ids, "include_repliers": include_repliers,
+                                    "created_draft_id": result.get("draft_id")}})
+            else:
+                _job_finished(job, "failed", result.get("message") or "create failed")
+        except Exception as e:  # noqa: BLE001 - job must record ANY failure, never die silently
+            _job_finished(job, "failed", f"{type(e).__name__}: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "job_id": job["id"]}, 200
+
+
+def _recontact_create_draft(ids: list, include_repliers: bool, name: str, verdicts: list):
     eligible = [v["email"] for v in verdicts if v["verdict"] == "eligible"]
     if not eligible:
         return {"ok": False, "message": "No eligible people to recontact with these settings."}, 400
@@ -7241,7 +7340,7 @@ def api_recontact_create(p: dict):
           prefer="resolution=merge-duplicates,return=minimal")
     log_activity("/api/recontact/create", {"campaign_ids": ids, "eligible": len(eligible), "draft_id": new_id},
                 action="create", entity="recontact_draft", entity_id=new_id)
-    return {"ok": True, "id": new_id, "eligible": len(eligible)}, 200
+    return {"ok": True, "draft_id": new_id, "id": new_id, "eligible": len(eligible)}, 200
 
 
 def _split_name(pr: dict) -> tuple[str, str]:
@@ -12561,6 +12660,10 @@ class Handler(SimpleHTTPRequestHandler):
             if isinstance(result, dict) and result.get("error"):
                 return self._json(result, 404)
             return self._json(result)
+        if path == "/api/recontact/job":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(api_recontact_job((q.get("id") or [""])[0]))
         if path == "/api/version":
             # Deploy verification: which commit/instance is actually serving.
             return self._json({"commit": _GIT_COMMIT or None,
@@ -13041,27 +13144,15 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
-            result = api_recontact_buckets(payload)
-            if isinstance(result, dict) and result.get("error"):
-                return self._json(result, 400)
-            if payload.get("run_id"):
-                sb("PATCH", f"recontact_runs?id=eq.{payload['run_id']}",
-                   {"payload": {"campaign_ids": payload.get("campaign_ids"),
-                                "include_repliers": payload.get("include_repliers"),
-                                "buckets": result}})
-            return self._json(result)
+            body, status = api_recontact_buckets_start(payload)
+            return self._json(body, status)
         if path == "/api/recontact/create":
             length = int(self.headers.get("Content-Length") or 0)
             try:
                 payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
-            body, status = api_recontact_create(payload)
-            if payload.get("run_id") and isinstance(body, dict) and body.get("ok"):
-                sb("PATCH", f"recontact_runs?id=eq.{payload['run_id']}",
-                   {"payload": {"campaign_ids": payload.get("campaign_ids"),
-                                "include_repliers": payload.get("include_repliers"),
-                                "created_draft_id": body.get("id")}})
+            body, status = api_recontact_create_start(payload)
             return self._json(body, status)
         if path == "/api/verify-campaign":
             length = int(self.headers.get("Content-Length") or 0)
