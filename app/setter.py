@@ -3425,21 +3425,36 @@ def _compute_kpis_sync() -> dict:
             # Read-time direction tally: how many needs_review rows really still
             # await us (newest msg is the lead's) vs have been answered and
             # belong under sent / auto_sent. Mirrors _queue_direction exactly.
+            # "dir" maps row id -> (inbound, pill) so the thread-collapsed
+            # count below can look up JUST the representative rows; the flat
+            # stay/sent/auto tallies stay as the no-collapse fallback.
             rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.needs_review"
-                              f"&is_test=eq.false&select=thread,sent_at,decision,status")
+                              f"&is_test=eq.false&select=id,thread,sent_at,decision,status")
             stay = m_sent = m_auto = 0
+            dirs = {}
             if isinstance(rows, list):
                 for r in rows:
-                    inbound, pill = _queue_direction(r if isinstance(r, dict) else {})
+                    r = r if isinstance(r, dict) else {}
+                    inbound, pill = _queue_direction(r)
+                    dirs[r.get("id")] = (inbound, pill)
                     if inbound:
                         stay += 1
                     elif pill == "auto_sent":
                         m_auto += 1
                     else:
                         m_sent += 1
-            return {"stay": stay, "sent": m_sent, "auto": m_auto}
+            return {"stay": stay, "sent": m_sent, "auto": m_auto, "dir": dirs}
+
+        def _light():
+            # The thread-collapse source: every real row's key fields (no
+            # thread blobs - a few KB). Same is_test=false semantics as the
+            # pill counts.
+            rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&is_test=eq.false&limit=2000"
+                              "&select=id,status,smartlead_campaign_id,lead_email,replied_at,created_at")
+            return rows if isinstance(rows, list) else None
 
         tasks = {
+            "light": _light,
             "c_needs_review": lambda: _pill("status=eq.needs_review"),
             "c_sent": lambda: _pill("status=eq.sent"),
             "c_auto_sent": lambda: _pill("status=eq.auto_sent"),
@@ -3464,10 +3479,13 @@ def _compute_kpis_sync() -> dict:
                     results[k] = fut.result()
                 except Exception:  # noqa: BLE001 - one bad query must not sink the block
                     results[k] = None
-        # Fold the read-time direction tally into needs_review / sent /
-        # auto_sent so the pills match who actually spoke last. dismissed / all
-        # are direction-independent. If the reclass read failed, fall back to
-        # the raw status counts (never crash the KPI block).
+        # Fold order matches the read path: thread-collapse FIRST (one
+        # representative row per conversation, from the light fetch), THEN
+        # the who-spoke-last direction on each surviving needs_review row.
+        # Every pill counts distinct threads and each thread lands in exactly
+        # one bucket. If the light fetch failed, fall back to the pre-collapse
+        # tallies; if the reclass read also failed, fall back to the raw
+        # status counts (never crash the KPI block).
         rc = results.get("reclass") or {}
         _stay = rc.get("stay")
         _m_sent = rc.get("sent") or 0
@@ -3475,14 +3493,44 @@ def _compute_kpis_sync() -> dict:
         _c_nr = results.get("c_needs_review") or 0
         _c_sent = results.get("c_sent") or 0
         _c_auto = results.get("c_auto_sent") or 0
-        kpis["counts"] = {
-            "needs_review": _stay if _stay is not None else _c_nr,
-            "sent": _c_sent + _m_sent,
-            "auto_sent": _c_auto + _m_auto,
-            "dismissed": results.get("c_dismissed") or 0,
-            "all": results.get("c_all") or 0,
-        }
-        kpis["needs_review"] = _stay if _stay is not None else (results.get("needs_review") or 0)
+        light = results.get("light")
+        if isinstance(light, list) and light:
+            reps = _collapse_threads(light)
+            dirs = rc.get("dir") or {}
+            n_nr = n_sent = n_auto = n_dis = 0
+            for r in reps:
+                st = r.get("status")
+                if st == "needs_review":
+                    inbound, pill = dirs.get(r.get("id"), (True, None))
+                    if inbound:
+                        n_nr += 1
+                    elif pill == "auto_sent":
+                        n_auto += 1
+                    else:
+                        n_sent += 1
+                elif st == "sent":
+                    n_sent += 1
+                elif st == "auto_sent":
+                    n_auto += 1
+                elif st == "dismissed":
+                    n_dis += 1
+            kpis["counts"] = {
+                "needs_review": n_nr,
+                "sent": n_sent,
+                "auto_sent": n_auto,
+                "dismissed": n_dis,
+                "all": len(reps),
+            }
+            kpis["needs_review"] = n_nr
+        else:
+            kpis["counts"] = {
+                "needs_review": _stay if _stay is not None else _c_nr,
+                "sent": _c_sent + _m_sent,
+                "auto_sent": _c_auto + _m_auto,
+                "dismissed": results.get("c_dismissed") or 0,
+                "all": results.get("c_all") or 0,
+            }
+            kpis["needs_review"] = _stay if _stay is not None else (results.get("needs_review") or 0)
         kpis["auto_sent_today"] = results.get("auto_sent_today") or 0
         kpis["sent_today"] = results.get("sent_today") or 0
         kpis["no_action_today"] = results.get("no_action_today") or 0
@@ -3588,6 +3636,68 @@ def _reclassify_queue(rows: list, requested: str) -> list:
     return kept
 
 
+def _collapse_threads(rows: list) -> list:
+    """READ-TIME thread collapse, never written back: one representative row
+    per conversation, keyed (smartlead_campaign_id, lower(trim(lead_email)))
+    — one thread per lead PER campaign (a lead in two campaigns stays two
+    threads; owner ruling 2026-07-16). Intake deliberately stores one row per
+    inbound reply (message_id is in the upsert key), so a conversation
+    accumulates siblings; the UI must show only the newest one.
+
+    Representative = most recent replied_at, tie-break latest created_at,
+    then highest id. ISO8601 strings compare lexicographically; a null stamp
+    becomes "" and sorts oldest, so it never wins. Rows with no lead_email
+    pass through uncollapsed (never clump into one fake thread), and is_test
+    is part of the key so a synthetic training row can never shadow a real
+    conversation. Runs BEFORE _reclassify_queue: collapse first, then decide
+    who spoke last on the survivor."""
+    def rank(r):
+        return (str(r.get("replied_at") or ""), str(r.get("created_at") or ""), r.get("id") or 0)
+    best = {}
+    loose = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        em = str(r.get("lead_email") or "").strip().lower()
+        if not em:
+            loose.append(r)
+            continue
+        key = (bool(r.get("is_test")), str(r.get("smartlead_campaign_id") or ""), em)
+        cur = best.get(key)
+        if cur is None or rank(r) > rank(cur):
+            best[key] = r
+    return list(best.values()) + loose
+
+
+# Representative-row ids, cached ~10s. Every pill fetch needs cross-status
+# visibility (a needs_review row must vanish when a NEWER dismissed sibling
+# exists), so the collapse is computed from one light all-status fetch and
+# the winning ids filter each pill's full fetch. Same TTL-dict pattern as
+# _POLL_TS_CACHE; _bust_read_caches clears it on mutations.
+_REP_IDS_TTL = 10.0
+_REP_IDS_CACHE = {"at": 0.0, "val": None}
+
+
+def _thread_rep_ids():
+    """Set of setter_queue ids that are their thread's representative row,
+    or None when the light fetch fails (callers then skip the collapse and
+    degrade to the uncollapsed view rather than blanking the inbox)."""
+    now = _time.time()
+    if _REP_IDS_CACHE["val"] is not None and (now - _REP_IDS_CACHE["at"]) < _REP_IDS_TTL:
+        return _REP_IDS_CACHE["val"]
+    try:
+        light = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&limit=2000"
+                           "&select=id,smartlead_campaign_id,lead_email,replied_at,created_at,is_test") if _SB else None
+        if not isinstance(light, list):
+            return None
+        val = {r.get("id") for r in _collapse_threads(light) if isinstance(r, dict)}
+    except Exception:  # noqa: BLE001 - collapse is best-effort, never sink the queue
+        return None
+    _REP_IDS_CACHE["val"] = val
+    _REP_IDS_CACHE["at"] = now
+    return val
+
+
 _POLL_TS_TTL = 10.0
 _POLL_TS_CACHE = {"at": 0.0, "val": None}
 
@@ -3663,9 +3773,17 @@ def _fetch_queue_rows(status: str, limit: int) -> list:
         else:  # All
             fetched = _SB("GET", f"{QUEUE_TABLE}?{base}")
             rows = fetched if isinstance(fetched, list) else []
+        # Thread collapse FIRST (one representative row per conversation),
+        # THEN the who-spoke-last reclass on the survivor - the order is
+        # load-bearing: a stale needs_review sibling must vanish because a
+        # newer dismissed/sent sibling won the thread, and only the winner's
+        # own state decides its pill.
+        rep_ids = _thread_rep_ids()
+        if rep_ids is not None:
+            rows = [r for r in rows if isinstance(r, dict) and r.get("id") in rep_ids]
         if status in ("needs_review", "sent", "auto_sent"):
             rows = _reclassify_queue(rows, status)
-            rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
+        rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
     return [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
 
 
@@ -3714,6 +3832,8 @@ def _bust_read_caches(rewarm: bool = True):
         _KPI_CACHE["at"] = 0.0
     _POLL_TS_CACHE["at"] = 0.0
     _POLL_TS_CACHE["val"] = None
+    _REP_IDS_CACHE["at"] = 0.0
+    _REP_IDS_CACHE["val"] = None
     stale_keys = [k for k in list(_ROWS_CACHE.keys())
                   if k[0] in _ROWS_REWARM_STATUSES and k[1] == 200]
     _ROWS_CACHE.clear()
