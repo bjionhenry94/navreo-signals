@@ -7063,6 +7063,19 @@ def api_recontact_scan(campaign_id: str) -> dict:
             else f"workspace=eq.{WORKSPACE_TAG}")
     all_camps = sb("GET", f"campaigns?{scope}&select=smartlead_campaign_id,name,status&limit=1000")
     all_camps = all_camps if isinstance(all_camps, list) else []
+    # Rarity-weighted similarity. Plain token-overlap let ubiquitous naming
+    # tokens ("navreo", "may", "2026") crowd out the token the user actually
+    # typed: searching "Clay" surfaced 4 of the account's 16 Clay campaigns
+    # (owner, live 2026-07-15). Weight = 1/df, and any campaign containing
+    # every SEARCH token is guaranteed a seat regardless of rank.
+    df: dict = {}
+    for c in all_camps:
+        for t in _recontact_name_tokens(c.get("name") or ""):
+            df[t] = df.get(t, 0) + 1
+    def _w(tokens) -> float:
+        return sum(1.0 / df.get(t, 1) for t in tokens)
+    search_tokens = {t for t in _recontact_name_tokens(str(campaign_id or ""))} \
+        if not str(campaign_id or "").strip().isdigit() else set()
     scored = []
     for c in all_camps:
         csid = str(c.get("smartlead_campaign_id") or "")
@@ -7070,12 +7083,16 @@ def api_recontact_scan(campaign_id: str) -> dict:
             continue
         ctoks = _recontact_name_tokens(c.get("name") or "")
         shared = target_tokens & ctoks
-        if not shared:
+        term_match = bool(search_tokens) and search_tokens <= ctoks
+        if not shared and not term_match:
             continue
-        ratio = len(shared) / max(1, len(target_tokens | ctoks))
-        scored.append((c, csid, shared, ratio))
-    scored.sort(key=lambda x: -x[3])
-    scored = scored[:10]
+        ratio = _w(shared) / max(1e-9, _w(target_tokens | ctoks))
+        scored.append((c, csid, shared or (search_tokens & ctoks), ratio, term_match))
+    scored.sort(key=lambda x: (0 if x[4] else 1, -x[3]))  # search-term matches first
+    keep = scored[:20]
+    # never drop a campaign that literally contains what the user typed
+    keep += [s for s in scored[20:] if s[4]]
+    scored = [(c, csid, shared, ratio) for c, csid, shared, ratio, _tm in keep]
     if not scored:
         return {"target": tinfo, "siblings": []}
 
@@ -7121,7 +7138,7 @@ def api_recontact_scan(campaign_id: str) -> dict:
                "match_reason": "shares \"" + "\", \"".join(sorted(shared)[:5]) + "\" in the name"}
 
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=min(5, len(scored))) as ex:
+    with ThreadPoolExecutor(max_workers=min(8, len(scored))) as ex:
         out = list(ex.map(_candidate_stats, scored))
     return {"target": tinfo, "siblings": out}
 
