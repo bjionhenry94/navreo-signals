@@ -2954,6 +2954,38 @@ def route_queue_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def route_thread_get(params):
+    """Fresh thread for one queue row, re-hydrated live from Smartlead when
+    the owner OPENS it (owner ruling 2026-07-15: an opened thread must show
+    the latest emails, not the intake-time snapshot). The refreshed thread is
+    also persisted back to the row (real column - schema-safe) so the list
+    stays current even without another open. Test rows have no Smartlead
+    lead behind them; they return their stored thread untouched."""
+    try:
+        qid = _qp(params, "id", "")
+        if not qid:
+            return 400, {"error": "id is required"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row:
+            return 404, {"error": "Queue row not found."}
+        if row.get("is_test"):
+            return 200, {"thread": row.get("thread") or [], "refreshed": False}
+        mid = row.get("message_id") or row.get("source_message_id") or ""
+        ok, hyd, herr = hydrate_lead(row.get("smartlead_campaign_id"), row.get("lead_email"), mid)
+        if not ok:
+            # Stale beats broken: hand back the stored snapshot with the why.
+            return 200, {"thread": row.get("thread") or [], "refreshed": False, "detail": herr}
+        thread = hyd.get("thread") or []
+        try:
+            _apply_patch(row, {"thread": thread})
+        except Exception:  # noqa: BLE001 - persisting is best-effort; the response is what matters
+            pass
+        return 200, {"thread": thread, "refreshed": True}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def route_queue_action(payload):
     try:
         payload = payload or {}
@@ -5582,6 +5614,7 @@ GET_ROUTES = {
     "/api/setter/agents": route_agents_get,
     "/api/setter/campaigns": route_campaigns_get,
     "/api/setter/queue": route_queue_get,
+    "/api/setter/thread": route_thread_get,
     "/api/setter/grading": route_grading_get,
     "/api/setter/training": route_training_get,
     "/api/setter/training/share-info": route_training_share_info,

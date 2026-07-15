@@ -1191,6 +1191,7 @@ function renderDetail(row) {
   wireDetailEvents(el, row);
   wireLeadPanelEvents(panelEl);
   reapplyEditedDraft(row.id);
+  refreshThreadFor(row);
 }
 
 /* "How this was decided" - shared content builder used by both the fixed
@@ -2341,6 +2342,32 @@ function renderTryItResult(row) {
 }
 
 /* ── Boot ──────────────────────────────────────────────── */
+/* Owner ruling 2026-07-15: opening a thread auto-refreshes it with the
+   latest emails. The stored snapshot renders instantly; a live re-hydrate
+   runs in the background (at most once per row per minute) and the detail
+   re-renders only when the thread actually changed - reapplyEditedDraft
+   inside renderDetail keeps any in-progress edit safe. */
+const THREAD_REFRESH_AT = new Map();
+function threadKey(t) {
+  return (t || []).map((m) => `${m.type}:${m.message_id || m.stats_id || String(m.body || "").slice(0, 40)}`).join("|");
+}
+async function refreshThreadFor(row) {
+  if (!row || row.is_test) return;
+  const last = THREAD_REFRESH_AT.get(String(row.id)) || 0;
+  if (Date.now() - last < 60000) return;
+  THREAD_REFRESH_AT.set(String(row.id), Date.now());
+  const res = await fetchJson(`/api/setter/thread?id=${encodeURIComponent(row.id)}`);
+  if (!res.ok || !res.data || !Array.isArray(res.data.thread) || !res.data.refreshed) return;
+  const fresh = res.data.thread;
+  if (threadKey(fresh) === threadKey(row.thread)) return;
+  row.thread = fresh;
+  [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
+    const r = (list || []).find((x) => String(x.id) === String(row.id));
+    if (r) r.thread = fresh;
+  });
+  if (String(selectedRowId) === String(row.id)) renderDetail(row);
+}
+
 document.addEventListener("click", (e) => {
   const a = e.target.closest(".qc-draft a");
   if (!a) return;

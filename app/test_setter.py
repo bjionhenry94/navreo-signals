@@ -7323,6 +7323,45 @@ def test_trust_true_negative_keeps_no_draft_short_circuit():
     check("trust always-draft: drafter never called for a true negative", len(draft_calls) == 0, len(draft_calls))
 
 
+
+
+def test_trust_thread_route_rehydrates_and_persists():
+    sb, http = fresh_setter()
+    stale = [{"type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+              "body": "first reply", "message_id": "m-live-1", "stats_id": "st-live-1"}]
+    sb.queue = [{"id": 71, "workspace": "navreo", "smartlead_campaign_id": 111,
+                 "lead_email": "fresh@example.com", "message_id": "m-live-1",
+                 "source_message_id": "m-live-1", "status": "needs_review",
+                 "is_test": False, "thread": stale}]
+    http.message_history = [
+        {"type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "subject": "Re: hi",
+         "email_body": "first reply", "message_id": "m-live-1", "stats_id": "st-live-1"},
+        {"type": "SENT", "time": "2026-07-11T09:00:00+00:00", "subject": "Re: hi",
+         "email_body": "our manual answer from Smartlead", "message_id": "m-live-2", "stats_id": "st-live-2"},
+        {"type": "REPLY", "time": "2026-07-12T09:00:00+00:00", "subject": "Re: hi",
+         "email_body": "their newest message", "message_id": "m-live-3", "stats_id": "st-live-3"},
+    ]
+    status, resp = setter.route_thread_get({"id": ["71"]})
+    thread = resp.get("thread") or []
+    check("thread route: 200 + refreshed", status == 200 and resp.get("refreshed") is True, (status, resp))
+    check("thread route: newest messages present", len(thread) == 3
+          and any("newest message" in str(m.get("body") or "") for m in thread), thread)
+    check("thread route: refreshed thread persisted to the row",
+          len(sb.queue[0].get("thread") or []) == 3, sb.queue[0].get("thread"))
+
+
+def test_trust_thread_route_test_rows_untouched():
+    sb, http = fresh_setter()
+    stale = [{"type": "REPLY", "time": "2026-07-10T09:00:00+00:00", "body": "hi", "message_id": "m-t1"}]
+    sb.queue = [{"id": 72, "workspace": "navreo", "smartlead_campaign_id": 111,
+                 "lead_email": "t@example.com", "message_id": "m-t1", "status": "needs_review",
+                 "is_test": True, "thread": stale}]
+    status, resp = setter.route_thread_get({"id": ["72"]})
+    check("thread route: test row returns stored thread, not refreshed",
+          status == 200 and resp.get("refreshed") is False and resp.get("thread") == stale, resp)
+    check("thread route: test row never touches Smartlead", http.smartlead_calls == [], http.smartlead_calls)
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
@@ -7515,6 +7554,9 @@ if __name__ == "__main__":
     test_trust_master_switch_reason_in_sync_with_decide()
     test_trust_surfacing_negative_still_gets_draft()
     test_trust_true_negative_keeps_no_draft_short_circuit()
+
+    test_trust_thread_route_rehydrates_and_persists()
+    test_trust_thread_route_test_rows_untouched()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
