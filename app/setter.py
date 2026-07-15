@@ -1525,12 +1525,21 @@ def _save_agent(doc: dict) -> dict:
     # that re-saves only the instructions, must NEVER re-stamp a pre-existing
     # campaign. A re-stamp silently disqualifies every reply received before the
     # re-save (run_poll only intakes replies newer than the stamp) - this is the
-    # leak that re-stamped all 30 of an agent's campaigns to one timestamp. Only
-    # genuinely-new campaigns get `now`.
+    # leak that re-stamped all 30 of an agent's campaigns to one timestamp.
+    # Existing campaign ids keep this original-stamp-wins protection exactly
+    # as before. Genuinely-NEW campaign ids (never seen in stamps before) get
+    # backdated 7 days instead of stamped `now` (owner ruling 2026-07-15): a
+    # freshly-attached campaign deliberately opens a 7-day backlog window so
+    # recent positive replies already sitting in `replies` get self-healed
+    # into the queue as drafts (see _self_heal_campaigns), rather than the
+    # attach silently starting the clock from a blank slate.
     prior_stamps = dict((existing or {}).get("campaign_assigned_at") or {})
     stamps = {**(doc.get("campaign_assigned_at") or {}), **prior_stamps}
+    backdated = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat(timespec="seconds")
     for cid in (doc.get("campaign_ids") or []):
-        stamps.setdefault(str(cid), now)
+        key = str(cid)
+        if key not in stamps:
+            stamps[key] = backdated
     doc["campaign_assigned_at"] = {k: v for k, v in stamps.items()
                                    if k in {str(c) for c in (doc.get("campaign_ids") or [])}}
     # v3 simplification (owner ruling 2026-07-14): agents have no resource
@@ -1932,6 +1941,152 @@ def _finalize_row(row: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         row["error"] = row.get("error") or f"db insert failed: {type(e).__name__}"
         return row
+
+
+def _self_heal_campaigns(agent: dict, cids: list) -> None:
+    """Backlog sweep for campaigns just newly attached to `agent` (called from
+    a daemon thread by route_agents_save - see the 7-day backdated stamp in
+    _save_agent). Owner ruling 2026-07-15: attaching a campaign shouldn't
+    silently start the clock from zero - recent positives already sitting
+    in Supabase should get swept into the queue as drafts. Never raises -
+    this runs detached from any request/response cycle, so an uncaught
+    exception here would just vanish silently instead of surfacing anywhere.
+    """
+    adopted = swept = errors = 0
+    try:
+        if not _SB or not cids:
+            return
+        # SEND-SAFETY GATE (non-negotiable): this function must NEVER be able
+        # to auto-send, even if the real agent doc is in autopilot mode - a
+        # backlog sweep running unattended in a background thread is exactly
+        # the kind of blast-radius a bug here should not have. Every
+        # downstream pipeline call below uses `snapshot`, never `agent`.
+        snapshot = {**agent, "mode": "draft_only"}
+        csv = ",".join(str(c) for c in cids)
+
+        # Step 1: adopt stranded rows - agentless queue rows already sitting
+        # in needs_review for these campaigns (queued before any agent was
+        # assigned) get classified/drafted now that there is a brain for
+        # them. Status stays needs_review either way - this only fills in
+        # the draft, it never auto-decides or auto-sends.
+        try:
+            stranded = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({csv})"
+                                  f"&agent_id=is.null&status=eq.needs_review&select=*")
+        except Exception:  # noqa: BLE001
+            stranded = None
+        if isinstance(stranded, list):
+            for row in stranded:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    body_text = clean_body(row.get("reply_body") or "")
+                    last_outbound = ""
+                    for m in reversed(row.get("thread") or []):
+                        if str(m.get("type") or "").upper() == "SENT":
+                            last_outbound = _TAG_RE.sub(" ", str(m.get("body") or ""))[:800]
+                            break
+                    first_outbound = row.get("first_outbound") or ""
+                    if not first_outbound:
+                        for m in (row.get("thread") or []):
+                            if str(m.get("type") or "").upper() == "SENT":
+                                first_outbound = clean_body(str(m.get("body") or ""))[:1500]
+                                break
+                    domain = (row.get("company_domain") or "").lower()
+                    comp_hints = _company_hints(domain)
+                    company_location = ", ".join([v for v in (comp_hints.get("country"), comp_hints.get("state"),
+                                                              comp_hints.get("city")) if v])
+                    mem_hints = _prefix_latest_rules(_latest_owner_rules(snapshot), _agent_memory_digest(snapshot))
+                    classification = classify({"subject": row.get("reply_subject"), "body": body_text,
+                                               "last_outbound": last_outbound, "first_outbound": first_outbound,
+                                               "email_domain": domain, "company_location": company_location},
+                                              snapshot, owner_hints=mem_hints)
+                    now = _dt.datetime.now(_dt.timezone.utc)
+                    tz = row.get("timezone")
+                    slots, slot_status = [], "not_configured"
+                    if tz:
+                        eff_settings = dict(_load_settings())
+                        eff_settings["_agent"] = snapshot
+                        eff_settings["_lead"] = {"first_name": row.get("lead_first_name"),
+                                                 "last_name": row.get("lead_last_name"),
+                                                 "email": row.get("lead_email")}
+                        slot_status, avail, _serr = get_calendly_availability(snapshot, eff_settings, now)
+                        if slot_status == "ok":
+                            slots = pick_slots(avail, tz, eff_settings, now)
+                            if not slots:
+                                slot_status = "none_available"
+                    thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
+                    d = draft_reply(
+                        {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
+                         "body": row.get("reply_body"), "first_outbound": first_outbound,
+                         "thread_text": thread_text},
+                        snapshot, classification, slots, slot_status,
+                        sender_first=_sender_first_for(snapshot))
+                    draft_html = d.get("html")
+                    if draft_html:
+                        draft_html, _changed = proofread_draft(draft_html)
+                    patch = {"agent_id": agent.get("id"), "classification": classification,
+                             "draft_subject": d.get("subject"), "draft_body": draft_html, "slots": slots}
+                    if tz:
+                        patch["timezone"] = tz
+                    _apply_patch(row, patch)
+                    adopted += 1
+                except Exception as e:  # noqa: BLE001 - one bad stranded row must never stop the rest
+                    errors += 1
+                    print(f"[setter] self-heal: adopt failed for row {row.get('id')}: {e}", file=sys.stderr)
+
+        # Step 2: sweep the 7-day backlog window this attach just opened (see
+        # the backdated campaign_assigned_at stamp in _save_agent). Mirrors
+        # run_poll's replies query/field-list exactly, scoped to just these
+        # campaign ids instead of the whole workspace, capped at 30 so a
+        # heavily-backlogged campaign can't run away in a background thread.
+        since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat()
+        try:
+            replies = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({csv})"
+                                 f"&replied_at=gte.{quote(since, safe='')}&order=replied_at.asc&limit=200"
+                                 f"&select=id,smartlead_campaign_id,email,replied_at,category,"
+                                 f"reply_subject,reply_body,smartlead_message_id")
+        except Exception:  # noqa: BLE001
+            replies = None
+        if isinstance(replies, list):
+            settings = _load_settings()
+            for r in replies:
+                if swept >= 30:
+                    break
+                if not isinstance(r, dict):
+                    continue
+                if r.get("category") not in CORE_FOUR:
+                    continue
+                cid = r.get("smartlead_campaign_id")
+                email = (r.get("email") or "").strip().lower()
+                mid = str(r.get("smartlead_message_id") or r.get("message_id") or r.get("id") or "")
+                if not cid or not email or not mid:
+                    continue
+                # Rows adopted in step 1 (and anything else already queued)
+                # correctly match here and get skipped - that is intentional,
+                # not a bug: it means no reply is processed twice.
+                if _existing_row(WORKSPACE, cid, email, mid):
+                    continue
+                reply = {
+                    "workspace": WORKSPACE, "campaign_id": cid, "email": email,
+                    "first_name": r.get("first_name"), "last_name": r.get("last_name"),
+                    "company_domain": r.get("company_domain"),
+                    "subject": r.get("reply_subject") or r.get("subject"),
+                    "body": r.get("reply_body") or r.get("body") or "",
+                    "replied_at": r.get("replied_at"), "message_id": mid,
+                    "category": r.get("category"), "is_test": False,
+                }
+                try:
+                    process_reply(reply, snapshot, settings)
+                    swept += 1
+                except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
+                    errors += 1
+                    print(f"[setter] self-heal: sweep error for {email}/{cid}: {e}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - this whole function must never raise, it runs unattended
+        errors += 1
+        print(f"[setter] self-heal: crashed for campaigns {cids}: {e}", file=sys.stderr)
+    finally:
+        print(f"[setter] self-heal: campaigns={cids} adopted={adopted} swept={swept} errors={errors}",
+             file=sys.stderr)
 
 
 def _intake_agentless(reply: dict) -> dict:
@@ -2624,9 +2779,23 @@ def route_agents_save(payload):
         doc = payload.get("doc") if isinstance(payload.get("doc"), dict) else payload
         if not isinstance(doc, dict) or not str(doc.get("name") or "").strip():
             return 400, {"error": "Give this agent a name."}
+        # Snapshot which campaign ids this agent already had BEFORE the save,
+        # so we can tell genuinely-new attachments apart from ones that were
+        # already there (self-heal below must only fire for the former). A
+        # brand-new agent (no id yet) has no prior campaigns.
+        prev_cids = {str(c) for c in ((_load_agent(doc.get("id")) or {}).get("campaign_ids") or [])} \
+            if doc.get("id") else set()
         saved = _save_agent(doc)
         webhooks = ensure_webhooks(saved)
-        return 200, {"doc": saved, "webhooks": webhooks}
+        # Self-heal (owner ruling 2026-07-15): every campaign id newly
+        # attached in this save gets its 7-day backlog swept in the
+        # background (see _self_heal_campaigns) so recent positive replies
+        # on it land as drafts instead of being silently missed. Runs in a
+        # daemon thread so the save response returns immediately.
+        new_cids = [c for c in map(str, saved.get("campaign_ids") or []) if c not in prev_cids]
+        if new_cids:
+            threading.Thread(target=_self_heal_campaigns, args=(saved, new_cids), daemon=True).start()
+        return 200, {"doc": saved, "webhooks": webhooks, "self_heal_started": len(new_cids)}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -2855,12 +3024,53 @@ def route_campaigns_get(_params):
         rows = _SB("GET", f"campaigns?workspace=eq.{WORKSPACE}&select=smartlead_campaign_id,name,status"
                           f"&status=in.(ACTIVE,PAUSED,STOPPED)&order=created_at_smartlead.desc")
         out = []
+        seen = set()
         if isinstance(rows, list):
             for r in rows:
                 name = (r.get("name") or "").strip()
                 if not name or _SUBSEQUENCE_NAME.match(name):
                     continue
-                out.append({"id": r.get("smartlead_campaign_id"), "name": name, "status": r.get("status")})
+                cid = r.get("smartlead_campaign_id")
+                out.append({"id": cid, "name": name, "status": r.get("status")})
+                seen.add(str(cid))
+        # Union in queue-only campaigns (owner fix 2026-07-15, campaign
+        # 3477411): a campaign can have a queued reply in setter_queue while
+        # being invisible above, either because its `campaigns` mirror row
+        # never landed/is stale, or because its name trips _SUBSEQUENCE_NAME
+        # (3477411 is literally named "Meeting Request", the exact pattern
+        # the mirror query excludes to hide Smartlead's ~300 auto-generated
+        # subsequence campaigns). A queued reply is proof-of-life that this
+        # is a real reply-bearing campaign the picker must show, so queue-
+        # derived ids deliberately BYPASS both the regex exclusion and the
+        # empty-name exclusion above. Mirror-only rows are untouched - this
+        # only ADDS rows the original query would have dropped or missed.
+        # Best-effort: any failure here degrades to the plain mirror-only
+        # list rather than 500ing the whole endpoint.
+        try:
+            qrows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&select=smartlead_campaign_id&limit=2000")
+            qids = set()
+            if isinstance(qrows, list):
+                for qr in qrows:
+                    cid = (qr or {}).get("smartlead_campaign_id")
+                    if cid is not None:
+                        qids.add(str(cid))
+            missing = sorted(qids - seen)
+            if missing:
+                csv = ",".join(missing)
+                lookup = _SB("GET", f"campaigns?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({csv})"
+                                    f"&select=smartlead_campaign_id,name,status")
+                by_id = {}
+                if isinstance(lookup, list):
+                    for lr in lookup:
+                        by_id[str((lr or {}).get("smartlead_campaign_id"))] = lr
+                for cid in missing:
+                    lr = by_id.get(cid)
+                    name = ((lr or {}).get("name") or "").strip() or f"Campaign {cid}"
+                    status = (lr or {}).get("status") if lr else None
+                    out.append({"id": cid, "name": name, "status": status})
+                    seen.add(cid)
+        except Exception:  # noqa: BLE001 - union is additive; a failure here must not break the endpoint
+            pass
         return 200, out
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
