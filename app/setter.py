@@ -1122,7 +1122,17 @@ def _sl_post(path: str, body: dict, params: dict = None):
         return None
     qs = dict(params or {})
     qs["api_key"] = key
-    return _HTTP("POST", f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}", {}, body)
+    try:
+        return _HTTP("POST", f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}", {}, body)
+    except ValueError:
+        # Smartlead sometimes answers a successful POST (e.g. reply-email-thread)
+        # with a non-JSON 2xx body such as a bare "OK". http_json's json.loads then
+        # raises JSONDecodeError (a ValueError) even though the HTTP call SUCCEEDED,
+        # which used to land the reply as needs_review + "Expecting value: line 1
+        # column 1 (char 0)" while the email had actually gone out - risking a
+        # double-send on the next click. A 2xx IS success, so treat it as an
+        # accepted, empty-JSON response. (4xx/5xx still raise HTTPError, unchanged.)
+        return {}
 
 
 def _sl_campaign_lead_map_id(campaign_id, lead_email: str, smartlead_lead_id=None, max_pages: int = 20):

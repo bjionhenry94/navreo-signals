@@ -1526,9 +1526,14 @@ async function doSend(btn) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
   restore();
-  if (!res.ok) {
-    showError("Couldn't send the reply: " + res.error);
-    showDetailError("Couldn't send the reply: " + res.error);
+  // The server always answers 200 here; a send that failed is reported as
+  // {ok:false} in the BODY, not by HTTP status. Honour res.data.ok so a failed
+  // send surfaces the real error instead of a false "Reply sent" toast.
+  const sendFailed = !res.ok || (res.data && res.data.ok === false);
+  if (sendFailed) {
+    const msg = (res.data && res.data.row && res.data.row.error) || res.error || "the send did not go through";
+    showError("Couldn't send the reply: " + msg);
+    showDetailError("Couldn't send the reply: " + msg);
     return;
   }
   clearError();
