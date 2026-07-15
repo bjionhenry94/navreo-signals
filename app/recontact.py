@@ -37,8 +37,10 @@ let lastBucketsJobId = null;
 /* Long computes run as server-side background jobs and get polled here -
    a plain long POST is killed by the proxy timeout and by every redeploy
    (both observed live 2026-07-15). Resolves with the finished job object,
-   or {error} after a failure / lost job. */
-async function pollJob(jobId) {
+   or {error} after a failure / lost job. While the job runs, the server
+   streams {done, total, stage} into counts - onProgress(counts) fires on
+   every such poll so the page can show live coverage. */
+async function pollJob(jobId, onProgress) {
   for (;;) {
     await new Promise(function (res) { setTimeout(res, 2500); });
     const r = await callApi('/api/recontact/job?id=' + encodeURIComponent(jobId));
@@ -48,7 +50,18 @@ async function pollJob(jobId) {
     if (r.body.status === 'failed') return { error: r.body.error || 'The job failed.' };
     if (r.body.status === 'interrupted') return { error:
       'An app update interrupted this run - click the button again to re-run it.' };
+    if (onProgress && r.body.counts && r.body.counts.stage) onProgress(r.body.counts);
   }
+}
+
+/* "Reviewing contacts - 34,000 of 51,837" - replaces the blind elapsed ticker
+   the moment the server reports real coverage numbers. */
+function progressInto(el) {
+  return function (c) {
+    stopTicker();
+    el.textContent = (c.stage || 'Working') + ' - ' +
+      (c.done || 0).toLocaleString() + ' of ' + (c.total || 0).toLocaleString();
+  };
 }
 
 function escHtml(s) {
@@ -144,7 +157,7 @@ document.getElementById('buckets-btn').onclick = async () => {
       'Could not start the compute.';
     return;
   }
-  const job = await pollJob(start.body.job_id);
+  const job = await pollJob(start.body.job_id, progressInto(status));
   stopTicker();
   if (job.error) { status.textContent = job.error; return; }
   lastBucketsJobId = start.body.job_id;
@@ -156,10 +169,13 @@ document.getElementById('buckets-btn').onclick = async () => {
     tile('Suppressed', b.suppressed) + tile('Already replied', b.replied) +
     tile('Total contacted', b.total_contact_rows != null ? b.total_contact_rows : b.total);
   if (b.capped) {
-    status.textContent = 'Big campaign set: verdicts cover the first ' +
+    // only appears when the read genuinely came up short (a transient break
+    // mid-fetch) - full coverage is the norm now the 20k cap is gone
+    status.textContent = 'Heads up: the review covered ' +
       (b.rows_scanned || 0).toLocaleString() + ' of ' +
-      (b.total_contact_rows || 0).toLocaleString() + ' contact records. The draft will ' +
-      'only include people from the reviewed part.';
+      (b.total_contact_rows || 0).toLocaleString() + ' contact records (a read was ' +
+      'interrupted). The draft will only include people from the reviewed part - ' +
+      'recompute to cover everyone.';
   }
   const elsewhere = (b.active_elsewhere || []).map(function (x) {
     return x.campaign + ': ' + x.count;
@@ -189,7 +205,7 @@ document.getElementById('create-btn').onclick = async () => {
     status.textContent = (start.body && start.body.message) || 'Could not start the draft.';
     return;
   }
-  const job = await pollJob(start.body.job_id);
+  const job = await pollJob(start.body.job_id, progressInto(status));
   stopTicker();
   if (job.error) { status.textContent = job.error; return; }
   const c = job.counts;
