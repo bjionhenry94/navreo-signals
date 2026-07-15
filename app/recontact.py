@@ -66,7 +66,7 @@ function startTicker(el, verb) {
   _tick = setInterval(function () {
     const s = Math.round((Date.now() - t0) / 1000);
     el.textContent = verb + '... ' + s + 's' +
-      (s >= 8 ? ' (big campaign sets can take a couple of minutes - still working)' : '');
+      (s >= 8 ? ' (still working - big campaign sets take longer)' : '');
   }, 1000);
 }
 function stopTicker() { if (_tick) { clearInterval(_tick); _tick = null; } }
@@ -87,8 +87,9 @@ document.getElementById('scan-btn').onclick = async () => {
   const cid = document.getElementById('camp-id').value.trim();
   const status = document.getElementById('scan-status');
   if (!cid) { status.textContent = 'Type a campaign name (or part of one) first.'; return; }
-  status.textContent = 'Scanning...';
+  startTicker(status, 'Scanning');
   const r = await callApi('/api/recontact/scan?campaign_id=' + encodeURIComponent(cid));
+  stopTicker();
   if (!r.ok || !r.body || r.body.error || !r.body.target) {
     status.textContent = (r.body && r.body.error) || 'Scan failed.';
     document.getElementById('scan-results').innerHTML = '';

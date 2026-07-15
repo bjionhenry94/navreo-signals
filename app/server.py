@@ -731,9 +731,11 @@ def sb(method: str, path: str, body=None, prefer: str = "", headers: dict | None
     return None
 
 
-def sb_count(path: str):
+def sb_count(path: str, mode: str = "exact"):
     """Row count for `path` via PostgREST's count header — transfers ~100B
-    instead of the rows. Returns int or None on any failure."""
+    instead of the rows. Returns int or None on any failure. mode="estimated"
+    answers from the planner beyond max-rows (~4s -> ~0.3s on contact_history
+    at 1.1M rows) — use it for display columns, never for safety maths."""
     url = KEYS.get("SUPABASE_URL")
     key = KEYS.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
@@ -741,7 +743,7 @@ def sb_count(path: str):
     req = urllib.request.Request(f"{url}/rest/v1/{path}", method="GET")
     req.add_header("apikey", key)
     req.add_header("Authorization", f"Bearer {key}")
-    req.add_header("Prefer", "count=exact")
+    req.add_header("Prefer", f"count={mode if mode in ('exact', 'planned', 'estimated') else 'exact'}")
     req.add_header("Range", "0-0")
     try:
         with urllib.request.urlopen(req, timeout=_SB_TIMEOUT_S, context=SSL_CTX) as resp:
@@ -6975,23 +6977,27 @@ def _batched_in_matches(table: str, col: str, values, select: str | None = None,
     return out
 
 
-_RECONTACT_CAP = 20000  # bounded read per campaign - keeps scan/buckets well under 10s
+_RECONTACT_CAP = 20000  # scan-path sample bound only - buckets reads the FULL population
 
 
-def _sb_paged(query: str, cap: int = _RECONTACT_CAP) -> list:
-    """Fetch up to `cap` rows in 1000-row pages. A single Range header does NOT
-    work: Supabase's max-rows setting silently clips every request to 1000, so
-    the old one-shot fetch computed verdicts on a 2% sample of big campaigns
-    (found in the 2026-07-15 test loop: 50,245 contacts -> 1,000 rows)."""
+def _sb_paged(query: str, cap: int | None = _RECONTACT_CAP, on_page=None) -> list:
+    """Fetch rows in 1000-row pages - up to `cap`, or the WHOLE result set when
+    cap is None. A single Range header does NOT work: Supabase's max-rows
+    setting silently clips every request to 1000, so the old one-shot fetch
+    computed verdicts on a 2% sample of big campaigns (found in the 2026-07-15
+    test loop: 50,245 contacts -> 1,000 rows). on_page(rows_so_far) fires after
+    every page so minutes-long reads can stream progress into a job."""
     out: list = []
     page = 1000
-    while len(out) < cap:
+    while cap is None or len(out) < cap:
         lo = len(out)
-        hi = min(lo + page, cap) - 1
+        hi = (lo + page - 1) if cap is None else (min(lo + page, cap) - 1)
         rows = sb("GET", query, headers={"Range-Unit": "items", "Range": f"{lo}-{hi}"})
         if not isinstance(rows, list) or not rows:
             break
         out.extend(rows)
+        if on_page:
+            on_page(len(out))
         if len(rows) < (hi - lo + 1):
             break
     return out
@@ -7082,16 +7088,25 @@ def api_recontact_scan(campaign_id: str) -> dict:
     # Candidates are independent, so all three calls per candidate run in
     # parallel across candidates too - together this is what keeps a
     # 15-candidate scan under the 10s budget (was ~23s fully serial).
-    target_emails = _contact_history_emails(sid)
+    # Overlap is a RELEVANCE hint, not the safety maths (buckets does the full
+    # 20k read) - so sample 3k rows per campaign. The paginated reader at full
+    # cap made this 11-campaign fan-out pull 200k+ rows: the owner's "Clay"
+    # scan sat 30s on a silent label (live, 2026-07-15).
+    _SCAN_OVERLAP_CAP = 3000
+    target_emails = _contact_history_emails(sid, cap=_SCAN_OVERLAP_CAP)
 
     def _count_retry(path: str) -> int:
         # sb_count has no built-in retry (unlike sb()); under this function's
         # concurrent fan-out a transient hiccup must not silently read as a
         # real zero, so retry once before accepting "unknown -> 0".
-        n = sb_count(path)
+        # "estimated": these are the picker table's Finished/In-progress
+        # DISPLAY columns - exact counts cost ~4s each on contact_history
+        # (20 of them made the owner's "Clay" scan sit ~30s on a silent
+        # label, live 2026-07-15). Buckets' safety maths stays count=exact.
+        n = sb_count(path, mode="estimated")
         if n is None:
             time.sleep(0.4)
-            n = sb_count(path)
+            n = sb_count(path, mode="estimated")
         return n or 0
 
     def _candidate_stats(item):
@@ -7099,7 +7114,7 @@ def api_recontact_scan(campaign_id: str) -> dict:
         finished = _count_retry(f"contact_history?smartlead_campaign_id=eq.{csid}&status=eq.COMPLETED")
         in_progress = _count_retry(
             f"contact_history?smartlead_campaign_id=eq.{csid}&status=in.(INPROGRESS,STARTED,PAUSED)")
-        cand_emails = _contact_history_emails(csid) if target_emails else set()
+        cand_emails = _contact_history_emails(csid, cap=_SCAN_OVERLAP_CAP) if target_emails else set()
         overlap = len(target_emails & cand_emails)
         return {"campaign_id": csid, "name": c.get("name"), "status": c.get("status"),
                "finished": finished, "in_progress": in_progress, "overlap_count": overlap,
@@ -7111,14 +7126,32 @@ def api_recontact_scan(campaign_id: str) -> dict:
     return {"target": tinfo, "siblings": out}
 
 
-def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> tuple[list, int]:
+def _recontact_verdicts(campaign_ids: list, include_repliers: bool,
+                        progress=None) -> tuple[list, int, int]:
     """Every person contacted in ANY of `campaign_ids`, each with one verdict:
     suppressed > active_elsewhere > in_progress > replied > eligible - checked
-    in that order so every person lands in exactly one bucket. Returns
-    (verdicts, contact_rows_fetched) - the row count powers cap disclosure."""
+    in that order so every person lands in exactly one bucket. Reads the FULL
+    population: the old 20k cap left ~61% of a 51,837-contact set silently
+    unadjudicated (unanimous 5-tester top issue, 2026-07-15). Adjudication runs
+    in bounded passes so the join fan-out and intermediate row sets stay small
+    no matter how big the set grows, and progress(done, total, stage) streams
+    into the job's counts so the page can show "Reviewing contacts - 34,000 of
+    51,837". Returns (verdicts, contact_rows_fetched, true_total_rows)."""
     ids_csv = ",".join(campaign_ids)
-    rows = _sb_paged(f"contact_history?smartlead_campaign_id=in.({ids_csv})"
-                     "&select=email,company_domain,smartlead_campaign_id,status")
+    base = f"contact_history?smartlead_campaign_id=in.({ids_csv})"
+
+    def _note(done, total, stage):
+        if progress and total:
+            progress(done, total, stage)
+
+    # exact row count up front - it anchors both fetch progress and the honest
+    # coverage disclosure. sb_count has no built-in retry, so try twice.
+    true_total = sb_count(base)
+    if true_total is None:
+        time.sleep(0.4)
+        true_total = sb_count(base)
+    rows = _sb_paged(base + "&select=email,company_domain,smartlead_campaign_id,status", cap=None,
+                     on_page=lambda n: _note(n, max(true_total or 0, n), "Loading contact records"))
     by_email: dict = {}
     for r in rows:
         em = (r.get("email") or "").strip().lower()
@@ -7126,62 +7159,67 @@ def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> tuple[lis
             by_email.setdefault(em, []).append(r)
     emails = list(by_email.keys())
     if not emails:
-        return [], len(rows)
+        return [], len(rows), (true_total or len(rows))
 
-    suppressed_emails = {(r.get("email") or "").strip().lower()
-                         for r in _batched_in_matches("suppressions", "email", emails, "email")}
-    domains = {(r.get("company_domain") or "").strip().lower() for recs in by_email.values()
-              for r in recs if r.get("company_domain")}
-    suppressed_domains = {(r.get("domain") or "").strip().lower()
-                          for r in _batched_in_matches("suppressions", "domain", domains, "domain")}
-
-    replied_emails = set()
-    if not include_repliers:
-        rrows = _batched_in_matches("replies", "email", emails, "email")
-        replied_emails = {(r.get("email") or "").strip().lower() for r in rrows}
-
-    chunks = [",".join(emails[i:i + 180]) for i in range(0, len(emails), 180)]
-    def _fetch_other(chunk):
-        r = sb("GET", f"contact_history?email=in.({chunk})&smartlead_campaign_id=not.in.({ids_csv})"
-                      "&status=in.(INPROGRESS,STARTED,PAUSED)&select=email,smartlead_campaign_id")
-        return r if isinstance(r, list) else []
     from concurrent.futures import ThreadPoolExecutor
-    other_rows = []
-    if chunks:
-        with ThreadPoolExecutor(max_workers=min(6, len(chunks))) as ex:
-            for r in ex.map(_fetch_other, chunks):
-                other_rows.extend(r)
-    active_elsewhere: dict = {}
-    for r in other_rows:
-        em = (r.get("email") or "").strip().lower()
-        if em and em not in active_elsewhere:
-            active_elsewhere[em] = str(r.get("smartlead_campaign_id"))
-    other_ids = sorted({v for v in active_elsewhere.values() if v})
-    other_names = {}
-    if other_ids:
-        crows = sb("GET", f"campaigns?smartlead_campaign_id=in.({','.join(other_ids)})"
-                          "&select=smartlead_campaign_id,name")
-        if isinstance(crows, list):
-            other_names = {str(r.get("smartlead_campaign_id")): r.get("name") for r in crows}
-
     out = []
-    for em in emails:
-        recs = by_email[em]
-        domain = next((r.get("company_domain") for r in recs if r.get("company_domain")), "") or ""
-        domain = domain.strip().lower()
-        if em in suppressed_emails or (domain and domain in suppressed_domains):
-            verdict, other = "suppressed", None
-        elif em in active_elsewhere:
-            other_id = active_elsewhere[em]
-            verdict, other = "active_elsewhere", other_names.get(other_id) or other_id
-        elif any((r.get("status") or "") in _IN_PROGRESS_STATUSES for r in recs):
-            verdict, other = "in_progress", None
-        elif not include_repliers and em in replied_emails:
-            verdict, other = "replied", None
-        else:
-            verdict, other = "eligible", None
-        out.append({"email": em, "verdict": verdict, "other_campaign": other})
-    return out, len(rows)
+    _PASS = 5000
+    _note(0, len(emails), "Reviewing contacts")
+    for start in range(0, len(emails), _PASS):
+        batch = emails[start:start + _PASS]
+        suppressed_emails = {(r.get("email") or "").strip().lower()
+                             for r in _batched_in_matches("suppressions", "email", batch, "email")}
+        domains = {(r.get("company_domain") or "").strip().lower() for em in batch
+                  for r in by_email[em] if r.get("company_domain")}
+        suppressed_domains = {(r.get("domain") or "").strip().lower()
+                              for r in _batched_in_matches("suppressions", "domain", domains, "domain")}
+
+        replied_emails = set()
+        if not include_repliers:
+            rrows = _batched_in_matches("replies", "email", batch, "email")
+            replied_emails = {(r.get("email") or "").strip().lower() for r in rrows}
+
+        chunks = [",".join(batch[i:i + 180]) for i in range(0, len(batch), 180)]
+        def _fetch_other(chunk):
+            r = sb("GET", f"contact_history?email=in.({chunk})&smartlead_campaign_id=not.in.({ids_csv})"
+                          "&status=in.(INPROGRESS,STARTED,PAUSED)&select=email,smartlead_campaign_id")
+            return r if isinstance(r, list) else []
+        other_rows = []
+        if chunks:
+            with ThreadPoolExecutor(max_workers=min(6, len(chunks))) as ex:
+                for r in ex.map(_fetch_other, chunks):
+                    other_rows.extend(r)
+        active_elsewhere: dict = {}
+        for r in other_rows:
+            em = (r.get("email") or "").strip().lower()
+            if em and em not in active_elsewhere:
+                active_elsewhere[em] = str(r.get("smartlead_campaign_id"))
+        other_ids = sorted({v for v in active_elsewhere.values() if v})
+        other_names = {}
+        if other_ids:
+            crows = sb("GET", f"campaigns?smartlead_campaign_id=in.({','.join(other_ids)})"
+                              "&select=smartlead_campaign_id,name")
+            if isinstance(crows, list):
+                other_names = {str(r.get("smartlead_campaign_id")): r.get("name") for r in crows}
+
+        for em in batch:
+            recs = by_email[em]
+            domain = next((r.get("company_domain") for r in recs if r.get("company_domain")), "") or ""
+            domain = domain.strip().lower()
+            if em in suppressed_emails or (domain and domain in suppressed_domains):
+                verdict, other = "suppressed", None
+            elif em in active_elsewhere:
+                other_id = active_elsewhere[em]
+                verdict, other = "active_elsewhere", other_names.get(other_id) or other_id
+            elif any((r.get("status") or "") in _IN_PROGRESS_STATUSES for r in recs):
+                verdict, other = "in_progress", None
+            elif not include_repliers and em in replied_emails:
+                verdict, other = "replied", None
+            else:
+                verdict, other = "eligible", None
+            out.append({"email": em, "verdict": verdict, "other_campaign": other})
+        _note(len(out), len(emails), "Reviewing contacts")
+    return out, len(rows), (true_total or len(rows))
 
 
 def _recontact_resolve_ids(p: dict) -> tuple[list, str | None]:
@@ -7193,12 +7231,13 @@ def _recontact_resolve_ids(p: dict) -> tuple[list, str | None]:
     return ids, None
 
 
-def _recontact_buckets_summary(ids: list, include_repliers: bool) -> tuple[dict, list]:
+def _recontact_buckets_summary(ids: list, include_repliers: bool,
+                               progress=None) -> tuple[dict, list]:
     """The full bucket computation. Runs MINUTES on big sets, so it only ever
     executes inside a background job thread - a synchronous handler here gets
     killed by Render's edge timeout and by every redeploy (both observed live
     2026-07-15: the owner's first-ever click died exactly this way)."""
-    verdicts, rows_fetched = _recontact_verdicts(ids, include_repliers)
+    verdicts, rows_fetched, true_total = _recontact_verdicts(ids, include_repliers, progress)
     counts = {"eligible": 0, "in_progress": 0, "suppressed": 0, "replied": 0}
     active_elsewhere_counts: dict = {}
     for v in verdicts:
@@ -7210,14 +7249,10 @@ def _recontact_buckets_summary(ids: list, include_repliers: bool) -> tuple[dict,
     active_elsewhere = [{"campaign": k, "count": n}
                         for k, n in sorted(active_elsewhere_counts.items(), key=lambda x: -x[1])]
     total = len(verdicts)
-    # honest-cap disclosure: when the campaigns hold more contact rows than the
-    # bounded read, say so - a silent 20k sample must never read as "everyone".
-    # sb_count has no built-in retry; a transient None here would silently
-    # erase the "reviewed X of Y" note, so try twice before falling back.
-    true_total = sb_count(f"contact_history?smartlead_campaign_id=in.({','.join(ids)})")
-    if true_total is None:
-        time.sleep(0.4)
-        true_total = sb_count(f"contact_history?smartlead_campaign_id=in.({','.join(ids)})")
+    # honest-coverage disclosure: the cap is gone (verdicts read the whole
+    # population), so `capped` is now only true when the paged fetch came up
+    # short of the exact count (a transient mid-read break) - the note must
+    # still say so rather than let a partial read masquerade as "everyone".
     true_total = true_total or rows_fetched
     summary = {"eligible": counts["eligible"], "in_progress": counts["in_progress"],
                "active_elsewhere": active_elsewhere, "suppressed": counts["suppressed"],
@@ -7250,10 +7285,15 @@ def api_recontact_buckets_start(p: dict):
     include_repliers = bool(p.get("include_repliers"))
     run_id = str(p.get("run_id") or "")
     job = _new_job("recontact_buckets", f"Recontact buckets ({len(ids)} campaigns)", ids[0])
+    def _progress(done, total, stage):
+        # streamed into counts so the polling page shows live coverage
+        # ("Reviewing contacts - 34,000 of 51,837") instead of a blind ticker
+        with JOBS_LOCK:
+            job["counts"] = {"done": done, "total": total, "stage": stage}
     def _run():
         _job_started(job)
         try:
-            summary, verdicts = _recontact_buckets_summary(ids, include_repliers)
+            summary, verdicts = _recontact_buckets_summary(ids, include_repliers, _progress)
             _recontact_stash(job["id"], ids, include_repliers, verdicts)
             with JOBS_LOCK:
                 job["counts"] = summary
@@ -7289,11 +7329,15 @@ def api_recontact_create_start(p: dict):
         cached = None  # selection changed since the compute - never reuse stale verdicts
     run_id = str(p.get("run_id") or "")
     job = _new_job("recontact_create", f"Recontact draft: {name}"[:80], ids[0])
+    def _progress(done, total, stage):
+        # only fires on the recompute path (cache hit skips the whole compute)
+        with JOBS_LOCK:
+            job["counts"] = {"done": done, "total": total, "stage": stage}
     def _run():
         _job_started(job)
         try:
             verdicts = cached["verdicts"] if cached \
-                else _recontact_buckets_summary(ids, include_repliers)[1]
+                else _recontact_buckets_summary(ids, include_repliers, _progress)[1]
             result, code = _recontact_create_draft(ids, include_repliers, name, verdicts)
             if code == 200:
                 with JOBS_LOCK:
@@ -7336,8 +7380,11 @@ def _recontact_create_draft(ids: list, include_repliers: bool, name: str, verdic
         rows = [{"source_id": src_r["id"], "full_name": None, "title": None, "company": None,
                 "domain": None, "linkedin_url": f"recontact:{em}", "country": None,
                 "icebreaker": "", "email": em} for em in eligible]
-        sb("POST", "signal_leads?on_conflict=source_id,linkedin_url", rows,
-          prefer="resolution=merge-duplicates,return=minimal")
+        # chunked: with the adjudication cap lifted, eligible can be 30k+ rows -
+        # a single multi-MB POST risks the request-body limit dropping them all
+        for i in range(0, len(rows), 2000):
+            sb("POST", "signal_leads?on_conflict=source_id,linkedin_url", rows[i:i + 2000],
+              prefer="resolution=merge-duplicates,return=minimal")
     log_activity("/api/recontact/create", {"campaign_ids": ids, "eligible": len(eligible), "draft_id": new_id},
                 action="create", entity="recontact_draft", entity_id=new_id)
     return {"ok": True, "draft_id": new_id, "id": new_id, "eligible": len(eligible)}, 200
