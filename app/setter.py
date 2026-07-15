@@ -3360,12 +3360,31 @@ def _compute_kpis(force: bool = False) -> dict:
                         continue
             return round(sum(mins) / len(mins), 1) if mins else None
 
+        def _reclass():
+            # Read-time direction tally: how many needs_review rows really still
+            # await us (newest msg is the lead's) vs have been answered and
+            # belong under sent / auto_sent. Mirrors _queue_direction exactly.
+            rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.needs_review"
+                              f"&is_test=eq.false&select=thread,sent_at,decision,status")
+            stay = m_sent = m_auto = 0
+            if isinstance(rows, list):
+                for r in rows:
+                    inbound, pill = _queue_direction(r if isinstance(r, dict) else {})
+                    if inbound:
+                        stay += 1
+                    elif pill == "auto_sent":
+                        m_auto += 1
+                    else:
+                        m_sent += 1
+            return {"stay": stay, "sent": m_sent, "auto": m_auto}
+
         tasks = {
             "c_needs_review": lambda: _pill("status=eq.needs_review"),
             "c_sent": lambda: _pill("status=eq.sent"),
             "c_auto_sent": lambda: _pill("status=eq.auto_sent"),
             "c_dismissed": lambda: _pill("status=eq.dismissed"),
             "c_all": lambda: _pill("id=not.is.null"),
+            "reclass": _reclass,
             "needs_review": lambda: _count_rows("is_test=eq.false&status=eq.needs_review"),
             "auto_sent_today": lambda: _count_rows(f"is_test=eq.false&status=eq.auto_sent&created_at=gte.{today}"),
             "sent_today": lambda: _count_rows(f"is_test=eq.false&status=eq.sent&created_at=gte.{today}"),
@@ -3381,14 +3400,25 @@ def _compute_kpis(force: bool = False) -> dict:
                     results[k] = fut.result()
                 except Exception:  # noqa: BLE001 - one bad query must not sink the block
                     results[k] = None
+        # Fold the read-time direction tally into needs_review / sent /
+        # auto_sent so the pills match who actually spoke last. dismissed / all
+        # are direction-independent. If the reclass read failed, fall back to
+        # the raw status counts (never crash the KPI block).
+        rc = results.get("reclass") or {}
+        _stay = rc.get("stay")
+        _m_sent = rc.get("sent") or 0
+        _m_auto = rc.get("auto") or 0
+        _c_nr = results.get("c_needs_review") or 0
+        _c_sent = results.get("c_sent") or 0
+        _c_auto = results.get("c_auto_sent") or 0
         kpis["counts"] = {
-            "needs_review": results.get("c_needs_review") or 0,
-            "sent": results.get("c_sent") or 0,
-            "auto_sent": results.get("c_auto_sent") or 0,
+            "needs_review": _stay if _stay is not None else _c_nr,
+            "sent": _c_sent + _m_sent,
+            "auto_sent": _c_auto + _m_auto,
             "dismissed": results.get("c_dismissed") or 0,
             "all": results.get("c_all") or 0,
         }
-        kpis["needs_review"] = results.get("needs_review") or 0
+        kpis["needs_review"] = _stay if _stay is not None else (results.get("needs_review") or 0)
         kpis["auto_sent_today"] = results.get("auto_sent_today") or 0
         kpis["sent_today"] = results.get("sent_today") or 0
         kpis["no_action_today"] = results.get("no_action_today") or 0
@@ -3436,6 +3466,64 @@ def _annotate_queue_row(row: dict) -> dict:
     return out
 
 
+def _queue_direction(row: dict):
+    """READ-TIME only, never written back. Answers "who spoke last in this
+    thread" from the stored `thread` jsonb so the queue pills reflect the real
+    conversation state, not just the static `status` column.
+
+    Returns (last_msg_inbound, effective_pill):
+      - last_msg_inbound: is the NEWEST thread message a REPLY from the lead?
+        (True = the ball is in our court -> belongs in Needs review.)
+      - effective_pill: for a row we've already answered (newest message is
+        ours), which pill it really belongs in -- "auto_sent" when the setter
+        agent sent it (sent_at stamped + decision=auto_send), else "sent"
+        (a human replied, typically direct in Smartlead). None when there's no
+        evidence to reclassify (empty / unparseable thread) -> keep stored bucket.
+    """
+    thread = row.get("thread")
+    if not isinstance(thread, list) or not thread:
+        return True, None
+    try:
+        # ISO8601 times sort lexicographically (same approach as thread
+        # hydration's norm.sort). Missing time -> "" sorts first, so it never
+        # wins "newest".
+        last = max((m for m in thread if isinstance(m, dict)),
+                   key=lambda m: m.get("time") or "", default=None)
+    except Exception:  # noqa: BLE001 - a malformed thread must not break the queue
+        return True, None
+    if not last or str(last.get("type") or "").upper() == "REPLY":
+        return True, None
+    # Newest message is ours: we replied last.
+    is_agent = bool(row.get("sent_at")) and row.get("decision") == "auto_send"
+    return False, ("auto_sent" if is_agent else "sent")
+
+
+def _reclassify_queue(rows: list, requested: str) -> list:
+    """Apply read-time direction to a needs_review / sent / auto_sent pill.
+    - needs_review: drop rows we've already answered (newest msg is ours).
+    - sent / auto_sent: add in the answered rows whose effective pill matches.
+    Ordering (created_at desc) is preserved on the merged set. Pure read path."""
+    if requested not in ("needs_review", "sent", "auto_sent"):
+        return rows
+    kept = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if r.get("status") == "needs_review":
+            inbound, pill = _queue_direction(r)
+            if requested == "needs_review":
+                if inbound:
+                    kept.append(r)
+            else:  # sent / auto_sent: only answered rows routed to this pill
+                if not inbound and pill == requested:
+                    kept.append(r)
+        else:
+            # already-stored rows for this pill (sent/auto_sent) pass through
+            if requested != "needs_review":
+                kept.append(r)
+    return kept
+
+
 def _last_poll_done_at():
     """Timestamp of the last COMPLETED reply-check (the setter_poll_done
     activity row) — what the UI shows as "last checked X ago". None when the
@@ -3458,11 +3546,27 @@ def route_queue_get(params):
         limit = max(1, min(limit, 500))
         rows = []
         if _SB:
-            filt = f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}&select=*"
-            if status:
-                filt += f"&status=eq.{status}"
-            fetched = _SB("GET", f"{QUEUE_TABLE}?{filt}")
-            rows = fetched if isinstance(fetched, list) else []
+            base = f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}&select=*"
+            # For the direction-aware pills (needs_review / sent / auto_sent) the
+            # membership depends on who spoke last, computed at read time from
+            # `thread` (see _queue_direction). The sent/auto_sent pills must also
+            # consider needs_review rows we've already answered, so pull both.
+            statuses = []
+            if status in ("sent", "auto_sent"):
+                statuses = [status, "needs_review"]
+            elif status:
+                statuses = [status]
+            if statuses:
+                for st in statuses:
+                    fetched = _SB("GET", f"{QUEUE_TABLE}?{base}&status=eq.{st}")
+                    if isinstance(fetched, list):
+                        rows.extend(fetched)
+            else:  # All
+                fetched = _SB("GET", f"{QUEUE_TABLE}?{base}")
+                rows = fetched if isinstance(fetched, list) else []
+            if status in ("needs_review", "sent", "auto_sent"):
+                rows = _reclassify_queue(rows, status)
+                rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
         rows = [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
         return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
