@@ -10612,12 +10612,23 @@ def _deliv_bundle_run_bg_inner():
             rested_doms = {(r.get("domain") or "").lower() for r in rested_rows if r.get("domain")}
             blob_resting = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {}).get("resting") or {}
             rested_doms |= {str(d).lower() for d in blob_resting}
-            truncated = bool((out["views"].get("rested") or {}).get("truncated"))
-            # A FAILED rested pull ("rested" absent from views) must never look
-            # like "no domains resting" — that path mass-deleted the ledger and
-            # reset every domain's rest clock on one flaky backend refresh.
+            # Warm-up ENTRY stamps too (owner ruling 2026-07-15): freshly-warming
+            # domains (inwarmup view — building reputation, never "rested") get a
+            # ledger row the first sweep we see them, so EVERY domain in the
+            # In-warm-up union carries due = first seen + 7d, one clock for the
+            # whole tab. ignore-duplicates keeps established rest clocks intact.
+            warming_rows = ((out["views"].get("inwarmup") or {}).get("rows")) or []
+            union_doms = rested_doms | {(r.get("domain") or "").lower()
+                                        for r in warming_rows if r.get("domain")}
+            # A FAILED pull of EITHER view must never look like "those domains
+            # left warm-up" — that path mass-deleted the ledger and reset every
+            # domain's rest clock on one flaky backend refresh. Same guard for
+            # truncation: a missing row must not reset a domain's clock.
+            trunc = any(bool((out["views"].get(v) or {}).get("truncated"))
+                        for v in ("rested", "inwarmup"))
             out["restDue"] = _deliv_resting_ledger_sync(
-                rested_doms, allow_delete=("rested" in out["views"]) and not truncated)
+                union_doms,
+                allow_delete=("rested" in out["views"]) and ("inwarmup" in out["views"]) and not trunc)
     except Exception as e:  # noqa: BLE001
         out["errors"]["restDue"] = str(e)[:200]
     # A partial refresh must not clobber keys the last complete bundle had:

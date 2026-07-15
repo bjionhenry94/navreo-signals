@@ -3287,7 +3287,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // state they encode is already conveyed by the friendlier restChip below.
     (b.tags || []).forEach((t) => { if (!/^dash-rest-\d+$/i.test(t)) chips.push(t); });
     const tagChips = chips.length ? chips.map((t) => `<span class="dlv-tag md">${esc(t)}</span>`).join("") : `<span class="dlv-tag md" style="opacity:.6">untagged</span>`;
-    const restChip = b.rested > 0 ? `<span class="dlv-tag inactive">${glossify("resting")} (${b.rested})</span>${blDueChip(b.restedDue)}` : (b.cleared ? `<span class="dlv-tag ok">✓ cleared</span>` : "");
+    // Resting blacklist rows always carry a due date too (owner ruling
+    // 2026-07-15): ledger first (authoritative), then the row's own value
+    // (covers the optimistic local pause), then the pending stamp's now+7d.
+    const restChip = b.rested > 0 ? `<span class="dlv-tag inactive">${glossify("resting")} (${b.rested})</span>${blDueChip(restDueFor(b.domain) || b.restedDue || Date.now() + 7 * 864e5)}` : (b.cleared ? `<span class="dlv-tag ok">✓ cleared</span>` : "");
     const reBtn = b.rested > 0 ? `<button class="btn sm" data-act="domain-reactivate-bl" data-domain="${esc(b.domain)}" title="Restore saved caps and resume sending">Reactivate</button>` : "";
     // Still-sending (not resting, not cleared) domains get their own per-domain
     // Pause — the bulk "⏸ Pause sending" button above stays, this is just a
@@ -3711,10 +3714,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         mid = `<td><div class="dlv-mb-dom">${batches.join(" · ")}</div></td><td><span class="dlv-tag inactive">warmup off</span>${maildoso ? ` <span class="dlv-mb-dom">external — by design</span>` : ""}</td>`;
         action = maildoso ? `<span class="dlv-mb-dom">no action</span>` : `<button class="btn sm" data-act="open-warmup-fix">Re-enable…</button>`;
       } else if (flow === "inwarmup") {
-        const due = domDue(dom, rows);
+        // Every in-warm-up domain ALWAYS shows a due-back date (owner ruling
+        // 2026-07-15): if its entry-stamp ledger row hasn't landed yet (first
+        // sweep pending), show the date the sweep WILL stamp — now + 7d.
+        const due = domDue(dom, rows) || Date.now() + 7 * 864e5;
         const restedN = rows.filter((r) => r.rested).length;
-        const dueTitle = due ? ` title="Rest first recorded ${new Date(due - 7 * 864e5).toISOString().slice(0, 10)}; due back = rest start + 7 days"` : "";
-        mid = `<td style="text-align:right">${rows.length}</td><td style="text-align:right"${dueTitle}>${due ? blDueChip(due) : `<span class="dlv-mb-dom">—</span>`}</td>
+        const dueTitle = ` title="Warm-up start first recorded ${new Date(due - 7 * 864e5).toISOString().slice(0, 10)}; due back = start + 7 days"`;
+        mid = `<td style="text-align:right">${rows.length}</td><td style="text-align:right"${dueTitle}>${blDueChip(due)}</td>
           <td>${restedN ? `<span class="dlv-tag inactive">rested (${restedN})</span>` : ""}${rows.length - restedN ? ` <span class="dlv-tag md">warming (${rows.length - restedN})</span>` : ""}</td>`;
         action = (resting[dom] || 0) > 0 || restedN > 0
           ? `<button class="btn sm primary" data-act="domain-reactivate" data-domain="${esc(dom)}">Restore</button>`
@@ -3736,9 +3742,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         } else if (flow === "inwarmup") {
           // Per-box due follows the DOMAIN's ledger date — the backend's
           // per-mailbox restedAt is re-stamped every sweep and can't be shown.
-          let dueCell = `<span class="dlv-mb-dom">—</span>`;
-          const rowDue = restDueFor(r.domain) || (bundleRestDue() ? null : (r.restedAt ? r.restedAt + 7 * 864e5 : null));
-          if (rowDue) { const left = rowDue - Date.now(); dueCell = left <= 0 ? `<span class="dlv-tag blocked">due now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`; }
+          // Never "—" (owner ruling 2026-07-15): ledger date, else the local
+          // fallback, else the date the pending entry-stamp will write (now+7d).
+          const rowDue = restDueFor(r.domain) || (bundleRestDue() ? null : (r.restedAt ? r.restedAt + 7 * 864e5 : null)) || Date.now() + 7 * 864e5;
+          const left = rowDue - Date.now();
+          const dueCell = left <= 0 ? `<span class="dlv-tag blocked">due now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`;
           smid = `<td style="text-align:right"><span class="dlv-mb-dom">${r.cap === 0 ? "0/day" : r.cap + "/day"}</span></td><td style="text-align:right">${dueCell}</td><td><span class="dlv-mb-dom">${r.rested ? "rested" : esc(r.warmup_status || "warming")}</span></td>`;
           sact = "";
         } else {
