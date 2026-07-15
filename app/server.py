@@ -10308,6 +10308,31 @@ def _heyreach_sync_bg():
 # (the manual 2026-07-08 test) and then never again. Same fix as the signal
 # autopull: schedule it through the mechanism that provably fires here.
 _MAILBOX_SYNC_LOCK = threading.Lock()
+# ── Backstop reply-sync (pg_cron → pg_net → POST /api/cron/reply-sync, ~3 min) ─
+# Pulls the Smartlead master inbox for replies since a stored watermark and
+# feeds each unseen one to the SAME Make categoriser the webhook uses, so
+# Supabase `replies` becomes the complete single source of truth (incl.
+# subsequence + webhook-lagged replies). Dedup is exact — see setter.run_reply_sync.
+_REPLY_SYNC_LOCK = threading.Lock()
+
+
+def _reply_sync_bg():
+    if not _REPLY_SYNC_LOCK.acquire(blocking=False):
+        return  # a prior pull is still running — skip this tick
+    try:
+        res = setter.run_reply_sync()
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+            "action": "reply_sync_done" if res.get("ok") else "reply_sync_failed",
+            "entity": "replies", "payload": res})
+    except Exception as e:  # noqa: BLE001 — record, never crash the thread
+        print(f"[reply-sync] FAILED: {e}", file=sys.stderr)
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+            "action": "reply_sync_failed", "entity": "replies",
+            "payload": {"error": str(e)[:300]}})
+    finally:
+        _REPLY_SYNC_LOCK.release()
 
 
 def _mailbox_sync_bg():
@@ -11573,7 +11598,7 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                     "/api/cron/fleet-stats",
+                     "/api/cron/fleet-stats", "/api/cron/reply-sync",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
                      "/api/setter/training/recheck", "/api/setter/agents/correction",
@@ -12959,6 +12984,7 @@ class Handler(SimpleHTTPRequestHandler):
     _CLEAR_CACHE_EXEMPT_POST = {
         "/api/auth/login", "/api/cron/pull-all", "/api/cron/heyreach-sync",
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
+        "/api/cron/reply-sync",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
     }
 
@@ -13019,7 +13045,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                   "/api/cron/fleet-stats", "/api/setter/poll"):
+                   "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/setter/poll"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
             # and the lock does not nest.
@@ -13055,6 +13081,16 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
                 log_activity(path, actor="cron", action="sync", entity="mailboxes")
                 threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/cron/reply-sync":
+                # Backstop: pull the master inbox and feed unseen replies to the
+                # categoriser hook. Runs longer than pg_net's timeout under a
+                # burst, so kick to a background thread and ack immediately. A
+                # cap-hit lands as reply_sync_failed with the gap (never silent).
+                if _REPLY_SYNC_LOCK.locked():
+                    return self._json({"ok": True, "started": False, "busy": True}, 200)
+                log_activity(path, actor="cron", action="reply_sync", entity="replies")
+                threading.Thread(target=_reply_sync_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/fleet-stats":
                 # Fleet day-by-day record sync. Synchronous (a couple of Smartlead

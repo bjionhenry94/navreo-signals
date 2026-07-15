@@ -2525,6 +2525,191 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
 
 # ── poll (cron + "check now") ────────────────────────────────────────────────
 
+# ── backstop reply-sync: master-inbox pull → categoriser hook ────────────────
+# The Smartlead EMAIL_REPLY webhook is the fast-path into the reply-categoriser
+# (Make scenario 9251436) but it is lossy: it never fires for subsequence-
+# campaign replies ("Interested Reply"/"Meeting Request" subsequences) and lags
+# under reply bursts. This cron pulls the master inbox every ~3 min and feeds
+# each UNSEEN reply to the SAME categoriser hook so `replies` becomes complete.
+# Dedup is EXACT: the categoriser archives on
+#   smartlead_message_id = "{sl_email_lead_id}-{reply_message.time}"
+# and both fields here come straight off the master-inbox row
+# (email_lead_id + last_reply_time, already ".000Z"), so a pull-fed reply and a
+# webhook-fed one collapse to ONE `replies` row (unique index replies_dedupe)
+# and the categoriser's "no existing category" gate stops a second Slack.
+# NEVER re-implements GPT categorisation; NEVER calls an MCP tool.
+CATEGORISER_HOOK = "https://hook.eu2.make.com/6mda3nqyrtm8u4x9ihilymra4z70aaug"
+REPLY_SYNC_CAP = 300           # replies processed per run; overflow => run FAILED with gap
+_REPLY_SYNC_FIRST_WINDOW_H = 2  # a fresh/empty watermark seeds at now-minus-2h
+
+
+def _reply_sync_watermark():
+    """Reads the single-row watermark; seeds now-minus-2h if the table is empty.
+    Returns (watermark_dt, seeded: bool)."""
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rows = _SB("GET", "reply_sync_state?id=eq.1&select=watermark") if _SB else None
+    if isinstance(rows, list) and rows and rows[0].get("watermark"):
+        wm = _parse_iso(rows[0]["watermark"])
+        if wm:
+            return wm, False
+    seed = now - _dt.timedelta(hours=_REPLY_SYNC_FIRST_WINDOW_H)
+    if _SB:
+        _SB("POST", "reply_sync_state", {"id": 1, "watermark": seed.isoformat()},
+            prefer="resolution=merge-duplicates")
+    return seed, True
+
+
+def _reply_sync_seen(mid: str) -> bool:
+    """True if this message_id was already POSTed to the categoriser (belt-and-
+    braces on top of the `replies` unique index — stops a re-POST while the
+    categoriser is still in-flight, before the row lands in `replies`)."""
+    if not _SB or not mid:
+        return False
+    rows = _SB("GET", f"reply_sync_seen?message_id=eq.{quote(mid, safe='')}&select=message_id&limit=1")
+    return isinstance(rows, list) and bool(rows)
+
+
+def _reply_in_archive(mid: str) -> bool:
+    """True if the categoriser has already archived this reply into `replies`
+    (e.g. the webhook fast-path beat the pull to it)."""
+    if not _SB or not mid:
+        return False
+    rows = _SB("GET", f"replies?workspace=eq.{WORKSPACE}"
+                      f"&smartlead_message_id=eq.{quote(mid, safe='')}&select=id&limit=1")
+    return isinstance(rows, list) and bool(rows)
+
+
+def _mark_reply_seen(mid: str) -> None:
+    if _SB and mid:
+        _SB("POST", "reply_sync_seen", {"message_id": mid},
+            prefer="resolution=merge-duplicates")
+
+
+def _fetch_master_inbox_window(since_iso: str, until_iso: str, hard_cap: int):
+    """Raw Smartlead master-inbox list for replies in [since, until].
+    POST /master-inbox/inbox-replies (MCP-free, built on _sl_post — the MCP
+    tool `fetch_master_inbox_replies` wraps this same endpoint but cannot be
+    called from server code). Paginates newest-first by 20 (the endpoint's
+    max), fetching one page PAST hard_cap so an overflow is DETECTED, never
+    silently truncated. Returns (rows_oldest_first, overflow: bool)."""
+    out, offset, page_size = [], 0, 20
+    overflow = False
+    ceiling = hard_cap + page_size
+    while True:
+        resp = _sl_post("/master-inbox/inbox-replies", {
+            "limit": page_size, "offset": offset, "sortBy": "REPLY_TIME_DESC",
+            "filters": {"emailStatus": "Replied",
+                        "replyTimeBetween": [since_iso, until_iso]},
+        })
+        data = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data, list) or not data:
+            break
+        out.extend(data)
+        if len(data) < page_size:
+            break
+        offset += page_size
+        if len(out) > ceiling:
+            overflow = True
+            break
+    # newest-first -> oldest-first: the watermark then only advances across
+    # replies actually handled (gap-free), and an overflow drops the NEWEST
+    # tail — which the webhook fast-path is most likely to have caught anyway.
+    out.sort(key=lambda r: str(r.get("last_reply_time") or ""))
+    return out, overflow
+
+
+def run_reply_sync() -> dict:
+    """Backstop pull: master inbox -> categoriser hook for every unseen reply.
+    Never raises. ok=False (report FAILED) on a cap-hit, with `gap` = replies
+    left unprocessed this run (a lower bound when `overflow`)."""
+    summary = {"ok": True, "checked": 0, "posted": 0, "skipped_seen": 0,
+               "skipped_archived": 0, "errors": 0, "gap": 0, "overflow": False,
+               "watermark_before": None, "watermark_after": None, "first_run": False}
+    if not _SB or not _sl_key():
+        summary["ok"] = False
+        summary["errors"] += 1
+        summary["error"] = "Supabase or Smartlead not configured"
+        return summary
+    try:
+        wm, seeded = _reply_sync_watermark()
+        now = _dt.datetime.now(_dt.timezone.utc)
+        summary["first_run"] = seeded
+        summary["watermark_before"] = wm.isoformat()
+        since_iso = wm.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        until_iso = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        rows, overflow = _fetch_master_inbox_window(since_iso, until_iso, REPLY_SYNC_CAP)
+        summary["checked"] = len(rows)
+        summary["overflow"] = overflow
+
+        to_process = rows[:REPLY_SYNC_CAP]
+        if overflow or len(rows) > REPLY_SYNC_CAP:
+            summary["ok"] = False                       # cap-hit: FAILED, never silent
+            summary["gap"] = max(0, len(rows) - REPLY_SYNC_CAP)
+
+        advanced_to, frozen = wm, False
+        for r in to_process:
+            if not isinstance(r, dict):
+                continue
+            lead_id = r.get("email_lead_id")
+            rtime = r.get("last_reply_time")
+            cid = r.get("email_campaign_id")
+            email = (r.get("lead_email") or "").strip()
+            if not lead_id or not rtime or not cid or not email:
+                continue
+            mid = f"{lead_id}-{rtime}"          # == categoriser archive key (module 60)
+            rt_dt = _parse_iso(rtime)
+            handled = False
+            if _reply_sync_seen(mid):
+                summary["skipped_seen"] += 1
+                handled = True
+            elif _reply_in_archive(mid):
+                _mark_reply_seen(mid)           # remember so we skip the archive check next run
+                summary["skipped_archived"] += 1
+                handled = True
+            else:
+                ok, data, _err = hydrate_lead(cid, email, None)
+                text = clean_body(data.get("reply_email_body") or "") if ok else ""
+                if text:
+                    payload = {
+                        "event_type": "EMAIL_REPLY",
+                        "sl_lead_email": email,
+                        "sl_email_lead_id": lead_id,
+                        "campaign_id": cid,
+                        "reply_message": {"text": text, "time": rtime},
+                    }
+                    try:
+                        _HTTP("POST", CATEGORISER_HOOK, {}, payload)
+                    except ValueError:
+                        pass  # Make hook answers a non-JSON 2xx ("Accepted") = success
+                    _mark_reply_seen(mid)
+                    summary["posted"] += 1
+                    handled = True
+                else:
+                    # No body yet (thread not indexed) — leave UNSEEN, do not
+                    # advance past it; a later tick retries.
+                    summary["errors"] += 1
+            # Watermark only crosses a CONTIGUOUS run of handled replies, so a
+            # gap (unhandled reply) freezes it there and nothing downstream is lost.
+            if handled and not frozen:
+                if rt_dt and rt_dt > advanced_to:
+                    advanced_to = rt_dt
+            elif not handled:
+                frozen = True
+
+        if _SB and (advanced_to > wm or seeded):
+            _SB("PATCH", "reply_sync_state?id=eq.1",
+                {"watermark": advanced_to.isoformat(), "updated_at": now.isoformat(),
+                 "last_run": summary}, prefer="return=minimal")
+        summary["watermark_after"] = advanced_to.isoformat()
+        return summary
+    except Exception as e:  # noqa: BLE001 — record, never crash the cron thread
+        summary["ok"] = False
+        summary["errors"] += 1
+        summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return summary
+
+
 def run_poll() -> dict:
     """Sweeps recent core-four `replies` rows across EVERY campaign in the
     workspace (owner ruling 2026-07-14: a positive must reach the queue even
