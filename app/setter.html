@@ -1131,10 +1131,18 @@ function renderDetail(row) {
     }
   }
 
+  // Verified deep link (2026-07-15, observed live): the master inbox's
+  // ?search= param prefills the lead search, filtering the inbox to exactly
+  // this lead's conversation - one click from the chat. No per-lead URL
+  // exists (opening a chat never changes the address bar), so this is the
+  // closest supported jump.
+  const smartleadBtnHtml = row.lead_email
+    ? `<a class="btn sm" href="https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email)}" target="_blank" rel="noopener" title="Open this lead's conversation in Smartlead's master inbox">Open in Smartlead</a>` : "";
   const teachBtnHtml = row.agent_id
     ? `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span>
+       ${smartleadBtnHtml}
        <button class="btn sm" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}">Teach the agent</button>`
-    : `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span>`;
+    : `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span> ${smartleadBtnHtml}`;
 
   // Did they reply after our send? Client-side scan of every known row for a
   // LATER inbound from the same lead - a later reply always creates a new
