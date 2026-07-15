@@ -216,6 +216,18 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
 .hstep.gate .ictile .ic8 { color: var(--orange-700); }
 .hstep .hl { font-size: 10.5px; font-weight: 500; margin-top: 7px; line-height: 1.25; }
 .harrow { color: var(--line-2); font-size: 14px; margin-top: 13px; flex-shrink: 0; }
+
+/* ── tier1-live-ship: Overview insights (runs-dry nudge, positives table,
+   working/not-working card) + Sources campaign-idea cards. navreo.css has
+   table.tbl but no right-aligned .num cell rule (proto.css had it) - added here
+   rather than touching the shared stylesheet other pages also load. ──────── */
+table.tbl td.num, table.tbl th.num { text-align: right; }
+.suggest-card { border: 1px solid var(--orange); background: var(--orange-100); border-radius: var(--radius); padding: 16px 18px; }
+.suggest-card h3 { color: var(--orange-700); }
+.idea-menu { display: none; position: absolute; top: calc(100% + 4px); left: 0; background: var(--card); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 8px 20px rgba(20,17,14,.14); padding: 5px; z-index: 20; min-width: 172px; }
+.idea-menu.open { display: block; }
+.idea-menu button { display: block; width: 100%; text-align: left; padding: 8px 10px; border: none; background: none; font: 500 12.5px var(--font-sans); color: var(--ink); border-radius: 7px; cursor: pointer; }
+.idea-menu button:hover { background: var(--bg-sunken); }
 </style>
 </head>
 <body>
@@ -710,6 +722,7 @@ async function renderDraftCampaign(id) {
       <div class="small muted" style="margin-bottom:10px">Straight from ${platMeta.platform === "heyreach" ? "HeyReach" : "Smartlead"} — how this campaign is actually doing.</div>
       <div class="sc-tiles" id="ov-perf-tiles"><div class="skel" style="height:70px;width:100%"></div></div>
     </div>` : ""}
+    ${platMeta && platMeta.platform === "smartlead" ? `<div id="ov-insights" style="margin-bottom:14px"></div>` : ""}
     <div style="display:flex;gap:14px;align-items:flex-start">
       <div style="flex:1;min-width:0">
         ${external ? `<div class="small muted" style="margin:0 0 8px 2px">Signals feeding this campaign — add a source to start finding new people for it.</div>` : ""}
@@ -744,6 +757,12 @@ async function renderDraftCampaign(id) {
         : [t("People", fmt(d.total)), t("In progress", fmt(d.in_progress)), t("Finished", fmt(d.completed)), t("Failed", fmt(d.failed))].join("");
       hydrateFade(holder);
     })();
+    // Insights (runs-dry nudge / positives-by-source / working-not-working) - a
+    // separate fetch from Live performance above, fired in parallel and never
+    // blocking the funnel tiles / velocity chart / activity feed that already
+    // rendered synchronously into `el.innerHTML`. Smartlead only (same support
+    // boundary as /api/campaign-insights itself).
+    if (platMeta && platMeta.platform === "smartlead") hydrateOverviewInsights(id, platMeta.id);
     (async () => {
       let rows = null;
       try {
@@ -924,10 +943,18 @@ async function renderDraftCampaign(id) {
           <div class="ictile">${ic8(icon)}</div>
           <div><div class="t">${tt}</div><div class="d">${dsc}</div></div>
         </div>`).join("")}</div>
-      </div>`;
+      </div>
+      ${platMeta && platMeta.platform === "smartlead" ? `
+      <div class="card panel" style="margin-top:14px">
+        <h2 style="font-size:14px;margin-bottom:2px">Campaign ideas</h2>
+        <div class="small muted" style="margin-bottom:10px">Fresh hiring-signal campaign angles for this market. Generating uses provider credits, so it only runs when you ask.</div>
+        <div id="idea-cards"></div>
+        <div id="idea-actions" style="margin-top:10px"></div>
+      </div>` : ""}`;
     await renderDrafts(id);
     const bare = srcs.length === 1 && !srcs[0].prospects;
     if (bare) pullProspects(srcs[0].id, id);
+    if (platMeta && platMeta.platform === "smartlead") loadCampaignIdeas(id, platMeta.id);
   } else {
     renderCopyPreview(el, dc, srcs, people);
   }
@@ -3169,6 +3196,234 @@ async function strategyCall(payload) {
     if (res && res.status !== "running") return res;
   }
   return { ok: false, rows: [], message: "The run is taking unusually long. Hit Try again." };
+}
+
+/* ── tier1-live-ship: Overview insights + Sources campaign-idea cards ──────
+   Both features read/write the new tier1 endpoints (campaign-insights,
+   campaign-ideas). Additive only - every existing block on this page (funnel
+   tiles, Live performance, Signal velocity, Activity, leads tab, Add-a-source,
+   send-remaining/sendAll) is untouched. Smartlead-only by construction, same
+   support boundary the backend enforces. */
+
+/* Generic poll of the shared /api/jobs/<id> table - the same durable job the
+   Tasks sidebar (shell.js) already polls on its own interval, mirrors
+   strategyCall's poll loop above and deliverability-tab.js's pollDlvJob. */
+async function pollJobUntilDone(jobId) {
+  for (let i = 0; i < 100; i++) {           // up to 5 min (3s x 100)
+    await new Promise((r) => setTimeout(r, 3000));
+    let j = null;
+    try { j = await (await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" })).json(); }
+    catch { continue; }  // transient network blip - keep polling
+    if (j && (j.status === "done" || j.status === "failed" || j.status === "cancelled" || j.status === "interrupted")) return j;
+  }
+  return { status: "failed", error: "Still running after 5 minutes - check the tasks panel." };
+}
+function _pingJobsSidebar() {
+  if (window.NavreoJobs && typeof window.NavreoJobs.ping === "function") { try { window.NavreoJobs.ping(); } catch (_) {} }
+}
+
+/* ── Overview: runs-dry nudge + positives-by-source + working/not-working ── */
+function ovNudgeDismissed(id) { return sessionStorage.getItem(`ovnudge-${id}`) === "1"; }
+function dismissOvNudge(id) {
+  sessionStorage.setItem(`ovnudge-${id}`, "1");
+  const card = document.getElementById("ov-nudge-card");
+  if (card) { card.style.transition = "opacity .3s ease"; card.style.opacity = "0"; }
+  protoNote("No changes made. You can top up this source any time.");
+}
+function goToSourcesTab(id) {
+  dtab = "sources";
+  sessionStorage.setItem("cdtab", "sources");
+  renderDraftCampaign(id);
+}
+async function hydrateOverviewInsights(id, sid) {
+  let d = null;
+  try { d = await cachedGet(`/api/campaign-insights?platform=smartlead&id=${encodeURIComponent(sid)}`, SESSION_TTL); } catch {}
+  const holder = document.getElementById("ov-insights");  // may be gone if the user already switched tabs
+  if (!holder) return;
+  if (!d || d.error) {
+    holder.innerHTML = `<div class="small muted">Couldn't load campaign insights right now.</div>`;
+    return;
+  }
+  const parts = [];
+  const rd = d.runs_dry || {};
+  if (typeof rd.days_left === "number" && rd.days_left <= 30 && !ovNudgeDismissed(id)) {
+    parts.push(`
+    <div class="suggest-card" id="ov-nudge-card" style="margin-bottom:14px">
+      <h3 style="font-size:14px;margin:0 0 6px">This campaign runs out of people in ~${fmt(rd.days_left)} day${rd.days_left === 1 ? "" : "s"}</h3>
+      <div class="small" style="color:var(--ink-2)">${rd.best_source_name ? `Your best source is "<b>${esc(rd.best_source_name)}</b>". ` : ""}${esc(rd.new_estimate_note || "")}</div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="btn sm primary" onclick="goToSourcesTab('${id}')">Top up from this source</button>
+        <button class="btn sm" onclick="dismissOvNudge('${id}')">Not now</button>
+      </div>
+    </div>`);
+  }
+  const ps = d.per_source || [];
+  if (ps.length) {
+    const totalPos = Math.max(1, ps.reduce((s, r) => s + (r.positives || 0), 0));
+    parts.push(`
+    <div class="card panel">
+      <h2 style="font-size:14px;margin-bottom:2px">Where your positives come from</h2>
+      <div class="small muted" style="margin-bottom:8px">Matched by lead email between your sources and campaign activity. Close, not perfect.</div>
+      <table class="tbl">
+        <thead><tr><th>Source</th><th>Type</th><th class="num">Sent</th><th class="num">Replies</th><th class="num">Reply %</th><th class="num">Positives</th><th class="num">Meetings</th><th>Share of positives</th></tr></thead>
+        <tbody>${ps.map((r) => `<tr>
+          <td style="font-weight:500">${esc(r.name || "")}</td>
+          <td>${esc((MECH_META[r.type] || [])[1] || r.type || "")}</td>
+          <td class="num">${fmt(r.sent)}</td>
+          <td class="num">${fmt(r.replies)}</td>
+          <td class="num">${r.reply_pct == null ? "—" : r.reply_pct + "%"}</td>
+          <td class="num" style="font-weight:600">${fmt(r.positives)}</td>
+          <td class="num">${fmt(r.meetings)}</td>
+          <td style="min-width:110px"><div class="bar-track"><div class="bar-fill g" style="width:${(100 * (r.positives || 0) / totalPos).toFixed(1)}%"></div></div></td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>`);
+  } else {
+    parts.push(`<div class="small muted">No app-tracked sources feed this campaign yet.</div>`);
+  }
+  const ins = d.insights || {};
+  const listBlock = (title, arr) => (arr && arr.length) ? `<div style="margin-top:10px"><div class="small" style="font-weight:600;margin-bottom:4px">${esc(title)}</div><ul style="margin:0;padding-left:18px">${arr.map((x) => `<li class="small" style="color:var(--ink-2);margin-bottom:3px">${esc(x)}</li>`).join("")}</ul></div>` : "";
+  const insightsInner = [
+    ins.summary ? `<div class="small" style="color:var(--ink-2)">${esc(ins.summary)}</div>` : "",
+    listBlock("Working", ins.working),
+    listBlock("Not working", ins.not_working),
+    listBlock("Recommended changes", ins.changes),
+    listBlock("Recommended optimisations", ins.optimisations),
+  ].filter(Boolean).join("");
+  if (insightsInner) {
+    parts.push(`<div class="card panel" style="margin-top:14px">
+      <h2 style="font-size:14px;margin-bottom:2px">What's working, what to change</h2>
+      ${insightsInner}
+    </div>`);
+  }
+  holder.innerHTML = parts.join("");
+  hydrateFade(holder);
+}
+
+/* ── Sources: campaign-idea cards ───────────────────────────────────────── */
+function closeIdeaMenu() {
+  document.querySelectorAll(".idea-menu.open").forEach((m) => m.classList.remove("open"));
+  document.removeEventListener("click", _ideaMenuOutside, true);
+}
+function _ideaMenuOutside(e) {
+  if (!e.target.closest(".idea-menu") && !e.target.closest(".idea-add-btn")) closeIdeaMenu();
+}
+function toggleIdeaMenu(ev, ideaId) {
+  ev.stopPropagation();
+  const m = document.getElementById(`idea-menu-${ideaId}`);
+  if (!m) return;
+  const wasOpen = m.classList.contains("open");
+  closeIdeaMenu();
+  if (!wasOpen) {
+    m.classList.add("open");
+    setTimeout(() => document.addEventListener("click", _ideaMenuOutside, true), 0);
+  }
+}
+function ideaCardHtml(draftId, sid, idea) {
+  const dmLine = idea.dm_per_month == null ? "estimate pending" : `~${fmt(idea.dm_per_month)} decision-makers/mo`;
+  return `<div class="card suggest-card" style="margin-top:10px" id="idea-${esc(idea.id)}">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:4px">
+      <h3 style="font-size:14.5px;line-height:1.35;margin:0">${esc(idea.title || "")}</h3>
+      <span class="pill o" style="flex-shrink:0">hiring signal</span>
+    </div>
+    <div class="small" style="color:var(--ink-2);margin-bottom:8px">${esc(idea.lead_magnet || "")}</div>
+    <div class="small muted" style="margin-bottom:10px">${esc(idea.rationale || "")}</div>
+    <div style="font-weight:600;font-size:13px;margin-bottom:10px">${dmLine}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <div style="position:relative;display:inline-block">
+        <button class="btn sm primary idea-add-btn" onclick="toggleIdeaMenu(event,'${esc(idea.id)}')">Add ▾</button>
+        <div class="idea-menu" id="idea-menu-${esc(idea.id)}">
+          <button onclick="addCampaignIdea('${draftId}','${sid}','${esc(idea.id)}','existing')">Add to campaign</button>
+          <button onclick="addCampaignIdea('${draftId}','${sid}','${esc(idea.id)}','new')">Add to new campaign</button>
+        </div>
+      </div>
+      <button class="btn sm" onclick="dismissCampaignIdea('${draftId}','${sid}','${esc(idea.id)}')">Dismiss</button>
+    </div>
+  </div>`;
+}
+function renderIdeaCards(draftId, sid, ideas) {
+  const holder = document.getElementById("idea-cards");
+  if (!holder) return;
+  holder.innerHTML = (ideas || []).map((x) => ideaCardHtml(draftId, sid, x)).join("");
+}
+async function loadCampaignIdeas(draftId, sid) {
+  const holder = document.getElementById("idea-cards");
+  const actions = document.getElementById("idea-actions");
+  if (!holder || !actions) return;
+  let d = null;
+  try { d = await (await fetch(`/api/campaign-ideas?campaign_id=${encodeURIComponent(sid)}`, { cache: "no-store" })).json(); } catch {}
+  const ideas = (d && Array.isArray(d.ideas)) ? d.ideas : [];
+  renderIdeaCards(draftId, sid, ideas);
+  if (d && (d.status === "queued" || d.status === "running")) {
+    actions.innerHTML = `<div class="small muted">Generating ideas…</div>`;
+    return;
+  }
+  actions.innerHTML = ideas.length
+    ? `<button class="btn sm" id="idea-more-btn" onclick="suggestCampaignIdeas('${draftId}','${sid}',true)">Generate more ideas</button>`
+    : `<button class="btn sm primary" id="idea-suggest-btn" onclick="suggestCampaignIdeas('${draftId}','${sid}',false)">Suggest campaign ideas</button>`;
+}
+async function suggestCampaignIdeas(draftId, sid, more) {
+  const btn = document.getElementById(more ? "idea-more-btn" : "idea-suggest-btn");
+  const restore = busyBtn(btn, more ? "Generating…" : "Suggesting…");
+  if (!restore) return;
+  let r = null, j = null;
+  try {
+    r = await fetch("/api/campaign-ideas", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaign_id: sid, more: !!more }) });
+    j = await r.json().catch(() => ({}));
+  } catch (e) { r = null; j = null; }
+  if (!r || !r.ok || !j || !j.job_id) {
+    restore();
+    protoNote((j && j.message) || "Couldn't start idea generation - try again");
+    return;
+  }
+  _pingJobsSidebar();
+  const actions = document.getElementById("idea-actions");
+  if (actions) actions.innerHTML = `<div class="small muted">Thinking through hiring-signal angles - usually under a minute…</div>`;
+  const job = await pollJobUntilDone(j.job_id);
+  const counts = job.counts || {};
+  if (job.status !== "done") {
+    protoNote("Couldn't generate ideas - " + (job.error || "try again"));
+  } else if (counts.warning) {
+    protoNote(counts.warning);
+  } else if ((counts.ideas || []).length === 0 && counts.message) {
+    protoNote(counts.message);
+  }
+  loadCampaignIdeas(draftId, sid);
+}
+async function dismissCampaignIdea(draftId, sid, ideaId) {
+  closeIdeaMenu();
+  const card = document.getElementById(`idea-${ideaId}`);
+  if (card) { card.style.transition = "opacity .3s ease"; card.style.opacity = "0"; }
+  try {
+    await fetch("/api/campaign-ideas/dismiss", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaign_id: sid, idea_id: ideaId }) });
+  } catch {}
+  protoNote("Dismissed. Won't suggest this angle again.");
+  setTimeout(() => loadCampaignIdeas(draftId, sid), 300);
+}
+async function addCampaignIdea(draftId, sid, ideaId, mode) {
+  closeIdeaMenu();
+  const card = document.getElementById(`idea-${ideaId}`);
+  const btn = card ? card.querySelector(".idea-add-btn") : null;
+  const restore = busyBtn(btn, "Adding…");
+  if (!restore) return;
+  let r = null, j = null;
+  try {
+    r = await fetch("/api/campaign-ideas/add", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaign_id: sid, idea_id: ideaId, mode, dry_run: false }) });
+    j = await r.json().catch(() => ({}));
+  } catch (e) { r = null; j = null; }
+  if (!r || !r.ok || !j || !j.job_id) {
+    restore();
+    protoNote((j && j.message) || "Couldn't start - try again");
+    return;
+  }
+  restore();
+  _pingJobsSidebar();
+  protoNote(mode === "new"
+    ? "Drafting a copy of this campaign with the new audience. Sequences rebuild from the template, the draft stays paused."
+    : "Pulling decision makers now. They arrive behind the QA gate, nothing sends.");
 }
 
 function kwList() { return (wiz.keywords || "").split(",").map((s) => s.trim()).filter(Boolean); }

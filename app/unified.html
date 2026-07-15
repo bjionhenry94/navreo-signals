@@ -564,7 +564,6 @@ optgroup.destopt-testgroup { color: var(--amber); font-weight: 600; }
       <a class="back-link" href="#" id="campBack">&larr; Campaigns</a>
       <div class="det-head">
         <h1 id="campName">–</h1>
-        <button class="kebab-btn" id="renameBtn" title="Rename this campaign" style="font-size:13px">✎</button>
         <span id="campClient"></span>
         <span id="campPlatform" style="display:inline-flex;gap:6px;align-items:center"></span>
         <span id="campStatus"></span>
@@ -2202,39 +2201,7 @@ document.getElementById("campBack").addEventListener("click", (e) => { e.prevent
 document.getElementById("campKebab").addEventListener("click", (e) => {
   if (CURRENT) openCampMenu(e, CURRENT.id);
 });
-/* inline rename — contentEditable title, Enter saves / Esc cancels (campaigns.html port) */
-document.getElementById("renameBtn").addEventListener("click", () => renameCampaign());
-function renameCampaign() {
-  const h = document.getElementById("campName");
-  if (!h || h.isContentEditable || !CURRENT) return;
-  const id = CURRENT.id;
-  const orig = h.textContent;
-  try { h.contentEditable = "plaintext-only"; } catch { h.contentEditable = "true"; }
-  h.style.outline = "2px solid var(--orange-700)";
-  h.style.borderRadius = "6px";
-  h.focus();
-  document.getSelection().selectAllChildren(h);
-  const finish = async (save) => {
-    h.onblur = null;
-    h.onkeydown = null;
-    h.contentEditable = "false";
-    h.style.outline = "";
-    const name = h.textContent.trim().replace(/\s+/g, " ");
-    if (!save || !name || name === orig) { h.textContent = orig; return; }
-    await fetch("/api/campaign-drafts/update", { method: "POST", body: JSON.stringify({ id, name }) });
-    h.textContent = name;
-    const dc = DB.drafts.find((x) => x.id === id);
-    if (dc) dc.name = name;
-    if (CURRENT && CURRENT.id === id) CURRENT.name = name;
-    document.title = name + " · Navreo";
-    protoNote("Renamed ✓");
-  };
-  h.onblur = () => finish(true);
-  h.onkeydown = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); finish(true); }
-    if (e.key === "Escape") { e.preventDefault(); finish(false); }
-  };
-}
+/* campaign name is fixed, non-editable text — rename affordance removed by design */
 
 /* H3: a platform-mirror row can be opened before it has ever had a state doc
    (nothing pushed to it from this tool yet). Build an in-memory stand-in from
@@ -2370,18 +2337,11 @@ function renderCampHead() {
     if (running) setPaused(true);
     else openQAGate();
   });
-  // Autopilot ↔ Manual review — same segmented control + copy as campaigns.html
-  const ap = !!CURRENT.autopilot;
-  const hl = "background:var(--orange-100);color:var(--orange-700);font-weight:600";
-  document.getElementById("campAutopilot").innerHTML = `
-    <span style="display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden">
-      <button class="btn sm" style="border:none;border-radius:0;${!ap ? hl : "opacity:.65"}"
-        title="Manual: new leads wait in Leads until you ✓ them. The highlighted side is the current setting."
-        ${ap ? `onclick="toggleAutopilot(false)"` : ""}>✋ Manual review</button>
-      <button class="btn sm" style="border:none;border-radius:0;${ap ? hl : "opacity:.65"}"
-        title="Autopilot: the daily run sends every new lead into outreach automatically. The highlighted side is the current setting."
-        ${!ap ? `onclick="toggleAutopilot(true)"` : ""}>⚡ Autopilot</button>
-    </span>`;
+  // Manual/Autopilot toggle hidden by design. The autopilot flag and its
+  // daily-push behaviour are UNCHANGED — campaign_drafts.autopilot still
+  // persists (toggleAutopilot below) and still gates auto_push_new_leads in
+  // the server's daily run; only the header control is removed.
+  document.getElementById("campAutopilot").innerHTML = "";
   document.getElementById("campSub").textContent = campStateSentence(CURRENT);
 }
 
@@ -2633,25 +2593,26 @@ function uDestWarn() {
   const { sl, hr } = _destSel(CURRENT);
   return (sl || hr) ? "" : `<span class="dest-warn">⚠ No destination set — nothing can be sent</span>`;
 }
+/* READ-ONLY destination display. The campaign-level picker/popover is removed —
+   destination is set per source now — but the destination stays VISIBLE (and
+   uDestWarn() still surfaces "No destination set"). Only destinations that are
+   actually set render a chip; no clickable chip, no chevron, no popover. */
 function uDestBar(dc) {
   const { sl, hr } = _destSel(dc);
   const slName = destName("smartlead", sl);
   const hrName = destName("heyreach", hr) || (dc.destination || {}).heyreach_list_name || "";
   const chip = (kind, selId, name) => {
-    const set = !!selId;
+    if (!selId) return "";  // unset → no chip; uDestWarn() surfaces the gap
     const logo = kind === "smartlead" ? "icons/smartlead.png" : "icons/heyreach.png";
     const brand = kind === "smartlead" ? "Smartlead" : "HeyReach";
     const channel = kind === "smartlead" ? "Email" : "LinkedIn";
     const kindWord = kind === "smartlead" ? "email campaign" : "LinkedIn list";
-    const label = set ? esc(name || brand) : "Choose…";
-    const tip = set ? `${channel} leads go to the ${brand} ${kindWord} “${esc(name)}”. Click to change or clear.`
-                    : `Pick the ${brand} ${kindWord} that ${channel.toLowerCase()} leads go into.`;
-    return `<button class="destchip ${set ? "on" : "unset"}" data-kind="${kind}" title="${tip}" onclick="openDestPop('${kind}', event)">
+    const tip = `${channel} leads go to the ${brand} ${kindWord} “${esc(name || brand)}” — set per source, not editable here.`;
+    return `<span class="destchip on" data-kind="${kind}" title="${tip}">
       <img src="${logo}" alt="${brand}" onerror="this.style.display='none'">
       <span class="dc-ch ${kind === "smartlead" ? "email" : "li"}">${channel}</span>
-      <span class="dc-name">${label}</span>
-      <span class="dc-cx" aria-hidden="true">▾</span>
-    </button>`;
+      <span class="dc-name">${esc(name || brand)}</span>
+    </span>`;
   };
   return `${chip("smartlead", sl, slName)}${chip("heyreach", hr, hrName)}`;
 }
@@ -2836,6 +2797,14 @@ function uRouteNote(l) {
   return `<div style="margin-top:2px">${chip("heyreach", nm.heyreach || "your LinkedIn list")}</div>`;
 }
 
+/* Leads tab — a columnar table of the campaign's Supabase leads. Loads
+   INCREMENTALLY: the first ~50 rows come from a server-side page
+   (/api/leads?offset=&limit=), and "Load more" pulls the next page — a large
+   campaign never pulls every row at once. Columns are the essential fields
+   PLUS the icebreaker custom variable, and ONLY columns actually populated in
+   the loaded rows are rendered (no fabricated/empty variable columns). */
+const U_LEADS_LOAD = 50;   // rows per incremental Supabase page
+
 async function renderLeadsTab() {
   const el = document.getElementById("tab-leads");
   el.innerHTML = `<div class="empty">Loading people…</div>`;
@@ -2843,17 +2812,26 @@ async function renderLeadsTab() {
   // the first attached list backs the CSV export — same /api/lists/export?id=
   // href already used per-source on the Sources tab
   const { listRefs } = campSources(CURRENT);
-  const totalPeople = campPeopleFound(CURRENT);
+  const totalPeople = campPeopleFound(CURRENT);   // authoritative signal_leads count (DB.counts)
   const contactedCount = (DB.counts[CURRENT.id] || {}).sent || 0;
   const exportLabel = totalPeople > 0
     ? `Export CSV (${fmt(totalPeople)} loaded · ${fmt(contactedCount)} contacted)` : "Export CSV";
   const exportBtn = listRefs.length
     ? `<a class="btn sm" href="/api/lists/export?id=${esc(listRefs[0].list_id)}" style="text-decoration:none">${exportLabel}</a>` : "";
-  const leads = await j(`/api/leads?campaign_id=${encodeURIComponent(campId)}`);
+
+  let all = [];                 // loaded rows (grows as you Load more) — verdict actions patch these
+  let listBacked = false;       // campaign fed by a list, not signal_leads
+  let serverExhausted = false;  // last page came back short → nothing more to fetch
+
+  // first incremental page straight from signal_leads
+  const first = await j(`/api/leads?campaign_id=${encodeURIComponent(campId)}&offset=0&limit=${U_LEADS_LOAD}`);
   if (CURRENT && CURRENT.id !== campId) return; // user moved on
-  let all = Array.isArray(leads) ? leads : [];
+  all = Array.isArray(first) ? first : [];
+  if (all.length < U_LEADS_LOAD) serverExhausted = true;
+
   // no signal leads — the campaign may be fed by a list instead: show its rows
   if (!all.length && listRefs.length) {
+    listBacked = true; serverExhausted = true;
     const ref = listRefs[0];
     const page = await j(`/api/lists/rows?id=${encodeURIComponent(ref.list_id)}&limit=500`);
     if (CURRENT && CURRENT.id !== campId) return;
@@ -2863,7 +2841,8 @@ async function renderLeadsTab() {
       const d = r.data || {};
       const nm = (d.name || `${d.first_name || ""} ${d.last_name || ""}`.trim()) || d.company_name || "";
       return { name: nm, title: d.title || "", company: d.company_name || d.company || "",
-               country: d.country || "", status: "found", source_name: listName };
+               country: d.country || "", email: d.email || "", domain: d.domain || d.website || "",
+               status: "found", source_name: listName };
     });
   }
   if (!all.length) {
@@ -2872,16 +2851,32 @@ async function renderLeadsTab() {
       <div class="empty">No people in this campaign yet — add some from the Sources tab.</div>`;
     return;
   }
-  const PAGE = 10;
-  window._uLeads = all; // current campaign's lead rows (verdict actions patch these)
-  document.querySelector('.tab[data-tab="leads"]').textContent = `Leads (${fmt(all.length)})`;
-  const leadLinks = (l) => {
-    const bits = [];
-    if (l.linkedin) bits.push(`<a href="${esc(l.linkedin)}" target="_blank" rel="noopener" style="color:var(--orange-700);text-decoration:none">LinkedIn ↗</a>`);
-    if (l.domain) bits.push(`<a href="https://${esc(l.domain)}" target="_blank" rel="noopener" style="color:var(--orange-700);text-decoration:none">Website ↗</a>`);
-    if (sigHref(l)) bits.push(`<a href="${esc(sigHref(l))}" target="_blank" rel="noopener" title="${esc(sigTitle(l))}" style="color:var(--orange-700);text-decoration:none">View signal ↗</a>`);
-    return bits.length ? `<div class="small" style="margin-top:2px">${bits.join("&nbsp; ")}</div>` : "";
-  };
+
+  window._uLeads = all;
+  // header count is the authoritative DB total (not just what's loaded so far)
+  const trueTotal = listBacked ? all.length : Math.max(totalPeople || 0, all.length);
+  document.querySelector('.tab[data-tab="leads"]').textContent = `Leads (${fmt(trueTotal)})`;
+
+  // Candidate columns in reading order. `always` cols render unconditionally;
+  // the rest render only if ≥1 loaded row actually has that field populated —
+  // so no empty/fabricated columns (icebreaker is the sole custom variable).
+  const COLS = [
+    { key: "name", lab: "Name", always: true, cls: "ld-name", cellStyle: "white-space:normal",
+      cell: (l) => `${l.linkedin ? `<a href="${esc(l.linkedin)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${esc(l.name || "—")}</a>` : esc(l.name || "—")}${sigHref(l) ? `<div class="small" style="margin-top:2px"><a href="${esc(sigHref(l))}" target="_blank" rel="noopener" title="${esc(sigTitle(l))}" style="color:var(--orange-700);text-decoration:none">View signal ↗</a></div>` : ""}` },
+    { key: "title", lab: "Title", has: (l) => !!l.title, attr: (l) => ` title="${esc(l.title || "")}"`, cell: (l) => esc(l.title || "—") },
+    { key: "company", lab: "Company", has: (l) => !!l.company, cell: (l) => esc(l.company || "—") },
+    { key: "domain", lab: "Website", has: (l) => !!l.domain, cell: (l) => l.domain ? `<a href="https://${esc(l.domain)}" target="_blank" rel="noopener" style="color:var(--orange-700);text-decoration:none">${esc(l.domain)}</a>` : "—" },
+    { key: "country", lab: "Country", has: (l) => !!l.country, cell: (l) => esc(l.country || "—") },
+    { key: "email", lab: "Email", has: (l) => !!l.email, cellStyle: "white-space:nowrap", cell: (l) => esc(l.email || "—") },
+    { key: "linkedin", lab: "LinkedIn", has: (l) => !!l.linkedin, cell: (l) => l.linkedin ? `<a href="${esc(l.linkedin)}" target="_blank" rel="noopener" style="color:var(--orange-700);text-decoration:none">Profile ↗</a>` : "—" },
+    { key: "icebreaker", lab: "Icebreaker", has: (l) => !!l.icebreaker, cellStyle: "max-width:300px;white-space:normal",
+      cell: (l) => l.icebreaker ? `<span style="font-style:italic;color:var(--ink-2)">"${esc(l.icebreaker)}"</span>` : "—" },
+    { key: "source", lab: "Source", has: (l) => !!l.source_name, cls: "muted", attr: (l) => ` title="${esc(l.source_name || "")}"`, cellStyle: "white-space:normal", cell: (l) => `${esc(l.source_name || "")}${uRouteNote(l)}` },
+    { key: "status", lab: "Status", always: true, cell: (l) => uLeadPill(l) },
+    { key: "pulled", lab: "Pulled", has: (l) => !!l.pulled_at, cellStyle: "white-space:nowrap", cell: (l) => l.pulled_at ? `<span class="muted">${pulledAgo(l.pulled_at)}</span>` : "—" },
+  ];
+  const hasActions = all.some((l) => l._sid && (l._idx != null || l.linkedin));
+
   const render = (q) => {
     const ql = (q || "").toLowerCase();
     const F = window._uLeadFilter || "all";
@@ -2905,7 +2900,6 @@ async function renderLeadsTab() {
     ].map(([key, lab]) => `<button class="btn sm ${F === key ? "primary" : ""}" data-lchip="${key}">${lab} (${fmt(counts[key])})</button>`).join("");
     document.querySelectorAll("[data-lchip]").forEach((b) => b.addEventListener("click", () => {
       window._uLeadFilter = b.getAttribute("data-lchip");
-      window._uLeadsPage = 0;
       render(document.getElementById("leadsSearch").value);
     }));
     const srcChipEl = document.getElementById("leadsSrcFilter");
@@ -2916,55 +2910,56 @@ async function renderLeadsTab() {
       const clearBtn = srcChipEl.querySelector("[data-clear-srcfilter]");
       if (clearBtn) clearBtn.addEventListener("click", () => {
         window._uLeadSourceFilter = null;
-        window._uLeadsPage = 0;
         render(document.getElementById("leadsSearch").value);
       });
     }
+    // only render columns actually populated in the loaded rows (recomputed as
+    // more pages load, so a column can appear once its first value arrives)
+    const cols = COLS.filter((c) => c.always || all.some(c.has));
+    document.getElementById("leadsHead").innerHTML =
+      `<tr>${cols.map((c) => `<th style="text-align:left;font-weight:600;font-size:11px;color:var(--ink-3);padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap">${esc(c.lab)}</th>`).join("")}${hasActions ? `<th style="border-bottom:1px solid var(--line)"></th>` : ""}</tr>`;
     const rows = base.filter(byFilter).filter((l) =>
       !ql || `${l.name} ${l.company} ${l.title} ${l.email || ""}`.toLowerCase().includes(ql));
-    const pages = Math.max(1, Math.ceil(rows.length / PAGE));
-    if ((window._uLeadsPage || 0) >= pages) window._uLeadsPage = pages - 1;
-    const pg = window._uLeadsPage || 0;
-    const shown = rows.slice(pg * PAGE, pg * PAGE + PAGE);
-    document.getElementById("leadsRows").innerHTML = shown.map((l) => {
+    document.getElementById("leadsRows").innerHTML = rows.map((l) => {
       const i = all.indexOf(l);
-      return `
-      <tr style="${l.verdict === "reject" ? "opacity:.45" : ""}">
-        <td class="ld-name" style="white-space:normal">${l.linkedin ? `<a href="${esc(l.linkedin)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${esc(l.name || "—")}</a>` : esc(l.name || "—")}
-          ${l.icebreaker ? `<div class="small" style="font-style:italic;color:var(--ink-2);font-weight:400;max-width:340px;white-space:normal">"${esc(l.icebreaker)}"</div>` : ""}
-          ${leadLinks(l)}</td>
-        <td title="${esc(l.title || "")}">${esc(l.title || "—")}</td>
-        <td>${esc(l.company || "—")}</td>
-        <td>${esc(l.country || "—")}</td>
-        <td>${uLeadPill(l)}</td>
-        <td class="muted" title="${esc(l.source_name || "")}" style="white-space:normal">${esc(l.source_name || "")}${uRouteNote(l)}</td>
-        <td style="max-width:none;white-space:nowrap">${uLeadActions(l, i)}</td>
-      </tr>`;
+      const tds = cols.map((c) => `<td class="${c.cls || ""}"${c.attr ? c.attr(l) : ""}${c.cellStyle ? ` style="${c.cellStyle}"` : ""}>${c.cell(l)}</td>`).join("");
+      return `<tr style="${l.verdict === "reject" ? "opacity:.45" : ""}">${tds}${hasActions ? `<td style="max-width:none;white-space:nowrap">${uLeadActions(l, i)}</td>` : ""}</tr>`;
     }).join("");
-    document.getElementById("leadsCount").textContent = rows.length
-      ? `${fmt(pg * PAGE + 1)}–${fmt(pg * PAGE + shown.length)} of ${fmt(rows.length)}`
+    const loadedNote = serverExhausted ? "" : ` · <span class="muted">${fmt(all.length)} of ${fmt(trueTotal)} loaded</span>`;
+    document.getElementById("leadsCount").innerHTML = rows.length
+      ? `${fmt(rows.length)} shown${loadedNote}`
       : "No people match";
-    const prev = document.getElementById("leadsPrev"), next = document.getElementById("leadsNext");
-    prev.disabled = pg <= 0;
-    next.disabled = pg >= pages - 1;
-    prev.onclick = () => { window._uLeadsPage = pg - 1; render(document.getElementById("leadsSearch").value); };
-    next.onclick = () => { window._uLeadsPage = pg + 1; render(document.getElementById("leadsSearch").value); };
+    const moreBtn = document.getElementById("leadsMore");
+    if (moreBtn) moreBtn.style.display = serverExhausted ? "none" : "";
     uRefreshSendAll();
   };
+
+  const loadMore = async () => {
+    if (serverExhausted) return;
+    const btn = document.getElementById("leadsMore");
+    if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
+    const next = await j(`/api/leads?campaign_id=${encodeURIComponent(campId)}&offset=${all.length}&limit=${U_LEADS_LOAD}`);
+    if (CURRENT && CURRENT.id !== campId) return;
+    const got = Array.isArray(next) ? next : [];
+    all.push(...got);
+    if (got.length < U_LEADS_LOAD) serverExhausted = true;
+    if (btn) { btn.disabled = false; btn.textContent = "Load more"; }
+    render(document.getElementById("leadsSearch").value);
+  };
+
   el.innerHTML = `
     <div class="leads-tools">
-      <input type="text" id="leadsSearch" placeholder="Search people…">
+      <input type="text" id="leadsSearch" placeholder="Search loaded people…">
       <span id="leadsChips" style="display:inline-flex;gap:6px;flex-wrap:wrap"></span>
       <span id="leadsSrcFilter"></span>
       ${uDestWarn()}
       <span style="flex:1"></span>
       <span class="muted" style="font-size:12px" id="leadsCount"></span>
-      <button class="pagebtn" id="leadsPrev" title="Previous page">‹</button>
-      <button class="pagebtn" id="leadsNext" title="Next page">›</button>
       <button class="btn sm" id="leadsSendAll" style="display:none"></button>
       ${exportBtn}
     </div>
-    <table class="leads-tbl"><tbody id="leadsRows"></tbody></table>`;
+    <div style="overflow-x:auto"><table class="leads-tbl"><thead id="leadsHead"></thead><tbody id="leadsRows"></tbody></table></div>
+    <div style="text-align:center;margin-top:12px"><button class="btn sm" id="leadsMore">Load more</button></div>`;
   render("");
   // one delegated handler for ✓ Send / ✕ Skip / Undo — rows re-render on every search
   document.getElementById("leadsRows").addEventListener("click", async (e) => {
@@ -2976,6 +2971,7 @@ async function renderLeadsTab() {
     await uSetVerdict(lead, btn.getAttribute("data-uverdict"));
     render(document.getElementById("leadsSearch").value);
   });
+  document.getElementById("leadsMore").addEventListener("click", loadMore);
   document.getElementById("leadsSendAll").addEventListener("click", () => uSendAllLeads(all, () =>
     render(document.getElementById("leadsSearch").value)));
   let deb = null;

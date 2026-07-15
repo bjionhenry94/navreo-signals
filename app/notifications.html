@@ -225,6 +225,39 @@
 .ab-why summary::before { content: "▸ "; font-size: 10px; }
 .ab-why[open] summary::before { content: "▾ "; }
 .ab-why-body { margin-top: 8px; }
+
+/* ══ OPTIMISER-WHY (tier1-live-ship Step 5) ══ Full-replacement preview
+   block, rendered inside the .ab-why expander for any row whose
+   action_type is replace_variants — mirrors the approved design reference
+   at tier1-uxlab-proto/optimiser.html (Why-framing, unchanged-part tags,
+   .diffhl highlight on the changed piece, Approve + paste-ready pair). */
+.ab-fix-why { margin-top: 4px; }
+.ab-fix-why .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin: 12px 0 4px; }
+.ab-fix-why .whysentence { font-size: 13px; color: var(--ink-2); line-height: 1.5; margin: 0 0 10px; }
+.diffhl { background: var(--amber-bg); color: #6B4A00; padding: 1px 4px; border-radius: 4px; font-weight: 600; }
+.tinytag {
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-3); background: var(--line); border-radius: 4px; padding: 1px 5px;
+  margin-right: 6px; vertical-align: 1px;
+}
+.emailpreview { margin: 4px 0 10px; }
+.emailpreview summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--ink-2); list-style: none; }
+.emailpreview summary::-webkit-details-marker { display: none; }
+.emailpreview summary::before { content: "▸ "; font-size: 10px; }
+.emailpreview[open] summary::before { content: "▾ "; }
+.fullemail {
+  margin-top: 8px; padding: 12px 14px; background: var(--bg-sunken); border-radius: var(--radius);
+  display: flex; flex-direction: column; gap: 10px; font-size: 13px; line-height: 1.55;
+}
+/* The drafted email's full body (tier1-live-ship Step 5 gap closure) - the
+   live Smartlead HTML (<div>/<br>) is stripped to plain text client-side
+   (stripEmailHtml) and re-escaped before render, so pre-wrap is what
+   reproduces its paragraph breaks safely rather than trusting raw HTML from
+   an LLM-touched field. */
+.fullemail .fullbody { white-space: pre-wrap; }
+.ab-fix-why .fixactions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.ab-fix-why .fixwarn { font-size: 11.5px; color: var(--ink-3); margin-top: 10px; line-height: 1.5; }
+.approvedpill { margin-left: 2px; }
 .shared-explainer-link { font-size: 12px; color: var(--orange-700); text-decoration: none; margin-left: 4px; white-space: nowrap; }
 .shared-explainer-link:hover { text-decoration: underline; }
 
@@ -340,6 +373,7 @@ tr.var-winner td.var-flagcell { color: var(--green); }
           <option value="all">All statuses</option>
           <option value="new">New</option>
           <option value="acknowledged">In progress</option>
+          <option value="approved">Approved</option>
           <option value="actioned">Completed</option>
           <option value="dismissed">Dismissed</option>
           <option value="resolved">Resolved</option>
@@ -421,8 +455,8 @@ document.getElementById("rail").outerHTML = renderRail("notifications");
    No full re-render after any action — only the touched DOM node is patched
    in place. */
 
-const STATUS_LABEL = { new: "New", acknowledged: "In progress", actioned: "Completed", dismissed: "Dismissed", resolved: "Resolved" };
-const STATUS_PILL_CLASS = { new: "o", acknowledged: "b", actioned: "g", dismissed: "n", resolved: "n" };
+const STATUS_LABEL = { new: "New", acknowledged: "In progress", approved: "Approved", actioned: "Completed", dismissed: "Dismissed", resolved: "Resolved" };
+const STATUS_PILL_CLASS = { new: "o", acknowledged: "b", approved: "g", actioned: "g", dismissed: "n", resolved: "n" };
 /* One-line tooltip per status, for newcomers hovering a status pill anywhere
    on the page (fix H1) — every status gets one, not just resolved. */
 const STATUS_TOOLTIP = {
@@ -1056,6 +1090,7 @@ function variantFindingCardHTML(n) {
       ${n.detail ? `<div class="ab-impact"><span>${esc(n.detail)}</span></div>` : ""}
       ${angle ? `<div class="ab-impact"><span><span class="jg" title="The persuasion angle or theme this variant's copy uses.">Angle</span>: ${esc(angle)}</span></div>` : ""}
       ${variantsTableHTML(variantsByCampaign.get(String(n.campaign_id)) || n)}
+      ${replacementFixHTML(n)}
     </div></details>
   </div>`;
 }
@@ -1229,6 +1264,219 @@ function variantsTableHTML(n) {
     <tbody>${rows}</tbody></table></div>${keyLine}`;
 }
 
+/* ══ OPTIMISER-WHY (tier1-live-ship Step 5) ══
+   Full-replacement preview appended inside the Why-expander for any row
+   whose action_type is replace_variants — the one action_type that proposes
+   brand-new copy to test (see build_notifications.py's REPLACE/rewrite
+   branches vs. scale_winner/disable_loser/fix_distribution, none of which
+   touch copy). Mirrors tier1-uxlab-proto/optimiser.html's Why-framing: a
+   plain-English "why flagged" sentence built from the row's real numbers, a
+   full-email preview with unchanged parts tagged and the recommended change
+   highlighted via .diffhl, an Approve + Copy paste-ready pair, and the
+   fixed API-safety warning.
+
+   GAP CLOSURE (2026-07-14): optimiser_notifications never carried a drafted
+   email body — only a RECOMMENDATION (suggested_action + detail + the
+   variant's own past angle). That gap is now closed on-demand: a "Draft the
+   fix" button POSTs /api/notifications/{id}/draft-fix (server.py), which
+   reads the flagged variant's LIVE current copy straight from Smartlead
+   (read-only GET .../sequences) and has an LLM draft a replacement that
+   keeps the icebreaker/offer/CTA byte-identical and swaps in a new problem
+   statement — cached on the row's draft_fix jsonb column so a second click
+   (or a page reload, since ?slim=1 now includes draft_fix — see server.py's
+   NOTIFICATIONS_SLIM_SELECT) is a Supabase read, not a second LLM call. Until
+   that click happens, the card shows the same honest why-sentence as before
+   plus the new button — never fabricated copy. */
+
+/* draft_fix arrives as a jsonb column - already an object from Supabase, but
+   defend against a stringified value the same way parsedVariants() does. */
+function parsedDraftFix(n) {
+  let d = n.draft_fix;
+  if (typeof d === "string") {
+    try { d = JSON.parse(d); } catch { d = null; }
+  }
+  return (d && typeof d === "object" && d.body_html) ? d : null;
+}
+
+/* draft.body_html is Smartlead's own markup (<div>.../<br> paragraph breaks
+   - despite the field name, it's what Smartlead's editor stores, not a
+   sanitised fragment) with exactly one sentence swapped in server-side (see
+   server.py's _replace_verbatim_or_normalized). Every other line/section is
+   byte-identical to what is live right now. Stripped to plain text with
+   real line breaks for display/clipboard, then esc()'d before ever touching
+   innerHTML — this house style never trusts raw HTML into the DOM, even
+   HTML that originated from the account's own Smartlead sequence. */
+function stripEmailHtml(html) {
+  return String(html || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(div|p)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/* The full drafted email, rendered inside .fullemail: subject line, a note
+   naming which parts (icebreaker/offer/CTA) were identified and kept
+   verbatim, and the WHOLE body with the new problem statement highlighted
+   via .diffhl - never just the tagged fragments, so nothing the model
+   didn't bucket into kept.* (a sign-off, a footer line, etc.) silently
+   disappears from the preview the way the old placeholder's 3-line
+   reconstruction would have. */
+function draftedEmailHTML(draft) {
+  const kept = draft.kept || {};
+  const plainBody = esc(stripEmailHtml(draft.body_html));
+  const plainChanged = esc(stripEmailHtml(draft.changed_sentence));
+  const marked = (plainChanged && plainBody.includes(plainChanged))
+    ? plainBody.split(plainChanged).join(`<span class="diffhl">${plainChanged}</span>`)
+    // Shouldn't happen - the server only saves a draft once the swap
+    // succeeded - but never silently drop the highlight if the escaped
+    // forms don't line up; show the honest unhighlighted body instead of
+    // guessing.
+    : plainBody;
+  const keptParts = ["icebreaker", "offer", "cta"].filter((k) => kept[k]);
+  const keptNote = keptParts.length
+    ? `${keptParts.join(", ")} identified and kept exactly as live in Smartlead - only the highlighted sentence below changes.`
+    : `Everything except the highlighted sentence below is kept exactly as live in Smartlead.`;
+  const subjectHTML = draft.subject
+    ? esc(draft.subject)
+    : `<span class="jg" title="This step has no subject line in Smartlead - normal for a same-thread follow-up email">(no subject - follow-up in thread)</span>`;
+  return [
+    `<div class="emailline"><span class="tinytag">subject</span>${subjectHTML}</div>`,
+    `<div class="emailline small muted"><span class="tinytag">unchanged</span>${esc(keptNote)}</div>`,
+    `<div class="emailline fullbody">${marked}</div>`,
+  ].join("");
+}
+
+/* Plain-text subject+body for the clipboard - spintax/merge tags intact,
+   Smartlead's <div>/<br> markup stripped to real line breaks (see
+   stripEmailHtml) so what gets pasted into Smartlead's editor is clean text,
+   not literal HTML tags. */
+function draftPasteReadyText(n, draft) {
+  return [`Subject: ${draft.subject || ""}`, ``, stripEmailHtml(draft.body_html)].join("\n");
+}
+
+/* The specific variant this row's replacement targets, using the same
+   failing/off logic variantsTableHTML already uses so the two never
+   disagree. Falls back to the campaign's own variants (via
+   variantsByCampaign, same lookup variantFindingCardHTML uses) when the row
+   itself carries none.
+
+   A Section 4 variant-analysis card names ONE specific variant in its own
+   title ("Variant call: Email 1 Var B") - matched here via parseVariantTitle
+   so the Why-sentence/preview never names a different variant than the
+   card's own header, even when several variants in the campaign are
+   failing. A Section 7 rollup card (one row per campaign, title is always
+   "Recommended actions", no single named variant) and the "Whole offer
+   failing" row have no such name to match, so they fall through to
+   worst-first (fewest positives, then most sent). */
+function flaggedVariantFor(n) {
+  const variants = parsedVariants(n) || parsedVariants(variantsByCampaign.get(String(n.campaign_id)));
+  if (!variants) return null;
+  const failing = variants.filter((v) => {
+    const flags = v.flags || [];
+    return flags.includes("failing") && !flags.includes("disabled") && !flags.includes("zero_distribution");
+  });
+  if (!failing.length) return null;
+  const p = parseVariantTitle(n.title);
+  if (p && !p.wholeOffer && p.email) {
+    const named = failing.find((v) => String(v.email ?? "") === String(p.email)
+      && (p.variant ? String(v.variant || "") === String(p.variant) : !v.variant));
+    if (named) return { variant: named, count: failing.length, named: true };
+  }
+  failing.sort((a, b) => (a.positives || 0) - (b.positives || 0) || (b.sent || 0) - (a.sent || 0));
+  return { variant: failing[0], count: failing.length, named: false };
+}
+
+/* One dynamic plain-English sentence from the row's real numbers, e.g.
+   "Variant B has sent 840 emails with zero replies. The problem statement
+   is the tested variable, so that is what changes." Falls back to the
+   row's own campaign-level sent/positive (always present via row_base) for
+   the "Whole offer failing" case, which has no single flagged variant. */
+function replacementWhySentence(n) {
+  const found = flaggedVariantFor(n);
+  if (found) {
+    const v = found.variant;
+    const label = `Email ${esc(String(v.email ?? "?"))}${v.variant ? ` Var ${esc(v.variant)}` : ""}`;
+    const repliesWord = !v.replies ? "zero replies" : `only ${fmt(v.replies)} repl${v.replies === 1 ? "y" : "ies"}`;
+    const multiNote = found.count > 1
+      ? (found.named ? ` ${found.count} variants are failing in this campaign.` : ` This is the worst of ${found.count} failing variants in this campaign.`)
+      : "";
+    return `${label} has sent ${fmt(v.sent)} emails with ${repliesWord}.${multiNote} The problem statement is the tested variable, so that is what changes.`;
+  }
+  const repliesWord = !n.positive ? "zero positive replies" : `only ${fmt(n.positive)} positive repl${n.positive === 1 ? "y" : "ies"}`;
+  return `This campaign has sent ${fmt(n.sent)} emails with ${repliesWord} at campaign level. The problem statement is the tested variable, so that is what changes.`;
+}
+
+/* The recommended-change line for the .diffhl highlight: whatever the row
+   actually says to do (suggested_action) plus the flagged variant's own
+   past angle when known, real text throughout, never invented copy. */
+function replacementChangeText(n) {
+  const found = flaggedVariantFor(n);
+  const action = (n.suggested_action || "Replace the problem statement").trim();
+  const angle = (found && found.variant.angle) || parseAngle(n.detail);
+  const angleNote = angle ? ` Current angle: ${angle}, the tested variable is the next one.` : "";
+  return `${action}.${angleNote}`;
+}
+
+/* Paste-ready block for both the "Copy paste-ready email" button and
+   Approve. Once a draft_fix exists, this is the ACTUAL drafted replacement
+   email (subject + full body, spintax/merge tags intact) — see
+   draftPasteReadyText. Before a draft exists (no button click yet, or a
+   non-replace_variants row), falls back to the honest RECOMMENDATION summary
+   this always was, pointing at "Draft the fix" / "Copy Claude prompt" as the
+   next step. */
+function pasteReadyText(n) {
+  const draft = parsedDraftFix(n);
+  if (draft) return draftPasteReadyText(n, draft);
+  const found = flaggedVariantFor(n);
+  const who = found
+    ? `Email ${esc(String(found.variant.email ?? "?"))}${found.variant.variant ? ` Var ${found.variant.variant}` : ""}`
+    : (n.title || "Whole offer");
+  const bullets = (n.detail || "").split("\n").filter((l) => l.trim().startsWith("- ")).join("\n");
+  return [
+    `${n.campaign_name || "Campaign"} — ${who}`,
+    ``,
+    `Recommendation: ${(n.suggested_action || "Replace the problem statement").trim()}`,
+    ``,
+    bullets || (n.detail || ""),
+    ``,
+    `Icebreaker, offer and CTA stay exactly as live in Smartlead, only the problem statement changes. Use Draft the fix (or Copy Claude prompt) to draft the replacement, then paste the finished sequence into Smartlead's editor yourself.`,
+  ].join("\n");
+}
+
+function replacementFixHTML(n) {
+  if (n.action_type !== "replace_variants") return "";
+  const id = esc(String(n.id));
+  const draft = parsedDraftFix(n);
+  const approved = n.status === "approved";
+
+  if (!draft) {
+    return `<div class="ab-fix-why" data-fixwhy-id="${id}">
+      <div class="eyebrow">Why this is flagged</div>
+      <div class="whysentence">${esc(replacementWhySentence(n))}</div>
+      <div class="fixactions">
+        <button type="button" class="btn sm primary" data-act="draft-fix" data-id="${id}">Draft the fix</button>
+      </div>
+      <div class="fixwarn">Drafts a full replacement email from the live Smartlead copy - the icebreaker, offer and CTA stay exactly as they are today, only the problem statement changes.</div>
+    </div>`;
+  }
+
+  return `<div class="ab-fix-why" data-fixwhy-id="${id}">
+    <div class="eyebrow">Why this is flagged</div>
+    <div class="whysentence">${esc(replacementWhySentence(n))}</div>
+    <details class="emailpreview" open>
+      <summary>Full replacement email</summary>
+      <div class="fullemail">${draftedEmailHTML(draft)}</div>
+    </details>
+    <div class="fixactions">
+      <button type="button" class="btn sm" data-act="copy-paste-ready" data-id="${id}">Copy paste-ready email</button>
+      <button type="button" class="btn sm primary" data-act="approve-fix" data-id="${id}">Approve</button>
+      ${approved ? '<span class="pill g approvedpill">Approved</span>' : ""}
+    </div>
+    <div class="fixwarn">Applying happens in Smartlead's UI on purpose: saving sequences by API resets variant stats. Copy this email and paste it in manually.</div>
+  </div>`;
+}
+
 /* fix-split cross-tag: the strategist panel's exact worry was a variant with
    an unconfigured 0% split sitting on a card whose action_type is something
    OTHER than fix_distribution (e.g. a kill_threshold_pivot card whose ratios
@@ -1275,7 +1523,7 @@ function actionBlockHTML(n) {
   const showCopy = CLAUDE_PROMPT_ACTION_TYPES.has(n.action_type);
   const rendered = bullets.map(renderBullet);
   const reasonCount = bullets.length;
-  const whyBody = `${reasonCount ? `<ul class="action-list">${rendered.map((r) => `<li>${r.html}</li>`).join("")}</ul>` : ""}${variantsTableHTML(n)}`;
+  const whyBody = `${reasonCount ? `<ul class="action-list">${rendered.map((r) => `<li>${r.html}</li>`).join("")}</ul>` : ""}${variantsTableHTML(n)}${replacementFixHTML(n)}`;
   const showWhy = reasonCount > 0 || !!parsedVariants(n);
   return `<div class="${cls.join(" ")}" id="ab-${esc(String(n.id))}" data-id="${esc(String(n.id))}">
     <div class="ab-head">
@@ -1778,6 +2026,28 @@ document.getElementById("list").addEventListener("click", async (e) => {
     return;
   }
 
+  const copyPasteBtn = e.target.closest('[data-act="copy-paste-ready"]');
+  if (copyPasteBtn) {
+    e.preventDefault();
+    const row = all.find((n) => String(n.id) === String(copyPasteBtn.dataset.id));
+    if (row) { await writeClipboard(pasteReadyText(row)); flashCopied(copyPasteBtn); }
+    return;
+  }
+
+  const draftFixBtn = e.target.closest('[data-act="draft-fix"]');
+  if (draftFixBtn) {
+    e.preventDefault();
+    await draftFix(draftFixBtn.dataset.id, draftFixBtn);
+    return;
+  }
+
+  const approveBtn = e.target.closest('[data-act="approve-fix"]');
+  if (approveBtn) {
+    e.preventDefault();
+    await approveFix(approveBtn.dataset.id, approveBtn);
+    return;
+  }
+
   const btn = e.target.closest("[data-target]");
   if (!btn || btn.disabled) return;
   e.preventDefault();
@@ -2097,6 +2367,85 @@ async function copyAuditPrompt(btn) {
   const text = buildAuditPrompt(btn.dataset.campaign, btn.dataset.url);
   await writeClipboard(text);
   flashCopied(btn);
+}
+
+/* Draft the fix (tier1-live-ship Step 5 gap closure): POSTs
+   /api/notifications/{id}/draft-fix, which reads the flagged variant's LIVE
+   copy from Smartlead (read-only) and has an LLM draft a full replacement
+   email, cached server-side on draft_fix. Patches all[] with the response
+   and swaps just the .ab-fix-why node in place — not a full applyRowPatch,
+   because a row-{id} variant-analysis card (variantFindingCardHTML) never
+   gets its Why-body rebuilt by applyRowPatch (see that function's own
+   comment), so this has to reach into the DOM directly the same way
+   markApprovedPill already does for that card type. */
+async function draftFix(id, btn) {
+  const restore = busyBtn(btn, "Drafting…");
+  if (!restore) return;
+  try {
+    const res = await fetch(`/api/notifications/${encodeURIComponent(id)}/draft-fix`, { method: "POST" });
+    const body = await res.json();
+    if (!res.ok || body.ok === false) {
+      throw new Error(body.message || `HTTP ${res.status}`);
+    }
+    const idx = all.findIndex((n) => String(n.id) === String(id));
+    if (idx >= 0) {
+      all[idx] = { ...all[idx], draft_fix: body.draft_fix };
+      bustNotifCache();
+      renderFixWhyInPlace(all[idx]);
+    }
+    restore();
+  } catch (err) {
+    restore();
+    protoNote("Draft failed, retry. " + (err.message || "network error"));
+  }
+}
+
+/* Swap just the .ab-fix-why node inside whichever card shape (#ab-{id} or
+   #row-{id}) currently has this row's Why-expander open, without touching
+   anything else on the card (scroll position, other buttons' busy state,
+   sibling Why content). Used by both draftFix (new drafted email) and
+   approveFix (approved pill) so neither has to force a full re-render just
+   to update this one block. No-op if the card isn't on screen right now
+   (e.g. its section is collapsed) — the fresh data in all[] still renders
+   correctly whenever that section is next opened/drawn. */
+function renderFixWhyInPlace(n) {
+  const card = document.getElementById(`ab-${CSS.escape(String(n.id))}`) || document.getElementById(`row-${CSS.escape(String(n.id))}`);
+  if (!card) return;
+  const existing = card.querySelector(".ab-fix-why");
+  if (!existing) return;
+  const tmp = document.createElement("div");
+  tmp.innerHTML = replacementFixHTML(n).trim();
+  existing.replaceWith(tmp.firstElementChild);
+}
+
+/* Approve (OPTIMISER-WHY, tier1-live-ship Step 5): sets the row's real
+   status to 'approved' (the status CHECK constraint was widened to allow it
+   — see server.py's NOTIFICATION_STATUSES) and copies the drafted email as
+   paste-ready text. Durable: n.status === "approved" is what
+   replacementFixHTML checks to show the green pill, so a refresh keeps
+   showing it, unlike the old client-only-Set version. Uses the same
+   performStatusChange PATCH every other status action uses. */
+async function approveFix(id, btn) {
+  const restore = busyBtn(btn, "Approving…");
+  if (!restore) return;
+  const row = all.find((n) => String(n.id) === String(id));
+  try {
+    let current = row;
+    if (!row || row.status !== "approved") {
+      current = await performStatusChange(id, "approved");
+      applyRowPatch(current);
+      // applyRowPatch fully rebuilds an ab-{id} card (so its pill already
+      // shows), but only toggles a row-{id} card's dimmed class - belt and
+      // suspenders for that shape, this is a no-op if the pill is already there.
+      renderFixWhyInPlace(current);
+    }
+    if (current) await writeClipboard(pasteReadyText(current));
+    restore();
+    showActionToast("Approved and copied as paste-ready copy. Sequences are never saved by API, that wipes the A/B history, so the paste into Smartlead stays manual.", null);
+  } catch (err) {
+    restore();
+    protoNote("Approve failed, retry. " + (err.message || "network error"));
+  }
 }
 
 /* --- Success toast w/ Undo (fix #3) ---

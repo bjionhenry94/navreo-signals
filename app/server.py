@@ -2228,7 +2228,12 @@ def _clear_ui_caches():
     _NOTIFICATIONS_SWR.clear()
 
 
-NOTIFICATION_STATUSES = ("new", "acknowledged", "actioned", "dismissed")
+NOTIFICATION_STATUSES = ("new", "acknowledged", "actioned", "dismissed", "approved")
+# "approved" (tier1-live-ship Step 5 gap closure, 2026-07-14): the DB's status
+# CHECK constraint was widened to add it (see app/optimiser_notifications.sql's
+# v3 note above the constraint for the widen pattern) so the notifications.html
+# Approve button on a replace_variants row's drafted-fix card can PATCH a real,
+# durable status instead of the old "reuse acknowledged" workaround.
 _NOTIFICATION_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}  # unranked/None sorts last
 
 # canonical client id -> free-text name variants this table's legacy `client`
@@ -2243,12 +2248,19 @@ NOTIFICATIONS_CLIENT_ALIASES = {
 # Every optimiser_notifications column EXCEPT claude_prompt (per
 # app/optimiser_notifications.sql) — the ?slim=1 payload-weight fix. Keep in
 # sync with that schema file if columns are ever added/removed.
+#
+# draft_fix IS included here (unlike claude_prompt): it's a small jsonb blob
+# (null on almost every row — only populated once a CSM clicks "Draft the
+# fix" on a replace_variants row) rather than a several-KB text column, so
+# there's no payload-weight reason to slim it out. Including it lets the
+# initial list render a drafted replacement immediately on page load without
+# a second per-row fetch — see notifications.html's replacementFixHTML.
 NOTIFICATIONS_SLIM_SELECT = (
     "id,campaign_id,campaign_name,client,client_id,finding_type,section,"
     "block_number,priority,title,detail,suggested_action,action_type,"
     "api_safe,smartlead_url,sent,positive,replied,sent_pos_ratio,"
     "completion_pct,reply_rate,status,created_at,actioned_at,variants,"
-    "impact_score,impact_reason,meetings"
+    "impact_score,impact_reason,meetings,draft_fix"
 )
 
 
@@ -2362,6 +2374,283 @@ def update_notification_status(nid: str, status: str) -> dict:
     if not result:
         raise LookupError("notification not found")
     return result[0]
+
+
+# ── draft-fix (tier1-live-ship Step 5 gap closure, 2026-07-14) ──────────────
+# On-demand LLM draft of the FULL replacement email for a replace_variants
+# row's flagged variant. The click on notifications.html's "Draft the fix"
+# button IS the credit-control gate — this machinery must never be called
+# from api_notifications()/_compute_notifications_list() or any other list/
+# compute path, only from the POST route below.
+
+DRAFT_FIX_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        # The exact substring of the CURRENT email body that is the problem
+        # statement being replaced — copied verbatim so the server (not the
+        # model) can do the substitution. This is what actually guarantees
+        # the subject/icebreaker/offer/CTA come out byte-identical: the
+        # server only ever touches the span the model names here, never
+        # regenerates the rest of the body (or the subject) itself. See
+        # api_notification_draft_fix's subject-handling comment for why
+        # subject isn't a separate model-authored field.
+        "old_sentence": {"type": "string"},
+        # The new problem statement (45-70 words, no em dashes) that replaces
+        # old_sentence.
+        "changed_sentence": {"type": "string"},
+        "kept": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "icebreaker": {"type": "string"},
+                "offer": {"type": "string"},
+                "cta": {"type": "string"},
+            },
+            "required": ["icebreaker", "offer", "cta"],
+        },
+    },
+    "required": ["old_sentence", "changed_sentence", "kept"],
+}
+
+
+def _parsed_variants_list(row: dict) -> list | None:
+    variants = row.get("variants")
+    if isinstance(variants, str):
+        try:
+            variants = json.loads(variants)
+        except ValueError:
+            return None
+    return variants if isinstance(variants, list) else None
+
+
+def _flagged_variant_for_row(row: dict, variants: list) -> dict | None:
+    """Mirrors notifications.html's flaggedVariantFor(n) exactly (same
+    failing/off flag logic, same title-match-else-worst-first fallback) so
+    the server never drafts a fix for a different variant than the one the
+    Why-expander names on screen."""
+    failing = [v for v in variants if isinstance(v, dict)
+               and "failing" in (v.get("flags") or [])
+               and "disabled" not in (v.get("flags") or [])
+               and "zero_distribution" not in (v.get("flags") or [])]
+    if not failing:
+        return None
+    m = _VARIANT_CALL_TITLE_RE.match(row.get("title") or "")
+    if m:
+        email_num = m.group(1)
+        variant_label = (m.group(2) or "").strip()
+        for v in failing:
+            if str(v.get("email") or "") == str(email_num) and (
+                (variant_label and str(v.get("variant") or "") == variant_label)
+                or (not variant_label and not v.get("variant"))
+            ):
+                return v
+    failing = sorted(failing, key=lambda v: ((v.get("positives") or 0), -(v.get("sent") or 0)))
+    return failing[0]
+
+
+def _winning_variant_for_row(variants: list) -> dict | None:
+    winners = [v for v in variants if isinstance(v, dict) and "winner" in (v.get("flags") or [])]
+    if not winners:
+        return None
+    winners.sort(key=lambda v: ((v.get("positives") or 0), (v.get("meetings") or 0),
+                                 (v.get("replies") or 0)), reverse=True)
+    return winners[0]
+
+
+def _extract_smartlead_variant_copy(sequences: list, email_num, variant_label) -> tuple | None:
+    """(subject, body) for one step/variant out of a fresh
+    GET /campaigns/{id}/sequences response. `email_num` matches a step's
+    seq_number (1-indexed, same field build_notifications.py stores as
+    `email` on the row's variants jsonb); `variant_label` matches a
+    sequence_variants[].variant_label (case-insensitive), or None for the
+    step-level (no-A/B, e.g. Email 2) copy. Falls back to the step's own
+    subject/body when the variant row doesn't override one of them (Smartlead
+    variants can inherit either field from the step)."""
+    for s in sequences:
+        if str(s.get("seq_number")) != str(email_num):
+            continue
+        if variant_label:
+            for v in (s.get("sequence_variants") or []):
+                if v.get("is_deleted"):
+                    continue
+                if str(v.get("variant_label") or "").strip().lower() == str(variant_label).strip().lower():
+                    subject = v.get("subject") if v.get("subject") is not None else s.get("subject")
+                    body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
+                    return (subject or "", body or "")
+            return None
+        return (s.get("subject") or "", s.get("email_body") or "")
+    return None
+
+
+def _replace_verbatim_or_normalized(haystack: str, needle: str, replacement: str) -> str | None:
+    """Swap `needle` for `replacement` inside `haystack`. Tries an exact
+    substring match first (the common case for a careful verbatim copy);
+    falls back to a whitespace-insensitive match (collapsing any run of
+    whitespace in `needle` to \\s+) since a minimal-effort completion
+    occasionally normalises internal line breaks/spacing when it copies a
+    span out of HTML-ish email_body text. Returns None (caller must report a
+    clear error, never fabricate) if neither matches — this is the one place
+    that guarantees the icebreaker/offer/CTA never get silently rewritten."""
+    if not needle:
+        return None
+    if needle in haystack:
+        return haystack.replace(needle, replacement, 1)
+    pattern = re.sub(r"\s+", r"\\s+", re.escape(needle))
+    m = re.search(pattern, haystack, flags=re.DOTALL)
+    if not m:
+        return None
+    return haystack[:m.start()] + replacement + haystack[m.end():]
+
+
+def api_notification_draft_fix(nid: str) -> tuple:
+    """POST /api/notifications/<id>/draft-fix.
+
+    Cache-first: a non-null draft_fix already on the row is returned as-is —
+    no LLM spend, no Smartlead call, this IS the cache-hit path the ship
+    brief asks for.
+
+    READ-ONLY against Smartlead: the ONLY Smartlead call in this function is
+    GET /campaigns/{id}/sequences (via _smartlead_json). NEVER a sequences
+    POST/save — that resets variant stats, exactly what the card's fixwarn
+    note tells the CSM to avoid by pasting manually.
+
+    The model never reassembles the icebreaker/offer/CTA itself: it names the
+    exact substring to replace (old_sentence) and the server does the
+    substitution against the untouched current_body, so those three parts
+    come out of this endpoint byte-identical to what is live in Smartlead
+    right now, not merely "close" to it.
+    """
+    rows = sb("GET", f"optimiser_notifications?id=eq.{nid}")
+    if not isinstance(rows, list) or not rows:
+        return 404, {"ok": False, "message": "notification not found"}
+    row = rows[0]
+
+    if row.get("action_type") != "replace_variants":
+        return 400, {"ok": False, "message": "draft-fix only applies to replace_variants rows"}
+
+    cached = row.get("draft_fix")
+    if isinstance(cached, dict) and cached:
+        return 200, {"ok": True, "cache_hit": True, "draft_fix": cached}
+
+    variants = _parsed_variants_list(row)
+    if not variants:
+        return 400, {"ok": False, "message": "this row has no variant breakdown to draft from"}
+
+    flagged = _flagged_variant_for_row(row, variants)
+    if not flagged:
+        return 400, {"ok": False, "message": "could not identify the flagged (failing) variant on this row"}
+
+    try:
+        campaign_id = int(row.get("campaign_id"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign_id is not numeric"}
+
+    if not KEYS.get("SMARTLEAD_API_KEY"):
+        return 503, {"ok": False, "message": "SMARTLEAD_API_KEY is not configured on this server"}
+
+    sequences_raw = _smartlead_json("GET", f"/campaigns/{campaign_id}/sequences")
+    sequences = sequences_raw if isinstance(sequences_raw, list) else (
+        (sequences_raw.get("data") or sequences_raw.get("sequences") or [])
+        if isinstance(sequences_raw, dict) else [])
+    if not sequences:
+        return 502, {"ok": False, "message": "Smartlead returned no sequences for this campaign",
+                      "smartlead_url": row.get("smartlead_url")}
+
+    current = _extract_smartlead_variant_copy(sequences, flagged.get("email"), flagged.get("variant"))
+    if not current:
+        return 404, {"ok": False,
+                      "message": "the flagged variant was not found in Smartlead's current sequence — it "
+                                 "may have been edited or removed since this finding was generated",
+                      "smartlead_url": row.get("smartlead_url")}
+    current_subject, current_body = current
+    if not current_body.strip():
+        return 400, {"ok": False, "message": "the flagged variant has no email body in Smartlead to draft from"}
+
+    winner = _winning_variant_for_row(variants)
+    winner_copy = None
+    if winner:
+        winner_copy = _extract_smartlead_variant_copy(sequences, winner.get("email"), winner.get("variant"))
+
+    tried = sorted({(v.get("angle") or "").strip() for v in variants
+                    if isinstance(v, dict) and (v.get("angle") or "").strip()})
+
+    key = KEYS.get("OPENAI_API_KEY")
+    if not key:
+        return 503, {"ok": False, "message": "OPENAI_API_KEY missing from ~/.navreo-keys.env"}
+
+    system = (
+        "You rewrite ONE underperforming cold-email variant for a B2B outbound agency. The email "
+        "has, in order: an icebreaker/opening personalisation line, a problem-statement paragraph, "
+        "an offer, and a call to action (CTA). old_sentence must be copied CHARACTER FOR CHARACTER "
+        "from the current email body given to you — it is the existing problem-statement span that "
+        "will be swapped out; a paraphrase or a small edit to it makes the swap fail. changed_sentence "
+        "is the NEW problem statement that replaces it: a different argument than every angle already "
+        "tried on this campaign (do not reuse or lightly reword a tried angle), 45-70 words, plain "
+        "English, no em dashes, and any merge tags or spintax present in the surrounding email "
+        "preserved exactly if the new sentence needs them. kept.icebreaker, kept.offer and kept.cta "
+        "are the exact verbatim icebreaker/offer/CTA text from the current email (character for "
+        "character, including merge tags like {{first_name}} and spintax like {a|b}) — copied for "
+        "display only, they are never edited."
+    )
+    user_bits = [
+        f"Current subject: {current_subject}",
+        f"Current full email body:\n{current_body}",
+    ]
+    if tried:
+        user_bits.append("Problem-statement angles already tried on this campaign (do not repeat any of "
+                          "these, even reworded): " + "; ".join(tried))
+    if winner_copy and winner_copy[1].strip():
+        user_bits.append("For tone/register reference only — a DIFFERENT variant that is winning on this "
+                          "campaign, do not copy its problem statement or angle:\n" + winner_copy[1])
+    user = "\n\n".join(user_bits)
+
+    try:
+        out = _suggest_llm(key, system, user, "draft_fix", DRAFT_FIX_SCHEMA)
+    except Exception as e:  # noqa: BLE001 — surface as a clear JSON error, never a bare 500
+        return 502, {"ok": False, "message": f"draft generation failed: {str(e)[:300]}"}
+
+    old_sentence = (out.get("old_sentence") or "").strip()
+    changed_sentence = (out.get("changed_sentence") or "").strip()
+    if not changed_sentence:
+        return 502, {"ok": False, "message": "draft generation returned no replacement text"}
+    body_html = _replace_verbatim_or_normalized(current_body, old_sentence, changed_sentence)
+    if body_html is None:
+        return 502, {"ok": False,
+                      "message": "draft generation could not isolate the problem statement in the live "
+                                 "copy — try again, or edit the sequence directly in Smartlead"}
+
+    # Subject is server-authoritative, not model-trusted: it stays byte-
+    # identical to the live subject (which is legitimately "" on a lot of
+    # follow-up steps, e.g. Email 2 replying in-thread — a minimal-effort
+    # completion asked to "return the subject unchanged" on an EMPTY current
+    # subject has been observed inventing text instead of echoing blank). The
+    # one exception the prompt allows — the subject literally quoting the old
+    # problem statement — is applied here with the same verbatim/normalized
+    # swap as the body, never by trusting out.get("subject") directly.
+    subject = current_subject
+    if old_sentence and old_sentence in current_subject:
+        subject = current_subject.replace(old_sentence, changed_sentence, 1)
+
+    draft_fix = {
+        "subject": subject.strip(),
+        "body_html": body_html,
+        "changed_sentence": changed_sentence,
+        "kept": {
+            "icebreaker": ((out.get("kept") or {}).get("icebreaker") or "").strip(),
+            "offer": ((out.get("kept") or {}).get("offer") or "").strip(),
+            "cta": ((out.get("kept") or {}).get("cta") or "").strip(),
+        },
+        "tried": tried,
+        "drafted_at": _now_iso(),
+        "model": SUGGEST_MODEL,
+    }
+    result = sb("PATCH", f"optimiser_notifications?id=eq.{nid}", {"draft_fix": draft_fix},
+                prefer="return=representation")
+    if not isinstance(result, list) or not result:
+        return 502, {"ok": False, "message": "draft generated but failed to save — Supabase unavailable, retry"}
+
+    log_activity("/api/notifications/draft-fix", {"campaign_id": campaign_id}, action="draft",
+                 entity="notification", entity_id=nid)
+    return 200, {"ok": True, "cache_hit": False, "draft_fix": draft_fix}
 
 
 # ── executable notification actions (Optimiser CSM-approval gate) ───────
@@ -5963,6 +6252,929 @@ def _collective_30d() -> dict:
 _COLLECTIVE_30D_SWR = _SWRCache(_collective_30d, 300,
                                 is_degraded=lambda p: not (isinstance(p, dict) and p.get("sent") is not None),
                                 name="collective-30d")
+
+
+# ── tier1-live-ship Step 2: campaign detail insights, hiring-signal campaign
+# ideas, and recontact. Hard rules baked into every function below:
+#   - nothing here activates a campaign or sends anything (drafts + QA-gate only)
+#   - Smartlead sequence-save NEVER targets an id that already had sequences
+#     (see execute_disable_variant_action's docstring at ~2553 for the one
+#     existing-campaign exception; _create_smartlead_shell_from_god is the
+#     other, and only ever targets a campaign this same call just created)
+#   - idea generation is hiring-signal only, and only ever runs from an
+#     explicit POST (never on a GET/page load)
+WORKSPACE_TAG = "navreo"  # sent_messages/replies/contact_history/campaigns tag
+                          # (matches setter.py's WORKSPACE) - every query below
+                          # scopes to it explicitly
+
+
+def _tier1_write_ok(res) -> bool:
+    """True when an sb() write actually succeeded. A return=minimal success is
+    `{}`; a hard failure (network/timeout, sb()'s own retry-then-give-up path)
+    is None; a PostgREST error (e.g. PGRST205 'table not found', so this write
+    happened before the migration was applied) comes back as a DICT CARRYING A
+    `message` key, not None - same shape _lists_sb_error (~2737) checks for.
+    Checking `res is not None` alone (an earlier draft of this code did) reads
+    that error dict as success, which is exactly the "table not found" case
+    this whole helper exists to catch."""
+    if res is None:
+        return False
+    if isinstance(res, dict) and res.get("message"):
+        return False
+    return True
+
+
+# ── 1. Campaign insights (proxy source attribution + deterministic findings) ─
+_POS_REPLY_CATS = {"Interested", "Call Booked", "Meeting Request", "Information Request"}
+_MEETING_REPLY_CATS = {"Call Booked", "Meeting Request"}
+_IN_PROGRESS_STATUSES = {"INPROGRESS", "STARTED", "PAUSED"}
+
+
+def _campaign_draft_ids_for_sl(sid) -> set:
+    """draft ids whose destination points at this Smartlead campaign - same
+    join _campaign_source_ids (~5559) does, factored out so campaign-insights
+    and campaign-ideas can share it (both need the full source dicts, not
+    just ids)."""
+    sid = str(sid)
+    drafts, _failed = _cached_campaign_drafts()
+    return {str(d.get("id")) for d in (drafts or [])
+            if str((d.get("destination") or {}).get("smartlead_campaign_id") or "") == sid
+            and d.get("id") and not d.get("deleted_at")}
+
+
+def _campaign_sources_full(sid) -> list:
+    """Every non-deleted source doc feeding Smartlead campaign `sid` - same
+    draft-resolution join as _campaign_source_ids, but returns the source
+    dicts (id/name/mechanism/config/params/titles), not just ids."""
+    draft_ids = _campaign_draft_ids_for_sl(sid)
+    if not draft_ids:
+        return []
+    srcs = _cached_read_drafts() or []
+    return [s for s in srcs if str(s.get("campaign_id") or "") in draft_ids
+            and s.get("id") and not s.get("deleted_at")]
+
+
+def _campaign_primary_draft(sid) -> dict | None:
+    """One representative campaign_drafts doc for `sid` (name/client_id) - a
+    campaign normally resolves to exactly one draft."""
+    draft_ids = _campaign_draft_ids_for_sl(sid)
+    if not draft_ids:
+        return None
+    drafts, _failed = _cached_campaign_drafts()
+    return next((d for d in (drafts or []) if str(d.get("id")) in draft_ids), None)
+
+
+def _campaign_insights_findings(sid: str, ro: dict, per_source: list,
+                                ro_unavailable: bool = False) -> dict:
+    """Deterministic (no LLM) plain-English findings: a summary line against
+    the 1% fleet reply-rate benchmark, working/not-working sources from the
+    reply-rate spread, concrete change suggestions, and this campaign's open
+    optimiser rows. Every sentence is plain English, no jargon, no em dashes."""
+    sent = ro.get("sent") or 0
+    replied = ro.get("replied") or 0
+    reply_rate = round(100.0 * replied / sent, 2) if sent else None
+    if ro_unavailable:
+        summary = ("Live campaign numbers could not be fetched just now, so the "
+                   "summary is hidden rather than shown as zeros. Refresh in a minute.")
+    elif not sent:
+        summary = "This campaign has not sent any emails yet."
+    elif reply_rate is None:
+        summary = "Smartlead has not reported a reply rate for this campaign yet."
+    elif reply_rate >= 1.0:
+        summary = (f"This campaign is replying at {reply_rate}%, at or above the 1% benchmark "
+                   f"most cold campaigns aim for.")
+    else:
+        summary = (f"This campaign is replying at {reply_rate}%, below the 1% benchmark "
+                   f"most cold campaigns aim for.")
+
+    working, not_working, changes = [], [], []
+    rated = [r for r in per_source if r["reply_pct"] is not None and r["sent"] >= 20]
+    if len(rated) >= 2:
+        avg = sum(r["reply_pct"] for r in rated) / len(rated)
+        for r in rated:
+            if r["reply_pct"] >= avg * 1.3 and r["reply_pct"] - avg >= 0.3:
+                working.append(f"{r['name']} is replying at {r['reply_pct']}%, well above this "
+                               f"campaign's own average of {round(avg, 2)}%.")
+            elif r["reply_pct"] <= avg * 0.7 and avg - r["reply_pct"] >= 0.3:
+                not_working.append(f"{r['name']} is replying at {r['reply_pct']}%, well below this "
+                                   f"campaign's own average of {round(avg, 2)}%.")
+        if working:
+            top = max((r for r in rated if r["reply_pct"] >= avg * 1.3), key=lambda r: r["reply_pct"])
+            changes.append(f"Send more leads through {top['name']} - it is the strongest source right now.")
+        if not_working:
+            bottom = min((r for r in rated if r["reply_pct"] <= avg * 0.7), key=lambda r: r["reply_pct"])
+            changes.append(f"Pause or rework {bottom['name']} - it is underperforming the other sources.")
+    elif rated:
+        working.append(f"Only {rated[0]['name']} has enough sends yet to read a reply rate "
+                       f"({rated[0]['reply_pct']}%).")
+    else:
+        not_working.append("No source has sent enough emails yet to compare reply rates.")
+
+    if reply_rate is not None and reply_rate < 1.0 and sent >= 200:
+        changes.append("Reply rate is under the 1% benchmark with real send volume behind it - "
+                       "worth reviewing the copy or the audience.")
+
+    opt_rows = sb("GET", f"optimiser_notifications?campaign_id=eq.{sid}&status=eq.new"
+                         "&select=title,suggested_action,detail&order=created_at.desc&limit=20")
+    opt_rows = opt_rows if isinstance(opt_rows, list) else []
+    optimisations = []
+    for r in opt_rows:
+        text = (r.get("suggested_action") or r.get("title") or r.get("detail") or "").strip()
+        if text:
+            optimisations.append(text)
+
+    return {"summary": summary, "working": working, "not_working": not_working,
+            "changes": changes, "optimisations": optimisations}
+
+
+def _compute_campaign_insights(sid: str) -> dict:
+    """PROXY per-source attribution (labelled - see the perf_daily comment
+    block at ~5579 for why: sent_messages has no source_id) + deterministic
+    findings for one Smartlead campaign. Cached 10min per campaign id via
+    _CAMPAIGN_INSIGHTS_SWR below."""
+    sources = _campaign_sources_full(sid)
+    src_ids = [s["id"] for s in sources]
+
+    # signal_leads -> lower(email) -> source_id (first source wins a rare
+    # cross-source dupe). Batched via sb_get_all's Range pagination.
+    email_source: dict = {}
+    if src_ids:
+        ids_csv = ",".join(str(x) for x in src_ids)
+        rows = sb_get_all(f"signal_leads?select=source_id,email&source_id=in.({ids_csv})",
+                          page_size=2000)
+        for r in (rows or []):
+            em = (r.get("email") or "").strip().lower()
+            if em:
+                email_source.setdefault(em, r.get("source_id"))
+
+    # sent_messages + replies for the WHOLE Smartlead campaign, columns
+    # trimmed to what the join needs - this is the proxy join the fact-sheet
+    # calls for (_campaign_source_ids -> signal_leads (join) sent_messages/
+    # replies on lower(email)). Paginated/batched so a 10k-send campaign
+    # stays well under the 5s budget.
+    sent_rows = sb_get_all(
+        f"sent_messages?select=email&workspace=eq.{WORKSPACE_TAG}&smartlead_campaign_id=eq.{sid}",
+        page_size=2000)
+    reply_rows = sb_get_all(
+        f"replies?select=email,category&workspace=eq.{WORKSPACE_TAG}&smartlead_campaign_id=eq.{sid}",
+        page_size=2000)
+    degraded = not isinstance(sent_rows, list) or not isinstance(reply_rows, list)
+    sent_emails = {(r.get("email") or "").strip().lower() for r in (sent_rows or []) if r.get("email")}
+    reply_cats: dict = {}
+    for r in (reply_rows or []):
+        em = (r.get("email") or "").strip().lower()
+        if em:
+            reply_cats.setdefault(em, set()).add(r.get("category"))
+
+    per_source = []
+    for s in sources:
+        s_emails = [em for em, src in email_source.items() if src == s["id"]]
+        sent_n = sum(1 for em in s_emails if em in sent_emails)
+        replies_n = sum(1 for em in s_emails if em in reply_cats)
+        pos_n = sum(1 for em in s_emails if reply_cats.get(em, set()) & _POS_REPLY_CATS)
+        mtg_n = sum(1 for em in s_emails if reply_cats.get(em, set()) & _MEETING_REPLY_CATS)
+        per_source.append({
+            "source_id": s["id"], "name": s.get("name") or s["id"],
+            "type": s.get("mechanism") or s.get("type") or "unknown",
+            "leads_pushed": len(s_emails), "sent": sent_n, "replies": replies_n,
+            "reply_pct": round(100.0 * replies_n / sent_n, 2) if sent_n else None,
+            "positives": pos_n, "meetings": mtg_n,
+        })
+    per_source.sort(key=lambda r: -(r["sent"] or 0))
+
+    # runs_dry: campaign_readonly's real Smartlead totals + a 14-day send pace
+    ro = campaign_readonly({"platform": "smartlead", "id": sid})
+    # campaign_readonly zero-fills silently when the live Smartlead fetch fails
+    # (a real campaign always has a name and a status). Treat that as "numbers
+    # unavailable", never as "campaign sent nothing" - rendering a false zero
+    # as fact is worse than admitting the fetch failed.
+    ro_unavailable = ro.get("name") is None and ro.get("status") is None
+    leads_total = None if ro_unavailable else ro.get("total")
+    leads_completed = None if ro_unavailable else ro.get("completed")
+    from datetime import datetime, timedelta, timezone
+    # date-only bound: an isoformat() timestamp carries "+00:00" whose "+"
+    # reads as a space in a query string -> PostgREST 400 (caught on staging
+    # 2026-07-14). A day of slack is irrelevant to a 14-day pace estimate.
+    since = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%d")
+    pace_n = sb_count(f"sent_messages?workspace=eq.{WORKSPACE_TAG}&smartlead_campaign_id=eq.{sid}"
+                      f"&sent_at=gte.{since}")
+    pace_per_day = (pace_n / 14.0) if pace_n else 0.0
+    days_left = None
+    if isinstance(leads_total, int) and isinstance(leads_completed, int) and pace_per_day > 0:
+        remaining = max(0, leads_total - leads_completed)
+        days_left = int(round(remaining / pace_per_day)) if remaining else 0
+    best = max(per_source, key=lambda r: (r["positives"], r["reply_pct"] or 0.0), default=None)
+
+    insights = _campaign_insights_findings(sid, ro, per_source, ro_unavailable=ro_unavailable)
+
+    return {
+        "attribution": "proxy",
+        "runs_dry": {
+            "days_left": days_left, "leads_total": leads_total, "leads_completed": leads_completed,
+            "best_source_id": (best or {}).get("source_id"), "best_source_name": (best or {}).get("name"),
+            "new_estimate_note": ("Estimated from the last 14 days of sends - a slower or faster send "
+                                  "pace changes this." if days_left is not None else
+                                  "Not enough send history yet to estimate days left."),
+        },
+        "per_source": per_source,
+        "insights": insights,
+        "degraded": degraded or ro_unavailable,
+    }
+
+
+_CAMPAIGN_INSIGHTS_SWR = _SWRKeyedCache(_compute_campaign_insights, 600,
+                                        is_degraded=lambda p: bool(p.get("degraded")),
+                                        name="campaign-insights")
+
+
+def api_campaign_insights(p: dict) -> dict:
+    platform = (p.get("platform") or "").lower()
+    sid = str(p.get("id") or "").strip()
+    if not sid:
+        return {"error": "missing id"}
+    if platform != "smartlead":
+        return {"error": "campaign-insights currently supports platform=smartlead only"}
+    return _CAMPAIGN_INSIGHTS_SWR.get(sid)
+
+
+# ── 2. Campaign ideas: on-demand, hiring-signal only, never on page load ────
+CAMPAIGN_IDEA_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"ideas": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string"},
+            "job_titles": {"type": "array", "items": {"type": "string"}},
+            "dm_titles": {"type": "array", "items": {"type": "string"}},
+            "lead_magnet": {"type": "string"},
+            "rationale": {"type": "string"},
+            "icebreaker": {"type": "string"},
+        },
+        "required": ["title", "job_titles", "dm_titles", "lead_magnet", "rationale", "icebreaker"],
+    }}},
+    "required": ["ideas"],
+}
+
+
+def _campaign_ideas_context(sid: str) -> dict:
+    """Client/ICP context for idea generation, all derived server-side from
+    the campaign's own client + any hiring source it already runs - no
+    frontend wizard state involved (this is a pure backend feature)."""
+    draft = _campaign_primary_draft(sid)
+    client: dict = {}
+    if draft and draft.get("client_id"):
+        clients, _failed = _cached_clients()
+        client = next((c for c in (clients or []) if c.get("id") == draft["client_id"]), None) or {}
+    campaign_name = (draft or {}).get("name")
+    if not campaign_name:
+        campaign_name = campaign_readonly({"platform": "smartlead", "id": sid}).get("name")
+    sources = _campaign_sources_full(sid) if draft else []
+    existing = [f"{s.get('mechanism') or s.get('type') or 'signal'}: {s.get('name')}"
+               for s in sources if s.get("name")]
+    hiring_src = next((s for s in sources if (s.get("mechanism") or s.get("type")) == "hiring"), None)
+    cfg = {**((hiring_src or {}).get("config") or {}), **((hiring_src or {}).get("params") or {})}
+    return {
+        "campaign_id": sid, "campaign_name": campaign_name,
+        "client_name": client.get("name") or "", "client_description": client.get("description") or "",
+        "client_offer": client.get("offer") or "", "existing": existing,
+        "countries": cfg.get("countries") or [], "headcount": cfg.get("headcount") or [],
+        "dm_titles": cfg.get("dm_titles") or (hiring_src or {}).get("titles") or [],
+    }
+
+
+def _generate_campaign_ideas(ctx: dict, exclude_titles: list, max_credits: int) -> list:
+    """Reuses _suggest_llm (~933) - the same minimal-effort JSON-schema
+    completion the wizard's Generate-more buttons use - constrained to
+    hiring-signal ideas only. Sizing reuses preview_hiring (~359, FREE
+    TheirStack blurred preview - the same probe strategy_map's Stage 2 uses
+    at ~1554), so idea generation spends zero paid-provider credits;
+    max_credits only bounds how many of those free probes one call makes."""
+    key = KEYS.get("OPENAI_API_KEY")
+    if not key:
+        return []
+    bits = []
+    if ctx.get("client_name"):
+        bits.append(f"Client: {ctx['client_name']}")
+    if ctx.get("client_description"):
+        bits.append(f"What they do: {ctx['client_description']}")
+    if ctx.get("client_offer"):
+        bits.append(f"What is being sold (only propose signals that indicate need for THIS): {ctx['client_offer']}")
+    if ctx.get("campaign_name"):
+        bits.append(f"This existing campaign: {ctx['campaign_name']}")
+    if ctx.get("existing"):
+        bits.append("Already running on this campaign (do not repeat or propose a close variant): "
+                    + "; ".join(ctx["existing"]))
+    if exclude_titles:
+        bits.append("Already suggested before - propose genuinely different ideas, not close variants: "
+                    + "; ".join(t for t in exclude_titles if t))
+    system = ("You are the campaign-ideation engine of a cold-email agency, generating HIRING-SIGNAL "
+             "ideas ONLY. A hiring-signal idea fires when a target company posts a live job opening for "
+             "a specific role - that open role is the buying signal. Every idea needs job_titles (the "
+             "roles being hired for, which indicate need for the offer) and dm_titles (the decision-makers "
+             "to actually email at that company - e.g. Founder, Head of Sales - never the role being "
+             "hired). Plain English, no jargon, no em dashes.")
+    user = (("\n".join(bits) if bits else
+            "No client context is available - reason from a generic B2B hiring-signal angle.")
+           + "\n\nGenerate exactly 3 NEW hiring-signal campaign ideas.")
+    try:
+        out = _suggest_llm(key, system, user, "hiring_ideas", CAMPAIGN_IDEA_SCHEMA)
+    except Exception as e:  # noqa: BLE001 — generation is best-effort; caller reports "try again"
+        print(f"[campaign-ideas] generation failed: {e}", file=sys.stderr)
+        return []
+
+    codes, _unmapped = country_codes(ctx.get("countries") or [])
+    codes = codes or ["US"]
+    lo, hi = emp_range(ctx.get("headcount"))
+    probes_left = max(0, max_credits)
+    result = []
+    import hashlib
+    for it in (out.get("ideas") or [])[:3]:
+        title = (it.get("title") or "").strip()
+        job_titles = [t.strip() for t in (it.get("job_titles") or []) if str(t).strip()]
+        if not title or not job_titles:
+            continue
+        dm_titles = ([t.strip() for t in (it.get("dm_titles") or []) if str(t).strip()]
+                    or ctx.get("dm_titles") or [])
+        dm_per_month = None
+        if probes_left > 0:
+            try:
+                r = preview_hiring({"job_titles": job_titles, "countries": codes,
+                                    "min_emp": lo, "max_emp": hi, "days": 30})
+                probes_left -= 1
+                companies = r.get("total_companies")
+                # gate fallback: companies-with-signal/mo x 2.5 titles, estimate=true
+                if isinstance(companies, int):
+                    dm_per_month = round(companies * 2.5)
+            except Exception:  # noqa: BLE001 — sizing is best-effort, never blocks the idea
+                pass
+        idea_id = hashlib.md5(f"{ctx['campaign_id']}|{title.lower()}".encode()).hexdigest()[:12]
+        result.append({
+            "id": idea_id, "title": title, "mechanism": "hiring-signal",
+            "lead_magnet": (it.get("lead_magnet") or "").strip(),
+            "rationale": (it.get("rationale") or "").strip(),
+            "dm_per_month": dm_per_month, "estimate": True,
+            "job_titles": job_titles, "dm_titles": dm_titles,
+            "icebreaker": ensure_hiring_vars(it.get("icebreaker") or HIRING_ICE_DEFAULT),
+        })
+    return result
+
+
+def _campaign_ideas_job_worker(job: dict, sid: str, more: bool, max_credits: int):
+    _job_started(job)
+    try:
+        ctx = _campaign_ideas_context(sid)
+        exclude_titles = []
+        if more:
+            prev = sb("GET", f"campaign_idea_suggestions?campaign_id=eq.{sid}&select=idea")
+            if isinstance(prev, list):
+                exclude_titles = [(r.get("idea") or {}).get("title") for r in prev
+                                  if isinstance(r.get("idea"), dict) and (r.get("idea") or {}).get("title")]
+        ideas = _generate_campaign_ideas(ctx, exclude_titles, max_credits)
+        if not ideas:
+            job["counts"] = {"ideas": [],
+                             "message": "Could not generate ideas right now - check OPENAI_API_KEY, or try again."}
+            _job_finished(job, "done")
+            return
+        now = _now_iso()
+        rows = [{"id": i["id"], "campaign_id": sid, "idea": i, "status": "suggested", "created_at": now}
+               for i in ideas]
+        res = sb("POST", "campaign_idea_suggestions?on_conflict=id", rows,
+                prefer="resolution=merge-duplicates,return=minimal")
+        persisted = _tier1_write_ok(res)
+        job["counts"] = {"ideas": ideas, "persisted": persisted}
+        if not persisted:
+            job["counts"]["warning"] = ("Ideas generated but could not be saved - the "
+                                        "campaign_idea_suggestions table may not exist yet. Apply "
+                                        "migrations/tier1_idea_suggestions.sql, then try again.")
+        _job_finished(job, "done")
+    except Exception as e:  # noqa: BLE001
+        _job_finished(job, "failed", str(e)[:300])
+
+
+def api_campaign_ideas_start(p: dict):
+    sid = str(p.get("campaign_id") or "").strip()
+    if not sid:
+        return {"error": "missing_campaign_id"}, 400
+    more = bool(p.get("more"))
+    try:
+        max_credits = max(1, min(200, int(p.get("max_credits") or 50)))
+    except (TypeError, ValueError):
+        max_credits = 50
+    with _JOB_CREATE_LOCK:
+        if _campaign_has_active_job(sid):
+            return {"error": "already_active",
+                   "message": "This campaign already has a task running - wait for it to finish."}, 409
+        job = _new_job("campaign_ideas", "Suggest campaign ideas", sid, mode=("more" if more else "first"))
+        _enqueue_job(_campaign_ideas_job_worker, job, (job, sid, more, max_credits))
+    return {"job_id": job["id"]}, 202
+
+
+def api_campaign_ideas_get(p: dict):
+    """Pure read - NEVER triggers generation (generation only ever happens
+    inside api_campaign_ideas_start, reached only via POST)."""
+    sid = str(p.get("campaign_id") or "").strip()
+    if not sid:
+        return {"status": "idle", "ideas": []}
+    with JOBS_LOCK:
+        running = [j for j in JOBS.values() if str(j.get("campaign_id")) == sid
+                  and j.get("kind") == "campaign_ideas" and j.get("status") in ("queued", "running")]
+    status = running[-1]["status"] if running else "idle"
+    rows = sb("GET", f"campaign_idea_suggestions?campaign_id=eq.{sid}&status=neq.dismissed"
+                     "&order=created_at.desc")
+    if not isinstance(rows, list):
+        return {"status": status, "ideas": [],
+               "error": "campaign_idea_suggestions table unavailable - apply "
+                        "migrations/tier1_idea_suggestions.sql"}
+    return {"status": status, "ideas": [r["idea"] for r in rows if isinstance(r.get("idea"), dict)]}
+
+
+def api_campaign_ideas_dismiss(p: dict):
+    sid = str(p.get("campaign_id") or "").strip()
+    iid = str(p.get("idea_id") or "").strip()
+    if not sid or not iid:
+        return {"ok": False, "message": "campaign_id and idea_id are required"}, 400
+    res = sb("PATCH", f"campaign_idea_suggestions?id=eq.{iid}&campaign_id=eq.{sid}", {"status": "dismissed"})
+    if not _tier1_write_ok(res):
+        return {"ok": False, "message": "Could not save - the campaign_idea_suggestions table may not "
+                                       "exist yet, or the database is unreachable."}, 503
+    log_activity("/api/campaign-ideas/dismiss", p, action="dismiss", entity="campaign_idea", entity_id=iid)
+    return {"ok": True}, 200
+
+
+def _patch_campaign_draft(cid: str, **fields) -> bool:
+    """Set arbitrary fields on ONE campaign_drafts doc by id - same whole-list
+    read/patch/write pattern update_campaign_draft (~8333) uses for its
+    whitelisted fields; this covers fields that function doesn't expose
+    (e.g. needs_shell)."""
+    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
+    found = False
+    for d in drafts:
+        if d.get("id") == cid:
+            d.update(fields)
+            found = True
+    if found:
+        write_drafts(drafts, CAMPAIGN_DRAFTS)
+    return found
+
+
+def _idea_add_default_dm_titles(idea: dict) -> list:
+    return idea.get("dm_titles") or ["Founder", "CEO", "VP of Sales", "Head of Sales"]
+
+
+def _idea_add_plan(sid: str, idea: dict, mode: str, test_cap: int) -> dict:
+    """The dry-run plan - what api_campaign_ideas_add would do, without doing
+    any of it. Same shape whether dry_run is true or not."""
+    draft = _campaign_primary_draft(sid)
+    plan = {"mode": mode, "test_cap": test_cap, "idea_title": idea.get("title"),
+           "target_smartlead_campaign_id": sid,
+           "draft_id": (draft or {}).get("id") or f"camp-sl-{sid}",
+           "draft_exists": bool(draft),
+           "source_config": {
+               "type": "hiring", "mechanism": "hiring", "name": idea.get("title") or "Hiring signal idea",
+               "titles": _idea_add_default_dm_titles(idea),
+               "params": {"job_titles": idea.get("job_titles") or [], "days": 30, "leads_per_day": test_cap},
+           }}
+    if mode == "existing":
+        plan["will_create_source_on_existing_campaign"] = True
+        plan["note"] = (f"Creates a hiring source on the existing campaign and pulls up to {test_cap} "
+                        f"leads. Leads land as drafts and go through the normal QA gate - nothing sends.")
+    else:
+        god = KEYS.get("GOD_TEMPLATE_SL_ID") or os.environ.get("GOD_TEMPLATE_SL_ID")
+        plan["will_duplicate_campaign"] = True
+        plan["god_template_sl_id"] = god
+        plan["will_create_smartlead_shell"] = bool(god)
+        plan["needs_shell"] = not bool(god)
+        plan["note"] = ((f"Duplicates the campaign draft, attaches a new hiring source, creates a "
+                         f"Smartlead DRAFT campaign, and copies sequences from campaign {god} onto it "
+                         f"only - the template itself is never written to.") if god else
+                        "Duplicates the campaign draft and attaches a new hiring source. "
+                        "GOD_TEMPLATE_SL_ID is not set, so no Smartlead shell is created - "
+                        "the new draft is marked needs_shell.")
+    return plan
+
+
+def _create_smartlead_shell_from_god(god_sl_id: str, name: str) -> dict:
+    """Creates ONE new Smartlead DRAFT campaign and copies the God-template's
+    sequence onto it. This and execute_disable_variant_action (~2553) are the
+    only two places in this file that call Smartlead's sequences endpoint -
+    that one is the sanctioned exception for an EXISTING campaign (id-carrying
+    + post-verify, never destroys history); this one is safe by construction
+    because the target campaign was JUST created by this same call and has no
+    sequence yet, so there is no history to lose and no ids to preserve. It
+    NEVER writes to god_sl_id or any other pre-existing campaign, and never
+    sets any campaign active (Smartlead campaigns are created in DRAFT status)."""
+    if not KEYS.get("SMARTLEAD_API_KEY"):
+        return {"ok": False, "message": "SMARTLEAD_API_KEY is not configured on this server"}
+    created = _smartlead_json("POST", "/campaigns/create", {"name": (name or "New campaign")[:190]})
+    new_id = created.get("id") if isinstance(created, dict) else None
+    if not new_id:
+        return {"ok": False, "message": "Smartlead did not return a new campaign id",
+               "smartlead_response": created}
+    if str(new_id) == str(god_sl_id):
+        # Cannot happen in practice - Smartlead always mints a fresh id - but this
+        # is exactly the invariant that must never be violated, so refuse outright.
+        return {"ok": False, "message": "Smartlead returned the template's own id - refusing to touch it"}
+    template = _smartlead_json("GET", f"/campaigns/{god_sl_id}/sequences")
+    steps = template if isinstance(template, list) else (
+        template.get("data") or template.get("sequences") or [] if isinstance(template, dict) else [])
+    if not steps:
+        return {"ok": True, "smartlead_campaign_id": new_id, "sequences_copied": 0,
+               "message": "Shell created; the God-template has no sequences to copy"}
+    body = []
+    for s in steps:
+        step = {"seq_number": s.get("seq_number")}
+        delay = (s.get("seq_delay_details") or {}).get("delayInDays")
+        if delay is not None:
+            step["seq_delay_details"] = {"delay_in_days": delay}
+        if s.get("subject") is not None:
+            step["subject"] = s.get("subject")
+        if s.get("email_body") is not None:
+            step["email_body"] = s.get("email_body")
+        variants = [v for v in (s.get("sequence_variants") or []) if not v.get("is_deleted")]
+        if variants:
+            step["seq_variants"] = [
+                {"variant_label": v.get("variant_label"), "subject": v.get("subject"),
+                 "email_body": v.get("email_body"),
+                 "variant_distribution_percentage": v.get("variant_distribution_percentage")}
+                for v in variants]
+        body.append(step)
+    # ONLY the campaign this call just created - never god_sl_id, never any
+    # other existing id (mirrors the HARD CONSTRAINT at ~2419).
+    save_res = _smartlead_json("POST", f"/campaigns/{new_id}/sequences", {"sequences": body})
+    return {"ok": True, "smartlead_campaign_id": new_id, "sequences_copied": len(body),
+           "smartlead_save_response": save_res,
+           # Smartlead's public API has no separate sub-sequence resource distinct
+           # from these steps as of this build - nothing further is known to copy.
+           # Flagged as a known gap rather than silently skipped.
+           "sub_sequences_copied": None}
+
+
+def _apply_idea_add_existing(sid: str, idea: dict, test_cap: int) -> dict:
+    draft = _campaign_primary_draft(sid)
+    if draft:
+        draft_id = draft["id"]
+    else:
+        ro = campaign_readonly({"platform": "smartlead", "id": sid})
+        r = save_campaign_draft({"id": f"camp-sl-{sid}",
+                                 "destination": {"platform": "smartlead", "smartlead_campaign_id": sid},
+                                 "name": ro.get("name") or f"Smartlead campaign {sid}"})
+        draft_id = r.get("id") or f"camp-sl-{sid}"
+    src_doc = {
+        "type": "hiring", "mechanism": "hiring", "name": idea.get("title") or "Hiring signal idea",
+        "campaign_id": draft_id, "active": True, "titles": _idea_add_default_dm_titles(idea),
+        "params": {"job_titles": idea.get("job_titles") or [], "days": 30, "leads_per_day": test_cap},
+        "icebreaker": ensure_hiring_vars(idea.get("icebreaker") or HIRING_ICE_DEFAULT),
+    }
+    r = save_draft(src_doc)
+    if not r.get("ok"):
+        return {"ok": False, "message": r.get("message") or "Could not create the source.", "draft_id": draft_id}
+    source_id = r["id"]
+    pull = pull_source({"id": source_id})
+    log_activity("/api/campaign-ideas/add", {"campaign_id": sid, "idea_id": idea.get("id"),
+                "mode": "existing", "source_id": source_id, "test_cap": test_cap},
+                action="add_idea", entity="source", entity_id=source_id)
+    return {"ok": True, "draft_id": draft_id, "source_id": source_id,
+           "pull": {"ok": pull.get("ok"), "message": pull.get("message"),
+                     "leads": len(pull.get("prospects") or [])}}
+
+
+def _apply_idea_add_new(sid: str, idea: dict, test_cap: int) -> dict:
+    draft = _campaign_primary_draft(sid)
+    if not draft:
+        ro = campaign_readonly({"platform": "smartlead", "id": sid})
+        r = save_campaign_draft({"id": f"camp-sl-{sid}",
+                                 "destination": {"platform": "smartlead", "smartlead_campaign_id": sid},
+                                 "name": ro.get("name") or f"Smartlead campaign {sid}"})
+        draft = {"id": r.get("id") or f"camp-sl-{sid}"}
+    dup = duplicate_campaign_draft({"id": draft["id"]})
+    if not dup.get("ok"):
+        return {"ok": False, "message": dup.get("message") or "Could not duplicate the campaign."}
+    new_draft_id = dup["id"]
+    # the duplicate inherited the ORIGINAL's destination (still pointing at sid) -
+    # clear it immediately so this new, unlinked draft never gets mistaken for a
+    # source of the campaign it was copied from (see _campaign_draft_ids_for_sl).
+    _patch_campaign_draft(new_draft_id, destination={})
+    src_doc = {
+        "type": "hiring", "mechanism": "hiring", "name": idea.get("title") or "Hiring signal idea",
+        "campaign_id": new_draft_id, "active": True, "titles": _idea_add_default_dm_titles(idea),
+        "params": {"job_titles": idea.get("job_titles") or [], "days": 30, "leads_per_day": test_cap},
+        "icebreaker": ensure_hiring_vars(idea.get("icebreaker") or HIRING_ICE_DEFAULT),
+    }
+    r = save_draft(src_doc)
+    source_id = r.get("id") if r.get("ok") else None
+    god = KEYS.get("GOD_TEMPLATE_SL_ID") or os.environ.get("GOD_TEMPLATE_SL_ID")
+    shell = None
+    if god:
+        shell = _create_smartlead_shell_from_god(god, dup.get("name") or idea.get("title") or "New campaign")
+        if shell.get("ok"):
+            update_campaign_draft({"id": new_draft_id,
+                                   "destination": {"platform": "smartlead",
+                                                    "smartlead_campaign_id": shell["smartlead_campaign_id"]}})
+        else:
+            _patch_campaign_draft(new_draft_id, needs_shell=True, shell_error=shell.get("message"))
+    else:
+        _patch_campaign_draft(new_draft_id, needs_shell=True)
+    log_activity("/api/campaign-ideas/add", {"campaign_id": sid, "idea_id": idea.get("id"), "mode": "new",
+                "new_draft_id": new_draft_id, "source_id": source_id, "test_cap": test_cap},
+                action="add_idea", entity="campaign_draft", entity_id=new_draft_id)
+    return {"ok": True, "draft_id": new_draft_id, "source_id": source_id, "shell": shell}
+
+
+def _campaign_idea_add_worker(job: dict, sid: str, idea: dict, mode: str, dry_run: bool, test_cap: int):
+    _job_started(job)
+    try:
+        plan = _idea_add_plan(sid, idea, mode, test_cap)
+        if dry_run:
+            job["counts"] = {"plan": plan, "dry_run": True}
+            _job_finished(job, "done")
+            return
+        result = (_apply_idea_add_existing(sid, idea, test_cap) if mode == "existing"
+                 else _apply_idea_add_new(sid, idea, test_cap))
+        job["counts"] = {"plan": plan, "result": result}
+        _job_finished(job, "done")
+    except Exception as e:  # noqa: BLE001
+        _job_finished(job, "failed", str(e)[:300])
+
+
+def api_campaign_ideas_add(p: dict):
+    sid = str(p.get("campaign_id") or "").strip()
+    iid = str(p.get("idea_id") or "").strip()
+    mode = p.get("mode")
+    dry_run = bool(p.get("dry_run"))
+    try:
+        test_cap = max(1, min(500, int(p.get("test_cap") or 25)))
+    except (TypeError, ValueError):
+        test_cap = 25
+    if not sid or not iid:
+        return {"error": "missing_campaign_id_or_idea_id"}, 400
+    if mode not in ("existing", "new"):
+        return {"error": "unknown_mode", "message": 'mode must be "existing" or "new"'}, 400
+    rows = sb("GET", f"campaign_idea_suggestions?id=eq.{iid}&campaign_id=eq.{sid}&limit=1")
+    if not isinstance(rows, list) or not rows:
+        return {"error": "idea_not_found",
+               "message": "That idea was not found - it may have been dismissed, or the suggestion "
+                          "table isn't available (apply migrations/tier1_idea_suggestions.sql)."}, 404
+    idea = rows[0].get("idea") or {}
+    with _JOB_CREATE_LOCK:
+        if not dry_run and _campaign_has_active_job(sid):
+            return {"error": "already_active",
+                   "message": "This campaign already has a task running - wait for it to finish."}, 409
+        job = _new_job("campaign_idea_add", f"Add idea to campaign: {idea.get('title') or iid}", sid,
+                      mode=mode, dry_run=dry_run, max_new=test_cap)
+        _enqueue_job(_campaign_idea_add_worker, job, (job, sid, idea, mode, dry_run, test_cap))
+    return {"job_id": job["id"]}, 202
+
+
+# ── 3. Recontact: sibling scan + eligibility buckets + draft creation ──────
+_RECONTACT_NAME_STOP = {"the", "a", "an", "and", "of", "for", "to", "campaign", "email",
+                        "cold", "outreach", "v1", "v2", "test", "copy"}
+
+
+def _recontact_name_tokens(name: str) -> set:
+    toks = re.split(r"[^a-z0-9]+", (name or "").lower())
+    return {t for t in toks if t and t not in _RECONTACT_NAME_STOP and len(t) > 1}
+
+
+def _recontact_resolve_sl_id(campaign_id) -> str | None:
+    """Accepts a bare Smartlead numeric id, a camp-sl-<id> mirror key, or a
+    cdraft-*/draft id whose destination points at Smartlead - always returns
+    the bare numeric id (the key contact_history/replies/sent_messages/
+    campaigns are all keyed on), or None."""
+    cid = str(campaign_id or "").strip()
+    if not cid:
+        return None
+    if cid.isdigit():
+        return cid
+    if cid.startswith("camp-sl-"):
+        rest = cid[len("camp-sl-"):]
+        return rest if rest.isdigit() else None
+    drafts, _failed = _cached_campaign_drafts()
+    d = next((x for x in (drafts or []) if str(x.get("id")) == cid), None)
+    sl = (d or {}).get("destination", {}).get("smartlead_campaign_id")
+    return str(sl) if sl else None
+
+
+def _batched_in_matches(table: str, col: str, values, select: str | None = None, chunk: int = 180) -> list:
+    """PostgREST `in.()` filter, chunked so a large candidate set never blows
+    the URL length limit. Returns every matching row across all chunks."""
+    out = []
+    vals = sorted({str(v) for v in values if v})
+    sel = select or col
+    for i in range(0, len(vals), chunk):
+        part = ",".join(vals[i:i + chunk])
+        rows = sb("GET", f"{table}?{col}=in.({part})&select={sel}")
+        if isinstance(rows, list):
+            out.extend(rows)
+    return out
+
+
+_RECONTACT_CAP = 20000  # bounded read per campaign - keeps scan/buckets well under 10s
+
+
+def _contact_history_emails(sl_id: str, cap: int = _RECONTACT_CAP) -> set:
+    rows = sb("GET", f"contact_history?smartlead_campaign_id=eq.{sl_id}&select=email",
+             headers={"Range-Unit": "items", "Range": f"0-{cap - 1}"})
+    return ({(r.get("email") or "").strip().lower() for r in rows if r.get("email")}
+           if isinstance(rows, list) else set())
+
+
+def api_recontact_scan(campaign_id: str) -> list | dict:
+    sid = _recontact_resolve_sl_id(campaign_id)
+    if not sid:
+        return {"error": "campaign not found, or not linked to a Smartlead campaign"}
+    target_rows = sb("GET", f"campaigns?workspace=eq.{WORKSPACE_TAG}&smartlead_campaign_id=eq.{sid}"
+                            "&select=name,client_id,status&limit=1")
+    if not isinstance(target_rows, list) or not target_rows:
+        return {"error": "campaign not found in the campaigns table (not synced yet)"}
+    target = target_rows[0]
+    target_tokens = _recontact_name_tokens(target.get("name") or "")
+    if not target_tokens:
+        return []
+    scope = (f"client_id=eq.{target['client_id']}" if target.get("client_id")
+            else f"workspace=eq.{WORKSPACE_TAG}")
+    all_camps = sb("GET", f"campaigns?{scope}&select=smartlead_campaign_id,name,status&limit=1000")
+    all_camps = all_camps if isinstance(all_camps, list) else []
+    scored = []
+    for c in all_camps:
+        csid = str(c.get("smartlead_campaign_id") or "")
+        if not csid or csid == sid:
+            continue
+        ctoks = _recontact_name_tokens(c.get("name") or "")
+        shared = target_tokens & ctoks
+        if not shared:
+            continue
+        ratio = len(shared) / max(1, len(target_tokens | ctoks))
+        scored.append((c, csid, shared, ratio))
+    scored.sort(key=lambda x: -x[3])
+    scored = scored[:10]
+    if not scored:
+        return []
+
+    # finished/in_progress are EXACT counts (sb_count -> PostgREST's count
+    # header, no row transfer, cheap regardless of table size - a bounded row
+    # fetch here would silently undercount a campaign bigger than PostgREST's
+    # own per-request row cap). overlap_count is the one genuinely bounded
+    # SAMPLE (a real join would mean pulling both full email sets - fine at
+    # signal_leads/source scale, too slow across whole Smartlead campaigns).
+    # Candidates are independent, so all three calls per candidate run in
+    # parallel across candidates too - together this is what keeps a
+    # 15-candidate scan under the 10s budget (was ~23s fully serial).
+    target_emails = _contact_history_emails(sid)
+
+    def _count_retry(path: str) -> int:
+        # sb_count has no built-in retry (unlike sb()); under this function's
+        # concurrent fan-out a transient hiccup must not silently read as a
+        # real zero, so retry once before accepting "unknown -> 0".
+        n = sb_count(path)
+        if n is None:
+            time.sleep(0.4)
+            n = sb_count(path)
+        return n or 0
+
+    def _candidate_stats(item):
+        c, csid, shared, _ratio = item
+        finished = _count_retry(f"contact_history?smartlead_campaign_id=eq.{csid}&status=eq.COMPLETED")
+        in_progress = _count_retry(
+            f"contact_history?smartlead_campaign_id=eq.{csid}&status=in.(INPROGRESS,STARTED,PAUSED)")
+        cand_emails = _contact_history_emails(csid) if target_emails else set()
+        overlap = len(target_emails & cand_emails)
+        return {"campaign_id": csid, "name": c.get("name"), "status": c.get("status"),
+               "finished": finished, "in_progress": in_progress, "overlap_count": overlap,
+               "match_reason": "shares \"" + "\", \"".join(sorted(shared)[:5]) + "\" in the name"}
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(5, len(scored))) as ex:
+        out = list(ex.map(_candidate_stats, scored))
+    return out
+
+
+def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> list:
+    """Every person contacted in ANY of `campaign_ids`, each with one verdict:
+    suppressed > active_elsewhere > in_progress > replied > eligible - checked
+    in that order so every person lands in exactly one bucket."""
+    ids_csv = ",".join(campaign_ids)
+    rows = sb("GET", f"contact_history?smartlead_campaign_id=in.({ids_csv})"
+                     "&select=email,company_domain,smartlead_campaign_id,status",
+             headers={"Range-Unit": "items", "Range": f"0-{_RECONTACT_CAP - 1}"})
+    rows = rows if isinstance(rows, list) else []
+    by_email: dict = {}
+    for r in rows:
+        em = (r.get("email") or "").strip().lower()
+        if em:
+            by_email.setdefault(em, []).append(r)
+    emails = list(by_email.keys())
+    if not emails:
+        return []
+
+    suppressed_emails = {(r.get("email") or "").strip().lower()
+                         for r in _batched_in_matches("suppressions", "email", emails, "email")}
+    domains = {(r.get("company_domain") or "").strip().lower() for recs in by_email.values()
+              for r in recs if r.get("company_domain")}
+    suppressed_domains = {(r.get("domain") or "").strip().lower()
+                          for r in _batched_in_matches("suppressions", "domain", domains, "domain")}
+
+    replied_emails = set()
+    if not include_repliers:
+        rrows = _batched_in_matches("replies", "email", emails, "email")
+        replied_emails = {(r.get("email") or "").strip().lower() for r in rrows}
+
+    other_rows = []
+    for i in range(0, len(emails), 180):
+        chunk = ",".join(emails[i:i + 180])
+        r = sb("GET", f"contact_history?email=in.({chunk})&smartlead_campaign_id=not.in.({ids_csv})"
+                      "&status=in.(INPROGRESS,STARTED,PAUSED)&select=email,smartlead_campaign_id")
+        if isinstance(r, list):
+            other_rows.extend(r)
+    active_elsewhere: dict = {}
+    for r in other_rows:
+        em = (r.get("email") or "").strip().lower()
+        if em and em not in active_elsewhere:
+            active_elsewhere[em] = str(r.get("smartlead_campaign_id"))
+    other_ids = sorted({v for v in active_elsewhere.values() if v})
+    other_names = {}
+    if other_ids:
+        crows = sb("GET", f"campaigns?smartlead_campaign_id=in.({','.join(other_ids)})"
+                          "&select=smartlead_campaign_id,name")
+        if isinstance(crows, list):
+            other_names = {str(r.get("smartlead_campaign_id")): r.get("name") for r in crows}
+
+    out = []
+    for em in emails:
+        recs = by_email[em]
+        domain = next((r.get("company_domain") for r in recs if r.get("company_domain")), "") or ""
+        domain = domain.strip().lower()
+        if em in suppressed_emails or (domain and domain in suppressed_domains):
+            verdict, other = "suppressed", None
+        elif em in active_elsewhere:
+            other_id = active_elsewhere[em]
+            verdict, other = "active_elsewhere", other_names.get(other_id) or other_id
+        elif any((r.get("status") or "") in _IN_PROGRESS_STATUSES for r in recs):
+            verdict, other = "in_progress", None
+        elif not include_repliers and em in replied_emails:
+            verdict, other = "replied", None
+        else:
+            verdict, other = "eligible", None
+        out.append({"email": em, "verdict": verdict, "other_campaign": other})
+    return out
+
+
+def api_recontact_buckets(p: dict) -> dict:
+    raw_ids = [str(x).strip() for x in (p.get("campaign_ids") or []) if str(x).strip()]
+    ids = [x for x in (_recontact_resolve_sl_id(x) for x in raw_ids) if x]
+    if not ids:
+        return {"error": "campaign_ids is required"}
+    include_repliers = bool(p.get("include_repliers"))
+    verdicts = _recontact_verdicts(ids, include_repliers)
+    counts = {"eligible": 0, "in_progress": 0, "suppressed": 0, "replied": 0}
+    active_elsewhere_counts: dict = {}
+    for v in verdicts:
+        if v["verdict"] == "active_elsewhere":
+            key = v["other_campaign"] or "unknown campaign"
+            active_elsewhere_counts[key] = active_elsewhere_counts.get(key, 0) + 1
+        else:
+            counts[v["verdict"]] += 1
+    active_elsewhere = [{"campaign": k, "count": n}
+                        for k, n in sorted(active_elsewhere_counts.items(), key=lambda x: -x[1])]
+    total = len(verdicts)
+    return {"eligible": counts["eligible"], "in_progress": counts["in_progress"],
+           "active_elsewhere": active_elsewhere, "suppressed": counts["suppressed"],
+           "replied": counts["replied"], "total": total,
+           "sample": [{"email": v["email"], "verdict": v["verdict"]} for v in verdicts[:20]]}
+
+
+def api_recontact_create(p: dict):
+    raw_ids = [str(x).strip() for x in (p.get("campaign_ids") or []) if str(x).strip()]
+    ids = [x for x in (_recontact_resolve_sl_id(x) for x in raw_ids) if x]
+    if not ids:
+        return {"ok": False, "message": "campaign_ids is required"}, 400
+    include_repliers = bool(p.get("include_repliers"))
+    name = (p.get("name") or "").strip() or f"Recontact - {len(ids)} campaign(s)"
+    verdicts = _recontact_verdicts(ids, include_repliers)
+    eligible = [v["email"] for v in verdicts if v["verdict"] == "eligible"]
+    if not eligible:
+        return {"ok": False, "message": "No eligible people to recontact with these settings."}, 400
+    import uuid
+    new_id = f"cdraft-{uuid.uuid4().hex[:8]}"
+    r = save_campaign_draft({"id": new_id, "name": name,
+                             "recontact": {"source_campaign_ids": ids, "include_repliers": include_repliers,
+                                            "eligible_count": len(eligible)}})
+    if not r.get("ok"):
+        return {"ok": False, "message": "Could not create the draft campaign."}, 502
+    src = {"type": "recontact", "mechanism": "recontact", "name": f"Recontact list ({len(eligible)})",
+          "campaign_id": new_id, "active": False,
+          "prospects": [{"name": None, "email": em, "company": None,
+                          "linkedin": f"recontact:{em}", "icebreaker": "", "verdict": None}
+                       for em in eligible]}
+    src_r = save_draft(src)
+    if src_r.get("ok"):
+        rows = [{"source_id": src_r["id"], "full_name": None, "title": None, "company": None,
+                "domain": None, "linkedin_url": f"recontact:{em}", "country": None,
+                "icebreaker": "", "email": em} for em in eligible]
+        sb("POST", "signal_leads?on_conflict=source_id,linkedin_url", rows,
+          prefer="resolution=merge-duplicates,return=minimal")
+    log_activity("/api/recontact/create", {"campaign_ids": ids, "eligible": len(eligible), "draft_id": new_id},
+                action="create", entity="recontact_draft", entity_id=new_id)
+    return {"ok": True, "id": new_id, "eligible": len(eligible)}, 200
 
 
 def _split_name(pr: dict) -> tuple[str, str]:
@@ -11026,6 +12238,31 @@ class Handler(SimpleHTTPRequestHandler):
                     return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
             return self._qa_gate_get(path)
+        if path.startswith("/recontact/") and len(path) > len("/recontact/"):
+            # Recontact review page (tier1-live-ship) - behind the normal login
+            # gate above (this path is deliberately NOT in _AUTH_PUBLIC_GET).
+            # Follows the /qa-gate/<id> pattern: server.py owns the
+            # recontact_runs row, recontact.py owns rendering only.
+            run_id = path[len("/recontact/"):].strip("/")
+            if not run_id.replace("-", "").isalnum():
+                return self._json({"error": "invalid run id"}, 400)
+            existing = sb("GET", f"recontact_runs?id=eq.{run_id}&limit=1")
+            if not (isinstance(existing, list) and existing):
+                sb("POST", "recontact_runs?on_conflict=id", {"id": run_id, "payload": {}},
+                   prefer="resolution=merge-duplicates,return=minimal")
+            import recontact
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            seed = (q.get("campaign_id") or [""])[0]
+            html_out = recontact.render(run_id, seed).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(html_out)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(html_out)
+            return
         if path == "/api/insights":  # Today homepage: daily insight feed (generated on first request, cached per day)
             import insights_engine
             payload = insights_engine.api_insights(sb)
@@ -11191,6 +12428,26 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self._json(campaign_readonly({"platform": (q.get("platform") or [""])[0],
                                                  "id": (q.get("id") or [""])[0]}))
+        if path == "/api/campaign-insights":
+            # tier1-live-ship: PROXY per-source attribution + deterministic
+            # findings for one Smartlead campaign. platform=smartlead only.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(api_campaign_insights({"platform": (q.get("platform") or [""])[0],
+                                                      "id": (q.get("id") or [""])[0]}))
+        if path == "/api/campaign-ideas":
+            # Pure read - generation only ever happens via POST (see
+            # api_campaign_ideas_start). Excludes dismissed ideas.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(api_campaign_ideas_get({"campaign_id": (q.get("campaign_id") or [""])[0]}))
+        if path == "/api/recontact/scan":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            result = api_recontact_scan((q.get("campaign_id") or [""])[0])
+            if isinstance(result, dict) and result.get("error"):
+                return self._json(result, 404)
+            return self._json(result)
         if path == "/api/version":
             # Deploy verification: which commit/instance is actually serving.
             return self._json({"commit": _GIT_COMMIT or None,
@@ -11591,6 +12848,16 @@ class Handler(SimpleHTTPRequestHandler):
                          entity_id=nid)
             status, body = execute_notification_action(nid, payload)
             return self._json(body, status)
+        draft_prefix, draft_suffix = "/api/notifications/", "/draft-fix"
+        if path.startswith(draft_prefix) and path.endswith(draft_suffix) and \
+                len(path) > len(draft_prefix) + len(draft_suffix):
+            nid = path[len(draft_prefix):-len(draft_suffix)]
+            status, body = api_notification_draft_fix(nid)
+            # log_activity is a no-op-cost fire-and-forget thread (~841); skip it
+            # on the cache-hit path so a re-render's re-POST doesn't pad the
+            # ledger with a "draft" entry that generated nothing new — the
+            # actual generation is already logged inside api_notification_draft_fix.
+            return self._json(body, status)
         if path.startswith("/api/jobs/") and path.endswith("/cancel"):
             jid = path[len("/api/jobs/"):-len("/cancel")]
             with JOBS_LOCK:
@@ -11627,6 +12894,60 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(body, status)
         if path == "/api/jobs/dismiss-finished":
             return self._json(dismiss_finished_jobs())
+        if path == "/api/campaign-ideas":
+            # Starts an async job (JOBS/app_jobs pattern) - never generates
+            # synchronously, and never on a GET (see api_campaign_ideas_get).
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_campaign_ideas_start(payload)
+            return self._json(body, status)
+        if path == "/api/campaign-ideas/dismiss":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_campaign_ideas_dismiss(payload)
+            return self._json(body, status)
+        if path == "/api/campaign-ideas/add":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_campaign_ideas_add(payload)
+            return self._json(body, status)
+        if path == "/api/recontact/buckets":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            result = api_recontact_buckets(payload)
+            if isinstance(result, dict) and result.get("error"):
+                return self._json(result, 400)
+            if payload.get("run_id"):
+                sb("PATCH", f"recontact_runs?id=eq.{payload['run_id']}",
+                   {"payload": {"campaign_ids": payload.get("campaign_ids"),
+                                "include_repliers": payload.get("include_repliers"),
+                                "buckets": result}})
+            return self._json(result)
+        if path == "/api/recontact/create":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_recontact_create(payload)
+            if payload.get("run_id") and isinstance(body, dict) and body.get("ok"):
+                sb("PATCH", f"recontact_runs?id=eq.{payload['run_id']}",
+                   {"payload": {"campaign_ids": payload.get("campaign_ids"),
+                                "include_repliers": payload.get("include_repliers"),
+                                "created_draft_id": body.get("id")}})
+            return self._json(body, status)
         if path == "/api/verify-campaign":
             length = int(self.headers.get("Content-Length") or 0)
             try:
