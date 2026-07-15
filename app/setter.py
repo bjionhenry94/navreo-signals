@@ -51,6 +51,17 @@ def configure(sb, http_json, keys, log_activity, sb_count=None):
     _HTTP = http_json
     _KEYS = keys or {}
     _LOG = log_activity
+    # Boot warm-up (perf pass 2026-07-16): pre-compute the queue read caches
+    # in the background so even the FIRST /api/setter/queue GET after a
+    # deploy/restart is served warm (~300ms) instead of paying the cold
+    # rows+KPI compute (~4s measured live). Daemon threads; failures are
+    # swallowed - the request path just computes cold as before.
+    try:
+        _kick_kpi_refresh()
+        _kick_rows_refresh(("needs_review", 200))
+        _kick_rows_refresh(("", 200))
+    except Exception:  # noqa: BLE001 - warm-up must never block boot
+        pass
 
 
 WORKSPACE = "navreo"
