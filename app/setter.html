@@ -179,26 +179,19 @@
 .qc-draft div { min-height: 1em; }
 .qc-draft a { color: var(--orange-700); cursor: pointer; text-decoration: underline; }
 .composer-head .ch-spacer { flex: 1; }
-.teach-tgl { display: inline-flex; align-items: center; gap: 7px; border: none; background: none; font: 500 12.5px var(--font-sans); color: var(--ink-2); cursor: pointer; padding: 4px 6px; }
-.teach-tgl .tgl-track { width: 30px; height: 17px; border-radius: 999px; background: var(--line-2); position: relative; transition: background 0.15s ease; flex-shrink: 0; }
-.teach-tgl .tgl-track.on { background: var(--orange-600, #E05D26); }
-.teach-tgl .tgl-knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: left 0.15s ease; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
-.teach-tgl .tgl-track.on .tgl-knob { left: 15px; }
+.teach-link {
+  border: none; background: none; padding: 4px 2px; cursor: pointer;
+  font: 500 12px var(--font-sans); color: var(--ink-3);
+  text-decoration: underline; text-underline-offset: 2px;
+  text-decoration-color: var(--line-2); white-space: nowrap;
+}
+.teach-link:hover { color: var(--orange-700); text-decoration-color: var(--orange-700); }
 .qc-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 .qc-split { display: inline-flex; }
 .qc-split .qc-regen { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
 .qc-split .qc-regen-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 10px; }
 .qc-feedback { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
 .qc-feedback .qc-feedback-input { flex: 1; min-width: 200px; }
-.qc-training-tgl {
-  display: inline-flex; align-items: center; gap: 6px; border: none; background: none; padding: 0;
-  font: 500 12px var(--font-sans); color: var(--ink-2); cursor: pointer; white-space: nowrap;
-}
-.qc-training-tgl .tgl-pill {
-  border-radius: 999px; padding: 2px 10px; font-size: 11.5px; font-weight: 600;
-  background: var(--green-bg); color: #195C3F; border: 1px solid var(--green-line);
-}
-.qc-training-tgl .tgl-pill.off { background: var(--bg-sunken); color: var(--ink-3); border-color: var(--line-2); }
 .detail-err { margin: 10px 0; }
 
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
@@ -1382,32 +1375,15 @@ function feedbackPlaceholder() {
     ? "Tell it what to change - it'll remember going forward"
     : "Tell it what to change - applies to this reply only";
 }
-function setTrainingMode(on) {
-  localStorage.setItem("setterTrainingMode", on ? "on" : "off");
-  document.querySelectorAll(".qc-training-tgl .tgl-pill").forEach((el) => {
-    el.textContent = on ? "On" : "Off";
-    el.classList.toggle("off", !on);
-  });
-  document.querySelectorAll(".qc-training-tgl .tgl-track").forEach((el) => el.classList.toggle("on", on));
-  document.querySelectorAll(".qc-feedback-input").forEach((inp) => { inp.placeholder = feedbackPlaceholder(); });
-  protoNote(on ? "Training on - feedback teaches the agent" : "Training off - feedback shapes this reply only");
-}
-
-/* The teach controls, pinned beside "Your reply" (owner ruling 2026-07-15):
-   an explicit switch for training mode - On means your typed feedback (via
-   Regenerate's arrow) teaches this agent permanently, Off means it shapes
-   this one reply only - plus "Add a lesson", the standing-correction modal
-   that always teaches regardless of the switch. */
+/* The teach control, pinned beside "Your reply" (owner ruling 2026-07-15,
+   simplified same day: minimal, not showy - no toggle, one quiet link). It
+   opens the standing-correction modal, always remembered. Feedback typed via
+   Regenerate's arrow already teaches by default (feedback IS teaching), so
+   the old On/Off switch is gone. */
 function teachToggleHtml(row) {
-  const on = trainingModeOn();
-  const tgl = needsComposerActions(row)
-    ? `<button type="button" class="qc-training-tgl teach-tgl" title="On: feedback you type when regenerating is remembered by this agent for every future reply. Off: it only shapes this one reply.">
-         <span class="tgl-track${on ? " on" : ""}"><span class="tgl-knob"></span></span>
-         Teach the agent <span class="tgl-pill${on ? "" : " off"}">${on ? "On" : "Off"}</span>
-       </button>` : "";
-  const lesson = row.agent_id
-    ? `<button class="btn sm" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}" title="Give this agent a standing lesson - always remembered, whatever the switch says.">Add a lesson</button>` : "";
-  return tgl || lesson ? `${tgl} ${lesson}` : "";
+  return row.agent_id
+    ? `<button class="teach-link" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}" title="Tell the agent what to learn from this reply - it's remembered for next time.">Remember this as a lesson</button>`
+    : "";
 }
 
 function composerFeedbackHtml(row) {
@@ -1472,7 +1448,6 @@ function wireDetailEvents(root, row) {
     const feedback = inp ? inp.value.trim() : "";
     doRedraft(btn, feedback, (feedback && trainingModeOn()) ? "remember" : undefined);
   }));
-  root.querySelectorAll(".qc-training-tgl").forEach((btn) => btn.addEventListener("click", () => setTrainingMode(!trainingModeOn())));
   root.querySelectorAll(".qc-feedback-input").forEach((inp) => inp.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
