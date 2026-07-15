@@ -206,19 +206,39 @@ _PHONE_RE = re.compile(r"\+\s?\d[\d\s().\-]{6,}")
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _STYLE_BLOCK_RE = re.compile(r"<(style|script|head)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+# Tags that end a visual line/paragraph become newlines (not spaces), so a
+# Gmail/Outlook HTML reply keeps its paragraph structure after the tag strip.
+_BREAK_TAG_RE = re.compile(
+    r"<\s*(?:br\s*/?|/p|/div|/tr|/li|/h[1-6]|/blockquote|/pre)\s*>", re.IGNORECASE)
+# HTML-level quoted-history containers: everything from the first reply-quote
+# wrapper onward is the older thread, not the lead's new message. In cold-email
+# replies a <blockquote> is quoted history for all practical purposes.
+_HTML_QUOTE_RE = re.compile(
+    r"<blockquote[^>]*>.*$"
+    r"|<div[^>]*(?:gmail_quote|OutlookMessageHeader|yahoo_quoted|moz-cite-prefix)[^>]*>.*$",
+    re.IGNORECASE | re.DOTALL)
 
 
 def clean_body(body: str) -> str:
-    """Reply text with HTML markup stripped and whitespace collapsed. Outlook
-    and Gmail replies often arrive as full HTML documents; markup must never
-    count toward the length veto or blur what the classifier reads."""
+    """Reply text with HTML markup stripped, PARAGRAPH BREAKS KEPT, and quoted
+    history removed. Outlook and Gmail replies often arrive as full HTML
+    documents dragging the whole earlier thread along; markup and quoted
+    history must never count toward the length veto or blur what the
+    classifier reads — only the lead's actual new message survives.
+    Stored bodies stay raw; this is read/render-time only."""
     text = body or ""
     if "<" in text and _HTML_TAG_RE.search(text):
         import html as _html
         text = _STYLE_BLOCK_RE.sub(" ", text)
+        text = _HTML_QUOTE_RE.sub(" ", text)
+        text = _BREAK_TAG_RE.sub("\n", text)
         text = _HTML_TAG_RE.sub(" ", text)
         text = _html.unescape(text)
-    return re.sub(r"[ \t\r\f\v]+", " ", text).strip()
+    text = _strip_quoted(text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r" ?\n ?", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 # Same-day scheduling asks ("can we chat today / in an hour?") can't be
 # answered by two fixed future slots - deterministic veto, judged from the
@@ -1267,7 +1287,10 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
             "reply_email_time": target.get("time"),
             "reply_email_body": target.get("body") or "",
             "reply_subject": target.get("subject") or "",
-            "thread": norm[-6:],
+            # Full conversation, not a keyhole: the owner reads this thread in
+            # the UI, so a 6-message cap silently hid earlier replies. 50
+            # bounds the payload without ever clipping a real sales thread.
+            "thread": norm[-50:],
             "sender_first": sender_first,
             "answered_since_reply": answered_since_reply,
             "first_outbound": first_outbound,
@@ -2230,9 +2253,19 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     except (TypeError, ValueError):
         conf = 0.0
     is_clear_negative = primary in CLEAR_NEGATIVE_INTENTS and conf >= 0.8
+    # Owner ruling (2026-07-15): anything that will actually SURFACE in the
+    # queue must carry a draft, even when the agent is unsure — the human
+    # wants a starting point, not a blank composer. decide() holds a clear
+    # negative for review when Smartlead's categoriser disagrees or the reply
+    # points at a live opening; mirror those two conditions here so exactly
+    # the rows that surface get drafted, and true no_action negatives keep
+    # their no-draft short-circuit.
+    negative_but_surfaces = is_clear_negative and (
+        (category in POSITIVE_CATEGORIES) or bool(classification.get("live_lead")))
+    wants_draft = (not is_clear_negative) or negative_but_surfaces
 
     slots, slot_status = [], "not_configured"
-    if not is_clear_negative:
+    if wants_draft:
         eff_settings = dict(settings)
         eff_settings["_agent"] = agent
         eff_settings["_lead"] = {"first_name": row["lead_first_name"], "last_name": row["lead_last_name"], "email": email}
@@ -2253,7 +2286,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     row["slots"] = slots
 
     draft_subject, draft_body = None, None
-    if not is_clear_negative:
+    if wants_draft:
         try:
             d = draft_reply(
                 {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text,
@@ -2853,6 +2886,53 @@ def _compute_kpis() -> dict:
     return kpis
 
 
+# decide()'s exact master-switch hold reason — the read-time ground for
+# "this WOULD have auto-sent". Keep in sync with decide().
+_MASTER_SWITCH_REASON = "Held for review: every check passed, but the autopilot master switch is off."
+
+
+def _annotate_queue_row(row: dict) -> dict:
+    """READ-TIME annotations for the UI, derived from columns that already
+    exist. Returned in GET payloads only — NEVER written back (a setter_queue
+    PATCH carrying a key without a real column dies silently, see
+    reference_setter_queue_schema_freeze_gotcha)."""
+    out = dict(row)
+    reason = str(row.get("decision_reason") or "")
+    held_by_switch = reason == _MASTER_SWITCH_REASON
+    out["held_only_by_master_switch"] = held_by_switch
+    out["would_auto_send"] = (row.get("status") == "auto_sent"
+                              or row.get("decision") == "auto_send"
+                              or held_by_switch)
+    slots = row.get("slots") or []
+    no_slots = None
+    if not slots and row.get("draft_body"):
+        r = reason.lower()
+        if "timezone" in r:
+            no_slots = ("The lead's timezone couldn't be pinned down, so no fixed "
+                        "call times were proposed — the draft asks for their availability instead.")
+        elif "calendly" in r or "calendar" in r:
+            no_slots = reason.replace("Held for review: ", "").strip().capitalize()
+        elif str(row.get("error") or "").strip():
+            no_slots = f"Call-time lookup hit an error: {str(row.get('error'))[:160]}"
+        else:
+            no_slots = ("No bookable Calendly slots were available when this was "
+                        "processed, so the draft falls back to an availability ask / booking link.")
+    out["no_slots_reason"] = no_slots
+    return out
+
+
+def _last_poll_done_at():
+    """Timestamp of the last COMPLETED reply-check (the setter_poll_done
+    activity row) — what the UI shows as "last checked X ago". None when the
+    ledger has no such row yet."""
+    try:
+        rows = _SB("GET", "app_activity_log?action=eq.setter_poll_done"
+                          "&order=created_at.desc&limit=1&select=created_at") if _SB else None
+        return rows[0].get("created_at") if isinstance(rows, list) and rows else None
+    except Exception:  # noqa: BLE001 - a ledger hiccup must never break the queue
+        return None
+
+
 def route_queue_get(params):
     try:
         status = _qp(params, "status", "")
@@ -2868,7 +2948,8 @@ def route_queue_get(params):
                 filt += f"&status=eq.{status}"
             fetched = _SB("GET", f"{QUEUE_TABLE}?{filt}")
             rows = fetched if isinstance(fetched, list) else []
-        return 200, {"rows": rows, "kpis": _compute_kpis()}
+        rows = [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
+        return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 

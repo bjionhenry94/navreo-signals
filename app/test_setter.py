@@ -7182,6 +7182,147 @@ def test_agents_save_sender_first_round_trips_and_survives_partial_resave():
 
 # ── run everything ───────────────────────────────────────────────────────────
 
+
+
+# ── trust-ship (2026-07-15): clean_body paragraphs + quote strip, thread cap,
+#    read-time queue annotations, always-draft for surfacing negatives ───────
+
+_TRUST_GMAIL_FIXTURE = (
+    '<html><head><style>p{margin:0;color:#111}</style></head><body>'
+    '<div dir="ltr"><p>Hi Sam,</p><p>Yes this sounds interesting.</p>'
+    '<p>Could you send pricing?</p><p>Thanks,<br>Dan</p></div>'
+    '<div class="gmail_quote">On Mon, 13 Jul 2026 at 09:12, Sam &lt;sam@x.io&gt; wrote:<br>'
+    '<blockquote class="gmail_quote">Original pitch text here with <b>bold</b> bits</blockquote></div>'
+    '</body></html>')
+
+
+def test_trust_clean_body_paragraphs_and_quote_strip():
+    out = setter.clean_body(_TRUST_GMAIL_FIXTURE)
+    check("trust clean_body: keeps paragraph breaks", "\n" in out, repr(out))
+    check("trust clean_body: several paragraphs survive", out.count("\n") >= 3, repr(out))
+    check("trust clean_body: quoted history gone",
+          "Original pitch" not in out and "wrote:" not in out, repr(out))
+    check("trust clean_body: style block gone", "margin" not in out, repr(out))
+    check("trust clean_body: new-message text intact",
+          "Yes this sounds interesting." in out and "Could you send pricing?" in out, repr(out))
+
+
+def test_trust_clean_body_plaintext_quote_strip():
+    txt = ("Sounds good.\n\nOn Mon, Jul 13, 2026 at 9:12 AM Sam <sam@x.io> wrote:\n"
+           "> the old pitch\n> more old text")
+    out = setter.clean_body(txt)
+    check("trust clean_body: plain-text 'On ... wrote:' cut", "old pitch" not in out, repr(out))
+    check("trust clean_body: plain-text new message kept", out.startswith("Sounds good."), repr(out))
+
+
+def test_trust_hydrate_thread_cap_raised():
+    sb, http = fresh_setter()
+    http.message_history = [
+        {"type": "SENT" if i % 2 == 0 else "REPLY", "time": f"2026-07-01T{10+ (i % 12):02d}:00:00+00:00",
+         "subject": "Re: hi", "email_body": f"<p>message number {i}</p>",
+         "message_id": f"m-cap-{i}", "stats_id": f"st-cap-{i}", "from_name": "Dan"}
+        for i in range(12)
+    ]
+    ok, hyd, herr = setter.hydrate_lead(111, "cap@example.com", "m-cap-11")
+    thread = (hyd or {}).get("thread") or []
+    check("trust hydrate: hydration succeeds", ok is True, herr)
+    check("trust hydrate: >6 messages survive (12 in, 12 out)", len(thread) == 12, len(thread))
+
+
+def test_trust_queue_get_read_time_annotations():
+    sb, http = fresh_setter()
+    sb.queue = [
+        {"id": 1, "workspace": "navreo", "status": "needs_review", "decision": "review",
+         "decision_reason": setter._MASTER_SWITCH_REASON, "slots": [], "draft_body": "<p>d</p>",
+         "created_at": "2026-07-15T09:00:00+00:00"},
+        {"id": 2, "workspace": "navreo", "status": "auto_sent", "decision": "auto_send",
+         "decision_reason": "Meets every autopilot condition.", "slots": [{"label": "x", "link": "y"}],
+         "draft_body": "<p>d</p>", "created_at": "2026-07-15T09:01:00+00:00"},
+        {"id": 3, "workspace": "navreo", "status": "needs_review", "decision": "review",
+         "decision_reason": "Held for review: not sure enough of the lead's timezone to pick a time for them.",
+         "slots": [], "draft_body": "<p>d</p>", "created_at": "2026-07-15T09:02:00+00:00"},
+    ]
+    before = copy.deepcopy(sb.queue)
+    status, resp = setter.route_queue_get({})
+    rows = {r["id"]: r for r in resp.get("rows", [])}
+    check("trust queue GET: 200", status == 200, (status, resp.get("error")))
+    check("trust queue GET: master-switch hold -> would_auto_send True",
+          rows.get(1, {}).get("would_auto_send") is True and rows.get(1, {}).get("held_only_by_master_switch") is True,
+          rows.get(1))
+    check("trust queue GET: auto_sent -> would_auto_send True",
+          rows.get(2, {}).get("would_auto_send") is True, rows.get(2))
+    check("trust queue GET: other hold -> would_auto_send False",
+          rows.get(3, {}).get("would_auto_send") is False and rows.get(3, {}).get("held_only_by_master_switch") is False,
+          rows.get(3))
+    check("trust queue GET: timezone hold explains missing slots",
+          "timezone" in str(rows.get(3, {}).get("no_slots_reason") or "").lower(), rows.get(3))
+    check("trust queue GET: slots present -> no no_slots_reason",
+          rows.get(2, {}).get("no_slots_reason") is None, rows.get(2))
+    check("trust queue GET: last_checked key present in payload", "last_checked" in resp, sorted(resp.keys()))
+    check("trust queue GET: annotations are response-only, stored rows untouched",
+          sb.queue == before, sb.queue)
+
+
+def test_trust_master_switch_reason_in_sync_with_decide():
+    import inspect
+    src = inspect.getsource(setter.decide)
+    check("trust: _MASTER_SWITCH_REASON literal still lives inside decide()",
+          setter._MASTER_SWITCH_REASON in src, setter._MASTER_SWITCH_REASON)
+
+
+_TRUST_NEG_CLASSIFY = {
+    "primary_intent": "not_interested", "all_intents": ["not_interested"], "simple_ask": False,
+    "confidence": 0.95, "red_flags": [], "timezone_guess": "Europe/London", "tz_confidence": 0.9,
+    "wants": "", "rationale": "clear pass",
+}
+
+
+def test_trust_surfacing_negative_still_gets_draft():
+    sb, http = fresh_setter()
+    draft_calls = []
+    http.classify_fn = lambda _b: dict(_TRUST_NEG_CLASSIFY)
+    def _draft(_b):
+        draft_calls.append(1)
+        return {"subject": "Re: hi", "html": "Hi Dan, totally understood. Best, Sam"}
+    http.draft_fn = _draft
+    agent = {"id": "agent-trust-neg1", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"],
+             "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    pos_cat = "Interested"  # Smartlead disagrees with the AI's clear-negative read
+    reply = {"workspace": "navreo", "campaign_id": 111, "email": "neg1@example.com",
+             "first_name": "Dan", "message_id": "m-trust-neg1", "body": "no thanks, not for us",
+             "subject": "Re: hi", "replied_at": "2026-07-15T09:00:00+00:00", "is_test": True,
+             "category": pos_cat}
+    row = setter.process_reply(reply, agent, {})
+    check("trust always-draft: disagreement negative is held for review",
+          row.get("status") == "needs_review", row.get("status"))
+    check("trust always-draft: held negative CARRIES a draft",
+          bool(row.get("draft_body")), row.get("draft_body"))
+    check("trust always-draft: drafter was actually called", len(draft_calls) == 1, len(draft_calls))
+
+
+def test_trust_true_negative_keeps_no_draft_short_circuit():
+    sb, http = fresh_setter()
+    draft_calls = []
+    http.classify_fn = lambda _b: dict(_TRUST_NEG_CLASSIFY)
+    def _draft(_b):
+        draft_calls.append(1)
+        return {"subject": "Re: hi", "html": "should never be produced"}
+    http.draft_fn = _draft
+    agent = {"id": "agent-trust-neg2", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    reply = {"workspace": "navreo", "campaign_id": 111, "email": "neg2@example.com",
+             "first_name": "Dan", "message_id": "m-trust-neg2", "body": "no thanks, not for us",
+             "subject": "Re: hi", "replied_at": "2026-07-15T09:00:00+00:00", "is_test": True,
+             "category": None}
+    row = setter.process_reply(reply, agent, {})
+    check("trust always-draft: true negative stays no_action", row.get("status") == "no_action", row.get("status"))
+    check("trust always-draft: true negative has no draft", not row.get("draft_body"), row.get("draft_body"))
+    check("trust always-draft: drafter never called for a true negative", len(draft_calls) == 0, len(draft_calls))
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
@@ -7366,6 +7507,14 @@ if __name__ == "__main__":
     test_self_learning_stamp_persists_once_from_live_thread()
     test_self_learning_stamp_never_overwrites_existing_identity()
     test_agents_save_sender_first_round_trips_and_survives_partial_resave()
+
+    test_trust_clean_body_paragraphs_and_quote_strip()
+    test_trust_clean_body_plaintext_quote_strip()
+    test_trust_hydrate_thread_cap_raised()
+    test_trust_queue_get_read_time_annotations()
+    test_trust_master_switch_reason_in_sync_with_decide()
+    test_trust_surfacing_negative_still_gets_draft()
+    test_trust_true_negative_keeps_no_draft_short_circuit()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

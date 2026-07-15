@@ -12065,7 +12065,7 @@ class Handler(SimpleHTTPRequestHandler):
             body = None
             if method == "POST":
                 length = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(length) if length else b""
+                body = self._post_body
             status, obj = mock_deliv.handle_proxy(method, rest, body)
             return self._json(obj, status)
         import base64, urllib.error
@@ -12078,7 +12078,7 @@ class Handler(SimpleHTTPRequestHandler):
         body = None
         if method == "POST":
             length = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(length) if length else b""
+            body = self._post_body
             # ledger: every proxied deliverability mutation (apply signatures,
             # process-new, warmup changes, ...) — previously invisible
             try:
@@ -12122,6 +12122,39 @@ class Handler(SimpleHTTPRequestHandler):
     # ── login gate plumbing ────────────────────────────────────────────────
     def _authed_email(self):
         return _session_email(self.headers.get("Cookie"))
+
+    _MAX_POST_BODY = 32 * 1024 * 1024
+
+    def _drain_request_body(self) -> bool:
+        """Read the request body exactly ONCE, up front, into self._post_body.
+
+        This server speaks HTTP/1.1 keep-alive. Any handler branch that
+        responds WITHOUT reading the body (401 gates, cron kicks, early
+        returns) leaves the body bytes on the socket — and the next request
+        on that same connection parses them as a request line, which
+        http.server answers with '501 Unsupported method'. That was the
+        intermittent "Request failed (501)" the setter queue hit. Draining
+        here makes desync impossible regardless of which branch answers.
+        Returns False when the request was rejected (413 already written)."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            self._post_body = b""
+            return True
+        if length > self._MAX_POST_BODY:
+            remaining = length
+            while remaining > 0:  # keep the connection in sync even on reject
+                chunk = self.rfile.read(min(remaining, 1 << 20))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            self._post_body = b""
+            self._json({"error": "payload too large"}, 413)
+            return False
+        self._post_body = self._post_body
+        return True
 
     def _gate(self, path) -> bool:
         """True → request may proceed. False → a 401/redirect was written."""
@@ -12253,7 +12286,7 @@ class Handler(SimpleHTTPRequestHandler):
         if length > 8_000_000:
             return self._json({"error": "payload too large"}, 413)
         try:
-            body = json.loads(self.rfile.read(length).decode() or "{}")
+            body = json.loads(self._post_body.decode() or "{}")
         except ValueError:
             return self._json({"error": "invalid JSON body"}, 400)
         if path == "/api/qa-gate/runs":
@@ -12761,6 +12794,8 @@ class Handler(SimpleHTTPRequestHandler):
     }
 
     def do_POST(self):
+        if not self._drain_request_body():
+            return
         path = self.path.split("?")[0]
         if path not in self._CLEAR_CACHE_EXEMPT_POST:
             _clear_ui_caches()  # G2: every other POST may mutate — never let a stale cached GET follow it
@@ -12769,7 +12804,7 @@ class Handler(SimpleHTTPRequestHandler):
             if length > 4096:
                 return self._json({"ok": False, "message": "payload too large"}, 413)
             try:
-                p = json.loads(self.rfile.read(length).decode() or "{}")
+                p = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             email = (p.get("email") or "").strip().lower()
@@ -12794,7 +12829,7 @@ class Handler(SimpleHTTPRequestHandler):
             if length > 12288:  # /email carries a full offer object
                 return self._json({"ok": False, "message": "payload too large"}, 413)
             try:
-                p = json.loads(self.rfile.read(length).decode() or "{}")
+                p = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             ip = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip() \
@@ -12904,7 +12939,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "message": "unauthorized"}, 401)
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             log_activity(path, actor="webhook", action="inbound", entity="setter_queue")
@@ -12919,7 +12954,7 @@ class Handler(SimpleHTTPRequestHandler):
             nid = path[len(exec_prefix):-len(exec_suffix)]
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             log_activity(path, payload, action="execute", entity="notification",
@@ -12977,7 +13012,7 @@ class Handler(SimpleHTTPRequestHandler):
             # synchronously, and never on a GET (see api_campaign_ideas_get).
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_campaign_ideas_start(payload)
@@ -12985,7 +13020,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/campaign-ideas/dismiss":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_campaign_ideas_dismiss(payload)
@@ -12993,7 +13028,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/campaign-ideas/add":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_campaign_ideas_add(payload)
@@ -13001,7 +13036,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/recontact/buckets":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             result = api_recontact_buckets(payload)
@@ -13016,7 +13051,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/recontact/create":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_recontact_create(payload)
@@ -13029,7 +13064,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/verify-campaign":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             log_activity(path, payload)
@@ -13038,7 +13073,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/verify-remove":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             log_activity(path, payload)
@@ -13047,7 +13082,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/verify-dismiss":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             log_activity(path, payload)
@@ -13056,7 +13091,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/warmup-job":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_warmup_job(payload)
@@ -13064,7 +13099,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/process-new-selected":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             log_activity(path, payload)
@@ -13073,7 +13108,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/restore-live":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             if not payload.get("dry_run"):  # ledger: real restores only, not previews
@@ -13085,7 +13120,7 @@ class Handler(SimpleHTTPRequestHandler):
             # hides the row (ledger.dismissed); nothing in Smartlead changes.
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             doms = _safe_domains([str(d).lower() for d in (payload.get("domains") or []) if d])
@@ -13104,7 +13139,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "not_found"}, 404)
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
+                payload = json.loads(self._post_body.decode() or "{}") if length else {}
             except ValueError:
                 return self._json({"error": "invalid_json"}, 400)
             if payload.get("reset"):
@@ -13119,7 +13154,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/deliverability/_audit/refresh":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                force = bool(json.loads(self.rfile.read(length).decode() or "{}").get("force", True)) if length else True
+                force = bool(json.loads(self._post_body.decode() or "{}").get("force", True)) if length else True
             except ValueError:
                 force = True
             log_activity(path, {"force": force}, action="audit_refresh",
@@ -13128,7 +13163,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/deliverability/_bundle/refresh":
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                force = bool(json.loads(self.rfile.read(length).decode() or "{}").get("force", True)) if length else True
+                force = bool(json.loads(self._post_body.decode() or "{}").get("force", True)) if length else True
             except ValueError:
                 force = True
             log_activity(path, {"force": force}, action="bundle_refresh",
@@ -13148,7 +13183,7 @@ class Handler(SimpleHTTPRequestHandler):
         if setter_route:
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             # Only /api/setter/training/answer, /api/setter/training/generate,
@@ -13178,7 +13213,7 @@ class Handler(SimpleHTTPRequestHandler):
             # here can write list_rows (see the Lists API HARD RULE above).
             length = int(self.headers.get("Content-Length") or 0)
             try:
-                payload = json.loads(self.rfile.read(length).decode() or "{}")
+                payload = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             log_activity(path, payload, action=path.rsplit("/", 1)[-1],
@@ -13190,7 +13225,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": False, "message": "unknown endpoint"}, 404)
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            payload = json.loads(self.rfile.read(length).decode() or "{}")
+            payload = json.loads(self._post_body.decode() or "{}")
             log_activity(path, payload)  # ledger first — even a failing call is activity
             with drafts_lock():  # every POST may read-modify-write the drafts files
                 return self._json(route(payload))
@@ -13198,6 +13233,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": False, "message": str(e)[:300]}, 200)
 
     def do_PATCH(self):
+        if not self._drain_request_body():
+            return
         _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
         if not self._gate(path):
@@ -13208,7 +13245,7 @@ class Handler(SimpleHTTPRequestHandler):
         nid = path[len(prefix):]
         length = int(self.headers.get("Content-Length") or 0)
         try:
-            payload = json.loads(self.rfile.read(length).decode() or "{}")
+            payload = json.loads(self._post_body.decode() or "{}")
         except ValueError:
             return self._json({"ok": False, "message": "invalid JSON body"}, 400)
         status = payload.get("status")

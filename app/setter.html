@@ -44,8 +44,15 @@
 /* ── Three-pane inbox shell: list | conversation | fixed lead-info sidebar ── */
 .inbox-shell {
   display: flex; border: 1px solid var(--line); border-radius: var(--radius);
-  overflow: hidden; height: calc(100vh - 220px); min-height: 460px;
+  overflow: hidden; min-height: 460px;
+  /* JS (sizeInboxShell) pins the shell's bottom edge to the viewport with
+     the same gutter as the page's side padding - one viewport, one scroll
+     per column. The calc is only the pre-JS fallback. */
+  height: calc(100vh - 220px);
 }
+/* Page-scoped: the shell IS the page bottom, so the .main bottom padding
+   shrinks from 80px to the same side gutter the shell aligns to. */
+.main { padding-bottom: clamp(24px, 3vw, 48px); }
 .inbox-left { width: 340px; flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .il-search input {
@@ -54,6 +61,8 @@
 }
 .il-search input:focus { outline: none; box-shadow: var(--focus); }
 .il-search-notes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.il-filters { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+.il-client-filter { margin-top: 8px; width: 100%; }
 .il-list { flex: 1; overflow-y: auto; }
 .il-test-note { padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .il-list .empty { padding: 40px 16px; }
@@ -136,7 +145,9 @@
 
 /* ── Threaded conversation (Change 1): one scrollable column, oldest first,
    their current reply always last and visually emphasised ─────────────── */
-.convo { position: relative; max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 4px 0; }
+/* No inner scroll (owner ruling 2026-07-15: one scroll, not a scroll inside
+   a scroll) - the conversation grows and the whole centre pane scrolls. */
+.convo { position: relative; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 4px 0; }
 .convo-fade {
   position: absolute; top: 0; left: 0; right: 0; height: 30px; border-radius: 8px 8px 0 0;
   background: linear-gradient(var(--card), rgba(255, 255, 255, 0));
@@ -267,14 +278,13 @@
       <h1 class="sh-title">Appointment Setter</h1>
       <div class="stats-inline" id="statsInline"></div>
       <div class="sh-spacer"></div>
+      <span class="small muted" id="lastCheckedNote"></span>
       <button class="btn primary" id="checkNowBtn" type="button">Check for new replies</button>
     </div>
 
     <div id="errBanner" class="err-banner" style="display:none"></div>
 
     <div class="setter-toolbar">
-      <div class="filters" id="queueFilters"></div>
-      <select class="client-filter-sel" id="clientFilterSel" title="Filter by client"></select>
       <label class="test-toggle" id="testToggleWrap" style="display:none">
         <input type="checkbox" id="showTestChk" checked> Show test items
       </label>
@@ -295,6 +305,8 @@
             <span class="small muted">&uarr;&darr; to move between replies</span>
             <span class="small muted" id="searchAllNote" style="display:none">searching all replies</span>
           </div>
+          <div class="filters il-filters" id="queueFilters"></div>
+          <select class="client-filter-sel il-client-filter" id="clientFilterSel" title="Filter by client"></select>
         </div>
         <div class="il-test-note small muted" id="testOnlyNote" style="display:none"></div>
         <div class="il-list" id="inboxList"></div>
@@ -415,6 +427,25 @@
 document.getElementById("rail").outerHTML = renderRail("setter");
 
 /* ── State ─────────────────────────────────────────────── */
+let LAST_CHECKED = null;  // ISO time of the last COMPLETED reply-check (server-supplied)
+function renderLastChecked() {
+  const el = document.getElementById("lastCheckedNote");
+  if (!el) return;
+  el.textContent = LAST_CHECKED ? `Last checked ${pulledAgo(LAST_CHECKED)}` : "";
+  el.title = LAST_CHECKED || "";
+}
+/* One viewport, one scroll per pane: pin the shell's bottom edge to the
+   viewport with the same gutter as the page's side padding. Below 1200px the
+   responsive queries own the heights - clear the inline style there. */
+function sizeInboxShell() {
+  const shell = document.getElementById("inboxShell");
+  if (!shell) return;
+  if (window.innerWidth <= 1200) { shell.style.height = ""; return; }
+  const gutter = Math.min(Math.max(window.innerWidth * 0.03, 24), 48);
+  const top = shell.getBoundingClientRect().top + window.scrollY;
+  shell.style.height = Math.max(460, window.innerHeight - top - gutter) + "px";
+}
+window.addEventListener("resize", sizeInboxShell);
 let AGENTS = [];
 let CAMPAIGNS = [];
 let SETTINGS = {};
@@ -582,14 +613,35 @@ function stripMimeHeaders(text) {
   }
   return out.join("\n");
 }
+/* Plain-text quoted-history cut: everything from the first reply marker
+   ("On ... wrote:", "--- Original Message ---", a "> " quote line) onward is
+   the older thread, not the lead's new message. Port of setter.py
+   _strip_quoted - keep the two in lockstep. */
+function stripQuotedText(text) {
+  const markers = [/\n\s*On [^\n]{0,100} wrote:\s*\n/i, /\n-{2,}\s*Original Message\s*-{2,}/i, /\n>/];
+  let cut = -1;
+  for (const re of markers) {
+    const m = re.exec(text);
+    if (m && (cut === -1 || m.index < cut)) cut = m.index;
+  }
+  return cut >= 0 ? text.slice(0, cut) : text;
+}
 function cleanBody(s) {
   let text = stripMimeHeaders(s);
   if (text.indexOf("<") !== -1 && /<[^>]+>/.test(text)) {
     text = text.replace(/<(style|script|head)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+               // HTML-level quoted-history containers - a blockquote in a
+               // cold-email reply is the earlier thread, cut to the end
+               .replace(/<blockquote[^>]*>[\s\S]*$/gi, " ")
+               .replace(/<div[^>]*(?:gmail_quote|OutlookMessageHeader|yahoo_quoted|moz-cite-prefix)[^>]*>[\s\S]*$/gi, " ")
+               // line/paragraph-ending tags become newlines so the reply
+               // keeps its paragraph structure (mirror of setter.py)
+               .replace(/<\s*(?:br\s*\/?|\/p|\/div|\/tr|\/li|\/h[1-6]|\/blockquote|\/pre)\s*>/gi, "\n")
                .replace(/<[^>]+>/g, " ");
     text = unescapeEntities(text);
   }
-  return text.replace(/[ \t\r\f\v]+/g, " ").trim();
+  text = stripQuotedText(text);
+  return text.replace(/[ \t\r\f\v]+/g, " ").replace(/ ?\n ?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 /* Local-part of an email ("daniel" from "daniel@leadhq.io"), or "". */
 function emailLocalPart(email) {
@@ -686,6 +738,7 @@ async function fetchJson(url, opts) {
   }
 }
 function showError(msg) {
+  setTimeout(sizeInboxShell, 0); // banner shifts the shell down - re-pin
   const el = document.getElementById("errBanner");
   el.textContent = msg;
   el.style.display = "block";
@@ -757,6 +810,8 @@ async function loadQueue() {
     }
     QUEUE_ROWS = rows;
     KPIS = res.data.kpis || {};
+    LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
+    renderLastChecked();
     clearError();
   } else {
     showError("Couldn't load the queue: " + res.error);
@@ -1078,12 +1133,29 @@ function renderDetail(row) {
   }
 
   const teachBtnHtml = row.agent_id
-    ? `<button class="btn sm" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}">Teach the agent</button>` : "";
+    ? `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span>
+       <button class="btn sm" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}">Teach the agent</button>`
+    : `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span>`;
+
+  // Did they reply after our send? Client-side scan of every known row for a
+  // LATER inbound from the same lead - a later reply always creates a new
+  // queue row, so ALL_ROWS is the ground truth we already have.
+  let repliedBackHtml = "";
+  if ((row.status === "auto_sent" || row.status === "sent") && row.sent_at) {
+    const later = (ALL_ROWS || []).find((r) =>
+      String(r.id) !== String(row.id)
+      && String(r.lead_email || "").toLowerCase() === String(row.lead_email || "").toLowerCase()
+      && r.replied_at && new Date(r.replied_at) > new Date(row.sent_at));
+    repliedBackHtml = later
+      ? `<div class="sent-line auto_sent">They replied ${pulledAgo(later.replied_at)} - it's in this queue as its own item.</div>`
+      : `<div class="sent-line sent">No reply from them since this was sent.</div>`;
+  }
 
   el.innerHTML = `
     <a class="back-link mobile-back" href="#" id="backToInboxLink">&larr; Back to inbox</a>
     <div class="detail-head">
-      <h2 class="dh-name">${esc(leadName(row))} ${testChip}</h2>
+      <h2 class="dh-name">${esc(leadName(row))} ${testChip}
+        <span class="small muted dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span></h2>
       ${teachBtnHtml}
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
@@ -1096,6 +1168,7 @@ function renderDetail(row) {
       </div>
       ${composerFeedbackHtml(row)}
       ${sentLineHtml}
+      ${repliedBackHtml}
       ${noSlotsHint}
       ${composerHtml(row)}
     </div>
@@ -1131,6 +1204,18 @@ function howDecidedContentHtml(row, opts) {
   if (row.decision_reason) {
     parts.push(`<div style="margin-bottom:10px"><b>${esc(decisionLabel(row))}</b><br>${esc(row.decision_reason)}</div>`);
   }
+  // Explicit autopilot verdict (owner ruling 2026-07-15): even with the
+  // master switch off, say plainly whether this WOULD have gone out on its
+  // own, and why not when it wouldn't. Computed read-time by the server
+  // (would_auto_send / held_only_by_master_switch) - never stored.
+  if (row.would_auto_send != null) {
+    let verdict;
+    if (row.status === "auto_sent") verdict = "<b>Yes</b> - it sent automatically.";
+    else if (row.held_only_by_master_switch) verdict = "<b>Yes</b> - every check passed; only the master switch (off) held it back.";
+    else if (row.would_auto_send) verdict = "<b>Yes</b>.";
+    else verdict = `<b>No</b> - ${esc(row.decision_reason || "one of the autopilot checks failed.")}`;
+    parts.push(`<div class="small" style="margin-bottom:10px"><b>Would this have auto-sent?</b><br>${verdict}</div>`);
+  }
   const kv = (label, val) => `<div class="small" style="margin-bottom:6px"><b>${esc(label)}:</b> ${val}</div>`;
   if (!opts.skipIdentity) {
     parts.push(kv("Email", row.lead_email ? esc(row.lead_email) : "unknown"));
@@ -1141,6 +1226,9 @@ function howDecidedContentHtml(row, opts) {
   parts.push(kv("Opt-out hits", lexHits.length ? esc(lexHits.join(", ")) : "none"));
   parts.push(kv("AI flags", redFlags.length ? esc(redFlags.join(", ")) : "none"));
   parts.push(kv("Call slots", esc(slotSituationText(row))));
+  if (row.no_slots_reason) {
+    parts.push(`<div class="small" style="margin:-2px 0 8px;color:var(--ink-3)">${esc(row.no_slots_reason)}</div>`);
+  }
   if (row.category) parts.push(kv("Smartlead category", esc(row.category)));
 
   if (allIntents.includes("pricing")) {
@@ -1328,18 +1416,13 @@ function wireDetailEvents(root, row) {
   const backLink = root.querySelector("#backToInboxLink");
   if (backLink) backLink.addEventListener("click", (e) => { e.preventDefault(); backToInbox(); });
 
-  // Threaded conversation: start scrolled to the bottom (their reply is
-  // always the last block) on every render, and only show the top fade
-  // while there's earlier content scrolled out of view above.
-  const convoEl = root.querySelector(".convo");
-  if (convoEl) {
-    convoEl.scrollTop = convoEl.scrollHeight;
-    const fadeEl = convoEl.querySelector(".convo-fade");
-    if (fadeEl) {
-      const toggleFade = () => { fadeEl.style.opacity = convoEl.scrollTop > 8 ? "1" : "0"; };
-      toggleFade();
-      convoEl.addEventListener("scroll", toggleFade);
-    }
+  // The conversation has no inner scroll any more (one scroll per pane) -
+  // on long threads, start the centre pane at the CURRENT reply so the
+  // newest message and the composer are what you land on, with the history
+  // available by scrolling up.
+  const curMsg = root.querySelector(".thread-msg.current");
+  if (curMsg && el.scrollHeight > el.clientHeight) {
+    curMsg.scrollIntoView({ block: "center" });
   }
 
   const teachBtn = root.querySelector("#teachAgentBtn");
@@ -2233,6 +2316,16 @@ function renderTryItResult(row) {
 (async function init() {
   await loadAgentsAndCampaigns();
   await loadQueue();
+  sizeInboxShell();
+  // Real-inbox freshness (owner ruling 2026-07-15): every page load kicks a
+  // check for new replies automatically - no manual click needed to see the
+  // latest messages. The kick is fire-and-forget; the delayed reload picks
+  // up whatever the sweep queued (same 2.5s the manual button uses).
+  const kick = await fetchJson("/api/setter/poll", { method: "POST" });
+  if (kick.ok) {
+    protoNote("Checking for new replies…");
+    setTimeout(async () => { await loadQueue(); sizeInboxShell(); }, 2500);
+  }
 })();
 </script>
 </body>
