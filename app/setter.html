@@ -1450,7 +1450,7 @@ function wireDetailEvents(root, row) {
   // newest message and the composer are what you land on, with the history
   // available by scrolling up.
   const curMsg = root.querySelector(".thread-msg.current");
-  if (curMsg && el.scrollHeight > el.clientHeight) {
+  if (curMsg && root.scrollHeight > root.clientHeight) {
     curMsg.scrollIntoView({ block: "center" });
   }
 
