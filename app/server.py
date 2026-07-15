@@ -11286,11 +11286,10 @@ def api_restore_live(p: dict):
     if not domains:
         return {"ok": False, "error": "no_domains",
                 "message": "No domains to restore — pass id or domains."}, 400
-    blocked = [d for d in domains if d in bl_doms]
-    if blocked:
-        return {"ok": False, "error": "blacklisted",
-                "message": "Refusing to restore blacklisted domain(s): "
-                           + ", ".join(blocked) + ". Delist first."}, 409
+    # Owner ruling 2026-07-15: a blocklist hit FLAGS, it never blocks — the
+    # restore proceeds and the response carries the listed domains so the UI
+    # and the operator can see exactly what is still on a blocklist.
+    blacklist_warning = [d for d in domains if d in bl_doms]
     plans = []
     for d in domains:
         m = (mbx or {}).get(d) or {"accounts": [], "cap_sum": 0, "zero_cap": 0, "tags": [], "maildoso": False}
@@ -11320,6 +11319,7 @@ def api_restore_live(p: dict):
     if p.get("dry_run"):
         return {"ok": True, "dry_run": True, "client": client, "early": early,
                 "plans": plans, "suggestions": suggestions,
+                "blacklist_warning": blacklist_warning,
                 "entry": {k: entry.get(k) for k in ("id", "dueDate", "source", "attached_boxes")} if entry else None}, 200
     if early and not p.get("force_early"):
         return {"ok": False, "error": "before_due",
@@ -11379,11 +11379,13 @@ def api_restore_live(p: dict):
                   "mailboxes": sum(pl["mailboxes"] for pl in plans),
                   "caps_restored_total": total_cap,
                   "resumed": sum(r["resumed"] or 0 for r in results),
+                  "blacklist_warning": blacklist_warning,
                   "errors": [e for r in results for e in r["errors"]]},
                  action="restore_live", entity="deliverability",
                  entity_id=",".join(domains)[:120])
     ok = not any(r["errors"] for r in results)
     return {"ok": ok, "results": results, "reminder_done": done_ok,
+            "blacklist_warning": blacklist_warning,
             "client": client, "capacity_restored": total_cap}, 200
 
 
