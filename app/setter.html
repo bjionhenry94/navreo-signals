@@ -192,6 +192,10 @@
 .qc-split .qc-regen-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 10px; }
 .qc-feedback { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
 .qc-feedback .qc-feedback-input { flex: 1; min-width: 200px; }
+/* Can't-comply note from a feedback redraft (warn only, never inject -
+   owner ruling 2026-07-16): the drafter explains what it couldn't honour. */
+.qc-note { font-size: 12.5px; line-height: 1.5; color: #6B4A00; background: var(--amber-bg);
+  border: 1px solid var(--amber-line); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
 .detail-err { margin: 10px 0; }
 
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
@@ -497,6 +501,9 @@ let inboxSearchQuery = "";
 /* rowId -> last edited (unsent) draft HTML, so a background refresh never
    clobbers text the user is mid-way through editing */
 const EDITED_DRAFTS = {};
+/* rowId -> the drafter's can't-comply note from the last feedback redraft
+   (transient by design - the backend never persists it; schema-freeze) */
+const REDRAFT_NOTES = {};
 /* left-list pagination: 25 rows/page. Reset to page 1 whenever the filter
    pill, search query, or test-toggle changes the underlying row set. */
 let inboxPage = 1;
@@ -1401,7 +1408,12 @@ function convoMsgHtml(who, when, body, emphasize) {
 }
 function convoHtml(row) {
   const thread = Array.isArray(row.thread) ? row.thread : [];
-  const replyHead80 = String(row.reply_body || "").trim().slice(0, 80);
+  // Compare CLEANED text, not raw HTML: every inbound reply body shares the
+  // same "<html><head> <meta http-equiv=..." boilerplate, so a raw head-80
+  // match collapsed ALL replies into the current one and dropped them from
+  // the history - the pane then ended on our last SENT and looked like we
+  // spoke last even when the lead replied after (owner report 2026-07-16).
+  const replyHead80 = cleanBody(String(row.reply_body || "")).replace(/\s+/g, " ").trim().slice(0, 80);
   const older = thread.filter((m) => {
     if (!m) return false;
     if (m.type !== "REPLY") return true; // every SENT message is older context
@@ -1410,7 +1422,7 @@ function convoHtml(row) {
     // never shows twice.
     if (row.email_stats_id != null && m.stats_id != null && String(m.stats_id) === String(row.email_stats_id)) return false;
     if (row.message_id != null && m.message_id != null && String(m.message_id) === String(row.message_id)) return false;
-    const mHead80 = String(m.body || "").trim().slice(0, 80);
+    const mHead80 = cleanBody(String(m.body || "")).replace(/\s+/g, " ").trim().slice(0, 80);
     if (mHead80 && mHead80 === replyHead80) return false;
     return true;
   });
@@ -1489,7 +1501,12 @@ function teachToggleHtml(row) {
 function composerFeedbackHtml(row) {
   if (!needsComposerActions(row)) return "";
   const on = trainingModeOn();
-  return `<div class="qc-feedback" id="fb-${esc(row.id)}" style="display:none">
+  // Can't-comply note (warn only, never inject): visible even while the
+  // feedback input row itself is collapsed, so the explanation for the last
+  // feedback redraft is never hidden behind the arrow toggle.
+  const note = REDRAFT_NOTES[String(row.id)];
+  const noteHtml = note ? `<div class="qc-note" id="note-${esc(row.id)}">${esc(note)}</div>` : "";
+  return `${noteHtml}<div class="qc-feedback" id="fb-${esc(row.id)}" style="display:none">
     <input type="text" class="qc-feedback-input" data-id="${esc(row.id)}" placeholder="${feedbackPlaceholder()}">
     <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">Regenerate with feedback</button>
   </div>`;
@@ -1657,6 +1674,10 @@ async function doRedraft(btn, feedback, scope) {
   }
   clearError();
   delete EDITED_DRAFTS[id];
+  // Surface (or clear) the drafter's can't-comply explanation for the typed
+  // feedback - rendered by composerFeedbackHtml on the next paint.
+  const note = String((res.data && res.data.feedback_note) || "").trim();
+  if (note) REDRAFT_NOTES[String(id)] = note; else delete REDRAFT_NOTES[String(id)];
   loadQueue();
 }
 
