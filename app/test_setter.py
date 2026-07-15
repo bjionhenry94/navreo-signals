@@ -1929,32 +1929,30 @@ def test_handle_inbound_missing_campaign_or_email_ignored():
 
 # ── ensure_webhooks: additive Smartlead EMAIL_REPLY webhook registration ────
 
-def test_ensure_webhooks_adds_one_and_preserves_existing():
+def test_ensure_webhooks_never_registers_and_leaves_campaign_untouched():
+    # The Setter must NOT touch a campaign's Smartlead webhooks on agent setup;
+    # a per-campaign webhook diverts replies away from the reply-categoriser.
     sb, http = fresh_setter()
     cid = 321
-    # a pre-existing, unrelated webhook already registered directly in Smartlead
     existing_hook = {"id": "existing-1", "webhook_url": "https://other.example/hook", "event_types": ["EMAIL_OPEN"]}
     http.webhooks_by_campaign[str(cid)] = [dict(existing_hook)]
     agent = {"id": "agent-hook0001", "campaign_ids": [cid]}
 
     results = setter.ensure_webhooks(agent)
 
-    check("ensure_webhooks: reports ok for the campaign", len(results) == 1 and results[0].get("ok") is True, results)
-    check("ensure_webhooks: existing_intact reported true", results[0].get("existing_intact") is True, results)
-
+    check("ensure_webhooks: returns ok/poll-only per campaign",
+         results == [{"campaign_id": cid, "ok": True, "skipped": "poll-only"}], results)
+    check("ensure_webhooks: makes ZERO Smartlead calls", http.smartlead_calls == [], http.smartlead_calls)
     hooks_after = http.webhooks_by_campaign[str(cid)]
-    check("ensure_webhooks: adds exactly one new webhook (pre-existing + new = 2)", len(hooks_after) == 2, hooks_after)
-    check("ensure_webhooks: the pre-existing webhook is byte-for-byte untouched",
-         hooks_after[0] == existing_hook, hooks_after[0])
-    check("ensure_webhooks: the new webhook points at /api/setter/inbound",
-         "/api/setter/inbound" in (hooks_after[1].get("webhook_url") or ""), hooks_after[1])
-
+    check("ensure_webhooks: campaign webhooks left exactly as they were", hooks_after == [existing_hook], hooks_after)
+    check("ensure_webhooks: nothing added pointing at /api/setter/inbound",
+         not any("/api/setter/inbound" in (w.get("webhook_url") or "") for w in hooks_after), hooks_after)
     settings = setter._load_settings()
-    check("ensure_webhooks: records the new webhook into settings.webhooks",
-         str(cid) in (settings.get("webhooks") or {}), settings.get("webhooks"))
+    check("ensure_webhooks: does not register anything into settings.webhooks",
+         str(cid) not in (settings.get("webhooks") or {}), settings.get("webhooks"))
 
 
-def test_ensure_webhooks_dry_run_skips():
+def test_ensure_webhooks_dry_run_also_noop():
     sb, http = fresh_setter()
     cid = 654
     agent = {"id": "agent-hook0002", "campaign_ids": [cid]}
@@ -1963,27 +1961,21 @@ def test_ensure_webhooks_dry_run_skips():
         results = setter.ensure_webhooks(agent)
     finally:
         os.environ.pop("SETTER_DRY_RUN", None)
-    check("ensure_webhooks: dry run returns skipped without touching Smartlead",
-         results == [{"campaign_id": cid, "ok": True, "skipped": "dry run"}] and http.smartlead_calls == [],
+    check("ensure_webhooks: no Smartlead calls in dry run either",
+         results == [{"campaign_id": cid, "ok": True, "skipped": "poll-only"}] and http.smartlead_calls == [],
          (results, http.smartlead_calls))
 
 
-def test_ensure_webhooks_second_call_is_noop():
+def test_ensure_webhooks_repeat_calls_stay_noop():
     sb, http = fresh_setter()
     cid = 987
     agent = {"id": "agent-hook0003", "campaign_ids": [cid]}
 
     first = setter.ensure_webhooks(agent)
-    calls_after_first = len(http.smartlead_calls)
-    check("ensure_webhooks: first call registers the webhook", first == [{
-        "campaign_id": cid, "ok": True, "existing_intact": True, "webhook_id": 1, "error": None,
-    }], first)
-
     second = setter.ensure_webhooks(agent)
-    check("ensure_webhooks: second call for the same campaign is a no-op 'already'",
-         second == [{"campaign_id": cid, "ok": True, "already": True}], second)
-    check("ensure_webhooks: second call makes no further Smartlead calls",
-         len(http.smartlead_calls) == calls_after_first, (calls_after_first, len(http.smartlead_calls)))
+    check("ensure_webhooks: idempotent poll-only no-op",
+         first == second == [{"campaign_id": cid, "ok": True, "skipped": "poll-only"}], (first, second))
+    check("ensure_webhooks: never calls Smartlead across repeats", http.smartlead_calls == [], http.smartlead_calls)
 
 
 # ── v2: instructions field (with pricing_notes fallback) ───────────────────
@@ -7235,9 +7227,9 @@ if __name__ == "__main__":
     test_handle_inbound_missing_message_id_ignored()
     test_handle_inbound_unassigned_campaign_ignored()
     test_handle_inbound_missing_campaign_or_email_ignored()
-    test_ensure_webhooks_adds_one_and_preserves_existing()
-    test_ensure_webhooks_dry_run_skips()
-    test_ensure_webhooks_second_call_is_noop()
+    test_ensure_webhooks_never_registers_and_leaves_campaign_untouched()
+    test_ensure_webhooks_dry_run_also_noop()
+    test_ensure_webhooks_repeat_calls_stay_noop()
     test_agent_instructions_fallback()
     test_booking_link_derivation()
     test_decide_multi_turn_autonomy()

@@ -1709,9 +1709,7 @@ function agentModeLabel(agent) { return agent.mode === "autopilot" ? "Autopilot"
 
 function liveIntakeLine(agent) {
   const cids = (agent.campaign_ids || []).map((c) => String(c));
-  const webhooks = SETTINGS.webhooks || {};
-  const live = cids.filter((c) => Object.prototype.hasOwnProperty.call(webhooks, c)).length;
-  return `Instant alerts on ${live} of ${cids.length} campaign${cids.length === 1 ? "" : "s"} · the 5-minute check covers the rest`;
+  return `The 5-minute check pulls replies for ${cids.length} campaign${cids.length === 1 ? "" : "s"}`;
 }
 
 /* Fix 8: first two campaign names (truncated) instead of a bare count, full

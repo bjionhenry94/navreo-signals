@@ -2523,64 +2523,28 @@ def handle_inbound(payload: dict) -> dict:
 
 
 def ensure_webhooks(agent: dict) -> list:
-    """Additively registers the Setter EMAIL_REPLY webhook on each of the
-    agent's campaigns that doesn't have one yet. NEVER modifies or removes an
-    existing webhook, and verifies the pre-existing list is intact after
-    adding (byte-compare by webhook id). Skipped in dry-run mode. Returns a
-    per-campaign result list for the UI."""
+    """No-op by design. Setting up or editing an agent must NOT touch a
+    campaign's Smartlead webhooks.
+
+    Reply intake is handled entirely by the poll (`/api/setter/poll`, the
+    5-minute cron + the "check now" run when the tool is opened), which reads
+    each assigned campaign's replies and filters internally by `campaign_ids`
+    + `campaign_assigned_at`. It never needs a per-campaign webhook.
+
+    History: we used to register a per-campaign "Navreo Setter" EMAIL_REPLY
+    webhook here. Smartlead routes a campaign's replies to its own campaign
+    webhook and SUPPRESSES the workspace-level webhook, so this silently
+    diverted every Setter campaign away from the reply-categoriser and killed
+    #interested-replies Slack alerts across ~73 campaigns (found & reverted
+    2026-07-15). The Setter shares the existing intake (poll); it does not add
+    webhooks of its own.
+
+    Kept as a no-op (rather than deleted) so the save-agent flow and the UI's
+    per-campaign result contract are unchanged; it issues zero Smartlead calls.
+    """
     agent = agent or {}
-    cids = agent.get("campaign_ids") or []
-    if _dry_run():
-        return [{"campaign_id": c, "ok": True, "skipped": "dry run"} for c in cids]
-    if not _sl_key():
-        return [{"campaign_id": c, "ok": False, "error": "Smartlead key missing"} for c in cids]
-    settings = _load_settings()
-    registered = dict(settings.get("webhooks") or {})
-    hook_url = f"{(settings.get('public_base_url') or DEFAULT_BASE_URL).rstrip('/')}/api/setter/inbound?token={_cron_token()}"
-    results, changed = [], False
-    for cid in cids:
-        scid = str(cid)
-        if scid in registered:
-            results.append({"campaign_id": cid, "ok": True, "already": True})
-            continue
-        try:
-            before = _sl_get(f"/campaigns/{cid}/webhooks")
-            before = before if isinstance(before, list) else []
-            mine = next((w for w in before if isinstance(w, dict)
-                        and "/api/setter/inbound" in str(w.get("webhook_url") or "")), None)
-            if mine:
-                registered[scid] = {"webhook_id": mine.get("id"), "url": mine.get("webhook_url")}
-                changed = True
-                results.append({"campaign_id": cid, "ok": True, "already": True})
-                continue
-            # NOTE: no "categories" key - Smartlead 400s on an empty list
-            # ("categories does not contain 1 required value(s)"); omitting it
-            # means "all categories", which is what we want here.
-            resp = _sl_post(f"/campaigns/{cid}/webhooks", {
-                "id": None, "name": "Navreo Setter", "webhook_url": hook_url,
-                "event_types": ["EMAIL_REPLY"],
-            })
-            after = _sl_get(f"/campaigns/{cid}/webhooks")
-            after = after if isinstance(after, list) else []
-            before_by_id = {w.get("id"): json.dumps(w, sort_keys=True) for w in before if isinstance(w, dict)}
-            after_by_id = {w.get("id"): json.dumps(w, sort_keys=True) for w in after if isinstance(w, dict)}
-            intact = all(after_by_id.get(i) == v for i, v in before_by_id.items())
-            new_ids = [i for i in after_by_id if i not in before_by_id]
-            wid = (resp.get("id") if isinstance(resp, dict) else None) or (new_ids[0] if len(new_ids) == 1 else None)
-            registered_now = wid is not None or any(
-                "/api/setter/inbound" in str(w.get("webhook_url") or "") for w in after if isinstance(w, dict))
-            ok = intact and registered_now
-            if ok:
-                registered[scid] = {"webhook_id": wid, "url": hook_url}
-                changed = True
-            results.append({"campaign_id": cid, "ok": ok, "existing_intact": intact, "webhook_id": wid,
-                            "error": None if ok else "couldn't confirm the webhook was added safely"})
-        except Exception as e:  # noqa: BLE001 - one campaign failing must not stop the rest
-            results.append({"campaign_id": cid, "ok": False, "error": str(e)[:200]})
-    if changed:
-        settings["webhooks"] = registered
-        _save_settings(settings)
-    return results
+    return [{"campaign_id": c, "ok": True, "skipped": "poll-only"}
+            for c in (agent.get("campaign_ids") or [])]
 
 
 # ── HTTP routes ──────────────────────────────────────────────────────────────
