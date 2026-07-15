@@ -61,7 +61,6 @@
 }
 .il-search input:focus { outline: none; box-shadow: var(--focus); }
 .il-search-notes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
-.il-filters { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
 .il-client-filter { margin-top: 8px; width: 100%; }
 .il-list { flex: 1; overflow-y: auto; }
 .il-test-note { padding: 8px 14px; border-bottom: 1px solid var(--line); }
@@ -285,6 +284,7 @@
     <div id="errBanner" class="err-banner" style="display:none"></div>
 
     <div class="setter-toolbar">
+      <div class="filters" id="queueFilters"></div>
       <label class="test-toggle" id="testToggleWrap" style="display:none">
         <input type="checkbox" id="showTestChk" checked> Show test items
       </label>
@@ -305,7 +305,6 @@
             <span class="small muted">&uarr;&darr; to move between replies</span>
             <span class="small muted" id="searchAllNote" style="display:none">searching all replies</span>
           </div>
-          <div class="filters il-filters" id="queueFilters"></div>
           <select class="client-filter-sel il-client-filter" id="clientFilterSel" title="Filter by client"></select>
         </div>
         <div class="il-test-note small muted" id="testOnlyNote" style="display:none"></div>
