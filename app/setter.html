@@ -1419,8 +1419,15 @@ function convoHtml(row) {
     if (m.type !== "REPLY") return true; // every SENT message is older context
     // Dedupe: this REPLY entry IS the current inbound reply, rendered
     // separately below as the emphasised last message - drop it here so it
-    // never shows twice.
-    if (row.email_stats_id != null && m.stats_id != null && String(m.stats_id) === String(row.email_stats_id)) return false;
+    // never shows twice. Key on TIME: stats_id is thread-level (identical on
+    // every message in a Gmail-forwarded thread) so matching it dropped the
+    // WHOLE reply history and made every thread look like we spoke last
+    // (owner report 2026-07-16); row.message_id is a synthetic id that never
+    // matches the RFC Message-IDs in the thread, so it can't key it either.
+    if (row.replied_at && m.time) {
+      const a = new Date(m.time).getTime(), b = new Date(row.replied_at).getTime();
+      if (a && b && a === b) return false;
+    }
     if (row.message_id != null && m.message_id != null && String(m.message_id) === String(row.message_id)) return false;
     const mHead80 = cleanBody(String(m.body || "")).replace(/\s+/g, " ").trim().slice(0, 80);
     if (mHead80 && mHead80 === replyHead80) return false;
