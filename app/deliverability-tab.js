@@ -3525,7 +3525,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const CHIP_TIPS = {
       floor: "Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest",
       notwarming: "Mailboxes with warmup switched OFF — nothing is rebuilding their reputation (Maildoso warms externally, by design)",
-      inwarmup: "Resting or warming on purpose, due-date tracked — restore when due",
+      inwarmup: "Warmup is always running here — 'sends paused' just means the send cap is 0, due-date tracked; restore when due",
       reconnect: "Mailboxes whose connection failed — silently sending nothing until reconnected",
     };
     const chip = (id, label) => {
@@ -3631,7 +3631,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       let action;
       if (restN > 0) {
         const due = restDueFor(d.domain) || restingDue[d.domain];
-        const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive">resting (${restN})</span>${blDueChip(due)}`;
+        const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive" title="Send cap set to 0 — warmup is still running">sends paused (${restN})</span>${blDueChip(due)}`;
         action = pill + ` <button class="btn sm" data-act="domain-reactivate" data-domain="${esc(d.domain)}">Reactivate</button>`;
       } else action = `<button class="btn sm" data-act="domain-warmup" data-domain="${esc(d.domain)}"${boxN ? ` title="Rests all ${boxN} mailboxes on ${esc(d.domain)}"` : ""}>Warm up domain</button>`;
       return `<tr><td><div class="dlv-mb-email">${esc(d.domain)}${boxN ? ` <span class="dlv-mb-dom">· ${boxN} mbx</span>` : ""}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
@@ -3729,7 +3729,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const restedN = rows.filter((r) => r.rested).length;
         const dueTitle = ` title="Warm-up start first recorded ${new Date(due - 7 * 864e5).toISOString().slice(0, 10)}; due back = start + 7 days"`;
         mid = `<td style="text-align:right">${rows.length}</td><td style="text-align:right"${dueTitle}>${blDueChip(due)}</td>
-          <td>${restedN ? `<span class="dlv-tag inactive">resting (${restedN})</span>` : ""}${rows.length - restedN ? ` <span class="dlv-tag md">warming (${rows.length - restedN})</span>` : ""}</td>`;
+          <td>${restedN ? `<span class="dlv-tag inactive" title="Send cap set to 0 — warmup is still running">sends paused (${restedN})</span>` : ""}${rows.length - restedN ? ` <span class="dlv-tag md" title="Warmup running, ramping reputation">warming (${rows.length - restedN})</span>` : ""}</td>`;
         action = (resting[dom] || 0) > 0 || restedN > 0
           ? `<button class="btn sm primary" data-act="domain-reactivate" data-domain="${esc(dom)}">Restore</button>`
           : `<span class="dlv-mb-dom">warming</span>`;
@@ -3755,7 +3755,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           const rowDue = restDueFor(r.domain) || (bundleRestDue() ? null : (r.restedAt ? r.restedAt + 7 * 864e5 : null)) || Date.now() + 7 * 864e5;
           const left = rowDue - Date.now();
           const dueCell = left <= 0 ? `<span class="dlv-tag blocked">due now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`;
-          smid = `<td style="text-align:right"><span class="dlv-mb-dom">${r.cap === 0 ? "0/day" : r.cap + "/day"}</span></td><td style="text-align:right">${dueCell}</td><td><span class="dlv-mb-dom">${r.rested ? "rested" : esc(r.warmup_status || "warming")}</span></td>`;
+          smid = `<td style="text-align:right"><span class="dlv-mb-dom">${r.cap === 0 ? "0/day" : r.cap + "/day"}</span></td><td style="text-align:right">${dueCell}</td><td><span class="dlv-mb-dom">${r.rested ? "sends paused" : esc(r.warmup_status || "warming")}</span></td>`;
           sact = "";
         } else {
           smid = `<td><div class="dlv-mb-reason" title="${esc(r.reason)}">${glossify(r.reason || r.reason_category || "")}</div></td>`;
