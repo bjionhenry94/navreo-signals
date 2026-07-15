@@ -781,25 +781,27 @@ async function loadAgentsAndCampaigns() {
   renderTryIt();
 }
 
+/* Perf architecture (2026-07-16): the list paints from a SLIM fetch
+   (fields=list drops the stored `thread` blobs - ~80% of the old payload),
+   then hydrateAllRows() pulls the full all-statuses corpus in the background.
+   The hydrated corpus powers cross-pill search, INSTANT client-side pill
+   switching (see rowDirection/clientPillRows, mirrors the server's
+   _queue_direction/_reclassify_queue), and instant conversation-opens (the
+   stored thread is grafted onto the slim rows by id). */
 async function loadQueue(prefetch) {
   const params = new URLSearchParams();
   // Every pill now maps to a real status column value (needs_review / sent /
   // auto_sent / dismissed, or blank for All), so the server filters directly.
   if (currentStatus) params.set("status", currentStatus);
   params.set("limit", "200");
-  // ONE queue fetch per load. The all-statuses copy that powers
-  // search-across-all-replies used to fire on EVERY load in parallel here,
-  // doubling the queue round-trips (and the server-side KPI compute) for a
-  // corpus most loads never search. It's now lazy - fetched on first search
-  // via ensureAllRows() (perf pass 2026-07-16). On the "All" pill QUEUE_ROWS
-  // already IS every row, so no second fetch is ever needed there.
+  params.set("fields", "list");
   // `prefetch` lets init() start this network call in PARALLEL with the
   // agents/campaigns load instead of waiting for it (the fetch is pill-status
   // specific, so it's only reused for the initial default-status load).
   const res = await (prefetch || fetchJson(`/api/setter/queue?${params.toString()}`));
   if (res.ok) {
-    const rows = res.data.rows || [];
-    QUEUE_ROWS = rows;
+    QUEUE_ROWS = res.data.rows || [];
+    graftThreads(QUEUE_ROWS);
     KPIS = res.data.kpis || {};
     LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
     renderLastChecked();
@@ -808,35 +810,75 @@ async function loadQueue(prefetch) {
     showError("Couldn't load the queue: " + res.error);
     QUEUE_ROWS = []; KPIS = {};
   }
-  if (!currentStatus) {
-    // "All" pill: the rows we just fetched ARE the full cross-pill corpus.
-    ALL_ROWS = QUEUE_ROWS; _allRowsLoaded = true;
-  } else if (_allRowsLoaded) {
-    // The user has searched this session, so keep the full corpus fresh.
-    await ensureAllRows(true);
-  } else {
-    // No search yet: provisionally search within the current pill; the full
-    // corpus loads the moment a search starts.
-    ALL_ROWS = QUEUE_ROWS;
-  }
+  if (!_allRowsLoaded) ALL_ROWS = QUEUE_ROWS;  // provisional corpus until hydrate lands
   renderKpis();
   renderQueueFilters();
   renderClientFilter();
   renderQueue();
+  hydrateAllRows();  // background: full corpus (threads + search + instant pills)
 }
 
-/* Cross-pill search corpus, loaded lazily. Fetches the all-statuses queue
-   copy once (or force-refreshes it) so a search never misses a match sitting
-   under a different filter pill - without paying that fetch on every page
-   load. */
-async function ensureAllRows(force) {
-  if (_allRowsLoaded && !force) return;
-  const res = await fetchJson(`/api/setter/queue?limit=200`);
-  if (res.ok) {
-    ALL_ROWS = res.data.rows || QUEUE_ROWS;
-    _allRowsLoaded = true;
-    renderQueue();
+/* Full-fidelity corpus refresh, single-flight. Reuses one in-flight fetch
+   across callers; re-arms after it lands so the next loadQueue refreshes it. */
+let _hydrateP = null;
+function hydrateAllRows() {
+  if (_hydrateP) return _hydrateP;
+  _hydrateP = (async () => {
+    try {
+      const res = await fetchJson(`/api/setter/queue?limit=200`);
+      if (res.ok) {
+        ALL_ROWS = res.data.rows || [];
+        _allRowsLoaded = true;
+        graftThreads(QUEUE_ROWS);
+        renderQueue();  // hydrated threads / fresh search corpus (edit-safe: reapplyEditedDraft)
+      }
+    } finally { _hydrateP = null; }
+  })();
+  return _hydrateP;
+}
+
+/* Copy stored threads from the hydrated corpus onto slim rows by id, so a
+   conversation opened from a slim list still shows its history instantly. */
+function graftThreads(rows) {
+  if (!_allRowsLoaded || !rows || !rows.length) return;
+  const byId = new Map(ALL_ROWS.map((r) => [String(r.id), r]));
+  rows.forEach((q) => {
+    if (q.thread) return;
+    const full = byId.get(String(q.id));
+    if (full && full.thread) q.thread = full.thread;
+  });
+}
+
+/* Client-side mirror of setter.py's _queue_direction: who spoke last in the
+   stored thread decides the row's REAL pill. Keep in lockstep with the
+   server version - drift here shows as pills disagreeing after a switch. */
+function rowDirection(r) {
+  const t = Array.isArray(r.thread) ? r.thread : [];
+  let last = null, lastKey = "";
+  for (const m of t) {
+    if (!m || typeof m !== "object") continue;
+    const k = m.time || "";
+    if (last === null || k > lastKey) { last = m; lastKey = k; }  // strict >: first maximal wins, like Python max()
   }
+  if (!last || String(last.type || "").toUpperCase() === "REPLY") return { inbound: true, pill: null };
+  const isAgent = !!r.sent_at && r.decision === "auto_send";
+  return { inbound: false, pill: isAgent ? "auto_sent" : "sent" };
+}
+
+/* Client-side mirror of setter.py's _reclassify_queue over the hydrated
+   corpus - powers zero-network pill switches. */
+function clientPillRows(all, status) {
+  if (!status) return all.slice();
+  return (all || []).filter((r) => {
+    if (!r || typeof r !== "object") return false;
+    if (r.status === "needs_review") {
+      const d = rowDirection(r);
+      if (status === "needs_review") return d.inbound;
+      if (status === "sent" || status === "auto_sent") return !d.inbound && d.pill === status;
+      return false;
+    }
+    return status !== "needs_review" && r.status === status;
+  });
 }
 
 /* ── Slim stats row ────────────────────────────────────── */
@@ -874,7 +916,19 @@ function renderQueueFilters() {
   wrap.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     currentStatus = b.getAttribute("data-status");
     inboxPage = 1;
-    loadQueue();
+    // Instant pill switch: filter the hydrated corpus client-side (mirrors
+    // the server's direction reclass) - zero network. Fall back to a server
+    // fetch while hydration is still in flight, or if the corpus is running
+    // into the 200-row fetch cap (a deep pill could be missing older rows).
+    if (_allRowsLoaded && ALL_ROWS.length < 195) {
+      QUEUE_ROWS = clientPillRows(ALL_ROWS, currentStatus);
+      renderKpis();
+      renderQueueFilters();
+      renderClientFilter();
+      renderQueue();
+    } else {
+      loadQueue();
+    }
   }));
   const hasTest = QUEUE_ROWS.some((r) => r.is_test);
   document.getElementById("testToggleWrap").style.display = hasTest ? "flex" : "none";
@@ -1660,9 +1714,9 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   const searching = !!inboxSearchQuery.trim();
   if (note) note.style.display = searching ? "inline" : "none";
   // A live search spans every pill, so make sure the full cross-pill corpus
-  // is loaded (it's fetched lazily now, not on every page load). ensureAllRows
-  // re-renders when it lands so an early keystroke's matches fill in.
-  if (searching) ensureAllRows();
+  // is loaded. hydrateAllRows is single-flight and re-renders when it lands,
+  // so an early keystroke's matches fill in.
+  if (searching && !_allRowsLoaded) hydrateAllRows();
   // While a search spans every filter, the highlighted pill isn't what's on
   // screen - dim the pill row so the two can't visually contradict.
   const pills = document.getElementById("queueFilters");
@@ -2392,7 +2446,7 @@ document.addEventListener("click", (e) => {
   // fire alongside the agents/campaigns load. The queue RENDER still waits for
   // agents (client filter + agent labels read those maps), so nothing renders
   // with empty data - only the network waits overlap.
-  const queueP = fetchJson(`/api/setter/queue?status=${encodeURIComponent(currentStatus)}&limit=200`);
+  const queueP = fetchJson(`/api/setter/queue?status=${encodeURIComponent(currentStatus)}&limit=200&fields=list`);
   // Real-inbox freshness (owner ruling 2026-07-15): every page load STILL
   // kicks a reply-check automatically - it's just off the critical path now,
   // fire-and-forget, so it no longer blocks first paint. The delayed reload

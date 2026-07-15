@@ -1855,11 +1855,14 @@ def _apply_patch(row: dict, patch: dict):
             _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{row['id']}", patch)
         except Exception:  # noqa: BLE001
             pass
-    # A status change moves a row between pills, so the cached KPI counts are
-    # now stale - invalidate so the next queue GET recomputes them (perf pass
-    # 2026-07-16: KPIs are cached ~15s to avoid ~10 Supabase queries per load).
-    if "status" in patch:
-        _KPI_CACHE["at"] = 0.0
+    # A row changed under the read caches (status moves it between pills;
+    # thread/draft edits change its content) - hard-drop them all and start a
+    # rewarm so the reload the UI fires right after an action reads fresh
+    # (perf pass 2026-07-16: queue GETs are served from short-TTL caches now).
+    # No-op patches skip the bust: route_thread_get re-persists the thread on
+    # EVERY conversation open, and an unchanged thread must not thrash caches.
+    if any(row.get(k) != v for k, v in patch.items()):
+        _bust_read_caches()
 
 
 def _company_hints(domain: str) -> dict:
@@ -2842,10 +2845,12 @@ def run_poll() -> dict:
     except Exception as e:  # noqa: BLE001 - run_poll itself must never raise
         summary["errors"] += 1
         print(f"[setter] run_poll crashed: {e}", file=sys.stderr)
-    # New rows changed the pill totals - drop the cached KPI block so the
-    # post-poll queue reload shows accurate counts (perf pass 2026-07-16).
-    if summary.get("queued") or summary.get("needs_review") or summary.get("auto_sent"):
-        _KPI_CACHE["at"] = 0.0
+    # New rows changed the queue - drop every read cache and start a rewarm
+    # so the post-poll reload (the UI's delayed loadQueue) reads fresh counts
+    # and rows (perf pass 2026-07-16). A no-change sweep keeps caches warm.
+    if summary.get("queued") or summary.get("needs_review") or summary.get("auto_sent") \
+            or summary.get("no_action"):
+        _bust_read_caches()
     return summary
 
 
@@ -3310,7 +3315,23 @@ def _pill_count(filt: str) -> int:
 # CONCURRENTLY (they share no data) so a cold compute is ~1 round-trip, not 10.
 _KPI_TTL = 15.0
 _KPI_CACHE = {"at": 0.0, "val": None}
-_KPI_LOCK = threading.Lock()
+_KPI_LOCK = threading.Lock()      # guards cache writes
+_KPI_COMPUTE = threading.Lock()   # single-flight: one KPI compute at a time
+
+
+def _kick_kpi_refresh():
+    """Refresh the KPI cache in the background. Single-flight: if a compute is
+    already running, do nothing - concurrent queue GETs stacking parallel
+    ~10-query computes is exactly the storm that measured 12.6s live
+    (2026-07-16), worse than the serial baseline it replaced."""
+    def run():
+        if not _KPI_COMPUTE.acquire(blocking=False):
+            return
+        try:
+            _compute_kpis_sync()
+        finally:
+            _KPI_COMPUTE.release()
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _count_rows(filt: str) -> int:
@@ -3325,11 +3346,27 @@ def _count_rows(filt: str) -> int:
 
 
 def _compute_kpis(force: bool = False) -> dict:
-    now = _time.time()
-    if not force:
-        cached = _KPI_CACHE.get("val")
-        if cached is not None and (now - _KPI_CACHE.get("at", 0.0)) < _KPI_TTL:
+    """Serve-from-cache wrapper around _compute_kpis_sync. Fresh -> cached;
+    stale -> cached value NOW plus one background refresh (stale-while-
+    revalidate, chip counts tolerate seconds of lag); empty (boot or a hard
+    bust after a mutation) -> compute synchronously, single-flight so
+    concurrent GETs join one compute instead of stacking storms."""
+    cached = _KPI_CACHE.get("val")
+    if not force and cached is not None:
+        if (_time.time() - _KPI_CACHE.get("at", 0.0)) < _KPI_TTL:
             return cached
+        _kick_kpi_refresh()
+        return cached
+    with _KPI_COMPUTE:
+        # A compute may have landed while we waited on the lock - reuse it.
+        cached = _KPI_CACHE.get("val")
+        if not force and cached is not None and (_time.time() - _KPI_CACHE.get("at", 0.0)) < _KPI_TTL:
+            return cached
+        return _compute_kpis_sync()
+
+
+def _compute_kpis_sync() -> dict:
+    now = _time.time()
     kpis = {"needs_review": 0, "auto_sent_today": 0, "sent_today": 0,
            "avg_response_mins_7d": None, "no_action_today": 0, "counts": {}}
     if not _SB:
@@ -3392,7 +3429,10 @@ def _compute_kpis(force: bool = False) -> dict:
             "avg_response_mins_7d": _avg_response,
         }
         results = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        # 5 workers, not len(tasks): each worker opens its own TLS connection
+        # to Supabase (urllib has no keep-alive) and ~11 simultaneous
+        # handshakes visibly choked the small Render instance.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(tasks))) as pool:
             fut_key = {pool.submit(fn): k for k, fn in tasks.items()}
             for fut in concurrent.futures.as_completed(fut_key):
                 k = fut_key[fut]
@@ -3524,16 +3564,139 @@ def _reclassify_queue(rows: list, requested: str) -> list:
     return kept
 
 
+_POLL_TS_TTL = 10.0
+_POLL_TS_CACHE = {"at": 0.0, "val": None}
+
+
 def _last_poll_done_at():
     """Timestamp of the last COMPLETED reply-check (the setter_poll_done
     activity row) — what the UI shows as "last checked X ago". None when the
-    ledger has no such row yet."""
+    ledger has no such row yet. Cached ~10s: it rides on EVERY queue GET and
+    the display is minutes-granular, so the extra Supabase round-trip per GET
+    was pure overhead (perf pass 2026-07-16)."""
+    now = _time.time()
+    if _POLL_TS_CACHE["val"] is not None and (now - _POLL_TS_CACHE["at"]) < _POLL_TS_TTL:
+        return _POLL_TS_CACHE["val"]
     try:
         rows = _SB("GET", "app_activity_log?action=eq.setter_poll_done"
                           "&order=ts.desc&limit=1&select=ts") if _SB else None
-        return rows[0].get("ts") if isinstance(rows, list) and rows else None
+        val = rows[0].get("ts") if isinstance(rows, list) and rows else None
     except Exception:  # noqa: BLE001 - a ledger hiccup must never break the queue
-        return None
+        val = None
+    if val is not None:
+        _POLL_TS_CACHE["val"] = val
+        _POLL_TS_CACHE["at"] = now
+    return val
+
+
+# ── Queue-rows read cache (perf pass 2026-07-16) ──────────────────────────
+# One /api/setter/queue GET used to re-fetch every row (2MB+ of stored threads)
+# from Supabase and re-run the direction reclass on EVERY call - and the
+# sent/auto_sent pills fetch TWO row sets each. Cache the finished (fetched +
+# reclassified + annotated) row list per (status, limit):
+#   fresh  -> serve cached;
+#   stale  -> serve cached NOW, refresh once in the background (SWR);
+#   absent (boot / hard bust after a mutation) -> compute synchronously,
+#            single-flight per key so concurrent GETs join one compute.
+# Mutations (_apply_patch status changes, run_poll queuing rows) call
+# _bust_read_caches() which drops everything and starts a rewarm, so reads
+# right after an action are fresh - never zombie-stale.
+_ROWS_TTL = 20.0
+_ROWS_CACHE = {}   # (status, limit) -> {"at": ts, "rows": [annotated rows]}
+_ROWS_LOCKS = {}   # (status, limit) -> per-key single-flight lock
+_ROWS_META = threading.Lock()
+# Keys worth rewarming after a bust: the standard pill fetches the UI makes.
+_ROWS_REWARM_STATUSES = ("", "needs_review", "sent", "auto_sent", "dismissed")
+
+
+def _rows_lock(key):
+    with _ROWS_META:
+        lk = _ROWS_LOCKS.get(key)
+        if lk is None:
+            lk = _ROWS_LOCKS[key] = threading.Lock()
+        return lk
+
+
+def _fetch_queue_rows(status: str, limit: int) -> list:
+    """The uncached read: fetch, direction-reclassify, annotate. Pure read."""
+    rows = []
+    if _SB:
+        base = f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}&select=*"
+        # For the direction-aware pills (needs_review / sent / auto_sent) the
+        # membership depends on who spoke last, computed at read time from
+        # `thread` (see _queue_direction). The sent/auto_sent pills must also
+        # consider needs_review rows we've already answered, so pull both.
+        statuses = []
+        if status in ("sent", "auto_sent"):
+            statuses = [status, "needs_review"]
+        elif status:
+            statuses = [status]
+        if statuses:
+            for st in statuses:
+                fetched = _SB("GET", f"{QUEUE_TABLE}?{base}&status=eq.{st}")
+                if isinstance(fetched, list):
+                    rows.extend(fetched)
+        else:  # All
+            fetched = _SB("GET", f"{QUEUE_TABLE}?{base}")
+            rows = fetched if isinstance(fetched, list) else []
+        if status in ("needs_review", "sent", "auto_sent"):
+            rows = _reclassify_queue(rows, status)
+            rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
+    return [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
+
+
+def _store_rows(key, rows):
+    _ROWS_CACHE[key] = {"at": _time.time(), "rows": rows}
+
+
+def _queue_rows_cached(status: str, limit: int) -> list:
+    key = (status, limit)
+    ent = _ROWS_CACHE.get(key)
+    if ent:
+        if (_time.time() - ent["at"]) < _ROWS_TTL:
+            return ent["rows"]
+        _kick_rows_refresh(key)   # stale-while-revalidate
+        return ent["rows"]
+    lk = _rows_lock(key)
+    with lk:
+        ent = _ROWS_CACHE.get(key)   # a waiter's compute may have landed
+        if ent:
+            return ent["rows"]
+        rows = _fetch_queue_rows(status, limit)
+        _store_rows(key, rows)
+        return rows
+
+
+def _kick_rows_refresh(key):
+    def run():
+        lk = _rows_lock(key)
+        if not lk.acquire(blocking=False):
+            return   # someone is already refreshing this key
+        try:
+            _store_rows(key, _fetch_queue_rows(*key))
+        except Exception:  # noqa: BLE001 - background refresh must never raise
+            pass
+        finally:
+            lk.release()
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _bust_read_caches(rewarm: bool = True):
+    """A mutation changed queue rows: drop every read cache so the next GET
+    reads fresh, and start rewarming so that GET usually joins a compute
+    already in flight instead of starting cold."""
+    with _KPI_LOCK:
+        _KPI_CACHE["val"] = None
+        _KPI_CACHE["at"] = 0.0
+    _POLL_TS_CACHE["at"] = 0.0
+    _POLL_TS_CACHE["val"] = None
+    stale_keys = [k for k in list(_ROWS_CACHE.keys())
+                  if k[0] in _ROWS_REWARM_STATUSES and k[1] == 200]
+    _ROWS_CACHE.clear()
+    if rewarm:
+        _kick_kpi_refresh()
+        for k in (stale_keys or [("needs_review", 200)]):
+            _kick_rows_refresh(k)
 
 
 def route_queue_get(params):
@@ -3544,30 +3707,14 @@ def route_queue_get(params):
         except ValueError:
             limit = 200
         limit = max(1, min(limit, 500))
-        rows = []
-        if _SB:
-            base = f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}&select=*"
-            # For the direction-aware pills (needs_review / sent / auto_sent) the
-            # membership depends on who spoke last, computed at read time from
-            # `thread` (see _queue_direction). The sent/auto_sent pills must also
-            # consider needs_review rows we've already answered, so pull both.
-            statuses = []
-            if status in ("sent", "auto_sent"):
-                statuses = [status, "needs_review"]
-            elif status:
-                statuses = [status]
-            if statuses:
-                for st in statuses:
-                    fetched = _SB("GET", f"{QUEUE_TABLE}?{base}&status=eq.{st}")
-                    if isinstance(fetched, list):
-                        rows.extend(fetched)
-            else:  # All
-                fetched = _SB("GET", f"{QUEUE_TABLE}?{base}")
-                rows = fetched if isinstance(fetched, list) else []
-            if status in ("needs_review", "sent", "auto_sent"):
-                rows = _reclassify_queue(rows, status)
-                rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
-        rows = [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
+        rows = _queue_rows_cached(status, limit) if _SB else []
+        # fields=list: the inbox LIST doesn't need the stored `thread` blobs -
+        # they're ~80% of the payload (measured 1.3MB of 1.6MB live). The UI
+        # opts in for its fast first paint and hydrates full rows in the
+        # background; the default (no param) response is byte-identical to
+        # before, so nothing else changes shape.
+        if _qp(params, "fields", "") == "list":
+            rows = [{k: v for k, v in r.items() if k != "thread"} for r in rows]
         return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
