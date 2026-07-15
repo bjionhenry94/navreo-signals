@@ -2927,8 +2927,8 @@ def _last_poll_done_at():
     ledger has no such row yet."""
     try:
         rows = _SB("GET", "app_activity_log?action=eq.setter_poll_done"
-                          "&order=created_at.desc&limit=1&select=created_at") if _SB else None
-        return rows[0].get("created_at") if isinstance(rows, list) and rows else None
+                          "&order=ts.desc&limit=1&select=ts") if _SB else None
+        return rows[0].get("ts") if isinstance(rows, list) and rows else None
     except Exception:  # noqa: BLE001 - a ledger hiccup must never break the queue
         return None
 
