@@ -930,9 +930,15 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
 
 DRAFT_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "properties": {"subject": {"type": "string"}, "html": {"type": "string"}},
-    "required": ["subject", "html"],
+    "properties": {"subject": {"type": "string"}, "html": {"type": "string"},
+                   "feedback_note": {"type": "string"}},
+    "required": ["subject", "html", "feedback_note"],
 }
+
+# Single budget for the reviewer_feedback payload field - draft_reply enforces
+# it as a backstop, and route_queue_redraft allocates within it feedback-first
+# (owner ruling 2026-07-16: the typed feedback is never the part that gets cut).
+REVIEWER_FEEDBACK_CAP = 4000
 
 DRAFT_SYSTEM = """You write the reply for a cold-email appointment-setter agent, in the team's OWN voice. It must read as if the same person who sent these real replies wrote it. Output real, sendable HTML: short paragraphs, each its own <div>...</div>, separated by <br>. Sign off with just the sender's first name on its own line: <div>{SenderFirst}</div> (NO "Best,", no "Kind regards" - the real replies just sign the name). NEVER write one run-on line.
 
@@ -981,7 +987,8 @@ Rules:
 - recent_thread, when present, is the last few messages in this thread (our sends and their replies, oldest first) - a later-turn reply must read as a natural continuation of it, never repeating something already said or re-introducing yourself.
 - reviewer_feedback, when present, is the human reviewer's instruction for THIS regeneration ("shorter", "don't offer times", "mention the guide is free") - follow it faithfully while keeping every rule above. It never overrides the never-invent rules.
 - reviewer_feedback/owner_corrections may contain a LATEST OWNER RULES block: those rules are the owner's newest teaching and take priority over everything else, including older instructions - obey them exactly.
-- Output STRICT JSON: {"subject": "...", "html": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
+- feedback_note is ONLY about reviewer_feedback, and only about the part you could NOT honour. When reviewer_feedback asks for something you have NO source for (a resource link when the instructions contain none, a fact or asset not present in the instructions, thread, or slots), do NOT invent it and do NOT silently ignore the ask - write one plain-English sentence in feedback_note saying what you couldn't do and why, plus what would unblock it (e.g. "No agent is assigned to this campaign, so I have no resource links to include - assign an agent or paste the link into the draft manually."). Never use feedback_note for gaps the reviewer didn't raise: a missing booking link, missing call slots, empty instructions, or any other limitation is NOT feedback_note material unless reviewer_feedback itself asked for that thing. When you honoured the feedback fully, or there is no reviewer_feedback, feedback_note must be exactly "".
+- Output STRICT JSON: {"subject": "...", "html": "...", "feedback_note": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
 
 
 def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slot_status: str, sender_first: str,
@@ -1029,7 +1036,7 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         # (~1600 chars) plus the session digest (~2000). The old 500-char cap
         # silently discarded almost all teaching before the drafter saw it -
         # the root cause of "it keeps repeating the same mistakes".
-        payload["reviewer_feedback"] = regen_feedback.strip()[:4000]
+        payload["reviewer_feedback"] = regen_feedback.strip()[:REVIEWER_FEEDBACK_CAP]
     user = json.dumps(payload)
     r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
              {"Authorization": f"Bearer {key}"},
@@ -1051,7 +1058,13 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     subject = data.get("subject") or f"Re: {reply.get('subject') or ''}"
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
-    return {"subject": subject, "html": html_body}
+    # Warn only, never inject (owner ruling 2026-07-16): when the reviewer's
+    # feedback asked for something this draft has no source for, the model
+    # explains itself here instead of silently ignoring the ask. Only
+    # meaningful on a feedback redraft - blank it everywhere else.
+    feedback_note = (str(data.get("feedback_note") or "").strip()
+                     if payload.get("reviewer_feedback") else "")
+    return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
 
 
 PROOFREAD_SCHEMA = {
@@ -3921,9 +3934,19 @@ def route_queue_redraft(payload):
         # live classify()/draft_reply() call. The LATEST OWNER RULES block
         # (recency weighting) is the outermost prefix, ahead of even the
         # standing memory digest.
+        # Feedback-first budget (owner ruling 2026-07-16): draft_reply caps
+        # reviewer_feedback at REVIEWER_FEEDBACK_CAP, and the typed feedback
+        # used to sit at the truncatable TAIL - after the LATEST OWNER RULES
+        # block (~1600 chars) and the memory digest (~2000) - so a big digest
+        # silently deleted the very instruction the reviewer just typed.
+        # Same ordering as before; the RULES and DIGEST shrink to whatever
+        # room remains, the fresh feedback is never cut.
+        rules_block = _latest_owner_rules(agent)
+        rules_block = rules_block[:max(REVIEWER_FEEDBACK_CAP - len(feedback_text) - 4, 0)]
         mem_digest = _agent_memory_digest(agent)
+        mem_digest = mem_digest[:max(REVIEWER_FEEDBACK_CAP - len(rules_block) - len(feedback_text) - 4, 0)]
         combined_feedback = "\n".join([x for x in (mem_digest, feedback_text) if x])
-        combined_feedback = _prefix_latest_rules(_latest_owner_rules(agent), combined_feedback)
+        combined_feedback = _prefix_latest_rules(rules_block, combined_feedback)
         # No live thread re-read on a redraft (the row doesn't keep a from_name
         # separate from its stored thread) - resolves to the agent's own
         # configured identity via _sender_first_for, same as every other
@@ -3998,7 +4021,11 @@ def route_queue_redraft(payload):
             patch["draft_subject"], patch["draft_body"] = None, None
             patch["status"] = "no_action"
         _apply_patch(row, patch)
-        return 200, {"row": {**row, **patch}}
+        # Transient, response-only (setter_queue schema-freeze: never a new
+        # column): the drafter's can't-comply explanation for the TYPED
+        # feedback, surfaced only when the reviewer actually typed some.
+        return 200, {"row": {**row, **patch},
+                     "feedback_note": (d.get("feedback_note") or "") if feedback_text else ""}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
