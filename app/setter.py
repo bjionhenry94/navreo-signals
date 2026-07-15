@@ -3850,6 +3850,9 @@ def route_queue_redraft(payload):
         settings = _load_settings()
         classification = row.get("classification") or {}
         tz = row.get("timezone")
+        # A stored timezone was already vetted at intake; only a fresh
+        # resolve below can downgrade confidence.
+        tz_confident = bool(tz)
         fresh_classification = None
         # Adopted/agentless rows reach Regenerate with NO stored classification
         # (their intake deliberately skips the brain) - a redraft used to run
@@ -3886,7 +3889,7 @@ def route_queue_redraft(payload):
                     hints = {"country": comp_hints.get("country"), "state": comp_hints.get("state"),
                              "city": comp_hints.get("city"), "phone": _extract_phone(body_text),
                              "tld": ".".join(domain.split(".")[-2:]) if domain else "", "body": body_text}
-                    tz, _tz_confident = resolve_timezone(hints, classification)
+                    tz, tz_confident = resolve_timezone(hints, classification)
             except Exception:  # noqa: BLE001 - classify outage: the draft still runs, just without intent routing
                 classification = {}
         now = _dt.datetime.now(_dt.timezone.utc)
@@ -3933,6 +3936,56 @@ def route_queue_redraft(payload):
             patch["first_outbound"] = row.get("first_outbound") or ""
             if tz:
                 patch["timezone"] = tz
+        # Re-run the SAME lint + decision gate the live pipeline applies, so
+        # the row's verdict (and the inbox pill, which reads decision_reason)
+        # describes THIS draft - not the one it replaced. Owner report
+        # 2026-07-15: a row whose first draft failed kept "No draft was
+        # produced." beside a perfectly good regenerated draft.
+        body_text = clean_body(row.get("reply_body") or "")
+        slots_fallback = slot_status != "ok"
+        needs_availability_ask = "scheduling" in (classification.get("all_intents") or [])
+        lint_ok, lint_reason = False, "No draft was produced."
+        if draft_html:
+            lint_ok, lint_reason = lint_draft(draft_html, {
+                "subject": d.get("subject"), "first_name": row.get("lead_first_name"),
+                "needs_resource_link": "send_resource" in (classification.get("all_intents") or []),
+                "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                "slot_labels": [s.get("label") for s in slots],
+                "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
+                "thread_text": f"{body_text} {thread_text}",
+                "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+            })
+        first_touch = True
+        if not row.get("is_test") and _SB:
+            try:
+                prior = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{row.get('workspace')}"
+                                   f"&smartlead_campaign_id=eq.{row.get('smartlead_campaign_id')}"
+                                   f"&lead_email=eq.{row.get('lead_email')}"
+                                   f"&status=in.(auto_sent,sent)&select=id&limit=1")
+                first_touch = not (isinstance(prior, list) and prior)
+            except Exception:  # noqa: BLE001
+                first_touch = True
+        decision, reason = decide(classification, agent, {
+            "red_flag_hits": lexicon_hits(body_text), "category": row.get("category"),
+            "first_touch": first_touch, "slot_status": slot_status, "slots_fallback": slots_fallback,
+            "timezone": tz, "tz_confident": tz_confident,
+            "lint_ok": lint_ok, "lint_reason": lint_reason,
+            "body_len": len(body_text), "hydrated": True, "answered_since_reply": False,
+            "autopilot_enabled": bool(settings.get("autopilot_enabled")),
+            "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body_text))),
+            "first_outbound_present": bool((row.get("first_outbound") or "").strip()),
+            "needs_availability_ask": needs_availability_ask,
+        })
+        # A redraft NEVER sends (owner ruling 2026-07-16): the human asked for
+        # this draft mid-review, so the send stays theirs via Approve.
+        if decision == "auto_send":
+            decision, reason = "review", "Ready to send: every check passed - approve to send it."
+        patch["decision"], patch["decision_reason"] = decision, reason
+        if decision == "no_action":
+            # Mirror the pipeline (owner ruling 2026-07-16): a no_action
+            # verdict keeps no draft and moves the row out of review.
+            patch["draft_subject"], patch["draft_body"] = None, None
+            patch["status"] = "no_action"
         _apply_patch(row, patch)
         return 200, {"row": {**row, **patch}}
     except Exception as e:  # noqa: BLE001

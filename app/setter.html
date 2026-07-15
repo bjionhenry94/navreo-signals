@@ -1678,6 +1678,13 @@ async function doDraftAnyway(btn) {
   }
   clearError();
   delete EDITED_DRAFTS[id];
+  // The redraft re-runs the decision gate, and a no_action verdict keeps NO
+  // draft (owner ruling 2026-07-16, mirrors the pipeline) - say why nothing
+  // appeared instead of silently doing nothing.
+  const rrow = res.data && res.data.row;
+  if (rrow && !rrow.draft_body) {
+    showDetailError("No draft kept: " + (rrow.decision_reason || "the agent decided no reply is needed."));
+  }
   loadQueue();
 }
 
