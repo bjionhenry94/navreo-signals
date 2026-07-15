@@ -274,7 +274,7 @@
   <main class="main">
     <div class="setter-head-row">
       <h1 class="sh-title">Appointment Setter</h1>
-      <div class="stats-inline" id="statsInline"></div>
+      <div class="stats-inline" id="statsInline"><span class="muted"><span class="btnspin"></span> Loading…</span></div>
       <div class="sh-spacer"></div>
       <span class="small muted" id="lastCheckedNote"></span>
       <button class="btn primary" id="checkNowBtn" type="button">Check for new replies</button>
@@ -307,7 +307,7 @@
           <select class="client-filter-sel il-client-filter" id="clientFilterSel" title="Filter by client"></select>
         </div>
         <div class="il-test-note small muted" id="testOnlyNote" style="display:none"></div>
-        <div class="il-list" id="inboxList"></div>
+        <div class="il-list" id="inboxList"><div class="empty"><span class="btnspin"></span> Loading replies…</div></div>
         <div class="il-pager" id="inboxPager" style="display:none"></div>
       </div>
       <div class="inbox-right" id="inboxRight"></div>
@@ -453,6 +453,7 @@ let QUEUE_ROWS = [];
    a match just because a different pill happens to be selected */
 let ALL_ROWS = [];
 let _allRowsLoaded = false;  // has the lazy all-statuses search corpus been fetched?
+let _queueLoading = false;   // a queue fetch is in flight - empty list shows a loader, not "No replies"
 let KPIS = {};
 let currentStatus = "needs_review";
 let campaignMap = {};
@@ -798,7 +799,9 @@ async function loadQueue(prefetch) {
   // `prefetch` lets init() start this network call in PARALLEL with the
   // agents/campaigns load instead of waiting for it (the fetch is pill-status
   // specific, so it's only reused for the initial default-status load).
+  _queueLoading = true;
   const res = await (prefetch || fetchJson(`/api/setter/queue?${params.toString()}`));
+  _queueLoading = false;
   if (res.ok) {
     QUEUE_ROWS = res.data.rows || [];
     graftThreads(QUEUE_ROWS);
@@ -927,6 +930,13 @@ function renderQueueFilters() {
       renderClientFilter();
       renderQueue();
     } else {
+      // Server fetch: the rows on screen belong to the OLD pill - clear them
+      // and show the list loader right away instead of a stale list that
+      // snaps later (loader ruling 2026-07-16).
+      QUEUE_ROWS = [];
+      _queueLoading = true;
+      renderQueueFilters();
+      renderQueue();
       loadQueue();
     }
   }));
@@ -1011,7 +1021,12 @@ function renderInboxList() {
     testNoteEl.textContent = onlyTest ? "These are simulated test replies. Real replies will appear here." : "";
   }
   if (!paged.rows.length) {
-    el.innerHTML = `<div class="empty">No replies here. New ones will show up after the next check.</div>`;
+    // While a fetch is in flight an empty list means "still loading", not
+    // "nothing here" - never show the misleading empty state during a load
+    // (loader ruling 2026-07-16).
+    el.innerHTML = _queueLoading
+      ? `<div class="empty"><span class="btnspin"></span> Loading replies…</div>`
+      : `<div class="empty">No replies here. New ones will show up after the next check.</div>`;
   } else {
     el.innerHTML = paged.rows.map(inboxItemHtml).join("");
     el.querySelectorAll(".inbox-item").forEach((item) => {
@@ -1410,11 +1425,17 @@ function convoHtml(row) {
   // Fade hint only when there's earlier content to scroll up to - test rows
   // (no thread) skip it entirely, matching "container shrinks to fit".
   const fadeHtml = older.length ? `<div class="convo-fade"></div>` : "";
+  // Slim rows (fields=list) haven't got their stored thread yet - the graft /
+  // live refresh fills it in seconds. Say so instead of silently showing a
+  // one-message "history" (loader ruling 2026-07-16).
+  const historyLoading = row.thread === undefined
+    ? `<div class="muted small" style="padding:2px 0 8px"><span class="btnspin"></span> Loading earlier messages…</div>` : "";
   return `
     <div class="msg-card">
       <div class="msg-card-lab">Conversation</div>
       <div class="convo" id="convo-${esc(row.id)}">
         ${fadeHtml}
+        ${historyLoading}
         ${items.map((i) => i.html).join("")}
       </div>
     </div>`;
@@ -1715,8 +1736,14 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   if (note) note.style.display = searching ? "inline" : "none";
   // A live search spans every pill, so make sure the full cross-pill corpus
   // is loaded. hydrateAllRows is single-flight and re-renders when it lands,
-  // so an early keystroke's matches fill in.
-  if (searching && !_allRowsLoaded) hydrateAllRows();
+  // so an early keystroke's matches fill in. The note doubles as the loader
+  // while the corpus is still on its way (loader ruling 2026-07-16).
+  if (searching && !_allRowsLoaded) {
+    if (note) note.innerHTML = `<span class="btnspin"></span> loading all replies…`;
+    hydrateAllRows().then(() => { if (note) note.textContent = "searching all replies"; });
+  } else if (note && searching) {
+    note.textContent = "searching all replies";
+  }
   // While a search spans every filter, the highlighted pill isn't what's on
   // screen - dim the pill row so the two can't visually contradict.
   const pills = document.getElementById("queueFilters");
