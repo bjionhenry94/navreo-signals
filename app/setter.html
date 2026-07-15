@@ -177,7 +177,13 @@
 }
 .qc-draft:focus { outline: none; box-shadow: var(--focus); }
 .qc-draft div { min-height: 1em; }
-.qc-draft a { color: var(--orange-700); }
+.qc-draft a { color: var(--orange-700); cursor: pointer; text-decoration: underline; }
+.composer-head .ch-spacer { flex: 1; }
+.teach-tgl { display: inline-flex; align-items: center; gap: 7px; border: none; background: none; font: 500 12.5px var(--font-sans); color: var(--ink-2); cursor: pointer; padding: 4px 6px; }
+.teach-tgl .tgl-track { width: 30px; height: 17px; border-radius: 999px; background: var(--line-2); position: relative; transition: background 0.15s ease; flex-shrink: 0; }
+.teach-tgl .tgl-track.on { background: var(--orange-600, #E05D26); }
+.teach-tgl .tgl-knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: left 0.15s ease; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+.teach-tgl .tgl-track.on .tgl-knob { left: 15px; }
 .qc-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 .qc-split { display: inline-flex; }
 .qc-split .qc-regen { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
@@ -1138,11 +1144,7 @@ function renderDetail(row) {
   // closest supported jump.
   const smartleadBtnHtml = row.lead_email
     ? `<a class="btn sm" href="https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email)}" target="_blank" rel="noopener" title="Open this lead's conversation in Smartlead's master inbox">Open in Smartlead</a>` : "";
-  const teachBtnHtml = row.agent_id
-    ? `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span>
-       ${smartleadBtnHtml}
-       <button class="btn sm" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}">Teach the agent</button>`
-    : `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span> ${smartleadBtnHtml}`;
+  const teachBtnHtml = `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span> ${smartleadBtnHtml}`;
 
   // Did they reply after our send? Client-side scan of every known row for a
   // LATER inbound from the same lead - a later reply always creates a new
@@ -1171,6 +1173,8 @@ function renderDetail(row) {
     <div class="msg-card">
       <div class="composer-head">
         <div class="msg-card-lab">Your reply</div>
+        ${teachToggleHtml(row)}
+        <div class="ch-spacer"></div>
         ${composerActionsHtml(row)}
       </div>
       ${composerFeedbackHtml(row)}
@@ -1383,8 +1387,26 @@ function setTrainingMode(on) {
     el.textContent = on ? "On" : "Off";
     el.classList.toggle("off", !on);
   });
+  document.querySelectorAll(".qc-training-tgl .tgl-track").forEach((el) => el.classList.toggle("on", on));
   document.querySelectorAll(".qc-feedback-input").forEach((inp) => { inp.placeholder = feedbackPlaceholder(); });
   protoNote(on ? "Training on - feedback teaches the agent" : "Training off - feedback shapes this reply only");
+}
+
+/* The teach controls, pinned beside "Your reply" (owner ruling 2026-07-15):
+   an explicit switch for training mode - On means your typed feedback (via
+   Regenerate's arrow) teaches this agent permanently, Off means it shapes
+   this one reply only - plus "Add a lesson", the standing-correction modal
+   that always teaches regardless of the switch. */
+function teachToggleHtml(row) {
+  const on = trainingModeOn();
+  const tgl = needsComposerActions(row)
+    ? `<button type="button" class="qc-training-tgl teach-tgl" title="On: feedback you type when regenerating is remembered by this agent for every future reply. Off: it only shapes this one reply.">
+         <span class="tgl-track${on ? " on" : ""}"><span class="tgl-knob"></span></span>
+         Teach the agent <span class="tgl-pill${on ? "" : " off"}">${on ? "On" : "Off"}</span>
+       </button>` : "";
+  const lesson = row.agent_id
+    ? `<button class="btn sm" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}" title="Give this agent a standing lesson - always remembered, whatever the switch says.">Add a lesson</button>` : "";
+  return tgl || lesson ? `${tgl} ${lesson}` : "";
 }
 
 function composerFeedbackHtml(row) {
@@ -1392,7 +1414,6 @@ function composerFeedbackHtml(row) {
   const on = trainingModeOn();
   return `<div class="qc-feedback" id="fb-${esc(row.id)}" style="display:none">
     <input type="text" class="qc-feedback-input" data-id="${esc(row.id)}" placeholder="${feedbackPlaceholder()}">
-    <button type="button" class="qc-training-tgl" title="Training on: the agent keeps this feedback for every future reply. Training off: the feedback only shapes this one regeneration.">Training <span class="tgl-pill${on ? "" : " off"}">${on ? "On" : "Off"}</span></button>
     <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">Regenerate with feedback</button>
   </div>`;
 }
@@ -2320,6 +2341,14 @@ function renderTryItResult(row) {
 }
 
 /* ── Boot ──────────────────────────────────────────────── */
+document.addEventListener("click", (e) => {
+  const a = e.target.closest(".qc-draft a");
+  if (!a) return;
+  e.preventDefault();
+  const href = a.getAttribute("href") || "";
+  if (/^https?:/i.test(href)) window.open(href, "_blank", "noopener");
+});
+
 (async function init() {
   await loadAgentsAndCampaigns();
   await loadQueue();
