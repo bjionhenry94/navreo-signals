@@ -864,7 +864,7 @@ def log_activity(endpoint: str, payload=None, actor: str = "app",
                      daemon=True).start()
 
 
-setter.configure(sb=sb, http_json=http_json, keys=KEYS, log_activity=log_activity)
+setter.configure(sb=sb, http_json=http_json, keys=KEYS, log_activity=log_activity, sb_count=sb_count)
 
 
 def client_prefill(p: dict) -> dict:

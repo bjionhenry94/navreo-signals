@@ -500,21 +500,17 @@ const EDITED_DRAFTS = {};
 let inboxPage = 1;
 const INBOX_PAGE_SIZE = 25;
 
+/* Each pill maps to a server-side count key on KPIS.counts (see _compute_kpis),
+   so every chip shows its live item total. "Needs review" = they replied last
+   and it awaits our decision; "Sent" = we manually sent a reply and are waiting
+   on them to come back; "Auto-sent" = the same but the agent sent it itself. */
 const FILTER_PILLS = [
-  { key: "needs_review", label: "Needs review" },
-  { key: "waiting", label: "Waiting" },
-  { key: "auto_sent", label: "Auto-sent" },
-  { key: "sent", label: "Sent" },
-  { key: "no_action", label: "No action" },
-  { key: "dismissed", label: "Dismissed" },
-  { key: "", label: "All" },
+  { key: "needs_review", label: "Needs review", count: "needs_review" },
+  { key: "sent", label: "Sent", count: "sent" },
+  { key: "auto_sent", label: "Auto-sent", count: "auto_sent" },
+  { key: "dismissed", label: "Dismissed", count: "dismissed" },
+  { key: "", label: "All", count: "all" },
 ];
-/* "Waiting" is a virtual filter, not a real status column value - it's every
-   row that still needs a human to look at it (everything except the four
-   terminal/self-handled statuses below). There's no server-side filter for
-   this, so loadQueue() fetches everything and filters client-side. */
-const WAITING_EXCLUDED_STATUSES = new Set(["sent", "auto_sent", "dismissed", "no_action"]);
-function isWaitingStatus(status) { return !WAITING_EXCLUDED_STATUSES.has(status); }
 
 const INTENT_LABELS = {
   send_resource: "Wants the resource",
@@ -786,10 +782,9 @@ async function loadAgentsAndCampaigns() {
 
 async function loadQueue() {
   const params = new URLSearchParams();
-  // "waiting" has no matching status column value - fetch everything and
-  // filter client-side (see isWaitingStatus) instead of asking the server
-  // to match a status that doesn't exist.
-  if (currentStatus && currentStatus !== "waiting") params.set("status", currentStatus);
+  // Every pill now maps to a real status column value (needs_review / sent /
+  // auto_sent / dismissed, or blank for All), so the server filters directly.
+  if (currentStatus) params.set("status", currentStatus);
   params.set("limit", "200");
   // fetch the current pill's rows plus an all-statuses copy in parallel - the
   // all-statuses copy is what search-across-all-replies searches against, so
@@ -799,13 +794,7 @@ async function loadQueue() {
     fetchJson(`/api/setter/queue?limit=200`),
   ]);
   if (res.ok) {
-    let rows = res.data.rows || [];
-    if (currentStatus === "waiting") {
-      // Oldest first - these are the replies that have been sitting the
-      // longest without a human decision, so the stalest one leads.
-      rows = rows.filter((r) => isWaitingStatus(r.status))
-        .sort((a, b) => new Date(a.replied_at || a.created_at || 0) - new Date(b.replied_at || b.created_at || 0));
-    }
+    const rows = res.data.rows || [];
     QUEUE_ROWS = rows;
     KPIS = res.data.kpis || {};
     LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
@@ -848,9 +837,12 @@ function renderKpis() {
 /* ── Queue: filters + two-pane inbox ───────────────────── */
 function renderQueueFilters() {
   const wrap = document.getElementById("queueFilters");
-  wrap.innerHTML = FILTER_PILLS.map((p) =>
-    `<button type="button" class="chip ${p.key === currentStatus ? "on" : ""}" data-status="${esc(p.key)}">${esc(p.label)}</button>`
-  ).join("");
+  const counts = KPIS.counts || {};
+  wrap.innerHTML = FILTER_PILLS.map((p) => {
+    const n = counts[p.count];
+    const badge = (typeof n === "number") ? ` <b class="n">${fmt(n)}</b>` : "";
+    return `<button type="button" class="chip ${p.key === currentStatus ? "on" : ""}" data-status="${esc(p.key)}">${esc(p.label)}${badge}</button>`;
+  }).join("");
   wrap.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     currentStatus = b.getAttribute("data-status");
     inboxPage = 1;
@@ -1006,11 +998,11 @@ function holdReasonLabel(reason, row) {
   return truncate(rest, 40);
 }
 
-/* Short age badge for the Waiting tab - "3h", "2d", browser-local, no bare
-   UTC. Colour shifts once a reply has been waiting past the 15-minute
-   response-time target, so a stale one stands out at a glance. */
+/* Short age badge for the Needs-review tab - "3h", "2d", browser-local, no
+   bare UTC. Colour shifts once their reply has sat unanswered past the
+   15-minute response-time target, so a stale one stands out at a glance. */
 function ageBadgeHtml(row) {
-  if (currentStatus !== "waiting") return "";
+  if (currentStatus !== "needs_review") return "";
   const iso = row.replied_at || row.created_at;
   if (!iso) return "";
   let s = String(iso).trim().replace(" ", "T");

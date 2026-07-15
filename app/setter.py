@@ -32,17 +32,21 @@ from zoneinfo import ZoneInfo
 # ── wiring (set once by server.py at startup) ────────────────────────────────
 
 _SB = None
+_SB_COUNT = None
 _HTTP = None
 _KEYS: dict = {}
 _LOG = None
 
 
-def configure(sb, http_json, keys, log_activity):
+def configure(sb, http_json, keys, log_activity, sb_count=None):
     """Called once by server.py: setter.configure(sb=sb, http_json=http_json,
-    keys=KEYS, log_activity=log_activity). Stores the app's own helpers in
-    module globals so this file never has to `import server`."""
-    global _SB, _HTTP, _KEYS, _LOG
+    keys=KEYS, log_activity=log_activity, sb_count=sb_count). Stores the app's
+    own helpers in module globals so this file never has to `import server`.
+    sb_count is a header-only row counter (transfers ~100B instead of the rows)
+    used to size the queue filter pills."""
+    global _SB, _SB_COUNT, _HTTP, _KEYS, _LOG
     _SB = sb
+    _SB_COUNT = sb_count
     _HTTP = http_json
     _KEYS = keys or {}
     _LOG = log_activity
@@ -2862,12 +2866,35 @@ def route_campaigns_get(_params):
         return 500, {"error": str(e)[:300]}
 
 
+def _pill_count(filt: str) -> int:
+    """Real-lead row count for a queue filter pill. Prefers the header-only
+    counter (sb_count); falls back to len(select=id) when it isn't wired in."""
+    base = f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&is_test=eq.false&{filt}"
+    if _SB_COUNT:
+        n = _SB_COUNT(f"{base}&select=id")
+        if isinstance(n, int):
+            return n
+    rows = _SB("GET", f"{base}&select=id") if _SB else None
+    return len(rows) if isinstance(rows, list) else 0
+
+
 def _compute_kpis() -> dict:
     kpis = {"needs_review": 0, "auto_sent_today": 0, "sent_today": 0,
-           "avg_response_mins_7d": None, "no_action_today": 0}
+           "avg_response_mins_7d": None, "no_action_today": 0, "counts": {}}
     if not _SB:
         return kpis
     try:
+        # Per-pill totals for the queue filter chips. "needs_review" = they
+        # replied last and it awaits our decision; "sent"/"auto_sent" = we
+        # replied last (manually / by the agent) and are waiting on them;
+        # "all" = every real row.
+        kpis["counts"] = {
+            "needs_review": _pill_count("status=eq.needs_review"),
+            "sent": _pill_count("status=eq.sent"),
+            "auto_sent": _pill_count("status=eq.auto_sent"),
+            "dismissed": _pill_count("status=eq.dismissed"),
+            "all": _pill_count("id=not.is.null"),
+        }
         today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
         nr = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.needs_review&is_test=eq.false&select=id")
         kpis["needs_review"] = len(nr) if isinstance(nr, list) else 0
