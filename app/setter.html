@@ -452,6 +452,7 @@ let QUEUE_ROWS = [];
    search-across-all-replies (see visibleInboxRows) so a search never misses
    a match just because a different pill happens to be selected */
 let ALL_ROWS = [];
+let _allRowsLoaded = false;  // has the lazy all-statuses search corpus been fetched?
 let KPIS = {};
 let currentStatus = "needs_review";
 let campaignMap = {};
@@ -780,19 +781,22 @@ async function loadAgentsAndCampaigns() {
   renderTryIt();
 }
 
-async function loadQueue() {
+async function loadQueue(prefetch) {
   const params = new URLSearchParams();
   // Every pill now maps to a real status column value (needs_review / sent /
   // auto_sent / dismissed, or blank for All), so the server filters directly.
   if (currentStatus) params.set("status", currentStatus);
   params.set("limit", "200");
-  // fetch the current pill's rows plus an all-statuses copy in parallel - the
-  // all-statuses copy is what search-across-all-replies searches against, so
-  // typing a query never misses a match sitting under a different pill
-  const [res, allRes] = await Promise.all([
-    fetchJson(`/api/setter/queue?${params.toString()}`),
-    fetchJson(`/api/setter/queue?limit=200`),
-  ]);
+  // ONE queue fetch per load. The all-statuses copy that powers
+  // search-across-all-replies used to fire on EVERY load in parallel here,
+  // doubling the queue round-trips (and the server-side KPI compute) for a
+  // corpus most loads never search. It's now lazy - fetched on first search
+  // via ensureAllRows() (perf pass 2026-07-16). On the "All" pill QUEUE_ROWS
+  // already IS every row, so no second fetch is ever needed there.
+  // `prefetch` lets init() start this network call in PARALLEL with the
+  // agents/campaigns load instead of waiting for it (the fetch is pill-status
+  // specific, so it's only reused for the initial default-status load).
+  const res = await (prefetch || fetchJson(`/api/setter/queue?${params.toString()}`));
   if (res.ok) {
     const rows = res.data.rows || [];
     QUEUE_ROWS = rows;
@@ -804,11 +808,35 @@ async function loadQueue() {
     showError("Couldn't load the queue: " + res.error);
     QUEUE_ROWS = []; KPIS = {};
   }
-  ALL_ROWS = allRes.ok ? (allRes.data.rows || []) : QUEUE_ROWS;
+  if (!currentStatus) {
+    // "All" pill: the rows we just fetched ARE the full cross-pill corpus.
+    ALL_ROWS = QUEUE_ROWS; _allRowsLoaded = true;
+  } else if (_allRowsLoaded) {
+    // The user has searched this session, so keep the full corpus fresh.
+    await ensureAllRows(true);
+  } else {
+    // No search yet: provisionally search within the current pill; the full
+    // corpus loads the moment a search starts.
+    ALL_ROWS = QUEUE_ROWS;
+  }
   renderKpis();
   renderQueueFilters();
   renderClientFilter();
   renderQueue();
+}
+
+/* Cross-pill search corpus, loaded lazily. Fetches the all-statuses queue
+   copy once (or force-refreshes it) so a search never misses a match sitting
+   under a different filter pill - without paying that fetch on every page
+   load. */
+async function ensureAllRows(force) {
+  if (_allRowsLoaded && !force) return;
+  const res = await fetchJson(`/api/setter/queue?limit=200`);
+  if (res.ok) {
+    ALL_ROWS = res.data.rows || QUEUE_ROWS;
+    _allRowsLoaded = true;
+    renderQueue();
+  }
 }
 
 /* ── Slim stats row ────────────────────────────────────── */
@@ -1631,6 +1659,10 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   const note = document.getElementById("searchAllNote");
   const searching = !!inboxSearchQuery.trim();
   if (note) note.style.display = searching ? "inline" : "none";
+  // A live search spans every pill, so make sure the full cross-pill corpus
+  // is loaded (it's fetched lazily now, not on every page load). ensureAllRows
+  // re-renders when it lands so an early keystroke's matches fill in.
+  if (searching) ensureAllRows();
   // While a search spans every filter, the highlighted pill isn't what's on
   // screen - dim the pill row so the two can't visually contradict.
   const pills = document.getElementById("queueFilters");
@@ -2354,18 +2386,27 @@ document.addEventListener("click", (e) => {
 });
 
 (async function init() {
+  // Everything that can start at once, starts at once (perf pass 2026-07-16).
+  // Old path was strictly serial: agents -> queue -> poll, so first paint
+  // waited on all three. Now the queue fetch and the reply-sweep POST both
+  // fire alongside the agents/campaigns load. The queue RENDER still waits for
+  // agents (client filter + agent labels read those maps), so nothing renders
+  // with empty data - only the network waits overlap.
+  const queueP = fetchJson(`/api/setter/queue?status=${encodeURIComponent(currentStatus)}&limit=200`);
+  // Real-inbox freshness (owner ruling 2026-07-15): every page load STILL
+  // kicks a reply-check automatically - it's just off the critical path now,
+  // fire-and-forget, so it no longer blocks first paint. The delayed reload
+  // picks up whatever the sweep queued (same 2.5s the manual button uses).
+  const kickP = fetchJson("/api/setter/poll", { method: "POST" });
   await loadAgentsAndCampaigns();
-  await loadQueue();
+  await loadQueue(queueP);
   sizeInboxShell();
-  // Real-inbox freshness (owner ruling 2026-07-15): every page load kicks a
-  // check for new replies automatically - no manual click needed to see the
-  // latest messages. The kick is fire-and-forget; the delayed reload picks
-  // up whatever the sweep queued (same 2.5s the manual button uses).
-  const kick = await fetchJson("/api/setter/poll", { method: "POST" });
-  if (kick.ok) {
-    protoNote("Checking for new replies…");
-    setTimeout(async () => { await loadQueue(); sizeInboxShell(); }, 2500);
-  }
+  kickP.then((kick) => {
+    if (kick && kick.ok) {
+      protoNote("Checking for new replies…");
+      setTimeout(async () => { await loadQueue(); sizeInboxShell(); }, 2500);
+    }
+  });
 })();
 </script>
 </body>

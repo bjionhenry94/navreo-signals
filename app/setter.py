@@ -25,6 +25,7 @@ import random
 import re
 import sys
 import threading
+import time as _time
 import uuid
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
@@ -1854,6 +1855,11 @@ def _apply_patch(row: dict, patch: dict):
             _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{row['id']}", patch)
         except Exception:  # noqa: BLE001
             pass
+    # A status change moves a row between pills, so the cached KPI counts are
+    # now stale - invalidate so the next queue GET recomputes them (perf pass
+    # 2026-07-16: KPIs are cached ~15s to avoid ~10 Supabase queries per load).
+    if "status" in patch:
+        _KPI_CACHE["at"] = 0.0
 
 
 def _company_hints(domain: str) -> dict:
@@ -2836,6 +2842,10 @@ def run_poll() -> dict:
     except Exception as e:  # noqa: BLE001 - run_poll itself must never raise
         summary["errors"] += 1
         print(f"[setter] run_poll crashed: {e}", file=sys.stderr)
+    # New rows changed the pill totals - drop the cached KPI block so the
+    # post-poll queue reload shows accurate counts (perf pass 2026-07-16).
+    if summary.get("queued") or summary.get("needs_review") or summary.get("auto_sent"):
+        _KPI_CACHE["at"] = 0.0
     return summary
 
 
@@ -3291,48 +3301,103 @@ def _pill_count(filt: str) -> int:
     return len(rows) if isinstance(rows, list) else 0
 
 
-def _compute_kpis() -> dict:
+# Short-TTL cache for the KPI block. The queue endpoint recomputed ~10
+# SEQUENTIAL Supabase queries on EVERY GET, which alone made one
+# /api/setter/queue call take ~3.7s live (baseline 2026-07-15). The counts
+# are chip/headline totals, not per-lead data, so a few seconds of staleness
+# is invisible - and the reply-poll refreshes them anyway. Cache the whole
+# block for _KPI_TTL seconds and, on a miss, fetch every independent query
+# CONCURRENTLY (they share no data) so a cold compute is ~1 round-trip, not 10.
+_KPI_TTL = 15.0
+_KPI_CACHE = {"at": 0.0, "val": None}
+_KPI_LOCK = threading.Lock()
+
+
+def _count_rows(filt: str) -> int:
+    """len() of a select=id query, header-counter first when wired in."""
+    base = f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&{filt}"
+    if _SB_COUNT:
+        n = _SB_COUNT(f"{base}&select=id")
+        if isinstance(n, int):
+            return n
+    rows = _SB("GET", f"{base}&select=id") if _SB else None
+    return len(rows) if isinstance(rows, list) else 0
+
+
+def _compute_kpis(force: bool = False) -> dict:
+    now = _time.time()
+    if not force:
+        cached = _KPI_CACHE.get("val")
+        if cached is not None and (now - _KPI_CACHE.get("at", 0.0)) < _KPI_TTL:
+            return cached
     kpis = {"needs_review": 0, "auto_sent_today": 0, "sent_today": 0,
            "avg_response_mins_7d": None, "no_action_today": 0, "counts": {}}
     if not _SB:
         return kpis
     try:
-        # Per-pill totals for the queue filter chips. "needs_review" = they
-        # replied last and it awaits our decision; "sent"/"auto_sent" = we
-        # replied last (manually / by the agent) and are waiting on them;
-        # "all" = every real row.
-        kpis["counts"] = {
-            "needs_review": _pill_count("status=eq.needs_review"),
-            "sent": _pill_count("status=eq.sent"),
-            "auto_sent": _pill_count("status=eq.auto_sent"),
-            "dismissed": _pill_count("status=eq.dismissed"),
-            "all": _pill_count("id=not.is.null"),
-        }
         today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
-        nr = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.needs_review&is_test=eq.false&select=id")
-        kpis["needs_review"] = len(nr) if isinstance(nr, list) else 0
-        for out_key, status in (("auto_sent_today", "auto_sent"), ("sent_today", "sent"), ("no_action_today", "no_action")):
-            rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.{status}&is_test=eq.false"
-                              f"&created_at=gte.{today}&select=id")
-            kpis[out_key] = len(rows) if isinstance(rows, list) else 0
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat()
-        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(auto_sent,sent)&is_test=eq.false"
-                          f"&sent_at=gte.{quote(since, safe='')}&select=replied_at,sent_at")
-        mins = []
-        if isinstance(rows, list):
-            for r in rows:
+
+        # Each entry is an independent PostgREST read -> run them all at once.
+        # Per-pill totals for the filter chips ("needs_review" = they replied
+        # last and it awaits our decision; "sent"/"auto_sent" = we replied
+        # last; "all" = every real row). is_test=false everywhere except the
+        # pill counts, which keep _pill_count's exact (test-excluded) filter.
+        def _pill(filt):  # mirrors _pill_count's is_test=false pill semantics
+            return _count_rows(f"is_test=eq.false&{filt}")
+
+        def _avg_response():
+            rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(auto_sent,sent)&is_test=eq.false"
+                              f"&sent_at=gte.{quote(since, safe='')}&select=replied_at,sent_at")
+            mins = []
+            if isinstance(rows, list):
+                for r in rows:
+                    try:
+                        ra, sa = r.get("replied_at"), r.get("sent_at")
+                        if ra and sa:
+                            mins.append((_parse_iso(sa) - _parse_iso(ra)).total_seconds() / 60)
+                    except Exception:  # noqa: BLE001
+                        continue
+            return round(sum(mins) / len(mins), 1) if mins else None
+
+        tasks = {
+            "c_needs_review": lambda: _pill("status=eq.needs_review"),
+            "c_sent": lambda: _pill("status=eq.sent"),
+            "c_auto_sent": lambda: _pill("status=eq.auto_sent"),
+            "c_dismissed": lambda: _pill("status=eq.dismissed"),
+            "c_all": lambda: _pill("id=not.is.null"),
+            "needs_review": lambda: _count_rows("is_test=eq.false&status=eq.needs_review"),
+            "auto_sent_today": lambda: _count_rows(f"is_test=eq.false&status=eq.auto_sent&created_at=gte.{today}"),
+            "sent_today": lambda: _count_rows(f"is_test=eq.false&status=eq.sent&created_at=gte.{today}"),
+            "no_action_today": lambda: _count_rows(f"is_test=eq.false&status=eq.no_action&created_at=gte.{today}"),
+            "avg_response_mins_7d": _avg_response,
+        }
+        results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+            fut_key = {pool.submit(fn): k for k, fn in tasks.items()}
+            for fut in concurrent.futures.as_completed(fut_key):
+                k = fut_key[fut]
                 try:
-                    ra, sa = r.get("replied_at"), r.get("sent_at")
-                    if ra and sa:
-                        d1 = _parse_iso(ra)
-                        d2 = _parse_iso(sa)
-                        mins.append((d2 - d1).total_seconds() / 60)
-                except Exception:  # noqa: BLE001
-                    continue
-        if mins:
-            kpis["avg_response_mins_7d"] = round(sum(mins) / len(mins), 1)
+                    results[k] = fut.result()
+                except Exception:  # noqa: BLE001 - one bad query must not sink the block
+                    results[k] = None
+        kpis["counts"] = {
+            "needs_review": results.get("c_needs_review") or 0,
+            "sent": results.get("c_sent") or 0,
+            "auto_sent": results.get("c_auto_sent") or 0,
+            "dismissed": results.get("c_dismissed") or 0,
+            "all": results.get("c_all") or 0,
+        }
+        kpis["needs_review"] = results.get("needs_review") or 0
+        kpis["auto_sent_today"] = results.get("auto_sent_today") or 0
+        kpis["sent_today"] = results.get("sent_today") or 0
+        kpis["no_action_today"] = results.get("no_action_today") or 0
+        kpis["avg_response_mins_7d"] = results.get("avg_response_mins_7d")
     except Exception:  # noqa: BLE001
         pass
+    with _KPI_LOCK:
+        _KPI_CACHE["val"] = kpis
+        _KPI_CACHE["at"] = now
     return kpis
 
 
