@@ -33,6 +33,26 @@ _SCRIPT = """
 const RUN_ID = "__RUN_ID__";
 let selected = new Set();
 
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+/* Live elapsed counter so a long compute never looks hung (big sets take ~2 min). */
+let _tick = null;
+function startTicker(el, verb) {
+  stopTicker();
+  const t0 = Date.now();
+  el.textContent = verb + '...';
+  _tick = setInterval(function () {
+    const s = Math.round((Date.now() - t0) / 1000);
+    el.textContent = verb + '... ' + s + 's' +
+      (s >= 8 ? ' (big campaign sets can take a couple of minutes - still working)' : '');
+  }, 1000);
+}
+function stopTicker() { if (_tick) { clearInterval(_tick); _tick = null; } }
+
 async function callApi(path, opts) {
   const r = await fetch(path, opts);
   let body = null;
@@ -47,34 +67,39 @@ function tile(label, n) {
 
 document.getElementById('scan-btn').onclick = async () => {
   const cid = document.getElementById('camp-id').value.trim();
-  if (!cid) return;
-  selected = new Set([cid]);
   const status = document.getElementById('scan-status');
+  if (!cid) { status.textContent = 'Type a campaign name (or part of one) first.'; return; }
   status.textContent = 'Scanning...';
   const r = await callApi('/api/recontact/scan?campaign_id=' + encodeURIComponent(cid));
-  if (!r.ok || !Array.isArray(r.body)) {
+  if (!r.ok || !r.body || r.body.error || !r.body.target) {
     status.textContent = (r.body && r.body.error) || 'Scan failed.';
     document.getElementById('scan-results').innerHTML = '';
+    document.getElementById('buckets-card').classList.remove('active');
     return;
   }
-  status.textContent = r.body.length + ' similar campaign(s) found. Click a row to include or ' +
-    'exclude it - the campaign you scanned is always included.';
-  const rows = r.body.map(function (c) {
-    return '<tr class="rowsel on" data-id="' + c.campaign_id + '">' +
+  const target = r.body.target;
+  const sibs = r.body.siblings || [];
+  selected = new Set([String(target.campaign_id)]);
+  status.innerHTML = 'Matched: <b>' + escHtml(target.name || target.campaign_id) + '</b>' +
+    (target.status ? ' (' + escHtml(target.status) + ')' : '') + ' — ' +
+    sibs.length + ' similar campaign(s) found. Click a row to include or ' +
+    'exclude it - the matched campaign is always included.';
+  const rows = sibs.map(function (c) {
+    return '<tr class="rowsel on" data-id="' + escHtml(c.campaign_id) + '">' +
       '<td><input type="checkbox" checked></td>' +
-      '<td>' + (c.name || c.campaign_id) + '</td>' +
-      '<td>' + (c.status || '') + '</td>' +
+      '<td>' + escHtml(c.name || c.campaign_id) + '</td>' +
+      '<td>' + escHtml(c.status || '') + '</td>' +
       '<td>' + c.finished + '</td>' +
       '<td>' + c.in_progress + '</td>' +
       '<td>' + c.overlap_count + '</td>' +
-      '<td class="muted small">' + (c.match_reason || '') + '</td></tr>';
+      '<td class="muted small">' + escHtml(c.match_reason || '') + '</td></tr>';
   }).join('');
-  document.getElementById('scan-results').innerHTML = r.body.length ?
+  document.getElementById('scan-results').innerHTML = sibs.length ?
     '<table class="tbl"><tr><th></th><th>Campaign</th><th>Status</th><th>Finished</th>' +
     '<th>In progress</th><th>Lead overlap</th><th>Why it matched</th></tr>' + rows + '</table>' :
     '<p class="sub" style="margin-top:10px">No similarly-named campaigns found - you can still ' +
-    'continue with just the one you scanned.</p>';
-  r.body.forEach(function (c) { selected.add(String(c.campaign_id)); });
+    'continue with just the one that matched.</p>';
+  sibs.forEach(function (c) { selected.add(String(c.campaign_id)); });
   document.querySelectorAll('#scan-results tr.rowsel').forEach(function (tr) {
     tr.onclick = function () {
       const id = tr.dataset.id;
@@ -89,11 +114,12 @@ document.getElementById('scan-btn').onclick = async () => {
 document.getElementById('buckets-btn').onclick = async () => {
   const status = document.getElementById('buckets-status');
   if (!selected.size) { status.textContent = 'Pick at least one campaign first.'; return; }
-  status.textContent = 'Computing...';
+  startTicker(status, 'Computing');
   const include_repliers = document.getElementById('include-repliers').checked;
   const r = await callApi('/api/recontact/buckets', { method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ campaign_ids: [...selected], include_repliers, run_id: RUN_ID }) });
+  stopTicker();
   if (!r.ok || !r.body || r.body.error) {
     status.textContent = (r.body && r.body.error) || 'Could not compute buckets.';
     return;
@@ -104,7 +130,13 @@ document.getElementById('buckets-btn').onclick = async () => {
   document.getElementById('bucket-tiles').innerHTML =
     tile('Eligible', b.eligible) + tile('Still in progress', b.in_progress) +
     tile('Suppressed', b.suppressed) + tile('Already replied', b.replied) +
-    tile('Total contacted', b.total);
+    tile('Total contacted', b.total_contact_rows != null ? b.total_contact_rows : b.total);
+  if (b.capped) {
+    status.textContent = 'Big campaign set: verdicts cover the first ' +
+      (b.rows_scanned || 0).toLocaleString() + ' of ' +
+      (b.total_contact_rows || 0).toLocaleString() + ' contact records. The draft will ' +
+      'only include people from the reviewed part.';
+  }
   const elsewhere = (b.active_elsewhere || []).map(function (x) {
     return x.campaign + ': ' + x.count;
   }).join(', ');
@@ -123,16 +155,18 @@ document.getElementById('create-btn').onclick = async () => {
   const status = document.getElementById('create-status');
   const name = document.getElementById('draft-name').value.trim();
   const include_repliers = document.getElementById('include-repliers').checked;
-  status.textContent = 'Creating...';
+  startTicker(status, 'Creating the draft');
   const r = await callApi('/api/recontact/create', { method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ campaign_ids: [...selected], include_repliers, name, run_id: RUN_ID }) });
+  stopTicker();
   if (!r.ok || !r.body || !r.body.ok) {
     status.textContent = (r.body && r.body.message) || 'Could not create the draft.';
     return;
   }
-  status.textContent = 'Draft created: ' + r.body.id + ' (' + r.body.eligible + ' eligible leads). ' +
-    'Open it from the Campaigns tab under unlinked drafts.';
+  status.innerHTML = 'Draft created with ' + escHtml(r.body.eligible) + ' eligible leads &mdash; ' +
+    '<a href="/app/campaigns.html#' + escHtml(r.body.id) + '"><b>open it in Campaigns</b></a>. ' +
+    'It stays a draft until you launch it there.';
 };
 """
 
@@ -150,14 +184,15 @@ def render(run_id: str, seed_campaign_id: str = "") -> str:
       <div class="eyebrow">Recontact</div>
       <h1>Sibling campaign review</h1>
       <p class="sub" style="margin-top:6px">Find campaigns similar to one you pick, then see who is
-        safe to recontact.</p>
+        safe to recontact. Everything here only builds a <b>draft</b> campaign &mdash; nothing is ever
+        sent from this page.</p>
     </div>
   </div>
 
   <div class="card">
     <div class="eyebrow">1. Pick a campaign</div>
     <div class="row">
-      <input type="text" id="camp-id" placeholder="Smartlead campaign id" value=\"""" + esc(seed_campaign_id) + """\">
+      <input type="text" id="camp-id" placeholder="Campaign name (or Smartlead id)" value=\"""" + esc(seed_campaign_id) + """\">
       <button class="btn primary sm" id="scan-btn">Scan for siblings</button>
     </div>
     <div id="scan-status" class="muted small"></div>

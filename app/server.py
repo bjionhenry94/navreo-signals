@@ -6971,25 +6971,81 @@ def _batched_in_matches(table: str, col: str, values, select: str | None = None,
 _RECONTACT_CAP = 20000  # bounded read per campaign - keeps scan/buckets well under 10s
 
 
+def _sb_paged(query: str, cap: int = _RECONTACT_CAP) -> list:
+    """Fetch up to `cap` rows in 1000-row pages. A single Range header does NOT
+    work: Supabase's max-rows setting silently clips every request to 1000, so
+    the old one-shot fetch computed verdicts on a 2% sample of big campaigns
+    (found in the 2026-07-15 test loop: 50,245 contacts -> 1,000 rows)."""
+    out: list = []
+    page = 1000
+    while len(out) < cap:
+        lo = len(out)
+        hi = min(lo + page, cap) - 1
+        rows = sb("GET", query, headers={"Range-Unit": "items", "Range": f"{lo}-{hi}"})
+        if not isinstance(rows, list) or not rows:
+            break
+        out.extend(rows)
+        if len(rows) < (hi - lo + 1):
+            break
+    return out
+
+
 def _contact_history_emails(sl_id: str, cap: int = _RECONTACT_CAP) -> set:
-    rows = sb("GET", f"contact_history?smartlead_campaign_id=eq.{sl_id}&select=email",
-             headers={"Range-Unit": "items", "Range": f"0-{cap - 1}"})
-    return ({(r.get("email") or "").strip().lower() for r in rows if r.get("email")}
-           if isinstance(rows, list) else set())
+    rows = _sb_paged(f"contact_history?smartlead_campaign_id=eq.{sl_id}&select=email", cap)
+    return {(r.get("email") or "").strip().lower() for r in rows if r.get("email")}
 
 
-def api_recontact_scan(campaign_id: str) -> list | dict:
-    sid = _recontact_resolve_sl_id(campaign_id)
+def _recontact_resolve_target(term: str) -> tuple[str | None, dict | None]:
+    """Resolve whatever the user typed - a Smartlead id, camp-sl-<id>, a draft
+    id, or (the common case) a campaign NAME fragment - to (sl_id, campaign
+    row). Name lookup is ilike-first, then token-overlap so multi-word input
+    like "navreo influencer" still lands. ACTIVE beats finished on ties."""
+    term = str(term or "").strip()
+    sid = _recontact_resolve_sl_id(term)
+    if sid:
+        rows = sb("GET", f"campaigns?workspace=eq.{WORKSPACE_TAG}&smartlead_campaign_id=eq.{sid}"
+                         "&select=smartlead_campaign_id,name,client_id,status&limit=1")
+        return sid, (rows[0] if isinstance(rows, list) and rows else None)
+    if len(term) < 2:
+        return None, None
+    from urllib.parse import quote
+    sel = "smartlead_campaign_id,name,client_id,status,updated_at"
+    like = quote(term.replace("*", " ").replace(",", " "))
+    rows = sb("GET", f"campaigns?workspace=eq.{WORKSPACE_TAG}&name=ilike.*{like}*"
+                     f"&select={sel}&order=updated_at.desc&limit=50")
+    rows = rows if isinstance(rows, list) else []
+    if not rows:
+        toks = _recontact_name_tokens(term)
+        if toks:
+            allc = sb("GET", f"campaigns?workspace=eq.{WORKSPACE_TAG}&select={sel}"
+                             "&order=updated_at.desc&limit=1000")
+            rows = [c for c in (allc if isinstance(allc, list) else [])
+                   if toks & _recontact_name_tokens(c.get("name") or "")]
+    if not rows:
+        return None, None
+    # stable double-sort: newest first, then ACTIVE campaigns bubble to the top
+    rows.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+    rows.sort(key=lambda c: 0 if (c.get("status") or "").upper() == "ACTIVE" else 1)
+    best = rows[0]
+    return str(best.get("smartlead_campaign_id") or "") or None, best
+
+
+def api_recontact_scan(campaign_id: str) -> dict:
+    """Returns {"target": {...}, "siblings": [...]} - target echoes what the
+    input resolved to so the page can show "Matched: <name>" (typing a name
+    used to hard-fail with "campaign not found"; owner hit this 2026-07-15)."""
+    sid, target = _recontact_resolve_target(campaign_id)
     if not sid:
-        return {"error": "campaign not found, or not linked to a Smartlead campaign"}
-    target_rows = sb("GET", f"campaigns?workspace=eq.{WORKSPACE_TAG}&smartlead_campaign_id=eq.{sid}"
-                            "&select=name,client_id,status&limit=1")
-    if not isinstance(target_rows, list) or not target_rows:
-        return {"error": "campaign not found in the campaigns table (not synced yet)"}
-    target = target_rows[0]
+        return {"error": f"No campaign matched \"{str(campaign_id or '').strip()}\". "
+                         "Type part of the campaign's name (e.g. \"influencer\") "
+                         "or paste its Smartlead id."}
+    if not target:
+        return {"error": "That campaign isn't in the synced campaigns table yet - "
+                         "it should appear after the next daily sync."}
+    tinfo = {"campaign_id": sid, "name": target.get("name"), "status": target.get("status")}
     target_tokens = _recontact_name_tokens(target.get("name") or "")
     if not target_tokens:
-        return []
+        return {"target": tinfo, "siblings": []}
     scope = (f"client_id=eq.{target['client_id']}" if target.get("client_id")
             else f"workspace=eq.{WORKSPACE_TAG}")
     all_camps = sb("GET", f"campaigns?{scope}&select=smartlead_campaign_id,name,status&limit=1000")
@@ -7008,7 +7064,7 @@ def api_recontact_scan(campaign_id: str) -> list | dict:
     scored.sort(key=lambda x: -x[3])
     scored = scored[:10]
     if not scored:
-        return []
+        return {"target": tinfo, "siblings": []}
 
     # finished/in_progress are EXACT counts (sb_count -> PostgREST's count
     # header, no row transfer, cheap regardless of table size - a bounded row
@@ -7045,18 +7101,17 @@ def api_recontact_scan(campaign_id: str) -> list | dict:
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=min(5, len(scored))) as ex:
         out = list(ex.map(_candidate_stats, scored))
-    return out
+    return {"target": tinfo, "siblings": out}
 
 
-def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> list:
+def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> tuple[list, int]:
     """Every person contacted in ANY of `campaign_ids`, each with one verdict:
     suppressed > active_elsewhere > in_progress > replied > eligible - checked
-    in that order so every person lands in exactly one bucket."""
+    in that order so every person lands in exactly one bucket. Returns
+    (verdicts, contact_rows_fetched) - the row count powers cap disclosure."""
     ids_csv = ",".join(campaign_ids)
-    rows = sb("GET", f"contact_history?smartlead_campaign_id=in.({ids_csv})"
-                     "&select=email,company_domain,smartlead_campaign_id,status",
-             headers={"Range-Unit": "items", "Range": f"0-{_RECONTACT_CAP - 1}"})
-    rows = rows if isinstance(rows, list) else []
+    rows = _sb_paged(f"contact_history?smartlead_campaign_id=in.({ids_csv})"
+                     "&select=email,company_domain,smartlead_campaign_id,status")
     by_email: dict = {}
     for r in rows:
         em = (r.get("email") or "").strip().lower()
@@ -7064,7 +7119,7 @@ def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> list:
             by_email.setdefault(em, []).append(r)
     emails = list(by_email.keys())
     if not emails:
-        return []
+        return [], len(rows)
 
     suppressed_emails = {(r.get("email") or "").strip().lower()
                          for r in _batched_in_matches("suppressions", "email", emails, "email")}
@@ -7115,16 +7170,17 @@ def _recontact_verdicts(campaign_ids: list, include_repliers: bool) -> list:
         else:
             verdict, other = "eligible", None
         out.append({"email": em, "verdict": verdict, "other_campaign": other})
-    return out
+    return out, len(rows)
 
 
 def api_recontact_buckets(p: dict) -> dict:
     raw_ids = [str(x).strip() for x in (p.get("campaign_ids") or []) if str(x).strip()]
     ids = [x for x in (_recontact_resolve_sl_id(x) for x in raw_ids) if x]
     if not ids:
-        return {"error": "campaign_ids is required"}
+        return {"error": ("None of the given campaign ids could be resolved to a "
+                          "Smartlead campaign." if raw_ids else "campaign_ids is required")}
     include_repliers = bool(p.get("include_repliers"))
-    verdicts = _recontact_verdicts(ids, include_repliers)
+    verdicts, rows_fetched = _recontact_verdicts(ids, include_repliers)
     counts = {"eligible": 0, "in_progress": 0, "suppressed": 0, "replied": 0}
     active_elsewhere_counts: dict = {}
     for v in verdicts:
@@ -7136,9 +7192,14 @@ def api_recontact_buckets(p: dict) -> dict:
     active_elsewhere = [{"campaign": k, "count": n}
                         for k, n in sorted(active_elsewhere_counts.items(), key=lambda x: -x[1])]
     total = len(verdicts)
+    # honest-cap disclosure: when the campaigns hold more contact rows than the
+    # bounded read, say so - a silent 20k sample must never read as "everyone"
+    true_total = sb_count(f"contact_history?smartlead_campaign_id=in.({','.join(ids)})") or rows_fetched
     return {"eligible": counts["eligible"], "in_progress": counts["in_progress"],
            "active_elsewhere": active_elsewhere, "suppressed": counts["suppressed"],
            "replied": counts["replied"], "total": total,
+           "rows_scanned": rows_fetched, "total_contact_rows": true_total,
+           "capped": true_total > rows_fetched,
            "sample": [{"email": v["email"], "verdict": v["verdict"]} for v in verdicts[:20]]}
 
 
@@ -7146,20 +7207,26 @@ def api_recontact_create(p: dict):
     raw_ids = [str(x).strip() for x in (p.get("campaign_ids") or []) if str(x).strip()]
     ids = [x for x in (_recontact_resolve_sl_id(x) for x in raw_ids) if x]
     if not ids:
-        return {"ok": False, "message": "campaign_ids is required"}, 400
+        return {"ok": False, "message": ("None of the given campaign ids could be resolved "
+                                         "to a Smartlead campaign." if raw_ids
+                                         else "campaign_ids is required")}, 400
     include_repliers = bool(p.get("include_repliers"))
     name = (p.get("name") or "").strip() or f"Recontact - {len(ids)} campaign(s)"
-    verdicts = _recontact_verdicts(ids, include_repliers)
+    verdicts, _rows_fetched = _recontact_verdicts(ids, include_repliers)
     eligible = [v["email"] for v in verdicts if v["verdict"] == "eligible"]
     if not eligible:
         return {"ok": False, "message": "No eligible people to recontact with these settings."}, 400
-    import uuid
-    new_id = f"cdraft-{uuid.uuid4().hex[:8]}"
-    r = save_campaign_draft({"id": new_id, "name": name,
+    # save_campaign_draft mints its own cdraft-<hex> id for non-mirror rows -
+    # use the id it RETURNS everywhere below. (Passing our own id in and
+    # returning it to the caller shipped a phantom: the API said one id, the
+    # draft saved under another, and the source pointed at the phantom.
+    # Found in the 2026-07-15 test loop.)
+    r = save_campaign_draft({"name": name,
                              "recontact": {"source_campaign_ids": ids, "include_repliers": include_repliers,
                                             "eligible_count": len(eligible)}})
     if not r.get("ok"):
         return {"ok": False, "message": "Could not create the draft campaign."}, 502
+    new_id = r["id"]
     src = {"type": "recontact", "mechanism": "recontact", "name": f"Recontact list ({len(eligible)})",
           "campaign_id": new_id, "active": False,
           "prospects": [{"name": None, "email": em, "company": None,
