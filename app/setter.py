@@ -2761,6 +2761,199 @@ def run_reply_sync() -> dict:
         return summary
 
 
+# ── positive-thread re-reply sweep ───────────────────────────────────────────
+# run_reply_sync's watermark window CANNOT see a new reply landing on an old
+# thread: Smartlead's inbox-replies replyTimeBetween filter (and its
+# REPLY_TIME_DESC sort) index threads by their FIRST reply time, while each
+# row's last_reply_time field reports the LATEST reply. Proven live
+# 2026-07-16: zayncosmetics@gmail.com re-replied 2026-07-15T22:38:43Z on a
+# thread first-replied 2026-07-01 — the row only surfaces in a July-1st
+# window, so the 3-min backstop never saw the new reply and no 🚨 Slack
+# fired (the EMAIL_REPLY webhook doesn't fire for these either — the lead
+# was already Completed). This sweep is the guarantee net for POSITIVE
+# leads (the replies a human must never miss): every ~15 min it pulls EVERY
+# thread whose per-campaign lead category is positive
+# (filters.leadCategories.categoryIdsIn — a bounded set, ~1.5k threads /
+# ~75 pages) and feeds any unseen (email_lead_id + last_reply_time) to the
+# SAME categoriser hook. The categoriser's routeB then posts the 🚨
+# re-reply Slack AND archives the reply (module 61, key
+# "{sl_email_lead_id}-{reply_message.time}"), so webhook-fed and sweep-fed
+# re-replies dedupe exactly like first replies do.
+# FIRST run SEEDS: every current mid is marked seen WITHOUT posting —
+# otherwise ~1.5k historic threads would flood Slack in one tick.
+POSITIVE_CATEGORY_IDS = [1, 2, 5, 78386, 83039, 83731, 86207, 125938]
+RESWEEP_INTERVAL_MIN = 15      # effective cadence, self-throttled off the 3-min tick
+RESWEEP_THROTTLE_MIN = 13      # >13 min since last sweep => due (aligns to 3-min grid)
+RESWEEP_POST_CAP = 25          # tripwire: never fire more than this many alerts per sweep
+RESWEEP_PAGE_CEILING = 200     # 4k threads; hitting it reports FAILED, never silent
+_RESWEEP_STATE_ID = 2          # reply_sync_state row (id=1 is run_reply_sync's watermark)
+
+
+def _resweep_last_run():
+    """Timestamp of the last completed sweep, or None if never seeded (the
+    id=2 state row is only written after a sweep completes)."""
+    if not _SB:
+        return None
+    rows = _SB("GET", f"reply_sync_state?id=eq.{_RESWEEP_STATE_ID}&select=watermark")
+    if isinstance(rows, list) and rows and rows[0].get("watermark"):
+        return _parse_iso(rows[0]["watermark"])
+    return None
+
+
+def _fetch_positive_threads(page_ceiling: int):
+    """Every master-inbox thread whose per-campaign lead category is positive.
+    No time window — the category filter alone bounds the set, and each row's
+    last_reply_time is always the thread's true latest reply. Returns
+    (rows, overflow)."""
+    out, offset, page_size = [], 0, 20
+    overflow = False
+    while True:
+        resp = _sl_post("/master-inbox/inbox-replies", {
+            "limit": page_size, "offset": offset, "sortBy": "REPLY_TIME_DESC",
+            "filters": {"leadCategories": {"categoryIdsIn": POSITIVE_CATEGORY_IDS}},
+        })
+        data = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data, list) or not data:
+            break
+        out.extend(data)
+        if len(data) < page_size:
+            break
+        offset += page_size
+        if offset >= page_ceiling * page_size:
+            overflow = True
+            break
+    return out, overflow
+
+
+def _resweep_seen_set(mids):
+    """Bulk membership check against reply_sync_seen — chunked in.() GETs (100
+    mids/chunk) instead of one GET per mid (a full sweep is ~1.5k mids)."""
+    seen = set()
+    if not _SB:
+        return seen
+    mids = [m for m in mids if m]
+    for i in range(0, len(mids), 100):
+        chunk = mids[i:i + 100]
+        inlist = ",".join(quote(m, safe="") for m in chunk)
+        rows = _SB("GET", f"reply_sync_seen?message_id=in.({inlist})&select=message_id")
+        if isinstance(rows, list):
+            seen.update(r.get("message_id") for r in rows if isinstance(r, dict))
+    return seen
+
+
+def _resweep_mark_seen_bulk(mids):
+    """Bulk-insert seen mids (idempotent upsert), chunked to keep bodies small."""
+    if not _SB:
+        return
+    mids = [m for m in mids if m]
+    for i in range(0, len(mids), 100):
+        _SB("POST", "reply_sync_seen",
+            [{"message_id": m} for m in mids[i:i + 100]],
+            prefer="resolution=merge-duplicates")
+
+
+def run_positive_resweep(force: bool = False) -> dict:
+    """Guarantee net: every reply on a positively-categorised thread reaches
+    the categoriser hook (=> routeB 🚨 Slack + archive), even when both the
+    EMAIL_REPLY webhook and the watermark backstop missed it. Never raises.
+    force=True skips the cadence throttle (tests / manual runs)."""
+    summary = {"ok": True, "skipped": False, "seeded": False, "threads": 0,
+               "unseen": 0, "posted": 0, "marked_archived": 0, "would_post": 0,
+               "would_post_sample": [], "errors": 0, "capped": False,
+               "overflow": False}
+    if not _SB or not _sl_key():
+        summary["ok"] = False
+        summary["errors"] += 1
+        summary["error"] = "Supabase or Smartlead not configured"
+        return summary
+    try:
+        now = _dt.datetime.now(_dt.timezone.utc)
+        last = _resweep_last_run()
+        seed_mode = last is None
+        if not force and last is not None and \
+                (now - last) < _dt.timedelta(minutes=RESWEEP_THROTTLE_MIN):
+            summary["skipped"] = True
+            return summary
+        summary["seeded"] = seed_mode
+
+        rows, overflow = _fetch_positive_threads(RESWEEP_PAGE_CEILING)
+        summary["threads"] = len(rows)
+        summary["overflow"] = overflow
+        if overflow:
+            summary["ok"] = False       # partial coverage must be visible, never silent
+
+        mids_by_row = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            lead_id = r.get("email_lead_id")
+            rtime = r.get("last_reply_time")
+            cid = r.get("email_campaign_id")
+            email = (r.get("lead_email") or "").strip()
+            if not lead_id or not rtime or not cid or not email:
+                continue
+            mids_by_row[f"{lead_id}-{rtime}"] = r
+
+        seen = _resweep_seen_set(list(mids_by_row))
+        unseen = {m: r for m, r in mids_by_row.items() if m not in seen}
+        summary["unseen"] = len(unseen)
+
+        if seed_mode:
+            # Seed: never post. Record what WOULD have fired (unseen + not in
+            # archive) so the miss this sweep exists to catch is provably
+            # visible in the seed run's log, then mark everything seen.
+            for mid in unseen:
+                if not _reply_in_archive(mid):
+                    summary["would_post"] += 1
+                    if len(summary["would_post_sample"]) < 10:
+                        summary["would_post_sample"].append(mid)
+            _resweep_mark_seen_bulk(list(unseen))
+        else:
+            to_mark = []
+            for mid, r in unseen.items():
+                if _reply_in_archive(mid):
+                    # webhook fast-path already alerted + archived this one
+                    to_mark.append(mid)
+                    summary["marked_archived"] += 1
+                    continue
+                if summary["posted"] >= RESWEEP_POST_CAP:
+                    summary["capped"] = True
+                    summary["ok"] = False   # leftovers retry next sweep, loudly
+                    continue
+                ok, data, _err = hydrate_lead(r.get("email_campaign_id"),
+                                              (r.get("lead_email") or "").strip(), None)
+                text = clean_body(data.get("reply_email_body") or "") if ok else ""
+                if not text:
+                    # thread not hydrated yet — leave unseen, retry next sweep
+                    summary["errors"] += 1
+                    continue
+                payload = {
+                    "event_type": "EMAIL_REPLY",
+                    "sl_lead_email": (r.get("lead_email") or "").strip(),
+                    "sl_email_lead_id": r.get("email_lead_id"),
+                    "campaign_id": r.get("email_campaign_id"),
+                    "reply_message": {"text": text, "time": r.get("last_reply_time")},
+                }
+                try:
+                    _HTTP("POST", CATEGORISER_HOOK, {}, payload)
+                except ValueError:
+                    pass  # Make answers a non-JSON 2xx ("Accepted") = success
+                to_mark.append(mid)
+                summary["posted"] += 1
+            _resweep_mark_seen_bulk(to_mark)
+
+        _SB("POST", "reply_sync_state",
+            {"id": _RESWEEP_STATE_ID, "watermark": now.isoformat(),
+             "updated_at": now.isoformat(), "last_run": summary},
+            prefer="resolution=merge-duplicates")
+        return summary
+    except Exception as e:  # noqa: BLE001 — record, never crash the cron thread
+        summary["ok"] = False
+        summary["errors"] += 1
+        summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return summary
+
+
 def run_poll() -> dict:
     """Sweeps recent core-four `replies` rows across EVERY campaign in the
     workspace (owner ruling 2026-07-14: a positive must reach the queue even

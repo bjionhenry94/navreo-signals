@@ -10325,6 +10325,17 @@ def _reply_sync_bg():
            {"actor": "cron", "endpoint": "/api/cron/reply-sync",
             "action": "reply_sync_done" if res.get("ok") else "reply_sync_failed",
             "entity": "replies", "payload": res})
+        # Positive-thread re-reply sweep rides the same tick, self-throttled to
+        # ~15 min inside run_positive_resweep (the watermark backstop above is
+        # blind to NEW replies on OLD threads — Smartlead's replyTimeBetween
+        # indexes threads by FIRST reply time; see setter.py for the proof).
+        res2 = setter.run_positive_resweep()
+        if not res2.get("skipped"):
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+                "action": ("positive_resweep_done" if res2.get("ok")
+                           else "positive_resweep_failed"),
+                "entity": "replies", "payload": res2})
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[reply-sync] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",
