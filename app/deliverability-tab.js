@@ -3448,8 +3448,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const bd = bundleRestDue();
     if (bd && bd[dom] != null) return bd[dom];
     if (bd) return null; // ledger present but domain not rested — never trust blob re-stamps
-    const D = fullDerive();
-    return D.restingDue[dom] || null;
+    // Read the raw resting ledger straight from state. Do NOT call fullDerive()
+    // here: derive() (line ~935, flaggedActionable) calls restDueFor(), and
+    // fullDerive()->derive() would re-enter it -> infinite recursion -> stack
+    // overflow -> blank page, whenever bundleRestDue() is absent. derive()
+    // returns restingDue verbatim from S.A.domainHealth.restingDue anyway, so
+    // this is behaviour-identical without the cycle.
+    return (S.A.domainHealth.restingDue || {})[dom] || null;
   }
 
   // Domain-health rows for the selected window preset. The audit blob ships
