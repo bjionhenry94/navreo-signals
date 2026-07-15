@@ -927,7 +927,12 @@
     // rested-domain list — heal by union so rested domains can't disappear.
     Object.keys(A.domainHealth.restingDue || {}).forEach((d) => { if (!(resting[d] > 0)) resting[d] = 1; });
     const flaggedTotal = dhRows.filter((d) => d.flag === "warmup").length;
-    const flaggedActionable = dhRows.filter((d) => d.flag === "warmup" && !(resting[d.domain] > 0)).length;
+    // "Actionable" excludes domains already resting/warming per the LEDGER
+    // (restDueFor) too, not just the audit blob's resting map — the blob is
+    // up to 3h stale, so a domain rested minutes ago kept showing a "Warm up
+    // domain" button in Below-reply-floor (owner-hit 2026-07-15). A domain
+    // can never be "needs warm-up" and "in warm-up" at the same time.
+    const flaggedActionable = dhRows.filter((d) => d.flag === "warmup" && !(resting[d.domain] > 0) && !restDueFor(d.domain)).length;
     const restingCount = Object.keys(resting).length;
     const recovered = dhRows.filter((d) => (resting[d.domain] || 0) > 0 && d.sent >= minSent && d.reply_rate >= cutoff).map((d) => d.domain);
     const sized = dhRows.filter((d) => d.sent >= minSent).length;
@@ -3469,7 +3474,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const { minSent, cutoff } = dhCutoffMin();
     return src.rows
       .map((d) => Object.assign({}, d, { flag: dhFlag(d, minSent, cutoff) }))
-      .filter((d) => d.flag === "warmup" && !((D.resting[d.domain] || 0) > 0))
+      // Ledger check mirrors flaggedActionable: a domain with a live due-back
+      // date is already resting/warming — never offer "Warm up domain" on it
+      // just because the 3h-stale audit blob hasn't caught up (2026-07-15).
+      .filter((d) => d.flag === "warmup" && !((D.resting[d.domain] || 0) > 0) && !restDueFor(d.domain))
       .sort((a, b) => a.reply_rate - b.reply_rate || b.sent - a.sent);
   }
 
