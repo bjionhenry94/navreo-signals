@@ -1325,8 +1325,14 @@ function convoHtml(row) {
     if (mHead80 && mHead80 === replyHead80) return false;
     return true;
   });
-  const olderHtml = older.map((m) => convoMsgHtml(m.type === "SENT" ? "You" : "Them", m.time, m.body, false)).join("");
-  const currentHtml = convoMsgHtml("Their reply", row.replied_at, row.reply_body, true);
+  // TRUE chronological order (owner report 2026-07-15): with live thread
+  // refresh, messages can post-date the current reply (a manual Smartlead
+  // answer), so "current reply pinned last" would tell the story out of
+  // order. Sort everything by time; the current reply keeps its emphasis
+  // wherever it falls.
+  const items = older.map((m) => ({ time: m.time, html: convoMsgHtml(m.type === "SENT" ? "You" : "Them", m.time, m.body, false) }));
+  items.push({ time: row.replied_at, html: convoMsgHtml("Their reply", row.replied_at, row.reply_body, true) });
+  items.sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
   // Fade hint only when there's earlier content to scroll up to - test rows
   // (no thread) skip it entirely, matching "container shrinks to fit".
   const fadeHtml = older.length ? `<div class="convo-fade"></div>` : "";
@@ -1335,8 +1341,7 @@ function convoHtml(row) {
       <div class="msg-card-lab">Conversation</div>
       <div class="convo" id="convo-${esc(row.id)}">
         ${fadeHtml}
-        ${olderHtml}
-        ${currentHtml}
+        ${items.map((i) => i.html).join("")}
       </div>
     </div>`;
 }
