@@ -431,8 +431,8 @@ let LAST_CHECKED = null;  // ISO time of the last COMPLETED reply-check (server-
 function renderLastChecked() {
   const el = document.getElementById("lastCheckedNote");
   if (!el) return;
-  el.textContent = LAST_CHECKED ? `Last checked ${pulledAgo(LAST_CHECKED)}` : "";
-  el.title = LAST_CHECKED || "";
+  // pulledAgo returns markup (a titled <span>) - render it, don't quote it
+  el.innerHTML = LAST_CHECKED ? `Last checked ${pulledAgo(LAST_CHECKED)}` : "";
 }
 /* One viewport, one scroll per pane: pin the shell's bottom edge to the
    viewport with the same gutter as the page's side padding. Below 1200px the
