@@ -12155,7 +12155,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._post_body = b""
             self._json({"error": "payload too large"}, 413)
             return False
-        self._post_body = self._post_body
+        self._post_body = self.rfile.read(length)
         return True
 
     def _gate(self, path) -> bool:
