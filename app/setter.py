@@ -1964,14 +1964,23 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
         snapshot = {**agent, "mode": "draft_only"}
         csv = ",".join(str(c) for c in cids)
 
-        # Step 1: adopt stranded rows - agentless queue rows already sitting
-        # in needs_review for these campaigns (queued before any agent was
-        # assigned) get classified/drafted now that there is a brain for
-        # them. Status stays needs_review either way - this only fills in
-        # the draft, it never auto-decides or auto-sends.
+        # Step 1: adopt stranded rows - queue rows already sitting in
+        # needs_review for these campaigns without a draft get classified/
+        # drafted now that there is a brain for them. Matched on
+        # draft_body=is.null rather than agent_id=is.null because _save_agent
+        # itself already claims agentless rows synchronously during the save
+        # (agent_id + "hit Regenerate" reason, 2026-07-14) - by the time this
+        # background thread runs, those rows are no longer agentless, and the
+        # owner ruling 2026-07-15 upgrades adoption to retro-assign + DRAFT.
+        # The or= keeps it scoped to rows that are ours to draft: still
+        # agentless, or already claimed by this same agent. Status stays
+        # needs_review either way - this only fills in the draft, it never
+        # auto-decides or auto-sends.
         try:
+            aid = quote(str(agent.get("id") or ""), safe="")
             stranded = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&smartlead_campaign_id=in.({csv})"
-                                  f"&agent_id=is.null&status=eq.needs_review&select=*")
+                                  f"&status=eq.needs_review&draft_body=is.null"
+                                  f"&or=(agent_id.is.null,agent_id.eq.{aid})&select=*")
         except Exception:  # noqa: BLE001
             stranded = None
         if isinstance(stranded, list):
