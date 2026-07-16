@@ -11984,6 +11984,66 @@ def _offer_scrub(s: str) -> str:
     return re.sub(r"\s*[—–]\s*", " - ", str(s or "")).replace("￡", "£").strip()
 
 
+def _offer_sense_sweep(key: str, brief: dict, audience: str, offers: list):
+    """Second gpt-5-mini pass: re-read every offer as a stranger and FIX or
+    DROP copy that doesn't make sense - wrong-party promises (telling a law
+    firm it will win cleaning contracts), out-of-lane promises, contradictions
+    between name and body, garbled sentences. Best-effort: any failure returns
+    the offers untouched with a note, never an error."""
+    try:
+        payload = [{f: o[f] for f in OFFER_FIELDS} for o in offers]
+        aud = audience or brief.get("who_they_sell_to") or ""
+        prompt = f"""You are a strict SENSE-CHECKER for cold-email offers. A vendor is about to send these offers to buyers. Read each one as a stranger seeing it cold.
+
+THE SENDER (the business making the offers): {brief.get('what_they_do','')}
+THE BUYER (who each offer is addressed to): {aud}
+
+For EACH offer, check four things:
+1. RIGHT PARTY: every sentence must make sense addressed TO that buyer. The buyer BUYS the sender's service; the buyer does not want the sender's own goals. Telling a law firm it is "missing new cleaning contracts" is nonsense - the law firm hires cleaners, it does not win cleaning work.
+2. SENDER'S LANE: the promise must be something this sender could actually do and measure. A cleaner delivers cleans, not tenants; a freight company delivers shipments, not the buyer's sales.
+3. CONSISTENT: the name, numbers and body must agree with each other (a "30 leads" name with a "3 leads" body is broken).
+4. PLAIN SENSE: no contradictions, no half-finished logic, every sentence something a normal person understands on first read.
+
+OFFERS (JSON):
+{json.dumps(payload)}
+
+Reply with ONLY a JSON array of the same length and order, one verdict per offer, no fences:
+[{{"verdict": "ok"}} or {{"verdict": "fixed", "offer": {{...the corrected offer, ALL of the same fields...}}}} or {{"verdict": "drop"}}]
+Fixing rules: change as little as possible, NEVER change the mechanism, keep every field one short sentence in plain English, no em-dashes. Use "drop" only when an offer is nonsense at its core and cannot be fixed by rewording."""
+        r = http_json("POST", "https://api.openai.com/v1/chat/completions",
+                      {"Authorization": f"Bearer {key}"},
+                      {"model": "gpt-5-mini", "reasoning_effort": "low",
+                       "messages": [{"role": "user", "content": prompt}]},
+                      timeout=45)
+        if r.get("error"):
+            raise RuntimeError(str(r["error"].get("message", r["error"]))[:120])
+        text = (r["choices"][0]["message"]["content"] or "").strip()
+        m = re.search(r"\[.*\]", text, re.S)
+        verdicts = json.loads(m.group(0) if m else text)
+        if not isinstance(verdicts, list) or len(verdicts) != len(offers):
+            raise ValueError(f"verdict count {len(verdicts) if isinstance(verdicts, list) else '?'} != {len(offers)}")
+        out, fixed, dropped = [], 0, 0
+        for o, v in zip(offers, verdicts):
+            verdict = str((v or {}).get("verdict") or "ok")
+            if verdict == "drop":
+                dropped += 1
+                continue
+            if verdict == "fixed":
+                f = (v or {}).get("offer") or {}
+                if f.get("mechanism") == o["mechanism"] and \
+                        all(str(f.get(k) or "").strip() for k in OFFER_FIELDS):
+                    out.append({**{k: _offer_scrub(f[k]) for k in OFFER_FIELDS},
+                                "appeal": o["appeal"]})
+                    fixed += 1
+                    continue
+            out.append(o)
+        if len(out) < max(3, len(offers) // 2):
+            return offers, "ignored (sweep dropped too many)"
+        return out, f"fixed {fixed}, dropped {dropped}"
+    except Exception as e:  # noqa: BLE001 - the sweep must never sink a generation
+        return offers, f"skipped ({type(e).__name__}: {str(e)[:80]})"
+
+
 def _offer_llm(site: dict, audience: str = "", seed: dict | None = None):
     """Run the gpt-5-mini generation for a fetched site. Returns (status, body).
     Blocking and slow (up to ~2 min) - callers run it either synchronously
@@ -11996,6 +12056,7 @@ def _offer_llm(site: dict, audience: str = "", seed: dict | None = None):
     key = KEYS.get("OPENAI_API_KEY")
     if not key:
         return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
+    started = time.time()
     audience = (audience or "").strip()[:300]
     if audience:
         audience_block = (f"WHO THEY SELL TO (given by the business owner - this is the buyer to aim EVERY "
@@ -12199,13 +12260,20 @@ Reply with ONLY a JSON object, no fences, no commentary:
     if offers is None:
         return 502, {"ok": False, "message":
                      "The offer generator hit a problem and couldn't finish. Please try again in a minute."}
+    # Sense sweep: a second cheap pass that fixes or drops copy that doesn't
+    # make sense. Only runs if there's comfortable room under the ~100s Render
+    # proxy timeout; otherwise the unswept offers ship (better than a 502).
+    if time.time() - started < 55:
+        offers, sweep_note = _offer_sense_sweep(key, brief, audience, offers)
+    else:
+        sweep_note = "skipped (time budget)"
     print(f"OFFER GEN ok: {site['domain']} -> {len(offers)} offers, "
-          f"{len(site.get('pages', []))} extra pages read"
+          f"{len(site.get('pages', []))} extra pages read | sense sweep: {sweep_note}"
           + (f" (audience: {audience})" if audience else "") + (" [more-like]" if seed else ""))
     return 200, {"ok": True, "domain": site["domain"], "site_name": site["title"],
                  "audience": audience, "brief": brief,
                  "pages_read": ["/"] + [p["path"] for p in site.get("pages", [])],
-                 "offers": offers}
+                 "sweep": sweep_note, "offers": offers}
 
 
 def offer_generate(p: dict, ip: str):
