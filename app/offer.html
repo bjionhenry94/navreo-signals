@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v2-chord-r4 -->
+<!-- offer-maker-v2-chord-r5 -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
@@ -59,6 +59,10 @@
   .badge.pay_after_result { background: #e9f6ec; color: #2e7d43; }
   .badge.pay_per_result { background: #fdf2e3; color: #a05c12; }
   .badge.guarantee_refund { background: #f5e9f7; color: #7d3a8f; }
+  .card .offerline { font-size: 16px; color: var(--ink); line-height: 1.45; margin-bottom: 8px; }
+  .card .fixline { font-size: 14px; color: var(--ink-2); margin-bottom: 12px; }
+  .card .fixline b { color: var(--ink-3); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; }
+  .card .emailfield { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
   .card .field { margin-bottom: 10px; font-size: 14.5px; color: var(--ink-2); }
   .card .field b { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--ink-3); margin-bottom: 2px; font-weight: 600; }
@@ -67,10 +71,10 @@
   .card .emailpending { font-size: 13.5px; color: var(--ink-3); background: var(--bg-sunken);
     border: 1px dashed var(--line-2); border-radius: 9px; padding: 12px 14px; }
   .card .emailnote { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
-  .card details.why { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; font-size: 14px; color: var(--ink-2); }
+  .card details.why { font-size: 14px; color: var(--ink-2); margin-bottom: 4px; }
   .card details.why summary { cursor: pointer; font-size: 12.5px; color: var(--ink-3); list-style: none; font-weight: 600; }
   .card details.why summary::-webkit-details-marker { display: none; }
-  .card details.why[open] summary { margin-bottom: 6px; }
+  .card details.why[open] summary { margin-bottom: 8px; }
   .card .morebtn { font: inherit; font-size: 13px; font-weight: 600; margin-top: 12px; padding: 8px 14px;
     border-radius: 9px; border: 1.5px solid var(--line-2); background: #fff; color: var(--ink); cursor: pointer; }
   .card .morebtn:hover { border-color: var(--orange); color: var(--orange); }
@@ -264,16 +268,18 @@ function whoHeader(){
 function cardHtml(o, i){
   return `
     <div class="head"><span class="badge ${esc(o.mechanism)}">${esc(MECH[o.mechanism]||o.mechanism)}</span><h3>${esc(o.name)}</h3></div>
-    <div class="field"><b>The problem it solves</b>${esc(o.problem)}</div>
-    <div class="field"><b>What you'd do, and why it's better</b>${esc(o.differentiator)}</div>
-    <div class="field"><b>The pricing angle</b>${esc(o.pricing)}</div>
-    <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
-    <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
-    <div class="field"><b>The cold email you'd send</b>
+    <p class="offerline">${esc(o.differentiator)}</p>
+    <p class="fixline"><b>Fixes:</b> ${esc(o.problem)}</p>
+    <details class="why"><summary>Full details</summary>
+      <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
+      <div class="field"><b>The pricing angle</b>${esc(o.pricing)}</div>
+      <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
+      <div class="field"><b>Why this works on cold email</b>${esc(o.why_cold_email)}</div>
+    </details>
+    <div class="field emailfield"><b>The cold email you'd send</b>
       <div class="emailwrap" id="emailwrap-${i}">${o._email
         ? `<div class="email">${esc(o._email)}</div><p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`
         : `<div class="emailpending">Writing the email...</div>`}</div></div>
-    <details class="why"><summary>Why this works on cold email</summary>${esc(o.why_cold_email)}</details>
     <button class="morebtn" id="more-${i}" onclick="moreLike(${i})">More like this</button>`;
 }
 

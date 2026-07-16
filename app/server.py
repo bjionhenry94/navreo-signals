@@ -12066,6 +12066,7 @@ DELIVERABILITY LAW (the sender must be able to keep every promise):
 - Recovery framing is BANNED everywhere: "stop losing", "recover lost", "recover missed", "win back", income "leaking". The benefit is always new money coming in, said that way.
 
 HARD RULES:
+- BREVITY LAW (a buyer must grasp the offer at a glance): every field is ONE short sentence. problem max 15 words. differentiator max 20 words. pricing max 12 words. risk_reversal max 14 words. stipulation max 14 words. problem + differentiator together must read in UNDER 40 WORDS. If a field needs a second sentence, the offer is too complicated - simplify the offer, don't add words.
 - NEW MONEY ONLY (the single most important rule): every offer must promise the RECIPIENT brand-new revenue - new customers, new sales, new orders, new markets, new booked work, new tenants, new contracts they currently lose. The main benefit to the recipient must be MORE MONEY COMING IN, never money saved or a loss avoided. BANNED offer types, no matter how the business is described: preventing downtime, avoiding losses, cutting or saving costs, staying compliant, protecting or keeping existing revenue, reducing risk on things they already do, optimising/auditing/refreshing/speeding up/tidying up something they already run. Recovering money the recipient is already owed (tax refunds, duty drawbacks, rebates, overcharges, chargebacks) is NOT new money - it is found money, and it is BANNED as an offer. If this business sells repairs, maintenance, logistics, cleaning, compliance, efficiency or cost-saving, you MUST recast every offer as a NEW-revenue win for the recipient. Example: a handyman must NOT offer "emergency repairs to prevent downtime" (that is avoiding a loss); instead offer "get your empty units rented faster by making them move-in ready in 48 hours" (that is NEW rental income). A logistics firm must NOT offer "cut your shipping costs" (saving); instead offer "get your product onto shelves in three new states" (NEW orders).
 - FINAL SELF-CHECK before you answer: re-read every offer and ask TWO questions. One: "does the recipient make NEW money from this, or does it only save money / avoid a loss / keep what they have?" If it is not clearly NEW money coming in, DELETE that offer and replace it. Two: "does this offer contain exactly ONE mechanism, or has a second one crept in anywhere?" If any part of the offer mentions a second mechanism, strip it out or replace the offer. Every offer in your final answer must pass both tests.
 - WHO THE EMAIL GOES TO: cold email is business-to-business. If this business sells to consumers, aim every offer at business buyers instead (retailers who could stock the product, distributors, corporate accounts, partners), never at individual consumers.
@@ -12113,6 +12114,11 @@ Reply with ONLY a JSON object, no fences, no commentary:
                         raise ValueError(f"offer missing {f}")
                 if o["mechanism"] not in OFFER_MECHANISMS:
                     raise ValueError(f"bad mechanism {o['mechanism']!r}")
+                # Brevity law (with slack over the prompt's caps): the visible
+                # offer must be scannable, so a bloated one fails the parse and
+                # triggers the retry rather than reaching the page.
+                if len(str(o["problem"]).split()) + len(str(o["differentiator"]).split()) > 48:
+                    raise ValueError(f"offer {o.get('name','')!r} too wordy")
                 # Anti-stacking guard: a lead-magnet offer must never carry a
                 # paid price - that is a second mechanism sneaking in.
                 if o["mechanism"] == "lead_magnet" and re.search(
