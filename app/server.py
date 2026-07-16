@@ -12003,6 +12003,7 @@ For EACH offer, check four things:
 2. SENDER'S LANE: the promise must be something this sender could actually do and measure. A cleaner delivers cleans, not tenants; a freight company delivers shipments, not the buyer's sales.
 3. CONSISTENT: the name, numbers and body must agree with each other (a "30 leads" name with a "3 leads" body is broken).
 4. PLAIN SENSE: no contradictions, no half-finished logic, every sentence something a normal person understands on first read.
+5. ONE OFFER ONLY: the opener's closing ask must be a bare "can I send over the details?" style question. If it pitches a crafted artifact on top of the offer ("a one-page plan showing the cadence we would build", "an offer sheet showing the terms"), that is TWO offers in one - fix it to a plain three-word ask.
 
 OFFERS (JSON):
 {json.dumps(payload)}
@@ -12132,7 +12133,7 @@ HARD RULES:
 - NEW MONEY ONLY (the single most important rule): every offer must promise the RECIPIENT brand-new revenue - new customers, new sales, new orders, new markets, new booked work, new tenants, new contracts they currently lose. The main benefit to the recipient must be MORE MONEY COMING IN, never money saved or a loss avoided. BANNED offer types, no matter how the business is described: preventing downtime, avoiding losses, cutting or saving costs, staying compliant, protecting or keeping existing revenue, reducing risk on things they already do, optimising/auditing/refreshing/speeding up/tidying up something they already run. Recovering money the recipient is already owed (tax refunds, duty drawbacks, rebates, overcharges, chargebacks) is NOT new money - it is found money, and it is BANNED as an offer. If this business sells repairs, maintenance, logistics, cleaning, compliance, efficiency or cost-saving, you MUST recast every offer as a NEW-revenue win for the recipient. Example: a handyman must NOT offer "emergency repairs to prevent downtime" (that is avoiding a loss); instead offer "get your empty units rented faster by making them move-in ready in 48 hours" (that is NEW rental income). A logistics firm must NOT offer "cut your shipping costs" (saving); instead offer "get your product onto shelves in three new states" (NEW orders).
 - FINAL SELF-CHECK before you answer: re-read every offer and ask TWO questions. One: "does the recipient make NEW money from this, or does it only save money / avoid a loss / keep what they have?" If it is not clearly NEW money coming in, DELETE that offer and replace it. Two: "does this offer contain exactly ONE mechanism, or has a second one crept in anywhere?" If any part of the offer mentions a second mechanism, strip it out or replace the offer. Every offer in your final answer must pass both tests.
 - WHO THE EMAIL GOES TO: cold email is business-to-business. If this business sells to consumers, aim every offer at business buyers instead (retailers who could stock the product, distributors, corporate accounts, partners), never at individual consumers.
-- LOW-RISK CTA: the example opener must offer to SEND something small (a short Loom video, a free sample, a one-page breakdown, a worked example) - never "book a call" or "hop on a call".
+- LOW-RISK CTA: the example opener must offer to SEND something small, named in three plain words or fewer ("the details", "a short breakdown", "a short Loom") - never "book a call" or "hop on a call". NEVER describe what the artifact shows or contains: "a one-page plan showing the campaigns we would run" or "an offer sheet showing the terms" reads as a SECOND free offer stacked on the first. "Can I send over the details?" is the model. (lead_magnet offers are the exception - there the free thing IS the offer, name it properly.)
 - STIPULATION: each offer includes one fair condition that protects the seller (e.g. "leads must match an agreed target list", "guarantee starts after onboarding is complete", "capped at N per month").
 - PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned words and phrases: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. Say it the way a shop owner would: "your ideal customers", "a salesperson", "steady flow of new deals". A 12-year-old should understand every sentence. NEVER use an em-dash anywhere.
 - ENGLISH ONLY: every single word in every field is English. Numbers in names must match the numbers in the body of the offer. Never leave a placeholder like "X days" or "N leads" - always pick a real, sensible number.
@@ -12363,7 +12364,7 @@ HARD RULES FOR THIS TEMPLATE:
 - The promise clause sits INSIDE that sentence joined naturally with "and" - never a spliced clause like "..., we will refund the fee, would you like...".
 - Keep the "If we could ... ?" sentence between 45 and 70 words.
 - The promise woven in is ONLY this offer's mechanism. Do NOT add a free resource, sample or any second promise on top of it. Use the words guarantee or refund ONLY if this offer's mechanism is guarantee_refund.
-- The CTA offers to SEND something small (a short Loom, a one-page plan, a worked example). Never "book a call" or "hop on a call"."""
+- THE CTA IS TINY: ask permission to send something named in three plain words or fewer - "can I send over the details?", "want me to send a short breakdown?". NEVER describe what the artifact shows, contains or covers ("a one-page plan showing the cadence we would build", "an offer sheet showing pay per lead terms") - that reads as a second free offer stacked on the real one. The email contains exactly ONE thing of value: the offer itself. Never "book a call"."""
     prompt = f"""You are our house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below, using the template EXACTLY.
 
 {who}
@@ -12409,6 +12410,9 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
             # these despite the prompt; a retry usually clears them.
             if re.search(r"[():;]", re.sub(r"^Hi [^,]+,", "", email)):
                 raise ValueError("colon/semicolon/parenthesis in email")
+            if not lead_magnet and re.search(
+                    r"\b(?:showing|that shows|which shows|outlining|detailing)\b", email, re.I):
+                raise ValueError("CTA re-pitches the offer (second-offer stack)")
             if lead_magnet:
                 if re.search(r"no charge|no cost|for free|free of charge|obligation", email, re.I):
                     raise ValueError("cost language in lead magnet email")
