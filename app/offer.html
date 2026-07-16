@@ -4,69 +4,79 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v10-servicepitch -->
+<!-- offer-maker-v2-chord -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
-  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 36px; }
-  .brand .mark { width: 34px; height: 34px; border-radius: 9px; background: var(--ink);
-    color: var(--cream); font-family: var(--font-display); font-size: 18px;
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 20px 80px; }
+  .topbrand { display: flex; align-items: center; gap: 9px; padding: 18px 0 0; }
+  .topbrand .mark { width: 28px; height: 28px; border-radius: 8px; background: var(--ink);
+    color: var(--cream); font-family: var(--font-display); font-size: 15px;
     display: flex; align-items: center; justify-content: center; }
-  .brand span { font-family: var(--font-display); font-size: 17px; }
-  h1 { font-size: 34px; margin-bottom: 10px; }
-  .lede { font-size: 16px; color: var(--ink-2); max-width: 640px; margin-bottom: 6px; }
-  .teach { background: var(--cream-50); border: 1px solid var(--light-200); border-radius: var(--radius);
-    padding: 18px 20px; margin: 26px 0; }
-  .teach h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); margin-bottom: 10px; }
-  .teach ol { margin-left: 18px; font-size: 14.5px; color: var(--ink-2); display: grid; gap: 7px; }
-  .teach b { color: var(--ink); }
-  .inputrow { display: flex; gap: 10px; margin: 8px 0 6px; }
-  .inputrow input { flex: 1; font: inherit; font-size: 16px; padding: 13px 16px;
-    border: 1.5px solid var(--line-2); border-radius: var(--radius); outline: none; }
-  .inputrow input:focus { border-color: var(--orange); box-shadow: var(--focus); }
-  .audience { width: 100%; font: inherit; font-size: 16px; padding: 13px 16px; margin-bottom: 6px;
-    border: 1.5px solid var(--line-2); border-radius: var(--radius); outline: none; }
-  .audience:focus { border-color: var(--orange); box-shadow: var(--focus); }
-  .inputrow button { font: inherit; font-size: 15.5px; font-weight: 600; padding: 13px 22px;
-    background: var(--orange); color: #fff; border: 0; border-radius: var(--radius); cursor: pointer; }
-  .inputrow button:hover { background: var(--orange-600); }
-  .inputrow button:disabled { opacity: 0.55; cursor: default; }
-  .hint { font-size: 13px; color: var(--ink-3); }
-  .status { display: none; margin: 30px 0; padding: 20px; border: 1px solid var(--line);
-    border-radius: var(--radius); background: var(--bg-sunken); font-size: 15px; color: var(--ink-2); }
+  .topbrand span { font-family: var(--font-display); font-size: 15px; color: var(--ink-2); }
+  .hero { text-align: center; padding: 11vh 0 0; }
+  .hero.done { padding-top: 28px; }
+  h1 { font-size: 40px; margin-bottom: 10px; }
+  .hint { font-size: 15px; color: var(--ink-3); margin-bottom: 28px; }
+  .searchbox { max-width: 620px; margin: 0 auto; }
+  .searchbox input { width: 100%; font: inherit; font-size: 17px; padding: 15px 22px;
+    border: 1.5px solid var(--line-2); border-radius: 28px; outline: none; background: var(--card);
+    box-shadow: 0 1px 6px rgba(0,0,0,0.06); }
+  .searchbox input:focus { border-color: var(--orange); box-shadow: var(--focus); }
+  .searchbox input + input { margin-top: 10px; font-size: 15px; padding: 12px 22px; box-shadow: none; }
+  .searchbox button { font: inherit; font-size: 16px; font-weight: 600; padding: 13px 34px; margin-top: 16px;
+    background: var(--orange); color: #fff; border: 0; border-radius: 28px; cursor: pointer; }
+  .searchbox button:hover { background: var(--orange-600); }
+  .searchbox button:disabled { opacity: 0.55; cursor: default; }
+  details.how { max-width: 620px; margin: 26px auto 0; text-align: left; font-size: 14.5px; color: var(--ink-2); }
+  details.how summary { cursor: pointer; color: var(--ink-3); font-size: 14px; text-align: center; list-style: none; }
+  details.how summary::-webkit-details-marker { display: none; }
+  details.how[open] summary { margin-bottom: 10px; }
+  details.how ol { margin: 10px 0 0 18px; display: grid; gap: 7px; background: var(--cream-50);
+    border: 1px solid var(--light-200); border-radius: var(--radius); padding: 16px 18px 16px 34px; }
+  .status { display: none; margin: 30px auto; max-width: 620px; padding: 20px; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--bg-sunken); font-size: 15px; color: var(--ink-2); text-align: left; }
   .status .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 12px; }
   .status .bar i { display: block; height: 100%; width: 0%; background: var(--orange); transition: width 1s linear; }
-  .error { display: none; margin: 24px 0; padding: 16px 18px; border: 1px solid var(--red-line);
-    background: var(--red-bg); color: var(--red); border-radius: var(--radius); font-size: 15px; }
-  .results { display: none; }
-  .savebanner { margin: 26px 0 18px; padding: 12px 16px; border: 1px solid var(--amber-line);
-    background: var(--amber-bg); color: var(--amber); border-radius: var(--radius); font-size: 14px; }
-  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 26px; }
+  .error { display: none; margin: 24px auto; max-width: 620px; padding: 16px 18px; border: 1px solid var(--red-line);
+    background: var(--red-bg); color: var(--red); border-radius: var(--radius); font-size: 15px; text-align: left; }
+  .results { display: none; text-align: left; margin-top: 34px; }
+  .whoheader { font-size: 16px; color: var(--ink); background: var(--cream-50); border: 1px solid var(--light-200);
+    border-radius: var(--radius); padding: 14px 18px; margin-bottom: 14px; }
+  .whoheader b { font-weight: 600; }
+  .whoheader .sub { display: block; font-size: 13.5px; color: var(--ink-3); margin-top: 4px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 22px; }
   .actions button { font: inherit; font-size: 14.5px; font-weight: 600; padding: 10px 18px;
     border-radius: 10px; border: 1.5px solid var(--ink); background: var(--ink); color: #fff; cursor: pointer; }
   .actions button.ghost { background: #fff; color: var(--ink); }
   .actions button:hover { opacity: 0.88; }
-  .audience-note { font-size: 14.5px; color: var(--ink-2); background: var(--cream-50);
-    border: 1px solid var(--light-200); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 10px; }
-  .group { margin: 34px 0 10px; }
-  .group h2 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 4px; }
-  .group .gsub { font-size: 14px; color: var(--ink-3); margin-bottom: 14px; max-width: 620px; }
+  .actions .note { font-size: 13px; color: var(--ink-3); }
   .card { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 20px; margin-bottom: 14px; background: var(--card); }
-  .card h3 { font-size: 17px; margin-bottom: 12px; }
+  .card .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .card h3 { font-size: 17px; margin: 0; }
+  .badge { font-size: 11.5px; font-weight: 600; letter-spacing: 0.03em; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+  .badge.lead_magnet { background: #e8f1fb; color: #2b5f9e; }
+  .badge.pay_after_result { background: #e9f6ec; color: #2e7d43; }
+  .badge.pay_per_result { background: #fdf2e3; color: #a05c12; }
+  .badge.guarantee_refund { background: #f5e9f7; color: #7d3a8f; }
   .card .field { margin-bottom: 10px; font-size: 14.5px; color: var(--ink-2); }
   .card .field b { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--ink-3); margin-bottom: 2px; font-weight: 600; }
-  .card .opener { background: var(--cream-50); border: 1px dashed var(--light-200);
-    border-radius: 9px; padding: 10px 12px; font-style: italic; }
   .card .email { white-space: pre-wrap; background: var(--bg-sunken); border: 1px solid var(--line);
     border-radius: 9px; padding: 12px 14px; font-size: 14px; line-height: 1.55; color: var(--ink); }
   .card .emailpending { font-size: 13.5px; color: var(--ink-3); background: var(--bg-sunken);
     border: 1px dashed var(--line-2); border-radius: 9px; padding: 12px 14px; }
   .card .emailnote { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
-  .card .why { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; }
-  .proof { margin-top: 50px; border-top: 1px solid var(--line-2); padding-top: 30px; }
-  .proof h2 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 4px; }
+  .card details.why { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; font-size: 14px; color: var(--ink-2); }
+  .card details.why summary { cursor: pointer; font-size: 12.5px; color: var(--ink-3); list-style: none; font-weight: 600; }
+  .card details.why summary::-webkit-details-marker { display: none; }
+  .card details.why[open] summary { margin-bottom: 6px; }
+  .card .morebtn { font: inherit; font-size: 13px; font-weight: 600; margin-top: 12px; padding: 8px 14px;
+    border-radius: 9px; border: 1.5px solid var(--line-2); background: #fff; color: var(--ink); cursor: pointer; }
+  .card .morebtn:hover { border-color: var(--orange); color: var(--orange); }
+  .card .morebtn:disabled { opacity: 0.55; cursor: default; }
+  .proof { margin-top: 50px; border-top: 1px solid var(--line-2); padding-top: 30px; text-align: left; }
+  .proof h2 { font-family: var(--font-display); font-weight: 400; font-size: 21px; margin-bottom: 4px; }
   .proof .gsub { font-size: 14px; color: var(--ink-3); margin-bottom: 16px; max-width: 640px; }
   .quote { border-left: 3px solid var(--orange); padding: 8px 14px; margin-bottom: 14px; }
   .quote p { font-size: 15px; font-style: italic; color: var(--ink-2); }
@@ -75,37 +85,34 @@
     background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 14px;
     opacity: 0; pointer-events: none; transition: opacity 0.25s; }
   .toast.show { opacity: 1; }
-  @media (max-width: 560px) { .inputrow { flex-direction: column; } h1 { font-size: 27px; } }
+  @media (max-width: 560px) { h1 { font-size: 30px; } .hero { padding-top: 7vh; } }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="brand"><div class="mark">N</div><span>Navreo Offer Maker</span></div>
+  <div class="topbrand"><div class="mark">N</div><span>Navreo</span></div>
 
-  <h1>Turn your website into offers people say yes to</h1>
-  <p class="lede">Paste your website below. We'll read it and write 15 ready-to-use offer ideas
-  for winning new customers with cold email. You don't need to know anything about cold email.
-  Pick the ones you like, download them, and send them to us.</p>
-
-  <div class="teach">
-    <h3>What makes a good offer? Four things.</h3>
-    <ol>
-      <li><b>A real problem.</b> Something that costs your buyer money, time, or sleep. Not a nice-to-have.</li>
-      <li><b>What you'd do about it.</b> And why your way beats the usual way.</li>
-      <li><b>Pricing that favours the buyer.</b> Cheaper than the alternative, or tied to results.</li>
-      <li><b>A promise that removes their risk.</b> Pay after the work is done, pay per result, or get a full refund if we miss. Each promise comes with one fair condition so nobody gets burned.</li>
-    </ol>
+  <div class="hero" id="hero">
+    <h1>Offer Maker</h1>
+    <p class="hint">Paste your website. We read it and write cold-email offers you can download. Nothing is saved.</p>
+    <div class="searchbox">
+      <input id="url" type="text" placeholder="yourcompany.com" autocomplete="off"
+        onkeydown="if(event.key==='Enter')generate()">
+      <input id="audience" type="text" autocomplete="off"
+        placeholder="Who do you sell to? Optional, we can work it out"
+        onkeydown="if(event.key==='Enter')generate()">
+      <button id="go" onclick="generate()">Make my offers</button>
+    </div>
+    <details class="how">
+      <summary>What makes a good offer?</summary>
+      <ol>
+        <li><b>A real problem.</b> New business your buyer is missing out on.</li>
+        <li><b>What you'd do about it.</b> And why your way beats the usual way.</li>
+        <li><b>Pricing that favours the buyer.</b> Cheaper than the alternative, or tied to results.</li>
+        <li><b>One simple promise.</b> A free thing first, pay after the work, pay per result, or a refund if we miss. Always just one, never stacked.</li>
+      </ol>
+    </details>
   </div>
-
-  <div class="inputrow">
-    <input id="url" type="text" placeholder="yourcompany.com" autocomplete="off"
-      onkeydown="if(event.key==='Enter')document.getElementById('audience').focus()">
-    <button id="go" onclick="generate()">Make my offers</button>
-  </div>
-  <input id="audience" class="audience" type="text" autocomplete="off"
-    placeholder="Who do you sell to? For example: heads of sales at software companies"
-    onkeydown="if(event.key==='Enter')generate()">
-  <p class="hint">Your website address, plus the kind of buyer you want to reach. Leave the second box blank and we'll work the buyer out from your site. Nothing is saved, and nothing gets sent to anyone.</p>
 
   <div class="status" id="status">
     <span id="statustext">Reading your website...</span>
@@ -114,20 +121,18 @@
   <div class="error" id="error"></div>
 
   <div class="results" id="results">
-    <div class="savebanner"><b>Heads up:</b> nothing here is saved. Download your offers or copy
-    them before you close this page.</div>
+    <div class="whoheader" id="whoheader"></div>
     <div class="actions">
-      <button onclick="downloadCsv()">Download all offers (CSV)</button>
+      <button onclick="downloadCsv()">Download all (CSV)</button>
       <button class="ghost" onclick="copyAll()">Copy everything</button>
+      <span class="note">Nothing is saved. Download before you leave.</span>
     </div>
-    <div id="groups"></div>
+    <div id="cards"></div>
   </div>
 
   <div class="proof">
     <h2>Real offers that got replies</h2>
-    <p class="gsub">These lines are word-for-word from real cold emails we sent that got interested
-    replies. Names are swapped out for privacy. Notice how each one makes a promise, removes risk,
-    or offers something small and free.</p>
+    <p class="gsub">Word-for-word lines from real cold emails that got interested replies. Names swapped for privacy.</p>
     <div class="quote"><p>"If it fits, we can build or run it for you guaranteeing 30 qualified leads in 90 days or we refund you."</p><span>A promise with a full refund. 30+ interested replies.</span></div>
     <div class="quote"><p>"You only pay after we've built it, so zero upfront amount."</p><span>Pay after the work is done. 12 interested replies.</span></div>
     <div class="quote"><p>"If it lands, we can run it for you on a pay-per-lead basis, so you only pay for the leads we deliver."</p><span>Pay per result. Several booked calls came from this.</span></div>
@@ -138,10 +143,25 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","risk_reversal_type","stipulation","opener","why_cold_email"];
-// A simple starter email, used only as the fallback if the worked-email write
-// fails for an offer. Normally every card gets a full worked email written for
-// it automatically (see autoWriteEmails below).
+const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","mechanism","stipulation","opener","why_cold_email"];
+const MECH = {
+  lead_magnet:      "Free thing first",
+  pay_after_result: "Pay after the work",
+  pay_per_result:   "Pay per result",
+  guarantee_refund: "Refund if we miss"
+};
+let OFFERS = [];
+let DOMAIN = "";
+let AUDIENCE = "";
+let BRIEF = null;
+let PAGES = [];
+
+function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg;
+  t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
+
+// A simple starter email, used only as the export fallback if the worked-email
+// write fails for an offer.
 function starterEmail(o){
   return "Hi {{first_name}},\n\n"
     + "[Add one line about them here, like a recent post, a new hire, or a win.]\n\n"
@@ -149,8 +169,18 @@ function starterEmail(o){
     + "Best,\n[Your name]\n\n"
     + "P.S - [Add one real result you have delivered.]";
 }
-// The email used in exports: the worked one, or the starter if the write failed.
 function exportEmail(o){ return o._email || starterEmail(o); }
+
+// Read a response as JSON without ever letting r.json() throw a raw
+// "Unexpected token '<'" at a normal person: a gateway timeout returns an
+// HTML page, so parse the text ourselves and treat non-JSON as a plain error.
+const SLOW_MSG = "This is taking longer than usual. Please wait a moment and try again. If it keeps happening, email us your website address and we'll run it for you.";
+const GENERIC_MSG = "Something went wrong on our side. Please try again in a moment.";
+async function readJson(r){
+  const raw = await r.text();
+  try { return JSON.parse(raw); }
+  catch(_) { return {ok:false, message:(r.status>=502&&r.status<=504)?SLOW_MSG:GENERIC_MSG}; }
+}
 
 // Fill one card's email box with a fully-worked cold email from the server.
 async function genEmailInto(i){
@@ -159,44 +189,27 @@ async function genEmailInto(i){
     const r = await fetch("/api/offer/email", { method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({offer: OFFERS[i], audience: AUDIENCE, domain: DOMAIN}) });
-    let d; const raw = await r.text();
-    try { d = JSON.parse(raw); } catch(_) { d = {ok:false}; }
+    const d = await readJson(r);
     if(!r.ok || !d.ok || !d.email){ throw new Error(d.message || "fail"); }
     OFFERS[i]._email = d.email;
     if(wrap) wrap.innerHTML = `<div class="email">${esc(d.email)}</div>`
       + `<p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`;
   } catch(e) {
-    // Never leave a card stuck: fall back to the starter email.
     if(wrap) wrap.innerHTML = `<div class="email">${esc(starterEmail(OFFERS[i]))}</div>`
       + `<p class="emailnote">A starter to personalise. Refresh to try a fully-written version again.</p>`;
   }
 }
 
-// As soon as the offers render, write a full cold email into every card in the
-// background, a few at a time so the requests stay small and never time out.
+// Write a full cold email into every card that doesn't have one yet, a few at
+// a time so the requests stay small and never time out.
 async function autoWriteEmails(){
-  const CONCURRENCY = 4;
+  const todo = OFFERS.map((o,i)=>o._email?null:i).filter(i=>i!==null);
   let next = 0;
   async function worker(){
-    while(next < OFFERS.length){ const i = next++; await genEmailInto(i); }
+    while(next < todo.length){ const i = todo[next++]; await genEmailInto(i); }
   }
-  await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
+  await Promise.all(Array.from({length: 4}, () => worker()));
 }
-const GROUPS = [
-  ["pay_after_result", "Pay after the work is done",
-   "The buyer pays nothing upfront. The work gets delivered first, then they pay. Easiest yes there is."],
-  ["pay_per_result", "Pay for each result",
-   "No retainer. The buyer pays per lead, per sale, or per placement, so they only ever pay for what they actually get."],
-  ["guarantee_refund", "A promise with a full refund",
-   "A concrete promise with a number and a deadline. Miss it and the buyer gets every penny back."]
-];
-let OFFERS = [];
-let DOMAIN = "";
-let AUDIENCE = "";
-
-function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
-function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg;
-  t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
 
 async function generate(){
   const url = document.getElementById("url").value.trim();
@@ -209,26 +222,17 @@ async function generate(){
   go.disabled = true; st.style.display = "block";
   const bar = document.getElementById("barfill"); bar.style.width = "0%";
   const stext = document.getElementById("statustext");
-  const phases = ["Reading your website...", "Working out what you sell and who buys it...",
+  const phases = ["Reading your website...", "Reading your about, pricing and customer pages...",
+                  "Working out what you sell and who buys it...",
                   "Writing your offers... this takes about a minute", "Nearly there, checking every offer..."];
   let ph = 0; stext.textContent = phases[0];
   const tick = setInterval(()=>{ ph = Math.min(ph+1, phases.length-1);
     stext.textContent = phases[ph];
     bar.style.width = Math.min(92, parseFloat(bar.style.width||0)+8) + "%"; }, 9000);
   bar.style.width = "8%";
-  const SLOW_MSG = "This is taking longer than usual. Please wait a moment and try again. If it keeps happening, email us your website address and we'll run it for you.";
-  const GENERIC_MSG = "Something went wrong on our side. Please try again in a moment.";
-  // Read a response as JSON without ever letting r.json() throw a raw
-  // "Unexpected token '<'" at a normal person: a gateway timeout returns an
-  // HTML page, so parse the text ourselves and treat non-JSON as a plain error.
-  async function readJson(r){
-    const raw = await r.text();
-    try { return JSON.parse(raw); }
-    catch(_) { return {ok:false, message:(r.status>=502&&r.status<=504)?SLOW_MSG:GENERIC_MSG}; }
-  }
   try {
     // One synchronous request. The model runs at low reasoning effort so the
-    // whole generation finishes in ~30-50s, comfortably inside the Render proxy
+    // whole generation finishes in ~40-60s, comfortably inside the Render proxy
     // timeout. No job id, no polling, no server-side state that could go stale
     // if the load balancer routes a follow-up to a different instance.
     const r = await fetch("/api/offer/generate", { method: "POST",
@@ -236,6 +240,8 @@ async function generate(){
     const d = await readJson(r);
     if(!r.ok || !d.ok){ throw new Error(d.message || GENERIC_MSG); }
     OFFERS = d.offers; DOMAIN = d.domain; AUDIENCE = d.audience || "";
+    BRIEF = d.brief || null; PAGES = d.pages_read || [];
+    document.getElementById("hero").classList.add("done");
     render();
   } catch(e) {
     const friendly = (e && e.message && !/JSON|token|NetworkError|Failed to fetch|Load failed/i.test(e.message))
@@ -247,48 +253,73 @@ async function generate(){
   }
 }
 
+function whoHeader(){
+  const who = AUDIENCE || (BRIEF && BRIEF.who_they_sell_to) || "";
+  const pages = PAGES.length > 1 ? `We read ${PAGES.length} pages of ${esc(DOMAIN)}.` : `We read ${esc(DOMAIN)}.`;
+  let h = `${pages} These offers are aimed at <b>${esc(who)}</b>`;
+  if(BRIEF && BRIEF.what_they_do) h += `<span class="sub">${esc(BRIEF.what_they_do)}</span>`;
+  return h;
+}
+
+function cardHtml(o, i){
+  return `
+    <div class="head"><span class="badge ${esc(o.mechanism)}">${esc(MECH[o.mechanism]||o.mechanism)}</span><h3>${esc(o.name)}</h3></div>
+    <div class="field"><b>The problem it solves</b>${esc(o.problem)}</div>
+    <div class="field"><b>What you'd do, and why it's better</b>${esc(o.differentiator)}</div>
+    <div class="field"><b>The pricing angle</b>${esc(o.pricing)}</div>
+    <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
+    <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
+    <div class="field"><b>The cold email you'd send</b>
+      <div class="emailwrap" id="emailwrap-${i}">${o._email
+        ? `<div class="email">${esc(o._email)}</div><p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`
+        : `<div class="emailpending">Writing the email...</div>`}</div></div>
+    <details class="why"><summary>Why this works on cold email</summary>${esc(o.why_cold_email)}</details>
+    <button class="morebtn" id="more-${i}" onclick="moreLike(${i})">More like this</button>`;
+}
+
 function render(){
-  const wrap = document.getElementById("groups");
+  const wrap = document.getElementById("cards");
+  document.getElementById("whoheader").innerHTML = whoHeader();
   wrap.innerHTML = "";
-  if(AUDIENCE){
-    const h = document.createElement("p"); h.className = "audience-note";
-    h.innerHTML = `These offers are aimed at <b>${esc(AUDIENCE)}</b>. Each example first line is written to that buyer.`;
-    wrap.appendChild(h);
-  }
-  for(const [key, title, sub] of GROUPS){
-    const items = OFFERS.filter(o => o.risk_reversal_type === key);
-    if(!items.length) continue;
-    const g = document.createElement("div"); g.className = "group";
-    g.innerHTML = `<h2>${esc(title)}</h2><p class="gsub">${esc(sub)}</p>`;
-    for(const o of items){
-      const c = document.createElement("div"); c.className = "card";
-      c.innerHTML = `
-        <h3>${esc(o.name)}</h3>
-        <div class="field"><b>The problem it solves</b>${esc(o.problem)}</div>
-        <div class="field"><b>What you'd do, and why it's better</b>${esc(o.differentiator)}</div>
-        <div class="field"><b>The pricing angle</b>${esc(o.pricing)}</div>
-        <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
-        <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
-        <div class="field"><b>The cold email you'd send</b>
-          <div class="emailwrap" id="emailwrap-${OFFERS.indexOf(o)}">${o._email
-            ? `<div class="email">${esc(o._email)}</div><p class="emailnote">An example written for you. Swap in a real name and a real result before you send it.</p>`
-            : `<div class="emailpending">Writing the email...</div>`}</div></div>
-        <div class="field why"><b>Why this works on cold email</b>${esc(o.why_cold_email)}</div>`;
-      g.appendChild(c);
-    }
-    wrap.appendChild(g);
-  }
+  OFFERS.forEach((o, i) => {
+    const c = document.createElement("div"); c.className = "card"; c.id = "card-" + i;
+    c.innerHTML = cardHtml(o, i);
+    wrap.appendChild(c);
+  });
   document.getElementById("results").style.display = "block";
   document.getElementById("results").scrollIntoView({behavior:"smooth"});
-  autoWriteEmails();  // fill every card's full cold email in the background
+  autoWriteEmails();
+}
+
+// "More like this": ask the server for 5 fresh offers with this offer's
+// mechanism, in its spirit, and slot them in right after this card.
+async function moreLike(i){
+  const url = document.getElementById("url").value.trim();
+  const btn = document.getElementById("more-" + i);
+  const o = OFFERS[i];
+  btn.disabled = true; btn.textContent = "Making more like this...";
+  try {
+    const r = await fetch("/api/offer/generate", { method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({url, audience: AUDIENCE,
+        seed: {mechanism: o.mechanism, name: o.name, opener: o.opener}}) });
+    const d = await readJson(r);
+    if(!r.ok || !d.ok || !d.offers){ throw new Error(d.message || GENERIC_MSG); }
+    OFFERS.splice(i + 1, 0, ...d.offers);
+    render();
+    toast("Added " + d.offers.length + " more like \"" + o.name + "\"");
+  } catch(e) {
+    btn.disabled = false; btn.textContent = "More like this";
+    toast((e && e.message) ? e.message : GENERIC_MSG);
+  }
 }
 
 function csvCell(s){ s = String(s??""); return '"' + s.replace(/"/g,'""') + '"'; }
 function downloadCsv(){
   const header = ["Offer name","The problem","What you'd do and why it's better","Pricing angle",
-                  "The promise","Promise type","One fair condition","Example first line","Why this works on cold email","Full cold email"];
+                  "The promise","Mechanism","One fair condition","Example first line","Why this works on cold email","Full cold email"];
   const rows = [header.join(",")];
-  for(const o of OFFERS){ rows.push(FIELDS.map(f => csvCell(o[f])).concat(csvCell(exportEmail(o))).join(",")); }
+  for(const o of OFFERS){ rows.push(FIELDS.map(f => csvCell(f==="mechanism" ? (MECH[o[f]]||o[f]) : o[f])).concat(csvCell(exportEmail(o))).join(",")); }
   const blob = new Blob(["﻿" + rows.join("\r\n")], {type: "text/csv;charset=utf-8"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -298,7 +329,7 @@ function downloadCsv(){
 }
 
 function offerText(o, i){
-  return `OFFER ${i+1}: ${o.name}
+  return `OFFER ${i+1}: ${o.name} [${MECH[o.mechanism]||o.mechanism}]
 The problem: ${o.problem}
 What you'd do, and why it's better: ${o.differentiator}
 Pricing angle: ${o.pricing}

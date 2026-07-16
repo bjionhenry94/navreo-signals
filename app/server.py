@@ -11871,14 +11871,69 @@ OFFER_WINNING_EXAMPLES = """\
 12. "If we could help {{company}} book your sales team meetings with facility and property managers needing building services, and I showed you exactly how through a 2-minute video, would you be keen to see it?" (named buyer type + video CTA; 4 positive replies)"""
 
 OFFER_FIELDS = ("name", "problem", "differentiator", "pricing", "risk_reversal",
-                "risk_reversal_type", "stipulation", "opener", "why_cold_email")
-OFFER_RISK_TYPES = ("pay_after_result", "pay_per_result", "guarantee_refund")
+                "mechanism", "stipulation", "opener", "why_cold_email")
+# Exactly ONE mechanism per offer - a lead magnet OR one of the three risk
+# reversals. Never stacked (user ruling 2026-07-16: no guarantee inside a
+# lead-magnet offer).
+OFFER_MECHANISMS = ("lead_magnet", "pay_after_result", "pay_per_result", "guarantee_refund")
+
+# Subpages worth reading beyond the homepage (competitor auto-research pattern:
+# scrape about/product/pricing/customers, write a company brief, THEN generate).
+OFFER_EXTRA_PATHS = ("/about", "/about-us", "/product", "/products", "/pricing",
+                     "/customers", "/case-studies", "/services", "/work", "/clients")
+OFFER_PAGE_TIMEOUT_S = 8    # per extra page
+OFFER_RESEARCH_BUDGET_S = 20  # hard cap on ALL extra-page fetching combined
 
 
-def _offer_fetch_site(url: str):
-    """Fetch the homepage only and strip it to text. Raises ValueError with a
-    plain-English message on anything unreachable. Refuses private hosts (this
-    is a public endpoint — never let it probe our own network)."""
+def _offer_strip_html(raw: str) -> str:
+    body = re.sub(r"<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", raw, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", body)
+    import html as _html
+    return re.sub(r"\s+", " ", _html.unescape(text)).strip()
+
+
+def _offer_fetch_extra_pages(base: str, homepage_html: str):
+    """Read up to 5 subpages (about/product/pricing/customers/...) in parallel,
+    each with a short timeout, all inside a hard research budget so the single
+    synchronous request stays far under the Render proxy timeout. Best-effort:
+    a page that fails or misses the deadline is simply skipped."""
+    hrefs = set(re.findall(r'href=["\']([^"\'#?]+)', homepage_html, re.I))
+    candidates = []
+    for path in OFFER_EXTRA_PATHS:
+        linked = any(h.rstrip("/").lower().endswith(path) for h in hrefs)
+        if linked and path not in candidates:
+            candidates.append(path)
+    for path in ("/about", "/pricing"):  # worth one blind try even if not linked
+        if path not in candidates:
+            candidates.append(path)
+    candidates = candidates[:5]
+    results: dict = {}
+
+    def fetch(path: str):
+        try:
+            req = urllib.request.Request(base.rstrip("/") + path,
+                                         headers={"User-Agent": "Mozilla/5.0 (compatible; NavreoOfferMaker)"})
+            with urllib.request.urlopen(req, timeout=OFFER_PAGE_TIMEOUT_S, context=SSL_CTX) as resp:
+                text = _offer_strip_html(resp.read(300_000).decode("utf-8", "ignore"))
+            if len(text) > 150:
+                results[path] = text[:2_000]
+        except Exception:  # noqa: BLE001 — best-effort research, never fatal
+            pass
+
+    threads = [threading.Thread(target=fetch, args=(p,), daemon=True) for p in candidates]
+    deadline = time.time() + OFFER_RESEARCH_BUDGET_S
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(max(0.1, deadline - time.time()))
+    return [{"path": p, "text": results[p]} for p in candidates if p in results]
+
+
+def _offer_fetch_site(url: str, deep: bool = True):
+    """Fetch the homepage (and, when deep=True, a handful of subpages) and strip
+    to text. Raises ValueError with a plain-English message on anything
+    unreachable. Refuses private hosts (this is a public endpoint — never let
+    it probe our own network)."""
     url = (url or "").strip()
     if not url:
         raise ValueError("Please paste your website address first.")
@@ -11904,35 +11959,40 @@ def _offer_fetch_site(url: str):
     except Exception as e:  # noqa: BLE001
         raise ValueError(f"We couldn't open {domain} ({str(e)[:80]}). "
                          "Check the address works in your browser, then try again.")
-    body = re.sub(r"<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", raw, flags=re.I | re.S)
-    title = re.search(r"<title[^>]*>([^<]+)</title>", body, re.I)
-    desc = re.search(r'<meta[^>]+(?:name|property)=["\'](?:og:)?description["\'][^>]+content=["\']([^"\']+)', body, re.I)
-    text = re.sub(r"<[^>]+>", " ", body)
-    import html as _html
-    text = re.sub(r"\s+", " ", _html.unescape(text)).strip()
+    title = re.search(r"<title[^>]*>([^<]+)</title>", raw, re.I)
+    desc = re.search(r'<meta[^>]+(?:name|property)=["\'](?:og:)?description["\'][^>]+content=["\']([^"\']+)', raw, re.I)
+    text = _offer_strip_html(raw)
     if len(text) < 200:
         raise ValueError(f"We reached {domain} but couldn't read enough of the page to work with. "
                          "If your site is mostly images or loads with JavaScript, email us the address instead.")
+    base = url.split("//", 1)[0] + "//" + host
+    pages = _offer_fetch_extra_pages(base, raw) if deep else []
     return {"domain": domain,
             "title": (title.group(1).strip() if title else domain),
             "description": (desc.group(1).strip() if desc else ""),
             # 6k chars of homepage text is plenty to understand a business, and
             # keeping the prompt small keeps gpt-5-mini comfortably under the
             # Render proxy timeout (heavy sites were pushing ~90s and 502ing).
-            "text": text[:6_000]}
+            # Extra pages are capped at 2k chars each, max 5 pages.
+            "text": text[:6_000],
+            "pages": pages}
 
 
 def _offer_scrub(s: str) -> str:
-    """Backstop the style law: no em-dashes ever reach the page."""
-    return re.sub(r"\s*[—–]\s*", " - ", str(s or "")).strip()
+    """Backstop the style laws: no em-dashes, and normalise the fullwidth pound
+    sign gpt-5-mini sometimes emits."""
+    return re.sub(r"\s*[—–]\s*", " - ", str(s or "")).replace("￡", "£").strip()
 
 
-def _offer_llm(site: dict, audience: str = ""):
+def _offer_llm(site: dict, audience: str = "", seed: dict | None = None):
     """Run the gpt-5-mini generation for a fetched site. Returns (status, body).
     Blocking and slow (up to ~2 min) - callers run it either synchronously
     (offer_generate, for curl/tests) or in a background thread (offer_start).
     audience: optional plain-English description of who the business sells to,
-    typed by the visitor. When given, every offer and opener is aimed at it."""
+    typed by the visitor. When given, every offer and opener is aimed at it.
+    seed: optional {"mechanism","name","opener"} from a "More like this" click -
+    when given, generate exactly 5 fresh offers of that one mechanism, in the
+    same spirit as the seed offer."""
     key = KEYS.get("OPENAI_API_KEY")
     if not key:
         return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
@@ -11946,32 +12006,65 @@ def _offer_llm(site: dict, audience: str = ""):
     else:
         audience_block = ""
         who_line = "work out who buys it and aim the offers at that buyer."
+    extra_pages = "\n".join(f"PAGE {p['path']}: {p['text']}" for p in site.get("pages", []))
+    if seed:
+        count_line = (f"Generate EXACTLY 5 fresh offer ideas, every one using the mechanism "
+                      f"\"{seed.get('mechanism','')}\", in the same spirit as this offer the owner liked: "
+                      f"\"{str(seed.get('name',''))[:120]}\" (opener: \"{str(seed.get('opener',''))[:200]}\"). "
+                      "Do not repeat that offer; give 5 genuinely different takes on it.")
+        mix_line = "All 5 offers use the seed mechanism above."
+        n_expect = "5 objects"
+    else:
+        count_line = "Generate EXACTLY 15 distinct offer ideas this business could use in cold emails to win NEW customers."
+        mix_line = "Across the 15 offers, EVERY one of the four mechanisms must appear at least 3 times."
+        n_expect = "15 objects"
     prompt = f"""You are an expert at designing cold-email OFFERS for a B2B lead-generation agency.
 
-A business owner pasted their website. Here is what their homepage says:
+A business owner pasted their website. Here is what it says:
 WEBSITE: {site['domain']}
 TITLE: {site['title']}
 DESCRIPTION: {site['description']}
-PAGE TEXT (truncated): {site['text']}
+HOMEPAGE TEXT (truncated): {site['text']}
+{extra_pages}
 {audience_block}
-First, silently work out what this business sells, then {who_line} Then generate EXACTLY 15 distinct offer ideas this business could use in cold emails to win NEW customers.
+STEP 1 - THE COMPANY BRIEF. Before any offers, read every page above and write a short brief:
+- what_they_do: 1-2 plain sentences on what this business actually sells.
+- who_they_sell_to: one line naming the buyer ({who_line})
+- proof_signals: up to 3 short facts from the pages that build trust (named clients, results, years, awards). Empty list if none.
+- angles: up to 3 short outreach angles the pages suggest.
+The brief must come from the pages above, not from guessing.
+
+STEP 2 - THE OFFERS. {count_line}
+GROUNDING RULE: every offer must be rooted in something concrete from the pages above - a named service, a named client type, a stated result, a pricing fact. An offer that could apply to any business in any industry is wrong; rewrite it until it could only belong to THIS business.
+REAL SERVICES ONLY: every offer sells a service or product this business ACTUALLY provides according to the pages. NEVER invent a new line of business for them - a freight company does not "run outreach" or "deliver qualified leads", a cleaning company does not win tenders for its customers. The offers help them win new customers FOR WHAT THEY ALREADY SELL. Proof lines may only use results actually stated on the pages.
 
 THE OFFER FRAMEWORK (every offer must have all four):
 (a) PROBLEM: the specific NEW BUSINESS the recipient is MISSING OUT ON, and what that gap costs them. Phrase it as money they are NOT winning, e.g. "You are missing [new customers / new orders / new contracts / new tenants] because [reason], which costs you [amount] in sales you never make." Do NOT phrase the problem as a current operational pain, a risk of loss, downtime, wasted spend, or something breaking - if the problem is not about missed NEW revenue, the offer is wrong.
 (b) DIFFERENTIATOR: what this business would do about it AND an explicit comparison to the usual way (the words "instead of" or "unlike" or "most" should appear: e.g. "unlike agencies that charge a retainer", "instead of waiting weeks for quotes", "most suppliers make you...").
-(c) PRICING: a pricing angle that favours the buyer (fixed price, pay less than the alternative, price tied to results, free first step).
-(d) RISK REVERSAL: exactly one of three types, and across the 15 offers ALL THREE types must appear at least 3 times each:
+(c) PRICING: a pricing angle that favours the buyer (fixed price, pay less than the alternative, price tied to results, free first step). For a lead_magnet offer the pricing angle IS the free first step.
+(d) MECHANISM: exactly ONE per offer. {mix_line}
+   - lead_magnet: you make something small, useful and FREE and offer to SEND it (a one-page breakdown, a short Loom, a worked sample, a plan). No strings attached.
    - pay_after_result: buyer pays nothing until the work is delivered or the result shows up.
    - pay_per_result: buyer pays per unit of result (per lead, per sale, per placement), not a retainer.
-   - guarantee_refund: a concrete promise (number + deadline) with a full refund if missed.
+   - guarantee_refund: a concrete promise (number + deadline) with a full refund if missed. The word "refund" (or "money back") MUST appear in the risk_reversal field of every guarantee_refund offer.
+The risk_reversal field spells the chosen mechanism out as a promise in the buyer's words (for lead_magnet: what the free thing is and that it costs nothing).
+
+ONE MECHANISM ONLY (as important as the new-money rule): each offer picks its ONE mechanism and NOTHING from the other three appears anywhere in that offer. BANNED STACKING, no exceptions: a guarantee or refund inside a lead_magnet offer; a free sample or free resource bolted onto a pay_per_result or guarantee_refund offer; a guarantee added to a pay_after_result offer; any offer whose pricing, risk_reversal, opener or stipulation mentions a second mechanism. Simple offers get replies; stacked offers read as too good to be true and get deleted.
+WATCH THE PRICING FIELD - it is where stacking sneaks in:
+- lead_magnet pricing is ALWAYS a single sentence of the form "The <thing> costs nothing and there is no obligation." (vary the wording slightly, keep the meaning identical). NEVER a number, a currency symbol, a fee, a rate, a plan, or how any paid service would be priced - if a paid price appears in a lead_magnet offer, the offer is WRONG.
+- guarantee_refund pricing is a normal fee paid the normal way; the refund is the safety net. NEVER also delay, waive or condition the payment (that would be pay_after_result on top).
+- pay_after_result and pay_per_result pricing never mention a refund or a free deliverable.
+(A Loom or one-pager that merely EXPLAINS the offer is a CTA, not a second mechanism - that is fine.)
+WATCH THE OPENER TOO: in pay_after_result, pay_per_result and guarantee_refund offers, the small thing the opener offers to send may only DESCRIBE the offer (a short Loom about it, a one-page plan of what we would do). NEVER offer a free sample, free unit, free trial or free version of the deliverable itself ("a sample of the work we'd build for you", "an example lead we'd deliver") - a free taste of the deliverable IS the lead_magnet mechanism and belongs only in lead_magnet offers.
 
 HARD RULES:
-- NEW MONEY ONLY (the single most important rule): every offer must promise the RECIPIENT brand-new revenue - new customers, new sales, new orders, new markets, new booked work, new tenants, new contracts they currently lose. The main benefit to the recipient must be MORE MONEY COMING IN, never money saved or a loss avoided. BANNED offer types, no matter how the business is described: preventing downtime, avoiding losses, cutting or saving costs, staying compliant, protecting or keeping existing revenue, reducing risk on things they already do, optimising/auditing/refreshing/speeding up/tidying up something they already run. If this business sells repairs, maintenance, logistics, cleaning, compliance, efficiency or cost-saving, you MUST recast every offer as a NEW-revenue win for the recipient. Example: a handyman must NOT offer "emergency repairs to prevent downtime" (that is avoiding a loss); instead offer "get your empty units rented faster by making them move-in ready in 48 hours" (that is NEW rental income). A logistics firm must NOT offer "cut your shipping costs" (saving); instead offer "get your product onto shelves in three new states" (NEW orders).
-- FINAL SELF-CHECK before you answer: re-read every one of the 15 offers. For each, ask "does the recipient make NEW money from this, or does it only save money / avoid a loss / keep what they have?" If it is not clearly NEW money coming in, DELETE that offer and replace it with one that wins the recipient brand-new customers or orders. Every offer in your final answer must pass this test.
+- NEW MONEY ONLY (the single most important rule): every offer must promise the RECIPIENT brand-new revenue - new customers, new sales, new orders, new markets, new booked work, new tenants, new contracts they currently lose. The main benefit to the recipient must be MORE MONEY COMING IN, never money saved or a loss avoided. BANNED offer types, no matter how the business is described: preventing downtime, avoiding losses, cutting or saving costs, staying compliant, protecting or keeping existing revenue, reducing risk on things they already do, optimising/auditing/refreshing/speeding up/tidying up something they already run. Recovering money the recipient is already owed (tax refunds, duty drawbacks, rebates, overcharges, chargebacks) is NOT new money - it is found money, and it is BANNED as an offer. If this business sells repairs, maintenance, logistics, cleaning, compliance, efficiency or cost-saving, you MUST recast every offer as a NEW-revenue win for the recipient. Example: a handyman must NOT offer "emergency repairs to prevent downtime" (that is avoiding a loss); instead offer "get your empty units rented faster by making them move-in ready in 48 hours" (that is NEW rental income). A logistics firm must NOT offer "cut your shipping costs" (saving); instead offer "get your product onto shelves in three new states" (NEW orders).
+- FINAL SELF-CHECK before you answer: re-read every offer and ask TWO questions. One: "does the recipient make NEW money from this, or does it only save money / avoid a loss / keep what they have?" If it is not clearly NEW money coming in, DELETE that offer and replace it. Two: "does this offer contain exactly ONE mechanism, or has a second one crept in anywhere?" If any part of the offer mentions a second mechanism, strip it out or replace the offer. Every offer in your final answer must pass both tests.
 - WHO THE EMAIL GOES TO: cold email is business-to-business. If this business sells to consumers, aim every offer at business buyers instead (retailers who could stock the product, distributors, corporate accounts, partners), never at individual consumers.
 - LOW-RISK CTA: the example opener must offer to SEND something small (a short Loom video, a free sample, a one-page breakdown, a worked example) - never "book a call" or "hop on a call".
 - STIPULATION: each offer includes one fair condition that protects the seller (e.g. "leads must match an agreed target list", "guarantee starts after onboarding is complete", "capped at N per month").
 - PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned words and phrases: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. Say it the way a shop owner would: "your ideal customers", "a salesperson", "steady flow of new deals". A 12-year-old should understand every sentence. NEVER use an em-dash anywhere.
+- ENGLISH ONLY: every single word in every field is English. Numbers in names must match the numbers in the body of the offer. Never leave a placeholder like "X days" or "N leads" - always pick a real, sensible number.
 - The opener is ONE sentence, 20 words or fewer, written as the first line of a cold email from this business to its buyer. Use {{{{company}}}} where the prospect's company name would go.
 - why_cold_email: one or two plain sentences explaining to a beginner WHY this offer works on cold strangers (e.g. it removes their risk, it asks for a tiny yes, it names their exact problem).
 - opener writing rule: the opener is the FIRST line of the email and must offer to SEND something small (a short Loom, a one-page plan, a sample). The page wraps it into a full ready-to-send email around it, so make it read as a natural, complete opening line.
@@ -11979,8 +12072,8 @@ HARD RULES:
 REAL OFFER LINES THAT GOT POSITIVE REPLIES (mined from real campaigns - match this energy and concreteness, do not copy them word for word unless they genuinely fit):
 {OFFER_WINNING_EXAMPLES}
 
-Reply with ONLY a JSON array of exactly 15 objects, no fences, no commentary:
-[{{"name": "<3-6 word plain name for the offer>", "problem": "<the specific high-consequence problem, 1-2 sentences>", "differentiator": "<what you do and why it beats the usual way, 1-2 sentences>", "pricing": "<the buyer-favouring pricing angle, 1 sentence>", "risk_reversal": "<the risk-reversal promise written out, 1 sentence>", "risk_reversal_type": "<pay_after_result|pay_per_result|guarantee_refund>", "stipulation": "<the fair protective condition, 1 sentence>", "opener": "<one-line example cold email opener, max 20 words>", "why_cold_email": "<plain-English reason this works on cold email, 1-2 sentences>"}}]"""
+Reply with ONLY a JSON object, no fences, no commentary:
+{{"brief": {{"what_they_do": "<1-2 sentences>", "who_they_sell_to": "<one line>", "proof_signals": ["<fact>"], "angles": ["<angle>"]}}, "offers": [<exactly {n_expect}, each: {{"name": "<3-6 word plain name for the offer>", "problem": "<the specific high-consequence problem, 1-2 sentences>", "differentiator": "<what you do and why it beats the usual way, 1-2 sentences>", "pricing": "<the buyer-favouring pricing angle, 1 sentence>", "risk_reversal": "<the one mechanism written out as a promise, 1 sentence>", "mechanism": "<lead_magnet|pay_after_result|pay_per_result|guarantee_refund>", "stipulation": "<the fair protective condition, 1 sentence>", "opener": "<one-line example cold email opener, max 20 words>", "why_cold_email": "<plain-English reason this works on cold email, 1-2 sentences>"}}>]}}"""
     offers = None
     err = ""
     for attempt in (1, 2):  # one retry on a malformed reply
@@ -11996,20 +12089,66 @@ Reply with ONLY a JSON array of exactly 15 objects, no fences, no commentary:
             if r.get("error"):
                 raise RuntimeError(str(r["error"].get("message", r["error"]))[:200])
             text = (r["choices"][0]["message"]["content"] or "").strip()
-            m = re.search(r"\[.*\]", text, re.S)
-            cand = json.loads(m.group(0) if m else text)
-            if not isinstance(cand, list) or not 12 <= len(cand) <= 18:
+            m = re.search(r"\{.*\}", text, re.S)
+            doc = json.loads(m.group(0) if m else text)
+            brief_raw = doc.get("brief") or {}
+            cand = doc.get("offers")
+            lo, hi = (4, 6) if seed else (12, 18)
+            if not isinstance(cand, list) or not lo <= len(cand) <= hi:
                 raise ValueError(f"got {len(cand) if isinstance(cand, list) else 'non-list'} offers")
+            if not str(brief_raw.get("what_they_do") or "").strip() \
+                    or not str(brief_raw.get("who_they_sell_to") or "").strip():
+                raise ValueError("brief missing what_they_do / who_they_sell_to")
             for o in cand:
                 for f in OFFER_FIELDS:
                     if not str(o.get(f) or "").strip():
                         raise ValueError(f"offer missing {f}")
-                if o["risk_reversal_type"] not in OFFER_RISK_TYPES:
-                    raise ValueError(f"bad risk_reversal_type {o['risk_reversal_type']!r}")
-            types = {o["risk_reversal_type"] for o in cand}
-            if types != set(OFFER_RISK_TYPES):
-                raise ValueError(f"missing risk types: {set(OFFER_RISK_TYPES) - types}")
+                if o["mechanism"] not in OFFER_MECHANISMS:
+                    raise ValueError(f"bad mechanism {o['mechanism']!r}")
+                # Anti-stacking guard: a lead-magnet offer must never carry a
+                # paid price - that is a second mechanism sneaking in.
+                if o["mechanism"] == "lead_magnet" and re.search(
+                        r"[£$€]|\bbilled|\b(?:fixed|one.off|weekly|monthly) (?:price|fee|rate)|(?<!no )\bfee\b",
+                        str(o.get("pricing") or ""), re.I):
+                    raise ValueError(f"lead_magnet offer {o.get('name','')!r} has paid pricing")
+            # Deterministic anti-stacking drops (the model occasionally leaks a
+            # second mechanism despite the prompt; one bad offer must not sink
+            # the whole generation, so drop the offender instead):
+            def _stacked(o):
+                blob = " ".join(str(o.get(f) or "") for f in
+                                ("pricing", "risk_reversal", "opener", "stipulation"))
+                if o["mechanism"] != "lead_magnet" and re.search(
+                        r"\bfree (?:sample|trial|unit|version|clean|month|week)\b|\bsample of the\b"
+                        r"|\bunless you (?:sign|buy|purchase)\b", blob, re.I):
+                    return "free-sample leak"
+                if o["mechanism"] == "guarantee_refund" and not re.search(
+                        r"refund|money.?back", str(o.get("risk_reversal") or ""), re.I):
+                    return "guarantee without refund"
+                if o["mechanism"] == "guarantee_refund" and re.search(
+                        r"\b(?:paid|invoiced?|charged?|payable)\b[^.]{0,40}\bafter\b|\bafter launch\b",
+                        str(o.get("pricing") or ""), re.I):
+                    return "guarantee with delayed payment"
+                return None
+            dropped = [(o.get("name", "?"), why) for o in cand if (why := _stacked(o))]
+            cand = [o for o in cand if not _stacked(o)]
+            if dropped:
+                print(f"OFFER GEN dropped {len(dropped)} stacked offers for {site['domain']}: {dropped}")
+            if seed:
+                if any(o["mechanism"] != seed.get("mechanism") for o in cand):
+                    raise ValueError("seed run returned a different mechanism")
+                if len(cand) < 3:
+                    raise ValueError("too few clean seed offers after drops")
+            else:
+                mechs = {o["mechanism"] for o in cand}
+                if mechs != set(OFFER_MECHANISMS):
+                    raise ValueError(f"missing mechanisms: {set(OFFER_MECHANISMS) - mechs}")
+                if len(cand) < 10:
+                    raise ValueError(f"only {len(cand)} clean offers after drops")
             offers = [{f: _offer_scrub(o[f]) for f in OFFER_FIELDS} for o in cand]
+            brief = {"what_they_do": _offer_scrub(brief_raw.get("what_they_do")),
+                     "who_they_sell_to": _offer_scrub(brief_raw.get("who_they_sell_to")),
+                     "proof_signals": [_offer_scrub(s) for s in (brief_raw.get("proof_signals") or [])[:3]],
+                     "angles": [_offer_scrub(s) for s in (brief_raw.get("angles") or [])[:3]]}
             break
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:120]}"
@@ -12017,24 +12156,33 @@ Reply with ONLY a JSON array of exactly 15 objects, no fences, no commentary:
     if offers is None:
         return 502, {"ok": False, "message":
                      "The offer generator hit a problem and couldn't finish. Please try again in a minute."}
-    print(f"OFFER GEN ok: {site['domain']} -> {len(offers)} offers" + (f" (audience: {audience})" if audience else ""))
+    print(f"OFFER GEN ok: {site['domain']} -> {len(offers)} offers, "
+          f"{len(site.get('pages', []))} extra pages read"
+          + (f" (audience: {audience})" if audience else "") + (" [more-like]" if seed else ""))
     return 200, {"ok": True, "domain": site["domain"], "site_name": site["title"],
-                 "audience": audience, "offers": offers}
+                 "audience": audience, "brief": brief,
+                 "pages_read": ["/"] + [p["path"] for p in site.get("pages", [])],
+                 "offers": offers}
 
 
 def offer_generate(p: dict, ip: str):
-    """Synchronous path (browser + curl). Returns (status, body)."""
+    """Synchronous path (browser + curl). Returns (status, body).
+    Optional p["seed"] = {"mechanism","name","opener"} makes this a "More like
+    this" run: homepage-only fetch (fast) and 5 offers of that one mechanism."""
     refusal = _offer_rate_check(ip, "try")
     if refusal:
         return 429, {"ok": False, "message": refusal}
+    seed = p.get("seed") if isinstance(p.get("seed"), dict) else None
+    if seed and seed.get("mechanism") not in OFFER_MECHANISMS:
+        seed = None
     try:
-        site = _offer_fetch_site(p.get("url") or "")
+        site = _offer_fetch_site(p.get("url") or "", deep=not seed)
     except ValueError as e:
         return 400, {"ok": False, "message": str(e)}
     refusal = _offer_rate_check(ip, "gen")
     if refusal:
         return 429, {"ok": False, "message": refusal}
-    return _offer_llm(site, p.get("audience") or "")
+    return _offer_llm(site, p.get("audience") or "", seed)
 
 
 def offer_email(p: dict, ip: str):
@@ -12050,7 +12198,7 @@ def offer_email(p: dict, ip: str):
         return 502, {"ok": False, "message": "The email writer isn't available right now. Please try again later."}
     o = p.get("offer") or {}
     fields = {k: str(o.get(k) or "").strip()[:600] for k in
-              ("name", "problem", "differentiator", "pricing", "risk_reversal", "stipulation", "opener")}
+              ("name", "problem", "differentiator", "pricing", "risk_reversal", "mechanism", "stipulation", "opener")}
     if not fields["problem"] or not fields["opener"]:
         return 400, {"ok": False, "message": "That offer looks incomplete, please generate the offers again."}
     audience = str(p.get("audience") or "").strip()[:300]
@@ -12058,39 +12206,70 @@ def offer_email(p: dict, ip: str):
     who = f"The business sending this email is {domain}." if domain else ""
     aud = (f"They sell to: {audience}. Write the email to a realistic example person in that group."
            if audience else "Write the email to a realistic example person in the buyer group this offer targets.")
-    prompt = f"""You are our house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below, using our "Service Pitch" template EXACTLY.
+    # Template law: each mechanism maps to exactly ONE house template
+    # (lilly-copywriter). Lead-magnet offers use the Lead Magnet template; the
+    # three risk-reversal mechanisms use the Service Pitch template.
+    lead_magnet = fields["mechanism"] == "lead_magnet"
+    template_name = "lead_magnet" if lead_magnet else "service_pitch"
+    if lead_magnet:
+        template_block = """THE LEAD MAGNET TEMPLATE (follow this shape exactly, one blank line between each part):
 
-{who}
-{aud}
+Hi <recipient first name>,
 
-THE OFFER:
-- Name: {fields['name']}
-- Problem it solves (the NEW business the buyer is missing): {fields['problem']}
-- What we would do and why it is better: {fields['differentiator']}
-- Pricing angle: {fields['pricing']}
-- The promise (risk reversal): {fields['risk_reversal']}
-- One fair condition: {fields['stipulation']}
-- Suggested opening line: {fields['opener']}
+<Icebreaker: ONE short line, either a concrete plausible trigger about the recipient's company, or a "most <their kind of company> find that <problem>" observation. Do not pitch here.>
 
-THE SERVICE PITCH TEMPLATE (follow this shape exactly, one blank line between each part):
+<The offer, ONE or TWO sentences: name the free thing and offer it. If it is a ready-made resource: "We put together a <resource type> which I thought might be useful for <their company name>, it covers <what it covers, tied to the problem>." If making it needs their input: "We'd love to put together a <resource type> for <their company name> showing <outcome>." Never claim per-company work that was not done.>
+
+<Soft CTA, one short question offering to SEND it: "Can I send it over?" or "Want me to send it across?">
+
+<sender first name>
+
+P.S - We've helped <a named example client or "companies like X"> who were struggling with <problem> <concrete result>.
+
+HARD RULES FOR THIS TEMPLATE:
+- The ONLY ask is permission to send the free thing. No call ask, no meeting, no second question.
+- The CTA verb is send / share / give / show, and the buyer receives a ready-made thing, never work done to them.
+- Do NOT mention any guarantee, refund, pay-per-result or pay-after-result anywhere. The free thing is the whole offer.
+- The body between greeting and sign-off is 45-70 words."""
+    else:
+        template_block = """THE SERVICE PITCH TEMPLATE (follow this shape exactly, one blank line between each part):
 
 Hi <recipient first name>,
 
 <Icebreaker: ONE short line naming a concrete, plausible trigger about the recipient's company (a recent hire, a new office, a launch, a post) that ends with the exact words "so I wanted to reach out.". Do not pitch here.>
 
-If we could <the new-money outcome they want> by <what we would do, in plain words>, <the risk reversal woven in as a natural clause>, <a low-risk CTA question that offers to SEND something small like a short Loom, a one-page plan, or a sample>?
+If we could <the new-money outcome they want> by <what we would do, in plain words>, <the promise woven in as a natural clause>, <a low-risk CTA question that offers to SEND something small like a short Loom, a one-page plan, or a worked example>?
 
 Best,
 <sender first name>
 
 P.S - <one concrete line of proof: a named example client and a result>
 
-HARD RULES:
-- Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
-- The "If we could ... ?" part is ONE flowing sentence that ends on the question mark. Do NOT split the risk reversal into its own separate sentence, and do NOT add any sentence after the question.
-- The CTA offers to SEND something small (a short Loom, a one-page plan, a sample). Never "book a call" or "hop on a call".
+HARD RULES FOR THIS TEMPLATE:
+- The "If we could ... ?" part is ONE flowing sentence that ends on the question mark. Do NOT split the promise into its own separate sentence, and do NOT add any sentence after the question.
 - Keep the "If we could ... ?" sentence between 45 and 70 words.
-- Plain English an 11th grader understands. No em-dashes anywhere. No colons or semicolons in the body. No spam words (free, trial, guaranteed, risk-free, today, urgent).
+- The promise woven in is ONLY this offer's mechanism. Do NOT add a free resource, sample or any second promise on top of it.
+- The CTA offers to SEND something small (a short Loom, a one-page plan, a worked example). Never "book a call" or "hop on a call"."""
+    prompt = f"""You are our house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below, using the template EXACTLY.
+
+{who}
+{aud}
+
+THE OFFER (its one mechanism is: {fields['mechanism']}):
+- Name: {fields['name']}
+- Problem it solves (the NEW business the buyer is missing): {fields['problem']}
+- What we would do and why it is better: {fields['differentiator']}
+- Pricing angle: {fields['pricing']}
+- The promise: {fields['risk_reversal']}
+- One fair condition: {fields['stipulation']}
+- Suggested opening line: {fields['opener']}
+
+{template_block}
+
+HARD RULES (always):
+- Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
+- ONE mechanism only: the email expresses this offer's mechanism and nothing from any other (the P.S proof line is proof, not a promise).
+- Plain English an 11th grader understands. No em-dashes anywhere. No colons or semicolons in the body. No spam words (free of charge is fine to say as "no charge"; avoid the words free, trial, guaranteed, risk-free, today, urgent).
 - Real line breaks between the parts, exactly as shown.
 
 Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full email, with real line breaks>"}}"""
@@ -12109,7 +12288,7 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
             email = _offer_scrub(json.loads(m.group(0) if m else text).get("email", ""))
             if len(email) < 60 or "Hi " not in email[:8]:
                 raise ValueError("email too short or malformed")
-            return 200, {"ok": True, "email": email}
+            return 200, {"ok": True, "email": email, "template": template_name}
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:120]}"
             print(f"OFFER EMAIL attempt {attempt} failed: {err}")
