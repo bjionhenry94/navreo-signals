@@ -10346,6 +10346,117 @@ def _reply_sync_bg():
         _REPLY_SYNC_LOCK.release()
 
 
+# ── Positive-card notify (categoriser → client-card hook, Smartlead bypass) ──
+# Smartlead's own LEAD_CATEGORY_UPDATED webhook delivery lags 50min–11h
+# (measured 2026-07-15/16), so the client "New Positive Response" Slack cards
+# (Make scenario 8946472, hook 4001002) arrived hours late or piled up. The
+# Make categoriser (9251436) now calls this endpoint the moment it sets a
+# positive category; we rebuild the same payload Smartlead would send — from
+# live Smartlead data — stamped navreo_source=categoriser, and 8946472 drops
+# unstamped LEAD_CATEGORY_UPDATED events so the laggy native deliveries can
+# never double-post.
+POSITIVE_CARD_HOOK = "https://hook.eu2.make.com/qt3b07kefg9ogusrgd044qh1uae7hu27"
+
+
+def compose_positive_card_payload(lead: dict, history: list, campaign_id, category: str) -> dict:
+    """Pure compose: Smartlead LEAD_CATEGORY_UPDATED shape from a /leads/
+    lookup + message-history, covering every field scenario 8946472 reads
+    (lead_data.*, campaign_name, client_id, history, last_reply, app_url,
+    lead_id, from_email, lead_category.new_name)."""
+    lcd = lead.get("lead_campaign_data") or []
+    row = next((c for c in lcd if str(c.get("campaign_id")) == str(campaign_id)), {})
+    hist = [{
+        "type": str(m.get("type") or "").upper(),
+        "time": m.get("time"),
+        "subject": m.get("subject"),
+        "email_body": m.get("email_body") or m.get("body") or "",
+        "stats_id": m.get("stats_id"),
+        "message_id": m.get("message_id"),
+    } for m in history if isinstance(m, dict)]
+    hist.sort(key=lambda m: m["time"] or "")
+    replies = [m for m in hist if m["type"] == "REPLY"]
+    last_reply = replies[-1] if replies else {}
+    lead_map_id = row.get("campaign_lead_map_id")
+    return {
+        "event_type": "LEAD_CATEGORY_UPDATED",
+        "navreo_source": "categoriser",
+        "campaign_id": campaign_id,
+        "campaign_name": row.get("campaign_name") or "",
+        "campaign_status": row.get("campaign_status") or "",
+        "client_id": row.get("client_id"),
+        "lead_id": lead.get("id"),
+        "sl_lead_email": lead.get("email") or "",
+        "lead_email": lead.get("email") or "",
+        # The sending-mailbox address isn't in the /leads/ or history payloads;
+        # 8946472 only renders it, so an empty string degrades gracefully.
+        "from_email": "",
+        "app_url": (f"https://app.smartlead.ai/app/master-inbox?leadMap={lead_map_id}"
+                    if lead_map_id else ""),
+        "lead_category": {"old_id": None, "old_name": None,
+                          "new_id": None, "new_name": category},
+        "lead_data": {
+            "email": lead.get("email") or "",
+            "first_name": lead.get("first_name") or "",
+            "last_name": lead.get("last_name") or "",
+            "company_name": lead.get("company_name") or "",
+            "website": lead.get("website") or "",
+            "linkedin_profile": lead.get("linkedin_profile") or "",
+            "location": lead.get("location") or "",
+            "phone_number": lead.get("phone_number") or "",
+            "custom_fields": lead.get("custom_fields") or {},
+        },
+        "history": hist[-50:],
+        "last_reply": {
+            "type": "REPLY",
+            "time": last_reply.get("time"),
+            "email_body": last_reply.get("email_body") or "",
+            "stats_id": last_reply.get("stats_id"),
+            "message_id": last_reply.get("message_id"),
+        },
+        "reply_message": {"time": last_reply.get("time"),
+                          "text": setter.clean_body(last_reply.get("email_body") or "")[:4000]},
+    }
+
+
+def positive_card_notify(campaign_id, email: str, category: str) -> dict:
+    """Fetch lead + thread from Smartlead, compose the card payload, POST it
+    to the client-card hook. Two attempts; failures land in app_activity_log
+    (actor='positive_card') so a miss is visible, never silent."""
+    lead_resp = setter._sl_get("/leads/", {"email": email})
+    lead = None
+    if isinstance(lead_resp, dict):
+        lead = lead_resp.get("lead") if isinstance(lead_resp.get("lead"), dict) else lead_resp
+    elif isinstance(lead_resp, list) and lead_resp:
+        first = lead_resp[0]
+        lead = first.get("lead") if isinstance(first, dict) and isinstance(first.get("lead"), dict) else first
+    if not isinstance(lead, dict) or not lead.get("id"):
+        return {"ok": False, "error": "lead not found in Smartlead"}
+    hist_resp = setter._sl_get(f"/campaigns/{campaign_id}/leads/{lead['id']}/message-history")
+    hist = hist_resp.get("history") if isinstance(hist_resp, dict) else hist_resp
+    payload = compose_positive_card_payload(lead, hist if isinstance(hist, list) else [],
+                                            campaign_id, category)
+    err = ""
+    for _ in range(2):
+        try:
+            http_json("POST", POSITIVE_CARD_HOOK, {}, payload)
+            return {"ok": True, "campaign_id": campaign_id, "email": email,
+                    "category": category, "client_id": payload.get("client_id"),
+                    "campaign_name": payload.get("campaign_name")}
+        except ValueError:
+            # Make webhooks answer a bare "Accepted" (non-JSON 2xx) — that IS success.
+            return {"ok": True, "campaign_id": campaign_id, "email": email,
+                    "category": category, "client_id": payload.get("client_id"),
+                    "campaign_name": payload.get("campaign_name")}
+        except Exception as e:  # noqa: BLE001 — retry once, then report
+            err = str(e)[:300]
+    sb("POST", "app_activity_log",
+       {"actor": "positive_card", "endpoint": "/api/notify/positive-card",
+        "action": "card_notify_failed", "entity": "replies",
+        "payload": {"campaign_id": campaign_id, "email": email,
+                    "category": category, "error": err}})
+    return {"ok": False, "error": err}
+
+
 def _mailbox_sync_bg():
     if not _MAILBOX_SYNC_LOCK.acquire(blocking=False):
         return  # a prior sweep is still running — skip this one
@@ -12995,7 +13106,7 @@ class Handler(SimpleHTTPRequestHandler):
     _CLEAR_CACHE_EXEMPT_POST = {
         "/api/auth/login", "/api/cron/pull-all", "/api/cron/heyreach-sync",
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
-        "/api/cron/reply-sync",
+        "/api/cron/reply-sync", "/api/notify/positive-card",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
     }
 
@@ -13056,7 +13167,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                   "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/setter/poll"):
+                   "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/setter/poll",
+                   "/api/notify/positive-card"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
             # and the lock does not nest.
@@ -13093,6 +13205,19 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, actor="cron", action="sync", entity="mailboxes")
                 threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/notify/positive-card":
+                # Categoriser → client-card hook bypass (query params only —
+                # the POST body, if any, stays drained by _post_body upstream).
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                cid = (q.get("campaign_id") or [None])[0]
+                email = ((q.get("email") or [""])[0]).strip().lower()
+                category = (q.get("category") or [""])[0]
+                if not (cid and email and category):
+                    return self._json({"ok": False, "error": "campaign_id, email, category required"}, 400)
+                log_activity(path, actor="categoriser", action="card_notify", entity="replies")
+                res = positive_card_notify(cid, email, category)
+                return self._json(res, 200 if res.get("ok") else 502)
             if path == "/api/cron/reply-sync":
                 # Backstop: pull the master inbox and feed unseen replies to the
                 # categoriser hook. Runs longer than pg_net's timeout under a
