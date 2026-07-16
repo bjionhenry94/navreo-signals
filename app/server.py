@@ -12114,11 +12114,6 @@ Reply with ONLY a JSON object, no fences, no commentary:
                         raise ValueError(f"offer missing {f}")
                 if o["mechanism"] not in OFFER_MECHANISMS:
                     raise ValueError(f"bad mechanism {o['mechanism']!r}")
-                # Brevity law (with slack over the prompt's caps): the visible
-                # offer must be scannable, so a bloated one fails the parse and
-                # triggers the retry rather than reaching the page.
-                if len(str(o["problem"]).split()) + len(str(o["differentiator"]).split()) > 48:
-                    raise ValueError(f"offer {o.get('name','')!r} too wordy")
                 # Anti-stacking guard: a lead-magnet offer must never carry a
                 # paid price - that is a second mechanism sneaking in.
                 if o["mechanism"] == "lead_magnet" and re.search(
@@ -12129,6 +12124,11 @@ Reply with ONLY a JSON object, no fences, no commentary:
             # second mechanism despite the prompt; one bad offer must not sink
             # the whole generation, so drop the offender instead):
             def _stacked(o):
+                # Brevity law: the visible offer (problem + differentiator) must
+                # be scannable. Drop bloated offers rather than failing the run.
+                if len(str(o.get("problem") or "").split()) \
+                        + len(str(o.get("differentiator") or "").split()) > 44:
+                    return "too wordy"
                 blob = " ".join(str(o.get(f) or "") for f in
                                 ("pricing", "risk_reversal", "opener", "stipulation"))
                 if o["mechanism"] != "lead_magnet" and re.search(
