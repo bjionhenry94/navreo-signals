@@ -1908,6 +1908,39 @@ def _dry_run() -> bool:
     return os.environ.get("SETTER_DRY_RUN") == "1"
 
 
+def _resolve_stats_id(row: dict):
+    """Returns (stats_id_str, error_msg). Smartlead's reply-email-thread rejects a
+    non-string email_stats_id with a raw Joi 400 ('"email_stats_id" must be a
+    string'), which is exactly what a reviewer saw when hydration at intake had
+    left the column NULL.
+
+    Intake hydration is best-effort and its Smartlead call can fail transiently
+    (live rows carried 'Couldn't load the Smartlead thread (HTTPError)' and
+    '(TimeoutError)'). Nothing retried, so the row sat in Needs-review looking
+    sendable with no stats_id forever. Re-hydrating here fixes it at the only
+    moment it matters, and the recovered id is persisted so the next send is free.
+    Verified 2026-07-16: all six affected rows re-hydrated on retry.
+    """
+    sid = row.get("email_stats_id")
+    if sid is not None and str(sid).strip():
+        return str(sid), ""
+    ok, hyd, herr = hydrate_lead(row.get("smartlead_campaign_id"), row.get("lead_email"),
+                                 row.get("message_id"))
+    sid = hyd.get("email_stats_id") if ok else None
+    if sid is None or not str(sid).strip():
+        # Never hand Smartlead a null and never relay its Joi text to a human.
+        return "", ("Couldn't match this reply to its Smartlead thread, so it can't be "
+                    "replied to from here. Reply in Smartlead directly."
+                    + (f" ({herr})" if herr else ""))
+    patch = {"email_stats_id": str(sid)}
+    # smartlead_lead_id goes NULL in the same failed hydration - take it back too
+    # while we have it, so the row stops being half-hydrated.
+    if row.get("smartlead_lead_id") is None and hyd.get("smartlead_lead_id") is not None:
+        patch["smartlead_lead_id"] = hyd.get("smartlead_lead_id")
+    _apply_patch(row, patch)
+    return str(sid), ""
+
+
 def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: bool = False,
                 success_status: str = "sent") -> dict:
     """Sends (or stub-sends) one reply. Returns {"ok": bool, "row": <patch dict>}.
@@ -1926,9 +1959,14 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
                 pass
         patch["sent_via"] = "dry_run"
         return {"ok": True, "row": patch}
+    stats_id, sid_err = _resolve_stats_id(row)
+    if not stats_id:
+        patch = {"status": "needs_review", "error": sid_err}
+        _apply_patch(row, patch)
+        return {"ok": False, "row": patch}
     try:
         body = {
-            "email_stats_id": row.get("email_stats_id"),
+            "email_stats_id": stats_id,
             "email_body": html_body,
             "reply_message_id": row.get("message_id"),
             "reply_email_time": row.get("replied_at"),
@@ -4145,6 +4183,23 @@ def route_queue_action(payload):
                             "detail": detail}
             _apply_patch(row, {"added_to_subsequence": True})
             return 200, {"ok": True, "added_to_subsequence": True, "subsequence_id": sub_id, "detail": detail}
+        if action == "save_draft":
+            # Auto-save (owner ask 2026-07-16): a hand-edited draft used to live
+            # ONLY in the browser's EDITED_DRAFTS map, so a failed send, a reload
+            # or a closed tab threw the edit away. Persist it as it's typed so a
+            # send error can never cost the reviewer their work.
+            if row.get("status") in ("sent", "auto_sent"):
+                return 409, {"error": "This reply was already sent."}
+            body_html = payload.get("body")
+            if body_html is None:
+                return 400, {"error": "body is required"}
+            # Schema freeze: draft_body/draft_subject exist, nothing else here.
+            patch = {"draft_body": body_html}
+            if payload.get("subject"):
+                patch["draft_subject"] = payload["subject"]
+            _apply_patch(row, patch)
+            return 200, {"ok": True, "saved_at": _dt.datetime.now(_dt.timezone.utc)
+                         .isoformat(timespec="seconds")}
         if action == "send":
             if row.get("status") in ("sent", "auto_sent"):
                 return 409, {"error": "This reply was already sent."}

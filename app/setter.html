@@ -1525,7 +1525,8 @@ function composerFeedbackHtml(row) {
 }
 function composerHtml(row) {
   if (needsComposerActions(row)) {
-    return `<div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>`;
+    return `<div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>
+      <div class="qc-savestate small muted" id="save-${esc(row.id)}"></div>`;
   }
   if (row.status === "auto_sent" || row.status === "sent") {
     return `<div class="qc-draft" style="background:var(--bg-sunken)">${row.sent_body || row.draft_body || ""}</div>`;
@@ -1588,9 +1589,53 @@ function wireDetailEvents(root, row) {
 
   const draftEl = root.querySelector(".qc-draft[contenteditable]");
   if (draftEl) {
-    draftEl.addEventListener("input", () => { EDITED_DRAFTS[row.id] = draftEl.innerHTML; });
+    draftEl.addEventListener("input", () => {
+      EDITED_DRAFTS[row.id] = draftEl.innerHTML;
+      queueDraftSave(row.id);
+    });
   }
 }
+
+/* Auto-save (owner ask 2026-07-16): EDITED_DRAFTS is browser memory only, so a
+   failed send / reload / closed tab used to lose the edit. Debounce a save to
+   the row so the work outlives any of them. Never blocks typing; stays quiet on
+   success (a toast per keystroke pause would be unusable). */
+const SAVE_TIMERS = {};
+const SAVED_DRAFTS = {};
+function setSaveState(rowId, text) {
+  const el = document.getElementById(`save-${rowId}`);
+  if (el) el.textContent = text;
+}
+function queueDraftSave(rowId) {
+  clearTimeout(SAVE_TIMERS[rowId]);
+  setSaveState(rowId, "Saving…");
+  SAVE_TIMERS[rowId] = setTimeout(() => saveDraftNow(rowId), 800);
+}
+async function saveDraftNow(rowId) {
+  const body = EDITED_DRAFTS[rowId];
+  if (body === undefined) return;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: Number(rowId), action: "save_draft", body }),
+  });
+  if (!res.ok || (res.data && res.data.ok === false)) {
+    // Say so plainly - a silent failure here is the exact data loss this fixes.
+    setSaveState(rowId, "Not saved - keep this tab open");
+    return;
+  }
+  SAVED_DRAFTS[rowId] = body;
+  setSaveState(rowId, "Saved");
+}
+/* Flush a pending edit if the tab is closing mid-debounce. */
+window.addEventListener("beforeunload", () => {
+  Object.keys(SAVE_TIMERS).forEach((id) => {
+    if (EDITED_DRAFTS[id] === undefined || SAVED_DRAFTS[id] === EDITED_DRAFTS[id]) return;
+    clearTimeout(SAVE_TIMERS[id]);
+    navigator.sendBeacon("/api/setter/queue/action", new Blob(
+      [JSON.stringify({ id: Number(id), action: "save_draft", body: EDITED_DRAFTS[id] })],
+      { type: "application/json" }));
+  });
+});
 
 /* re-apply an unsent, user-edited draft after a background refresh rebuilt
    the whole detail pane (never let a 60s auto-refresh silently overwrite it) */
