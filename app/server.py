@@ -12060,7 +12060,8 @@ WATCH THE OPENER TOO: in pay_after_result, pay_per_result and guarantee_refund o
 DELIVERABILITY LAW (the sender must be able to keep every promise):
 - The PROBLEM names the new money the recipient is missing. The PROMISE (risk_reversal, opener, pricing trigger) names ONLY what the sender delivers and can measure itself: work completed, stock landed, a space made viewing-ready, meetings booked, leads delivered to agreed criteria.
 - Unless winning customers is literally this business's service (a lead-generation or marketing agency), NEVER promise or gate payment on the recipient's own sales outcomes - their orders won, contracts signed, tenants moved in, store opened, bookings taken. Promise the deliverable that unlocks those, not the outcome itself. Even a lead-gen agency's deliverable ends at leads or booked meetings - never "customers won" or "closed deals" (closing is the client's job).
-- NEVER promise platform metrics that cannot be verified per person (impressions, followers, views by job title).
+- NEVER promise platform metrics that cannot be verified per person (impressions, followers, views by job title), and NEVER guarantee counted results from ORGANIC social content (inbound replies or messages from posts) - organic reach is not controllable. A content service either uses the lead_magnet mechanism, or promises the publishing deliverable itself (posts written and published on schedule).
+- Repeat business, rebookings, renewals and upsells from EXISTING customers are NOT new money - only brand-new customers, orders and contracts count.
 - Keep every number modest and honest: a promise the business would miss more often than hit is a broken offer.
 - Recovery framing is BANNED everywhere: "stop losing", "recover lost", "recover missed", "win back", income "leaking". The benefit is always new money coming in, said that way.
 
@@ -12127,12 +12128,18 @@ Reply with ONLY a JSON object, no fences, no commentary:
                 if o["mechanism"] != "lead_magnet" and re.search(
                         r"\bfree (?:sample|trial|unit|version|clean|month|week)\b|\bsample of the\b"
                         r"|\bthe exact (?:posts?|emails?|sequences?|copy|lists?|companies|accounts|prospects|leads)\b"
-                        r"|\bchecklist we use\b|\bunless you (?:sign|buy|purchase)\b", blob, re.I):
+                        r"|\bchecklist we use\b|\bunless you (?:sign|buy|purchase)\b"
+                        r"|\bposts we(?:'d| would) publish\b", blob, re.I):
                     return "free-sample leak"
                 if re.search(r"\bwin back\b|\brecover(?:ed|ing)? (?:lost|missed)\b|\bstop losing\b"
-                             r"|\bleak(?:ing|s)? (?:revenue|income|rent)\b",
+                             r"|\bleak(?:ing|s)? (?:revenue|income|rent)\b"
+                             r"|\brenewals?\b|\brepeat business\b|\brebook(?:ing|ings)?\b",
                              " ".join(str(o.get(f) or "") for f in OFFER_FIELDS), re.I):
                     return "recovery framing"
+                if o["mechanism"] == "guarantee_refund" and re.search(
+                        r"\binbound (?:replies|messages|leads)\b.{0,80}\bposts?\b|\bposts?\b.{0,80}\binbound (?:replies|messages|leads)\b",
+                        str(o.get("risk_reversal") or "") + " " + str(o.get("problem") or ""), re.I):
+                    return "organic-social guarantee"
                 if o["mechanism"] in ("pay_after_result", "pay_per_result") and re.search(
                         r"\bguarantee|\brefund|\bmoney.?back", blob, re.I):
                     return "guarantee leak in pay offer"
@@ -12245,7 +12252,7 @@ HARD RULES FOR THIS TEMPLATE:
 - The email ALWAYS starts with the icebreaker line. NEVER open with the CTA or the offer.
 - The ONLY ask is permission to send the free thing. Exactly ONE question in the whole email. No call ask, no meeting, no second question.
 - The CTA verb is send / share / give / show, and the buyer receives a ready-made thing, never work done to them.
-- Honest tense: if making the free thing needs the recipient's input, access or a call first, write "We'd love to put together..." (future). Only write "We put together..." (past) for a thing that can genuinely exist already.
+- Honest tense: if the offer's stipulation depends on ANYTHING the recipient sends, approves or gives access to, the offer line MUST be future tense ("We'd love to put together..."). Only write "We put together..." or "I recorded..." (past) for a thing that can genuinely exist before ever speaking to them.
 - Do NOT mention any guarantee, refund, pay-per-result or pay-after-result anywhere. Do NOT mention cost, charge, price, "no charge" or obligation at all - just offer the thing; the offer block is at most 2 sentences.
 - The body between greeting and sign-off is 45-70 words. Count them."""
     else:
@@ -12290,12 +12297,12 @@ HARD RULES (always):
 - Recovery framing is banned: never "win back", "recover lost", "stop losing", income "leaking". The benefit is always new money coming in.
 - Before answering, COUNT THE WORDS of the body (service pitch: the "If we could ... ?" sentence; lead magnet: everything between greeting and sign-off). It must be 45-70. If over, cut words - move any stipulation detail out of the sentence entirely.
 - ONE mechanism only: the email expresses this offer's mechanism and nothing from any other (the P.S proof line is proof, not a promise).
-- Plain English an 11th grader understands. No em-dashes anywhere. No colons or semicolons in the body. No spam words (free of charge is fine to say as "no charge"; avoid the words free, trial, guaranteed, risk-free, today, urgent).
+- Plain English an 11th grader understands. No em-dashes, colons, semicolons or parentheses ANYWHERE in the email, including the P.S line. The P.S is one proof sentence only - never conditions or stipulations. No spam words (avoid the words free, trial, guaranteed, risk-free, today, urgent).
 - Real line breaks between the parts, exactly as shown.
 
 Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full email, with real line breaks>"}}"""
     err = ""
-    for attempt in (1, 2):
+    for attempt in (1, 2, 3):
         try:
             r = http_json("POST", "https://api.openai.com/v1/chat/completions",
                           {"Authorization": f"Bearer {key}"},
@@ -12309,6 +12316,17 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
             email = _offer_scrub(json.loads(m.group(0) if m else text).get("email", ""))
             if len(email) < 60 or "Hi " not in email[:8]:
                 raise ValueError("email too short or malformed")
+            # Deterministic template checks - the model occasionally leaks
+            # these despite the prompt; a retry usually clears them.
+            if re.search(r"[():;]", re.sub(r"^Hi [^,]+,", "", email)):
+                raise ValueError("colon/semicolon/parenthesis in email")
+            if lead_magnet:
+                if re.search(r"no charge|no cost|for free|free of charge|obligation", email, re.I):
+                    raise ValueError("cost language in lead magnet email")
+                lines = [l.strip() for l in email.splitlines() if l.strip()]
+                if len(lines) > 1 and (lines[1].endswith("?") or
+                        re.match(r"(?:Can|May|Would|Want|Should) ", lines[1])):
+                    raise ValueError("lead magnet opens with the CTA")
             return 200, {"ok": True, "email": email, "template": template_name}
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:120]}"
