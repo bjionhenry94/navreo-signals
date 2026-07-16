@@ -12035,6 +12035,7 @@ STEP 1 - THE COMPANY BRIEF. Before any offers, read every page above and write a
 The brief must come from the pages above, not from guessing.
 
 STEP 2 - THE OFFERS. {count_line}
+STEP 3 - RATE EACH OFFER. After writing the offers, put yourself in the target buyer's seat - a busy, sceptical person who deletes most cold email - and give every offer an "appeal" score from 1 to 10: how likely would THIS buyer be to reply to this offer? Concrete, low-risk, in-lane offers with a small ask score high; vague, big-claim or hard-to-believe offers score low. Be honest and SPREAD the scores - not everything is an 8.
 GROUNDING RULE: every offer must be rooted in something concrete from the pages above - a named service, a named client type, a stated result, a pricing fact. An offer that could apply to any business in any industry is wrong; rewrite it until it could only belong to THIS business.
 REAL SERVICES ONLY: every offer sells a service or product this business ACTUALLY provides according to the pages. NEVER invent a new line of business for them - a freight company does not "run outreach" or "deliver qualified leads", a cleaning company does not win tenders for its customers. The offers help them win new customers FOR WHAT THEY ALREADY SELL. Proof lines may only use results actually stated on the pages.
 
@@ -12082,7 +12083,7 @@ REAL OFFER LINES THAT GOT POSITIVE REPLIES (mined from real campaigns - match th
 {OFFER_WINNING_EXAMPLES}
 
 Reply with ONLY a JSON object, no fences, no commentary:
-{{"brief": {{"what_they_do": "<1-2 sentences>", "who_they_sell_to": "<one line>", "proof_signals": ["<fact>"], "angles": ["<angle>"]}}, "offers": [<exactly {n_expect}, each: {{"name": "<3-6 word plain name for the offer>", "problem": "<the specific high-consequence problem, 1-2 sentences>", "differentiator": "<what you do and why it beats the usual way, 1-2 sentences>", "pricing": "<the buyer-favouring pricing angle, 1 sentence>", "risk_reversal": "<the one mechanism written out as a promise, 1 sentence>", "mechanism": "<lead_magnet|pay_after_result|pay_per_result|guarantee_refund>", "stipulation": "<the fair protective condition, 1 sentence>", "opener": "<one-line example cold email opener, max 20 words>", "why_cold_email": "<plain-English reason this works on cold email, 1-2 sentences>"}}>]}}"""
+{{"brief": {{"what_they_do": "<1-2 sentences>", "who_they_sell_to": "<one line>", "proof_signals": ["<fact>"], "angles": ["<angle>"]}}, "offers": [<exactly {n_expect}, each: {{"name": "<3-6 word plain name for the offer>", "problem": "<the specific high-consequence problem, 1-2 sentences>", "differentiator": "<what you do and why it beats the usual way, 1-2 sentences>", "pricing": "<the buyer-favouring pricing angle, 1 sentence>", "risk_reversal": "<the one mechanism written out as a promise, 1 sentence>", "mechanism": "<lead_magnet|pay_after_result|pay_per_result|guarantee_refund>", "stipulation": "<the fair protective condition, 1 sentence>", "opener": "<one-line example cold email opener, max 20 words>", "why_cold_email": "<plain-English reason this works on cold email, 1-2 sentences>", "appeal": <integer 1-10, how likely the target buyer is to reply>}}>]}}"""
     offers = None
     err = ""
     for attempt in (1, 2):  # one retry on a malformed reply
@@ -12114,6 +12115,13 @@ Reply with ONLY a JSON object, no fences, no commentary:
                         raise ValueError(f"offer missing {f}")
                 if o["mechanism"] not in OFFER_MECHANISMS:
                     raise ValueError(f"bad mechanism {o['mechanism']!r}")
+                try:
+                    appeal = int(o.get("appeal"))
+                except (TypeError, ValueError):
+                    raise ValueError(f"offer {o.get('name','')!r} has no appeal score")
+                if not 1 <= appeal <= 10:
+                    raise ValueError(f"offer {o.get('name','')!r} bad appeal {appeal}")
+                o["appeal"] = appeal
                 # Anti-stacking guard: a lead-magnet offer must never carry a
                 # paid price - that is a second mechanism sneaking in.
                 if o["mechanism"] == "lead_magnet" and re.search(
@@ -12177,7 +12185,9 @@ Reply with ONLY a JSON object, no fences, no commentary:
                     raise ValueError(f"missing mechanisms: {set(OFFER_MECHANISMS) - mechs}")
                 if len(cand) < 10:
                     raise ValueError(f"only {len(cand)} clean offers after drops")
-            offers = [{f: _offer_scrub(o[f]) for f in OFFER_FIELDS} for o in cand]
+            cand.sort(key=lambda o: -o["appeal"])  # buyer-appeal rank, best first
+            offers = [{**{f: _offer_scrub(o[f]) for f in OFFER_FIELDS},
+                       "appeal": o["appeal"]} for o in cand]
             brief = {"what_they_do": _offer_scrub(brief_raw.get("what_they_do")),
                      "who_they_sell_to": _offer_scrub(brief_raw.get("who_they_sell_to")),
                      "proof_signals": [_offer_scrub(s) for s in (brief_raw.get("proof_signals") or [])[:3]],

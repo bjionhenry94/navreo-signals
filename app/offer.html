@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v2-chord-r7 -->
+<!-- offer-maker-v2-chord-r8 -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
@@ -51,6 +51,13 @@
   .actions button.ghost { background: #fff; color: var(--ink); }
   .actions button:hover { opacity: 0.88; }
   .actions .note { font-size: 13px; color: var(--ink-3); }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .filters button { font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px;
+    border-radius: 20px; border: 1.5px solid var(--line-2); background: #fff; color: var(--ink-2); cursor: pointer; }
+  .filters button:hover { border-color: var(--ink-3); }
+  .filters button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .appeal { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--ink-3); white-space: nowrap; }
+  .appeal b { color: var(--ink); font-size: 14px; }
   .card { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 20px; margin-bottom: 14px; background: var(--card); }
   .card .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
   .card h3 { font-size: 17px; margin: 0; }
@@ -131,6 +138,7 @@
       <button class="ghost" onclick="copyAll()">Copy everything</button>
       <span class="note">Nothing is saved. Download before you leave.</span>
     </div>
+    <div class="filters" id="filters"></div>
     <div id="cards"></div>
   </div>
 
@@ -147,7 +155,8 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","mechanism","stipulation","opener","why_cold_email"];
+const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","mechanism","appeal","stipulation","opener","why_cold_email"];
+let FILTER = "all";
 const MECH = {
   lead_magnet:      "Free thing first",
   pay_after_result: "Pay after the work",
@@ -245,6 +254,7 @@ async function generate(){
     if(!r.ok || !d.ok){ throw new Error(d.message || GENERIC_MSG); }
     OFFERS = d.offers; DOMAIN = d.domain; AUDIENCE = d.audience || "";
     BRIEF = d.brief || null; PAGES = d.pages_read || [];
+    FILTER = "all";
     document.getElementById("hero").classList.add("done");
     render();
   } catch(e) {
@@ -267,7 +277,8 @@ function whoHeader(){
 
 function cardHtml(o, i){
   return `
-    <div class="head"><span class="badge ${esc(o.mechanism)}">${esc(MECH[o.mechanism]||o.mechanism)}</span><h3>${esc(o.name)}</h3></div>
+    <div class="head"><span class="badge ${esc(o.mechanism)}">${esc(MECH[o.mechanism]||o.mechanism)}</span><h3>${esc(o.name)}</h3>${o.appeal
+      ? `<span class="appeal" title="How likely your buyer is to reply, scored 1-10"><b>${esc(o.appeal)}</b>/10 buyer appeal</span>` : ""}</div>
     <p class="offerline">${esc(o.differentiator)}</p>
     <p class="fixline"><b>Fixes:</b> ${esc(o.problem)}</p>
     <details class="why"><summary>Full details</summary>
@@ -283,17 +294,30 @@ function cardHtml(o, i){
     <button class="morebtn" id="more-${i}" onclick="moreLike(${i})">More like this</button>`;
 }
 
-function render(){
+function setFilter(f){ FILTER = f; render(false); }
+
+function renderFilters(){
+  const wrap = document.getElementById("filters");
+  const opts = [["all", "All offers", OFFERS.length]].concat(
+    Object.keys(MECH).map(k => [k, MECH[k], OFFERS.filter(o=>o.mechanism===k).length])
+      .filter(([,,n]) => n > 0));
+  wrap.innerHTML = opts.map(([k, label, n]) =>
+    `<button class="${FILTER===k?"on":""}" onclick="setFilter('${k}')">${esc(label)} (${n})</button>`).join("");
+}
+
+function render(scroll = true){
   const wrap = document.getElementById("cards");
   document.getElementById("whoheader").innerHTML = whoHeader();
+  renderFilters();
   wrap.innerHTML = "";
   OFFERS.forEach((o, i) => {
+    if(FILTER !== "all" && o.mechanism !== FILTER) return;
     const c = document.createElement("div"); c.className = "card"; c.id = "card-" + i;
     c.innerHTML = cardHtml(o, i);
     wrap.appendChild(c);
   });
   document.getElementById("results").style.display = "block";
-  document.getElementById("results").scrollIntoView({behavior:"smooth"});
+  if(scroll) document.getElementById("results").scrollIntoView({behavior:"smooth"});
   autoWriteEmails();
 }
 
@@ -312,7 +336,7 @@ async function moreLike(i){
     const d = await readJson(r);
     if(!r.ok || !d.ok || !d.offers){ throw new Error(d.message || GENERIC_MSG); }
     OFFERS.splice(i + 1, 0, ...d.offers);
-    render();
+    render(false);
     toast("Added " + d.offers.length + " more like \"" + o.name + "\"");
   } catch(e) {
     btn.disabled = false; btn.textContent = "More like this";
@@ -323,7 +347,7 @@ async function moreLike(i){
 function csvCell(s){ s = String(s??""); return '"' + s.replace(/"/g,'""') + '"'; }
 function downloadCsv(){
   const header = ["Offer name","The problem","What you'd do and why it's better","Pricing angle",
-                  "The promise","Mechanism","One fair condition","Example first line","Why this works on cold email","Full cold email"];
+                  "The promise","Mechanism","Buyer appeal (1-10)","One fair condition","Example first line","Why this works on cold email","Full cold email"];
   const rows = [header.join(",")];
   for(const o of OFFERS){ rows.push(FIELDS.map(f => csvCell(f==="mechanism" ? (MECH[o[f]]||o[f]) : o[f])).concat(csvCell(exportEmail(o))).join(",")); }
   const blob = new Blob(["﻿" + rows.join("\r\n")], {type: "text/csv;charset=utf-8"});
@@ -335,7 +359,7 @@ function downloadCsv(){
 }
 
 function offerText(o, i){
-  return `OFFER ${i+1}: ${o.name} [${MECH[o.mechanism]||o.mechanism}]
+  return `OFFER ${i+1}: ${o.name} [${MECH[o.mechanism]||o.mechanism}${o.appeal?", buyer appeal "+o.appeal+"/10":""}]
 The problem: ${o.problem}
 What you'd do, and why it's better: ${o.differentiator}
 Pricing angle: ${o.pricing}
