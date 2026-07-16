@@ -1766,22 +1766,55 @@ async function doDraftAnyway(btn) {
   loadQueue();
 }
 
+/* Optimistic (perf ruling 2026-07-16): the row leaves the screen the moment
+   Dismiss is clicked - the POST runs in the background, and a failed write
+   puts the row back exactly where it was with the usual error surfaces.
+   QUEUE_ROWS and ALL_ROWS can hold DISTINCT objects for the same id (separate
+   fetches), so the status flip is applied to both. */
 async function doDismiss(btn) {
-  const restore = busyBtn(btn, "Dismissing…");
-  if (!restore) return;
+  if (btn.disabled) return;
+  btn.disabled = true;
   const id = btn.getAttribute("data-id");
+  const qIdx = QUEUE_ROWS.findIndex((r) => String(r.id) === String(id));
+  const qRow = qIdx >= 0 ? QUEUE_ROWS[qIdx] : null;
+  const aRow = ALL_ROWS.find((r) => String(r.id) === String(id)) || null;
+  const row = qRow || aRow;
+  if (!row) { btn.disabled = false; return; }
+  const prevStatus = row.status;
+  const counts = KPIS.counts || {};
+  const hadCounts = { prev: counts[prevStatus], dis: counts.dismissed };
+  if (qRow) qRow.status = "dismissed";
+  if (aRow) aRow.status = "dismissed";
+  // The dismissed row only leaves the list when the active pill excludes it -
+  // on "Dismissed"/"All" (or during a cross-pill search) it stays put and the
+  // re-render flips its visible status instead.
+  if (qIdx >= 0 && currentStatus && currentStatus !== "dismissed") QUEUE_ROWS.splice(qIdx, 1);
+  if (typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
+  if (typeof counts.dismissed === "number") counts.dismissed += 1;
+  if (prevStatus === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
+  renderKpis(); renderQueueFilters(); renderQueue();
+  protoNote("Dismissed");
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id), action: "dismiss" }),
   });
-  restore();
+  btn.disabled = false;
   if (!res.ok) {
+    // Roll the optimistic state back: same objects, same index, same counts.
+    if (qRow) qRow.status = prevStatus;
+    if (aRow) aRow.status = prevStatus;
+    if (qIdx >= 0 && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
+      QUEUE_ROWS.splice(Math.min(qIdx, QUEUE_ROWS.length), 0, qRow);
+    }
+    counts[prevStatus] = hadCounts.prev;
+    counts.dismissed = hadCounts.dis;
+    if (prevStatus === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review += 1;
+    renderKpis(); renderQueueFilters(); renderQueue();
     showError("Couldn't dismiss: " + res.error);
     showDetailError("Couldn't dismiss: " + res.error);
     return;
   }
   clearError();
   delete EDITED_DRAFTS[id];
-  loadQueue();
 }
 
 async function doSubsequence(chk) {

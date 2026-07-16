@@ -4155,13 +4155,20 @@ def route_queue_action(payload):
         action = payload.get("action")
         if not qid or not action:
             return 400, {"error": "id and action are required"}
+        if action == "dismiss":
+            # One round-trip (perf ruling 2026-07-16): the old GET-then-PATCH
+            # cost two sequential Supabase calls over keep-alive-less urllib.
+            # return=representation makes the PATCH itself the existence check.
+            updated = _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{qid}",
+                          {"status": "dismissed"}, "return=representation") if _SB else None
+            if not (isinstance(updated, list) and updated):
+                return 404, {"error": "Queue row not found."}
+            _bust_read_caches()
+            return 200, {"ok": True, "status": "dismissed"}
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
-        if action == "dismiss":
-            _apply_patch(row, {"status": "dismissed"})
-            return 200, {"ok": True, "status": "dismissed"}
         if action == "subsequence":
             checked = bool(payload.get("checked"))
             if not checked:
