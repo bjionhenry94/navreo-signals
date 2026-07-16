@@ -12043,7 +12043,7 @@ THE OFFER FRAMEWORK (every offer must have all four):
 (b) DIFFERENTIATOR: what this business would do about it AND an explicit comparison to the usual way (the words "instead of" or "unlike" or "most" should appear: e.g. "unlike agencies that charge a retainer", "instead of waiting weeks for quotes", "most suppliers make you...").
 (c) PRICING: a pricing angle that favours the buyer (fixed price, pay less than the alternative, price tied to results, free first step). For a lead_magnet offer the pricing angle IS the free first step.
 (d) MECHANISM: exactly ONE per offer. {mix_line}
-   - lead_magnet: you make something small, useful and FREE and offer to SEND it (a one-page breakdown, a short Loom, a worked sample, a plan). No strings attached.
+   - lead_magnet: you make something small, useful and FREE and offer to SEND it. The magnet must be SERVICE-BASED - a small worked piece of the actual service, done for them (a sample deliverable, a worked plan for their exact situation, a done-for-you example, a short Loom showing their solution built). NEVER an audit, review, assessment, health check, or consultation - offers to inspect their stuff do not get replies; a ready-made taste of the service does. No strings attached.
    - pay_after_result: buyer pays nothing until the work is delivered or the result shows up.
    - pay_per_result: buyer pays per unit of result (per lead, per sale, per placement), not a retainer.
    - guarantee_refund: a concrete promise (number + deadline) with a full refund if missed. The word "refund" (or "money back") MUST appear in the risk_reversal field of every guarantee_refund offer.
@@ -12124,6 +12124,11 @@ Reply with ONLY a JSON object, no fences, no commentary:
             # second mechanism despite the prompt; one bad offer must not sink
             # the whole generation, so drop the offender instead):
             def _stacked(o):
+                # User law 2026-07-16: audits never work as offers - drop any
+                # offer built around one (service-based lead magnets instead).
+                if re.search(r"\baudit(?:s|ed|ing)?\b",
+                             " ".join(str(o.get(f) or "") for f in OFFER_FIELDS), re.I):
+                    return "audit offer"
                 # Brevity law: the visible offer (problem + differentiator) must
                 # be scannable. Drop bloated offers rather than failing the run.
                 if len(str(o.get("problem") or "").split()) \
