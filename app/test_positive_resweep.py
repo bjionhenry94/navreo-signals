@@ -66,8 +66,17 @@ class FakeSB:
     def __init__(self, last_sweep=None, seen=None, archived=None):
         self.state2 = {"watermark": last_sweep} if last_sweep else None
         self.seen = set(seen or [])
+        # archived: set of (campaign_id, email_lower, epoch_seconds) — the
+        # sweep checks by timestamp EQUALITY, not by message_id string, so a
+        # "+00:00"-keyed webhook row must match a ".000Z" query (dedup-format
+        # drift proven live on Gerry's 2026-07-15 reply).
         self.archived = set(archived or [])
         self.state_writes = []
+
+    @staticmethod
+    def _epoch(ts):
+        s = _unq(str(ts)).replace(".000Z", "+00:00").replace("Z", "+00:00")
+        return dt.datetime.fromisoformat(s).timestamp()
 
     def __call__(self, method, path, body=None, prefer=""):
         table = path.split("?", 1)[0]
@@ -94,9 +103,13 @@ class FakeSB:
                     self.seen.add((it or {}).get("message_id"))
                 return []
         if table == "replies" and method == "GET":
-            m = re.search(r"smartlead_message_id=eq\.([^&]+)", q)
-            mid = _unq(m.group(1)) if m else ""
-            return [{"id": 1}] if mid in self.archived else []
+            mc = re.search(r"smartlead_campaign_id=eq\.([^&]+)", q)
+            me = re.search(r"email=ilike\.([^&]+)", q)
+            mt = re.search(r"replied_at=eq\.([^&]+)", q)
+            if mc and me and mt:
+                key = (int(mc.group(1)), _unq(me.group(1)).lower(), self._epoch(mt.group(1)))
+                return [{"id": 1}] if key in self.archived else []
+            return []
         return []
 
 
@@ -152,7 +165,10 @@ def test_seed_run():
             row(102, NOW - dt.timedelta(days=5), email="b@x.com"),
             row(103, NOW - dt.timedelta(hours=1), email="c@x.com")]
     mid_archived = f"102-{_iso(NOW - dt.timedelta(days=5))}"
-    sb = FakeSB(archived={mid_archived})          # one already webhook-archived
+    # archived under the webhook's "+00:00" time format — the sweep queries
+    # with the master-inbox ".000Z" form; timestamp equality must still hit
+    when_plus = (NOW - dt.timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    sb = FakeSB(archived={(3506959, "b@x.com", FakeSB._epoch(when_plus))})
     inbox, hook = FakeInbox(rows), HookRecorder()
     wire(sb, inbox, hook)
     s = setter.run_positive_resweep()
@@ -205,7 +221,10 @@ def test_new_re_reply_posts_once():
 def test_archived_skipped():
     t = NOW - dt.timedelta(minutes=10)
     mid = f"301-{_iso(t)}"
-    sb = FakeSB(last_sweep=(NOW - dt.timedelta(minutes=30)).isoformat(), archived={mid})
+    # archived by the webhook fast-path under its "+00:00" serialisation
+    sb = FakeSB(last_sweep=(NOW - dt.timedelta(minutes=30)).isoformat(),
+                archived={(3506959, "lead@acme.com",
+                           FakeSB._epoch(t.strftime("%Y-%m-%dT%H:%M:%S+00:00")))})
     inbox, hook = FakeInbox([row(301, t)]), HookRecorder()
     wire(sb, inbox, hook)
     s = setter.run_positive_resweep()

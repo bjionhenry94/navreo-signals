@@ -2825,6 +2825,23 @@ def _fetch_positive_threads(page_ceiling: int):
     return out, overflow
 
 
+def _reply_time_in_archive(campaign_id, email: str, rtime: str) -> bool:
+    """True if ANY replies row records this exact reply instant for this
+    lead+campaign. Keyed on (campaign, email, replied_at-as-timestamp) rather
+    than smartlead_message_id because the mid's time half is format-fluid:
+    webhook-fed routeB rows key "...+00:00" while master-inbox mids are
+    "....000Z" (both exist live for ONE Gerry reply, 2026-07-15) — a string
+    match on one format would re-fire alerts the webhook already sent.
+    Postgres compares replied_at as a timestamp, so both formats hit."""
+    if not _SB or not email or not rtime:
+        return False
+    rows = _SB("GET", f"replies?workspace=eq.{WORKSPACE}"
+                      f"&smartlead_campaign_id=eq.{campaign_id}"
+                      f"&email=ilike.{quote(email, safe='')}"
+                      f"&replied_at=eq.{quote(rtime, safe='')}&select=id&limit=1")
+    return isinstance(rows, list) and bool(rows)
+
+
 def _resweep_seen_set(mids):
     """Bulk membership check against reply_sync_seen — chunked in.() GETs (100
     mids/chunk) instead of one GET per mid (a full sweep is ~1.5k mids)."""
@@ -2902,8 +2919,10 @@ def run_positive_resweep(force: bool = False) -> dict:
             # Seed: never post. Record what WOULD have fired (unseen + not in
             # archive) so the miss this sweep exists to catch is provably
             # visible in the seed run's log, then mark everything seen.
-            for mid in unseen:
-                if not _reply_in_archive(mid):
+            for mid, r in unseen.items():
+                if not _reply_time_in_archive(r.get("email_campaign_id"),
+                                              (r.get("lead_email") or "").strip(),
+                                              r.get("last_reply_time")):
                     summary["would_post"] += 1
                     if len(summary["would_post_sample"]) < 10:
                         summary["would_post_sample"].append(mid)
@@ -2911,7 +2930,9 @@ def run_positive_resweep(force: bool = False) -> dict:
         else:
             to_mark = []
             for mid, r in unseen.items():
-                if _reply_in_archive(mid):
+                if _reply_time_in_archive(r.get("email_campaign_id"),
+                                          (r.get("lead_email") or "").strip(),
+                                          r.get("last_reply_time")):
                     # webhook fast-path already alerted + archived this one
                     to_mark.append(mid)
                     summary["marked_archived"] += 1
