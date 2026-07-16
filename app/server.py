@@ -12055,7 +12055,12 @@ WATCH THE PRICING FIELD - it is where stacking sneaks in:
 - guarantee_refund pricing is a normal fee paid the normal way; the refund is the safety net. NEVER also delay, waive or condition the payment (that would be pay_after_result on top).
 - pay_after_result and pay_per_result pricing never mention a refund or a free deliverable.
 (A Loom or one-pager that merely EXPLAINS the offer is a CTA, not a second mechanism - that is fine.)
-WATCH THE OPENER TOO: in pay_after_result, pay_per_result and guarantee_refund offers, the small thing the opener offers to send may only DESCRIBE the offer (a short Loom about it, a one-page plan of what we would do). NEVER offer a free sample, free unit, free trial or free version of the deliverable itself ("a sample of the work we'd build for you", "an example lead we'd deliver") - a free taste of the deliverable IS the lead_magnet mechanism and belongs only in lead_magnet offers.
+WATCH THE OPENER TOO: in pay_after_result, pay_per_result and guarantee_refund offers, the small thing the opener offers to send may only DESCRIBE the offer (a short Loom about it, a one-page plan of what we would do). NEVER offer a free sample, free unit, free trial or free version of the deliverable itself ("a sample of the work we'd build for you", "the exact posts we'd publish", "an example lead we'd deliver", "the checklist we use") - a free taste of the deliverable or a standalone useful asset IS the lead_magnet mechanism and belongs only in lead_magnet offers.
+
+DELIVERABILITY LAW (the sender must be able to keep every promise):
+- The promise, and anything payment is gated on, must be something THIS business controls and can measure: work delivered, a booking confirmed, a listing live, leads delivered that match agreed criteria. NEVER promise, guarantee, or gate payment on the recipient's own sales outcomes (their customers' purchase orders, their new accounts won, their tenants signing, their store opening on time) or on platform metrics that cannot be verified per person (impressions, followers, views by job title).
+- Keep every number modest and honest: a promise the business would miss more often than hit is a broken offer. When in doubt, promise the delivery of the work, not the market's response to it.
+- Never use "stop losing", "recover lost" or "win back" as the benefit - the benefit is always new money coming in.
 
 HARD RULES:
 - NEW MONEY ONLY (the single most important rule): every offer must promise the RECIPIENT brand-new revenue - new customers, new sales, new orders, new markets, new booked work, new tenants, new contracts they currently lose. The main benefit to the recipient must be MORE MONEY COMING IN, never money saved or a loss avoided. BANNED offer types, no matter how the business is described: preventing downtime, avoiding losses, cutting or saving costs, staying compliant, protecting or keeping existing revenue, reducing risk on things they already do, optimising/auditing/refreshing/speeding up/tidying up something they already run. Recovering money the recipient is already owed (tax refunds, duty drawbacks, rebates, overcharges, chargebacks) is NOT new money - it is found money, and it is BANNED as an offer. If this business sells repairs, maintenance, logistics, cleaning, compliance, efficiency or cost-saving, you MUST recast every offer as a NEW-revenue win for the recipient. Example: a handyman must NOT offer "emergency repairs to prevent downtime" (that is avoiding a loss); instead offer "get your empty units rented faster by making them move-in ready in 48 hours" (that is NEW rental income). A logistics firm must NOT offer "cut your shipping costs" (saving); instead offer "get your product onto shelves in three new states" (NEW orders).
@@ -12119,8 +12124,12 @@ Reply with ONLY a JSON object, no fences, no commentary:
                                 ("pricing", "risk_reversal", "opener", "stipulation"))
                 if o["mechanism"] != "lead_magnet" and re.search(
                         r"\bfree (?:sample|trial|unit|version|clean|month|week)\b|\bsample of the\b"
+                        r"|\bthe exact (?:posts?|emails?|sequences?|copy|lists?)\b|\bchecklist we use\b"
                         r"|\bunless you (?:sign|buy|purchase)\b", blob, re.I):
                     return "free-sample leak"
+                if o["mechanism"] in ("pay_after_result", "pay_per_result") and re.search(
+                        r"\bguarantee|\brefund|\bmoney.?back", blob, re.I):
+                    return "guarantee leak in pay offer"
                 if o["mechanism"] == "guarantee_refund" and not re.search(
                         r"refund|money.?back", str(o.get("risk_reversal") or ""), re.I):
                     return "guarantee without refund"
@@ -12227,10 +12236,12 @@ Hi <recipient first name>,
 P.S - We've helped <a named example client or "companies like X"> who were struggling with <problem> <concrete result>.
 
 HARD RULES FOR THIS TEMPLATE:
-- The ONLY ask is permission to send the free thing. No call ask, no meeting, no second question.
+- The email ALWAYS starts with the icebreaker line. NEVER open with the CTA or the offer.
+- The ONLY ask is permission to send the free thing. Exactly ONE question in the whole email. No call ask, no meeting, no second question.
 - The CTA verb is send / share / give / show, and the buyer receives a ready-made thing, never work done to them.
+- Honest tense: if making the free thing needs the recipient's input, access or a call first, write "We'd love to put together..." (future). Only write "We put together..." (past) for a thing that can genuinely exist already.
 - Do NOT mention any guarantee, refund, pay-per-result or pay-after-result anywhere. The free thing is the whole offer.
-- The body between greeting and sign-off is 45-70 words."""
+- The body between greeting and sign-off is 45-70 words. Count them."""
     else:
         template_block = """THE SERVICE PITCH TEMPLATE (follow this shape exactly, one blank line between each part):
 
@@ -12247,8 +12258,9 @@ P.S - <one concrete line of proof: a named example client and a result>
 
 HARD RULES FOR THIS TEMPLATE:
 - The "If we could ... ?" part is ONE flowing sentence that ends on the question mark. Do NOT split the promise into its own separate sentence, and do NOT add any sentence after the question.
+- The promise clause sits INSIDE that sentence joined naturally with "and" - never a spliced clause like "..., we will refund the fee, would you like...".
 - Keep the "If we could ... ?" sentence between 45 and 70 words.
-- The promise woven in is ONLY this offer's mechanism. Do NOT add a free resource, sample or any second promise on top of it.
+- The promise woven in is ONLY this offer's mechanism. Do NOT add a free resource, sample or any second promise on top of it. Use the words guarantee or refund ONLY if this offer's mechanism is guarantee_refund.
 - The CTA offers to SEND something small (a short Loom, a one-page plan, a worked example). Never "book a call" or "hop on a call"."""
     prompt = f"""You are our house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below, using the template EXACTLY.
 
@@ -12268,6 +12280,7 @@ THE OFFER (its one mechanism is: {fields['mechanism']}):
 
 HARD RULES (always):
 - Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
+- The P.S proof line uses a PLAUSIBLE INVENTED client name - never the name of a real well-known company. Keep the numbers modest and only claim results this kind of business could actually measure and attribute.
 - ONE mechanism only: the email expresses this offer's mechanism and nothing from any other (the P.S proof line is proof, not a promise).
 - Plain English an 11th grader understands. No em-dashes anywhere. No colons or semicolons in the body. No spam words (free of charge is fine to say as "no charge"; avoid the words free, trial, guaranteed, risk-free, today, urgent).
 - Real line breaks between the parts, exactly as shown.
