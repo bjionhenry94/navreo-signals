@@ -3818,6 +3818,7 @@ def route_subsequence_unresolved(_params):
                     continue
                 out.append({
                     "id": r.get("id"), "lead_name": _lead_name(r), "lead_email": r.get("lead_email"),
+                    "company_domain": r.get("company_domain"),
                     "reply_snippet": clean_body(r.get("reply_body") or "")[:200],
                     "sent_at": r.get("sent_at"), "smartlead_campaign_id": r.get("smartlead_campaign_id"),
                     "subsequence_decision": decision,

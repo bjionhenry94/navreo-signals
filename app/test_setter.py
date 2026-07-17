@@ -1829,7 +1829,8 @@ def test_subsequence_unresolved_endpoint_filters_correctly():
     old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)).isoformat(timespec="seconds")
     recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat(timespec="seconds")
     sb.queue.append({"id": 801, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "a@x.com",
-                     "lead_first_name": "Ann", "message_id": "u1", "status": "sent", "sent_at": recent,
+                     "lead_first_name": "Ann", "company_domain": "annco.com",
+                     "message_id": "u1", "status": "sent", "sent_at": recent,
                      "reply_body": "sounds good", "added_to_subsequence": False, "subsequence_decision": None})
     sb.queue.append({"id": 802, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "b@x.com",
                      "lead_first_name": "Bo", "message_id": "u2", "status": "auto_sent", "sent_at": recent,
@@ -1861,6 +1862,8 @@ def test_subsequence_unresolved_endpoint_filters_correctly():
          row801.get("lead_name") == "Ann" and row801.get("lead_email") == "a@x.com"
          and row801.get("sent_at") == recent and row801.get("smartlead_campaign_id") == 111
          and "sounds good" in (row801.get("reply_snippet") or ""), row801)
+    check("unresolved: row carries company_domain for the tray's company line",
+         row801.get("company_domain") == "annco.com", row801)
 
 
 def test_subsequence_none_action_patches_decision_and_409s_if_added():

@@ -253,22 +253,64 @@
 .sg-chip.sg-none { border-style: dashed; }
 .sg-hint { margin-top: 8px; }
 
-/* ── Unresolved-followup banner, pinned above the queue list ──────────── */
-.sg-banner { padding: 0; overflow: hidden; }
-.sg-banner-head { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 9px 13px; }
-.sg-banner-caret { margin-left: auto; opacity: 0.7; }
-.sg-banner-rows { border-top: 1px solid var(--amber-line); }
-.sg-banner-row {
-  display: flex; align-items: center; gap: 12px; padding: 9px 13px;
-  border-bottom: 1px solid var(--amber-line); flex-wrap: wrap;
+/* ── Unresolved-followup TRAY, pinned at the top of the queue column ────
+   Owner ruling 2026-07-17 (round 2): the P3 prototype's tray design, not a
+   full-width page banner. Amber accent, collapsible header with a count
+   badge, amber card rows; >24h rows get the stronger amber treatment.
+   Hidden entirely at zero. */
+.tray {
+  flex-shrink: 0; border-bottom: 1px solid var(--amber-line);
+  background: var(--amber-bg);
 }
-.sg-banner-row:last-child { border-bottom: none; }
-.sg-br-main { flex: 1; min-width: 200px; cursor: pointer; border-radius: 8px; margin: -4px; padding: 4px; }
-.sg-br-main:hover { background: rgba(255, 255, 255, 0.55); }
-.sg-br-main:hover .sg-br-name { text-decoration: underline; }
-.sg-br-name { font-weight: 600; font-size: 12.5px; color: var(--ink); }
-.sg-br-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
-.sg-br-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tray-head {
+  display: flex; align-items: center; gap: 8px; padding: 11px 14px; cursor: pointer;
+  user-select: none;
+}
+.tray-head .t-icon {
+  width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--amber); color: var(--amber-bg); font-size: 11px; font-weight: 700;
+}
+.tray-title { font-size: 12.5px; font-weight: 600; color: #6B4A00; flex: 1; }
+.tray-count-badge {
+  font-size: 11px; font-weight: 700; color: #6B4A00; background: rgba(255,255,255,0.55);
+  padding: 1px 8px; border-radius: 999px;
+}
+.tray-chev { font-size: 10px; color: #6B4A00; transition: transform 0.2s; }
+.tray.open .tray-chev { transform: rotate(180deg); }
+.tray-body { max-height: 0; overflow: hidden; transition: max-height 0.25s ease; }
+.tray.open .tray-body { max-height: 340px; overflow-y: auto; }
+.tray-row {
+  padding: 10px 14px; border-top: 1px solid var(--amber-line);
+  display: flex; flex-direction: column; gap: 5px; background: var(--cream-50);
+}
+.tray-row.old {
+  background: var(--amber-bg);
+  border-left: 3px solid var(--amber);
+  padding-left: 11px;
+}
+.tray-row-main { cursor: pointer; display: flex; flex-direction: column; gap: 5px; border-radius: 6px; }
+.tray-row-main:hover .tray-row-name { text-decoration: underline; }
+.tray-row-h { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.tray-row-name { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.tray-row-age { font-size: 10.5px; font-weight: 600; color: var(--ink-3); background: rgba(20,17,14,0.06); padding: 1px 7px; border-radius: 999px; flex-shrink: 0; }
+.tray-row.old .tray-row-age { background: var(--amber); color: var(--amber-bg); }
+.tray-row-time { font-size: 10.5px; color: var(--ink-3); margin-left: auto; flex-shrink: 0; }
+.tray-row-snippet { font-size: 11.5px; color: var(--ink-2); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tray-row-actions { display: flex; gap: 6px; margin-top: 3px; align-items: center; flex-wrap: wrap; }
+.tray-add-btn {
+  border: 1px solid var(--line-2); background: var(--card); color: var(--ink-2);
+  border-radius: 999px; padding: 4px 10px; font: 500 11px var(--font-sans);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+}
+.tray-add-btn:hover { background: var(--bg-sunken); }
+.tray-dismiss-btn {
+  border: 1px solid var(--line-2); background: transparent; color: var(--ink-3);
+  border-radius: 999px; padding: 4px 10px; font: 500 11px var(--font-sans); cursor: pointer;
+}
+.tray-dismiss-btn:hover { background: var(--bg-sunken); color: var(--ink); }
+.tray-row-picker { margin-top: 4px; }
+/* Detail-view retro picker keeps this class from the previous ship. */
 .sg-br-picker { flex-basis: 100%; }
 
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
@@ -373,10 +415,17 @@
       </div>
     </div>
 
-    <div id="subseqBanner" class="warn-banner sg-banner" style="display:none"></div>
-
     <div class="inbox-shell" id="inboxShell">
       <div class="inbox-left">
+        <div class="tray" id="subseqTray" style="display:none">
+          <div class="tray-head" id="trayHead" role="button" tabindex="0">
+            <div class="t-icon">!</div>
+            <div class="tray-title" id="trayTitle"></div>
+            <span class="tray-count-badge" id="trayBadge"></span>
+            <span class="tray-chev">&#9662;</span>
+          </div>
+          <div class="tray-body" id="trayBody"></div>
+        </div>
         <div class="il-search">
           <input type="text" id="inboxSearch" placeholder="Search name, email, campaign, reply…">
           <div class="il-search-notes">
@@ -563,7 +612,11 @@ const SUBSEQ_CACHE = {};
 // rowId (string) -> {choice:"push", subSequenceId, name} | {choice:"none"}
 const GATE_SELECTION = {};
 let unresolvedRows = [];
-let unresolvedExpanded = false;
+/* P3 tray behaviour: auto-expanded whenever the count is above zero
+   (collapsible by clicking the header, but a NEW unresolved send re-expands
+   it so nothing piles up unseen). */
+let trayOpen = true;
+let _lastTrayCount = 0;
 
 /* Client-side mirror of setter.py's _extract_urls: every distinct http(s)
    URL in text (an href attribute value and a bare URL in prose both match
@@ -911,64 +964,91 @@ async function loadQueue(prefetch) {
   renderClientFilter();
   renderQueue();
   hydrateAllRows();  // background: full corpus (threads + search + instant pills)
-  loadUnresolvedBanner();
+  loadUnresolvedTray();
 }
 
-/* ── Unresolved-followup banner (2026-07-17) ──────────────────────────────
-   Amber banner pinned above the queue list: sent/auto_sent rows that never
-   got a follow-up decision (see route_subsequence_unresolved). Collapsed by
-   default - count visible, click the header to expand. Hidden entirely at
-   zero. Fed on queue load and re-fetched after every banner action / send. */
-async function loadUnresolvedBanner() {
+/* ── Unresolved-followup TRAY (2026-07-17, P3 design) ─────────────────────
+   Pinned at the top of the queue column, above search: sent/auto_sent rows
+   that never got a follow-up decision (see route_subsequence_unresolved).
+   Auto-expands whenever the count is above zero (collapsible; a new
+   unresolved send re-expands it). Hidden entirely at zero. Fed on queue
+   load and re-fetched after every tray/detail action and every send. */
+async function loadUnresolvedTray() {
   const res = await fetchJson("/api/setter/subsequence/unresolved");
   unresolvedRows = (res.ok && res.data && Array.isArray(res.data.rows)) ? res.data.rows : [];
-  renderUnresolvedBanner();
+  renderUnresolvedTray();
 }
-function unresolvedRowHtml(r) {
+function unresolvedAgeHours(r) {
+  const t = new Date(r.sent_at || 0).getTime();
+  if (!t) return 0;
+  return Math.max(0, (Date.now() - t) / 3600e3);
+}
+function trayAgeLabel(h) {
+  if (h < 1) return "just now";
+  if (h < 48) return `${Math.floor(h)}h unresolved`;
+  return `${Math.floor(h / 24)}d unresolved`;
+}
+/* P3 ordering: >24h rows float to the top, oldest first; fresher rows
+   below, newest first. */
+function sortedTrayRows() {
+  return [...unresolvedRows].sort((a, b) => {
+    const ah = unresolvedAgeHours(a), bh = unresolvedAgeHours(b);
+    const aOld = ah >= 24, bOld = bh >= 24;
+    if (aOld !== bOld) return aOld ? -1 : 1;
+    return aOld ? bh - ah : ah - bh;
+  });
+}
+function trayRowHtml(r) {
+  const h = unresolvedAgeHours(r);
   const failTag = r.subsequence_decision === "push_failed"
     ? `<span class="pill r">push failed — retry</span>` : "";
-  return `<div class="sg-banner-row" data-id="${esc(r.id)}">
-    <div class="sg-br-main" role="button" tabindex="0" data-id="${esc(r.id)}" title="Open the full conversation">
-      <div class="sg-br-name">${esc(r.lead_name || r.lead_email || "Unknown lead")}</div>
-      <div class="sg-br-snippet small muted">${esc(truncate(r.reply_snippet || "", 140))}</div>
-      <div class="sg-br-when small muted">${pulledAgo(r.sent_at)}</div>
+  const company = r.company_domain ? `<span class="muted small">${esc(r.company_domain)}</span>` : "";
+  return `<div class="tray-row ${h >= 24 ? "old" : ""}" data-id="${esc(r.id)}">
+    <div class="tray-row-main" role="button" tabindex="0" data-id="${esc(r.id)}" title="Open the full conversation">
+      <div class="tray-row-h">
+        <span class="tray-row-name">${esc(r.lead_name || r.lead_email || "Unknown lead")}</span>
+        ${company}
+        <span class="tray-row-age">${esc(trayAgeLabel(h))}</span>
+        <span class="tray-row-time">${pulledAgo(r.sent_at)}</span>
+      </div>
+      <div class="tray-row-snippet">${esc(truncate(r.reply_snippet || "", 140))}</div>
     </div>
-    <div class="sg-br-actions">
+    <div class="tray-row-actions">
       ${failTag}
-      <button class="btn sm sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence</button>
-      <button class="btn sm sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>
+      <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence &#9662;</button>
+      <button class="tray-dismiss-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>
     </div>
-    <div class="sg-br-picker" id="sgPicker-${esc(r.id)}" style="display:none"></div>
+    <div class="tray-row-picker" id="sgPicker-${esc(r.id)}" style="display:none"></div>
   </div>`;
 }
-function renderUnresolvedBanner() {
-  const el = document.getElementById("subseqBanner");
-  if (!el) return;
-  if (!unresolvedRows.length) {
-    el.style.display = "none";
-    el.innerHTML = "";
+function renderUnresolvedTray() {
+  const tray = document.getElementById("subseqTray");
+  if (!tray) return;
+  const n = unresolvedRows.length;
+  if (!n) {
+    tray.style.display = "none";
+    document.getElementById("trayBody").innerHTML = "";
+    _lastTrayCount = 0;
     return;
   }
-  el.style.display = "block";
-  const n = unresolvedRows.length;
-  el.innerHTML = `
-    <div class="sg-banner-head" id="sgBannerHead" role="button" tabindex="0">
-      <b>${fmt(n)}</b>&nbsp;earlier send${n === 1 ? "" : "s"} ${n === 1 ? "has" : "have"} no follow-up — review
-      <span class="sg-banner-caret">${unresolvedExpanded ? "▾" : "▸"}</span>
-    </div>
-    ${unresolvedExpanded ? `<div class="sg-banner-rows">${unresolvedRows.map(unresolvedRowHtml).join("")}</div>` : ""}
-  `;
-  const head = document.getElementById("sgBannerHead");
-  if (head) head.addEventListener("click", () => { unresolvedExpanded = !unresolvedExpanded; renderUnresolvedBanner(); });
-  if (unresolvedExpanded) wireUnresolvedBannerEvents(el);
-  setTimeout(sizeInboxShell, 0);  // banner shifts the shell down - re-pin
+  // A NEW unresolved send re-expands a collapsed tray (P3 behaviour) so
+  // bare sends can't pile up unseen behind a folded header.
+  if (n > _lastTrayCount) trayOpen = true;
+  _lastTrayCount = n;
+  tray.style.display = "";
+  tray.classList.toggle("open", trayOpen);
+  document.getElementById("trayTitle").textContent = `Sent without follow-up (${n})`;
+  document.getElementById("trayBadge").textContent = n;
+  const body = document.getElementById("trayBody");
+  body.innerHTML = sortedTrayRows().map(trayRowHtml).join("");
+  wireUnresolvedTrayEvents(body);
 }
-function wireUnresolvedBannerEvents(el) {
-  el.querySelectorAll(".sg-add").forEach((btn) => btn.addEventListener("click", () => doBannerAdd(btn)));
-  el.querySelectorAll(".sg-none").forEach((btn) => btn.addEventListener("click", () => doBannerNone(btn)));
+function wireUnresolvedTrayEvents(el) {
+  el.querySelectorAll(".sg-add").forEach((btn) => btn.addEventListener("click", () => doTrayAdd(btn)));
+  el.querySelectorAll(".sg-none").forEach((btn) => btn.addEventListener("click", () => doTrayNone(btn)));
   // The row body opens the FULL conversation (owner ruling 2026-07-17: a
   // retro follow-up decision shouldn't be made from a one-line snippet).
-  el.querySelectorAll(".sg-br-main").forEach((main) => {
+  el.querySelectorAll(".tray-row-main").forEach((main) => {
     const open = () => openUnresolvedRow(main.getAttribute("data-id"));
     main.addEventListener("click", open);
     main.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
@@ -1031,7 +1111,7 @@ async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
   clearError();
   protoNote("Pushed to Smartlead subsequence");
   applyRetroDecision(id, { added_to_subsequence: true, subsequence_decision: "pushed" });
-  await loadUnresolvedBanner();
+  await loadUnresolvedTray();
 }
 async function retroFollowupNone(id, btn) {
   const restore = busyBtn(btn, "Saving…");
@@ -1047,9 +1127,9 @@ async function retroFollowupNone(id, btn) {
   }
   clearError();
   applyRetroDecision(id, { subsequence_decision: "none" });
-  await loadUnresolvedBanner();
+  await loadUnresolvedTray();
 }
-function renderBannerPicker(id, subs) {
+function renderTrayPicker(id, subs) {
   const picker = document.getElementById(`sgPicker-${id}`);
   if (!picker) return;
   picker.style.display = "block";
@@ -1059,16 +1139,24 @@ function renderBannerPicker(id, subs) {
     ).join("")}</div>`;
   picker.querySelectorAll(".sg-picker-chip").forEach((chip) => chip.addEventListener("click", () => {
     const addBtn = document.querySelector(`.sg-add[data-id="${CSS.escape(String(id))}"]`);
-    if (addBtn) doBannerAdd(addBtn, chip.getAttribute("data-sub-id"));
+    if (addBtn) doTrayAdd(addBtn, chip.getAttribute("data-sub-id"));
   }));
 }
-function doBannerAdd(btn, subSequenceId) {
+function doTrayAdd(btn, subSequenceId) {
   const id = btn.getAttribute("data-id");
-  return retroFollowupAdd(id, subSequenceId, btn, (subs) => renderBannerPicker(id, subs));
+  return retroFollowupAdd(id, subSequenceId, btn, (subs) => renderTrayPicker(id, subs));
 }
-function doBannerNone(btn) {
+function doTrayNone(btn) {
   return retroFollowupNone(btn.getAttribute("data-id"), btn);
 }
+/* The tray header is static markup - wire its collapse toggle once. */
+(function wireTrayHead() {
+  const head = document.getElementById("trayHead");
+  if (!head) return;
+  const toggle = () => { trayOpen = !trayOpen; renderUnresolvedTray(); };
+  head.addEventListener("click", toggle);
+  head.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+})();
 
 /* Full-fidelity corpus refresh, single-flight. Reuses one in-flight fetch
    across callers; re-arms after it lands so the next loadQueue refreshes it. */
@@ -2394,7 +2482,7 @@ async function doSend(btn) {
   clearError();
   delete EDITED_DRAFTS[id];
   delete GATE_SELECTION[id];
-  loadUnresolvedBanner();
+  loadUnresolvedTray();
   protoNote("Reply sent");
   // If this approve carried an edit and training is on, the learner may turn
   // it into a standing rule ~40s from now. Watch for it and SAY SO - the
