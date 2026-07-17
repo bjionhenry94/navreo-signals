@@ -1883,6 +1883,73 @@ def test_subsequence_none_action_patches_decision_and_409s_if_added():
          row2.get("subsequence_decision") == "pushed", row2)
 
 
+def test_queue_row_get_returns_annotated_row():
+    """GET /api/setter/queue/row?id=X - the unresolved banner's click-to-open
+    fetch for rows outside the client's loaded list."""
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 810, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "h@x.com",
+                     "lead_first_name": "Hana", "message_id": "u8", "status": "sent",
+                     "sent_at": "2026-07-17T10:00:00+00:00", "decision_reason": "",
+                     "added_to_subsequence": False, "subsequence_decision": None})
+    status, resp = setter.route_queue_row_get({"id": ["810"]})
+    check("queue/row: 200 status", status == 200, (status, resp))
+    row = resp.get("row") or {}
+    check("queue/row: the full row comes back by id",
+         row.get("id") == 810 and row.get("lead_email") == "h@x.com", row)
+    check("queue/row: annotated like the list rows (read-time keys present)",
+         "would_auto_send" in row and "no_slots_reason" in row, sorted(row.keys()))
+    check("queue/row: unknown id -> 404", setter.route_queue_row_get({"id": ["999999"]})[0] == 404)
+    check("queue/row: missing id -> 400", setter.route_queue_row_get({})[0] == 400)
+
+
+def test_queue_row_get_is_workspace_scoped():
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 811, "workspace": "someone-else", "smartlead_campaign_id": 111,
+                     "lead_email": "alien@x.com", "message_id": "u9", "status": "sent"})
+    status, resp = setter.route_queue_row_get({"id": ["811"]})
+    check("queue/row: another workspace's row is a 404, not a leak", status == 404, (status, resp))
+
+
+def test_retro_decision_from_detail_view_patches_and_clears_unresolved():
+    """The detail view's own 'Add to subsequence' / 'No follow-up needed'
+    buttons fire the SAME actions the banner uses - prove a decision made on
+    a sent row patches both columns and drops the row from the unresolved
+    feed on the next fetch."""
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http)
+    recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).isoformat(timespec="seconds")
+    sb.queue.append({"id": 812, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": "u10",
+                     "status": "sent", "sent_at": recent, "reply_body": "keen, what next?",
+                     "added_to_subsequence": False, "subsequence_decision": None})
+    sb.queue.append({"id": 813, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+                     "lead_email": "other@x.com", "smartlead_lead_id": 43, "message_id": "u11",
+                     "status": "auto_sent", "sent_at": recent, "reply_body": "no thanks",
+                     "added_to_subsequence": False, "subsequence_decision": None})
+    st0, r0 = setter.route_subsequence_unresolved({})
+    check("retro-from-detail: both rows start in the unresolved feed",
+         st0 == 200 and {r["id"] for r in r0.get("rows", [])} >= {812, 813}, (st0, r0))
+
+    # 'Add to subsequence' from the detail view = the "subsequence" action.
+    st1, r1 = setter.route_queue_action({"id": 812, "action": "subsequence", "checked": True})
+    check("retro-from-detail: add succeeds on a sent row", st1 == 200 and r1.get("ok") is True, (st1, r1))
+    row = [r for r in sb.queue if r["id"] == 812][0]
+    check("retro-from-detail: add patches added_to_subsequence AND decision 'pushed'",
+         row.get("added_to_subsequence") is True and row.get("subsequence_decision") == "pushed", row)
+
+    # 'No follow-up needed' from the detail view = the "subsequence_none" action.
+    st2, r2 = setter.route_queue_action({"id": 813, "action": "subsequence_none"})
+    check("retro-from-detail: none succeeds on an auto_sent row", st2 == 200 and r2.get("ok") is True, (st2, r2))
+    row2 = [r for r in sb.queue if r["id"] == 813][0]
+    check("retro-from-detail: none patches decision 'none' only",
+         row2.get("subsequence_decision") == "none" and row2.get("added_to_subsequence") is False, row2)
+
+    st3, r3 = setter.route_subsequence_unresolved({})
+    ids = {r["id"] for r in r3.get("rows", [])}
+    check("retro-from-detail: both rows leave the unresolved feed after the decisions",
+         st3 == 200 and 812 not in ids and 813 not in ids, (st3, ids))
+
+
 def test_claim_race_returns_existing_row_without_classifying():
     """Two intake paths (the webhook and the poll) can race on the same reply.
     process_reply's own dedupe check can find nothing (nobody has claimed the
@@ -7996,6 +8063,9 @@ if __name__ == "__main__":
     test_subsequences_endpoint_returns_mapped_list_and_caches()
     test_subsequence_unresolved_endpoint_filters_correctly()
     test_subsequence_none_action_patches_decision_and_409s_if_added()
+    test_queue_row_get_returns_annotated_row()
+    test_queue_row_get_is_workspace_scoped()
+    test_retro_decision_from_detail_view_patches_and_clears_unresolved()
 
     test_claim_race_returns_existing_row_without_classifying()
     test_existing_row_percent_encodes_plus_in_keys()

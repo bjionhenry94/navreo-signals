@@ -263,7 +263,9 @@
   border-bottom: 1px solid var(--amber-line); flex-wrap: wrap;
 }
 .sg-banner-row:last-child { border-bottom: none; }
-.sg-br-main { flex: 1; min-width: 200px; }
+.sg-br-main { flex: 1; min-width: 200px; cursor: pointer; border-radius: 8px; margin: -4px; padding: 4px; }
+.sg-br-main:hover { background: rgba(255, 255, 255, 0.55); }
+.sg-br-main:hover .sg-br-name { text-decoration: underline; }
 .sg-br-name { font-weight: 600; font-size: 12.5px; color: var(--ink); }
 .sg-br-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
 .sg-br-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -926,7 +928,7 @@ function unresolvedRowHtml(r) {
   const failTag = r.subsequence_decision === "push_failed"
     ? `<span class="pill r">push failed — retry</span>` : "";
   return `<div class="sg-banner-row" data-id="${esc(r.id)}">
-    <div class="sg-br-main">
+    <div class="sg-br-main" role="button" tabindex="0" data-id="${esc(r.id)}" title="Open the full conversation">
       <div class="sg-br-name">${esc(r.lead_name || r.lead_email || "Unknown lead")}</div>
       <div class="sg-br-snippet small muted">${esc(truncate(r.reply_snippet || "", 140))}</div>
       <div class="sg-br-when small muted">${pulledAgo(r.sent_at)}</div>
@@ -964,6 +966,88 @@ function renderUnresolvedBanner() {
 function wireUnresolvedBannerEvents(el) {
   el.querySelectorAll(".sg-add").forEach((btn) => btn.addEventListener("click", () => doBannerAdd(btn)));
   el.querySelectorAll(".sg-none").forEach((btn) => btn.addEventListener("click", () => doBannerNone(btn)));
+  // The row body opens the FULL conversation (owner ruling 2026-07-17: a
+  // retro follow-up decision shouldn't be made from a one-line snippet).
+  el.querySelectorAll(".sg-br-main").forEach((main) => {
+    const open = () => openUnresolvedRow(main.getAttribute("data-id"));
+    main.addEventListener("click", open);
+    main.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+  });
+}
+/* Opens the unresolved row's conversation in the main detail pane, reusing
+   the exact renderer a Sent-tab click uses (selectRow -> renderDetail).
+   These are real setter_queue rows: if the one clicked belongs to a status
+   tab that isn't loaded client-side, fetch it by id first and fold it into
+   ALL_ROWS so every later render finds it. */
+async function openUnresolvedRow(id) {
+  const known = QUEUE_ROWS.find((r) => String(r.id) === String(id))
+             || ALL_ROWS.find((r) => String(r.id) === String(id));
+  if (known) { selectRow(id); return; }
+  const res = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(id)}`);
+  const row = res.ok && res.data && res.data.row;
+  if (!row) {
+    showError("Couldn't open that conversation: " + (res.error || "row not found"));
+    return;
+  }
+  ALL_ROWS.push(row);
+  selectRow(id);
+}
+/* One shared write path for the retro decision, used by the banner rows AND
+   the detail view's own buttons: patch the local copies, refresh whichever
+   detail pane is open, and re-count the banner. */
+function applyRetroDecision(id, patch) {
+  [QUEUE_ROWS, ALL_ROWS].forEach((set) => set.forEach((r) => {
+    if (String(r.id) === String(id)) Object.assign(r, patch);
+  }));
+  if (String(selectedRowId) === String(id)) {
+    const row = QUEUE_ROWS.find((r) => String(r.id) === String(id))
+             || ALL_ROWS.find((r) => String(r.id) === String(id));
+    if (row) renderDetail(row);
+  }
+}
+/* Reuses the existing "subsequence" action (the same one the sidebar
+   checkbox fires) - checked:true pushes live to Smartlead and also patches
+   subsequence_decision='pushed' (setter.py 2026-07-17). A campaign with
+   more than one subsequence answers 400 with the candidate list - the
+   caller's showPicker renders a small picker from it and retries with the
+   chosen sub_sequence_id. */
+async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
+  const restore = busyBtn(btn, "Adding…");
+  if (!restore) return;
+  const payload = { id: Number(id), action: "subsequence", checked: true };
+  if (subSequenceId) payload.sub_sequence_id = subSequenceId;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  restore();
+  if (!res.ok && res.status === 400 && res.data && Array.isArray(res.data.subsequences)) {
+    if (showPicker) showPicker(res.data.subsequences);
+    return;
+  }
+  if (!res.ok) {
+    showError("Couldn't add to subsequence: " + res.error);
+    return;
+  }
+  clearError();
+  protoNote("Pushed to Smartlead subsequence");
+  applyRetroDecision(id, { added_to_subsequence: true, subsequence_decision: "pushed" });
+  await loadUnresolvedBanner();
+}
+async function retroFollowupNone(id, btn) {
+  const restore = busyBtn(btn, "Saving…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: Number(id), action: "subsequence_none" }),
+  });
+  restore();
+  if (!res.ok) {
+    showError("Couldn't record: " + res.error);
+    return;
+  }
+  clearError();
+  applyRetroDecision(id, { subsequence_decision: "none" });
+  await loadUnresolvedBanner();
 }
 function renderBannerPicker(id, subs) {
   const picker = document.getElementById(`sgPicker-${id}`);
@@ -978,48 +1062,12 @@ function renderBannerPicker(id, subs) {
     if (addBtn) doBannerAdd(addBtn, chip.getAttribute("data-sub-id"));
   }));
 }
-/* Reuses the existing "subsequence" action (the same one the sidebar
-   checkbox fires) - checked:true pushes live to Smartlead and now also
-   patches subsequence_decision='pushed' (setter.py 2026-07-17). A campaign
-   with more than one subsequence answers 400 with the candidate list - build
-   a small picker from it and retry with the chosen sub_sequence_id. */
-async function doBannerAdd(btn, subSequenceId) {
+function doBannerAdd(btn, subSequenceId) {
   const id = btn.getAttribute("data-id");
-  const restore = busyBtn(btn, "Adding…");
-  if (!restore) return;
-  const payload = { id: Number(id), action: "subsequence", checked: true };
-  if (subSequenceId) payload.sub_sequence_id = subSequenceId;
-  const res = await fetchJson("/api/setter/queue/action", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-  });
-  restore();
-  if (!res.ok && res.status === 400 && res.data && Array.isArray(res.data.subsequences)) {
-    renderBannerPicker(id, res.data.subsequences);
-    return;
-  }
-  if (!res.ok) {
-    showError("Couldn't add to subsequence: " + res.error);
-    return;
-  }
-  clearError();
-  await loadUnresolvedBanner();
-  loadQueue();
+  return retroFollowupAdd(id, subSequenceId, btn, (subs) => renderBannerPicker(id, subs));
 }
-async function doBannerNone(btn) {
-  const id = btn.getAttribute("data-id");
-  const restore = busyBtn(btn, "Saving…");
-  if (!restore) return;
-  const res = await fetchJson("/api/setter/queue/action", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: Number(id), action: "subsequence_none" }),
-  });
-  restore();
-  if (!res.ok) {
-    showError("Couldn't record: " + res.error);
-    return;
-  }
-  clearError();
-  await loadUnresolvedBanner();
+function doBannerNone(btn) {
+  return retroFollowupNone(btn.getAttribute("data-id"), btn);
 }
 
 /* Full-fidelity corpus refresh, single-flight. Reuses one in-flight fetch
@@ -1208,7 +1256,12 @@ function pagedInboxRows() {
 
 function renderQueue() {
   renderInboxList();
-  const stillThere = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId));
+  // Fall back to ALL_ROWS (same fallback selectRow uses for cross-pill
+  // search results): a conversation opened from the unresolved banner can
+  // belong to a status tab that isn't the active pill, and a background
+  // refresh must not blank it.
+  const stillThere = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId))
+                  || ALL_ROWS.find((r) => String(r.id) === String(selectedRowId));
   renderDetail(stillThere || null);
 }
 
@@ -1460,7 +1513,9 @@ function renderDetail(row) {
         ${teachToggleHtml(row)}
         <div class="ch-spacer"></div>
         ${composerActionsHtml(row)}
+        ${retroFollowupHtml(row)}
       </div>
+      ${retroFollowupPickerHtml(row)}
       ${sendGateHtml(row)}
       ${learnBarHtml(row)}
       ${composerFeedbackHtml(row)}
@@ -1698,6 +1753,45 @@ function composerActionsHtml(row) {
     </span>
     <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
   </div>`;
+}
+
+/* ── Retro follow-up decision, in the detail view (2026-07-17) ───────────
+   A sent/auto_sent row with no follow-up decision shows the same two
+   actions the unresolved banner offers - "Add to subsequence" (with the
+   multi-subsequence picker and the push_failed retry tag) and "No follow-up
+   needed" - sitting where the composer actions normally sit, so the
+   decision can be made right where the conversation was just read. */
+function needsRetroFollowup(row) {
+  return (row.status === "sent" || row.status === "auto_sent")
+    && !row.added_to_subsequence
+    && (row.subsequence_decision == null || row.subsequence_decision === "push_failed");
+}
+function retroFollowupHtml(row) {
+  if (!needsRetroFollowup(row)) return "";
+  const failTag = row.subsequence_decision === "push_failed"
+    ? `<span class="pill r">push failed — retry</span>` : "";
+  return `<div class="qc-actions">
+    ${failTag}
+    <button class="btn primary qc-retro-add" data-id="${esc(row.id)}" type="button">Add to subsequence</button>
+    <button class="btn qc-retro-none" data-id="${esc(row.id)}" type="button">No follow-up needed</button>
+  </div>`;
+}
+function retroFollowupPickerHtml(row) {
+  if (!needsRetroFollowup(row)) return "";
+  return `<div class="sg-br-picker" id="sgDetailPicker-${esc(row.id)}" style="display:none"></div>`;
+}
+function renderDetailRetroPicker(id, subs) {
+  const picker = document.getElementById(`sgDetailPicker-${id}`);
+  if (!picker) return;
+  picker.style.display = "block";
+  picker.innerHTML = `<div class="small muted" style="margin:4px 0">This campaign has more than one subsequence — pick one:</div>
+    <div class="sg-chips">${(subs || []).map((s) =>
+      `<button type="button" class="chip sg-detail-picker-chip" data-id="${esc(id)}" data-sub-id="${esc(s.id)}">${esc(s.name || "Follow-up")}</button>`
+    ).join("")}</div>`;
+  picker.querySelectorAll(".sg-detail-picker-chip").forEach((chip) => chip.addEventListener("click", () => {
+    const addBtn = document.querySelector(`.qc-retro-add[data-id="${CSS.escape(String(id))}"]`);
+    if (addBtn) retroFollowupAdd(id, chip.getAttribute("data-sub-id"), addBtn, (again) => renderDetailRetroPicker(id, again));
+  }));
 }
 
 /* ── Send gate (2026-07-17): "Follow-up — pick one to unlock Approve" ────
@@ -1992,6 +2086,12 @@ function wireDetailEvents(root, row) {
     const intro = root.querySelector("#learnIntro");
     if (intro) intro.remove();
   });
+
+  root.querySelectorAll(".qc-retro-add").forEach((btn) => btn.addEventListener("click", () =>
+    retroFollowupAdd(btn.getAttribute("data-id"), null, btn,
+      (subs) => renderDetailRetroPicker(btn.getAttribute("data-id"), subs))));
+  root.querySelectorAll(".qc-retro-none").forEach((btn) => btn.addEventListener("click", () =>
+    retroFollowupNone(btn.getAttribute("data-id"), btn)));
 
   root.querySelectorAll(".qc-send").forEach((btn) => btn.addEventListener("click", () => doSend(btn)));
   root.querySelectorAll(".qc-regen").forEach((btn) => btn.addEventListener("click", () => doRedraft(btn)));

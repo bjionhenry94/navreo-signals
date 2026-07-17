@@ -4465,6 +4465,26 @@ def route_queue_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def route_queue_row_get(params):
+    """GET /api/setter/queue/row?id=X - one full queue row by id, annotated
+    exactly like the list rows (same _annotate_queue_row pass). Added for the
+    unresolved-followup banner (owner ruling 2026-07-17: clicking an
+    unresolved row must show the CONVERSATION): the banner can surface rows
+    from any status tab, so the one clicked may not be in the client's
+    currently loaded list. Workspace-scoped like every other queue read."""
+    try:
+        qid = _qp(params, "id", "")
+        if not qid:
+            return 400, {"error": "id is required"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&workspace=eq.{WORKSPACE}&select=*") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row:
+            return 404, {"error": "Queue row not found."}
+        return 200, {"row": _annotate_queue_row(row)}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def route_thread_get(params):
     """Fresh thread for one queue row, re-hydrated live from Smartlead when
     the owner OPENS it (owner ruling 2026-07-15: an opened thread must show
@@ -7374,6 +7394,7 @@ GET_ROUTES = {
     "/api/setter/agents": route_agents_get,
     "/api/setter/campaigns": route_campaigns_get,
     "/api/setter/queue": route_queue_get,
+    "/api/setter/queue/row": route_queue_row_get,
     "/api/setter/thread": route_thread_get,
     "/api/setter/grading": route_grading_get,
     "/api/setter/training": route_training_get,
