@@ -1953,6 +1953,89 @@ def test_retro_decision_from_detail_view_patches_and_clears_unresolved():
          st3 == 200 and 812 not in ids and 813 not in ids, (st3, ids))
 
 
+# ── tray reconciliation against Smartlead ground truth (2026-07-17) ────────
+
+def _fresh_reconcile_setup(campaign_id=7710001, sub_id=7720001):
+    """Own campaign/sub ids + cleared module caches so earlier tests'
+    10-minute cache entries can never leak into these assertions."""
+    setter._SUBSEQ_LIST_CACHE.clear()
+    setter._SUBSEQ_ENROLL_CACHE.clear()
+    sb, http = fresh_setter()
+    http.all_campaigns = [{"id": sub_id, "name": "Meeting Request", "status": "ACTIVE",
+                           "parent_campaign_id": campaign_id}]
+    recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat(timespec="seconds")
+    sb.queue.append({"id": 901001, "workspace": "navreo", "smartlead_campaign_id": campaign_id,
+                     "lead_email": "enrolled@x.com", "message_id": "rc1", "status": "sent",
+                     "sent_at": recent, "reply_body": "yes", "added_to_subsequence": False,
+                     "subsequence_decision": None})
+    sb.queue.append({"id": 901002, "workspace": "navreo", "smartlead_campaign_id": campaign_id,
+                     "lead_email": "bare@x.com", "message_id": "rc2", "status": "sent",
+                     "sent_at": recent, "reply_body": "maybe", "added_to_subsequence": False,
+                     "subsequence_decision": None})
+    # Smartlead ground truth: enrolled@x.com IS a lead of the subsequence
+    # campaign (enrolment done in Smartlead's own UI - our DB knows nothing).
+    http.campaign_leads_by_campaign[str(sub_id)] = [
+        {"campaign_lead_map_id": 1, "status": "INPROGRESS",
+         "lead": {"id": 71, "email": "Enrolled@X.com"}},   # case-insensitive match
+    ]
+    return sb, http
+
+
+def test_unresolved_reconcile_stamps_smartlead_enrolled_row():
+    sb, http = _fresh_reconcile_setup()
+    status, resp = setter.route_subsequence_unresolved({})
+    ids = {r["id"] for r in resp.get("rows", [])}
+    check("reconcile: 200 status", status == 200, (status, resp))
+    check("reconcile: Smartlead-enrolled row excluded from the tray", 901001 not in ids, ids)
+    check("reconcile: non-enrolled row stays in the tray", 901002 in ids, ids)
+    row = [r for r in sb.queue if r["id"] == 901001][0]
+    check("reconcile: enrolled row stamped added_to_subsequence + 'pushed' permanently",
+         row.get("added_to_subsequence") is True and row.get("subsequence_decision") == "pushed", row)
+    bare = [r for r in sb.queue if r["id"] == 901002][0]
+    check("reconcile: bare row's columns untouched",
+         bare.get("added_to_subsequence") is False and bare.get("subsequence_decision") is None, bare)
+
+
+def test_unresolved_reconcile_smartlead_error_fails_open():
+    sb, http = _fresh_reconcile_setup(campaign_id=7710002, sub_id=7720002)
+
+    class _BoomOnLeads:
+        def __init__(self, wrapped):
+            self._w = wrapped
+        def __call__(self, method, url, headers, body=None):
+            if re.search(r"/campaigns/[^/?]+/leads", url):
+                raise OSError("smartlead unreachable")
+            return self._w(method, url, headers, body)
+        def __getattr__(self, name):
+            return getattr(self._w, name)
+
+    setter.configure(sb=sb, http_json=_BoomOnLeads(http), keys={"OPENAI_API_KEY": "x", "SMARTLEAD_API_KEY": "y"},
+                     log_activity=lambda *a, **k: None)
+    status, resp = setter.route_subsequence_unresolved({})
+    ids = {r["id"] for r in resp.get("rows", [])}
+    check("reconcile fail-open: no crash, 200", status == 200, (status, resp))
+    check("reconcile fail-open: BOTH rows stay in the tray (enrolled one included)",
+         ids >= {901001, 901002}, ids)
+    row = [r for r in sb.queue if r["id"] == 901001][0]
+    check("reconcile fail-open: nothing stamped on a failed lookup",
+         row.get("added_to_subsequence") is False and row.get("subsequence_decision") is None, row)
+    check("reconcile fail-open: the failure was NOT cached (no negative-cache entry)",
+         str(7720002) not in setter._SUBSEQ_ENROLL_CACHE, setter._SUBSEQ_ENROLL_CACHE.keys())
+
+
+def test_unresolved_reconcile_second_call_uses_cache():
+    sb, http = _fresh_reconcile_setup(campaign_id=7710003, sub_id=7720003)
+    status1, resp1 = setter.route_subsequence_unresolved({})
+    check("reconcile cache: first call resolves the enrolled row",
+         status1 == 200 and 901001 not in {r["id"] for r in resp1.get("rows", [])}, (status1, resp1))
+    n_before = len(http.smartlead_calls)
+    status2, resp2 = setter.route_subsequence_unresolved({})
+    check("reconcile cache: second call still keeps the bare row",
+         status2 == 200 and 901002 in {r["id"] for r in resp2.get("rows", [])}, (status2, resp2))
+    check("reconcile cache: second call makes ZERO extra Smartlead reads (negative verdict cached)",
+         len(http.smartlead_calls) == n_before, http.smartlead_calls[n_before:])
+
+
 def test_claim_race_returns_existing_row_without_classifying():
     """Two intake paths (the webhook and the poll) can race on the same reply.
     process_reply's own dedupe check can find nothing (nobody has claimed the
@@ -8069,6 +8152,9 @@ if __name__ == "__main__":
     test_queue_row_get_returns_annotated_row()
     test_queue_row_get_is_workspace_scoped()
     test_retro_decision_from_detail_view_patches_and_clears_unresolved()
+    test_unresolved_reconcile_stamps_smartlead_enrolled_row()
+    test_unresolved_reconcile_smartlead_error_fails_open()
+    test_unresolved_reconcile_second_call_uses_cache()
 
     test_claim_race_returns_existing_row_without_classifying()
     test_existing_row_percent_encodes_plus_in_keys()

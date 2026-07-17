@@ -3785,12 +3785,125 @@ def _lead_name(row: dict) -> str:
     return name or str(row.get("lead_email") or "") or "Unknown lead"
 
 
+# ── Tray reconciliation against Smartlead ground truth (2026-07-17) ────────
+# Owner bug report: enrolments done directly in Smartlead's own UI never
+# touch our DB, so rows the human already pushed showed as "Sent without
+# follow-up" - false positives. A subsequence IS a Smartlead campaign
+# (parent_campaign_id points at the parent - see _sl_find_subsequences), so
+# "is this lead enrolled?" = "does this lead appear in any subsequence
+# campaign's own leads listing?". The listing is fetched ONCE per subsequence
+# campaign per _SUBSEQ_ENROLL_TTL (batched: one read covers every candidate
+# lead of that campaign), which doubles as the negative-verdict cache -
+# repeated tray loads inside the window cost zero Smartlead calls. Positive
+# verdicts are patched onto the row permanently, so reconciliation is
+# one-time per row, never a per-request Smartlead storm. Calls stay well
+# under the 200/min limit: worst case is one GET /campaigns/ per distinct
+# stale parent campaign plus a few pages per subsequence, per 10 minutes.
+_SUBSEQ_ENROLL_TTL = 600
+_SUBSEQ_ENROLL_CACHE = {}   # str(subseq_campaign_id) -> {"at": ts, "emails": set(lowercased)}
+
+
+def _subseq_enrolled_emails(sub_campaign_id, max_pages: int = 10):
+    """Lowercased emails of every lead enrolled in subsequence campaign
+    `sub_campaign_id`, via GET /campaigns/{id}/leads (same read
+    _sl_campaign_lead_map_id pages through), cached for _SUBSEQ_ENROLL_TTL.
+    Returns None on ANY fetch problem - a malformed page (Smartlead's
+    rate-limit error string mid-listing reads as a non-dict page, see
+    reference_smartlead_pagination_ratelimit_truncation) or an exception -
+    and never caches a failure, so the caller fails OPEN (row stays in the
+    tray) and the next load retries."""
+    key = str(sub_campaign_id)
+    ent = _SUBSEQ_ENROLL_CACHE.get(key)
+    if ent and (_time.time() - ent["at"]) < _SUBSEQ_ENROLL_TTL:
+        return ent["emails"]
+    emails = set()
+    offset = 0
+    try:
+        for _ in range(max_pages):
+            resp = _sl_get(f"/campaigns/{sub_campaign_id}/leads", {"offset": offset, "limit": 100})
+            if not isinstance(resp, dict) or not isinstance(resp.get("data"), list):
+                return None  # error / rate-limited page - fail open, cache nothing
+            page = resp["data"]
+            if not page:
+                break
+            for entry in page:
+                lead = (entry or {}).get("lead") or {}
+                em = str(lead.get("email") or "").strip().lower()
+                if em:
+                    emails.add(em)
+            if len(page) < 100:
+                break
+            offset += 100
+    except Exception:  # noqa: BLE001
+        return None
+    _SUBSEQ_ENROLL_CACHE[key] = {"at": _time.time(), "emails": emails}
+    return emails
+
+
+def _prime_subseq_list_cache(campaign_ids):
+    """One GET /campaigns/ covers the subsequence lookup for EVERY stale
+    parent campaign in `campaign_ids` (instead of _sl_find_subsequences
+    re-fetching the same full list once per campaign). Best-effort: on any
+    failure the per-campaign path retries individually."""
+    now = _time.time()
+    missing = [str(c) for c in campaign_ids
+               if not (_SUBSEQ_LIST_CACHE.get(str(c))
+                       and (now - _SUBSEQ_LIST_CACHE[str(c)]["at"]) < _SUBSEQ_LIST_TTL)]
+    if not missing:
+        return
+    try:
+        resp = _sl_get("/campaigns/")
+        rows = resp if isinstance(resp, list) else None
+        if rows is None:
+            return
+        for cid in missing:
+            subs = [{"id": r.get("id"), "name": r.get("name")} for r in rows
+                    if isinstance(r, dict) and r.get("id") is not None
+                    and r.get("parent_campaign_id") and str(r.get("parent_campaign_id")) == cid]
+            _SUBSEQ_LIST_CACHE[cid] = {"at": now, "list": subs}
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _reconcile_unresolved_against_smartlead(candidates):
+    """`candidates` = [(raw_row, out_dict)]. Returns the out_dicts that are
+    STILL unresolved after checking Smartlead ground truth. A lead found in
+    any subsequence of its campaign is stamped pushed+added on the row
+    (permanently leaving the unresolved set) and dropped from the response.
+    Every failure path keeps the row - a false positive in the tray beats a
+    silently hidden miss."""
+    by_campaign = {}
+    for r, o in candidates:
+        by_campaign.setdefault(str(r.get("smartlead_campaign_id")), []).append((r, o))
+    _prime_subseq_list_cache(by_campaign.keys())
+    kept = []
+    for cid, group in by_campaign.items():
+        enrolled = set()
+        try:
+            subs = _subsequences_for_campaign_cached(cid)
+        except Exception:  # noqa: BLE001
+            subs = []
+        for s in subs:
+            ems = _subseq_enrolled_emails(s.get("id"))
+            if ems:
+                enrolled |= ems
+        for r, o in group:
+            em = str(r.get("lead_email") or "").strip().lower()
+            if em and em in enrolled:
+                _apply_patch(r, {"added_to_subsequence": True, "subsequence_decision": "pushed"})
+            else:
+                kept.append(o)
+    return kept
+
+
 def route_subsequence_unresolved(_params):
-    """GET /api/setter/subsequence/unresolved - the amber banner's feed:
-    sent/auto_sent rows from the last 14 days that never got a follow-up
-    decision (added_to_subsequence isn't true AND subsequence_decision is
-    null or push_failed). Workspace-scoped like every other queue read,
-    newest first, capped at 50.
+    """GET /api/setter/subsequence/unresolved - the tray's feed: sent/
+    auto_sent rows from the last 14 days that never got a follow-up decision
+    (added_to_subsequence isn't true AND subsequence_decision is null or
+    push_failed), reconciled against Smartlead ground truth (see
+    _reconcile_unresolved_against_smartlead - enrolments made in Smartlead's
+    own UI are stamped onto the row and excluded). Workspace-scoped like
+    every other queue read, newest first, capped at 50.
 
     The `status=in.(sent,auto_sent)` and `sent_at=gte.` filters are sent to
     Supabase so a live deployment never pulls more than the window needs, but
@@ -3803,7 +3916,7 @@ def route_subsequence_unresolved(_params):
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=14)).isoformat()
         rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(sent,auto_sent)"
                           f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select=*")
-        out = []
+        candidates = []
         if isinstance(rows, list):
             for r in rows:
                 if not isinstance(r, dict):
@@ -3816,15 +3929,17 @@ def route_subsequence_unresolved(_params):
                 sent_at = r.get("sent_at") or ""
                 if sent_at and sent_at < since:
                     continue
-                out.append({
+                candidates.append((r, {
                     "id": r.get("id"), "lead_name": _lead_name(r), "lead_email": r.get("lead_email"),
                     "company_domain": r.get("company_domain"),
                     "reply_snippet": clean_body(r.get("reply_body") or "")[:200],
                     "sent_at": r.get("sent_at"), "smartlead_campaign_id": r.get("smartlead_campaign_id"),
                     "subsequence_decision": decision,
-                })
+                }))
+        candidates.sort(key=lambda c: c[1].get("sent_at") or "", reverse=True)
+        out = _reconcile_unresolved_against_smartlead(candidates[:50])
         out.sort(key=lambda r: r.get("sent_at") or "", reverse=True)
-        return 200, {"rows": out[:50]}
+        return 200, {"rows": out}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
