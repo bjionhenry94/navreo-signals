@@ -191,6 +191,19 @@
   text-decoration-color: var(--line-2); white-space: nowrap;
 }
 .teach-link:hover { color: var(--orange-700); text-decoration-color: var(--orange-700); }
+/* Learning switch (owner ask 2026-07-17): rewriting a draft IS feedback, so
+   it teaches by default. One switch for the whole review pane, never a
+   per-reply question - see the 2026-07-14 ruling. The hint line below it
+   spells out the current mode in plain words: a switch that silently changes
+   what Approve does has to say so where the editing happens, not in a
+   tooltip nobody hovers. */
+.learn-chk {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font: 500 12px var(--font-sans); color: var(--ink-3); white-space: nowrap;
+}
+.learn-chk input { cursor: pointer; }
+.learn-chk:hover { color: var(--ink); }
+.learn-hint { font-size: 11.5px; color: var(--ink-3); margin: 0 0 7px; }
 .qc-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 .qc-split { display: inline-flex; }
 .qc-split .qc-regen { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
@@ -1273,10 +1286,12 @@ function renderDetail(row) {
       <div class="composer-head">
         <div class="msg-card-lab">Your reply</div>
         ${linkButtonHtml(row)}
+        ${learnToggleHtml(row)}
         ${teachToggleHtml(row)}
         <div class="ch-spacer"></div>
         ${composerActionsHtml(row)}
       </div>
+      ${learnHintHtml(row)}
       ${composerFeedbackHtml(row)}
       ${sentLineHtml}
       ${repliedBackHtml}
@@ -1501,6 +1516,27 @@ function composerActionsHtml(row) {
 function trainingModeOn() {
   return (localStorage.getItem("setterTrainingMode") || "on") === "on";
 }
+/* The switch this whole pane reads had no writer until 2026-07-17 - the mode
+   defaulted ON and nothing could ever turn it off. This is that writer. */
+function setTrainingMode(on) {
+  localStorage.setItem("setterTrainingMode", on ? "on" : "off");
+}
+function learnToggleHtml(row) {
+  // Agentless rows have no brain to teach, so the switch would be a lie.
+  if (!needsComposerActions(row) || !row.agent_id) return "";
+  return `<label class="learn-chk" title="">
+    <input type="checkbox" id="learnChk" ${trainingModeOn() ? "checked" : ""}> Learn from my edits
+  </label>`;
+}
+function learnHintText() {
+  return trainingModeOn()
+    ? "Your changes to this draft will teach the agent for next time."
+    : "Your changes apply to this reply only. Nothing is learned.";
+}
+function learnHintHtml(row) {
+  if (!needsComposerActions(row) || !row.agent_id) return "";
+  return `<div class="learn-hint" id="learnHint">${learnHintText()}</div>`;
+}
 function feedbackPlaceholder() {
   return trainingModeOn()
     ? "Tell it what to change - it'll remember going forward"
@@ -1589,6 +1625,18 @@ function wireDetailEvents(root, row) {
 
   const teachBtn = root.querySelector("#teachAgentBtn");
   if (teachBtn) teachBtn.addEventListener("click", () => openTeachAgentModal(teachBtn.getAttribute("data-agent-id"), teachBtn.getAttribute("data-id")));
+
+  // One switch, two learning paths: the Approve-time edit diff and the typed
+  // feedback placeholder both read trainingModeOn(), so flipping it here has
+  // to update both in place - no reload, no second control.
+  const learnChk = root.querySelector("#learnChk");
+  if (learnChk) learnChk.addEventListener("change", () => {
+    setTrainingMode(learnChk.checked);
+    const hint = root.querySelector("#learnHint");
+    if (hint) hint.textContent = learnHintText();
+    const fbInput = root.querySelector(".qc-feedback-input");
+    if (fbInput) fbInput.placeholder = feedbackPlaceholder();
+  });
 
   root.querySelectorAll(".qc-send").forEach((btn) => btn.addEventListener("click", () => doSend(btn)));
   root.querySelectorAll(".qc-regen").forEach((btn) => btn.addEventListener("click", () => doRedraft(btn)));
@@ -1860,7 +1908,9 @@ async function doSend(btn) {
   sendGuardArmedId = null;
   const restore = busyBtn(btn, "Sending…");
   if (!restore) return;
-  const payload = { id: Number(id), action: "send" };
+  // Stated explicitly on every send, never inferred: the server teaches only
+  // when this says so, so a stale tab can never spring a surprise lesson.
+  const payload = { id: Number(id), action: "send", training: trainingModeOn() };
   if (draftEl) payload.body_override = draftEl.innerHTML;
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),

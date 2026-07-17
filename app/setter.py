@@ -1912,6 +1912,153 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
     return True, saved.get("instructions") or new_text, how
 
 
+LESSON_FROM_EDIT_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["is_lesson", "rule", "reason"],
+    "properties": {
+        "is_lesson": {"type": "boolean"},
+        "rule": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+}
+
+LESSON_FROM_EDIT_SYSTEM = """An AI appointment setter drafted a reply. A human reviewer edited it before approving. You are given both versions. Decide whether the edit teaches a rule worth applying to EVERY future reply, and if so, state that rule.
+
+Almost all edits are NOT lessons. Default to is_lesson=false. A missed lesson costs nothing - the reviewer can always say it in words. A wrong rule silently corrupts every future draft, which is far worse. When in any doubt at all, answer false.
+
+THE DECIDING TEST - apply it first, and let it overrule everything else:
+
+Does the edit change HOW the reply is written, or WHAT it claims to be true?
+
+- HOW = style, structure, length, tone, ordering, what to leave out. The reviewer worked with the same facts the setter had and expressed them differently. This CAN be a lesson.
+- WHAT = information. The reviewer added, changed, or corrected a fact the setter did not have: a price, an availability, a circumstance, a name, a date, a link, a detail about this person or this deal. This is NEVER a lesson, no matter how general it sounds when you write it down. The reviewer was supplying knowledge about one conversation, not teaching a writing preference.
+
+Beware the trap: almost any WHAT edit can be dressed up as a plausible-sounding general rule. "They're away until August, so I'll suggest September" becomes "acknowledge when the recipient is unavailable and propose a time after they return". "For your volume we'd do $2,400" becomes "quote a price matched to the lead's volume". Both READ like sensible advice and both are catastrophic: taught as rules, they make the setter invent availability it cannot know and prices it was never given. If the reviewer's edit introduced information that is not in the setter's draft, answer false - however reasonable the generalisation seems.
+
+It IS a lesson only when the edit shows a durable PREFERENCE about how replies should be written - something that would read as sensible advice to someone drafting a reply to a completely different lead tomorrow, using facts they already have. Examples of real lessons: the reviewer cuts a stock closing line the setter always adds; the reviewer shortens rambling paragraphs; the reviewer strips hedging words; the reviewer moves the booking link after the value; the reviewer deletes an internal placeholder that leaked into the text.
+
+It is NOT a lesson when the edit is:
+- Any WHAT edit, per the deciding test above.
+- A per-lead fact: a person's name, a company name, a job title, a specific date, a specific time, a timezone, a price for this one deal, a link pasted for this one lead.
+- Anything true only of this conversation ("they're away until August", "they already have the deck").
+- Formatting, whitespace, HTML, punctuation, or typo repair with no preference behind it.
+- A change so small or so specific that you cannot restate it without naming something from this particular reply.
+
+The rule you return must be TIMELESS: an imperative sentence about how to write replies in general. It must NOT contain any person's name, any company name, any date, any time, any URL, any price, or the words "this reply", "this lead", or "this case". If you cannot state the rule without one of those, it is not a lesson - answer false.
+
+You are also given the setter's current instruction manual. Read it before deciding. If the edit undoes something the manual deliberately asks for, the reviewer was making a one-off exception for this conversation - they were NOT rewriting the manual. Answer false. A reviewer who genuinely wants to change a standing instruction says so in words; they do not signal it by silently deleting it once. Never return a rule that contradicts the manual.
+
+Keep the rule under 200 characters. Put your justification in `reason`, never in `rule`."""
+
+
+_LESSON_CASE_TOKENS = ("this reply", "this lead", "this case", "this one", "this email", "this thread")
+# A rule that names a date, a clock time, or a link is by definition about one
+# conversation, not about how to write replies. The model is told all of this;
+# these checks exist because it will sometimes say so anyway.
+_LESSON_DATE_RE = re.compile(
+    r"\b(\d{1,2}[:.]\d{2}\s*(am|pm)?|\d{1,2}\s*(am|pm)|"
+    r"mon|tues?|wed(nes)?|thur?s?|fri|sat(ur)?|sun)(day)?\b|"
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|"
+    r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}(/\d{2,4})?\b", re.I)
+
+
+def _draft_text(html: str) -> str:
+    """The visible words of a draft, with markup and whitespace noise gone -
+    so a diff compares what the lead would READ, not what the editor emitted.
+    A contenteditable rewraps tags constantly; comparing raw HTML would call
+    every reload an edit."""
+    txt = re.sub(r"<br\s*/?>|</p>|</div>", "\n", html or "", flags=re.I)
+    txt = re.sub(r"<[^>]+>", " ", txt)
+    txt = (txt.replace("&nbsp;", " ").replace("&amp;", "&")
+              .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#39;", "'"))
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+def lesson_from_edit(generated_html: str, sent_html: str, context: dict | None = None,
+                    instructions: str = ""):
+    """The reviewer rewrote a draft and approved it. Returns a timeless rule to
+    teach the agent, or None to teach nothing.
+
+    Owner ask 2026-07-17: editing a draft IS feedback - the reviewer showing
+    rather than telling. Typed feedback already teaches via
+    merge_correction_into_instructions; this closes the far more common path
+    where someone just fixes the text and hits Approve.
+
+    Returning None is the DEFAULT and the safe answer. An edit-diff is far
+    more case-specific than a typed note - it is full of names, times and
+    links - and a case-specific fragment reaching the rules block is not a
+    hypothetical: it shipped once, and an English lead got a Spanish draft
+    (commit af9c1dd). So the model's own is_lesson verdict is never trusted on
+    its own; every rule it proposes must also survive the checks below, and
+    anything that smells of one conversation is dropped. Never raises: any
+    failure means teach nothing.
+
+    context may carry lead_first_name / lead_last_name / company_domain, used
+    only to reject a rule that names them.
+
+    instructions is the agent's current manual. It is passed so the model can
+    refuse an edit that merely undoes something the manual deliberately asks
+    for. Live proof 2026-07-17: the Navreo manual says in as many words to
+    leave a "[PASTE LOOM LINK HERE]" placeholder for a human to fill; a
+    reviewer deleting that placeholder once produced the rule "remove internal
+    placeholders and editorial notes", which flatly contradicts it. Undoing an
+    instruction once is an exception for one lead, not a rewrite of the manual
+    - someone who wants the standing rule changed says so in words."""
+    try:
+        gen, sent = _draft_text(generated_html), _draft_text(sent_html)
+        # Free rejections before spending a token: an untouched draft, a
+        # cosmetic-only change, or an edit with nothing left to compare.
+        if not gen or not sent or gen == sent:
+            return None
+        if gen.lower() == sent.lower():
+            return None
+        key = _KEYS.get("OPENAI_API_KEY")
+        if not key:
+            return None
+        payload = {"setter_draft": gen, "reviewer_final": sent,
+                   "instruction_manual": (instructions or "")[:12000]}
+        r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                 {"Authorization": f"Bearer {key}"},
+                 {"model": OPENAI_MODEL,
+                  "messages": [{"role": "system", "content": LESSON_FROM_EDIT_SYSTEM},
+                              {"role": "user", "content": json.dumps(payload)}],
+                  "response_format": {"type": "json_schema", "json_schema": {
+                      "name": "setter_lesson_from_edit", "strict": True,
+                      "schema": LESSON_FROM_EDIT_SCHEMA}}})
+        if not isinstance(r, dict) or r.get("error"):
+            return None
+        data = json.loads(r["choices"][0]["message"]["content"])
+        if not data.get("is_lesson"):
+            return None
+        rule = str(data.get("rule") or "").strip()
+        if not rule or len(rule) > 200:
+            return None
+        lowered = rule.lower()
+        if any(t in lowered for t in _LESSON_CASE_TOKENS):
+            return None
+        if _extract_urls(rule):
+            return None
+        if _LESSON_DATE_RE.search(rule):
+            return None
+        # A rule that names the person or company in front of it is describing
+        # one conversation, whatever the model claims.
+        ctx = context or {}
+        for field in ("lead_first_name", "lead_last_name"):
+            name = str(ctx.get(field) or "").strip()
+            if len(name) > 2 and re.search(rf"\b{re.escape(name.lower())}\b", lowered):
+                return None
+        domain = str(ctx.get("company_domain") or "").strip().lower()
+        if domain:
+            if domain in lowered:
+                return None
+            stem = domain.split(".")[0]
+            if len(stem) > 3 and re.search(rf"\b{re.escape(stem)}\b", lowered):
+                return None
+        return rule
+    except Exception:  # noqa: BLE001 - a learning outage must never touch the send
+        return None
+
+
 def _existing_row(workspace: str, campaign_id, email: str, message_id: str):
     if not _SB:
         return None
@@ -2177,7 +2324,8 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                     if draft_html:
                         draft_html, _changed = proofread_draft(draft_html)
                     patch = {"agent_id": agent.get("id"), "classification": classification,
-                             "draft_subject": d.get("subject"), "draft_body": draft_html, "slots": slots}
+                             "draft_subject": d.get("subject"), "draft_body": draft_html,
+                             "original_draft_body": draft_html, "slots": slots}
                     if tz:
                         patch["timezone"] = tz
                     _apply_patch(row, patch)
@@ -2622,6 +2770,13 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             if not row.get("error"):
                 row["error"] = f"draft failed: {type(e).__name__}"
     row["draft_subject"], row["draft_body"] = draft_subject, draft_body
+    # The pristine generated draft, kept beside the working copy: save_draft
+    # overwrites draft_body with the reviewer's hand-edits from the first
+    # keystroke on, so this is the only record of what the agent itself wrote
+    # and the only thing an Approve-time diff can learn from. Stamped wherever
+    # the AGENT drafts (here, self-heal adopt, redraft) and nowhere else -
+    # never by save_draft, never by _send_reply.
+    row["original_draft_body"] = draft_body
 
     # Calendly fallback (owner ruling 2026-07-14): whenever real call times
     # aren't available for any reason, slot_status is something other than
@@ -4220,6 +4375,47 @@ def route_thread_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def _learn_from_edit_worker(row: dict, agent: dict, original: str, sent: str):
+    """Turns a reviewer's hand-edit into a standing lesson. Runs off the
+    request thread - see _learn_from_edit_async. Never raises: this is a
+    nice-to-have that must never surface as a failed send."""
+    try:
+        rule = lesson_from_edit(original, sent, {
+            "lead_first_name": row.get("lead_first_name"),
+            "lead_last_name": row.get("lead_last_name"),
+            "company_domain": row.get("company_domain"),
+        }, instructions=_agent_instructions(agent))
+        if not rule:
+            return
+        # Same door typed feedback uses: instructions stay the single living
+        # manual, and the edit lands in instruction_edits beside it for audit.
+        merge_correction_into_instructions(agent, rule, source=str(row.get("id") or "edit"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[setter] learn-from-edit failed for row {row.get('id')}: {e}", file=sys.stderr)
+
+
+def _learn_from_edit_async(row: dict, agent: dict, original: str, sent: str, training_on: bool):
+    """Decides - cheaply, with no LLM call - whether this send has anything to
+    learn from, then hands the work to a daemon thread.
+
+    Deliberately fail-closed on training_on: the review pane defaults the
+    switch ON and states the mode explicitly on every send, so a request that
+    says nothing is a stale or third-party client, and a silent surprise
+    lesson is worse than a missed one."""
+    if not training_on:
+        return None
+    if not row.get("agent_id") or not agent.get("id"):
+        return None  # agentless row - there is no brain to teach
+    if not (original or "").strip() or not (sent or "").strip():
+        return None  # nothing to diff against (pre-migration row, or no draft)
+    if _draft_text(original) == _draft_text(sent):
+        return None  # approved as written - the setter got it right, teach nothing
+    t = threading.Thread(target=_learn_from_edit_worker, args=(row, agent, original, sent),
+                        daemon=True, name="setter-learn-from-edit")
+    t.start()
+    return t
+
+
 def route_queue_action(payload):
     try:
         payload = payload or {}
@@ -4285,7 +4481,16 @@ def route_queue_action(payload):
             agent = _load_agent(row.get("agent_id")) or {}
             subject = payload.get("subject_override") or row.get("draft_subject") or f"Re: {row.get('reply_subject') or ''}"
             body_html = payload.get("body_override") or row.get("draft_body") or ""
+            original = row.get("original_draft_body") or ""
             result = _send_reply(row, agent, subject, body_html, is_test=bool(row.get("is_test")), success_status="sent")
+            if result.get("ok"):
+                # Owner ask 2026-07-17: rewriting the draft IS feedback. Only
+                # a SUCCESSFUL send teaches - a reply that never left must not
+                # change the brain. Fires after the send, in the background:
+                # Approve returns the moment the mail is away, never waiting on
+                # the learner's gpt-5-mini call (perf bar, 2026-07-16).
+                _learn_from_edit_async(row, agent, original, body_html,
+                                      training_on=bool(payload.get("training")))
             return 200, {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
         return 400, {"error": f"Unknown action '{action}'."}
     except Exception as e:  # noqa: BLE001
@@ -4430,7 +4635,11 @@ def route_queue_redraft(payload):
             # Second sweep (owner brief 2026-07-14): proofread before this
             # regenerated draft is saved.
             draft_html, _proofread_changed = proofread_draft(draft_html)
-        patch = {"draft_subject": d.get("subject"), "draft_body": draft_html, "slots": slots}
+        # Re-stamped, not preserved: the baseline for an Approve-time diff is
+        # the LATEST thing the agent wrote, not its first attempt. Edits the
+        # reviewer makes after this regenerate are measured against this draft.
+        patch = {"draft_subject": d.get("subject"), "draft_body": draft_html,
+                 "original_draft_body": draft_html, "slots": slots}
         if fresh_classification is not None:
             # Persist what the redraft-classify learned so the UI's Intent
             # line updates and the next Regenerate doesn't re-classify.
@@ -4487,6 +4696,7 @@ def route_queue_redraft(payload):
             # Mirror the pipeline (owner ruling 2026-07-16): a no_action
             # verdict keeps no draft and moves the row out of review.
             patch["draft_subject"], patch["draft_body"] = None, None
+            patch["original_draft_body"] = None
             patch["status"] = "no_action"
         _apply_patch(row, patch)
         # Transient, response-only (setter_queue schema-freeze: never a new

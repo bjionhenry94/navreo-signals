@@ -342,6 +342,11 @@ class FakeHTTP:
         # generic scenario per entry in the requested scenario_plan, so
         # tests that don't care about content still get a full batch.
         self.invent_fn = None
+        # lesson_fn(body) -> {"is_lesson": bool, "rule": "...", "reason": "..."}
+        # for lesson_from_edit()'s OpenAI call (schema
+        # "setter_lesson_from_edit"). None -> is_lesson False, so a test that
+        # doesn't opt in never accidentally teaches from an edit.
+        self.lesson_fn = None
         self.calendly_avail = []
         self.smartlead_calls = []
         self.calls = []
@@ -381,6 +386,10 @@ class FakeHTTP:
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_instructions_merge":
                 data = self.merge_fn(body) if self.merge_fn else {"instructions": ""}
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "setter_lesson_from_edit":
+                data = (self.lesson_fn(body) if self.lesson_fn
+                        else {"is_lesson": False, "rule": "", "reason": "default: teach nothing"})
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_proofread":
                 if self.proofread_fn:
@@ -5408,7 +5417,12 @@ def test_draft_system_fallback_ladder_text():
     check("draft ladder: never-mention-a-failed-tool rule still present",
          "Never mention that a calendar, tool, or booking system failed or wasn't available" in setter.DRAFT_SYSTEM,
          None)
-    idx_one = setter.DRAFT_SYSTEM.index("NO LIVE SLOTS BUT THE INSTRUCTIONS GIVE AVAILABILITY")
+    # Commit 20b6929 split the old single "...GIVE AVAILABILITY" heading into
+    # ONE-A (instructions list concrete times) and ONE-B (only a general
+    # window), and left this assertion pointing at a string that no longer
+    # exists - crashing the whole suite on import. Same intent, current text:
+    # the first ladder step's example must still precede step TWO's.
+    idx_one = setter.DRAFT_SYSTEM.index("NO LIVE SLOTS BUT THE INSTRUCTIONS LIST CONCRETE AVAILABLE TIMES")
     idx_two = setter.DRAFT_SYSTEM.index("NO TIMES AVAILABLE ANYWHERE")
     check("draft ladder: step ONE's example precedes step TWO's example in the prompt", idx_one < idx_two,
          (idx_one, idx_two))
@@ -7498,6 +7512,197 @@ def test_trust_thread_route_test_rows_untouched():
     check("thread route: test row never touches Smartlead", http.smartlead_calls == [], http.smartlead_calls)
 
 
+# ── learning from a hand-edited draft (owner ask 2026-07-17) ────────────────
+# Editing a draft and approving it IS feedback. These cover the snapshot the
+# diff needs, the refusals that keep a one-off out of the standing manual, and
+# the switch that turns the whole thing off.
+
+def _edit_learn_setup(row_extra=None, agent_extra=None):
+    sb, http = fresh_setter()
+    agent = {"id": "agent-editlearn", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Resource: https://x.example/r"}
+    agent.update(agent_extra or {})
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    row = {
+        "id": 901, "workspace": "navreo", "smartlead_campaign_id": 111, "agent_id": agent["id"],
+        "lead_email": "e@example.com", "lead_first_name": "Dana", "message_id": "m-e1",
+        "reply_subject": "Re: hi", "reply_body": "sure, send it", "status": "needs_review",
+        "draft_subject": "Re: hi", "draft_body": "<p>The agent wrote this.</p>",
+        "original_draft_body": "<p>The agent wrote this.</p>",
+        "is_test": True, "thread": [],
+    }
+    row.update(row_extra or {})
+    sb.queue.append(row)
+    return sb, http, agent
+
+
+def _edits_of(agent_id):
+    return setter._load_agent(agent_id).get("instruction_edits") or []
+
+
+def test_edit_learning_snapshot_survives_save_draft():
+    """save_draft overwrites draft_body from the first keystroke. The snapshot
+    it diffs against must not move, or there is nothing left to learn from."""
+    sb, http, agent = _edit_learn_setup()
+    for body in ("<p>edit one</p>", "<p>edit two</p>", "<p>edit three</p>"):
+        status, _ = setter.route_queue_action({"id": 901, "action": "save_draft", "body": body})
+        check("edit-learn: save_draft returns 200", status == 200, status)
+    row = [r for r in sb.queue if r["id"] == 901][0]
+    check("edit-learn: save_draft moved draft_body", row["draft_body"] == "<p>edit three</p>", row["draft_body"])
+    check("edit-learn: save_draft NEVER touches original_draft_body",
+         row["original_draft_body"] == "<p>The agent wrote this.</p>", row["original_draft_body"])
+
+
+def test_edit_learning_redraft_restamps_snapshot():
+    """A regenerate replaces the draft, so the diff baseline must become the
+    NEW generated draft - not the one it replaced."""
+    sb, http, agent = _edit_learn_setup()
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<p>Regenerated draft.</p>"}
+    status, _ = setter.route_queue_redraft({"id": 901})
+    check("edit-learn: redraft returns 200", status == 200, status)
+    row = [r for r in sb.queue if r["id"] == 901][0]
+    check("edit-learn: redraft re-stamps original_draft_body to the new draft",
+         row["original_draft_body"] == row["draft_body"] == "<p>Regenerated draft.</p>",
+         (row["original_draft_body"], row["draft_body"]))
+
+
+def test_edit_learning_teaches_on_edited_approve():
+    sb, http, agent = _edit_learn_setup()
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Keep replies short and direct.", "reason": "style"}
+    http.merge_fn = None  # append fallback - the merge itself is covered elsewhere
+    t = setter._learn_from_edit_async(
+        [r for r in sb.queue if r["id"] == 901][0], agent,
+        "<p>The agent wrote this.</p>", "<p>The human wrote something else entirely.</p>", training_on=True)
+    check("edit-learn: an edited approve starts a learner thread", t is not None)
+    if t:
+        t.join(timeout=10)
+    edits = _edits_of(agent["id"])
+    check("edit-learn: the edit lands as exactly one instruction_edit", len(edits) == 1, edits)
+    if edits:
+        check("edit-learn: the stored rule is the timeless one",
+             edits[0]["rule"] == "Keep replies short and direct.", edits[0])
+        check("edit-learn: source is the queue row it came from", edits[0]["source"] == "901", edits[0])
+
+
+def test_edit_learning_training_off_teaches_nothing():
+    sb, http, agent = _edit_learn_setup()
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Keep replies short.", "reason": "style"}
+    before = setter._load_agent(agent["id"]).get("instructions")
+    t = setter._learn_from_edit_async(
+        [r for r in sb.queue if r["id"] == 901][0], agent,
+        "<p>The agent wrote this.</p>", "<p>Totally different.</p>", training_on=False)
+    check("edit-learn: training OFF never starts a learner", t is None)
+    check("edit-learn: training OFF leaves instruction_edits empty", _edits_of(agent["id"]) == [])
+    check("edit-learn: training OFF leaves instructions byte-identical",
+         setter._load_agent(agent["id"]).get("instructions") == before)
+
+
+def test_edit_learning_unchanged_draft_teaches_nothing():
+    """Approving what the agent wrote means it got it right. Nothing to learn,
+    and no gpt-5-mini call to pay for."""
+    sb, http, agent = _edit_learn_setup()
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Should never be asked for.", "reason": "x"}
+    same = "<p>The agent wrote this.</p>"
+    t = setter._learn_from_edit_async([r for r in sb.queue if r["id"] == 901][0], agent, same, same, training_on=True)
+    check("edit-learn: an unedited approve never starts a learner", t is None)
+    # Markup churn from the contenteditable is not an edit either.
+    t2 = setter._learn_from_edit_async([r for r in sb.queue if r["id"] == 901][0], agent,
+                                      "<p>The agent wrote this.</p>",
+                                      "<div>The agent&nbsp;wrote  this.</div>", training_on=True)
+    check("edit-learn: markup/whitespace churn alone never starts a learner", t2 is None)
+    check("edit-learn: nothing was taught either way", _edits_of(agent["id"]) == [])
+
+
+def test_edit_learning_agentless_row_teaches_nothing():
+    sb, http, agent = _edit_learn_setup(row_extra={"agent_id": None})
+    t = setter._learn_from_edit_async([r for r in sb.queue if r["id"] == 901][0], {},
+                                     "<p>a</p>", "<p>b</p>", training_on=True)
+    check("edit-learn: an agentless row has no brain to teach, and says so quietly", t is None)
+
+
+def test_edit_learning_missing_snapshot_teaches_nothing():
+    """Rows drafted before the snapshot column existed have no baseline. They
+    must no-op, not guess."""
+    sb, http, agent = _edit_learn_setup()
+    t = setter._learn_from_edit_async([r for r in sb.queue if r["id"] == 901][0], agent,
+                                     "", "<p>edited</p>", training_on=True)
+    check("edit-learn: a pre-migration row (no snapshot) never starts a learner", t is None)
+
+
+def test_edit_learning_failed_send_teaches_nothing():
+    """A reply that never left must never change the brain."""
+    sb, http, agent = _edit_learn_setup(row_extra={"is_test": False, "email_stats_id": None,
+                                                   "smartlead_lead_id": None})
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Never reached.", "reason": "x"}
+    status, resp = setter.route_queue_action({"id": 901, "action": "send",
+                                             "body_override": "<p>hand edited</p>", "training": True})
+    check("edit-learn: the send failed (no stats id to send against)",
+         status == 200 and not resp.get("ok"), (status, resp))
+    check("edit-learn: a failed send teaches nothing", _edits_of(agent["id"]) == [])
+
+
+def test_lesson_from_edit_refuses_case_specific_rules():
+    """The model is told all of this; these are the checks for when it says so
+    anyway. A rule naming one conversation must never reach the manual."""
+    sb, http, agent = _edit_learn_setup()
+    ctx = {"lead_first_name": "Dana", "lead_last_name": "Kuepper", "company_domain": "newground.com"}
+    gen, sent = "<p>The agent wrote this.</p>", "<p>The human wrote that.</p>"
+    cases = [
+        ("names the lead", "Always greet Dana warmly by name."),
+        ("names the company", "Mention newground in the opening line."),
+        ("carries a case-specific token", "For this lead, keep the reply short."),
+        ("carries a URL", "Always link https://evil.example/x in the closer."),
+        ("carries a clock time", "Always propose 10:30am for calls."),
+        ("carries a weekday", "Always propose Thursday for calls."),
+        ("carries a date", "Always reference 2026-07-17 in the reply."),
+        ("is empty", ""),
+        ("is longer than 200 chars", "Be concise. " * 30),
+    ]
+    for label, rule in cases:
+        http.lesson_fn = lambda _b, r=rule: {"is_lesson": True, "rule": r, "reason": "x"}
+        got = setter.lesson_from_edit(gen, sent, ctx)
+        check(f"lesson_from_edit: refuses a rule that {label}", got is None, (label, got))
+    # is_lesson False is honoured even when a rule is supplied
+    http.lesson_fn = lambda _b: {"is_lesson": False, "rule": "Perfectly good rule.", "reason": "x"}
+    check("lesson_from_edit: is_lesson=False wins over any rule text",
+         setter.lesson_from_edit(gen, sent, ctx) is None)
+    # the happy path still gets through
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Keep replies short and direct.", "reason": "x"}
+    check("lesson_from_edit: a timeless rule survives every check",
+         setter.lesson_from_edit(gen, sent, ctx) == "Keep replies short and direct.")
+
+
+def test_lesson_from_edit_sends_the_manual_for_contradiction_checking():
+    """Live defect 2026-07-17: the manual says in as many words to leave a
+    [PASTE LOOM LINK HERE] placeholder for a human. A reviewer deleting it once
+    produced "remove internal placeholders", which contradicts the manual and
+    was silently ignored by the drafter. The model can only refuse that if it
+    is shown the manual."""
+    sb, http, agent = _edit_learn_setup()
+    seen = {}
+
+    def lesson_fn(body):
+        seen["payload"] = json.loads(body["messages"][1]["content"])
+        return {"is_lesson": False, "rule": "", "reason": "contradicts the manual"}
+
+    http.lesson_fn = lesson_fn
+    setter.lesson_from_edit("<p>a</p>", "<p>b</p>", {}, instructions="Always leave the placeholder.")
+    check("lesson_from_edit: the manual is sent to the model",
+         seen.get("payload", {}).get("instruction_manual") == "Always leave the placeholder.", seen)
+    check("lesson_from_edit: both drafts are sent as visible text, not markup",
+         seen.get("payload", {}).get("setter_draft") == "a"
+         and seen.get("payload", {}).get("reviewer_final") == "b", seen)
+
+
+def test_draft_text_strips_markup_for_diffing():
+    check("_draft_text: tags gone, words kept",
+         setter._draft_text("<div>Hi Dana,</div><br><div>Thanks &amp; regards</div>") == "Hi Dana, Thanks & regards")
+    check("_draft_text: entities decoded", setter._draft_text("<p>a&nbsp;&lt;b&gt;</p>") == "a <b>")
+    check("_draft_text: whitespace collapsed", setter._draft_text("<p>a   b\n\nc</p>") == "a b c")
+    check("_draft_text: same words in different markup compare equal",
+         setter._draft_text("<div>Hi there</div>") == setter._draft_text("<p>Hi&nbsp;there</p>"))
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
@@ -7696,6 +7901,18 @@ if __name__ == "__main__":
 
     test_trust_thread_route_rehydrates_and_persists()
     test_trust_thread_route_test_rows_untouched()
+
+    test_edit_learning_snapshot_survives_save_draft()
+    test_edit_learning_redraft_restamps_snapshot()
+    test_edit_learning_teaches_on_edited_approve()
+    test_edit_learning_training_off_teaches_nothing()
+    test_edit_learning_unchanged_draft_teaches_nothing()
+    test_edit_learning_agentless_row_teaches_nothing()
+    test_edit_learning_missing_snapshot_teaches_nothing()
+    test_edit_learning_failed_send_teaches_nothing()
+    test_lesson_from_edit_refuses_case_specific_rules()
+    test_lesson_from_edit_sends_the_manual_for_contradiction_checking()
+    test_draft_text_strips_markup_for_diffing()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
