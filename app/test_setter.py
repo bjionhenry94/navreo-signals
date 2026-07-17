@@ -1364,6 +1364,142 @@ def test_run_poll_assigned_at_filter():
          emails_processed == {"new@example.com"}, emails_processed)
 
 
+def test_subsequence_reply_inherits_parent_campaign_agent():
+    """Owner ruling 2026-07-17: a reply that arrives while the lead sits in a
+    Smartlead subsequence carries the SUBSEQUENCE's campaign id (subsequences
+    are campaigns in their own right). Nobody assigns an agent to a
+    subsequence, so those replies used to land agentless ("No agent is
+    assigned to this campaign") even though the parent campaign HAS one. The
+    agent must be inherited from the parent."""
+    sb, http = fresh_setter()
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
+    # The Smartlead thread the agented pipeline hydrates. Present so this test
+    # proves the agent actually DRAFTED - without it the pipeline stops at
+    # "Couldn't find the reply in the Smartlead thread" and the row would look
+    # draft-less for a reason that has nothing to do with agent inheritance.
+    http.message_history = [
+        {"type": "SENT", "time": "2026-07-09T09:00:00+00:00", "subject": "hi",
+         "email_body": "our pitch", "from_name": "Bjion Henry"},
+        {"type": "REPLY", "time": "2026-07-10T00:00:00+00:00", "subject": "Re: hi",
+         "email_body": "sure, send it", "message_id": "sub-1", "stats_id": "st-sub-1"},
+    ]
+    # 1001 "Interested Reply" is a subsequence of parent campaign 3591996.
+    http.all_campaigns = [
+        {"id": 3591996, "name": "Parent Campaign", "status": "ACTIVE", "parent_campaign_id": None},
+        {"id": 1001, "name": "Interested Reply", "status": "ACTIVE", "parent_campaign_id": 3591996},
+    ]
+    agent = {"id": "agent-parent001", "mode": "draft_only", "enabled": True,
+             "campaign_ids": [3591996], "allowed_intents": ["send_resource"], "pricing_notes": "",
+             "campaign_assigned_at": {"3591996": "2026-07-05T00:00:00+00:00"}}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    check("subsequence inherit: agent resolves via the parent campaign",
+         (setter._agent_for_campaign(1001) or {}).get("id") == "agent-parent001",
+         setter._agent_for_campaign(1001))
+    check("subsequence inherit: a top-level campaign with no agent still resolves to None",
+         setter._agent_for_campaign(999999) is None, setter._agent_for_campaign(999999))
+
+    # Mock reply FROM the subsequence, after the parent's assignment stamp.
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 1001, "email": "sub@example.com",
+        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "sub-1", "category": "Interested",
+    })
+    summary = setter.run_poll()
+    check("subsequence inherit: the subsequence reply is processed by the agent, not agentless",
+         summary.get("checked") == 1 and summary.get("queued") == 1 and not summary.get("agentless"),
+         summary)
+    row = sb.queue[0] if sb.queue else {}
+    check("subsequence inherit: the queued row is stamped with the parent's agent",
+         row.get("agent_id") == "agent-parent001", row)
+    check("subsequence inherit: the row got a real draft (agentless rows never do)",
+         bool(row.get("draft_body")), row)
+    check("subsequence inherit: the row keeps the subsequence's own campaign id",
+         str(row.get("smartlead_campaign_id")) == "1001", row)
+
+
+def test_subsequence_reply_inherits_parent_assigned_at_gate():
+    """The parent's campaign_assigned_at stamp must gate inherited replies
+    too. The subsequence id is never a key in campaign_assigned_at, so a naive
+    lookup returns None and hands subsequence backlog an un-gated free pass
+    into the queue - the exact 48h-of-already-handled-replies flood the gate
+    exists to stop."""
+    sb, http = fresh_setter()
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
+    http.all_campaigns = [
+        {"id": 3591996, "name": "Parent Campaign", "status": "ACTIVE", "parent_campaign_id": None},
+        {"id": 1001, "name": "Interested Reply", "status": "ACTIVE", "parent_campaign_id": 3591996},
+    ]
+    agent = {"id": "agent-parent002", "mode": "draft_only", "enabled": True,
+             "campaign_ids": [3591996], "allowed_intents": ["send_resource"], "pricing_notes": "",
+             "campaign_assigned_at": {"3591996": "2026-07-05T00:00:00+00:00"}}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 1001, "email": "old-sub@example.com",
+        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-01T00:00:00+00:00",
+        "smartlead_message_id": "old-sub-1", "category": "Interested",
+    })
+    sb.replies.append({
+        "workspace": "navreo", "smartlead_campaign_id": 1001, "email": "new-sub@example.com",
+        "subject": "Re: hi", "reply_body": "sure, send it", "replied_at": "2026-07-10T00:00:00+00:00",
+        "smartlead_message_id": "new-sub-1", "category": "Interested",
+    })
+    summary = setter.run_poll()
+    check("subsequence inherit: a subsequence reply older than the PARENT's assigned_at is skipped",
+         summary.get("checked") == 1, summary)
+    check("subsequence inherit: only the post-assignment subsequence reply is queued",
+         {r.get("lead_email") for r in sb.queue} == {"new-sub@example.com"},
+         [r.get("lead_email") for r in sb.queue])
+
+
+def test_subsequence_parent_lookup_is_cached_and_failure_safe():
+    """The parent map costs a full GET /campaigns/ listing, so it must be
+    fetched once per TTL, not once per reply - a poll tick resolves up to 15."""
+    sb, http = fresh_setter()
+    http.all_campaigns = [
+        {"id": 1001, "name": "Interested Reply", "status": "ACTIVE", "parent_campaign_id": 3591996},
+    ]
+
+    def _campaign_list_calls():
+        return len([1 for m, u in http.calls if m == "GET" and re.search(r"/campaigns/\?", u)])
+
+    setter._agent_for_campaign(1001)
+    first = _campaign_list_calls()
+    for _ in range(5):
+        setter._agent_for_campaign(1001)
+    check("subsequence inherit: the parent map is fetched once, not once per lookup",
+         _campaign_list_calls() == first, (first, _campaign_list_calls()))
+
+    # A direct hit must never pay for the listing at all.
+    sb2, http2 = fresh_setter()
+    agent = {"id": "agent-direct01", "mode": "draft_only", "enabled": True, "campaign_ids": [4242]}
+    sb2.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    setter._agent_for_campaign(4242)
+    check("subsequence inherit: a directly-assigned campaign makes zero Smartlead calls",
+         http2.smartlead_calls == [], http2.smartlead_calls)
+
+    # Smartlead unreachable -> no parent found, no crash, nothing poisoned.
+    sb3, http3 = fresh_setter()
+
+    def _boom(*_a, **_k):
+        raise OSError("smartlead unreachable")
+    setter.configure(sb=sb3, http_json=_boom, keys={"OPENAI_API_KEY": "x", "SMARTLEAD_API_KEY": "y"},
+                     log_activity=lambda *a, **k: None)
+    check("subsequence inherit: a Smartlead outage degrades to no-agent, it never raises",
+         setter._agent_for_campaign(1001) is None)
+
+
 def test_route_queue_action_send_409_when_already_sent():
     sb, http = fresh_setter()
     sb.queue.append({"id": 501, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "x@y.com",
@@ -7384,6 +7520,9 @@ if __name__ == "__main__":
     test_poll_batching_cap()
     test_poll_never_raises_on_bad_agent_config()
     test_run_poll_assigned_at_filter()
+    test_subsequence_reply_inherits_parent_campaign_agent()
+    test_subsequence_reply_inherits_parent_assigned_at_gate()
+    test_subsequence_parent_lookup_is_cached_and_failure_safe()
     test_route_queue_action_send_409_when_already_sent()
     test_subsequence_success_pushes_live_and_patches_flag()
     test_subsequence_failure_http200_okfalse_returns_502()

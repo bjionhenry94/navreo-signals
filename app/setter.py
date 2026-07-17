@@ -51,6 +51,10 @@ def configure(sb, http_json, keys, log_activity, sb_count=None):
     _HTTP = http_json
     _KEYS = keys or {}
     _LOG = log_activity
+    # The subsequence->parent map is keyed off whatever Smartlead account the
+    # keys point at, so a re-configure (boot, or a test swapping in fresh
+    # fakes) must drop it rather than answer from the previous account's data.
+    _PARENT_CACHE.update({"at": 0.0, "map": None})
     # Boot warm-up (perf pass 2026-07-16): pre-compute the queue read caches
     # in the background so even the FIRST /api/setter/queue GET after a
     # deploy/restart is served warm (~300ms) instead of paying the cold
@@ -1492,15 +1496,74 @@ def _load_agent(agent_id):
     return None
 
 
+# Parent lookup for subsequence campaigns. A Smartlead subsequence IS its own
+# campaign row (see _sl_find_subsequences), so a reply that lands while a lead
+# is enrolled in "Interested Reply" carries the SUBSEQUENCE's campaign id, not
+# the parent's. Nobody assigns an agent to a subsequence - they assign it to
+# the parent - so those replies used to fall through to agentless intake ("No
+# agent is assigned to this campaign"). GET /campaigns/ is the only place the
+# parent link lives (the Supabase `campaigns` mirror has no parent_campaign_id
+# column), and it returns the whole workspace in one call, so the id->parent
+# map is built once and cached rather than fetched per reply: a poll tick
+# resolves up to 15 replies and would otherwise re-list every campaign 15 times.
+_PARENT_CACHE = {"at": 0.0, "map": None}
+_PARENT_TTL = 600
+
+
+def _parent_map(force: bool = False) -> dict:
+    """{str(subsequence_campaign_id): str(parent_campaign_id)} for the whole
+    workspace, cached for _PARENT_TTL seconds. Returns {} (and does NOT cache
+    the failure) when Smartlead is unreachable, so a transient outage degrades
+    to "no parent found" for one call instead of poisoning the cache for 10
+    minutes."""
+    if not force and _PARENT_CACHE["map"] is not None \
+            and (_time.time() - _PARENT_CACHE["at"]) < _PARENT_TTL:
+        return _PARENT_CACHE["map"]
+    try:
+        resp = _sl_get("/campaigns/")
+        if not isinstance(resp, list):
+            return _PARENT_CACHE["map"] or {}
+        out = {}
+        for r in resp:
+            if isinstance(r, dict) and r.get("id") and r.get("parent_campaign_id"):
+                out[str(r["id"])] = str(r["parent_campaign_id"])
+        _PARENT_CACHE.update({"at": _time.time(), "map": out})
+        return out
+    except Exception:  # noqa: BLE001 - never let a Smartlead blip break agent lookup
+        return _PARENT_CACHE["map"] or {}
+
+
+def _parent_campaign_id(campaign_id):
+    """The campaign `campaign_id` is a subsequence of, or None when it is a
+    top-level campaign (or Smartlead can't be reached)."""
+    if not campaign_id:
+        return None
+    return _parent_map().get(str(campaign_id))
+
+
 def _agent_for_campaign(campaign_id, require_enabled: bool = True, agents=None):
+    """The agent assigned to `campaign_id`, or - when `campaign_id` is a
+    Smartlead subsequence - the agent assigned to its parent campaign (owner
+    ruling 2026-07-17: a subsequence inherits its parent's agent, because a
+    lead replying from "Interested Reply" is the same lead in the same
+    campaign as far as the setter is concerned). Direct assignment always
+    wins; the parent hop only runs when nothing matches directly, so the
+    extra Smartlead call never touches the common top-level-campaign path."""
     agents = agents if agents is not None else _load_agents()
-    want = str(campaign_id)
-    for a in agents:
-        if require_enabled and not a.get("enabled", True):
-            continue
-        if want in [str(c) for c in (a.get("campaign_ids") or [])]:
-            return a
-    return None
+
+    def _match(want):
+        for a in agents:
+            if require_enabled and not a.get("enabled", True):
+                continue
+            if want in [str(c) for c in (a.get("campaign_ids") or [])]:
+                return a
+        return None
+
+    direct = _match(str(campaign_id))
+    if direct:
+        return direct
+    parent = _parent_campaign_id(campaign_id)
+    return _match(str(parent)) if parent else None
 
 
 def _save_agent(doc: dict) -> dict:
@@ -3079,7 +3142,16 @@ def run_poll() -> dict:
                 # Only replies received AFTER this campaign was assigned to
                 # the agent. Without this, first activation would sweep up
                 # to 48h of already-humanly-handled backlog into the queue.
-                assigned_at = (agent.get("campaign_assigned_at") or {}).get(str(cid))
+                # A subsequence reply carries the subsequence's own id, which
+                # is never a key in campaign_assigned_at (only the parent gets
+                # assigned) - fall back to the parent's stamp so inherited
+                # replies get the same backlog gate as the parent's own,
+                # instead of an un-gated free pass.
+                stamps = agent.get("campaign_assigned_at") or {}
+                assigned_at = stamps.get(str(cid))
+                if not assigned_at:
+                    _par = _parent_campaign_id(cid)
+                    assigned_at = stamps.get(str(_par)) if _par else None
                 if assigned_at and r.get("replied_at"):
                     try:
                         if _parse_iso(r["replied_at"]) < _parse_iso(assigned_at):
