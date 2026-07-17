@@ -197,6 +197,11 @@
 .qc-split .qc-regen-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 10px; }
 .qc-feedback { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
 .qc-feedback .qc-feedback-input { flex: 1; min-width: 200px; }
+/* Manual link (owner ask 2026-07-17): highlight words in the draft, press Add
+   link, paste a URL. Inserts the same plain <a href> the drafter writes, so a
+   hand-added link and a generated one are the same shape on the way out. */
+.qc-linkbar { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+.qc-linkbar .qc-link-input { flex: 1; min-width: 200px; }
 /* Can't-comply note from a feedback redraft (warn only, never inject -
    owner ruling 2026-07-16): the drafter explains what it couldn't honour. */
 .qc-note { font-size: 12.5px; line-height: 1.5; color: #6B4A00; background: var(--amber-bg);
@@ -1267,6 +1272,7 @@ function renderDetail(row) {
     <div class="msg-card">
       <div class="composer-head">
         <div class="msg-card-lab">Your reply</div>
+        ${linkButtonHtml(row)}
         ${teachToggleHtml(row)}
         <div class="ch-spacer"></div>
         ${composerActionsHtml(row)}
@@ -1275,6 +1281,7 @@ function renderDetail(row) {
       ${sentLineHtml}
       ${repliedBackHtml}
       ${noSlotsHint}
+      ${composerLinkHtml(row)}
       ${composerHtml(row)}
     </div>
   `;
@@ -1523,6 +1530,23 @@ function composerFeedbackHtml(row) {
     <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">Regenerate with feedback</button>
   </div>`;
 }
+/* Manual link (owner ask 2026-07-17). The button sits with the "Your reply"
+   label because it acts on the draft, not on the send decision. It stays
+   disabled until there is a highlight inside this row's draft - a link with
+   nothing to attach to has no sensible meaning. */
+function linkButtonHtml(row) {
+  if (!needsComposerActions(row)) return "";
+  return `<button class="btn sm qc-link-btn" data-id="${esc(row.id)}" type="button" disabled
+    title="Highlight the words in your reply you want to link, then press this.">Add link</button>`;
+}
+function composerLinkHtml(row) {
+  if (!needsComposerActions(row)) return "";
+  return `<div class="qc-linkbar" id="lk-${esc(row.id)}" style="display:none">
+    <input type="text" class="qc-link-input" data-id="${esc(row.id)}" placeholder="Paste the URL, e.g. calendly.com/navreo/30min">
+    <button class="btn primary qc-link-apply" data-id="${esc(row.id)}" type="button">Add link</button>
+    <button class="btn qc-link-cancel" data-id="${esc(row.id)}" type="button">Cancel</button>
+  </div>`;
+}
 function composerHtml(row) {
   if (needsComposerActions(row)) {
     return `<div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>
@@ -1587,6 +1611,27 @@ function wireDetailEvents(root, row) {
   root.querySelectorAll(".qc-dismiss").forEach((btn) => btn.addEventListener("click", () => doDismiss(btn)));
   root.querySelectorAll(".qc-draft-anyway").forEach((btn) => btn.addEventListener("click", () => doDraftAnyway(btn)));
 
+  root.querySelectorAll(".qc-link-btn").forEach((btn) => {
+    // Grab the highlight here, on mousedown: pressing a button drops the
+    // selection, and the click event arrives too late to read it.
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      PENDING_LINK = currentDraftSelection() || PENDING_LINK;
+    });
+    btn.addEventListener("click", () => openLinkBar(btn.getAttribute("data-id")));
+  });
+  root.querySelectorAll(".qc-link-apply").forEach((btn) => btn.addEventListener("click", () => applyDraftLink(btn.getAttribute("data-id"))));
+  root.querySelectorAll(".qc-link-cancel").forEach((btn) => btn.addEventListener("click", () => closeLinkBar(btn.getAttribute("data-id"))));
+  root.querySelectorAll(".qc-link-input").forEach((inp) => inp.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { closeLinkBar(inp.getAttribute("data-id")); return; }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    applyDraftLink(inp.getAttribute("data-id"));
+  }));
+  LAST_DRAFT_SEL = null;
+  PENDING_LINK = null;
+  syncLinkButtons();
+
   const draftEl = root.querySelector(".qc-draft[contenteditable]");
   if (draftEl) {
     draftEl.addEventListener("input", () => {
@@ -1594,6 +1639,115 @@ function wireDetailEvents(root, row) {
       queueDraftSave(row.id);
     });
   }
+}
+
+/* Manual links, part two: the plumbing.
+
+   Clicking a button or focusing the URL box tears the live highlight down, so
+   the Range has to be saved while it still exists and restored right before
+   createLink runs. LAST_DRAFT_SEL follows the highlight; PENDING_LINK freezes a
+   copy the moment Add link is pressed, so nothing that happens afterwards (the
+   60s background re-render included) can move the target under our feet. */
+let LAST_DRAFT_SEL = null;
+let PENDING_LINK = null;
+function closestDraft(node) {
+  const el = node && node.nodeType === 1 ? node : (node && node.parentElement);
+  return (el && el.closest(".qc-draft[contenteditable]")) || null;
+}
+/* The live highlight, read straight from the document rather than from the
+   tracked copy - what mousedown needs, since by the time the click lands the
+   browser has already dropped the selection the click was about. */
+function currentDraftSelection() {
+  const sel = document.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+  const draftEl = closestDraft(sel.getRangeAt(0).commonAncestorContainer);
+  if (!draftEl) return null;
+  return { id: draftEl.getAttribute("data-id"), range: sel.getRangeAt(0).cloneRange() };
+}
+function syncLinkButtons() {
+  document.querySelectorAll(".qc-link-btn").forEach((btn) => {
+    btn.disabled = !(LAST_DRAFT_SEL && String(LAST_DRAFT_SEL.id) === String(btn.getAttribute("data-id")));
+  });
+}
+document.addEventListener("selectionchange", () => {
+  const sel = document.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const draftEl = closestDraft(sel.getRangeAt(0).commonAncestorContainer);
+  // Selection changes outside a draft (the URL box taking focus, for one) must
+  // leave the saved highlight alone - that highlight is the whole point.
+  if (!draftEl) return;
+  LAST_DRAFT_SEL = sel.isCollapsed
+    ? null
+    : { id: draftEl.getAttribute("data-id"), range: sel.getRangeAt(0).cloneRange() };
+  syncLinkButtons();
+});
+/* Only http(s) and mailto ever reach the lead's inbox. A bare domain gets
+   https://, a bare address gets mailto:, and script-ish schemes get nothing. */
+function normaliseUrl(raw) {
+  const v = (raw || "").trim();
+  if (!v) return "";
+  if (/^(https?:|mailto:)/i.test(v)) return v;
+  if (/^[^\s:@]+@[^\s:@]+\.[^\s:@]+$/.test(v)) return `mailto:${v}`;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return "";
+  return `https://${v}`;
+}
+function existingHrefIn(range) {
+  const node = range.commonAncestorContainer;
+  const el = node.nodeType === 1 ? node : node.parentElement;
+  const a = el && el.closest("a[href]");
+  return a ? a.getAttribute("href") : "";
+}
+function closeLinkBar(id) {
+  const bar = document.getElementById(`lk-${id}`);
+  if (bar) {
+    bar.style.display = "none";
+    const inp = bar.querySelector(".qc-link-input");
+    if (inp) inp.value = "";
+  }
+  PENDING_LINK = null;
+}
+function openLinkBar(id) {
+  // mousedown froze the highlight into PENDING_LINK; a keyboard press has no
+  // mousedown, so fall back to the tracked one.
+  const held = [PENDING_LINK, LAST_DRAFT_SEL].find((s) => s && String(s.id) === String(id));
+  if (!held) return;
+  PENDING_LINK = held;
+  const bar = document.getElementById(`lk-${id}`);
+  if (!bar) return;
+  bar.style.display = "flex";
+  const inp = bar.querySelector(".qc-link-input");
+  if (!inp) return;
+  // Highlighting text that is already linked prefills its URL, so the same
+  // control repoints a wrong link instead of forcing a delete-and-retype.
+  inp.value = existingHrefIn(PENDING_LINK.range) || "";
+  inp.focus();
+  inp.select();
+}
+function applyDraftLink(id) {
+  const draftEl = document.querySelector(`.qc-draft[contenteditable][data-id="${CSS.escape(String(id))}"]`);
+  if (!draftEl) return;
+  const inp = document.querySelector(`.qc-link-input[data-id="${CSS.escape(String(id))}"]`);
+  const url = normaliseUrl(inp ? inp.value : "");
+  if (!url) {
+    showDetailError("That doesn't look like a web address. Paste a link like https://calendly.com/navreo/30min");
+    return;
+  }
+  const live = PENDING_LINK && String(PENDING_LINK.id) === String(id) &&
+               !PENDING_LINK.range.collapsed &&
+               draftEl.contains(PENDING_LINK.range.commonAncestorContainer);
+  if (!live) {
+    showDetailError("Highlight the words you want to link, then press Add link again.");
+    closeLinkBar(id);
+    return;
+  }
+  const sel = document.getSelection();
+  draftEl.focus();
+  sel.removeAllRanges();
+  sel.addRange(PENDING_LINK.range);
+  document.execCommand("createLink", false, url);
+  EDITED_DRAFTS[id] = draftEl.innerHTML;
+  queueDraftSave(id);
+  closeLinkBar(id);
 }
 
 /* Auto-save (owner ask 2026-07-16): EDITED_DRAFTS is browser memory only, so a
