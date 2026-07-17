@@ -12330,7 +12330,7 @@ Hi <recipient first name>,
 
 <Icebreaker: ONE short line, either a concrete plausible trigger about the recipient's company, or a "most <their kind of company> find that <problem>" observation. Do not pitch here.>
 
-<The offer, ONE or TWO sentences: name the free thing and offer it. If it is a ready-made resource: "We put together a <resource type> which I thought might be useful for <their company name>, it covers <what it covers, tied to the problem>." If making it needs their input: "We'd love to put together a <resource type> for <their company name> showing <outcome>." Never claim per-company work that was not done.>
+<The offer, ONE or TWO sentences: name the free thing, offer it, and make the no-strings promise EXPLICIT in a human way - "no charge or commitment", "on us, nothing needed from you". If it is a ready-made resource: "We put together a <resource type> which I thought might be useful for <their company name>, it covers <what it covers, tied to the problem> - no charge or commitment." If making it needs their input: "We'd love to put together a <resource type> for <their company name> showing <outcome>, no charge or commitment." Never claim per-company work that was not done.>
 
 <Soft CTA, one short question offering to SEND it: "Can I send it over?" or "Want me to send it across?">
 
@@ -12343,7 +12343,7 @@ HARD RULES FOR THIS TEMPLATE:
 - The ONLY ask is permission to send the free thing. Exactly ONE question in the whole email. No call ask, no meeting, no second question.
 - The CTA verb is send / share / give / show, and the buyer receives a ready-made thing, never work done to them.
 - Honest tense: if the offer's stipulation depends on ANYTHING the recipient sends, approves or gives access to, the offer line MUST be future tense ("We'd love to put together..."). Only write "We put together..." or "I recorded..." (past) for a thing that can genuinely exist before ever speaking to them.
-- Do NOT mention any guarantee, refund, pay-per-result or pay-after-result anywhere. Do NOT mention cost, charge, price, "no charge" or obligation at all - just offer the thing; the offer block is at most 2 sentences.
+- Do NOT mention any guarantee, refund, pay-per-result or pay-after-result anywhere. The ONE promise this email carries is that the thing costs nothing and has no strings - say it once, naturally ("no charge or commitment"). Never the word "free", never "no obligation". The offer block is at most 2 sentences.
 - The body between greeting and sign-off is 45-70 words. Count them."""
     else:
         template_block = """THE SERVICE PITCH TEMPLATE (follow this shape exactly, one blank line between each part):
@@ -12352,7 +12352,7 @@ Hi <recipient first name>,
 
 <Icebreaker: ONE short line naming a concrete, plausible trigger about the recipient's company (a recent hire, a new office, a launch, a post) that ends with the exact words "so I wanted to reach out.". Do not pitch here.>
 
-If we could <the new-money outcome they want> by <what we would do, in plain words>, <the promise woven in as a natural clause>, <a low-risk CTA question that offers to SEND something small like a short Loom, a one-page plan, or a worked example>?
+If we could <the new-money outcome they want> by <what we would do, in plain words>, <the promise woven in as a natural clause>, would you be interested in <a tiny next step, e.g. "seeing the details" or "me sending over a short breakdown">?
 
 Best,
 <sender first name>
@@ -12364,7 +12364,8 @@ HARD RULES FOR THIS TEMPLATE:
 - The promise clause sits INSIDE that sentence joined naturally with "and" - never a spliced clause like "..., we will refund the fee, would you like...".
 - Keep the "If we could ... ?" sentence between 45 and 70 words.
 - The promise woven in is ONLY this offer's mechanism. Do NOT add a free resource, sample or any second promise on top of it. Use the words guarantee or refund ONLY if this offer's mechanism is guarantee_refund.
-- THE CTA IS TINY: ask permission to send something named in three plain words or fewer - "can I send over the details?", "want me to send a short breakdown?". NEVER describe what the artifact shows, contains or covers ("a one-page plan showing the cadence we would build", "an offer sheet showing pay per lead terms") - that reads as a second free offer stacked on the real one. The email contains exactly ONE thing of value: the offer itself. Never "book a call"."""
+- FINISH THE CONDITIONAL: the sentence starts with "If we could", so it MUST close as a proper conditional - "..., would you be interested in [X]?" or "..., would you be open to [X]?". NEVER bolt on "can I send...?" or "want me to send...?" - that leaves the "If" hanging and reads broken.
+- THE CLOSING [X] IS TINY: "seeing the details", "me sending over a short breakdown" - three or four plain words. NEVER describe what an artifact shows, contains or covers ("a one-page plan showing the cadence we would build") - that reads as a second free offer stacked on the real one. The email contains exactly ONE thing of value: the offer itself. Never "book a call"."""
     prompt = f"""You are our house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below, using the template EXACTLY.
 
 {who}
@@ -12410,12 +12411,17 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
             # these despite the prompt; a retry usually clears them.
             if re.search(r"[():;]", re.sub(r"^Hi [^,]+,", "", email)):
                 raise ValueError("colon/semicolon/parenthesis in email")
-            if not lead_magnet and re.search(
-                    r"\b(?:showing|that shows|which shows|outlining|detailing)\b", email, re.I):
-                raise ValueError("CTA re-pitches the offer (second-offer stack)")
+            if not lead_magnet:
+                if re.search(r"\b(?:showing|that shows|which shows|outlining|detailing)\b", email, re.I):
+                    raise ValueError("CTA re-pitches the offer (second-offer stack)")
+                if "If we could" in email and not re.search(
+                        r"would you be (?:interested|open|keen)", email, re.I):
+                    raise ValueError("If-we-could conditional never finished")
             if lead_magnet:
-                if re.search(r"no charge|no cost|for free|free of charge|obligation", email, re.I):
-                    raise ValueError("cost language in lead magnet email")
+                if not re.search(r"no charge|no cost|on us|without charge|no commitment", email, re.I):
+                    raise ValueError("lead magnet email missing the no-strings promise")
+                if re.search(r"\bfor free\b|\bfree of charge\b|\bobligation\b", email, re.I):
+                    raise ValueError("banned wording in lead magnet email")
                 lines = [l.strip() for l in email.splitlines() if l.strip()]
                 if len(lines) > 1 and (lines[1].endswith("?") or
                         re.match(r"(?:Can|May|Would|Want|Should) ", lines[1])):
