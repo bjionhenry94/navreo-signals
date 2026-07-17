@@ -247,8 +247,25 @@
 /* ── Send gate (2026-07-17): follow-up chips block Approve until a choice
    is made. All chips render equal weight - no star, no pre-select, no "on"
    class until the human actually clicks one (owner ruling: no suggestion). */
-.send-gate { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
-.send-gate .sg-label { margin-bottom: 8px; }
+/* P2 panel look (owner ruling 2026-07-17, composer reorder): the gate is a
+   sunken bordered panel between the draft and the actions row. */
+.send-gate {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; background: var(--bg-sunken);
+}
+.send-gate .sg-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-3); margin-bottom: 9px;
+}
+/* Locked-Approve hint beside the actions row (P2's gate-hint + why tooltip). */
+.gate-hint { font-size: 12px; color: var(--ink-3); display: inline-flex; align-items: center; gap: 5px; }
+.gate-hint .why { cursor: help; border-bottom: 1px dotted var(--ink-3); position: relative; }
+.gate-hint .why:hover .tooltip { display: block; }
+.gate-hint .tooltip {
+  display: none; position: absolute; bottom: 22px; left: 0; width: 230px;
+  background: var(--ink); color: var(--cream-50); font-size: 11.5px; line-height: 1.5;
+  padding: 9px 11px; border-radius: 8px; z-index: 20;
+}
 .sg-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .sg-chip.sg-none { border-style: dashed; }
 .sg-hint { margin-top: 8px; }
@@ -1511,8 +1528,10 @@ function backToInbox() {
    TEST chip, nothing else (the subsequence checkbox and every "how decided"
    fact now live permanently in the fixed lead-info sidebar - see
    leadPanelHtml / renderDetail below); (2) the threaded conversation
-   (convoHtml); (3) "Your reply" - label row with the action buttons beside
-   it, feedback row, sent-line / no-slots hint, then the draft. */
+   (convoHtml); (3) "Your reply" in the P2 order (owner ruling 2026-07-17):
+   label row (Add link + teach link), the draft box, the learning block, the
+   follow-up gate panel, then the actions row last - everything below the
+   text box. Sent/auto_sent retro actions stay in the label row, unchanged. */
 function renderDetail(row) {
   const el = document.getElementById("inboxRight");
   const panelEl = document.getElementById("leadPanel");
@@ -1600,18 +1619,18 @@ function renderDetail(row) {
         ${linkButtonHtml(row)}
         ${teachToggleHtml(row)}
         <div class="ch-spacer"></div>
-        ${composerActionsHtml(row)}
         ${retroFollowupHtml(row)}
       </div>
       ${retroFollowupPickerHtml(row)}
-      ${sendGateHtml(row)}
-      ${learnBarHtml(row)}
-      ${composerFeedbackHtml(row)}
       ${sentLineHtml}
       ${repliedBackHtml}
       ${noSlotsHint}
       ${composerLinkHtml(row)}
       ${composerHtml(row)}
+      ${learnBarHtml(row)}
+      ${sendGateHtml(row)}
+      ${composerActionsHtml(row)}
+      ${composerFeedbackHtml(row)}
     </div>
   `;
   if (panelEl) {
@@ -1818,10 +1837,18 @@ function convoHtml(row) {
 function needsComposerActions(row) {
   return row.status === "needs_review" || (row.status === "no_action" && row.draft_body);
 }
-/* Change 2: Approve / Regenerate-split / Dismiss now live beside the "Your
-   reply" label instead of below the draft - same classes (qc-send, qc-regen,
-   qc-regen-arrow, qc-dismiss), just relocated, so the existing wiring in
-   wireDetailEvents binds them exactly as before. */
+/* Owner ruling 2026-07-17 (P2 composer order): the actions row is the LAST
+   block of the composer card - draft, then learning, then the gate panel,
+   then Approve / Regenerate-split / Dismiss. Same classes (qc-send, qc-regen,
+   qc-regen-arrow, qc-dismiss), so the existing wiring in wireDetailEvents
+   binds them exactly as before. While the gate is locked, a "Pick a
+   follow-up track first (why?)" hint sits beside the buttons (P2's
+   gate-hint); updateApproveButton toggles it with the selection state. */
+function gateLockHintHtml(rowId, hidden) {
+  return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}" ${hidden ? 'style="display:none"' : ""}>Pick a follow-up track first
+    <span class="why">(why?<span class="tooltip">Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.</span>)</span>
+  </span>`;
+}
 function composerActionsHtml(row) {
   if (!needsComposerActions(row)) return "";
   // The send gate (below) decides whether Approve starts disabled: undetermined
@@ -1840,6 +1867,7 @@ function composerActionsHtml(row) {
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="Regenerate with feedback" aria-label="Regenerate with feedback">&#9662;</button>
     </span>
     <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+    ${gateApplies ? gateLockHintHtml(row.id, !!sel) : ""}
   </div>`;
 }
 
@@ -1907,7 +1935,7 @@ function sendGateChipsHtml(row, subs) {
   const note = (subs || []).length === 0
     ? `<div class="small muted" style="margin-bottom:6px">No subsequence is configured for this campaign.</div>` : "";
   return `<div class="send-gate" id="gate-${esc(row.id)}">
-    <div class="sg-label small muted">Follow-up — pick one to unlock Approve</div>
+    <div class="sg-label">Follow-up track — pick one to unlock Approve</div>
     ${note}
     <div class="sg-chips">${chips.join("")}</div>
     ${gateHintHtml()}
@@ -1929,12 +1957,22 @@ function sendGateHtml(row) {
 function updateApproveButton(rowId) {
   const btn = document.querySelector(`.qc-send[data-id="${CSS.escape(String(rowId))}"]`);
   if (!btn) return;
+  const hint = document.getElementById(`gateLockHint-${rowId}`);
   const gateEl = document.getElementById(`gate-${rowId}`);
-  if (!gateEl) { btn.disabled = false; btn.textContent = "Approve"; return; }
+  if (!gateEl) {
+    btn.disabled = false; btn.textContent = "Approve";
+    if (hint) hint.style.display = "none";
+    return;
+  }
   const sel = GATE_SELECTION[rowId];
-  if (!sel) { btn.disabled = true; btn.textContent = "Approve"; return; }
+  if (!sel) {
+    btn.disabled = true; btn.textContent = "Approve";
+    if (hint) hint.style.display = "";
+    return;
+  }
   btn.disabled = false;
   btn.textContent = sel.choice === "push" ? `Approve + ${sel.name || "Follow-up"}` : "Approve — no follow-up";
+  if (hint) hint.style.display = "none";
 }
 function selectGateChip(rowId, chip) {
   const choice = chip.getAttribute("data-choice");
