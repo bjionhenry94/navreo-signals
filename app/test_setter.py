@@ -1698,6 +1698,191 @@ def test_subsequence_ambiguous_multiple_subsequences_needs_override():
          resp2.get("subsequence_id") == 1002, resp2)
 
 
+# ── send-gate: subsequence choice at send time (2026-07-17) ────────────────
+
+def _join_subsequence_push_threads(timeout=10):
+    """The send-time 'push' choice fires _subsequence_choice_async on a
+    daemon thread named 'setter-subsequence-push' (route_queue_action itself
+    never returns it, unlike _learn_from_edit_async) - find it by name and
+    join it so assertions on the patched row see the finished result."""
+    for t in list(threading.enumerate()):
+        if t.name == "setter-subsequence-push":
+            t.join(timeout=timeout)
+
+
+def _gate_row(row_id, **extra):
+    row = {
+        "id": row_id, "workspace": "navreo", "smartlead_campaign_id": 3591996,
+        "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": f"gate-{row_id}",
+        "status": "needs_review", "draft_body": "<p>hi</p>", "draft_subject": "Re: hi",
+        "reply_subject": "hi", "is_test": True, "added_to_subsequence": False,
+    }
+    row.update(extra)
+    return row
+
+
+def test_send_gate_choice_none_records_decision():
+    sb, http = fresh_setter()
+    sb.queue.append(_gate_row(701))
+    status, resp = setter.route_queue_action({"id": 701, "action": "send",
+                                             "subsequence": {"choice": "none"}})
+    check("send-gate none: send still returns ok", status == 200 and resp.get("ok") is True, (status, resp))
+    row = [r for r in sb.queue if r["id"] == 701][0]
+    check("send-gate none: subsequence_decision recorded as 'none'",
+         row.get("subsequence_decision") == "none", row)
+    check("send-gate none: added_to_subsequence untouched (false)",
+         row.get("added_to_subsequence") is False, row)
+
+
+def test_send_gate_choice_push_success_patches_pushed():
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http)
+    sb.queue.append(_gate_row(702))
+    status, resp = setter.route_queue_action({"id": 702, "action": "send",
+                                             "subsequence": {"choice": "push"}})
+    check("send-gate push: send returns ok immediately (never waits on Smartlead)",
+         status == 200 and resp.get("ok") is True, (status, resp))
+    _join_subsequence_push_threads()
+    row = [r for r in sb.queue if r["id"] == 702][0]
+    check("send-gate push success: added_to_subsequence patched true", row.get("added_to_subsequence") is True, row)
+    check("send-gate push success: subsequence_decision patched 'pushed'",
+         row.get("subsequence_decision") == "pushed", row)
+    check("send-gate push success: exactly one live push POST fired",
+         len(http.subsequence_push_calls) == 1, http.subsequence_push_calls)
+
+
+def test_send_gate_choice_push_failure_patches_push_failed():
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http)
+    http.subsequence_push_result = {"success": False, "message": "Internal Server Error"}
+    sb.queue.append(_gate_row(703))
+    status, resp = setter.route_queue_action({"id": 703, "action": "send",
+                                             "subsequence": {"choice": "push"}})
+    check("send-gate push failure: send still returns ok - the reply itself went out",
+         status == 200 and resp.get("ok") is True, (status, resp))
+    _join_subsequence_push_threads()
+    row = [r for r in sb.queue if r["id"] == 703][0]
+    check("send-gate push failure: subsequence_decision patched 'push_failed'",
+         row.get("subsequence_decision") == "push_failed", row)
+    check("send-gate push failure: added_to_subsequence NOT patched true",
+         row.get("added_to_subsequence") is False, row)
+
+
+def test_send_gate_no_subsequence_key_leaves_decision_null():
+    """Old clients (a stale tab) and autopilot sends carry no `subsequence`
+    key at all - today's behaviour is unchanged: decision stays NULL, and
+    the unresolved banner is what catches these, not a forced choice."""
+    sb, http = fresh_setter()
+    sb.queue.append(_gate_row(704))
+    status, resp = setter.route_queue_action({"id": 704, "action": "send"})
+    check("send-gate no key: send returns ok", status == 200 and resp.get("ok") is True, (status, resp))
+    row = [r for r in sb.queue if r["id"] == 704][0]
+    check("send-gate no key: subsequence_decision stays NULL",
+         row.get("subsequence_decision") is None, row)
+    check("send-gate no key: no push thread was ever started",
+         all(t.name != "setter-subsequence-push" for t in threading.enumerate()))
+
+
+def test_send_gate_failed_send_never_teaches_subsequence_decision():
+    """A send that never went out (no email_stats_id to send against, and
+    is_test is False so the dry-run shortcut doesn't apply) must not record
+    ANY follow-up decision - same 'only a successful send counts' rule the
+    edit-learning path already follows."""
+    sb, http = fresh_setter()
+    sb.queue.append(_gate_row(705, is_test=False, email_stats_id=None, smartlead_lead_id=None))
+    status, resp = setter.route_queue_action({"id": 705, "action": "send",
+                                             "subsequence": {"choice": "none"}})
+    check("send-gate failed send: send failed as expected (no stats id)",
+         status == 200 and resp.get("ok") is False, (status, resp))
+    row = [r for r in sb.queue if r["id"] == 705][0]
+    check("send-gate failed send: subsequence_decision stays untouched (NULL)",
+         row.get("subsequence_decision") is None, row)
+    check("send-gate failed send: added_to_subsequence stays untouched (false)",
+         row.get("added_to_subsequence") is False, row)
+
+
+def test_subsequences_endpoint_returns_mapped_list_and_caches():
+    sb, http = fresh_setter()
+    http.all_campaigns = [
+        {"id": 1001, "name": "Meeting Request", "status": "ACTIVE", "parent_campaign_id": 3591996},
+        {"id": 1002, "name": "Interested Reply", "status": "ACTIVE", "parent_campaign_id": 3591996},
+    ]
+    status, resp = setter.route_subsequences_get({"campaign_id": ["3591996"]})
+    check("subsequences endpoint: 200 status", status == 200, (status, resp))
+    ids = {s["id"] for s in resp.get("subsequences", [])}
+    check("subsequences endpoint: both subsequences mapped to id+name",
+         ids == {1001, 1002}, resp)
+    check("subsequences endpoint: shape is exactly id+name (no status leak)",
+         all(set(s.keys()) == {"id", "name"} for s in resp.get("subsequences", [])), resp)
+    n_before = len(http.smartlead_calls)
+    status2, resp2 = setter.route_subsequences_get({"campaign_id": ["3591996"]})
+    check("subsequences endpoint: second call returns the same cached list",
+         status2 == 200 and {s["id"] for s in resp2.get("subsequences", [])} == {1001, 1002}, resp2)
+    check("subsequences endpoint: cached - no extra Smartlead GET on the second call",
+         len(http.smartlead_calls) == n_before, http.smartlead_calls)
+    check("subsequences endpoint: missing campaign_id -> 400",
+         setter.route_subsequences_get({})[0] == 400)
+
+
+def test_subsequence_unresolved_endpoint_filters_correctly():
+    sb, http = fresh_setter()
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)).isoformat(timespec="seconds")
+    recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat(timespec="seconds")
+    sb.queue.append({"id": 801, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "a@x.com",
+                     "lead_first_name": "Ann", "message_id": "u1", "status": "sent", "sent_at": recent,
+                     "reply_body": "sounds good", "added_to_subsequence": False, "subsequence_decision": None})
+    sb.queue.append({"id": 802, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "b@x.com",
+                     "lead_first_name": "Bo", "message_id": "u2", "status": "auto_sent", "sent_at": recent,
+                     "reply_body": "retry me", "added_to_subsequence": False,
+                     "subsequence_decision": "push_failed"})
+    # excluded: opted out
+    sb.queue.append({"id": 803, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "c@x.com",
+                     "message_id": "u3", "status": "sent", "sent_at": recent,
+                     "added_to_subsequence": False, "subsequence_decision": "none"})
+    # excluded: already pushed
+    sb.queue.append({"id": 804, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "d@x.com",
+                     "message_id": "u4", "status": "sent", "sent_at": recent,
+                     "added_to_subsequence": True, "subsequence_decision": "pushed"})
+    # excluded: outside the 14-day window
+    sb.queue.append({"id": 805, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "e@x.com",
+                     "message_id": "u5", "status": "sent", "sent_at": old,
+                     "added_to_subsequence": False, "subsequence_decision": None})
+
+    status, resp = setter.route_subsequence_unresolved({})
+    ids = {r["id"] for r in resp.get("rows", [])}
+    check("unresolved: 200 status", status == 200, (status, resp))
+    check("unresolved: includes the NULL-decision sent row", 801 in ids, ids)
+    check("unresolved: includes the push_failed auto_sent row", 802 in ids, ids)
+    check("unresolved: excludes the opted-out (none) row", 803 not in ids, ids)
+    check("unresolved: excludes the already-pushed row", 804 not in ids, ids)
+    check("unresolved: excludes the row outside the 14-day window", 805 not in ids, ids)
+    row801 = next((r for r in resp.get("rows", []) if r["id"] == 801), {})
+    check("unresolved: row carries lead_name / lead_email / snippet / sent_at / campaign id",
+         row801.get("lead_name") == "Ann" and row801.get("lead_email") == "a@x.com"
+         and row801.get("sent_at") == recent and row801.get("smartlead_campaign_id") == 111
+         and "sounds good" in (row801.get("reply_snippet") or ""), row801)
+
+
+def test_subsequence_none_action_patches_decision_and_409s_if_added():
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 806, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "f@x.com",
+                     "message_id": "u6", "status": "sent", "added_to_subsequence": False,
+                     "subsequence_decision": None})
+    status, resp = setter.route_queue_action({"id": 806, "action": "subsequence_none"})
+    check("subsequence_none: 200 status", status == 200 and resp.get("ok") is True, (status, resp))
+    row = [r for r in sb.queue if r["id"] == 806][0]
+    check("subsequence_none: decision patched to 'none'", row.get("subsequence_decision") == "none", row)
+
+    sb.queue.append({"id": 807, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "g@x.com",
+                     "message_id": "u7", "status": "sent", "added_to_subsequence": True,
+                     "subsequence_decision": "pushed"})
+    status2, resp2 = setter.route_queue_action({"id": 807, "action": "subsequence_none"})
+    check("subsequence_none: 409 when already added to a subsequence", status2 == 409, (status2, resp2))
+    row2 = [r for r in sb.queue if r["id"] == 807][0]
+    check("subsequence_none: decision untouched on the 409 path",
+         row2.get("subsequence_decision") == "pushed", row2)
+
+
 def test_claim_race_returns_existing_row_without_classifying():
     """Two intake paths (the webhook and the poll) can race on the same reply.
     process_reply's own dedupe check can find nothing (nobody has claimed the
@@ -7802,6 +7987,16 @@ if __name__ == "__main__":
     test_subsequence_no_queue_row_route_resolves_by_email_and_pushes()
     test_subsequence_uncheck_makes_no_smartlead_call()
     test_subsequence_ambiguous_multiple_subsequences_needs_override()
+
+    test_send_gate_choice_none_records_decision()
+    test_send_gate_choice_push_success_patches_pushed()
+    test_send_gate_choice_push_failure_patches_push_failed()
+    test_send_gate_no_subsequence_key_leaves_decision_null()
+    test_send_gate_failed_send_never_teaches_subsequence_decision()
+    test_subsequences_endpoint_returns_mapped_list_and_caches()
+    test_subsequence_unresolved_endpoint_filters_correctly()
+    test_subsequence_none_action_patches_decision_and_409s_if_added()
+
     test_claim_race_returns_existing_row_without_classifying()
     test_existing_row_percent_encodes_plus_in_keys()
     test_existing_row_falls_back_to_source_message_id()

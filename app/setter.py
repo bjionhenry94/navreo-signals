@@ -3738,6 +3738,128 @@ def _resolve_subsequence_id(campaign_id, sub_sequence_id_override):
     return None, (502, {"error": "No subsequence is configured for this campaign in Smartlead."})
 
 
+# ── Send-gate: subsequence picker + follow-up decision (2026-07-17) ────────
+# The queue-list caching pattern (_ROWS_CACHE et al) has short TTLs because
+# queue rows churn constantly; a campaign's set of Smartlead subsequences
+# almost never changes, so this gets its own longer-lived cache instead of
+# riding the queue-row cache's bust cycle.
+_SUBSEQ_LIST_TTL = 600
+_SUBSEQ_LIST_CACHE = {}   # str(campaign_id) -> {"at": ts, "list": [{"id","name"}]}
+
+
+def _subsequences_for_campaign_cached(campaign_id):
+    key = str(campaign_id)
+    ent = _SUBSEQ_LIST_CACHE.get(key)
+    if ent and (_time.time() - ent["at"]) < _SUBSEQ_LIST_TTL:
+        return ent["list"]
+    subs = _sl_find_subsequences(campaign_id)
+    out = [{"id": s.get("id"), "name": s.get("name")} for s in subs if s.get("id") is not None]
+    _SUBSEQ_LIST_CACHE[key] = {"at": _time.time(), "list": out}
+    return out
+
+
+def route_subsequences_get(params):
+    """GET /api/setter/subsequences?campaign_id=X - the send gate's chip
+    list. Wraps _sl_find_subsequences with a 10-minute in-process cache per
+    campaign_id so opening reply after reply in the same campaign doesn't
+    cost a live Smartlead lookup each time."""
+    try:
+        campaign_id = _qp(params, "campaign_id", "")
+        if not campaign_id:
+            return 400, {"error": "campaign_id is required"}
+        return 200, {"subsequences": _subsequences_for_campaign_cached(campaign_id)}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def _lead_name(row: dict) -> str:
+    """Server-side mirror of setter.html's leadName(): first name if it's a
+    real one, otherwise the email local-part, never a hollow "Hi there"."""
+    fn = str(row.get("lead_first_name") or "").strip()
+    if not fn or fn.lower() == "there":
+        email = str(row.get("lead_email") or "")
+        local = email.split("@", 1)[0] if "@" in email else email
+        return local or email or "Unknown lead"
+    parts = [fn, str(row.get("lead_last_name") or "").strip()]
+    name = " ".join(p for p in parts if p)
+    return name or str(row.get("lead_email") or "") or "Unknown lead"
+
+
+def route_subsequence_unresolved(_params):
+    """GET /api/setter/subsequence/unresolved - the amber banner's feed:
+    sent/auto_sent rows from the last 14 days that never got a follow-up
+    decision (added_to_subsequence isn't true AND subsequence_decision is
+    null or push_failed). Workspace-scoped like every other queue read,
+    newest first, capped at 50.
+
+    The `status=in.(sent,auto_sent)` and `sent_at=gte.` filters are sent to
+    Supabase so a live deployment never pulls more than the window needs, but
+    the added_to_subsequence / subsequence_decision / date checks are ALSO
+    re-applied here in Python - belt and suspenders against a PostgREST
+    filter typo, and the only filtering the in-memory test fake honours."""
+    try:
+        if not _SB:
+            return 200, {"rows": []}
+        since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=14)).isoformat()
+        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(sent,auto_sent)"
+                          f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select=*")
+        out = []
+        if isinstance(rows, list):
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                if r.get("added_to_subsequence"):
+                    continue
+                decision = r.get("subsequence_decision")
+                if decision not in (None, "push_failed"):
+                    continue
+                sent_at = r.get("sent_at") or ""
+                if sent_at and sent_at < since:
+                    continue
+                out.append({
+                    "id": r.get("id"), "lead_name": _lead_name(r), "lead_email": r.get("lead_email"),
+                    "reply_snippet": clean_body(r.get("reply_body") or "")[:200],
+                    "sent_at": r.get("sent_at"), "smartlead_campaign_id": r.get("smartlead_campaign_id"),
+                    "subsequence_decision": decision,
+                })
+        out.sort(key=lambda r: r.get("sent_at") or "", reverse=True)
+        return 200, {"rows": out[:50]}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def _subsequence_choice_worker(row: dict, sub_sequence_id_override):
+    """Off the request thread - see _subsequence_choice_async. Approve must
+    never wait on a Smartlead lookup+push (same bar as _learn_from_edit_async
+    for the send path). Never raises: any failure lands as subsequence_decision
+    'push_failed', which is exactly what the unresolved banner watches for."""
+    try:
+        campaign_id = row.get("smartlead_campaign_id")
+        sub_id, err = _resolve_subsequence_id(campaign_id, sub_sequence_id_override)
+        if err:
+            _apply_patch(row, {"subsequence_decision": "push_failed"})
+            return
+        ok, _detail = _push_to_subsequence(campaign_id, row.get("lead_email"),
+                                          row.get("smartlead_lead_id"), sub_id)
+        if ok:
+            _apply_patch(row, {"added_to_subsequence": True, "subsequence_decision": "pushed"})
+        else:
+            _apply_patch(row, {"subsequence_decision": "push_failed"})
+    except Exception as e:  # noqa: BLE001
+        print(f"[setter] subsequence push failed for row {row.get('id')}: {e}", file=sys.stderr)
+        try:
+            _apply_patch(row, {"subsequence_decision": "push_failed"})
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _subsequence_choice_async(row: dict, sub_sequence_id_override):
+    t = threading.Thread(target=_subsequence_choice_worker, args=(row, sub_sequence_id_override),
+                        daemon=True, name="setter-subsequence-push")
+    t.start()
+    return t
+
+
 def route_campaigns_get(_params):
     try:
         if not _SB:
@@ -4477,8 +4599,17 @@ def route_queue_action(payload):
                 return 502, {"ok": False, "added_to_subsequence": False, "subsequence_id": sub_id,
                             "error": detail if isinstance(detail, str) else "Smartlead rejected the request.",
                             "detail": detail}
-            _apply_patch(row, {"added_to_subsequence": True})
+            _apply_patch(row, {"added_to_subsequence": True, "subsequence_decision": "pushed"})
             return 200, {"ok": True, "added_to_subsequence": True, "subsequence_id": sub_id, "detail": detail}
+        if action == "subsequence_none":
+            # Banner's "No follow-up needed" - a deliberate opt-out for a
+            # sent/auto_sent row the reviewer decided doesn't need a track.
+            # A row already pushed stays pushed: this is a decision about
+            # whether to push, not a way to undo one that already happened.
+            if row.get("added_to_subsequence"):
+                return 409, {"error": "This lead was already added to a subsequence."}
+            _apply_patch(row, {"subsequence_decision": "none"})
+            return 200, {"ok": True, "subsequence_decision": "none"}
         if action == "save_draft":
             # Auto-save (owner ask 2026-07-16): a hand-edited draft used to live
             # ONLY in the browser's EDITED_DRAFTS map, so a failed send, a reload
@@ -4512,6 +4643,19 @@ def route_queue_action(payload):
                 # the learner's gpt-5-mini call (perf bar, 2026-07-16).
                 _learn_from_edit_async(row, agent, original, body_html,
                                       training_on=bool(payload.get("training")))
+                # Send-gate follow-up decision (owner spec 2026-07-17): only a
+                # SUCCESSFUL send records one - a reply that never left must
+                # not claim a follow-up decision was made. No "subsequence"
+                # key at all (old clients, autopilot) leaves the decision NULL
+                # exactly as before - the unresolved banner is what catches
+                # those, not a forced choice at send time.
+                sub_choice = payload.get("subsequence")
+                if isinstance(sub_choice, dict):
+                    choice = sub_choice.get("choice")
+                    if choice == "none":
+                        _apply_patch(row, {"subsequence_decision": "none"})
+                    elif choice == "push":
+                        _subsequence_choice_async(row, sub_choice.get("sub_sequence_id"))
             return 200, {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
         return 400, {"error": f"Unknown action '{action}'."}
     except Exception as e:  # noqa: BLE001
@@ -7235,6 +7379,8 @@ GET_ROUTES = {
     "/api/setter/training": route_training_get,
     "/api/setter/training/share-info": route_training_share_info,
     "/api/setter/edit-lesson": route_edit_lesson_get,
+    "/api/setter/subsequences": route_subsequences_get,
+    "/api/setter/subsequence/unresolved": route_subsequence_unresolved,
 }
 
 POST_ROUTES = {

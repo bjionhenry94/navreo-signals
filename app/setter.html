@@ -244,6 +244,31 @@
   border: 1px solid var(--amber-line); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
 .detail-err { margin: 10px 0; }
 
+/* ── Send gate (2026-07-17): follow-up chips block Approve until a choice
+   is made. All chips render equal weight - no star, no pre-select, no "on"
+   class until the human actually clicks one (owner ruling: no suggestion). */
+.send-gate { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.send-gate .sg-label { margin-bottom: 8px; }
+.sg-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.sg-chip.sg-none { border-style: dashed; }
+.sg-hint { margin-top: 8px; }
+
+/* ── Unresolved-followup banner, pinned above the queue list ──────────── */
+.sg-banner { padding: 0; overflow: hidden; }
+.sg-banner-head { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 9px 13px; }
+.sg-banner-caret { margin-left: auto; opacity: 0.7; }
+.sg-banner-rows { border-top: 1px solid var(--amber-line); }
+.sg-banner-row {
+  display: flex; align-items: center; gap: 12px; padding: 9px 13px;
+  border-bottom: 1px solid var(--amber-line); flex-wrap: wrap;
+}
+.sg-banner-row:last-child { border-bottom: none; }
+.sg-br-main { flex: 1; min-width: 200px; }
+.sg-br-name { font-weight: 600; font-size: 12.5px; color: var(--ink); }
+.sg-br-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+.sg-br-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sg-br-picker { flex-basis: 100%; }
+
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
 .agent-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; cursor: pointer; }
 .agent-card:hover { background: var(--bg-sunken); }
@@ -345,6 +370,8 @@
         <button class="btn" id="openTryItBtn" type="button">Try it</button>
       </div>
     </div>
+
+    <div id="subseqBanner" class="warn-banner sg-banner" style="display:none"></div>
 
     <div class="inbox-shell" id="inboxShell">
       <div class="inbox-left">
@@ -525,6 +552,16 @@ let editingAgentId = null;
 let currentAgentMode = "draft_only";
 let currentAgentEnabled = true;
 let selectedCampaignIds = new Set();
+
+/* ── Send gate (2026-07-17) state ─────────────────────────────────────── */
+// campaignId (string) -> {subsequences:[{id,name}]} once fetched, or the
+// string "failed" (endpoint error - fail open, gate never shows for that
+// campaign this session). undefined = not fetched yet.
+const SUBSEQ_CACHE = {};
+// rowId (string) -> {choice:"push", subSequenceId, name} | {choice:"none"}
+const GATE_SELECTION = {};
+let unresolvedRows = [];
+let unresolvedExpanded = false;
 
 /* Client-side mirror of setter.py's _extract_urls: every distinct http(s)
    URL in text (an href attribute value and a bare URL in prose both match
@@ -872,6 +909,117 @@ async function loadQueue(prefetch) {
   renderClientFilter();
   renderQueue();
   hydrateAllRows();  // background: full corpus (threads + search + instant pills)
+  loadUnresolvedBanner();
+}
+
+/* ── Unresolved-followup banner (2026-07-17) ──────────────────────────────
+   Amber banner pinned above the queue list: sent/auto_sent rows that never
+   got a follow-up decision (see route_subsequence_unresolved). Collapsed by
+   default - count visible, click the header to expand. Hidden entirely at
+   zero. Fed on queue load and re-fetched after every banner action / send. */
+async function loadUnresolvedBanner() {
+  const res = await fetchJson("/api/setter/subsequence/unresolved");
+  unresolvedRows = (res.ok && res.data && Array.isArray(res.data.rows)) ? res.data.rows : [];
+  renderUnresolvedBanner();
+}
+function unresolvedRowHtml(r) {
+  const failTag = r.subsequence_decision === "push_failed"
+    ? `<span class="pill r">push failed — retry</span>` : "";
+  return `<div class="sg-banner-row" data-id="${esc(r.id)}">
+    <div class="sg-br-main">
+      <div class="sg-br-name">${esc(r.lead_name || r.lead_email || "Unknown lead")}</div>
+      <div class="sg-br-snippet small muted">${esc(truncate(r.reply_snippet || "", 140))}</div>
+      <div class="sg-br-when small muted">${pulledAgo(r.sent_at)}</div>
+    </div>
+    <div class="sg-br-actions">
+      ${failTag}
+      <button class="btn sm sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence</button>
+      <button class="btn sm sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>
+    </div>
+    <div class="sg-br-picker" id="sgPicker-${esc(r.id)}" style="display:none"></div>
+  </div>`;
+}
+function renderUnresolvedBanner() {
+  const el = document.getElementById("subseqBanner");
+  if (!el) return;
+  if (!unresolvedRows.length) {
+    el.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+  el.style.display = "block";
+  const n = unresolvedRows.length;
+  el.innerHTML = `
+    <div class="sg-banner-head" id="sgBannerHead" role="button" tabindex="0">
+      <b>${fmt(n)}</b>&nbsp;earlier send${n === 1 ? "" : "s"} ${n === 1 ? "has" : "have"} no follow-up — review
+      <span class="sg-banner-caret">${unresolvedExpanded ? "▾" : "▸"}</span>
+    </div>
+    ${unresolvedExpanded ? `<div class="sg-banner-rows">${unresolvedRows.map(unresolvedRowHtml).join("")}</div>` : ""}
+  `;
+  const head = document.getElementById("sgBannerHead");
+  if (head) head.addEventListener("click", () => { unresolvedExpanded = !unresolvedExpanded; renderUnresolvedBanner(); });
+  if (unresolvedExpanded) wireUnresolvedBannerEvents(el);
+  setTimeout(sizeInboxShell, 0);  // banner shifts the shell down - re-pin
+}
+function wireUnresolvedBannerEvents(el) {
+  el.querySelectorAll(".sg-add").forEach((btn) => btn.addEventListener("click", () => doBannerAdd(btn)));
+  el.querySelectorAll(".sg-none").forEach((btn) => btn.addEventListener("click", () => doBannerNone(btn)));
+}
+function renderBannerPicker(id, subs) {
+  const picker = document.getElementById(`sgPicker-${id}`);
+  if (!picker) return;
+  picker.style.display = "block";
+  picker.innerHTML = `<div class="small muted" style="margin:4px 0">This campaign has more than one subsequence — pick one:</div>
+    <div class="sg-chips">${(subs || []).map((s) =>
+      `<button type="button" class="chip sg-picker-chip" data-id="${esc(id)}" data-sub-id="${esc(s.id)}">${esc(s.name || "Follow-up")}</button>`
+    ).join("")}</div>`;
+  picker.querySelectorAll(".sg-picker-chip").forEach((chip) => chip.addEventListener("click", () => {
+    const addBtn = document.querySelector(`.sg-add[data-id="${CSS.escape(String(id))}"]`);
+    if (addBtn) doBannerAdd(addBtn, chip.getAttribute("data-sub-id"));
+  }));
+}
+/* Reuses the existing "subsequence" action (the same one the sidebar
+   checkbox fires) - checked:true pushes live to Smartlead and now also
+   patches subsequence_decision='pushed' (setter.py 2026-07-17). A campaign
+   with more than one subsequence answers 400 with the candidate list - build
+   a small picker from it and retry with the chosen sub_sequence_id. */
+async function doBannerAdd(btn, subSequenceId) {
+  const id = btn.getAttribute("data-id");
+  const restore = busyBtn(btn, "Adding…");
+  if (!restore) return;
+  const payload = { id: Number(id), action: "subsequence", checked: true };
+  if (subSequenceId) payload.sub_sequence_id = subSequenceId;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  restore();
+  if (!res.ok && res.status === 400 && res.data && Array.isArray(res.data.subsequences)) {
+    renderBannerPicker(id, res.data.subsequences);
+    return;
+  }
+  if (!res.ok) {
+    showError("Couldn't add to subsequence: " + res.error);
+    return;
+  }
+  clearError();
+  await loadUnresolvedBanner();
+  loadQueue();
+}
+async function doBannerNone(btn) {
+  const id = btn.getAttribute("data-id");
+  const restore = busyBtn(btn, "Saving…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: Number(id), action: "subsequence_none" }),
+  });
+  restore();
+  if (!res.ok) {
+    showError("Couldn't record: " + res.error);
+    return;
+  }
+  clearError();
+  await loadUnresolvedBanner();
 }
 
 /* Full-fidelity corpus refresh, single-flight. Reuses one in-flight fetch
@@ -1313,6 +1461,7 @@ function renderDetail(row) {
         <div class="ch-spacer"></div>
         ${composerActionsHtml(row)}
       </div>
+      ${sendGateHtml(row)}
       ${learnBarHtml(row)}
       ${composerFeedbackHtml(row)}
       ${sentLineHtml}
@@ -1330,6 +1479,17 @@ function renderDetail(row) {
   wireLeadPanelEvents(panelEl);
   reapplyEditedDraft(row.id);
   refreshThreadFor(row);
+  // Cache hit already painted real chips synchronously above - wire them now.
+  // Cache miss painted an empty placeholder - loadSendGate fills + wires it.
+  if (needsComposerActions(row) && row.smartlead_campaign_id) {
+    const cid = row.smartlead_campaign_id;
+    if (SUBSEQ_CACHE[cid] && SUBSEQ_CACHE[cid] !== "failed") {
+      wireSendGateEvents(document.getElementById(`gate-${row.id}`), row);
+    } else if (SUBSEQ_CACHE[cid] === undefined) {
+      loadSendGate(row);
+    }
+  }
+  updateApproveButton(row.id);
 }
 
 /* "How this was decided" - shared content builder used by both the fixed
@@ -1521,14 +1681,162 @@ function needsComposerActions(row) {
    wireDetailEvents binds them exactly as before. */
 function composerActionsHtml(row) {
   if (!needsComposerActions(row)) return "";
+  // The send gate (below) decides whether Approve starts disabled: undetermined
+  // (no campaign fetch resolved yet) defaults to disabled so a slow Smartlead
+  // lookup can never race a click through before the chips exist - loadSendGate
+  // flips it open the moment the fetch fails (fail-open rule) or resolves.
+  const sel = GATE_SELECTION[row.id];
+  const gateApplies = !!row.smartlead_campaign_id;
+  const disabled = (gateApplies && !sel) ? "disabled" : "";
+  const label = sel
+    ? (sel.choice === "push" ? `Approve + ${esc(sel.name || "Follow-up")}` : "Approve — no follow-up")
+    : "Approve";
   return `<div class="qc-actions">
-    <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button">Approve</button>
+    <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button" ${disabled}>${label}</button>
     <span class="qc-split">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="Regenerate with feedback" aria-label="Regenerate with feedback">&#9662;</button>
     </span>
     <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
   </div>`;
 }
+
+/* ── Send gate (2026-07-17): "Follow-up — pick one to unlock Approve" ────
+   Winning P2 prototype, no-suggestion variant (setter-subsequence-prototypes
+   panel). Every chip - each subsequence plus the trailing dashed "None" -
+   renders equal weight: no star, no pre-selection, no recommendation text.
+   Approve stays disabled until the human clicks one. Fails open: a
+   subsequences-endpoint error removes the gate entirely rather than blocking
+   a send on a Smartlead lookup outage. */
+function gateHintSeen() { return localStorage.getItem("setterGateHintSeen") === "1"; }
+function gateHintHtml() {
+  if (gateHintSeen()) return "";
+  return `<div class="small muted sg-hint">Double-click a chip to pick it and send in one step - or press 1-5, then Enter.</div>`;
+}
+function sendGateChipsHtml(row, subs) {
+  const sel = GATE_SELECTION[row.id];
+  const chips = (subs || []).map((s, i) => {
+    const on = !!(sel && sel.choice === "push" && String(sel.subSequenceId) === String(s.id));
+    return `<button type="button" class="chip sg-chip${on ? " on" : ""}" data-id="${esc(row.id)}"
+      data-choice="push" data-sub-id="${esc(s.id)}" data-name="${esc(s.name || "Follow-up")}" data-idx="${i}">${esc(s.name || "Follow-up")}</button>`;
+  });
+  const noneOn = !!(sel && sel.choice === "none");
+  chips.push(`<button type="button" class="chip sg-chip sg-none${noneOn ? " on" : ""}" data-id="${esc(row.id)}"
+    data-choice="none" data-idx="${(subs || []).length}">None</button>`);
+  const note = (subs || []).length === 0
+    ? `<div class="small muted" style="margin-bottom:6px">No subsequence is configured for this campaign.</div>` : "";
+  return `<div class="send-gate" id="gate-${esc(row.id)}">
+    <div class="sg-label small muted">Follow-up — pick one to unlock Approve</div>
+    ${note}
+    <div class="sg-chips">${chips.join("")}</div>
+    ${gateHintHtml()}
+  </div>`;
+}
+/* First paint: a cache hit renders the real chips synchronously (no flicker
+   on a second reply from the same campaign); a cache miss renders an empty
+   placeholder div that loadSendGate fills in once the fetch lands. No
+   campaign on the row at all -> no gate, ever (nothing to gate on). */
+function sendGateHtml(row) {
+  if (!needsComposerActions(row)) return "";
+  const cid = row.smartlead_campaign_id;
+  if (!cid) return "";
+  const cached = SUBSEQ_CACHE[cid];
+  if (cached === undefined) return `<div class="send-gate" id="gate-${esc(row.id)}"></div>`;
+  if (cached === "failed") return "";
+  return sendGateChipsHtml(row, cached.subsequences || []);
+}
+function updateApproveButton(rowId) {
+  const btn = document.querySelector(`.qc-send[data-id="${CSS.escape(String(rowId))}"]`);
+  if (!btn) return;
+  const gateEl = document.getElementById(`gate-${rowId}`);
+  if (!gateEl) { btn.disabled = false; btn.textContent = "Approve"; return; }
+  const sel = GATE_SELECTION[rowId];
+  if (!sel) { btn.disabled = true; btn.textContent = "Approve"; return; }
+  btn.disabled = false;
+  btn.textContent = sel.choice === "push" ? `Approve + ${sel.name || "Follow-up"}` : "Approve — no follow-up";
+}
+function selectGateChip(rowId, chip) {
+  const choice = chip.getAttribute("data-choice");
+  GATE_SELECTION[rowId] = choice === "push"
+    ? { choice: "push", subSequenceId: chip.getAttribute("data-sub-id"), name: chip.getAttribute("data-name") }
+    : { choice: "none" };
+  const gate = document.getElementById(`gate-${rowId}`);
+  if (gate) gate.querySelectorAll(".sg-chip").forEach((c) => c.classList.toggle("on", c === chip));
+  updateApproveButton(rowId);
+}
+/* Clicking the already-selected chip deselects it (re-locks Approve) -
+   owner spec: "Clicking a selected chip deselects." */
+function toggleGateChip(rowId, chip) {
+  if (chip.classList.contains("on")) {
+    delete GATE_SELECTION[rowId];
+    const gate = document.getElementById(`gate-${rowId}`);
+    if (gate) gate.querySelectorAll(".sg-chip").forEach((c) => c.classList.remove("on"));
+    updateApproveButton(rowId);
+    return;
+  }
+  selectGateChip(rowId, chip);
+}
+function wireSendGateEvents(container, row) {
+  if (!container) return;
+  container.querySelectorAll(".sg-chip").forEach((chip) => {
+    chip.addEventListener("click", () => toggleGateChip(row.id, chip));
+    // Fast path: double-click selects AND sends in one step.
+    chip.addEventListener("dblclick", () => {
+      selectGateChip(row.id, chip);
+      const btn = document.querySelector(`.qc-send[data-id="${CSS.escape(String(row.id))}"]`);
+      if (btn && !btn.disabled) doSend(btn);
+    });
+  });
+  if (!gateHintSeen()) localStorage.setItem("setterGateHintSeen", "1");
+}
+/* Cache-first fetch of a campaign's subsequences, called once per detail
+   render for rows the gate applies to. Repaints the placeholder in place
+   once the fetch lands - a no-op if the reviewer has since selected a
+   different reply. Endpoint failure fails OPEN: the gate is torn down and
+   Approve unlocks, exactly as if there were no gate at all - a Smartlead
+   lookup outage must never block a send. */
+async function loadSendGate(row) {
+  if (!needsComposerActions(row)) return;
+  const cid = row.smartlead_campaign_id;
+  if (!cid) { updateApproveButton(row.id); return; }
+  if (SUBSEQ_CACHE[cid] === undefined) {
+    const res = await fetchJson(`/api/setter/subsequences?campaign_id=${encodeURIComponent(cid)}`);
+    SUBSEQ_CACHE[cid] = (res.ok && res.data && Array.isArray(res.data.subsequences))
+      ? { subsequences: res.data.subsequences } : "failed";
+  }
+  if (String(selectedRowId) !== String(row.id)) return;  // moved on already
+  const el = document.getElementById(`gate-${row.id}`);
+  if (!el) return;
+  const cached = SUBSEQ_CACHE[cid];
+  if (cached === "failed") {
+    el.remove();
+  } else {
+    el.outerHTML = sendGateChipsHtml(row, cached.subsequences || []);
+    wireSendGateEvents(document.getElementById(`gate-${row.id}`), row);
+  }
+  updateApproveButton(row.id);
+}
+/* Keyboard fast paths, scoped to whichever reply is currently open and only
+   when focus isn't in something editable (owner spec). 1-5 pick a chip in
+   display order (subsequences, then None); Enter approves once unlocked. */
+document.addEventListener("keydown", (e) => {
+  if (!selectedRowId) return;
+  const active = document.activeElement;
+  const tag = active && active.tagName;
+  const editable = active && (active.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT");
+  if (editable) return;
+  const gate = document.getElementById(`gate-${selectedRowId}`);
+  if (!gate) return;
+  if (/^[1-5]$/.test(e.key)) {
+    const chip = gate.querySelectorAll(".sg-chip")[Number(e.key) - 1];
+    if (chip) { e.preventDefault(); selectGateChip(selectedRowId, chip); }
+    return;
+  }
+  if (e.key === "Enter") {
+    const btn = document.querySelector(`.qc-send[data-id="${CSS.escape(String(selectedRowId))}"]`);
+    if (btn && !btn.disabled) { e.preventDefault(); doSend(btn); }
+  }
+});
+
 /* Training mode (owner ruling 2026-07-14): feedback IS teaching, so it
    persists by default. The toggle exists for the situational exception -
    flip it off, regenerate with a note that applies to this reply only
@@ -1959,6 +2267,16 @@ async function doSend(btn) {
   // when this says so, so a stale tab can never spring a surprise lesson.
   const payload = { id: Number(id), action: "send", training: trainingModeOn() };
   if (draftEl) payload.body_override = draftEl.innerHTML;
+  // The send-gate choice rides along on the same request (spec: no second
+  // round trip). No gate rendered for this row (no campaign, or the
+  // subsequences fetch failed open) -> no key at all, exactly today's
+  // behaviour, decision stays NULL server-side.
+  const gateSel = GATE_SELECTION[id];
+  if (gateSel) {
+    payload.subsequence = gateSel.choice === "push"
+      ? { choice: "push", sub_sequence_id: gateSel.subSequenceId || undefined }
+      : { choice: "none" };
+  }
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
@@ -1975,6 +2293,8 @@ async function doSend(btn) {
   }
   clearError();
   delete EDITED_DRAFTS[id];
+  delete GATE_SELECTION[id];
+  loadUnresolvedBanner();
   protoNote("Reply sent");
   // If this approve carried an edit and training is on, the learner may turn
   // it into a standing rule ~40s from now. Watch for it and SAY SO - the
