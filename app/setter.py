@@ -1177,18 +1177,55 @@ def _sl_post(path: str, body: dict, params: dict = None):
         return {}
 
 
+def _sl_lead_map_id_by_email(campaign_id, lead_email: str):
+    """One-call map-id resolution: GET /leads/?email=<email> returns the
+    lead with `lead_campaign_data` - a list where each entry carries the
+    `campaign_id` AND the `campaign_lead_map_id` for that membership (proven
+    live 2026-07-17 on campaign 3506959: the paging path capped out at 2,000
+    of 7,566 leads and reported the lead unfindable; this returned the map id
+    3259560174 in one call and the push succeeded). Returns the id or None
+    (missing email, endpoint error, no entry for this campaign) - the caller
+    falls back to paging. Never raises."""
+    email = (lead_email or "").strip()
+    if not campaign_id or not email:
+        return None
+    try:
+        resp = _sl_get("/leads/", {"email": email})
+        if not isinstance(resp, dict):
+            return None
+        memberships = resp.get("lead_campaign_data")
+        if not isinstance(memberships, list):
+            return None
+        for m in memberships:
+            if isinstance(m, dict) and str(m.get("campaign_id")) == str(campaign_id):
+                return m.get("campaign_lead_map_id")
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _sl_campaign_lead_map_id(campaign_id, lead_email: str, smartlead_lead_id=None, max_pages: int = 20):
     """Resolves the Smartlead `campaign_lead_map_id` for a lead inside a
     specific campaign - this is the id the push-to-subsequence endpoint calls
-    `email_lead_map_id`. Source: GET /campaigns/{campaign_id}/leads, docs at
+    `email_lead_map_id`.
+
+    FIRST tries the one-call by-email lookup (_sl_lead_map_id_by_email) -
+    the paging path below caps at max_pages*100 = 2,000 leads, which made
+    every lead past position 2,000 of a big campaign unfindable (live bug
+    2026-07-17, campaign 3506959 with 7,566 leads). Only when that yields
+    nothing (no email on the row, endpoint error, no matching campaign
+    entry) does it fall back to the original paging loop, unchanged:
+    GET /campaigns/{campaign_id}/leads, docs at
     https://api.smartlead.ai/api-reference/leads/get-by-campaign - each row of
     the paginated `data` list carries a top-level `campaign_lead_map_id` plus
-    a nested `lead` object ({id, email, ...}). That endpoint has no documented
-    email/lead_id filter, so this pages through (100/lead, capped at
-    max_pages*100 leads) matching by Smartlead lead id first, email second.
-    Returns the id, or None if not found / on any failure."""
+    a nested `lead` object ({id, email, ...}), matched by Smartlead lead id
+    first, email second. Returns the id, or None if not found / on any
+    failure. Never raises."""
     if not campaign_id:
         return None
+    map_id = _sl_lead_map_id_by_email(campaign_id, lead_email)
+    if map_id is not None:
+        return map_id
     email_l = (lead_email or "").strip().lower()
     offset = 0
     try:

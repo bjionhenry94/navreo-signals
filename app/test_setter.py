@@ -373,6 +373,12 @@ class FakeHTTP:
         # simulate a Smartlead 500/failure).
         self.subsequence_push_result = None
         self.subsequence_push_calls = []
+        # lead_by_email_result: response for GET /leads/?email=... - None ->
+        # the legacy minimal lead object (no lead_campaign_data, so map-id
+        # resolution falls back to campaign-leads paging); a dict -> returned
+        # verbatim; a callable(url) -> dict (may raise, to simulate an
+        # endpoint failure).
+        self.lead_by_email_result = None
 
     def __call__(self, method, url, headers, body=None):
         self.calls.append((method, url))
@@ -462,6 +468,10 @@ class FakeHTTP:
             if re.search(r"/campaigns/\?", url):
                 return list(self.all_campaigns)
             if "/leads/" in url:
+                if self.lead_by_email_result is not None:
+                    if callable(self.lead_by_email_result):
+                        return self.lead_by_email_result(url)
+                    return self.lead_by_email_result
                 return {"id": 999, "first_name": "Test", "last_name": "Lead"}
             m = re.search(r"/campaigns/([^/]+)/webhooks", url)
             if m:
@@ -1696,6 +1706,80 @@ def test_subsequence_ambiguous_multiple_subsequences_needs_override():
     check("subsequence override: explicit sub_sequence_id succeeds", status2 == 200, (status2, resp2))
     check("subsequence override: pushes to the requested subsequence, not the other one",
          resp2.get("subsequence_id") == 1002, resp2)
+
+
+# ── map-id resolution: by-email first, paging fallback (2026-07-17) ────────
+
+def test_map_id_by_email_resolves_in_one_call_no_paging():
+    """GET /leads/?email= carries lead_campaign_data with the
+    campaign_lead_map_id per campaign - one call, no /campaigns/{id}/leads
+    paging at all."""
+    sb, http = fresh_setter()
+    http.all_campaigns = [{"id": 8820001, "name": "Meeting Request", "status": "ACTIVE",
+                           "parent_campaign_id": 8810001}]
+    http.lead_by_email_result = {"id": 42, "email": "big@x.com", "lead_campaign_data": [
+        {"campaign_id": 999999, "campaign_lead_map_id": 111},
+        {"campaign_id": 8810001, "campaign_lead_map_id": 3259560174},
+    ]}
+    sb.queue.append({"id": 921001, "workspace": "navreo", "smartlead_campaign_id": 8810001,
+                     "lead_email": "big@x.com", "smartlead_lead_id": 42, "message_id": "me1",
+                     "status": "needs_review", "added_to_subsequence": False})
+    status, resp = setter.route_queue_action({"id": 921001, "action": "subsequence", "checked": True})
+    check("map-id by-email: push succeeds", status == 200 and resp.get("ok") is True, (status, resp))
+    check("map-id by-email: the by-email map id is what got pushed",
+         http.subsequence_push_calls and http.subsequence_push_calls[0].get("email_lead_map_id") == 3259560174,
+         http.subsequence_push_calls)
+    leads_paging_calls = [u for _m, u in http.calls if re.search(r"/campaigns/[^/?]+/leads", u)]
+    check("map-id by-email: ZERO /campaigns/{id}/leads paging calls", leads_paging_calls == [], leads_paging_calls)
+    by_email_calls = [u for _m, u in http.calls if "/leads/?" in u]
+    check("map-id by-email: exactly one /leads/ lookup", len(by_email_calls) == 1, by_email_calls)
+
+
+def test_map_id_by_email_error_falls_back_to_paging():
+    sb, http = fresh_setter()
+    _subsequence_fixture(sb, http, campaign_id=8810002, sub_id=8820002, map_id=424242)
+
+    def _boom(_url):
+        raise OSError("leads endpoint down")
+    http.lead_by_email_result = _boom
+    sb.queue.append({"id": 921002, "workspace": "navreo", "smartlead_campaign_id": 8810002,
+                     "lead_email": "lead@x.com", "smartlead_lead_id": 42, "message_id": "me2",
+                     "status": "needs_review", "added_to_subsequence": False})
+    status, resp = setter.route_queue_action({"id": 921002, "action": "subsequence", "checked": True})
+    check("map-id fallback: by-email error still resolves via paging and pushes",
+         status == 200 and resp.get("ok") is True, (status, resp))
+    check("map-id fallback: the paging-resolved map id got pushed",
+         http.subsequence_push_calls and http.subsequence_push_calls[0].get("email_lead_map_id") == 424242,
+         http.subsequence_push_calls)
+    check("map-id fallback: the paging listing WAS consulted",
+         any(re.search(r"/campaigns/8810002/leads", u) for _m, u in http.calls),
+         [u for _m, u in http.calls])
+    # A missing lead_campaign_data key (the endpoint's minimal legacy shape)
+    # must also fall through to paging, not crash.
+    http.lead_by_email_result = None
+    check("map-id fallback: minimal /leads/ shape (no lead_campaign_data) falls back too",
+         setter._sl_campaign_lead_map_id(8810002, "lead@x.com") == 424242)
+
+
+def test_map_id_beyond_2000_lead_paging_cap_resolves_by_email():
+    """The regression: campaign 3506959 has 7,566 leads; the paging loop caps
+    at 2,000, so a lead past that was unfindable. The by-email path must find
+    it regardless of its position in the campaign."""
+    sb, http = fresh_setter()
+    # 2,100 filler leads; the target is at position ~2,050 - beyond the cap.
+    entries = [{"campaign_lead_map_id": 10_000 + i, "status": "INPROGRESS",
+                "lead": {"id": 50_000 + i, "email": f"filler{i}@x.com"}} for i in range(2100)]
+    entries[2050] = {"campaign_lead_map_id": 3259560174, "status": "INPROGRESS",
+                     "lead": {"id": 77, "email": "enquiry@keepcalmandclipemin.com"}}
+    http.campaign_leads_by_campaign["3506959"] = entries
+    # Without the by-email path the paging cap makes the lead unfindable.
+    check("map-id 2000-cap: paging alone cannot find a lead past position 2,000",
+         setter._sl_campaign_lead_map_id(3506959, "enquiry@keepcalmandclipemin.com") is None)
+    http.lead_by_email_result = {"id": 77, "email": "enquiry@keepcalmandclipemin.com",
+                                 "lead_campaign_data": [
+                                     {"campaign_id": 3506959, "campaign_lead_map_id": 3259560174}]}
+    check("map-id 2000-cap: the by-email path resolves it regardless of position",
+         setter._sl_campaign_lead_map_id(3506959, "enquiry@keepcalmandclipemin.com") == 3259560174)
 
 
 # ── send-gate: subsequence choice at send time (2026-07-17) ────────────────
@@ -8140,6 +8224,9 @@ if __name__ == "__main__":
     test_subsequence_no_queue_row_route_resolves_by_email_and_pushes()
     test_subsequence_uncheck_makes_no_smartlead_call()
     test_subsequence_ambiguous_multiple_subsequences_needs_override()
+    test_map_id_by_email_resolves_in_one_call_no_paging()
+    test_map_id_by_email_error_falls_back_to_paging()
+    test_map_id_beyond_2000_lead_paging_cap_resolves_by_email()
 
     test_send_gate_choice_none_records_decision()
     test_send_gate_choice_push_success_patches_pushed()
