@@ -7694,6 +7694,72 @@ def test_lesson_from_edit_sends_the_manual_for_contradiction_checking():
          and seen.get("payload", {}).get("reviewer_final") == "b", seen)
 
 
+def test_edit_lesson_toast_roundtrip():
+    """The learned-lesson toast contract (tester panel 2026-07-17: a silent
+    permanent write was the core failure). The worker records a one-slot undo
+    record; the GET reports the lesson for exactly that row; undo restores the
+    instructions byte-identically and refuses once anything else has changed."""
+    sb, http, agent = _edit_learn_setup()
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Keep replies short and direct.", "reason": "style"}
+    before_instructions = setter._load_agent(agent["id"]).get("instructions")
+    row = [r for r in sb.queue if r["id"] == 901][0]
+
+    # Before anything lands, the row polls as pending.
+    status, resp = setter.route_edit_lesson_get({"id": "901"})
+    check("edit toast: pending before the learner runs", status == 200 and resp.get("status") == "pending", (status, resp))
+
+    setter._learn_from_edit_worker(row, agent, "<p>The agent wrote this.</p>", "<p>Something the human rewrote.</p>")
+    saved = setter._load_agent(agent["id"])
+    slot = saved.get("last_edit_lesson") or {}
+    check("edit toast: worker records the one-slot undo record",
+         slot.get("source") == "901" and slot.get("rule") == "Keep replies short and direct.", slot)
+    check("edit toast: the slot carries the exact pre-merge instructions",
+         slot.get("prev_instructions") == before_instructions, slot.get("prev_instructions"))
+
+    status, resp = setter.route_edit_lesson_get({"id": "901"})
+    check("edit toast: GET reports learned + rule + undoable",
+         status == 200 and resp.get("status") == "learned"
+         and resp.get("rule") == "Keep replies short and direct." and resp.get("undoable") is True,
+         (status, resp))
+    status, resp = setter.route_edit_lesson_get({"id": "902"})
+    check("edit toast: a different row still polls as pending",
+         status == 404 or (status == 200 and resp.get("status") == "pending"), (status, resp))
+
+    # Undo restores the manual byte-identically and removes the audit entry.
+    status, resp = setter.route_edit_lesson_undo({"id": 901})
+    check("edit toast: undo returns ok + the undone rule",
+         status == 200 and resp.get("ok") and resp.get("undone") == "Keep replies short and direct.", (status, resp))
+    after = setter._load_agent(agent["id"])
+    check("edit toast: undo restored instructions byte-identically",
+         after.get("instructions") == before_instructions, after.get("instructions"))
+    check("edit toast: undo removed the instruction_edits entry",
+         all(str(e.get("source")) != "901" for e in (after.get("instruction_edits") or [])),
+         after.get("instruction_edits"))
+    check("edit toast: undo cleared the slot", not after.get("last_edit_lesson"), after.get("last_edit_lesson"))
+
+    # A second undo has nothing to take back.
+    status, resp = setter.route_edit_lesson_undo({"id": 901})
+    check("edit toast: double-undo refuses with 409", status == 409, (status, resp))
+
+
+def test_edit_lesson_undo_refuses_after_instructions_change():
+    """The post_sha guard: if a typed correction (or a newer lesson) lands
+    after this one, undo must refuse rather than clobber the newer work."""
+    sb, http, agent = _edit_learn_setup()
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Keep replies short.", "reason": "style"}
+    row = [r for r in sb.queue if r["id"] == 901][0]
+    setter._learn_from_edit_worker(row, agent, "<p>The agent wrote this.</p>", "<p>Rewritten.</p>")
+    # Something else touches the manual after the lesson.
+    fresh = setter._load_agent(agent["id"])
+    setter.merge_correction_into_instructions(fresh, "Always answer pricing questions first.", source="manual")
+    status, resp = setter.route_edit_lesson_undo({"id": 901})
+    check("edit toast: undo refuses once instructions changed underneath it",
+         status == 409 and "changed" in (resp.get("error") or ""), (status, resp))
+    kept = setter._load_agent(agent["id"])
+    check("edit toast: the newer correction survives the refused undo",
+         "pricing" in (kept.get("instructions") or ""), kept.get("instructions"))
+
+
 def test_draft_text_strips_markup_for_diffing():
     check("_draft_text: tags gone, words kept",
          setter._draft_text("<div>Hi Dana,</div><br><div>Thanks &amp; regards</div>") == "Hi Dana, Thanks & regards")
@@ -7912,6 +7978,8 @@ if __name__ == "__main__":
     test_edit_learning_failed_send_teaches_nothing()
     test_lesson_from_edit_refuses_case_specific_rules()
     test_lesson_from_edit_sends_the_manual_for_contradiction_checking()
+    test_edit_lesson_toast_roundtrip()
+    test_edit_lesson_undo_refuses_after_instructions_change()
     test_draft_text_strips_markup_for_diffing()
 
     failed = run_report()

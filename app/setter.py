@@ -4375,10 +4375,23 @@ def route_thread_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def _instructions_sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256((text or "").encode()).hexdigest()
+
+
 def _learn_from_edit_worker(row: dict, agent: dict, original: str, sent: str):
     """Turns a reviewer's hand-edit into a standing lesson. Runs off the
     request thread - see _learn_from_edit_async. Never raises: this is a
-    nice-to-have that must never surface as a failed send."""
+    nice-to-have that must never surface as a failed send.
+
+    On a successful merge it also writes a ONE-SLOT `last_edit_lesson` record
+    onto the agent doc (tester panel 2026-07-17: a silent permanent write was
+    the whole failure - the reviewer needs to SEE that their edit taught
+    something, and be able to take it back). One slot, overwritten by each
+    newer lesson, so the doc never grows: undo is only offered for the most
+    recent lesson, and only while the instructions haven't changed since
+    (post_sha guard - see route_edit_lesson_undo)."""
     try:
         rule = lesson_from_edit(original, sent, {
             "lead_first_name": row.get("lead_first_name"),
@@ -4387,9 +4400,17 @@ def _learn_from_edit_worker(row: dict, agent: dict, original: str, sent: str):
         }, instructions=_agent_instructions(agent))
         if not rule:
             return
+        prev = _agent_instructions(agent)
         # Same door typed feedback uses: instructions stay the single living
         # manual, and the edit lands in instruction_edits beside it for audit.
-        merge_correction_into_instructions(agent, rule, source=str(row.get("id") or "edit"))
+        ok, new_text, _how = merge_correction_into_instructions(agent, rule, source=str(row.get("id") or "edit"))
+        if not ok:
+            return
+        _save_agent({"id": agent.get("id"), "name": agent.get("name"), "last_edit_lesson": {
+            "source": str(row.get("id") or "edit"), "rule": rule,
+            "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "prev_instructions": prev, "post_sha": _instructions_sha(new_text),
+        }})
     except Exception as e:  # noqa: BLE001
         print(f"[setter] learn-from-edit failed for row {row.get('id')}: {e}", file=sys.stderr)
 
@@ -7145,6 +7166,66 @@ def route_training_share_info(params):
         return 500, {"error": str(e)[:300]}
 
 
+def route_edit_lesson_get(params):
+    """Did the reviewer's edit on this row teach anything yet? The learner runs
+    in the background (~40s), so the page polls this after an edited Approve
+    and shows the result as a toast with Undo - a silent permanent write was
+    the tester panel's core objection (2026-07-17, 5/5 startled). Returns
+    {status:"learned", rule, undoable} once the lesson lands, {status:"pending"}
+    before that. "pending" is also what a never-teaching edit returns - the
+    page just stops polling; silence stays a valid outcome."""
+    try:
+        qid = _qp(params, "id", "")
+        if not qid:
+            return 400, {"error": "id is required"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=agent_id") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row or not row.get("agent_id"):
+            return 404, {"error": "Queue row not found or has no agent."}
+        agent = _load_agent(row["agent_id"]) or {}
+        slot = agent.get("last_edit_lesson") or {}
+        if str(slot.get("source") or "") != str(qid):
+            return 200, {"status": "pending"}
+        undoable = _instructions_sha(_agent_instructions(agent)) == slot.get("post_sha")
+        return 200, {"status": "learned", "rule": slot.get("rule"), "at": slot.get("at"),
+                    "undoable": undoable}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_edit_lesson_undo(payload):
+    """Takes back the most recent edit-taught lesson: restores the agent's
+    instructions to the exact pre-merge text and removes the matching
+    instruction_edits entry. Guarded by post_sha - if ANYTHING else has
+    touched the instructions since (another lesson, a typed correction, a
+    manual edit), undo refuses instead of clobbering it. One slot only: a
+    newer lesson overwrites the record and this row's undo window closes."""
+    try:
+        payload = payload or {}
+        qid = payload.get("id")
+        if not qid:
+            return 400, {"error": "id is required"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=agent_id") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row or not row.get("agent_id"):
+            return 404, {"error": "Queue row not found or has no agent."}
+        agent = _load_agent(row["agent_id"]) or {}
+        slot = agent.get("last_edit_lesson") or {}
+        if str(slot.get("source") or "") != str(qid):
+            return 409, {"error": "This lesson can no longer be undone - a newer lesson has replaced it."}
+        if _instructions_sha(_agent_instructions(agent)) != slot.get("post_sha"):
+            return 409, {"error": "The agent's instructions have changed since this lesson - "
+                                  "edit them from the Agents drawer instead."}
+        edits = [e for e in (agent.get("instruction_edits") or [])
+                 if str(e.get("source") or "") != str(qid)]
+        _save_agent({"id": agent.get("id"), "name": agent.get("name"),
+                    "instructions": slot.get("prev_instructions") or "",
+                    "instruction_edits": edits, "last_edit_lesson": None})
+        return 200, {"ok": True, "undone": slot.get("rule")}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 GET_ROUTES = {
     "/api/setter/agents": route_agents_get,
     "/api/setter/campaigns": route_campaigns_get,
@@ -7153,6 +7234,7 @@ GET_ROUTES = {
     "/api/setter/grading": route_grading_get,
     "/api/setter/training": route_training_get,
     "/api/setter/training/share-info": route_training_share_info,
+    "/api/setter/edit-lesson": route_edit_lesson_get,
 }
 
 POST_ROUTES = {
@@ -7173,4 +7255,5 @@ POST_ROUTES = {
     "/api/setter/training/reset": route_training_reset,
     "/api/setter/training/share": route_training_share,
     "/api/setter/test/inject": route_test_inject,
+    "/api/setter/edit-lesson/undo": route_edit_lesson_undo,
 }

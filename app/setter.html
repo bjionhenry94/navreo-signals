@@ -197,13 +197,36 @@
    spells out the current mode in plain words: a switch that silently changes
    what Approve does has to say so where the editing happens, not in a
    tooltip nobody hovers. */
+.learn-bar { margin: 2px 0 8px; }
 .learn-chk {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-  font: 500 12px var(--font-sans); color: var(--ink-3); white-space: nowrap;
+  font: 500 12px var(--font-sans); color: var(--ink-2);
 }
-.learn-chk input { cursor: pointer; }
+.learn-chk input { cursor: pointer; flex-shrink: 0; }
 .learn-chk:hover { color: var(--ink); }
-.learn-hint { font-size: 11.5px; color: var(--ink-3); margin: 0 0 7px; }
+.learn-hint { font-size: 11.5px; line-height: 1.5; color: var(--ink-3); margin: 3px 0 0 20px; max-width: 66ch; }
+/* One-time introduction (tester panel 2026-07-17): the reviewer who has used
+   this page for months has learned NOT to read it - their edits never did
+   anything, so no static copy can tell them that changed. This interrupts
+   exactly once, then never again. */
+.learn-intro { font-size: 12.5px; line-height: 1.55; color: #6B4A00; background: var(--amber-bg);
+  border: 1px solid var(--amber-line); border-radius: 8px; padding: 9px 11px; margin: 2px 0 8px;
+  display: flex; gap: 12px; align-items: flex-start; }
+.learn-intro .btn { flex-shrink: 0; }
+/* The learned-a-lesson toast: the one moment attention is guaranteed is just
+   after Approve, so that is where the lesson is announced - with its exact
+   rule and a working Undo, never as a silent background write. */
+.lesson-toast {
+  position: fixed; left: 50%; transform: translateX(-50%) translateY(12px);
+  bottom: 18px; z-index: 300; max-width: min(560px, 92vw);
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(20, 17, 14, 0.18); padding: 12px 14px;
+  opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.lesson-toast.on { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+.lesson-toast .lt-head { font: 600 12.5px var(--font-sans); }
+.lesson-toast .lt-rule { font-size: 12.5px; color: var(--ink-2); margin: 5px 0 9px; line-height: 1.5; }
+.lesson-toast .lt-actions { display: flex; gap: 8px; }
 .qc-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 .qc-split { display: inline-flex; }
 .qc-split .qc-regen { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
@@ -1286,12 +1309,11 @@ function renderDetail(row) {
       <div class="composer-head">
         <div class="msg-card-lab">Your reply</div>
         ${linkButtonHtml(row)}
-        ${learnToggleHtml(row)}
         ${teachToggleHtml(row)}
         <div class="ch-spacer"></div>
         ${composerActionsHtml(row)}
       </div>
-      ${learnHintHtml(row)}
+      ${learnBarHtml(row)}
       ${composerFeedbackHtml(row)}
       ${sentLineHtml}
       ${repliedBackHtml}
@@ -1521,21 +1543,39 @@ function trainingModeOn() {
 function setTrainingMode(on) {
   localStorage.setItem("setterTrainingMode", on ? "on" : "off");
 }
-function learnToggleHtml(row) {
+/* Its own line, directly above the box you type in - not crammed into the
+   label row with Add link and the buttons. A switch that changes what
+   Approve does belongs beside the editing, where the eye already travels.
+   The copy names three things the first draft of it left out, each one a
+   tester-panel failure (2026-07-17): the SCOPE (every lead, not this one),
+   the DEFAULT (on - "stays where you leave it" was a lie for anyone who
+   never touched it), and the OFF-state exception (the write-a-lesson link
+   still teaches, so "nothing is learned" would be false). */
+function learnBarHtml(row) {
   // Agentless rows have no brain to teach, so the switch would be a lie.
   if (!needsComposerActions(row) || !row.agent_id) return "";
-  return `<label class="learn-chk" title="">
-    <input type="checkbox" id="learnChk" ${trainingModeOn() ? "checked" : ""}> Learn from my edits
-  </label>`;
+  return `${learnIntroHtml()}<div class="learn-bar">
+    <label class="learn-chk">
+      <input type="checkbox" id="learnChk" ${trainingModeOn() ? "checked" : ""}> Learn from my edits (every future reply)
+    </label>
+    <div class="learn-hint" id="learnHint">${learnHintText()}</div>
+  </div>`;
 }
 function learnHintText() {
   return trainingModeOn()
-    ? "Your changes to this draft will teach the agent for next time."
-    : "Your changes apply to this reply only. Nothing is learned.";
+    ? "On by default: when you change this draft and approve it, the change becomes a lasting rule for how the agent writes to every lead, not just this one. Switch it off for one-off facts like a date, a name, or this prospect's situation."
+    : "Off: your edits apply to this reply only, and learning stays off for every reply until you tick this box again. (“Write a lesson in my own words” still teaches, whenever you use it.)";
 }
-function learnHintHtml(row) {
-  if (!needsComposerActions(row) || !row.agent_id) return "";
-  return `<div class="learn-hint" id="learnHint">${learnHintText()}</div>`;
+/* Shown once, ever. The reviewer who has used this page for months learned
+   the opposite lesson from experience - edits changed nothing - and no
+   static grey line can reach someone who has rightly stopped reading. */
+function learnIntroSeen() { return localStorage.getItem("setterLearnIntroSeen") === "1"; }
+function learnIntroHtml() {
+  if (learnIntroSeen()) return "";
+  return `<div class="learn-intro" id="learnIntro">
+    <div><b>New:</b> when you rewrite a draft and approve it, the agent now learns from your edit - it becomes a standing rule for every future reply. A message will confirm each lesson, with one-click Undo. Untick the box below to keep an edit one-off.</div>
+    <button class="btn sm" id="learnIntroBtn" type="button">Got it</button>
+  </div>`;
 }
 function feedbackPlaceholder() {
   return trainingModeOn()
@@ -1549,7 +1589,7 @@ function feedbackPlaceholder() {
    the old On/Off switch is gone. */
 function teachToggleHtml(row) {
   return row.agent_id
-    ? `<button class="teach-link" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}" title="Tell the agent what to learn from this reply - it's remembered for next time.">Remember this as a lesson</button>`
+    ? `<button class="teach-link" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}" title="Type a lesson in your own words. Always remembered, whatever the Learn switch says.">Write a lesson in my own words</button>`
     : "";
 }
 
@@ -1636,6 +1676,13 @@ function wireDetailEvents(root, row) {
     if (hint) hint.textContent = learnHintText();
     const fbInput = root.querySelector(".qc-feedback-input");
     if (fbInput) fbInput.placeholder = feedbackPlaceholder();
+  });
+
+  const introBtn = root.querySelector("#learnIntroBtn");
+  if (introBtn) introBtn.addEventListener("click", () => {
+    localStorage.setItem("setterLearnIntroSeen", "1");
+    const intro = root.querySelector("#learnIntro");
+    if (intro) intro.remove();
   });
 
   root.querySelectorAll(".qc-send").forEach((btn) => btn.addEventListener("click", () => doSend(btn)));
@@ -1929,7 +1976,91 @@ async function doSend(btn) {
   clearError();
   delete EDITED_DRAFTS[id];
   protoNote("Reply sent");
+  // If this approve carried an edit and training is on, the learner may turn
+  // it into a standing rule ~40s from now. Watch for it and SAY SO - the
+  // tester panel's core finding (2026-07-17, 5/5 startled) was that a silent
+  // permanent write cannot be made non-surprising by copy alone. The one
+  // moment attention is guaranteed is right after the action, so the lesson
+  // is announced there, with its exact rule and a working Undo.
+  const sentBody = draftEl ? draftEl.innerHTML : (row && row.draft_body) || "";
+  const originalDraft = (row && row.original_draft_body) || "";
+  if (payload.training && originalDraft && plainWords(sentBody) !== plainWords(originalDraft)) {
+    watchForEditLesson(id);
+  }
   loadQueue();
+}
+
+/* Mirrors the server's _draft_text: compare what a human would READ, so
+   contenteditable markup churn never counts as an edit. */
+function plainWords(html) {
+  const t = (html || "").replace(/<br\s*\/?>|<\/p>|<\/div>/gi, "\n").replace(/<[^>]+>/g, " ");
+  const el = document.createElement("textarea");
+  el.innerHTML = t;
+  return el.value.replace(/\s+/g, " ").trim();
+}
+
+let LESSON_POLL = null;
+async function watchForEditLesson(rowId) {
+  if (LESSON_POLL) clearTimeout(LESSON_POLL);
+  let tries = 0;
+  const poll = async () => {
+    tries += 1;
+    const res = await fetchJson(`/api/setter/edit-lesson?id=${encodeURIComponent(rowId)}`);
+    const d = res.ok ? res.data : null;
+    if (d && d.status === "learned" && d.rule) {
+      showLessonToast(rowId, d.rule, d.undoable !== false);
+      return;
+    }
+    // Silence is a valid outcome: an edit that was only a per-lead fact
+    // teaches nothing, and after ~2 minutes we stop asking.
+    if (tries < 20) LESSON_POLL = setTimeout(poll, 6000);
+  };
+  LESSON_POLL = setTimeout(poll, 8000);
+}
+
+function showLessonToast(rowId, rule, undoable) {
+  let el = document.querySelector(".lesson-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "lesson-toast";
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `
+    <div class="lt-head">Learned from your edits - this now applies to every lead</div>
+    <div class="lt-rule">&ldquo;${esc(rule)}&rdquo;</div>
+    <div class="lt-actions">
+      ${undoable ? `<button class="btn sm" id="lessonUndoBtn" type="button">Undo - forget this</button>` : ""}
+      <button class="btn sm" id="lessonOkBtn" type="button">Keep it</button>
+    </div>`;
+  // Forced reflow instead of requestAnimationFrame: rAF callbacks are
+  // throttled to nothing when the page isn't the focused foreground tab,
+  // and a toast that only appears while you happen to be looking is no
+  // toast at all. The reflow commits the pre-transition state synchronously
+  // so the fade still animates.
+  void el.offsetWidth;
+  el.classList.add("on");
+  const hide = () => el.classList.remove("on");
+  el.querySelector("#lessonOkBtn").addEventListener("click", hide);
+  const undoBtn = el.querySelector("#lessonUndoBtn");
+  if (undoBtn) undoBtn.addEventListener("click", async () => {
+    const restore = busyBtn(undoBtn, "Undoing…");
+    if (!restore) return;
+    const res = await fetchJson("/api/setter/edit-lesson/undo", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: Number(rowId) }),
+    });
+    restore();
+    if (res.ok && res.data && res.data.ok) {
+      hide();
+      protoNote("Undone - the agent kept nothing from that edit");
+    } else {
+      const msg = (res.data && res.data.error) || res.error || "it could not be undone";
+      hide();
+      showError("Couldn't undo the lesson: " + msg);
+    }
+  });
+  // No auto-hide: a message you can act on must wait for you. It leaves when
+  // you answer it or when the next lesson replaces it.
 }
 
 async function doRedraft(btn, feedback, scope) {
