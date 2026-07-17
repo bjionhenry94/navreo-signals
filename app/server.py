@@ -12362,7 +12362,7 @@ P.S - <one concrete line of proof: a named example client and a result>
 HARD RULES FOR THIS TEMPLATE:
 - The "If we could ... ?" part is ONE flowing sentence that ends on the question mark. Do NOT split the promise into its own separate sentence, and do NOT add any sentence after the question.
 - The promise clause sits INSIDE that sentence joined naturally with "and" - never a spliced clause like "..., we will refund the fee, would you like...".
-- Keep the "If we could ... ?" sentence between 45 and 70 words.
+- The "If we could ... ?" sentence is AT MOST 30 WORDS. Ruthlessly short: one outcome, one promise clause, a tiny closing ask. Cut method detail and adjectives, never the grammar. Example shape (24 words): "If we could get your empty units viewing-ready within 48 hours and you pay nothing until you sign off each clean, would you be interested?"
 - The promise woven in is ONLY this offer's mechanism. Do NOT add a free resource, sample or any second promise on top of it. Use the words guarantee or refund ONLY if this offer's mechanism is guarantee_refund.
 - FINISH THE CONDITIONAL: the sentence starts with "If we could", so it MUST close as a proper conditional - "..., would you be interested in [X]?" or "..., would you be open to [X]?". NEVER bolt on "can I send...?" or "want me to send...?" - that leaves the "If" hanging and reads broken.
 - THE CLOSING [X] IS TINY: "seeing the details", "me sending over a short breakdown" - three or four plain words. NEVER describe what an artifact shows, contains or covers ("a one-page plan showing the cadence we would build") - that reads as a second free offer stacked on the real one. The email contains exactly ONE thing of value: the offer itself. Never "book a call"."""
@@ -12386,7 +12386,7 @@ HARD RULES (always):
 - Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
 - The P.S proof line uses a PLAUSIBLE INVENTED client name - never the name of a real well-known company. The proof number must be something THIS business could measure ITSELF (days to turn a unit around, meetings booked, shipments delivered on time, cleans completed). NEVER the client's own downstream outcomes - their contract wins, bookings, footfall, viewing rates, or revenue - a vendor cannot know those numbers and readers smell it.
 - Recovery framing is banned: never "win back", "recover lost", "stop losing", income "leaking". The benefit is always new money coming in.
-- Before answering, COUNT THE WORDS of the body (service pitch: the "If we could ... ?" sentence; lead magnet: everything between greeting and sign-off). It must be 45-70. If over, cut words - move any stipulation detail out of the sentence entirely.
+- Before answering, COUNT THE WORDS of the body. Service pitch: the "If we could ... ?" sentence must be 30 words or fewer. Lead magnet: everything between greeting and sign-off must be 45-70 words. If over, cut words - stipulation detail never belongs in the sentence at all.
 - ONE mechanism only: the email expresses this offer's mechanism and nothing from any other (the P.S proof line is proof, not a promise).
 - Plain English an 11th grader understands. No em-dashes, colons, semicolons or parentheses ANYWHERE in the email, including the P.S line. The P.S is one proof sentence only - never conditions or stipulations. No spam words (avoid the words free, trial, guaranteed, risk-free, today, urgent).
 - Real line breaks between the parts, exactly as shown.
@@ -12417,6 +12417,9 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
                 if "If we could" in email and not re.search(
                         r"would you be (?:interested|open|keen)", email, re.I):
                     raise ValueError("If-we-could conditional never finished")
+                for para in email.split("\n"):
+                    if "If we could" in para and len(para.split()) > 33:
+                        raise ValueError(f"If-sentence too long ({len(para.split())} words)")
             if lead_magnet:
                 if not re.search(r"no charge|no cost|on us|without charge|no commitment", email, re.I):
                     raise ValueError("lead magnet email missing the no-strings promise")
