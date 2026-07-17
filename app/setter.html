@@ -1534,10 +1534,13 @@ function composerFeedbackHtml(row) {
    label because it acts on the draft, not on the send decision. It stays
    disabled until there is a highlight inside this row's draft - a link with
    nothing to attach to has no sensible meaning. */
+function linkShortcutLabel() {
+  return /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘K" : "Ctrl+K";
+}
 function linkButtonHtml(row) {
   if (!needsComposerActions(row)) return "";
   return `<button class="btn sm qc-link-btn" data-id="${esc(row.id)}" type="button" disabled
-    title="Highlight the words in your reply you want to link, then press this.">Add link</button>`;
+    title="Highlight the words in your reply you want to link, then press this (or ${linkShortcutLabel()}).">Add link</button>`;
 }
 function composerLinkHtml(row) {
   if (!needsComposerActions(row)) return "";
@@ -1637,6 +1640,20 @@ function wireDetailEvents(root, row) {
     draftEl.addEventListener("input", () => {
       EDITED_DRAFTS[row.id] = draftEl.innerHTML;
       queueDraftSave(row.id);
+    });
+    // Cmd+K / Ctrl+K - what every other editor binds to "make this a link".
+    // Read live here rather than from PENDING_LINK: a keypress doesn't disturb
+    // the highlight, so the selection under the cursor is still the real one.
+    draftEl.addEventListener("keydown", (e) => {
+      if (!(e.metaKey || e.ctrlKey) || (e.key || "").toLowerCase() !== "k") return;
+      e.preventDefault();
+      const held = currentDraftSelection();
+      if (!held) {
+        showDetailError(`Highlight the words you want to link, then press ${linkShortcutLabel()} again.`);
+        return;
+      }
+      PENDING_LINK = held;
+      openLinkBar(held.id);
     });
   }
 }
@@ -2033,6 +2050,9 @@ function scrollSelectedIntoView() {
   if (el) el.scrollIntoView({ block: "nearest" });
 }
 document.addEventListener("keydown", (e) => {
+  // Bare j/k only: a modifier means the keystroke belongs to someone else
+  // (Cmd+K is Add link), not to inbox navigation.
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
   const isUp = e.key === "ArrowUp" || e.key === "k" || e.key === "K";
   const isDown = e.key === "ArrowDown" || e.key === "j" || e.key === "J";
   if (!isUp && !isDown) return;
