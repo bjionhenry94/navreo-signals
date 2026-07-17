@@ -1528,10 +1528,11 @@ function backToInbox() {
    TEST chip, nothing else (the subsequence checkbox and every "how decided"
    fact now live permanently in the fixed lead-info sidebar - see
    leadPanelHtml / renderDetail below); (2) the threaded conversation
-   (convoHtml); (3) "Your reply" in the P2 order (owner ruling 2026-07-17):
-   label row (Add link + teach link), the draft box, the learning block, the
-   follow-up gate panel, then the actions row last - everything below the
-   text box. Sent/auto_sent retro actions stay in the label row, unchanged. */
+   (convoHtml); (3) "Your reply" (owner ruling 2026-07-17, revised same day):
+   label row (Add link + teach link), the draft box, the actions row (with
+   its feedback input), the follow-up gate panel directly UNDER Approve,
+   then the learning block last - everything below the text box.
+   Sent/auto_sent retro actions stay in the label row, unchanged. */
 function renderDetail(row) {
   const el = document.getElementById("inboxRight");
   const panelEl = document.getElementById("leadPanel");
@@ -1627,10 +1628,10 @@ function renderDetail(row) {
       ${noSlotsHint}
       ${composerLinkHtml(row)}
       ${composerHtml(row)}
-      ${learnBarHtml(row)}
-      ${sendGateHtml(row)}
       ${composerActionsHtml(row)}
       ${composerFeedbackHtml(row)}
+      ${sendGateHtml(row)}
+      ${learnBarHtml(row)}
     </div>
   `;
   if (panelEl) {
@@ -1837,13 +1838,13 @@ function convoHtml(row) {
 function needsComposerActions(row) {
   return row.status === "needs_review" || (row.status === "no_action" && row.draft_body);
 }
-/* Owner ruling 2026-07-17 (P2 composer order): the actions row is the LAST
-   block of the composer card - draft, then learning, then the gate panel,
-   then Approve / Regenerate-split / Dismiss. Same classes (qc-send, qc-regen,
-   qc-regen-arrow, qc-dismiss), so the existing wiring in wireDetailEvents
-   binds them exactly as before. While the gate is locked, a "Pick a
-   follow-up track first (why?)" hint sits beside the buttons (P2's
-   gate-hint); updateApproveButton toggles it with the selection state. */
+/* Owner ruling 2026-07-17 (revised same day): the actions row sits directly
+   UNDER the draft box, with the gate panel under it and the learning block
+   last. Same classes (qc-send, qc-regen, qc-regen-arrow, qc-dismiss), so
+   the existing wiring in wireDetailEvents binds them exactly as before.
+   While the gate is locked, a "Pick a follow-up track first (why?)" hint
+   sits beside the buttons (P2's gate-hint); updateApproveButton toggles it
+   with the selection state. */
 function gateLockHintHtml(rowId, hidden) {
   return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}" ${hidden ? 'style="display:none"' : ""}>Pick a follow-up track first
     <span class="why">(why?<span class="tooltip">Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.</span>)</span>
