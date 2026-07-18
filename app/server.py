@@ -12436,20 +12436,22 @@ def offer_email(p: dict, ip: str):
 
 1. Greeting: "Hey <first name>," or "Hi <first name>,".
 2. Icebreaker: ONE short, warm line. VARY it (a "wasn't sure who the best person at <company> was" apology, a genuine observation about them, or a market-noise line). Do not pitch here.
-3. The offer: name the free thing and offer it in a human way. Describing what it covers is GOOD ("a brief guide on how X are using Y to..."). Then, in most emails, a second short line elaborating - "It includes...", "It features..." - with a concrete proof point (a number, a case study). Make clear it costs them nothing, said naturally ("no charge", "on us", "nothing needed from you").
-4. A warm one-question CTA to SEND it: "Should I send it over?" / "Can I send it over?" / "Can I share it?".
-5. Sign-off first name.
-6. Optional P.S with one concrete proof line (an invented client + a result the sender could actually measure).
+3. Problem line: ONE short line naming the problem the offer fixes, phrased warmly ("Most <their kind of company> find that <problem>" or "The tricky part is <problem>"). It sets up the offer - the reader should feel the gap before you offer the fix. This is REQUIRED, always between the icebreaker and the offer.
+4. The offer: name the free thing and offer it in a human way, as the answer to that problem. Describing what it covers is GOOD ("a brief guide on how X are using Y to..."). Often a short elaborating line - "It includes...", "It features..." - with a concrete proof point. Make clear it costs them nothing, said naturally ("no charge", "on us", "nothing needed from you").
+5. A warm one-question CTA to SEND it: "Should I send it over?" / "Can I send it over?" / "Can I share it?".
+6. Sign-off first name.
+7. Optional P.S with one concrete proof line (an invented client + a result the sender could actually measure).
 
 RULES: exactly one question (the CTA). Never open with the CTA or the offer - the icebreaker is always first. Honest tense: if making the thing needs the recipient's input first, use future tense ("We'd love to put together..."); only past tense ("I've put together...") for something that can exist before you ever speak. Do NOT mention any guarantee, refund, or pay terms - the only promise is that it costs nothing. NEVER write eligibility or fine print ("matched to an agreed list of...", "applies to...", conditions) - keep it warm, not a spec. Avoid the bare word "free" and the phrase "no obligation" (Navreo says "no charge" / "at no cost"). Keep the whole thing tight, roughly 45-80 words."""
     else:
         template_block = """THIS IS A PITCH EMAIL for a paid offer (its mechanism is stated above). Shape it like the pitch examples in the voice reference:
 
 1. Greeting: "Hey <first name>," or "Hi <first name>,".
-2. Icebreaker: ONE short, warm line. VARY it every time - a genuine observation about them, a "wasn't sure who the best person was" apology, or a market-noise line. It does NOT have to end "so I wanted to reach out" (that exact phrase on every email is a robot tell - use it at most sometimes). Do not pitch here.
-3. The pitch. VARY how you open it - do NOT start every email "What if we could" or "If we could" (that is the #1 template tell). Rotate naturally, like the examples: sometimes state the outcome as a plain sentence ("You could be booking meetings with the buyers actively scoping new suppliers, and only paying once they show up."), sometimes a short "If we could... would you be open to...?" conditional, sometimes lead with what you'd do. Name a real, specific outcome, not a generic one.
-4. Optionally a short supporting line ("We use...", "It works by...").
-5. Sign-off first name, and a P.S with one concrete proof line (invented client + a result the sender could measure).
+2. Icebreaker: ONE short, warm line. VARY it every time - a genuine observation about them, a "wasn't sure who the best person was" apology, or a market-noise line. It does NOT have to end "so I wanted to reach out". Do not pitch here.
+3. Problem line: ONE short line naming the problem the offer fixes, phrased warmly ("Most <their kind of company> find that <problem>" or "The tricky part is usually <problem>"). REQUIRED, always between the icebreaker and the pitch - it sets up why the offer matters.
+4. The pitch, as the answer to that problem. VARY how you open it - do NOT start every email "What if we could" or "If we could" (that is the #1 template tell). Rotate naturally: sometimes state the outcome as a plain sentence ("You could be booking meetings with those buyers, and only paying once they show up."), sometimes a short "If we could... would you be open to...?" conditional, sometimes lead with what you'd do. Name a real, specific outcome, not a generic one.
+5. Optionally a short supporting line ("We use...", "It works by...").
+6. Sign-off first name, and a P.S with one concrete proof line (invented client + a result the sender could measure).
 
 RULES: the promise is ONLY this offer's mechanism, said in ONE warm human clause (use guarantee/refund only if the mechanism is guarantee_refund; "you only pay after we've built it, so nothing upfront" / "you only pay per booked meeting" for the pay mechanisms). NEVER write terms, fine print or eligibility into the email - NO "it applies to...", "payment due within X days", "invoiced upfront", "standard pricing applies", "the guarantee only kicks in", "bookings must be confirmed within...", "after onboarding", no unit minimums or dollar thresholds. The one fair condition from the offer stays OUT of the email entirely; it is not the reader's problem yet. The closing ask is tiny and warm ("a two-minute video on how we'd do it for <their company>", "a quick one-pager explaining how it works", "seeing the details"). Never "book a call". Keep the pitch readable - if it sprawls past ~30 words, break out a supporting line rather than cramming."""
     prompt = f"""You are Navreo's house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below that sounds exactly like a real Navreo email a person sent - warm, human, specific - NOT a filled-in template.
@@ -12525,6 +12527,15 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
             if len(lines) > 1 and (lines[1].endswith("?") or
                     re.match(r"(?:Can|May|Could|Would|Want|Should)\b.*\?", lines[1])):
                 raise ValueError("email opens with the CTA")
+            # Structure law (user 2026-07-18): icebreaker -> problem -> offer.
+            # Require at least 3 substantive content blocks (>=6 words) before
+            # the sign-off / P.S, so the problem beat can't be skipped.
+            blocks = [b.strip() for b in re.split(r"\n\s*\n", email) if b.strip()]
+            content = [b for b in blocks[1:]  # drop greeting
+                       if not re.match(r"^(P\.?S|Best|Thanks|Cheers|Warm|Kind|All the best)", b, re.I)
+                       and len(b.split()) >= 6]
+            if len(content) < 3:
+                raise ValueError(f"missing the icebreaker->problem->offer structure ({len(content)} content blocks)")
             if re.search(r"so I wanted to reach out", email, re.I):
                 raise ValueError("overused 'so I wanted to reach out' opener tell")
             if re.search(r"You're probably missing|You are probably missing", email, re.I):
