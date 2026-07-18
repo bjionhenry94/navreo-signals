@@ -12399,12 +12399,13 @@ def offer_email(p: dict, ip: str):
     import hashlib
     h = int(hashlib.md5(fields["name"].encode()).hexdigest(), 16)
     OPENERS = [
-        "an observation about something specific they'd be doing right now (a launch, a hire, expansion, a busy season) - warm, not researched-sounding",
+        "an observation about something specific they'd plausibly be doing right now (a launch, a hire, expansion, a busy season) - warm, not researched-sounding",
         "a light 'wasn't sure who the right person for this was' apology - vary the wording from the examples",
-        "a market-noise line ('there's so much noise right now about X') that sets up the problem",
-        "a plain line naming the new business they could be winning - framed as upside they're leaving on the table, NEVER an accusatory 'you're probably missing/failing at X'",
+        "a market-noise line ('there's so much noise right now about X') that sets up the problem warmly",
+        "a friendly 'noticed X about your world and thought of you' line tied to their situation",
         "a 'saw you were doing X and thought this might land' observation",
     ]
+    # every opener above is a genuine warm first line; NEVER skip straight to the pitch.
     CTAS = ([  # resource emails: offer to SEND the thing
         "Should I send it over?",
         "Can I share it?",
@@ -12474,7 +12475,9 @@ THE OFFER (its one mechanism is: {fields['mechanism']}):
 HARD RULES (always):
 - Say it once. NO over-explaining - do not add "That means...", "That lets you...", "which makes it easy to...", or stacked benefit sentences unpacking the offer. One crisp line of what it is, one short line of proof or how, then the ask. If you catch yourself explaining the benefit of the benefit, cut it.
 - Do not write a triple list ("a simple pick, a quick ship, and a 14-day refund") - it reads assembled. One concrete detail beats three.
-- State the pay-term or guarantee EXACTLY ONCE. Never restate it in different words ("you pay nothing until X. It's just our normal invoice, only after Y" is the SAME point twice - keep one).
+- State the pay-term or guarantee in ONE short clause and NEVER again - not restated in the pitch and again in a following sentence, not echoed in the P.S. Say it once, move on. ("you only pay after we launch the system" then "you pay nothing until we finish and launch the system" is the same point twice - delete one.)
+- Do not repeat the offer's key noun (e.g. "per-site", "bestseller pack", "the outreach system") more than twice in the whole email - if it shows up three times you are over-explaining.
+- Never use a colon set-up like "What we do is simple:" or "Here's how it works:" - just say it.
 - NEVER write the offer's name as a capitalised product label ("a Pay After First Clean option", "our Viewing Clean service") - just describe what you'd do in lower-case plain words.
 - Do NOT end the opener with "so I wanted to reach out" - it has become a tell. Reach for any of the other opener moves instead.
 - Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
@@ -12526,6 +12529,8 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
                 raise ValueError("overused 'so I wanted to reach out' opener tell")
             if re.search(r"You're probably missing|You are probably missing", email, re.I):
                 raise ValueError("presumptuous accusatory opener")
+            if re.search(r"\b(?:What we do is simple|here's how it works|here is how it works)\b\s*:", email, re.I):
+                raise ValueError("colon set-up phrase (pitch-deck tell)")
             if not lead_magnet:
                 if re.search(r"^\s*What if we could\b", email, re.M):
                     raise ValueError("banned 'What if we could' template opener")
