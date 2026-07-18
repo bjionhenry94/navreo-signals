@@ -11870,6 +11870,74 @@ OFFER_WINNING_EXAMPLES = """\
 11. "Most SaaS leaders we speak to find hiring and ramping SDRs burns months and budget before any pipeline shows up." (high-consequence problem statement; 6 positive replies)
 12. "If we could help {{company}} book your sales team meetings with facility and property managers needing building services, and I showed you exactly how through a 2-minute video, would you be keen to see it?" (named buyer type + video CTA; 4 positive replies)"""
 
+# Real Navreo first-touch emails that earned interested replies (mined from the
+# Supabase sent_messages archive 2026-07-18, identities placeholdered). Used as
+# few-shot voice references so the preview emails read like a human wrote them,
+# not a template. Source + full corpus: offer-email-voice-match skill.
+NAVREO_VOICE_EMAILS = '''\
+VOICE: warm, casual, first-name greeting, contractions everywhere, 3-4 short
+paragraphs, concrete numbers as proof, a little self-deprecation. Openers VARY
+(a POC apology, a genuine observation about them, a market-noise line) - never
+the same canned line twice. There is almost always a middle "It includes.../We
+use..." elaboration line. CTAs vary and are warm ("Should I send it over?",
+"Can I share it?", "Would you be open to a short video on how we'd do it for
+[Company]?"). No em-dashes.
+
+Real examples (learn the FEEL, never copy the wording):
+
+--- a resource offer (lead magnet) ---
+Hey Marcus,
+
+Apologies if this isn't relevant, wasn't sure who at Brightwave was the best person for this.
+
+I've put together a brief guide on how wholesalers are using AI to spot brands actively looking for new marketplace partners.
+
+It includes a case study on how we helped a similar brand find companies scaling into new channels.
+
+Should I send it over?
+
+--- a resource offer with a proof-packed middle line ---
+Hello Dana,
+
+Saw you were doing a bit of cold outreach and thought this might land well.
+
+We've put together a one-pager on the signal-based outbound system we use to generate serious pipeline for clients, without leaning on generic cold lists.
+
+It includes the exact build, the best-performing triggers, and real campaign stories you can use to pull in 30 high-intent leads a month.
+
+Can I send it over?
+
+--- a service pitch with pay-per-result woven in ---
+Hi Rita,
+
+Saw you were working with a number of international brands and so wanted to reach out.
+
+If we could open conversations with the buyers actively scoping new suppliers, and you only pay for the qualified leads after they show up, would you be open to a two-minute video on how we'd do it for Tattva?
+
+We use exhibitor lists from international trade shows to find companies scaling into new markets.
+
+--- a pay-after-result pitch, casual ---
+Hey Priya,
+
+Apologies if this isn't relevant, wasn't sure who the best person at Ninth Wave would be.
+
+What if we could build you a lead engine that added 30+ qualified leads a month, without you hiring a BDR team?
+
+You only pay after we've built it, so nothing upfront at all.
+
+Could I send a one-pager explaining how it works?
+
+--- a guarantee, understated ---
+Hi Paul,
+
+There's so much noise right now about which tools to use for going to market, so I wanted to reach out.
+
+I recorded a short video for your team showing what we'd set up to book more meetings with retail and eCommerce leaders.
+
+If it fits, we can run it for you and guarantee 30 qualified leads in 90 days or you get a full refund.
+
+Can I share it?'''
+
 OFFER_FIELDS = ("name", "problem", "differentiator", "pricing", "risk_reversal",
                 "mechanism", "stipulation", "opener", "why_cold_email")
 # Exactly ONE mechanism per offer - a lead magnet OR one of the three risk
@@ -12324,49 +12392,30 @@ def offer_email(p: dict, ip: str):
     lead_magnet = fields["mechanism"] == "lead_magnet"
     template_name = "lead_magnet" if lead_magnet else "service_pitch"
     if lead_magnet:
-        template_block = """THE LEAD MAGNET TEMPLATE (follow this shape exactly, one blank line between each part):
+        template_block = """THIS IS A RESOURCE (LEAD-MAGNET) EMAIL. Shape it like the resource examples in the voice reference:
 
-Hi <recipient first name>,
+1. Greeting: "Hey <first name>," or "Hi <first name>,".
+2. Icebreaker: ONE short, warm line. VARY it (a "wasn't sure who the best person at <company> was" apology, a genuine observation about them, or a market-noise line). Do not pitch here.
+3. The offer: name the free thing and offer it in a human way. Describing what it covers is GOOD ("a brief guide on how X are using Y to..."). Then, in most emails, a second short line elaborating - "It includes...", "It features..." - with a concrete proof point (a number, a case study). Make clear it costs them nothing, said naturally ("no charge", "on us", "nothing needed from you").
+4. A warm one-question CTA to SEND it: "Should I send it over?" / "Can I send it over?" / "Can I share it?".
+5. Sign-off first name.
+6. Optional P.S with one concrete proof line (an invented client + a result the sender could actually measure).
 
-<Icebreaker: ONE short line, either a concrete plausible trigger about the recipient's company, or a "most <their kind of company> find that <problem>" observation. Do not pitch here.>
-
-<The offer, ONE or TWO sentences: name the free thing, offer it, and make the no-strings promise EXPLICIT in a human way - "no charge or commitment", "on us, nothing needed from you". If it is a ready-made resource: "We put together a <resource type> which I thought might be useful for <their company name>, it covers <what it covers, tied to the problem> - no charge or commitment." If making it needs their input: "We'd love to put together a <resource type> for <their company name> showing <outcome>, no charge or commitment." Never claim per-company work that was not done.>
-
-<Soft CTA, one short question offering to SEND it: "Can I send it over?" or "Want me to send it across?">
-
-<sender first name>
-
-P.S - We've helped <a named example client or "companies like X"> who were struggling with <problem> <concrete result>.
-
-HARD RULES FOR THIS TEMPLATE:
-- The email ALWAYS starts with the icebreaker line. NEVER open with the CTA or the offer.
-- The ONLY ask is permission to send the free thing. Exactly ONE question in the whole email. No call ask, no meeting, no second question.
-- The CTA verb is send / share / give / show, and the buyer receives a ready-made thing, never work done to them.
-- Honest tense: if the offer's stipulation depends on ANYTHING the recipient sends, approves or gives access to, the offer line MUST be future tense ("We'd love to put together..."). Only write "We put together..." or "I recorded..." (past) for a thing that can genuinely exist before ever speaking to them.
-- Do NOT mention any guarantee, refund, pay-per-result or pay-after-result anywhere. The ONE promise this email carries is that the thing costs nothing and has no strings - say it once, naturally ("no charge or commitment"). Never the word "free", never "no obligation". The offer block is at most 2 sentences.
-- The body between greeting and sign-off is 45-70 words. Count them."""
+RULES: exactly one question (the CTA). Never open with the CTA or the offer - the icebreaker is always first. Honest tense: if making the thing needs the recipient's input first, use future tense ("We'd love to put together..."); only past tense ("I've put together...") for something that can exist before you ever speak. Do NOT mention any guarantee, refund, or pay terms - the only promise is that it costs nothing. Avoid the bare word "free" and the phrase "no obligation" (Navreo says "no charge" / "at no cost"). Keep the whole thing tight, roughly 45-80 words."""
     else:
-        template_block = """THE SERVICE PITCH TEMPLATE (follow this shape exactly, one blank line between each part):
+        template_block = """THIS IS A PITCH EMAIL for a paid offer (its mechanism is stated above). Shape it like the pitch examples in the voice reference:
 
-Hi <recipient first name>,
+1. Greeting: "Hey <first name>," or "Hi <first name>,".
+2. Icebreaker: ONE short, warm line. VARY it every time - a genuine observation about them, a "wasn't sure who the best person was" apology, or a market-noise line. It does NOT have to end "so I wanted to reach out" (that exact phrase on every email is a robot tell - use it at most sometimes). Do not pitch here.
+3. The pitch, as a natural conditional: "If we could <a vivid, specific new-money outcome> by <what we'd do in plain words>, and <this offer's ONE promise woven in>, would you be open to <a tiny next step>?" - OR the warmer variant "What if we could <outcome>? <promise as its own short line>. <CTA>?". Name a real, specific outcome, not a generic one.
+4. Optionally a short supporting line ("We use...", "It works by...").
+5. Sign-off first name, and a P.S with one concrete proof line (invented client + a result the sender could measure).
 
-<Icebreaker: ONE short line naming a concrete, plausible trigger about the recipient's company (a recent hire, a new office, a launch, a post) that ends with the exact words "so I wanted to reach out.". Do not pitch here.>
+RULES: the promise woven in is ONLY this offer's mechanism (use the words guarantee/refund only if the mechanism is guarantee_refund; say "you only pay after..." / "you only pay per..." for the pay mechanisms). The closing ask is tiny and warm ("a two-minute video on how we'd do it for <their company>", "a quick one-pager explaining how it works", "seeing the details") - describing that small artifact is fine, it is the CTA, not a second offer. Never "book a call". If you use "If we could", finish it as a real question ("...would you be open to...?"). Keep the pitch sentence readable - ideally under about 35 words; if it sprawls, break out a supporting line rather than cramming."""
+    prompt = f"""You are Navreo's house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below that sounds exactly like a real Navreo email a person sent - warm, human, specific - NOT a filled-in template.
 
-If we could <the new-money outcome they want> by <what we would do, in plain words>, <the promise woven in as a natural clause>, would you be interested in <a tiny next step, e.g. "seeing the details" or "me sending over a short breakdown">?
-
-Best,
-<sender first name>
-
-P.S - <one concrete line of proof: a named example client and a result>
-
-HARD RULES FOR THIS TEMPLATE:
-- The "If we could ... ?" part is ONE flowing sentence that ends on the question mark. Do NOT split the promise into its own separate sentence, and do NOT add any sentence after the question.
-- The promise clause sits INSIDE that sentence joined naturally with "and" - never a spliced clause like "..., we will refund the fee, would you like...".
-- The "If we could ... ?" sentence is AT MOST 30 WORDS. Ruthlessly short: one outcome, one promise clause, a tiny closing ask. Cut method detail and adjectives, never the grammar. Example shape (24 words): "If we could get your empty units viewing-ready within 48 hours and you pay nothing until you sign off each clean, would you be interested?"
-- The promise woven in is ONLY this offer's mechanism. Do NOT add a free resource, sample or any second promise on top of it. Use the words guarantee or refund ONLY if this offer's mechanism is guarantee_refund.
-- FINISH THE CONDITIONAL: the sentence starts with "If we could", so it MUST close as a proper conditional - "..., would you be interested in [X]?" or "..., would you be open to [X]?". NEVER bolt on "can I send...?" or "want me to send...?" - that leaves the "If" hanging and reads broken.
-- THE CLOSING [X] IS TINY: "seeing the details", "me sending over a short breakdown" - three or four plain words. NEVER describe what an artifact shows, contains or covers ("a one-page plan showing the cadence we would build") - that reads as a second free offer stacked on the real one. The email contains exactly ONE thing of value: the offer itself. Never "book a call"."""
-    prompt = f"""You are our house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below, using the template EXACTLY.
+Here is how Navreo actually writes (study the feel, the openers, the rhythm, the CTAs - never copy the wording):
+{NAVREO_VOICE_EMAILS}
 
 {who}
 {aud}
@@ -12384,12 +12433,11 @@ THE OFFER (its one mechanism is: {fields['mechanism']}):
 
 HARD RULES (always):
 - Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
-- The P.S proof line uses a PLAUSIBLE INVENTED client name - never the name of a real well-known company. The proof number must be something THIS business could measure ITSELF (days to turn a unit around, meetings booked, shipments delivered on time, cleans completed). NEVER the client's own downstream outcomes - their contract wins, bookings, footfall, viewing rates, or revenue - a vendor cannot know those numbers and readers smell it.
-- Recovery framing is banned: never "win back", "recover lost", "stop losing", income "leaking". The benefit is always new money coming in.
-- Before answering, COUNT THE WORDS of the body. Service pitch: the "If we could ... ?" sentence must be 30 words or fewer. Lead magnet: everything between greeting and sign-off must be 45-70 words. If over, cut words - stipulation detail never belongs in the sentence at all.
-- ONE mechanism only: the email expresses this offer's mechanism and nothing from any other (the P.S proof line is proof, not a promise).
-- Plain English an 11th grader understands. No em-dashes, colons, semicolons or parentheses ANYWHERE in the email, including the P.S line. The P.S is one proof sentence only - never conditions or stipulations. No spam words (avoid the words free, trial, guaranteed, risk-free, today, urgent).
-- Real line breaks between the parts, exactly as shown.
+- The P.S proof line (when you use one) names a PLAUSIBLE INVENTED client - never a real well-known company. The proof must be something THIS business could measure ITSELF (meetings booked, days to turn a unit around, shipments on time), never the client's own downstream outcomes (their contract wins, footfall, revenue) which a vendor cannot know.
+- ONE mechanism only: the email carries this offer's mechanism and nothing from any other (the P.S proof line is proof, not a second promise).
+- The benefit is always NEW money coming in - never "win back", "recover lost", or "stop losing".
+- Plain, warm English a busy person reads in five seconds. Contractions are good. NO em-dashes anywhere. Vary sentence length. Do not sound like a form.
+- Real line breaks between paragraphs.
 
 Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full email, with real line breaks>"}}"""
     err = ""
@@ -12405,26 +12453,27 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
             text = (r["choices"][0]["message"]["content"] or "").strip()
             m = re.search(r"\{.*\}", text, re.S)
             email = _offer_scrub(json.loads(m.group(0) if m else text).get("email", ""))
-            if len(email) < 60 or "Hi " not in email[:8]:
+            if len(email) < 60 or not re.match(r"(Hi|Hey|Hello) ", email):
                 raise ValueError("email too short or malformed")
-            # Deterministic template checks - the model occasionally leaks
-            # these despite the prompt; a retry usually clears them.
-            if re.search(r"[():;]", re.sub(r"^Hi [^,]+,", "", email)):
-                raise ValueError("colon/semicolon/parenthesis in email")
+            # SUBSTANCE guards only. The presentation of the copy is now taught
+            # by the real-voice few-shots and judged by the copywriter panel;
+            # the rigid phrasing/word-count validators were what made the
+            # previews read like a robot, so they are gone (offer-email-voice-match).
+            if re.search(r"[—–]", email):
+                raise ValueError("em-dash in email")
+            if re.search(r"\{\{|\[[a-z ]+\]|first_name|square-bracket", email, re.I):
+                raise ValueError("merge tag or bracket blank leaked")
             if not lead_magnet:
-                if re.search(r"\b(?:showing|that shows|which shows|outlining|detailing)\b", email, re.I):
-                    raise ValueError("CTA re-pitches the offer (second-offer stack)")
-                if "If we could" in email and not re.search(
-                        r"would you be (?:interested|open|keen)", email, re.I):
-                    raise ValueError("If-we-could conditional never finished")
-                for para in email.split("\n"):
-                    if "If we could" in para and len(para.split()) > 33:
-                        raise ValueError(f"If-sentence too long ({len(para.split())} words)")
+                if "If we could" in email and not re.search(r"\?", email):
+                    raise ValueError("If-we-could never resolves to a question")
+                if re.search(r"\baudit\b", email, re.I):
+                    raise ValueError("audit wording (banned offer type)")
             if lead_magnet:
-                if not re.search(r"no charge|no cost|on us|without charge|no commitment", email, re.I):
+                if not re.search(r"no charge|no cost|on us|without charge|no commitment|nothing needed|nothing to pay|at no", email, re.I):
                     raise ValueError("lead magnet email missing the no-strings promise")
-                if re.search(r"\bfor free\b|\bfree of charge\b|\bobligation\b", email, re.I):
-                    raise ValueError("banned wording in lead magnet email")
+                # exactly one question: the CTA (real Navreo resource emails ask once)
+                if email.count("?") != 1:
+                    raise ValueError(f"lead magnet has {email.count('?')} questions, need exactly 1")
                 lines = [l.strip() for l in email.splitlines() if l.strip()]
                 if len(lines) > 1 and (lines[1].endswith("?") or
                         re.match(r"(?:Can|May|Would|Want|Should) ", lines[1])):
