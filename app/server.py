@@ -12391,6 +12391,43 @@ def offer_email(p: dict, ip: str):
     # three risk-reversal mechanisms use the Service Pitch template.
     lead_magnet = fields["mechanism"] == "lead_magnet"
     template_name = "lead_magnet" if lead_magnet else "service_pitch"
+    # Cross-email variety: a page of offers is written by independent calls, so
+    # without steering they all share one skeleton (same opener + CTA + P.S) and
+    # the SET reads templated even when each email is fine (copywriter panel
+    # 2026-07-18). Deterministically rotate the opener / CTA / P.S archetype by
+    # hashing the offer name, so a card set spreads naturally.
+    import hashlib
+    h = int(hashlib.md5(fields["name"].encode()).hexdigest(), 16)
+    OPENERS = [
+        "an observation about something specific they'd be doing right now (a launch, a hire, expansion, a busy season) - warm, not researched-sounding",
+        "a light 'wasn't sure who the right person for this was' apology - vary the wording from the examples",
+        "a market-noise line ('there's so much noise right now about X') that sets up the problem",
+        "straight in with a short, plain-spoken line about the gap they have - no throat-clearing",
+        "a 'saw you were doing X and thought this might land' observation",
+    ]
+    CTAS = ([  # resource emails: offer to SEND the thing
+        "Should I send it over?",
+        "Can I share it?",
+        "Want me to send it across?",
+        "Should I send the details over?",
+    ] if lead_magnet else [  # pitches: offer a tiny next artifact
+        "Would you be open to a quick two-minute video on how we'd do it for their company?",
+        "Could I send a short one-pager explaining how it works?",
+        "Want me to send the details across?",
+        "Can I send over how it'd work for them?",
+    ])
+    PSS = [
+        "a one-line P.S with an invented client and a concrete result the sender could measure",
+        "no P.S at all - just the sign-off",
+        "a one-line P.S naming a plausible client and a simple outcome",
+    ]
+    pick_opener = OPENERS[h % len(OPENERS)]
+    pick_cta = CTAS[(h // 7) % len(CTAS)]
+    pick_ps = PSS[(h // 13) % len(PSS)]
+    variety_note = (f"FOR THIS EMAIL specifically (so a page of offers doesn't all sound the same):\n"
+                    f"- Open with {pick_opener}.\n"
+                    f"- Shape the CTA like: \"{pick_cta}\" (adapt naturally, keep it this short).\n"
+                    f"- P.S: {pick_ps}.\n")
     if lead_magnet:
         template_block = """THIS IS A RESOURCE (LEAD-MAGNET) EMAIL. Shape it like the resource examples in the voice reference:
 
@@ -12431,7 +12468,10 @@ THE OFFER (its one mechanism is: {fields['mechanism']}):
 
 {template_block}
 
+{variety_note}
 HARD RULES (always):
+- Say it once. NO over-explaining - do not add "That means...", "That lets you...", "which makes it easy to...", or stacked benefit sentences unpacking the offer. One crisp line of what it is, one short line of proof or how, then the ask. If you catch yourself explaining the benefit of the benefit, cut it.
+- Do not write a triple list ("a simple pick, a quick ship, and a 14-day refund") - it reads assembled. One concrete detail beats three.
 - Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
 - The P.S proof line (when you use one) names a PLAUSIBLE INVENTED client - never a real well-known company. The proof must be something THIS business could measure ITSELF (meetings booked, days to turn a unit around, shipments on time), never the client's own downstream outcomes (their contract wins, footfall, revenue) which a vendor cannot know.
 - ONE mechanism only: the email carries this offer's mechanism and nothing from any other (the P.S proof line is proof, not a second promise).
