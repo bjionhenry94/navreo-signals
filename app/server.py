@@ -12402,7 +12402,7 @@ def offer_email(p: dict, ip: str):
         "an observation about something specific they'd be doing right now (a launch, a hire, expansion, a busy season) - warm, not researched-sounding",
         "a light 'wasn't sure who the right person for this was' apology - vary the wording from the examples",
         "a market-noise line ('there's so much noise right now about X') that sets up the problem",
-        "straight in with a short, plain-spoken line about the gap they have - no throat-clearing",
+        "a plain line naming the new business they could be winning - framed as upside they're leaving on the table, NEVER an accusatory 'you're probably missing/failing at X'",
         "a 'saw you were doing X and thought this might land' observation",
     ]
     CTAS = ([  # resource emails: offer to SEND the thing
@@ -12415,6 +12415,8 @@ def offer_email(p: dict, ip: str):
         "Could I send a short one-pager explaining how it works?",
         "Want me to send the details across?",
         "Can I send over how it'd work for them?",
+        "Worth me sending a quick rundown?",
+        "Happy to send over the specifics if useful?",
     ])
     PSS = [
         "a one-line P.S with an invented client and a concrete result the sender could measure",
@@ -12472,6 +12474,9 @@ THE OFFER (its one mechanism is: {fields['mechanism']}):
 HARD RULES (always):
 - Say it once. NO over-explaining - do not add "That means...", "That lets you...", "which makes it easy to...", or stacked benefit sentences unpacking the offer. One crisp line of what it is, one short line of proof or how, then the ask. If you catch yourself explaining the benefit of the benefit, cut it.
 - Do not write a triple list ("a simple pick, a quick ship, and a 14-day refund") - it reads assembled. One concrete detail beats three.
+- State the pay-term or guarantee EXACTLY ONCE. Never restate it in different words ("you pay nothing until X. It's just our normal invoice, only after Y" is the SAME point twice - keep one).
+- NEVER write the offer's name as a capitalised product label ("a Pay After First Clean option", "our Viewing Clean service") - just describe what you'd do in lower-case plain words.
+- Do NOT end the opener with "so I wanted to reach out" - it has become a tell. Reach for any of the other opener moves instead.
 - Fill EVERY part with concrete, realistic values. Invent a realistic recipient first name, a realistic example company name, and a realistic sender first name. NEVER leave {{{{first_name}}}}, {{{{company}}}}, or any [square-bracket blank] in the email.
 - The P.S proof line (when you use one) names a PLAUSIBLE INVENTED client - never a real well-known company. The proof must be something THIS business could measure ITSELF (meetings booked, days to turn a unit around, shipments on time), never the client's own downstream outcomes (their contract wins, footfall, revenue) which a vendor cannot know.
 - ONE mechanism only: the email carries this offer's mechanism and nothing from any other (the P.S proof line is proof, not a second promise).
@@ -12517,6 +12522,10 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
             if len(lines) > 1 and (lines[1].endswith("?") or
                     re.match(r"(?:Can|May|Could|Would|Want|Should)\b.*\?", lines[1])):
                 raise ValueError("email opens with the CTA")
+            if re.search(r"so I wanted to reach out", email, re.I):
+                raise ValueError("overused 'so I wanted to reach out' opener tell")
+            if re.search(r"You're probably missing|You are probably missing", email, re.I):
+                raise ValueError("presumptuous accusatory opener")
             if not lead_magnet:
                 if re.search(r"^\s*What if we could\b", email, re.M):
                     raise ValueError("banned 'What if we could' template opener")
