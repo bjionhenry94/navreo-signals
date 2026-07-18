@@ -12401,17 +12401,17 @@ def offer_email(p: dict, ip: str):
 5. Sign-off first name.
 6. Optional P.S with one concrete proof line (an invented client + a result the sender could actually measure).
 
-RULES: exactly one question (the CTA). Never open with the CTA or the offer - the icebreaker is always first. Honest tense: if making the thing needs the recipient's input first, use future tense ("We'd love to put together..."); only past tense ("I've put together...") for something that can exist before you ever speak. Do NOT mention any guarantee, refund, or pay terms - the only promise is that it costs nothing. Avoid the bare word "free" and the phrase "no obligation" (Navreo says "no charge" / "at no cost"). Keep the whole thing tight, roughly 45-80 words."""
+RULES: exactly one question (the CTA). Never open with the CTA or the offer - the icebreaker is always first. Honest tense: if making the thing needs the recipient's input first, use future tense ("We'd love to put together..."); only past tense ("I've put together...") for something that can exist before you ever speak. Do NOT mention any guarantee, refund, or pay terms - the only promise is that it costs nothing. NEVER write eligibility or fine print ("matched to an agreed list of...", "applies to...", conditions) - keep it warm, not a spec. Avoid the bare word "free" and the phrase "no obligation" (Navreo says "no charge" / "at no cost"). Keep the whole thing tight, roughly 45-80 words."""
     else:
         template_block = """THIS IS A PITCH EMAIL for a paid offer (its mechanism is stated above). Shape it like the pitch examples in the voice reference:
 
 1. Greeting: "Hey <first name>," or "Hi <first name>,".
 2. Icebreaker: ONE short, warm line. VARY it every time - a genuine observation about them, a "wasn't sure who the best person was" apology, or a market-noise line. It does NOT have to end "so I wanted to reach out" (that exact phrase on every email is a robot tell - use it at most sometimes). Do not pitch here.
-3. The pitch, as a natural conditional: "If we could <a vivid, specific new-money outcome> by <what we'd do in plain words>, and <this offer's ONE promise woven in>, would you be open to <a tiny next step>?" - OR the warmer variant "What if we could <outcome>? <promise as its own short line>. <CTA>?". Name a real, specific outcome, not a generic one.
+3. The pitch. VARY how you open it - do NOT start every email "What if we could" or "If we could" (that is the #1 template tell). Rotate naturally, like the examples: sometimes state the outcome as a plain sentence ("You could be booking meetings with the buyers actively scoping new suppliers, and only paying once they show up."), sometimes a short "If we could... would you be open to...?" conditional, sometimes lead with what you'd do. Name a real, specific outcome, not a generic one.
 4. Optionally a short supporting line ("We use...", "It works by...").
 5. Sign-off first name, and a P.S with one concrete proof line (invented client + a result the sender could measure).
 
-RULES: the promise woven in is ONLY this offer's mechanism (use the words guarantee/refund only if the mechanism is guarantee_refund; say "you only pay after..." / "you only pay per..." for the pay mechanisms). The closing ask is tiny and warm ("a two-minute video on how we'd do it for <their company>", "a quick one-pager explaining how it works", "seeing the details") - describing that small artifact is fine, it is the CTA, not a second offer. Never "book a call". If you use "If we could", finish it as a real question ("...would you be open to...?"). Keep the pitch sentence readable - ideally under about 35 words; if it sprawls, break out a supporting line rather than cramming."""
+RULES: the promise is ONLY this offer's mechanism, said in ONE warm human clause (use guarantee/refund only if the mechanism is guarantee_refund; "you only pay after we've built it, so nothing upfront" / "you only pay per booked meeting" for the pay mechanisms). NEVER write terms, fine print or eligibility into the email - NO "it applies to...", "payment due within X days", "invoiced upfront", "standard pricing applies", "the guarantee only kicks in", "bookings must be confirmed within...", "after onboarding", no unit minimums or dollar thresholds. The one fair condition from the offer stays OUT of the email entirely; it is not the reader's problem yet. The closing ask is tiny and warm ("a two-minute video on how we'd do it for <their company>", "a quick one-pager explaining how it works", "seeing the details"). Never "book a call". Keep the pitch readable - if it sprawls past ~30 words, break out a supporting line rather than cramming."""
     prompt = f"""You are Navreo's house cold-email copywriter. Write ONE complete, ready-to-send cold email for the single offer below that sounds exactly like a real Navreo email a person sent - warm, human, specific - NOT a filled-in template.
 
 Here is how Navreo actually writes (study the feel, the openers, the rhythm, the CTAs - never copy the wording):
@@ -12463,7 +12463,23 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
                 raise ValueError("em-dash in email")
             if re.search(r"\{\{|\[[a-z ]+\]|first_name|square-bracket", email, re.I):
                 raise ValueError("merge tag or bracket blank leaked")
+            # Fine-print / contract language is the biggest voice-killer (panel
+            # 2026-07-18): the real corpus never states terms in the email.
+            if re.search(r"\bit applies to\b|\bapplies to (?:orders|new|accounts)\b"
+                         r"|payment due|invoiced? upfront|invoice normally"
+                         r"|standard (?:wholesale )?pricing applies|only kicks in"
+                         r"|must be confirmed within|within \d+ days of|after onboarding"
+                         r"|orders? (?:of|over) \d|\d+ units each", email, re.I):
+                raise ValueError("terms/fine-print language in email")
+            # The line after the greeting must be an icebreaker, never the CTA
+            # (real Navreo emails always warm up first).
+            lines = [l.strip() for l in email.splitlines() if l.strip()]
+            if len(lines) > 1 and (lines[1].endswith("?") or
+                    re.match(r"(?:Can|May|Could|Would|Want|Should)\b.*\?", lines[1])):
+                raise ValueError("email opens with the CTA")
             if not lead_magnet:
+                if re.search(r"^\s*What if we could\b", email, re.M):
+                    raise ValueError("banned 'What if we could' template opener")
                 if "If we could" in email and not re.search(r"\?", email):
                     raise ValueError("If-we-could never resolves to a question")
                 if re.search(r"\baudit\b", email, re.I):
@@ -12474,10 +12490,6 @@ Reply with ONLY a JSON object, no fences, no commentary: {{"email": "<the full e
                 # exactly one question: the CTA (real Navreo resource emails ask once)
                 if email.count("?") != 1:
                     raise ValueError(f"lead magnet has {email.count('?')} questions, need exactly 1")
-                lines = [l.strip() for l in email.splitlines() if l.strip()]
-                if len(lines) > 1 and (lines[1].endswith("?") or
-                        re.match(r"(?:Can|May|Would|Want|Should) ", lines[1])):
-                    raise ValueError("lead magnet opens with the CTA")
             return 200, {"ok": True, "email": email, "template": template_name}
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:120]}"
