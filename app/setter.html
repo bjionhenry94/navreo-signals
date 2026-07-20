@@ -62,6 +62,13 @@
 .il-search input:focus { outline: none; box-shadow: var(--focus); }
 .il-search-notes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
 .il-client-filter { margin-top: 8px; width: 100%; }
+/* Uncategorised handling (ship 2026-07-20) */
+.uncat-pill { background: rgba(217,164,32,.14); color: #9a7515; border: 1px solid rgba(217,164,32,.45); }
+.uncat-banner { border: 1px solid rgba(217,164,32,.5); background: rgba(217,164,32,.08);
+  border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.uncat-banner .ub-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.uncat-banner select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line, #ccc);
+  background: var(--bg, #fff); color: inherit; max-width: 100%; }
 .il-list { flex: 1; overflow-y: auto; }
 .il-test-note { padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .il-list .empty { padding: 40px 16px; }
@@ -1228,6 +1235,9 @@ function clientPillRows(all, status) {
   if (!status) return all.slice();
   return (all || []).filter((r) => {
     if (!r || typeof r !== "object") return false;
+    // Uncategorised-only lens (ship 2026-07-20): the alert's deep link and
+    // the toolbar chip narrow the list to unresolved uncategorised replies.
+    if (UNCAT_ONLY && !(isUncategorised(r) && r.status === "needs_review")) return false;
     if (r.status === "needs_review") {
       const d = rowDirection(r);
       if (status === "needs_review") return d.inbound;
@@ -1270,6 +1280,30 @@ function renderQueueFilters() {
     const badge = (typeof n === "number") ? ` <b class="n">${fmt(n)}</b>` : "";
     return `<button type="button" class="chip ${p.key === currentStatus ? "on" : ""}" data-status="${esc(p.key)}">${esc(p.label)}${badge}</button>`;
   }).join("");
+  // Uncategorised lens chip (ship 2026-07-20). An <a>, not a <button>, so the
+  // generic pill handler below never binds it - it toggles the client-side
+  // lens instead of switching server status.
+  const uncatN = (ALL_ROWS.length ? ALL_ROWS : QUEUE_ROWS)
+    .filter((r) => isUncategorised(r) && r.status === "needs_review").length;
+  if (uncatN || UNCAT_ONLY) {
+    wrap.innerHTML += `<a role="button" tabindex="0" class="chip ${UNCAT_ONLY ? "on" : ""}" id="uncatOnlyChip" title="Only replies the auto-categoriser failed on">Uncategorised <b class="n">${fmt(uncatN)}</b></a>`;
+  }
+  const uncatChipEl = document.getElementById("uncatOnlyChip");
+  if (uncatChipEl) uncatChipEl.addEventListener("click", () => {
+    UNCAT_ONLY = !UNCAT_ONLY;
+    if (UNCAT_ONLY) currentStatus = "needs_review";
+    inboxPage = 1;
+    try {
+      history.replaceState(null, "", UNCAT_ONLY ? "#uncategorised" : location.pathname + location.search);
+    } catch (e) { /* history API blocked - the lens still works */ }
+    if (_allRowsLoaded && ALL_ROWS.length < 195) {
+      QUEUE_ROWS = clientPillRows(ALL_ROWS, currentStatus);
+      renderKpis(); renderQueueFilters(); renderClientFilter(); renderQueue();
+    } else {
+      QUEUE_ROWS = []; _queueLoading = true;
+      renderQueueFilters(); renderQueue(); loadQueue();
+    }
+  });
   wrap.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     currentStatus = b.getAttribute("data-status");
     inboxPage = 1;
@@ -1479,6 +1513,77 @@ function ageBadgeHtml(row) {
 /* Minimal 3-line row: bold name + TEST chip / one-line snippet / hold label
    + relative time. Email, campaign, and the status pill (except under "All")
    moved into the detail pane's "How this was decided" panel. */
+/* ── Uncategorised handling (ship 2026-07-20) ─────────────────────────────
+   The categoriser failed or gave up on these - category stays empty until a
+   human picks one here (or the poll's auto-resolve fills it in late). The
+   dropdown's options come LIVE from Smartlead via /api/setter/categories -
+   never a hardcoded list. */
+let UNCAT_ONLY = (location.hash || "").replace("#", "") === "uncategorised";
+let CATEGORIES_CACHE = null;
+
+function isUncategorised(row) {
+  const s = String((row && row.category) || "").trim();
+  return !s || s === "Uncategorizable by Ai";
+}
+
+async function fetchCategories() {
+  if (CATEGORIES_CACHE) return CATEGORIES_CACHE;
+  const res = await fetchJson("/api/setter/categories");
+  if (res.ok && Array.isArray(res.data.categories) && res.data.categories.length) {
+    CATEGORIES_CACHE = res.data.categories;
+  }
+  return CATEGORIES_CACHE || [];
+}
+
+async function hydrateUncatBanner() {
+  const sel = document.getElementById("uncatCatSel");
+  if (!sel) return;
+  const cats = await fetchCategories();
+  const still = document.getElementById("uncatCatSel");
+  if (!still) return;
+  if (!cats.length) {
+    still.innerHTML = `<option value="">Couldn't load Smartlead categories - try again shortly</option>`;
+    return;
+  }
+  still.innerHTML = `<option value="">Choose a category…</option>` + cats.map((c) =>
+    `<option value="${esc(String(c.id))}" data-name="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+}
+
+async function applyRecategorise() {
+  const sel = document.getElementById("uncatCatSel");
+  const btn = document.getElementById("uncatApplyBtn");
+  const hint = document.getElementById("uncatHint");
+  if (!sel || !sel.value || !selectedRowId) return;
+  const name = sel.options[sel.selectedIndex].getAttribute("data-name") || "";
+  if (btn) btn.disabled = true;
+  if (hint) hint.textContent = "Updating Smartlead…";
+  const res = await fetchJson("/api/setter/queue/recategorise", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: selectedRowId, category_id: sel.value, category_name: name }),
+  });
+  if (!res.ok) {
+    if (hint) hint.textContent = res.error || "Couldn't recategorise - nothing was changed.";
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const act = res.data && res.data.action;
+  if (hint) hint.textContent = act === "converted"
+    ? `Marked '${name}' - moved into the normal flow, drafting now.`
+    : `Marked '${name}' - removed from the Setter.`;
+  selectedRowId = (act === "converted" && res.data.new_id) ? res.data.new_id : null;
+  await loadQueue();
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target && e.target.id === "uncatApplyBtn") applyRecategorise();
+});
+document.addEventListener("change", (e) => {
+  if (e.target && e.target.id === "uncatCatSel") {
+    const b = document.getElementById("uncatApplyBtn");
+    if (b) b.disabled = !e.target.value;
+  }
+});
+
 function inboxItemHtml(row) {
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
   const snippet = esc(cleanBody(row.reply_body).replace(/\s+/g, " "));
@@ -1492,11 +1597,14 @@ function inboxItemHtml(row) {
   // from a campaign with no assigned agent). Same subtle neutral pill as the
   // status chip above - no colour shouting, just a flag that no brain is set.
   const noAgentChip = row.agent_id ? "" : `<span class="pill n">No agent</span>`;
+  const uncatChip = (isUncategorised(row) && row.status === "needs_review")
+    ? `<span class="pill uncat-pill">UNCATEGORISED</span>` : "";
   return `<div class="inbox-item ${selected}" data-id="${esc(row.id)}">
     <div class="ii-line1">${esc(leadName(row))} ${testChip}</div>
     <div class="ii-snippet">${snippet || "No reply text."}</div>
     <div class="ii-line3">
       ${ageBadgeHtml(row)}
+      ${uncatChip}
       ${holdLabel ? `<span class="ii-hold">${esc(holdLabel)}</span>` : ""}
       ${statusChip}
       ${noAgentChip}
@@ -1553,6 +1661,24 @@ function renderDetail(row) {
   // decision" section instead of a top banner).
   const errorBannerHtml = (row.status === "error" && row.error)
     ? `<div class="err-banner" style="display:block;margin:10px 0">${esc(row.error)}</div>` : "";
+
+  // Uncategorised triage banner (ship 2026-07-20): pick the real Smartlead
+  // category right here. A positive category re-runs the normal pipeline
+  // (draft and all); anything else removes the row from the Setter. Either
+  // way Smartlead is updated first - it stays the system of record.
+  let uncatBannerHtml = "";
+  if (isUncategorised(row) && !["sent", "auto_sent", "dismissed"].includes(row.status)) {
+    uncatBannerHtml = `<div class="uncat-banner" id="uncatBanner">
+      <div><b>Uncategorised reply</b> - the auto-categoriser failed on this one, so no draft was written.</div>
+      <div class="small muted" style="margin-top:2px">Pick its real category: a positive moves it into the normal flow, anything else removes it from the Setter. Smartlead is updated either way.</div>
+      <div class="ub-row">
+        <select id="uncatCatSel"><option value="">Loading categories…</option></select>
+        <button type="button" class="btn sm" id="uncatApplyBtn" disabled>Apply</button>
+        <span class="small muted" id="uncatHint"></span>
+      </div>
+    </div>`;
+    setTimeout(hydrateUncatBanner, 0);
+  }
 
   // Auto-sent / sent rows keep one calm line, placed right above the draft
   // itself rather than at the top of the page.
@@ -1613,6 +1739,7 @@ function renderDetail(row) {
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
     ${errorBannerHtml}
+    ${uncatBannerHtml}
     ${convoHtml(row)}
     <div class="msg-card">
       <div class="composer-head">

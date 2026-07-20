@@ -174,6 +174,13 @@ class FakeSB:
         if table == "companies":
             return self._companies_table(params)
         if table == "replies":
+            if method == "PATCH":
+                for r in self.replies:
+                    if all(self._match_eq(r.get(k), params[k])
+                           for k in ("workspace", "smartlead_campaign_id", "smartlead_message_id")
+                           if k in params):
+                        r.update(body or {})
+                return []
             return self._replies_table(params)
         if table == "sent_messages":
             return self._sent_messages_table(params)
@@ -258,6 +265,9 @@ class FakeSB:
             for r in self.queue:
                 if self._queue_row_matches(r, params):
                     r.update(body or {})
+            return []
+        if method == "DELETE":
+            self.queue = [r for r in self.queue if not self._queue_row_matches(r, params)]
             return []
         return []
 
@@ -379,6 +389,16 @@ class FakeHTTP:
         # verbatim; a callable(url) -> dict (may raise, to simulate an
         # endpoint failure).
         self.lead_by_email_result = None
+        # Recategorise fixtures (ship 2026-07-20): the master category list
+        # GET /leads/fetch-categories serves, the recorded category writes
+        # (campaign_id, lead_id, body) from POST .../leads/{id}/category, and
+        # an optional exception to raise on that POST (Smartlead-down tests).
+        self.lead_categories = [{"id": 1, "name": "Interested"},
+                                {"id": 2, "name": "Meeting Request"},
+                                {"id": 3, "name": "Not Interested"},
+                                {"id": 4, "name": "Out Of Office"}]
+        self.category_writes = []
+        self.category_write_error = None
 
     def __call__(self, method, url, headers, body=None):
         self.calls.append((method, url))
@@ -446,6 +466,16 @@ class FakeHTTP:
                                  "sub_sequence_id": (body or {}).get("sub_sequence_id"),
                                  "will_start_at": "2026-07-14T00:00:00Z",
                                  "stop_on_parent_reply": (body or {}).get("stop_lead_on_parent_campaign_reply")}}
+            if "fetch-categories" in url:
+                return list(self.lead_categories)
+            # Checked BEFORE the generic "/leads/" branch below - the category
+            # write URL (".../campaigns/{c}/leads/{l}/category") contains it.
+            mcat = re.search(r"/campaigns/([^/?]+)/leads/([^/?]+)/category", url)
+            if mcat:
+                if self.category_write_error is not None:
+                    raise self.category_write_error
+                self.category_writes.append((mcat.group(1), mcat.group(2), body))
+                return {"ok": True}
             # message-history's own URL (".../leads/{id}/message-history") also
             # contains "/leads/", so it must be checked BEFORE the generic
             # leads-lookup branch or it always shadows it. Campaign-leads
@@ -1346,7 +1376,7 @@ def test_poll_never_raises_on_bad_agent_config():
     summary = setter.run_poll()
     check("poll: no agents configured -> returns empty summary without raising",
          summary == {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0,
-                    "errors": 0, "agentless": 0},
+                    "errors": 0, "agentless": 0, "uncategorised": 0, "auto_resolved": 0},
          summary)
 
 
@@ -6499,8 +6529,19 @@ def test_non_core_categories_stay_out_both_paths():
             setter.process_reply = lambda reply, agent_, settings_, _c=called: (
                 _c.__setitem__("n", _c["n"] + 1) or {"status": "needs_review", "id": 1})
             summary = setter.run_poll()
-            check(f"run_poll: category {cat!r} never reaches process_reply, no queue row",
-                 called["n"] == 0 and len(sb.queue) == 0, (cat, summary, sb.queue))
+            if cat is None:
+                # Ship 2026-07-20: uncategorised no longer stays out - it
+                # queues as a review-only row (no classify/draft, agent brain
+                # never runs) so a hidden positive can be rescued via the
+                # recategorise dropdown instead of dying invisible.
+                check("run_poll: category None queues a review-only uncategorised row",
+                     called["n"] == 0 and len(sb.queue) == 1
+                     and sb.queue[0].get("status") == "needs_review"
+                     and sb.queue[0].get("category") is None
+                     and not sb.queue[0].get("draft_body"), (cat, summary, sb.queue))
+            else:
+                check(f"run_poll: category {cat!r} never reaches process_reply, no queue row",
+                     called["n"] == 0 and len(sb.queue) == 0, (cat, summary, sb.queue))
 
             # -- handle_inbound path --
             sb2, http2 = fresh_setter()
@@ -8191,6 +8232,237 @@ def test_draft_text_strips_markup_for_diffing():
          setter._draft_text("<div>Hi there</div>") == setter._draft_text("<p>Hi&nbsp;there</p>"))
 
 
+# ── uncategorised intake + recategorise (ship 2026-07-20) ────────────────────
+
+def _seed_uncat_reply(sb, cid, email="uncat@example.com", mid="uncat-1", cat=None,
+                      replied_at="2026-07-10T00:00:00+00:00"):
+    sb.replies.append({
+        "id": len(sb.replies) + 9000,
+        "workspace": "navreo", "smartlead_campaign_id": cid, "email": email,
+        "subject": "Re: hi", "reply_body": "call me maybe", "replied_at": replied_at,
+        "smartlead_message_id": mid, "category": cat,
+    })
+
+
+def _seed_uncat_queue_row(sb, rid, cid, email, mid, **over):
+    row = {"id": rid, "workspace": "navreo", "smartlead_campaign_id": cid,
+           "lead_email": email, "lead_first_name": "Late", "lead_last_name": "",
+           "company_domain": "example.com", "message_id": mid, "source_message_id": mid,
+           "reply_subject": "Re: hi", "reply_body": "yes please",
+           "replied_at": "2026-07-10T00:00:00+00:00", "category": None,
+           "category_source": None, "status": "needs_review", "is_test": False,
+           "draft_body": None, "smartlead_lead_id": None}
+    row.update(over)
+    sb.queue.append(row)
+    return row
+
+
+def test_uncat_poll_intake_agented():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-uncat", "mode": "draft_only", "enabled": True, "campaign_ids": [9301]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    _seed_uncat_reply(sb, 9301)
+    summary = setter.run_poll()
+    check("uncat poll: summary counts the intake", summary.get("uncategorised") == 1, summary)
+    rows = [r for r in sb.queue if r.get("lead_email") == "uncat@example.com"]
+    check("uncat poll: row queued needs_review", bool(rows) and rows[0].get("status") == "needs_review", rows)
+    check("uncat poll: category stays empty", bool(rows) and rows[0].get("category") is None, rows)
+    check("uncat poll: agent_id recorded for the campaign's agent",
+         bool(rows) and rows[0].get("agent_id") == "agent-uncat", rows)
+    check("uncat poll: never drafted", bool(rows) and not rows[0].get("draft_body"), rows)
+    check("uncat poll: no OpenAI call for an uncategorised row",
+         not any("openai" in u for _m, u in http.calls), http.calls)
+    summary2 = setter.run_poll()
+    check("uncat poll: second tick never re-queues",
+         summary2.get("uncategorised") == 0
+         and len([r for r in sb.queue if r.get("lead_email") == "uncat@example.com"]) == 1,
+         (summary2, sb.queue))
+
+
+def test_uncat_grace_window_defers_fresh_replies():
+    sb, http = fresh_setter()
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    _seed_uncat_reply(sb, 9302, mid="uncat-fresh", replied_at=now_iso)
+    summary = setter.run_poll()
+    check("uncat grace: a fresh uncategorised reply is left for a later tick",
+         summary.get("uncategorised") == 0 and len(sb.queue) == 0, (summary, sb.queue))
+
+
+def test_uncat_legacy_and_empty_labels_count():
+    sb, http = fresh_setter()
+    _seed_uncat_reply(sb, 9303, email="legacy@example.com", mid="uncat-legacy",
+                      cat="Uncategorizable by Ai")
+    _seed_uncat_reply(sb, 9303, email="empty@example.com", mid="uncat-empty", cat="")
+    summary = setter.run_poll()
+    check("uncat: legacy 'Uncategorizable by Ai' and empty-string both intake",
+         summary.get("uncategorised") == 2 and len(sb.queue) == 2, (summary, sb.queue))
+    check("uncat: agentless campaign intakes with no agent_id",
+         all(r.get("agent_id") is None for r in sb.queue), sb.queue)
+
+
+def test_uncat_assigned_at_backlog_gate():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-uncat-gate", "mode": "draft_only", "enabled": True, "campaign_ids": [9304],
+             "campaign_assigned_at": {"9304": "2026-07-15T00:00:00+00:00"}}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    _seed_uncat_reply(sb, 9304, mid="uncat-old", replied_at="2026-07-10T00:00:00+00:00")
+    summary = setter.run_poll()
+    check("uncat gate: pre-assignment backlog is never swept",
+         summary.get("uncategorised") == 0 and len(sb.queue) == 0, (summary, sb.queue))
+
+
+def test_uncat_per_tick_cap():
+    sb, http = fresh_setter()
+    for i in range(12):
+        _seed_uncat_reply(sb, 9305, email=f"cap{i}@example.com", mid=f"uncat-cap-{i}")
+    summary = setter.run_poll()
+    check("uncat cap: at most UNCAT_PER_TICK intakes per tick",
+         summary.get("uncategorised") == setter.UNCAT_PER_TICK
+         and len(sb.queue) == setter.UNCAT_PER_TICK, (summary, len(sb.queue)))
+
+
+def test_uncat_autoresolve_converts_core_four():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-late", "mode": "draft_only", "enabled": True, "campaign_ids": [9306]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    _seed_uncat_queue_row(sb, 501, 9306, "late@example.com", "late-1")
+    _seed_uncat_reply(sb, 9306, email="late@example.com", mid="late-1", cat="Interested")
+    calls = []
+    real = setter.process_reply
+    setter.process_reply = lambda reply, a, s, _c=calls: (
+        _c.append(reply) or {"status": "needs_review", "id": 601})
+    try:
+        summary = setter.run_poll()
+    finally:
+        setter.process_reply = real
+    check("auto-resolve: converted through process_reply with the late category",
+         len(calls) == 1 and calls[0].get("category") == "Interested", (summary, calls))
+    check("auto-resolve: stale triage row deleted",
+         not any(r.get("id") == 501 for r in sb.queue), sb.queue)
+    check("auto-resolve: summary counted", summary.get("auto_resolved") == 1, summary)
+
+
+def test_uncat_autoresolve_dismisses_non_core():
+    sb, http = fresh_setter()
+    _seed_uncat_queue_row(sb, 502, 9307, "ooo@example.com", "late-2")
+    _seed_uncat_reply(sb, 9307, email="ooo@example.com", mid="late-2", cat="Out Of Office")
+    calls = []
+    real = setter.process_reply
+    setter.process_reply = lambda reply, a, s, _c=calls: (
+        _c.append(reply) or {"status": "needs_review", "id": 602})
+    try:
+        summary = setter.run_poll()
+    finally:
+        setter.process_reply = real
+    row = next((r for r in sb.queue if r.get("id") == 502), None)
+    check("auto-resolve: non-core late category dismisses the row with the label recorded",
+         row is not None and row.get("status") == "dismissed"
+         and row.get("category") == "Out Of Office" and row.get("category_source") == "auto",
+         (summary, row))
+    check("auto-resolve: non-core never runs the pipeline", len(calls) == 0, calls)
+
+
+def test_uncat_manual_verdict_is_untouchable():
+    sb, http = fresh_setter()
+    row = _seed_uncat_queue_row(sb, 504, 9308, "manual@example.com", "late-4",
+                                category_source="manual")
+    _seed_uncat_reply(sb, 9308, email="manual@example.com", mid="late-4", cat="Interested")
+    before = dict(row)
+    summary = setter.run_poll()
+    after = next((r for r in sb.queue if r.get("id") == 504), None)
+    check("manual verdict: auto-resolve never touches a manually-resolved row",
+         after is not None and after.get("status") == before.get("status")
+         and after.get("category") == before.get("category")
+         and summary.get("auto_resolved") == 0, (summary, after))
+
+
+def test_recategorise_route_convert_and_discard():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-recat", "mode": "draft_only", "enabled": True, "campaign_ids": [9309]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    _seed_uncat_queue_row(sb, 701, 9309, "pick@example.com", "pick-1", smartlead_lead_id=4242)
+    _seed_uncat_queue_row(sb, 702, 9309, "drop@example.com", "drop-1", smartlead_lead_id=4243)
+    sb.replies.append({"id": 11, "workspace": "navreo", "smartlead_campaign_id": 9309,
+                       "smartlead_message_id": "pick-1", "category": None})
+    calls = []
+    real = setter.process_reply
+    setter.process_reply = lambda reply, a, s, _c=calls: (
+        _c.append(reply) or {"status": "needs_review", "id": 801})
+    try:
+        code, resp = setter.route_queue_recategorise(
+            {"id": 701, "category_id": 1, "category_name": "Interested"})
+        code2, resp2 = setter.route_queue_recategorise(
+            {"id": 702, "category_id": 3, "category_name": "Not Interested"})
+    finally:
+        setter.process_reply = real
+    check("recategorise: convert answers 200/converted",
+         code == 200 and resp.get("action") == "converted", (code, resp))
+    check("recategorise: smartlead write hit the campaign/lead category endpoint",
+         any(cw[0] == "9309" and cw[1] == "4242" and (cw[2] or {}).get("category_id") == 1
+             for cw in http.category_writes), http.category_writes)
+    check("recategorise: replies row updated to the chosen category",
+         any(r.get("smartlead_message_id") == "pick-1" and r.get("category") == "Interested"
+             for r in sb.replies), sb.replies)
+    check("recategorise: converted through the normal pipeline",
+         len(calls) == 1 and calls[0].get("category") == "Interested", calls)
+    row2 = next((r for r in sb.queue if r.get("id") == 702), None)
+    check("recategorise: discard answers 200/discarded and dismisses with the manual stamp",
+         code2 == 200 and resp2.get("action") == "discarded" and row2 is not None
+         and row2.get("status") == "dismissed" and row2.get("category") == "Not Interested"
+         and row2.get("category_source") == "manual", (code2, resp2, row2))
+    check("recategorise: discard also wrote Smartlead",
+         any(cw[1] == "4243" and (cw[2] or {}).get("category_id") == 3
+             for cw in http.category_writes), http.category_writes)
+
+
+def test_recategorise_route_guards():
+    sb, http = fresh_setter()
+    code, resp = setter.route_queue_recategorise({"id": 999, "category_id": 1,
+                                                  "category_name": "Interested"})
+    check("recategorise guard: unknown row is a 404", code == 404, (code, resp))
+    code, resp = setter.route_queue_recategorise({"id": 999})
+    check("recategorise guard: missing params is a 400", code == 400, (code, resp))
+    _seed_uncat_queue_row(sb, 703, 9310, "done@example.com", "done-1", category="Interested")
+    code, resp = setter.route_queue_recategorise({"id": 703, "category_id": 3,
+                                                  "category_name": "Not Interested"})
+    check("recategorise guard: an already-categorised row is a 409", code == 409, (code, resp))
+    _seed_uncat_queue_row(sb, 704, 9310, "sent@example.com", "sent-1", status="sent")
+    code, resp = setter.route_queue_recategorise({"id": 704, "category_id": 1,
+                                                  "category_name": "Interested"})
+    check("recategorise guard: a sent row is a 409", code == 409, (code, resp))
+    row = _seed_uncat_queue_row(sb, 705, 9310, "down@example.com", "down-1", smartlead_lead_id=555)
+    http.category_write_error = RuntimeError("smartlead down")
+    code, resp = setter.route_queue_recategorise({"id": 705, "category_id": 1,
+                                                  "category_name": "Interested"})
+    http.category_write_error = None
+    fresh = next((r for r in sb.queue if r.get("id") == 705), None)
+    check("recategorise guard: smartlead failure is a 502 and NOTHING changed locally",
+         code == 502 and fresh is not None and fresh.get("status") == "needs_review"
+         and fresh.get("category") is None, (code, resp, fresh))
+    _seed_uncat_queue_row(sb, 706, 9310, "test@example.com", "test-1", is_test=True)
+    writes_before = len(http.category_writes)
+    code, resp = setter.route_queue_recategorise({"id": 706, "category_id": 3,
+                                                  "category_name": "Not Interested"})
+    check("recategorise guard: a test row never calls Smartlead",
+         code == 200 and resp.get("action") == "discarded"
+         and len(http.category_writes) == writes_before, (code, resp, http.category_writes))
+
+
+def test_categories_route_serves_smartlead_list_cached():
+    sb, http = fresh_setter()
+    setter._CATEGORY_CACHE["val"] = None
+    setter._CATEGORY_CACHE["at"] = 0.0
+    code, resp = setter.route_categories_get({})
+    check("categories: 200 with smartlead's own list",
+         code == 200 and resp.get("categories") == http.lead_categories, (code, resp))
+    n = len([u for _m, u in http.calls if "fetch-categories" in u])
+    code2, _resp2 = setter.route_categories_get({})
+    n2 = len([u for _m, u in http.calls if "fetch-categories" in u])
+    check("categories: second call served from the 1h cache", code2 == 200 and n2 == n, (n, n2))
+    setter._CATEGORY_CACHE["val"] = None
+    setter._CATEGORY_CACHE["at"] = 0.0
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
@@ -8422,6 +8694,18 @@ if __name__ == "__main__":
     test_edit_lesson_toast_roundtrip()
     test_edit_lesson_undo_refuses_after_instructions_change()
     test_draft_text_strips_markup_for_diffing()
+
+    test_uncat_poll_intake_agented()
+    test_uncat_grace_window_defers_fresh_replies()
+    test_uncat_legacy_and_empty_labels_count()
+    test_uncat_assigned_at_backlog_gate()
+    test_uncat_per_tick_cap()
+    test_uncat_autoresolve_converts_core_four()
+    test_uncat_autoresolve_dismisses_non_core()
+    test_uncat_manual_verdict_is_untouchable()
+    test_recategorise_route_convert_and_discard()
+    test_recategorise_route_guards()
+    test_categories_route_serves_smartlead_list_cached()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

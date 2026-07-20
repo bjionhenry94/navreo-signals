@@ -89,6 +89,26 @@ CORE_FOUR = frozenset({"Interested", "Information Request", "Meeting Request", "
 # instead of splitting on its internal space.
 CORE_FOUR_CATEGORY_FILTER = "in.(" + ",".join(quote(f'"{c}"', safe="") for c in sorted(CORE_FOUR)) + ")"
 
+# Uncategorised handling (ship 2026-07-20): replies the categoriser failed on
+# or explicitly gave up on ("Uncategorizable by Ai" is the categoriser's own
+# white-flag label) still enter setter_queue - flagged, never auto-drafted -
+# so a hidden positive can be rescued from the UI instead of dying invisible.
+# NULL, empty/whitespace and the legacy literal all count as "uncategorised".
+UNCATEGORISED_LEGACY = "Uncategorizable by Ai"
+# Fresh replies are routinely uncategorised for ~15min while the Make
+# categoriser works (see handle_inbound) - only replies still uncategorised
+# after this many hours are true stragglers worth queueing.
+UNCAT_GRACE_HOURS = 2
+# At most this many uncategorised intakes per poll tick - the positive sweep's
+# own 15-cap must never be starved by a straggler backlog.
+UNCAT_PER_TICK = 10
+
+
+def _is_uncategorised_value(v) -> bool:
+    s = str(v or "").strip()
+    return (not s) or s == UNCATEGORISED_LEGACY
+
+
 # Internal search window for Calendly availability, in working days. v2:
 # no longer a settings-drawer field - the slot rule is fixed (earliest
 # qualifying slots inside work hours), so this is just how far ahead the
@@ -1149,8 +1169,30 @@ def _sl_key():
     return _KEYS.get("SMARTLEAD_API_KEY")
 
 
+# Injected by server.py after configure() (client-workspaces-hub): maps a
+# Smartlead campaign id to its OWNING workspace's API key, so setter calls
+# against a done-with-you client's campaign use the client's key. None → every
+# call uses the navreo env key (exactly the pre-federation behaviour).
+_WS_KEY_FOR_CAMPAIGN = None
+
+
+def _sl_key_for(path: str, campaign_id=None):
+    cid = campaign_id
+    if cid is None:
+        m = re.match(r"/campaigns/(\d+)", path)
+        cid = m.group(1) if m else None
+    if cid is not None and _WS_KEY_FOR_CAMPAIGN:
+        try:
+            k = _WS_KEY_FOR_CAMPAIGN(cid)
+            if k:
+                return k
+        except Exception:  # noqa: BLE001 - key resolution must never break a fetch
+            pass
+    return _sl_key()
+
+
 def _sl_get(path: str, params: dict = None):
-    key = _sl_key()
+    key = _sl_key_for(path)
     if not key:
         return None
     qs = dict(params or {})
@@ -1159,7 +1201,7 @@ def _sl_get(path: str, params: dict = None):
 
 
 def _sl_post(path: str, body: dict, params: dict = None):
-    key = _sl_key()
+    key = _sl_key_for(path)
     if not key:
         return None
     qs = dict(params or {})
@@ -2514,6 +2556,86 @@ def _intake_agentless(reply: dict) -> dict:
         }
 
 
+def _intake_uncategorised(reply: dict, agent: dict = None) -> dict:
+    """Uncategorised intake (ship 2026-07-20): a reply the categoriser failed
+    on (or explicitly gave up on) still reaches setter_queue - status
+    needs_review, category left empty, NO classify/draft/decide: there is no
+    verdict to act on until a human picks the real category via the
+    recategorise dropdown, or the categoriser fills it in late and the poll's
+    auto-resolve converts/dismisses the row. Hydrates the Smartlead thread
+    best-effort exactly like the agentless path - triage needs the
+    conversation context. Never raises - mirrors _intake_agentless."""
+    try:
+        workspace = reply.get("workspace") or WORKSPACE
+        campaign_id = reply.get("campaign_id")
+        email = (reply.get("email") or "").strip().lower()
+        message_id = str(reply.get("message_id") or "")
+        is_test = bool(reply.get("is_test"))
+
+        if not is_test:
+            existing = _existing_row(workspace, campaign_id, email, message_id)
+            if existing:
+                return existing
+
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        domain = (reply.get("company_domain") or (email.split("@", 1)[1] if "@" in email else "")).lower()
+        row = {
+            "workspace": workspace, "smartlead_campaign_id": campaign_id,
+            "agent_id": (agent or {}).get("id"),
+            "lead_email": email, "lead_first_name": reply.get("first_name") or "",
+            "lead_last_name": reply.get("last_name") or "", "company_domain": domain,
+            "message_id": message_id, "source_message_id": message_id,
+            "reply_subject": reply.get("subject") or "",
+            "reply_body": reply.get("body") or "", "replied_at": reply.get("replied_at") or now_iso,
+            "category": None, "category_source": None, "thread": [], "smartlead_lead_id": None,
+            "email_stats_id": None, "classification": None, "guardrails": None,
+            "timezone": None, "slots": [], "draft_subject": None, "draft_body": None,
+            "decision": "review",
+            "decision_reason": "This reply was never auto-categorised - the categoriser failed or "
+                               "gave up on it. Pick its Smartlead category to resolve it: a positive "
+                               "category runs the normal Setter pipeline, anything else removes it "
+                               "from the Setter.",
+            "status": "needs_review",
+            "added_to_subsequence": False, "sent_at": None, "sent_body": None, "error": None,
+            "is_test": is_test,
+        }
+        # Same best-effort context hydration as the agentless path: an
+        # uncategorised row is a triage decision, and "is this a positive?"
+        # can't be judged without the conversation and the original outreach.
+        if not is_test:
+            try:
+                ok, hyd, _herr = hydrate_lead(campaign_id, email, message_id)
+                if ok:
+                    row["smartlead_lead_id"] = hyd.get("smartlead_lead_id")
+                    row["email_stats_id"] = hyd.get("email_stats_id")
+                    row["message_id"] = str(hyd.get("reply_message_id") or message_id)
+                    row["reply_subject"] = hyd.get("reply_subject") or row["reply_subject"]
+                    row["reply_body"] = hyd.get("reply_email_body") or row["reply_body"]
+                    row["replied_at"] = hyd.get("reply_email_time") or row["replied_at"]
+                    row["thread"] = hyd.get("thread") or []
+                    row["lead_first_name"] = hyd.get("first_name") or row["lead_first_name"]
+                    row["lead_last_name"] = hyd.get("last_name") or row["lead_last_name"]
+                    row["first_outbound"] = hyd.get("first_outbound") or ""
+            except Exception:  # noqa: BLE001 - context is a nice-to-have, intake is the job
+                pass
+        return _finalize_row(row)
+    except Exception as e:  # noqa: BLE001 - uncategorised intake must never crash its caller
+        reply = reply or {}
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        return {
+            "workspace": reply.get("workspace") or WORKSPACE,
+            "smartlead_campaign_id": reply.get("campaign_id"), "agent_id": None,
+            "lead_email": (reply.get("email") or "").strip().lower(),
+            "message_id": str(reply.get("message_id") or ""),
+            "reply_body": reply.get("body") or "",
+            "status": "error", "decision": "review",
+            "decision_reason": "Held for review: something went wrong processing this reply.",
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+            "is_test": bool(reply.get("is_test")),
+            "created_at": now_iso, "updated_at": now_iso,
+        }
+
+
 # ── the pipeline ─────────────────────────────────────────────────────────────
 
 def process_reply(reply: dict, agent: dict, settings: dict) -> dict:
@@ -3268,6 +3390,168 @@ def run_positive_resweep(force: bool = False) -> dict:
         return summary
 
 
+def _convert_uncat_row(row: dict, category: str, source: str, settings: dict = None) -> dict:
+    """An uncategorised queue row just got a real CORE_FOUR category (the
+    recategorise dropdown, or the categoriser filling it in late): re-run the
+    reply through the SAME intake it would have taken originally, drafting and
+    all. The stale triage row is deleted first so process_reply's claim insert
+    wins cleanly - the reply's identity lives in (workspace, campaign, email,
+    message id), so nothing is lost with the row. Never raises."""
+    try:
+        cid = row.get("smartlead_campaign_id")
+        email = (row.get("lead_email") or "").strip().lower()
+        mid = str(row.get("source_message_id") or row.get("message_id") or "")
+        reply = {
+            "workspace": row.get("workspace") or WORKSPACE, "campaign_id": cid, "email": email,
+            "first_name": row.get("lead_first_name"), "last_name": row.get("lead_last_name"),
+            "company_domain": row.get("company_domain"),
+            "subject": row.get("reply_subject") or "", "body": row.get("reply_body") or "",
+            "replied_at": row.get("replied_at"), "message_id": mid,
+            "category": category, "is_test": bool(row.get("is_test")),
+        }
+        if _SB and row.get("id") is not None:
+            try:
+                _SB("DELETE", f"{QUEUE_TABLE}?id=eq.{row['id']}")
+            except Exception:  # noqa: BLE001 - a failed delete just means the claim dedupes
+                pass
+        agent = _agent_for_campaign(cid)
+        if agent:
+            new_row = process_reply(reply, agent, settings or _load_settings())
+        else:
+            new_row = _intake_agentless(reply)
+        if _SB and (new_row or {}).get("id") is not None:
+            try:
+                _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{new_row['id']}", {"category_source": source})
+            except Exception:  # noqa: BLE001 - the stamp is bookkeeping, the row is the job
+                pass
+        _bust_read_caches()
+        return new_row or {}
+    except Exception as e:  # noqa: BLE001 - conversion must never crash its caller
+        print(f"[setter] _convert_uncat_row failed for row {row.get('id')}: {e}", file=sys.stderr)
+        return {}
+
+
+def _sweep_uncategorised(agents, settings, since_iso: str, summary: dict) -> None:
+    """Two passes, both bounded, both never raising:
+    1) AUTO-RESOLVE: queued uncategorised rows whose `replies` row has since
+       been categorised (late Make fill / reply-sync) - CORE_FOUR converts
+       through the normal pipeline, anything else is dismissed with the
+       category recorded. Rows a human already resolved are structurally out
+       of scope: their category is set, so they are no longer uncategorised,
+       and manual verdicts are authoritative (house law).
+    2) INTAKE: `replies` rows still uncategorised past UNCAT_GRACE_HOURS get
+       queued via _intake_uncategorised - same campaign scoping and
+       assigned-at backlog gate as the positive sweep, capped at
+       UNCAT_PER_TICK so stragglers never starve positives."""
+    if not _SB:
+        return
+    now = _dt.datetime.now(_dt.timezone.utc)
+    # ── pass 1: auto-resolve ──
+    try:
+        queued = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.needs_review"
+                            f"&order=created_at.desc&limit=200"
+                            f"&select=id,workspace,smartlead_campaign_id,lead_email,lead_first_name,"
+                            f"lead_last_name,company_domain,reply_subject,reply_body,replied_at,"
+                            f"message_id,source_message_id,category,category_source,status,is_test")
+        for q in (queued if isinstance(queued, list) else []):
+            if not isinstance(q, dict) or q.get("is_test"):
+                continue
+            if not _is_uncategorised_value(q.get("category")) or q.get("category_source"):
+                continue
+            mid = str(q.get("source_message_id") or q.get("message_id") or "")
+            cid = q.get("smartlead_campaign_id")
+            if not mid or not cid:
+                continue
+            rows = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&smartlead_campaign_id=eq.{cid}"
+                              f"&smartlead_message_id=eq.{quote(mid, safe='')}&select=category&limit=1")
+            cat = (rows[0] or {}).get("category") if isinstance(rows, list) and rows else None
+            if _is_uncategorised_value(cat):
+                continue
+            if cat in CORE_FOUR:
+                _convert_uncat_row(q, cat, source="auto", settings=settings)
+            else:
+                _apply_patch(q, {"category": cat, "category_source": "auto", "status": "dismissed",
+                                 "decision_reason": f"Auto-resolved: the categoriser later labelled "
+                                                    f"this '{cat}' - removed from the Setter."})
+            summary["auto_resolved"] += 1
+    except Exception as e:  # noqa: BLE001 - auto-resolve must never break the poll
+        summary["errors"] += 1
+        print(f"[setter] uncategorised auto-resolve failed: {e}", file=sys.stderr)
+    # ── pass 2: intake stragglers ──
+    try:
+        seen_ids, candidates = set(), []
+        for filt in ("is.null", "eq.", "eq." + quote(UNCATEGORISED_LEGACY, safe="")):
+            got = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&category={filt}"
+                             f"&replied_at=gte.{quote(since_iso, safe='')}&order=replied_at.asc&limit=100"
+                             f"&select=id,smartlead_campaign_id,email,replied_at,category,"
+                             f"reply_subject,reply_body,smartlead_message_id")
+            for r in (got if isinstance(got, list) else []):
+                if not isinstance(r, dict):
+                    continue
+                # Not every caller-seeded row carries the replies PK - fall
+                # back to the reply's natural identity so the three filter
+                # pulls above never collapse distinct replies together.
+                key = r.get("id") or (r.get("smartlead_campaign_id"),
+                                      str(r.get("smartlead_message_id") or ""))
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                candidates.append(r)
+        taken = 0
+        for r in candidates:
+            if taken >= UNCAT_PER_TICK:
+                break
+            cid = r.get("smartlead_campaign_id")
+            email = (r.get("email") or "").strip().lower()
+            mid = str(r.get("smartlead_message_id") or r.get("id") or "")
+            if not cid or not email or not mid:
+                continue
+            if not _is_uncategorised_value(r.get("category")):
+                continue  # belt-and-braces: the three filters above already scope this
+            # Grace window: fresh replies are usually mid-categorisation, not
+            # stragglers - leave anything younger than the grace to a later tick.
+            try:
+                if _parse_iso(r.get("replied_at")) > now - _dt.timedelta(hours=UNCAT_GRACE_HOURS):
+                    continue
+            except (ValueError, TypeError):
+                pass  # unparsable timestamp: intake rather than lose the reply
+            agent = _agent_for_campaign(cid, require_enabled=True, agents=agents)
+            if agent:
+                # Same backlog gate as the positive sweep: only replies received
+                # AFTER the campaign was assigned to its agent (parent fallback
+                # for subsequence campaigns, same as run_poll).
+                stamps = agent.get("campaign_assigned_at") or {}
+                assigned_at = stamps.get(str(cid))
+                if not assigned_at:
+                    _par = _parent_campaign_id(cid)
+                    assigned_at = stamps.get(str(_par)) if _par else None
+                if assigned_at and r.get("replied_at"):
+                    try:
+                        if _parse_iso(r["replied_at"]) < _parse_iso(assigned_at):
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+            if _existing_row(WORKSPACE, cid, email, mid):
+                continue
+            reply = {
+                "workspace": WORKSPACE, "campaign_id": cid, "email": email,
+                "first_name": r.get("first_name"), "last_name": r.get("last_name"),
+                "company_domain": r.get("company_domain"),
+                "subject": r.get("reply_subject") or "", "body": r.get("reply_body") or "",
+                "replied_at": r.get("replied_at"), "message_id": mid, "is_test": False,
+            }
+            taken += 1
+            try:
+                _intake_uncategorised(reply, agent)
+                summary["uncategorised"] += 1
+            except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
+                summary["errors"] += 1
+                print(f"[setter] uncategorised intake error for {email}/{cid}: {e}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - the straggler sweep must never break the poll
+        summary["errors"] += 1
+        print(f"[setter] uncategorised sweep failed: {e}", file=sys.stderr)
+
+
 def run_poll() -> dict:
     """Sweeps recent core-four `replies` rows across EVERY campaign in the
     workspace (owner ruling 2026-07-14: a positive must reach the queue even
@@ -3275,7 +3559,7 @@ def run_poll() -> dict:
     queued, and runs process_reply (agented) or the agentless intake
     (unassigned) on up to 15 per tick. Never raises."""
     summary = {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0,
-               "errors": 0, "agentless": 0}
+               "errors": 0, "agentless": 0, "uncategorised": 0, "auto_resolved": 0}
     try:
         if not _SB:
             return summary
@@ -3382,6 +3666,11 @@ def run_poll() -> dict:
                 except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
                     summary["errors"] += 1
                     print(f"[setter] poll agentless-intake error for {email}/{cid}: {e}", file=sys.stderr)
+        # Stragglers the categoriser never labelled (ship 2026-07-20): resolve
+        # queued ones whose category has since arrived, then intake new ones
+        # past the grace window. Runs AFTER the positive sweep so the 15-cap
+        # above is always spent on positives first.
+        _sweep_uncategorised(agents, settings, since, summary)
     except Exception as e:  # noqa: BLE001 - run_poll itself must never raise
         summary["errors"] += 1
         print(f"[setter] run_poll crashed: {e}", file=sys.stderr)
@@ -3389,7 +3678,7 @@ def run_poll() -> dict:
     # so the post-poll reload (the UI's delayed loadQueue) reads fresh counts
     # and rows (perf pass 2026-07-16). A no-change sweep keeps caches warm.
     if summary.get("queued") or summary.get("needs_review") or summary.get("auto_sent") \
-            or summary.get("no_action"):
+            or summary.get("no_action") or summary.get("uncategorised") or summary.get("auto_resolved"):
         _bust_read_caches()
     return summary
 
@@ -3514,6 +3803,127 @@ def _qp(params: dict, key: str, default: str = ""):
     if isinstance(v, list):
         return v[0] if v else default
     return v if v is not None else default
+
+
+# ── uncategorised: recategorise dropdown (ship 2026-07-20) ──────────────────
+
+_CATEGORY_CACHE = {"at": 0.0, "val": None}
+_CATEGORY_TTL = 3600.0  # Smartlead's category list changes ~never; 1h is plenty
+
+
+def _fetch_lead_categories() -> list:
+    """Live Smartlead master category list -> [{"id": int, "name": str}].
+    The dropdown must always mirror Smartlead (ruling 2026-07-20: never
+    hardcode the label list a second time)."""
+    got = _sl_get("/leads/fetch-categories")
+    if isinstance(got, dict):
+        got = got.get("data") or got.get("categories") or []
+    out = []
+    for c in (got if isinstance(got, list) else []):
+        if isinstance(c, dict) and c.get("id") is not None and c.get("name"):
+            out.append({"id": c.get("id"), "name": str(c.get("name"))})
+    return out
+
+
+def route_categories_get(_params):
+    """GET /api/setter/categories - the recategorise dropdown's options,
+    served from a 1h cache; stale beats broken when Smartlead hiccups."""
+    try:
+        now = _time.time()
+        if _CATEGORY_CACHE["val"] is not None and (now - _CATEGORY_CACHE["at"]) < _CATEGORY_TTL:
+            return 200, {"categories": _CATEGORY_CACHE["val"], "cached": True}
+        try:
+            cats = _fetch_lead_categories()
+        except Exception as e:  # noqa: BLE001 - stale beats broken
+            if _CATEGORY_CACHE["val"] is not None:
+                return 200, {"categories": _CATEGORY_CACHE["val"], "cached": True,
+                             "detail": f"Serving cached list - Smartlead fetch failed: {str(e)[:120]}"}
+            return 502, {"error": f"Couldn't fetch Smartlead categories: {str(e)[:200]}"}
+        if cats:
+            _CATEGORY_CACHE["val"] = cats
+            _CATEGORY_CACHE["at"] = now
+            return 200, {"categories": cats, "cached": False}
+        if _CATEGORY_CACHE["val"] is not None:
+            return 200, {"categories": _CATEGORY_CACHE["val"], "cached": True}
+        return 502, {"error": "Smartlead returned no categories."}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def _sl_lead_id_by_email(email: str):
+    """The categoriser's own lookup (GET /leads/?email=) - returns the global
+    Smartlead lead id, or None."""
+    try:
+        got = _sl_get("/leads/", {"email": email})
+        if isinstance(got, dict) and got.get("id") is not None:
+            return got.get("id")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def route_queue_recategorise(payload):
+    """POST /api/setter/queue/recategorise {id, category_id, category_name} -
+    the human verdict on an uncategorised row. Order is load-bearing:
+    Smartlead is written FIRST (it is the system of record for categories);
+    only on success do `replies` and the queue row move. A CORE_FOUR choice
+    re-runs the reply through the normal intake (drafting and all) exactly as
+    if the categoriser had labelled it; anything else dismisses the row with
+    the category recorded. Manual verdicts are authoritative
+    (category_source="manual") - nothing automated may overwrite them."""
+    try:
+        payload = payload or {}
+        qid = payload.get("id")
+        cat_id = payload.get("category_id")
+        cat_name = str(payload.get("category_name") or "").strip()
+        if not qid or cat_id is None or not cat_name:
+            return 400, {"error": "id, category_id and category_name are required"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&workspace=eq.{WORKSPACE}&select=*") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row:
+            return 404, {"error": "Queue row not found."}
+        if row.get("status") in ("sent", "auto_sent"):
+            return 409, {"error": "This reply was already sent - it can't be recategorised here."}
+        if not _is_uncategorised_value(row.get("category")):
+            return 409, {"error": f"This row is already categorised ('{row.get('category')}')."}
+        if not row.get("is_test"):
+            lead_id = row.get("smartlead_lead_id") or _sl_lead_id_by_email(row.get("lead_email") or "")
+            if not lead_id:
+                return 502, {"error": "Couldn't resolve this lead in Smartlead, so the category "
+                                      "wasn't written anywhere. Nothing was changed."}
+            try:
+                _sl_post(f"/campaigns/{row.get('smartlead_campaign_id')}/leads/{lead_id}/category",
+                         {"category_id": int(cat_id)})
+            except Exception as e:  # noqa: BLE001 - Smartlead write failed: change nothing locally
+                return 502, {"error": f"Smartlead rejected the category write: {str(e)[:200]}. "
+                                      f"Nothing was changed."}
+            mid = str(row.get("source_message_id") or row.get("message_id") or "")
+            if mid:
+                try:
+                    _SB("PATCH", f"replies?workspace=eq.{WORKSPACE}"
+                                 f"&smartlead_campaign_id=eq.{row.get('smartlead_campaign_id')}"
+                                 f"&smartlead_message_id=eq.{quote(mid, safe='')}",
+                        {"category": cat_name})
+                except Exception:  # noqa: BLE001 - Smartlead holds the truth; sync catches replies up
+                    pass
+        try:
+            if _LOG:
+                _LOG("/api/setter/queue/recategorise",
+                     {"id": qid, "category": cat_name, "category_id": cat_id},
+                     action="recategorise", entity="setter_queue", entity_id=qid)
+        except Exception:  # noqa: BLE001 - logging must never break the route
+            pass
+        if cat_name in CORE_FOUR:
+            new_row = _convert_uncat_row(row, cat_name, source="manual")
+            return 200, {"ok": True, "action": "converted", "category": cat_name,
+                         "new_id": (new_row or {}).get("id"), "status": (new_row or {}).get("status")}
+        _apply_patch(row, {"category": cat_name, "category_source": "manual", "status": "dismissed",
+                           "decision": "review",
+                           "decision_reason": f"Recategorised manually as '{cat_name}' - removed "
+                                              f"from the Setter."})
+        return 200, {"ok": True, "action": "discarded", "category": cat_name}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
 
 
 def route_agents_get(_params):
@@ -7548,6 +7958,7 @@ GET_ROUTES = {
     "/api/setter/campaigns": route_campaigns_get,
     "/api/setter/queue": route_queue_get,
     "/api/setter/queue/row": route_queue_row_get,
+    "/api/setter/categories": route_categories_get,
     "/api/setter/thread": route_thread_get,
     "/api/setter/grading": route_grading_get,
     "/api/setter/training": route_training_get,
@@ -7566,6 +7977,7 @@ POST_ROUTES = {
     "/api/setter/settings/save": route_settings_save,
     "/api/setter/queue/action": route_queue_action,
     "/api/setter/queue/redraft": route_queue_redraft,
+    "/api/setter/queue/recategorise": route_queue_recategorise,
     "/api/setter/subsequence/push": route_subsequence_push,
     "/api/setter/grading/answer": route_grading_answer,
     "/api/setter/grading/reset": route_grading_reset,
