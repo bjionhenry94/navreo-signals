@@ -2475,18 +2475,9 @@ async function doSend(btn) {
     setTimeout(() => { if (sendGuardArmedId === id) sendGuardArmedId = null; }, 6000);
     return;
   }
-  // Same idea for booking: if the original draft gave the lead a way to book
-  // (any calendly link) and the edit removed them ALL, check before sending a
-  // reply with no way to book at all. Removing just one of two proposed times
-  // stays silent - that's a normal edit.
-  const hadBooking = row && /calendly\.com/.test(row.draft_body || "");
-  const hasBookingNow = draftEl ? /calendly\.com/.test(draftEl.innerHTML) : true;
-  if (draftEl && hadBooking && !hasBookingNow && sendGuardArmedId !== `book-${id}`) {
-    sendGuardArmedId = `book-${id}`;
-    showDetailError("There is no booking link left in this draft. Click Approve again to send it anyway.");
-    setTimeout(() => { if (sendGuardArmedId === `book-${id}`) sendGuardArmedId = null; }, 6000);
-    return;
-  }
+  // Booking-link send gate removed (owner ask 2026-07-20): a draft with no
+  // booking link now sends on the first Approve click - no second-click
+  // "send it anyway" confirmation. The resource-link gate above is unchanged.
   sendGuardArmedId = null;
   const restore = busyBtn(btn, "Sending…");
   if (!restore) return;
