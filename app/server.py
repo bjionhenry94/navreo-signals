@@ -12880,6 +12880,22 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/api/_mock/dev-login":
+            # LOCAL MOCK ONLY: mints a session cookie so a browser can drive the
+            # mock server for rendered UI verification. Doubly-gated so it can
+            # NEVER exist in production — DELIV_MOCK is a local-only flag and
+            # RENDER is always set on Render; 404 otherwise, so the route is
+            # invisible off a developer's mock box.
+            if not (_deliv_mock_on() and not os.environ.get("RENDER")):
+                return self._json({"error": "not found"}, 404)
+            cookie = _session_cookie(_mint_session("mock-dev@navreo.ai"), AUTH_SESSION_DAYS * 86400)
+            self.send_response(302)
+            self.send_header("Location", "/app/deliverability.html")
+            self.send_header("Set-Cookie", cookie)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path.startswith("/api/qa-gate/") and self._qa_token_ok():
             return self._qa_gate_get(path)
         if path not in _AUTH_PUBLIC_GET and not path.startswith(_AUTH_PUBLIC_GET_PREFIX):
