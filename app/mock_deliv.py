@@ -180,14 +180,6 @@ def _pristine_state() -> dict:
             {"id": "mock-r2", "domains": ["arnic-mock-2.test", "amplifyy-mock-1.test"], "note": "batch restore",
              "restoredDate": _days_ago(3), "dueDate": _days_ago(-11), "done": False,
              "ts": int(time.time() * 1000) - 3 * 86400000},
-            # Regression case for the 2026-07-20 banner fix: an OVERDUE reminder
-            # whose domain is blacklisted. Pre-fix this padded the phantom
-            # "reminder-due" card ("N restore reminders due") while the In-warm-up
-            # list showed nothing due; now it must surface only as "blocked —
-            # delist first" on the restore-due card, never as ready-to-restore.
-            {"id": "mock-r3", "domains": ["blacklisted-reminder-mock.test"], "note": "overdue but blacklisted",
-             "restoredDate": _days_ago(20), "dueDate": _days_ago(5), "done": False,
-             "ts": int(time.time() * 1000) - 20 * 86400000},
         ],
         "next_reminder_id": 3,
         "history": [],
@@ -674,11 +666,12 @@ def run_audit_blob() -> dict:
                              "amplifyy": "Thanks,\n{{name}}\nAmplifyy Team",
                              "_all": "Best,\n{{name}}"},
             "blocked": 0, "blockedReal": 0, "blockedSoft": 0, "reasons": {},
-            # Paired with the mock-r3 reminder above: a blacklisted domain that
-            # also has an overdue restore reminder, so the restore-due card's
-            # "blocked — delist first" path renders in mock mode.
-            "blacklist": [{"domain": "blacklisted-reminder-mock.test", "lists": ["SURBL"],
-                           "mailboxes": 4, "rested": 0, "sending": 4, "ageDays": 120}],
+            # Regression case for the 2026-07-20 flag-not-block ruling:
+            # resting-due-mock.test is BOTH due-back AND blacklisted, so it must
+            # stay restorable (counted in "Restore all due") and merely be
+            # flagged, never excluded — a blocklist hit flags, it never blocks.
+            "blacklist": [{"domain": "resting-due-mock.test", "lists": ["SURBL"],
+                           "mailboxes": 4, "rested": 4, "sending": 0, "ageDays": 200}],
             "highbCamps": [],
         }
         for k in (_STATE["scenario"].get("strip_blob_fields") or []):

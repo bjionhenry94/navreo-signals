@@ -8,10 +8,15 @@
    audit service's manual reminders by their own dueDate, and a "restore-due"
    card reading the rest LEDGER (first-rested + 7d), which is the same clock the
    In-warm-up list uses. They routinely disagreed ("5 restore reminders due"
-   while the In-warm-up list showed 0 due now), and the 5 were blacklisted
-   domains that can't be restored at all. Now every surface calls reconcile()
-   below, so the banner count == the "Restore all due" button == what the list
-   shows, and a blacklisted domain is never counted as "ready to restore".
+   while the In-warm-up list showed 0 due now). Now every surface calls
+   reconcile() below, so the banner count == the "Restore all due" button ==
+   what the list shows.
+
+   Blacklist policy (owner ruling 2026-07-15): a blocklist hit FLAGS, it never
+   BLOCKS. A blacklisted domain is restorable like any other — it stays in
+   dueDomains and is merely reported in blacklistedDue so the UI can show it.
+   (An earlier 2026-07-20 pass excluded blacklisted domains from restore; that
+   reintroduced a block the owner had removed, and was reverted to flag-only.)
 
    Pure + dependency-free so it runs identically in the browser (window.
    RestoreReconcile) and in a Node mock test (require/import).
@@ -33,71 +38,48 @@
     return out;
   }
 
-  function overdue(dueDate, nowMs) {
-    // Reminders carry an ISO calendar date ("YYYY-MM-DD"). "Due today or
-    // overdue" == its end-of-day is at/behind now. Compare on the same UTC
-    // calendar day the rest of the tab uses (todayISO()).
-    if (!dueDate) return false;
-    var today = new Date(nowMs).toISOString().slice(0, 10);
-    return String(dueDate).slice(0, 10) <= today;
-  }
+  /* Given the resting ledger, the blacklist and "now", return the single split
+     every restore surface agrees on:
 
-  /* Given the resting ledger, the blacklist, the open manual reminders and
-     "now", return the single split every restore surface agrees on:
-
-       dueDomains      resting domains whose due-back has arrived AND that can
-                       actually be restored (NOT blacklisted). This is exactly
-                       what the In-warm-up "Restore all due" button acts on and
-                       what the Today restore card headlines.
+       dueDomains      resting domains whose due-back has arrived — ALL of them.
+                       This is exactly what the In-warm-up "Restore all due"
+                       button acts on and what the Today restore card headlines,
+                       so the count can never disagree with the list.
        upcomingDomains resting domains still inside their warm-up window.
-       blockedDomains  domains that ARE due (ledger-due, or an overdue manual
-                       reminder) but are blacklisted, so they CANNOT be restored
-                       — surfaced honestly ("delist first"), never counted as
-                       ready-to-restore. This is where the old phantom "5 due"
-                       correctly lands instead of nagging you to restore burned
-                       domains.
+       blacklistedDue  the subset of dueDomains that is currently blacklisted.
+                       Owner ruling 2026-07-15: a blocklist hit FLAGS, it never
+                       blocks — the backend restore-live resumes a listed domain
+                       and just reports the listing. So a blacklisted domain is
+                       restorable like any other (it stays IN dueDomains) and is
+                       merely noted here so the UI can show it without stopping
+                       the restore.
 
-     opts = { restDue: {domain: dueBackMs}, blacklist: Set|Array<domain>,
-              reminders: [{domains, dueDate, done}], now: ms } */
+     opts = { restDue: {domain: dueBackMs}, blacklist: Set|Array<domain>, now: ms } */
   function reconcile(opts) {
     opts = opts || {};
     var restDue = opts.restDue || {};
     var now = opts.now != null ? opts.now : Date.now();
     var bl = toSet(opts.blacklist);
-    var reminders = Array.isArray(opts.reminders) ? opts.reminders : [];
 
-    var due = new Set(), upcoming = new Set(), blocked = new Set();
+    var due = new Set(), upcoming = new Set(), flagged = new Set();
 
     Object.keys(restDue).forEach(function (raw) {
       var t = restDue[raw];
       if (t == null) return;
       var dom = String(raw).toLowerCase();
       if (t > now) { upcoming.add(dom); return; }
-      // Due by the ledger clock — but a blacklisted domain can't be restored.
-      if (bl.has(dom)) blocked.add(dom);
-      else due.add(dom);
-    });
-
-    // Overdue manual reminders whose domain is blacklisted (and isn't already
-    // represented as ledger-due) land in "blocked" — they are the real reason a
-    // reminder can sit overdue forever: the domain is listed and restore 409s
-    // it. A non-blacklisted overdue reminder for a resting domain is already
-    // covered by the ledger pass above; one for a domain that isn't resting at
-    // all has nothing to restore, so it is intentionally not counted as due.
-    reminders.forEach(function (r) {
-      if (!r || r.done || !overdue(r.dueDate, now)) return;
-      (r.domains || []).forEach(function (raw) {
-        var dom = String(raw).toLowerCase();
-        if (bl.has(dom) && !due.has(dom)) blocked.add(dom);
-      });
+      // Due by the ledger clock. Blacklist flags, never blocks — every due
+      // domain is restorable; a listed one is additionally noted below.
+      due.add(dom);
+      if (bl.has(dom)) flagged.add(dom);
     });
 
     return {
       dueDomains: Array.from(due),
       upcomingDomains: Array.from(upcoming),
-      blockedDomains: Array.from(blocked),
+      blacklistedDue: Array.from(flagged),
     };
   }
 
-  return { reconcile: reconcile, _overdue: overdue };
+  return { reconcile: reconcile };
 });

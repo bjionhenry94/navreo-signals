@@ -2278,17 +2278,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const _rec = restoreReconcileNow(D);
     const _bd = bundleRestDue();
     const _dueMs = (dom) => (_bd && _bd[dom] != null) ? _bd[dom] : ((D.restingDue || {})[dom] != null ? D.restingDue[dom] : null);
-    const dueDoms = _rec.dueDomains;         // ledger-due AND restorable (not blacklisted)
+    const dueDoms = _rec.dueDomains;         // ledger-due — all of them (blacklist flags, never blocks)
     const upcoming = _rec.upcomingDomains;   // still inside the warm-up window
-    const blockedDoms = _rec.blockedDomains; // due but blacklisted — can't restore yet
-    // One card for everything resting in warm-up: due-now (restorable) domains
-    // lead, still-waiting ones ride along, and any that are due-but-blacklisted
-    // are called out as blocked (delist first) instead of padding the "due"
-    // count. This is the EXACT set the In-warm-up "Restore all due" button acts
-    // on — both read restoreReconcileNow() — so the card count and the list can
-    // never disagree (the defect this replaces: a separate reminder card that
-    // counted 5 blacklisted domains the In-warm-up list never showed as due).
-    if (dueDoms.length || upcoming.length || blockedDoms.length) {
+    const blDue = _rec.blacklistedDue;       // subset of dueDoms that is blacklisted — restorable, just noted
+    // One card for everything resting in warm-up: due-now domains lead, the
+    // still-waiting ones ride along. Owner ruling 2026-07-15 — a blocklist hit
+    // FLAGS, never blocks — so blacklisted domains are restorable like any other
+    // (they stay IN the due count) and are simply noted. This is the EXACT set
+    // the In-warm-up "Restore all due" button acts on (both read
+    // restoreReconcileNow()), so the card count and the list can never disagree.
+    if (dueDoms.length || upcoming.length) {
       const bits = [];
       if (dueDoms.length) bits.push(dueDoms.length + " domain(s) due back from warm-up rest now (" + dueDoms.slice(0, 3).join(", ") + (dueDoms.length > 3 ? ", …" : "") + ")");
       if (upcoming.length) {
@@ -2296,17 +2295,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const soonest = ums.length ? new Date(Math.min.apply(null, ums)) : null;
         bits.push(upcoming.length + " still resting, due back later" + (soonest ? " (earliest " + soonest.toISOString().slice(0, 10) + ": " + upcoming.slice(0, 3).join(", ") + (upcoming.length > 3 ? ", …" : "") + ")" : ""));
       }
-      if (blockedDoms.length) bits.push(blockedDoms.length + " overdue but blacklisted — can't restore until delisted (" + blockedDoms.slice(0, 3).join(", ") + (blockedDoms.length > 3 ? ", …" : "") + ")");
+      if (blDue.length) bits.push(blDue.length + " of them still blacklisted — restoring resumes sending from a listed domain (" + blDue.slice(0, 3).join(", ") + (blDue.length > 3 ? ", …" : "") + ")");
       const actionLines = [];
       if (dueDoms.length) actionLines.push("Open the In warm-up view and restore them so their capacity comes back online.");
       else if (upcoming.length) actionLines.push("Reminder only — they'll flag as due when ready. Restore early from the In warm-up view if you need the capacity back now.");
-      if (blockedDoms.length) actionLines.push("The blacklisted ones can't be restored — delist or retire them from the Blacklisted domains tab first.");
-      raw.push({ key: "restore-due", level: (dueDoms.length || blockedDoms.length) ? "yellow" : "note", count: dueDoms.length || blockedDoms.length || upcoming.length, _openManager: true, _mgrFlow: "inwarmup",
+      if (blDue.length) actionLines.push("Blacklisted domains restore too — check the Blacklisted domains tab first if you'd rather delist them.");
+      raw.push({ key: "restore-due", level: dueDoms.length ? "yellow" : "note", count: dueDoms.length || upcoming.length, _openManager: true, _mgrFlow: "inwarmup",
         short: "domains resting in warm-up",
         text: bits.join(" · ") + ".",
         actionLines: actionLines,
         action: actionLines[0] || "",
-        _openBlacklist: !!blockedDoms.length });
+        _openBlacklist: !!blDue.length });
     }
 
     // Owner request 2026-07-11: the "Inbox issues" KPI number must always be
@@ -2427,12 +2426,28 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const domainList = domains.length
       ? domains.map((d) => "  - " + d).join("\n")
       : "  (per-domain roster still loading; open the Inbox & domain manager for the full list)";
-    return "Subject: Escalation — sending blocked across " + D.blockedReal + " mailbox(es)\n\n" +
+    // Remediation depends on WHY they're failing. Azure-deleted (AADSTS500341,
+    // "account deleted from directory") is a Hypertide-side reconnect/restore,
+    // NOT a reputation/auth problem — asking them to check IP/SPF/DKIM/DMARC on
+    // a deleted account is noise. Precedent: Hypertide has resolved this exact
+    // failure for us by reconnecting the inboxes (recurring 2026-05..07).
+    const nonSoft = Object.keys(byReason).filter((k) => k !== "soft");
+    const azureDeleted = nonSoft.some((k) => /azure|deleted|aadsts/i.test(k));
+    const otherReasons = nonSoft.some((k) => !/azure|deleted|aadsts/i.test(k));
+    const deletedOnly = azureDeleted && !otherReasons;
+    const nature = deletedOnly
+      ? "hard-failing with Microsoft AADSTS500341 (the Azure account has been deleted from the directory)"
+      : "blocked by receiving providers (excluding routine soft/warmup noise)";
+    let ask = "";
+    if (azureDeleted) ask = "This is the same reconnection issue you have restored for us before (AADSTS500341, the account deleted from the Azure directory). Could you reconnect / restore the affected inboxes and re-enable warmup, then confirm once done so we can resume?";
+    if (otherReasons) ask = (ask ? ask + " " : "") + "For the remaining blocks, could you also check these domains' sending IP reputation and authentication (SPF/DKIM/DMARC) and confirm once clear?";
+    if (!ask) ask = "Could you check these domains' sending IP reputation and authentication (SPF/DKIM/DMARC), and let us know once they're clear so we can resume?";
+    return "Subject: Escalation: " + D.blockedReal + " mailbox(es) " + (deletedOnly ? "hard-failing (Azure accounts deleted)" : "blocked") + "\n\n" +
       "Hi team,\n\n" +
-      "During today's audit (" + S.A.date + ") we found " + D.blockedReal + " mailbox(es) across " + domains.length + " domain(s) blocked by receiving providers (excluding routine soft/warmup noise)." + (truncated ? " (Domain list capped at the backend's 2,000-row limit, may be partial.)" : "") + " Breakdown:\n" +
+      "During today's audit (" + S.A.date + ") we found " + D.blockedReal + " mailbox(es) across " + domains.length + " domain(s) " + nature + "." + (truncated ? " (Domain list capped at the backend's 2,000-row limit, may be partial.)" : "") + " Breakdown:\n" +
       reasonLines + "\n\n" +
       "Domains affected:\n" + domainList + "\n\n" +
-      "Could you check these domains' sending IP reputation and authentication (SPF/DKIM/DMARC), and let us know once they're clear so we can resume?\n\n" +
+      ask + "\n\n" +
       "Thanks,\nNavreo";
   }
   function buildContext(D) {
@@ -3489,8 +3504,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return (S.A.domainHealth.restingDue || {})[dom] || null;
   }
 
-  // Live-blacklisted domains (not cleared). A domain here CANNOT be restored —
-  // restore-live 409s it — so it must never be counted as "ready to restore".
+  // Live-blacklisted domains (not cleared). Owner ruling 2026-07-15: a blocklist
+  // hit FLAGS, it never blocks — so this set doesn't gate restore, it only lets
+  // the restore surfaces NOTE which due domains are still listed.
   function blDomainSet() {
     return new Set((S.A.blacklistRows || [])
       .filter((r) => r && !r.cleared)
@@ -3499,21 +3515,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   // Conservative fallback used only if restore-reconcile.js failed to load:
-  // never invent a "due to restore" (that's the phantom this whole change
-  // removes) — treat everything resting as still upcoming so a missing <script>
-  // degrades to "nothing due" instead of throwing / resurrecting the bug.
+  // never invent a "due to restore" — treat everything resting as still
+  // upcoming so a missing <script> degrades to "nothing due" instead of
+  // throwing / resurrecting the phantom.
   function _localReconcile(o) {
     o = o || {};
     const rd = o.restDue || {};
-    return { dueDomains: [], upcomingDomains: Object.keys(rd).map((d) => String(d).toLowerCase()), blockedDomains: [] };
+    return { dueDomains: [], upcomingDomains: Object.keys(rd).map((d) => String(d).toLowerCase()), blacklistedDue: [] };
   }
 
   // THE single restore split every surface shares (Today "restore-due" card,
   // In-warm-up "Restore all due" button + its confirm/action). Reads the rest
-  // LEDGER (bundleRestDue) as the one clock, the live blacklist, and the open
-  // manual reminders, via the shared reconcile(). Because the card, the button,
-  // and the action all read this same set, their numbers can never disagree,
-  // and a blacklisted domain is never offered for restore. `D` (optional) only
+  // LEDGER (bundleRestDue) as the one clock plus the live blacklist (flag only),
+  // via the shared reconcile(). Because the card, the button, and the action all
+  // read this same set, their numbers can never disagree. `D` (optional) only
   // feeds the sample/pre-bundle fallback resting map.
   function restoreReconcileNow(D) {
     const bd = bundleRestDue();
@@ -3526,7 +3541,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       Object.keys(rd).forEach((dom) => { if ((resting[dom] || 0) > 0 && rd[dom]) restMap[dom] = rd[dom]; });
     }
     const rec = (typeof RestoreReconcile !== "undefined" && RestoreReconcile && RestoreReconcile.reconcile) ? RestoreReconcile.reconcile : _localReconcile;
-    return rec({ restDue: restMap, blacklist: blDomainSet(), reminders: S.A.reminders || [], now: Date.now() });
+    return rec({ restDue: restMap, blacklist: blDomainSet(), now: Date.now() });
   }
 
   // Domain-health rows for the selected window preset. The audit blob ships
@@ -6272,13 +6287,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // domains whose due-back date has arrived, naming each one in the confirm.
   async function domainRestoreDue(btn) {
     const D = fullDerive();
-    // Restore exactly the reconcile() due set — ledger-due AND restorable.
-    // Blacklisted domains are excluded here just as they are from the button
-    // count and the Today card (restore-live 409s them anyway), so the confirm
-    // list always matches the "Restore all due (N)" label.
-    const domains = restoreReconcileNow(D).dueDomains;
+    // Restore exactly the reconcile() due set — every ledger-due domain. Owner
+    // ruling 2026-07-15: blacklist flags, never blocks, so blacklisted domains
+    // are INCLUDED here (same set the button count and the Today card show); the
+    // confirm just names how many are still listed so it's an informed click.
+    const _rec = restoreReconcileNow(D);
+    const domains = _rec.dueDomains;
     if (!domains.length) { toast("Nothing due for restore", "err"); return; }
-    const ok = await dlvConfirm("Restore the " + domains.length + " domain(s) due back from warm-up?\n\n  " + domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "") + "\n\nRestores each mailbox to its saved daily cap and resumes sending.\n\nProceed?", { title: "Restore all due", yesLabel: "Restore " + domains.length });
+    const _blNote = _rec.blacklistedDue.length
+      ? "\n\n⚠ " + _rec.blacklistedDue.length + " of these are still blacklisted — restoring resumes sending from a listed domain."
+      : "";
+    const ok = await dlvConfirm("Restore the " + domains.length + " domain(s) due back from warm-up?\n\n  " + domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "") + _blNote + "\n\nRestores each mailbox to its saved daily cap and resumes sending.\n\nProceed?", { title: "Restore all due", yesLabel: "Restore " + domains.length });
     if (!ok) return;
     let resumed = 0;
     if (isLive()) {
