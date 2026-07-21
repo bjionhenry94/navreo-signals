@@ -1235,9 +1235,6 @@ function clientPillRows(all, status) {
   if (!status) return all.slice();
   return (all || []).filter((r) => {
     if (!r || typeof r !== "object") return false;
-    // Uncategorised-only lens (ship 2026-07-20): the alert's deep link and
-    // the toolbar chip narrow the list to unresolved uncategorised replies.
-    if (UNCAT_ONLY && !(isUncategorised(r) && r.status === "needs_review")) return false;
     if (r.status === "needs_review") {
       const d = rowDirection(r);
       if (status === "needs_review") return d.inbound;
@@ -1368,6 +1365,14 @@ function visibleInboxRows() {
   const q = inboxSearchQuery.trim().toLowerCase();
   const source = q ? ALL_ROWS : QUEUE_ROWS;
   let rows = showTest ? source : source.filter((r) => !r.is_test);
+  if (UNCAT_ONLY) {
+    // Uncategorised-only lens (ship 2026-07-20): the alert's deep link and
+    // the toolbar chip narrow the list to unresolved uncategorised replies.
+    // Lives HERE (the every-render chokepoint), never in clientPillRows -
+    // filtering there would bake the lens into QUEUE_ROWS state and leave a
+    // pre-shrunk corpus behind after toggling the lens off.
+    rows = rows.filter((r) => isUncategorised(r) && r.status === "needs_review");
+  }
   if (currentClient) {
     rows = rows.filter((r) => clientForRow(r) === currentClient);
   }
