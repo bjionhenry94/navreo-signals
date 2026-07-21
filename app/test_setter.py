@@ -8446,6 +8446,12 @@ def test_recategorise_route_guards():
     check("recategorise guard: a test row never calls Smartlead",
          code == 200 and resp.get("action") == "discarded"
          and len(http.category_writes) == writes_before, (code, resp, http.category_writes))
+    _seed_uncat_queue_row(sb, 707, 9310, "rescue@example.com", "rescue-1",
+                          status="dismissed", smartlead_lead_id=556)
+    code, resp = setter.route_queue_recategorise({"id": 707, "category_id": 6,
+                                                  "category_name": "Out Of Office"})
+    check("recategorise guard: a dismissed uncategorised row can still be resolved",
+         code == 200 and resp.get("action") == "discarded", (code, resp))
 
 
 def test_categories_route_serves_smartlead_list_cached():

@@ -1602,7 +1602,7 @@ function inboxItemHtml(row) {
   // from a campaign with no assigned agent). Same subtle neutral pill as the
   // status chip above - no colour shouting, just a flag that no brain is set.
   const noAgentChip = row.agent_id ? "" : `<span class="pill n">No agent</span>`;
-  const uncatChip = (isUncategorised(row) && row.status === "needs_review")
+  const uncatChip = (isUncategorised(row) && !["sent", "auto_sent"].includes(row.status))
     ? `<span class="pill uncat-pill">UNCATEGORISED</span>` : "";
   return `<div class="inbox-item ${selected}" data-id="${esc(row.id)}">
     <div class="ii-line1">${esc(leadName(row))} ${testChip}</div>
@@ -1672,9 +1672,12 @@ function renderDetail(row) {
   // (draft and all); anything else removes the row from the Setter. Either
   // way Smartlead is updated first - it stays the system of record.
   let uncatBannerHtml = "";
-  if (isUncategorised(row) && !["sent", "auto_sent", "dismissed"].includes(row.status)) {
+  if (isUncategorised(row) && !["sent", "auto_sent"].includes(row.status)) {
+    const wasDismissed = row.status === "dismissed";
     uncatBannerHtml = `<div class="uncat-banner" id="uncatBanner">
-      <div><b>Uncategorised reply</b> - the auto-categoriser failed on this one, so no draft was written.</div>
+      <div><b>Uncategorised reply</b> - ${wasDismissed
+        ? "dismissed without a category, so it can still be rescued or filed properly."
+        : "the auto-categoriser failed on this one, so no draft was written."}</div>
       <div class="small muted" style="margin-top:2px">Pick its real category: a positive moves it into the normal flow, anything else removes it from the Setter. Smartlead is updated either way.</div>
       <div class="ub-row">
         <select id="uncatCatSel"><option value="">Loading categories…</option></select>
@@ -2797,6 +2800,17 @@ async function doDismiss(btn) {
   if (btn.disabled) return;
   btn.disabled = true;
   const id = btn.getAttribute("data-id");
+  // Uncategorised guard (panel ruling 2026-07-20): dismissing a reply that
+  // never got a category deserves one pause - a hidden positive would die
+  // quietly otherwise. A nudge, not a wall: the amber flag survives under
+  // Dismissed and the category can still be set later.
+  const _uRow = QUEUE_ROWS.find((r) => String(r.id) === String(id))
+             || ALL_ROWS.find((r) => String(r.id) === String(id));
+  if (_uRow && isUncategorised(_uRow) && _uRow.status === "needs_review"
+      && !window.confirm("This reply was never categorised - it could be a hidden positive.\n\nDismiss anyway? Its amber flag stays under Dismissed and you can still pick its category later.")) {
+    btn.disabled = false;
+    return;
+  }
   const qIdx = QUEUE_ROWS.findIndex((r) => String(r.id) === String(id));
   const qRow = qIdx >= 0 ? QUEUE_ROWS[qIdx] : null;
   const aRow = ALL_ROWS.find((r) => String(r.id) === String(id)) || null;
