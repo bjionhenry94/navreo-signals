@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* settings-workspaces-v1 — Client Workspaces hub settings */
+.page-head { display: flex; align-items: baseline; gap: 14px; margin: 26px 0 6px; }
+.page-head h1 { font-size: 22px; font-weight: 700; color: var(--ink); margin: 0; }
+.section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-top: 18px; max-width: 980px; }
+.section h2 { font-size: 15px; font-weight: 600; color: var(--ink); margin: 0 0 6px; }
+.section .sub { font-size: 12.5px; color: var(--ink-3); line-height: 1.55; margin: 0 0 14px; max-width: 72ch; }
+.ws-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.ws-actions .hint { font-size: 12px; color: var(--ink-3); max-width: 52ch; line-height: 1.45; }
+table.ws { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.ws th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-3); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line-2); }
+table.ws td { padding: 11px 10px; border-bottom: 1px solid var(--line); color: var(--ink-2); vertical-align: middle; }
+table.ws tr:last-child td { border-bottom: none; }
+.ws-name { font-weight: 600; color: var(--ink); }
+.ws-slug { font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 11px; color: var(--ink-3); }
+.keycell { font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 12px; color: var(--ink-3); }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+.pill.on { color: var(--green); background: var(--green-bg); border: 1px solid var(--green-line); }
+.pill.off { color: var(--ink-3); background: var(--bg-sunken); border: 1px solid var(--line-2); }
+.empty, .loading { padding: 22px 10px; color: var(--ink-3); font-size: 13px; }
+/* remove modal */
+.overlay { position: fixed; inset: 0; background: rgba(20,17,14,.45); z-index: 90;
+  display: flex; align-items: center; justify-content: center; }
+.overlay.hidden { display: none; }
+.modal { background: var(--card); border-radius: 14px; width: min(460px, calc(100vw - 40px));
+  padding: 22px 24px; box-shadow: 0 18px 50px rgba(20,17,14,.3); }
+.modal h3 { margin: 0 0 8px; font-size: 15px; color: var(--ink); }
+.modal p { font-size: 12.5px; color: var(--ink-2); line-height: 1.55; margin: 0 0 8px; }
+.modal .warn { color: var(--red); font-weight: 600; }
+.modal input { width: 100%; box-sizing: border-box; margin: 10px 0 14px; padding: 9px 11px;
+  border: 1px solid var(--line-2); border-radius: 8px; font-size: 13px; font-family: inherit; color: var(--ink); }
+.modal input:focus { outline: none; border-color: var(--ink-3); }
+.modal .row { display: flex; justify-content: flex-end; gap: 10px; }
+/* toast */
+.toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: var(--ink); color: var(--cream); font-size: 12.5px; font-weight: 500;
+  padding: 10px 18px; border-radius: 999px; z-index: 95; max-width: calc(100vw - 32px);
+  box-shadow: 0 8px 24px rgba(20,17,14,.25); }
+.toast.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main">
+    <div class="page-head"><h1>Settings</h1></div>
+
+    <section class="section" id="ws-section">
+      <h2>Client workspaces</h2>
+      <p class="sub">Every Smartlead workspace feeding this hub — ours plus each
+      done-with-you client's own account, connected with their API key. Their
+      campaigns, deliverability, appointment setting and optimisation data show
+      here on top of ours. Lists stay on our side.</p>
+      <div class="ws-actions">
+        <button class="btn primary sm" id="copy-prompt">Copy add prompt</button>
+        <span class="hint">Adding a workspace runs inside Claude — it validates the
+        key, backfills their data and wires the Make automations. Copy the prompt,
+        fill in the client name and API key, and paste it to Claude.</span>
+      </div>
+      <div id="ws-table"><div class="loading">Loading workspaces…</div></div>
+    </section>
+  </main>
+</div>
+
+<div class="overlay hidden" id="rm-overlay">
+  <div class="modal">
+    <h3 id="rm-title">Remove workspace</h3>
+    <p>This deletes <span class="warn">all of this workspace's data in one go</span> —
+    campaigns, contacts, replies, sent messages, sequence snapshots and inbox
+    health — and cannot be undone.</p>
+    <p>Type the workspace name exactly to confirm: <strong id="rm-name"></strong></p>
+    <input id="rm-input" type="text" autocomplete="off" placeholder="Workspace name">
+    <div class="row">
+      <button class="btn sm" id="rm-cancel">Cancel</button>
+      <button class="btn danger sm" id="rm-go" disabled>Delete everything</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("settings");
+
+const ADD_PROMPT = `Add a new client workspace to the Navreo hub.
+Client: <CLIENT NAME>
+Smartlead API key: <PASTE KEY>
+
+Run /client-workspaces-hub in ADD WORKSPACE mode: validate the key, store it
+(~/.navreo-keys.env as <CLIENT>_SMARTLEAD_API_KEY + the Supabase workspaces
+table), backfill their data, wire the Make scenarios and other automations,
+then verify on the live host that their campaigns, deliverability and replies
+aggregate ON TOP of the existing data with nothing lost.`;
+
+let WS_ROWS = [];
+let toastTimer = null;
+
+function toast(msg, ms = 4200) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add("hidden"), ms);
+}
+
+async function load() {
+  const box = document.getElementById("ws-table");
+  try {
+    const r = await fetch("/api/workspaces", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    WS_ROWS = (await r.json()).workspaces || [];
+  } catch (e) {
+    box.innerHTML = `<div class="empty">Could not load workspaces (${esc(String(e))}). Refresh to retry.</div>`;
+    return;
+  }
+  if (!WS_ROWS.length) {
+    box.innerHTML = `<div class="empty">No workspaces connected.</div>`;
+    return;
+  }
+  const rows = WS_ROWS.map(w => {
+    const isNavreo = w.id === "navreo";
+    const status = (w.status || "enabled") === "enabled"
+      ? `<span class="pill on">Enabled</span>` : `<span class="pill off">${esc(w.status)}</span>`;
+    const removeBtn = isNavreo
+      ? `<button class="btn sm" disabled title="Our own workspace can never be removed">Remove</button>`
+      : `<button class="btn danger sm rm" data-id="${esc(w.id)}" data-name="${esc(w.name)}">Remove</button>`;
+    return `<tr>
+      <td><div class="ws-name">${esc(w.name)}</div><div class="ws-slug">${esc(w.id)}</div></td>
+      <td class="keycell">${esc(w.key_masked || "")}</td>
+      <td>${fmt(w.campaigns)}</td>
+      <td>${w.last_sync_at ? pulledAgo(w.last_sync_at) : "–"}</td>
+      <td>${status}</td>
+      <td style="text-align:right">${removeBtn}</td>
+    </tr>`;
+  }).join("");
+  box.innerHTML = `<table class="ws">
+    <thead><tr><th>Workspace</th><th>API key</th><th>Campaigns</th><th>Last sync</th><th>Status</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+  box.querySelectorAll("button.rm").forEach(b =>
+    b.addEventListener("click", () => openRemove(b.dataset.id, b.dataset.name)));
+}
+
+/* copy the add prompt (clipboard API with a textarea fallback) */
+document.getElementById("copy-prompt").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(ADD_PROMPT);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = ADD_PROMPT;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  toast("Add prompt copied — fill in the client name and API key, then paste it to Claude.");
+});
+
+/* remove flow: exact-name confirmation, then the one-go purge */
+let RM = null;
+function openRemove(id, name) {
+  RM = { id, name };
+  document.getElementById("rm-name").textContent = name;
+  const input = document.getElementById("rm-input");
+  input.value = "";
+  document.getElementById("rm-go").disabled = true;
+  document.getElementById("rm-overlay").classList.remove("hidden");
+  input.focus();
+}
+function closeRemove() {
+  RM = null;
+  document.getElementById("rm-overlay").classList.add("hidden");
+}
+document.getElementById("rm-input").addEventListener("input", e => {
+  document.getElementById("rm-go").disabled = !RM || e.target.value !== RM.name;
+});
+document.getElementById("rm-cancel").addEventListener("click", closeRemove);
+document.getElementById("rm-overlay").addEventListener("click", e => {
+  if (e.target === e.currentTarget) closeRemove();
+});
+document.getElementById("rm-go").addEventListener("click", async () => {
+  if (!RM) return;
+  const btn = document.getElementById("rm-go");
+  btn.disabled = true;
+  btn.textContent = "Deleting…";
+  let body = null;
+  try {
+    const r = await fetch("/api/workspaces/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: RM.id, confirm_name: document.getElementById("rm-input").value })
+    });
+    body = await r.json();
+    if (!r.ok || !body.ok) throw new Error(body.message || ("HTTP " + r.status));
+  } catch (e) {
+    btn.textContent = "Delete everything";
+    toast("Remove failed: " + String(e.message || e));
+    btn.disabled = false;
+    return;
+  }
+  btn.textContent = "Delete everything";
+  closeRemove();
+  const d = body.deleted || {};
+  const bits = Object.entries(d).filter(([, n]) => Number(n) > 0)
+    .map(([t, n]) => `${fmt(n)} ${t.replace(/_/g, " ")}`);
+  toast(`Workspace removed${bits.length ? " — deleted " + bits.join(", ") : ""}.`, 7000);
+  load();
+});
+
+load();
+</script>
+</body>
+</html>

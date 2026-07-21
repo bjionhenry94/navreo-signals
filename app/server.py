@@ -810,6 +810,181 @@ def sb_sync_source(src: dict):
     }, prefer="resolution=merge-duplicates,return=minimal")
 
 
+# ── Client workspaces (client-workspaces-hub) ───────────────────────────────
+# One row per connected Smartlead workspace: ours ('navreo', key from env) +
+# every done-with-you client's own Smartlead account, key stored in the
+# service-role-only `workspaces` table. Every federated Smartlead call resolves
+# its key here; unknown/missing degrades to 'navreo' — exactly the old
+# single-workspace behaviour. 'heyreach' is a sync-ledger name only, never a
+# Smartlead workspace. Client lists are OUT of scope by design.
+_WS_TTL_S = 300
+_WS_LOCK = threading.Lock()
+_ws_cache: dict = {"at": 0.0, "rows": []}
+_ws_campaign_cache: dict = {}   # str(smartlead campaign id) → workspace slug
+_WS_RESERVED = ("heyreach",)
+
+
+def ws_all(refresh: bool = False) -> list:
+    now = time.time()
+    with _WS_LOCK:
+        if not refresh and _ws_cache["rows"] and now - _ws_cache["at"] < _WS_TTL_S:
+            return list(_ws_cache["rows"])
+    try:
+        rows = sb("GET", "workspaces?select=id,name,api_key,status,added_at,last_sync_at"
+                         "&order=added_at") or []
+        rows = [r for r in rows if isinstance(r, dict) and r.get("id")]
+    except Exception:  # noqa: BLE001 — a Supabase outage degrades to navreo-only
+        rows = []
+    if not any(r.get("id") == "navreo" for r in rows):
+        rows.insert(0, {"id": "navreo", "name": "Navreo", "api_key": None, "status": "enabled"})
+    with _WS_LOCK:
+        _ws_cache.update(at=now, rows=rows)
+    return list(rows)
+
+
+def ws_enabled() -> list:
+    return [w for w in ws_all() if (w.get("status") or "enabled") == "enabled"]
+
+
+def ws_key(workspace) -> str:
+    """API key for a workspace. navreo's key stays in env only (never duplicated
+    into the table); client keys come from the table."""
+    ws = workspace or "navreo"
+    for w in ws_all():
+        if w.get("id") == ws:
+            if w.get("api_key"):
+                return w["api_key"]
+            break
+    return KEYS.get("SMARTLEAD_API_KEY", "") if ws == "navreo" else ""
+
+
+def ws_for_campaign(campaign_id) -> str:
+    """Owner workspace of a Smartlead campaign id. Smartlead ids are global
+    across accounts, so one id maps to exactly one workspace. Scorecard cache
+    first (the sweep sees every campaign per workspace), campaigns archive
+    second. Unknown → 'navreo' (pre-federation behaviour), deliberately NOT
+    cached so a client campaign the sweep hasn't stamped yet resolves correctly
+    on a later call."""
+    cid = str(campaign_id or "").strip()
+    if not cid or not cid.isdigit():
+        return "navreo"
+    hit = _ws_campaign_cache.get(cid)
+    if hit:
+        return hit
+    try:
+        rows = sb("GET", f"campaign_scorecard?select=workspace&smartlead_campaign_id=eq.{cid}&limit=1") \
+            or sb("GET", f"campaigns?select=workspace&smartlead_campaign_id=eq.{cid}&limit=1") or []
+    except Exception:  # noqa: BLE001
+        rows = []
+    if rows and rows[0].get("workspace"):
+        _ws_campaign_cache[cid] = rows[0]["workspace"]
+        return rows[0]["workspace"]
+    return "navreo"
+
+
+def ws_key_for_campaign(campaign_id) -> str:
+    return ws_key(ws_for_campaign(campaign_id))
+
+
+def api_workspaces_list() -> dict:
+    """Settings page list. Raw keys NEVER leave the server — masked to last 4."""
+    rows = ws_all(refresh=True)
+    tallies: dict = {}
+    for r in (sb_get_all("campaign_scorecard?select=workspace") or []):
+        w = r.get("workspace") or "navreo"
+        tallies[w] = tallies.get(w, 0) + 1
+    out = []
+    for w in rows:
+        wid = w.get("id")
+        raw = w.get("api_key") or ""
+        out.append({"id": wid, "name": w.get("name") or wid,
+                    "status": w.get("status") or "enabled",
+                    "added_at": w.get("added_at"), "last_sync_at": w.get("last_sync_at"),
+                    "campaigns": tallies.get(wid, 0),
+                    "key_masked": "env key" if wid == "navreo"
+                                  else (("…" + raw[-4:]) if raw else "missing")})
+    return {"workspaces": out}
+
+
+def api_workspaces_add(p: dict):
+    """Register a client Smartlead workspace. Validates the key LIVE (one
+    /campaigns GET with THEIR key) before anything is stored."""
+    name = (p.get("name") or "").strip()
+    api_key = (p.get("api_key") or "").strip()
+    slug = (p.get("id") or "").strip().lower() \
+        or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if not name or not api_key or not slug:
+        return {"ok": False, "message": "name and api_key are required"}, 400
+    if slug == "navreo" or slug in _WS_RESERVED:
+        return {"ok": False, "message": f"'{slug}' is a reserved workspace name"}, 400
+    if any(w.get("id") == slug for w in ws_all(refresh=True)):
+        return {"ok": False, "message": f"workspace '{slug}' already exists"}, 409
+    try:
+        camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={api_key}", {})
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"key validation failed: {str(e)[:120]}"}, 502
+    if not isinstance(camps, list):
+        msg = camps.get("message") if isinstance(camps, dict) else "unexpected response"
+        return {"ok": False, "message": f"Smartlead rejected the key: {msg}"}, 400
+    # Ensure a matching clients row exists (campaigns.client_id FKs into
+    # clients; the daily sync stamps client_id=<slug>). ignore-duplicates: a
+    # pre-existing client row (e.g. asteri, already a client) is never touched.
+    sb("POST", "clients?on_conflict=id",
+       {"id": slug, "name": name,
+        "smartlead_key_env": f"{slug.upper().replace('-', '_')}_SMARTLEAD_API_KEY"},
+       prefer="resolution=ignore-duplicates,return=minimal")
+    sb("POST", "workspaces", {"id": slug, "name": name, "api_key": api_key,
+                              "status": "enabled"}, prefer="return=minimal")
+    _ws_campaign_cache.clear()
+    ws_all(refresh=True)
+    log_activity("/api/workspaces", {"id": slug, "campaigns_seen": len(camps)},
+                 action="create", entity="workspace", entity_id=slug)
+    return {"ok": True, "id": slug, "name": name, "campaigns_seen": len(camps)}, 200
+
+
+def api_workspaces_delete(p: dict):
+    """One-go purge of a client workspace: every federated row + the registry
+    row, atomically via rpc/purge_workspace (single transaction — all or
+    nothing). Requires the workspace NAME typed exactly. 'navreo' can never be
+    deleted."""
+    slug = (p.get("id") or "").strip().lower()
+    confirm = (p.get("confirm_name") or "").strip()
+    if not slug:
+        return {"ok": False, "message": "id required"}, 400
+    if slug == "navreo" or slug in _WS_RESERVED:
+        return {"ok": False, "message": "this workspace can never be deleted"}, 403
+    row = next((w for w in ws_all(refresh=True) if w.get("id") == slug), None)
+    if not row:
+        return {"ok": False, "message": f"workspace '{slug}' not found"}, 404
+    if confirm != (row.get("name") or ""):
+        return {"ok": False, "message": "confirmation does not match — type the workspace "
+                                        "name exactly as shown"}, 400
+    # Long-timeout direct call: a real client purge deletes across eight tables
+    # in one transaction and can outlive sb()'s read timeout. If the call still
+    # fails client-side, VERIFY the actual state before reporting — the rpc may
+    # have committed server-side after the client gave up (seen in smoketest),
+    # and reporting "rolled back" for a committed purge would be a lie.
+    res = None
+    try:
+        sb_url, sb_key = KEYS.get("SUPABASE_URL"), KEYS.get("SUPABASE_SERVICE_ROLE_KEY")
+        res = http_json("POST", f"{sb_url}/rest/v1/rpc/purge_workspace",
+                        {"apikey": sb_key, "Authorization": f"Bearer {sb_key}"},
+                        {"p_workspace": slug}, timeout=300)
+    except Exception:  # noqa: BLE001 — state-verified below
+        pass
+    if not isinstance(res, dict):
+        still = sb("GET", f"workspaces?id=eq.{slug}&select=id")
+        if still:
+            return {"ok": False, "message": "purge failed — nothing was deleted "
+                                            "(the transaction rolled back)"}, 502
+        res = {"note": "purge committed; the per-table count report timed out"}
+    _ws_campaign_cache.clear()
+    ws_all(refresh=True)
+    log_activity("/api/workspaces/delete", {"id": slug, "deleted": res},
+                 action="delete", entity="workspace", entity_id=slug)
+    return {"ok": True, "id": slug, "deleted": res}, 200
+
+
 # ── activity ledger ─────────────────────────────────────────────────────────
 # Append-only record in Supabase of every write-shaped call the app receives,
 # so the database documents WHO changed WHAT and WHEN — not just the end state.
@@ -865,6 +1040,7 @@ def log_activity(endpoint: str, payload=None, actor: str = "app",
 
 
 setter.configure(sb=sb, http_json=http_json, keys=KEYS, log_activity=log_activity, sb_count=sb_count)
+setter._WS_KEY_FOR_CAMPAIGN = ws_key_for_campaign  # federate setter's campaign-scoped Smartlead calls (client-workspaces-hub)
 
 
 def client_prefill(p: dict) -> dict:
@@ -2737,7 +2913,7 @@ def execute_pause_action(nid: str, row: dict, payload: dict) -> tuple:
     # The ONLY Smartlead endpoint this handler is allowed to call - see the
     # HARD CONSTRAINT above. Do not add a sequences/variants call here.
     url = (f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/status"
-           f"?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}")
+           f"?api_key={ws_key_for_campaign(campaign_id)}")
     req = urllib.request.Request(
         url, data=json.dumps({"status": "PAUSED"}).encode(),
         headers={"User-Agent": UA, "Content-Type": "application/json"},
@@ -2917,7 +3093,7 @@ def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
     except (TypeError, ValueError):
         return 400, {"ok": False, "message": "campaign_id is not numeric"}
 
-    api_key = KEYS.get("SMARTLEAD_API_KEY", "")
+    api_key = ws_key_for_campaign(campaign_id)  # federated: owner workspace's key
     seq_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={api_key}"
 
     before = http_json("GET", seq_url, {})
@@ -4199,7 +4375,7 @@ def _reenqueue_verify(r: dict, new_resume_count: int):
     campaign_id = r["campaign_id"]
     mode = r.get("mode") or "mv"
     mock = _is_mock_job_row(r)
-    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    sl_key = ws_key_for_campaign(campaign_id) or os.environ.get("SMARTLEAD_API_KEY") or ""
     mv_key = KEYS.get("MILLIONVERIFIER_API_KEY") or os.environ.get("MILLIONVERIFIER_API_KEY")
     lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY")
     label = r.get("label") or f"Verify campaign {campaign_id}"
@@ -4238,7 +4414,7 @@ def resume_job(jid: str):
         return {"error": "not_interrupted",
                 "message": "This task isn't interrupted — nothing to resume."}, 409
     campaign_id = job.get("campaign_id")
-    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    sl_key = ws_key_for_campaign(campaign_id) or os.environ.get("SMARTLEAD_API_KEY") or ""
     # _JOB_CREATE_LOCK spans the has-active check AND job creation: two rapid
     # Resume clicks would otherwise both pass the check before either job
     # registers (TOCTOU) and race duplicate workers on the same campaign.
@@ -5194,7 +5370,7 @@ def api_verify_campaign(p: dict):
         return {"error": "mock_requires_fake_id",
                 "message": "Mock verifications must use a campaign_id starting with "
                            "\"MOCK\" so they can't overwrite a real campaign's records."}, 400
-    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    sl_key = ws_key_for_campaign(campaign_id) or os.environ.get("SMARTLEAD_API_KEY") or ""
     dry_run = bool(p.get("dry_run"))
     auto_remove = bool(p.get("auto_remove"))
     name = (p.get("name") or "").strip() or None
@@ -5235,7 +5411,7 @@ def api_verify_remove(p: dict):
     if not campaign_id:
         return {"error": "missing_campaign_id"}, 400
     dry_run = bool(p.get("dry_run"))
-    sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    sl_key = ws_key_for_campaign(campaign_id) or os.environ.get("SMARTLEAD_API_KEY") or ""
     name = (p.get("name") or "").strip() or None
     label = f"Remove bad leads: {name or ('campaign ' + str(campaign_id))}"
     # Dedup under _JOB_CREATE_LOCK (TOCTOU-safe): a double-click must not spawn
@@ -5326,15 +5502,23 @@ def api_warmup_job(p: dict):
 
 
 def _smartlead_json(method: str, path: str, body: dict | None = None, timeout: float = 60,
-                    attempts: int = 5):
+                    attempts: int = 5, workspace: str | None = None):
     """Smartlead call with 429 backoff (honours Retry-After). The 200req/min
     cap is SHARED with the background verify jobs, so a process-new apply can
     land mid-throttle and must wait its turn instead of failing the whole
     apply with 'HTTP Error 429' (seen live 2026-07-09). 5xx retries are
     GET-only: every POST here except /tags is idempotent, but a retried
-    /tags create after an ambiguous 5xx could double-mint an undeletable tag."""
+    /tags create after an ambiguous 5xx could double-mint an undeletable tag.
+
+    Workspace-aware (client-workspaces-hub): /campaigns/<id>/… paths derive the
+    owning workspace from the id and use THAT workspace's key, so every
+    campaign-scoped call federates without touching its callers. Pass
+    workspace= explicitly for account-scoped calls."""
     import urllib.error
-    key = KEYS.get("SMARTLEAD_API_KEY", "")
+    if workspace is None:
+        m = re.match(r"/campaigns/(\d+)", path)
+        workspace = ws_for_campaign(m.group(1)) if m else "navreo"
+    key = ws_key(workspace)
     sep = "&" if "?" in path else "?"
     url = f"{SMARTLEAD_BASE}{path}{sep}api_key={key}"
     for attempt in range(1, attempts + 1):
@@ -5450,6 +5634,8 @@ _OUTREACH_DESTS_TTL_S = 600  # the live Smartlead /campaigns GET was the slowest
 
 
 def _compute_outreach_destinations(refresh: bool = False) -> dict:
+    # navreo-fleet-only BY DESIGN (client-workspaces-hub): push destinations are
+    # where WE push signal leads; client lists/pushes stay out of scope.
     out: dict = {"smartlead": [], "heyreach": []}
     try:
         camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
@@ -5635,16 +5821,34 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
     out: dict = {"rows": []}
     sl_rows, hr_rows = [], []
     try:
-        camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
-        if not isinstance(camps, list):
-            msg = camps.get("message") if isinstance(camps, dict) else str(camps)
-            raise RuntimeError(f"Smartlead /campaigns: {msg or 'unexpected response'}")
-        sl_rows = [{"key": f"camp-sl-{c.get('id')}", "platform": "smartlead",
-                    "platform_id": c.get("id"), "name": c.get("name") or "",
-                    "status": (c.get("status") or "").upper(),
-                    "created_at": c.get("created_at")}
-                   for c in camps]
+        # Federated: one fetch per enabled workspace (navreo + every connected
+        # client Smartlead), rows tagged with their owner. A client-workspace
+        # failure degrades to a note; only a NAVREO failure trips the
+        # last-good-on-error path (client rows must never nuke the whole list).
+        ws_errs = []
+        for w in ws_enabled():
+            wid = w.get("id")
+            wname = w.get("name") or wid
+            wkey = ws_key(wid)
+            if not wkey:
+                ws_errs.append(f"{wid}: no key")
+                continue
+            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={wkey}", {})
+            if not isinstance(camps, list):
+                msg = camps.get("message") if isinstance(camps, dict) else str(camps)
+                if wid == "navreo":
+                    raise RuntimeError(f"Smartlead /campaigns: {msg or 'unexpected response'}")
+                ws_errs.append(f"{wid}: {str(msg)[:80]}")
+                continue
+            sl_rows.extend([{"key": f"camp-sl-{c.get('id')}", "platform": "smartlead",
+                             "platform_id": c.get("id"), "name": c.get("name") or "",
+                             "status": (c.get("status") or "").upper(),
+                             "workspace": wid, "workspace_name": wname,
+                             "created_at": c.get("created_at")}
+                            for c in camps])
         out["smartlead_synced_at"] = int(time.time())
+        if ws_errs:
+            out["workspace_errors"] = ws_errs
     except Exception as e:  # noqa: BLE001
         out["smartlead_error"] = str(e)[:150]
     try:
@@ -5777,7 +5981,7 @@ def campaign_platform_leads(p: dict) -> dict:
     if not cid:
         return {"error": "missing id", "leads": [], "total": None}
     if platform == "smartlead":
-        key = KEYS.get("SMARTLEAD_API_KEY", "")
+        key = ws_key_for_campaign(cid)  # federated: the owning workspace's key
         url = f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={key}&offset={offset}&limit={limit}"
         page = _smartlead_get_retry(url)
         if not isinstance(page, dict):
@@ -6140,31 +6344,37 @@ def _scorecard_sync_all():
     if not _SCORECARD_SYNC_LOCK.acquire(blocking=False):
         return  # a cycle is already running
     try:
-        camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {})
-        if not isinstance(camps, list):
-            print(f"[scorecard-sync] campaign list unavailable: {camps}", flush=True)
-            return
         rows, done, t0 = [], 0, time.time()
-        for c in camps:
-            cid = c.get("id")
-            if not cid:
+        for w in ws_enabled():  # federated: navreo + every connected client workspace
+            wid = w.get("id")
+            wkey = ws_key(wid)
+            if not wkey:
                 continue
-            try:
-                data = _smartlead_json("GET", f"/campaigns/{cid}/analytics")
-                m = _parse_smartlead_analytics(data)
-            except Exception:  # noqa: BLE001
+            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={wkey}", {})
+            if not isinstance(camps, list):
+                print(f"[scorecard-sync] {wid}: campaign list unavailable: {camps}", flush=True)
                 continue
-            rows.append({"smartlead_campaign_id": cid, "name": c.get("name") or "",
-                         "status": m.get("status") or c.get("status"),
-                         "sent": m["sent"], "replied": m["replied"], "positives": m["positives"],
-                         "bounced": m["bounced"], "completed": m["completed"], "total": m["total"],
-                         "updated_at": _now_iso()})
-            done += 1
-            if len(rows) >= 100:  # flush in batches so partial progress is visible
-                sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id", rows,
-                   prefer="resolution=merge-duplicates,return=minimal")
-                rows = []
-            time.sleep(0.28)  # ~215/min ceiling — stay just under Smartlead's cap
+            for c in camps:
+                cid = c.get("id")
+                if not cid:
+                    continue
+                try:
+                    data = _smartlead_json("GET", f"/campaigns/{cid}/analytics", workspace=wid)
+                    m = _parse_smartlead_analytics(data)
+                except Exception:  # noqa: BLE001
+                    continue
+                rows.append({"smartlead_campaign_id": cid, "workspace": wid,
+                             "name": c.get("name") or "",
+                             "status": m.get("status") or c.get("status"),
+                             "sent": m["sent"], "replied": m["replied"], "positives": m["positives"],
+                             "bounced": m["bounced"], "completed": m["completed"], "total": m["total"],
+                             "updated_at": _now_iso()})
+                done += 1
+                if len(rows) >= 100:  # flush in batches so partial progress is visible
+                    sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id", rows,
+                       prefer="resolution=merge-duplicates,return=minimal")
+                    rows = []
+                time.sleep(0.28)  # ~215/min ceiling — stay just under Smartlead's cap
         if rows:
             sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id", rows,
                prefer="resolution=merge-duplicates,return=minimal")
@@ -6189,11 +6399,12 @@ def _all_campaign_scorecard() -> dict:
     str(smartlead_campaign_id), same shape as _compute_campaign_scorecard so the
     UI is unchanged. Meetings merged from the optimiser cache. HeyReach campaigns
     get their LinkedIn progress counts (people/replied) from the snapshot table."""
-    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,name,status,sent,replied,positives,bounced,completed,total")
+    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status,sent,replied,positives,bounced,completed,total")
     camps = {}
     for r in (rows or []):
         sid = str(r.get("smartlead_campaign_id"))
         camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total", "status")}
+        camps[sid]["workspace"] = r.get("workspace") or "navreo"
         camps[sid]["meetings"] = None
     # meetings from the optimiser cache (latest per campaign)
     try:
@@ -7456,7 +7667,7 @@ def push_to_smartlead(pr: dict, campaign_id) -> dict:
                           **({"WhosePost": pr["whose_post"]} if pr.get("whose_post") else {}),
                           **({"Topic": pr["topic"]} if pr.get("topic") else {})},
     }]}
-    r = http_json("POST", f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}", {}, body)
+    r = http_json("POST", f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/leads?api_key={ws_key_for_campaign(campaign_id)}", {}, body)
     added = int(r.get("upload_count") or 0)
     dup = int(r.get("already_added_to_campaign") or 0) + int(r.get("duplicate_count") or 0)
     if added or dup:
@@ -7733,7 +7944,7 @@ def unpush_prospect(pr: dict, dest: dict) -> dict:
     sl = dest.get("smartlead_campaign_id")
     if sl and pr.get("email"):
         try:
-            key = KEYS.get("SMARTLEAD_API_KEY", "")
+            key = ws_key_for_campaign(sl)  # federated: owner workspace's key
             d = http_json("GET", f"{SMARTLEAD_BASE}/campaigns/{sl}/leads?api_key={key}", {})
             lid = next(((r.get("lead") or {}).get("id") for r in (d.get("data") or [])
                         if ((r.get("lead") or {}).get("email") or "").lower() == pr["email"].lower()), None)
@@ -11103,6 +11314,7 @@ def _deliv_trends_build(days: int) -> dict:
     caller keeps serving the previous cached copy in that case."""
     end = _dtmod.date.today()
     start = end - _dtmod.timedelta(days=days - 1)
+    # navreo-fleet-only BY DESIGN: OUR fleet's day-wise history
     url = (f"{SMARTLEAD_BASE}/analytics/day-wise-overall-stats"
            f"?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}"
            f"&start_date={start.isoformat()}&end_date={end.isoformat()}")
@@ -11186,7 +11398,8 @@ _FLEET_MONTHS = {m: i + 1 for i, m in enumerate(
 
 
 def _fleet_daywise(path: str, start_iso: str, end_iso: str) -> dict:
-    """{(day,month): email_engagement_metrics} for a Smartlead day-wise endpoint."""
+    """{(day,month): email_engagement_metrics} for a Smartlead day-wise endpoint.
+    navreo-fleet-only BY DESIGN: OUR fleet's day-wise history."""
     url = (f"{SMARTLEAD_BASE}/analytics/{path}"
            f"?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}"
            f"&start_date={start_iso}&end_date={end_iso}")
@@ -13059,6 +13272,10 @@ class Handler(SimpleHTTPRequestHandler):
             # numbers) + HeyReach LinkedIn progress. SWR ~2min over a cheap
             # Supabase read; the slow /analytics fetches happen in the bg thread.
             return self._json(_CAMPAIGN_SCORECARD_ALL_SWR.get())
+        if path == "/api/workspaces":
+            # Settings page: connected Smartlead workspaces (keys masked to
+            # last 4 — the raw key never leaves the server).
+            return self._json(api_workspaces_list())
         if path == "/api/campaigns-unified":
             # ONE row per outbound campaign account-wide (Smartlead + HeyReach
             # + unlinked drafts). Homepage list source. SWR-cached ~10min.
@@ -13148,7 +13365,6 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             ids = [s for s in (parse_qs(urlparse(self.path).query).get("ids") or [""])[0]
                    .split(",") if s.strip()][:25]
-            sl_key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
             out = {}
             budget_t0 = time.time()  # hard handler budget: a Smartlead brown-out
             # must not hold a UI repaint (and a server thread) for minutes —
@@ -13168,7 +13384,7 @@ class Handler(SimpleHTTPRequestHandler):
                         time.sleep(backoff)
                     try:
                         page = http_json("GET", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads"
-                                                f"?api_key={sl_key}&offset=0&limit=1", {},
+                                                f"?api_key={ws_key_for_campaign(cid)}&offset=0&limit=1", {},
                                          timeout=10)
                         n = int((page or {}).get("total_leads") or 0)
                         break
@@ -13410,6 +13626,16 @@ class Handler(SimpleHTTPRequestHandler):
             return self._qa_gate_post(path)
         if path not in _AUTH_PUBLIC_POST and not self._gate(path):
             return
+        if path in ("/api/workspaces", "/api/workspaces/delete"):
+            # client-workspaces-hub: add (key validated live, then stored) /
+            # one-go purge (typed-name confirm; atomic rpc). Session-gated above.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            body, status = (api_workspaces_delete(p) if path.endswith("/delete")
+                            else api_workspaces_add(p))
+            return self._json(body, status)
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
@@ -13958,6 +14184,13 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT") or (sys.argv[1] if len(sys.argv) > 1 else 7901))
     host = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
     print(f"Serving {PROJECT_DIR} + /api on http://{host}:{port}")
+    if os.environ.get("NAVREO_NO_BG"):
+        # Local verify boots (client-workspaces-hub): HTTP only — no boot
+        # ledger, no job recovery, no background sweeps. Prevents a dev boot
+        # from writing mock analytics into the real scorecard cache or marking
+        # production in-flight jobs interrupted.
+        print("NAVREO_NO_BG=1 — background threads disabled (HTTP only)")
+        ThreadingHTTPServer((host, port), Handler).serve_forever()
     threading.Thread(target=_boot_ledger_start, daemon=True).start()
     threading.Thread(target=_boot_warmup, daemon=True).start()
     # Serialise verify/remove jobs so multiple ListMint runs don't blow its rate

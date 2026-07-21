@@ -385,15 +385,17 @@ def verify_count(table: str, filter_query: str | None, supabase_url: str, supaba
 def main():
     log("=== Smartlead -> Supabase mailbox sync: START ===")
 
-    smartlead_key = server.KEYS.get("SMARTLEAD_API_KEY")
     supabase_url = server.KEYS.get("SUPABASE_URL")
     supabase_key = server.KEYS.get("SUPABASE_SERVICE_ROLE_KEY")
+    # Federated (client-workspaces-hub): one sweep per enabled workspace —
+    # navreo (env key) + every connected client Smartlead (key from the
+    # workspaces table). Rows are workspace-stamped.
+    workspaces = [w for w in server.ws_enabled() if server.ws_key(w.get("id"))]
 
-    if not smartlead_key or not supabase_url or not supabase_key:
-        log("FATAL: missing one or more required keys: SMARTLEAD_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY")
+    if not workspaces or not supabase_url or not supabase_key:
+        log("FATAL: need SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and at least one workspace key")
         sys.exit(1)
-    log(f"SMARTLEAD_API_KEY={smartlead_key[:6]}... SUPABASE_URL={supabase_url} "
-        f"SUPABASE_SERVICE_ROLE_KEY={supabase_key[:6]}...")
+    log(f"Workspaces: {', '.join(w.get('id') for w in workspaces)} | SUPABASE_URL={supabase_url}")
 
     now = datetime.now(timezone.utc)
     now_iso_str = now.isoformat()
@@ -402,45 +404,60 @@ def main():
     log(f"Today (UTC): {today_str}. Metrics window: {start_date_str} -> {today_str}")
 
     try:
-        # Pull 1
-        log("Pulling all mailboxes from /email-accounts/ ...")
-        mailboxes, pages_fetched = pull_all_mailboxes(smartlead_key)
-        log(f"Pull 1 complete: {pages_fetched} pages fetched, {len(mailboxes)} unique mailboxes pulled")
-
-        # Pull 2
-        log("Pulling 30d name-wise health metrics ...")
-        metrics_list = pull_metrics(smartlead_key, start_date_str, today_str)
-        log(f"Pull 2 complete: {len(metrics_list)} metrics entries returned")
-
-        metrics_map = {}
-        for entry in metrics_list:
-            if entry and entry.get("from_email"):
-                metrics_map[str(entry["from_email"]).lower()] = entry
-
-        # Pull 3
-        log("Pulling ACTIVE-campaign attachment counts (per-campaign email-accounts sweep) ...")
-        campaign_counts = pull_campaign_counts(smartlead_key)
-        if campaign_counts is None:
-            log("WARNING: campaign sweep incomplete — campaign_count omitted this run, "
-                "last-known values preserved in Supabase")
-        else:
-            attached = sum(1 for v in campaign_counts.values() if v)
-            log(f"Pull 3 complete: {attached} mailboxes attached to >=1 ACTIVE campaign, "
-                f"{sum(campaign_counts.values())} total attachments")
-
-        # Transform
         mailbox_rows, stats_rows = [], []
+        ws_pulled: dict = {}
+        ws_failed: list = []
         no_metrics_count = 0
         warmup_statuses_seen = set()
-        for m in mailboxes:
-            mailbox_row, stats_row, has_metrics = transform_mailbox(
-                m, metrics_map, campaign_counts, today_str, now_iso_str)
-            mailbox_rows.append(mailbox_row)
-            stats_rows.append(stats_row)
-            if not has_metrics:
-                no_metrics_count += 1
-            if mailbox_row["warmup_status"]:
-                warmup_statuses_seen.add(mailbox_row["warmup_status"])
+        for w in workspaces:
+            wid = w.get("id")
+            wkey = server.ws_key(wid)
+            try:
+                # Pull 1
+                log(f"[{wid}] Pulling all mailboxes from /email-accounts/ ...")
+                mailboxes, pages_fetched = pull_all_mailboxes(wkey)
+                log(f"[{wid}] Pull 1 complete: {pages_fetched} pages fetched, "
+                    f"{len(mailboxes)} unique mailboxes pulled")
+
+                # Pull 2
+                log(f"[{wid}] Pulling 30d name-wise health metrics ...")
+                metrics_list = pull_metrics(wkey, start_date_str, today_str)
+                log(f"[{wid}] Pull 2 complete: {len(metrics_list)} metrics entries returned")
+
+                metrics_map = {}
+                for entry in metrics_list:
+                    if entry and entry.get("from_email"):
+                        metrics_map[str(entry["from_email"]).lower()] = entry
+
+                # Pull 3
+                log(f"[{wid}] Pulling ACTIVE-campaign attachment counts (per-campaign email-accounts sweep) ...")
+                campaign_counts = pull_campaign_counts(wkey)
+                if campaign_counts is None:
+                    log(f"[{wid}] WARNING: campaign sweep incomplete — campaign_count omitted this run, "
+                        "last-known values preserved in Supabase")
+                else:
+                    attached = sum(1 for v in campaign_counts.values() if v)
+                    log(f"[{wid}] Pull 3 complete: {attached} mailboxes attached to >=1 ACTIVE campaign, "
+                        f"{sum(campaign_counts.values())} total attachments")
+
+                # Transform — every row stamped with its owner workspace
+                for m in mailboxes:
+                    mailbox_row, stats_row, has_metrics = transform_mailbox(
+                        m, metrics_map, campaign_counts, today_str, now_iso_str)
+                    mailbox_row["workspace"] = wid
+                    stats_row["workspace"] = wid
+                    mailbox_rows.append(mailbox_row)
+                    stats_rows.append(stats_row)
+                    if not has_metrics:
+                        no_metrics_count += 1
+                    if mailbox_row["warmup_status"]:
+                        warmup_statuses_seen.add(mailbox_row["warmup_status"])
+                ws_pulled[wid] = len(mailboxes)
+            except Exception as we:  # noqa: BLE001 — a client-workspace failure must never kill the navreo sweep
+                if wid == "navreo":
+                    raise
+                ws_failed.append(wid)
+                log(f"[{wid}] WARNING: workspace sweep FAILED ({we!r}) — continuing with the others")
         log(f"Transform complete: {len(mailbox_rows)} mailbox rows, {len(stats_rows)} stats rows")
         log(f"Mailboxes without a 30d metrics entry: {no_metrics_count}")
         log(f"Distinct warmup_details.status values observed: "
@@ -457,13 +474,19 @@ def main():
         log(f"Total batches written: {total_batches} (mailboxes={mailbox_batches}, "
             f"mailbox_stats_daily={stats_batches})")
 
-        # Verification
+        # Verification — per workspace: filtered counts must equal that
+        # workspace's own pulled count (a whole-table count would mix
+        # workspaces and could never reconcile)
         log("Verifying row counts in Supabase ...")
-        mailboxes_total = verify_count("mailboxes", None, supabase_url, supabase_key)
-        stats_total = verify_count("mailbox_stats_daily", f"stat_date=eq.{today_str}", supabase_url, supabase_key)
-        log(f"Supabase mailboxes total: {mailboxes_total}")
-        log(f"Supabase mailbox_stats_daily total for stat_date={today_str}: {stats_total}")
-        log(f"Pulled unique mailbox count: {len(mailboxes)}")
+        ver_ok = True
+        for wid, pulled in ws_pulled.items():
+            m_total = verify_count("mailboxes", f"workspace=eq.{wid}", supabase_url, supabase_key)
+            s_total = verify_count("mailbox_stats_daily",
+                                   f"stat_date=eq.{today_str}&workspace=eq.{wid}",
+                                   supabase_url, supabase_key)
+            log(f"[{wid}] pulled={pulled} mailboxes_total={m_total} stats_total_today={s_total}")
+            if not (m_total == pulled and s_total == pulled):
+                ver_ok = False
 
         # Null-rate check (in-memory, matches what was written)
         null_counts = {"message_per_day": 0, "warmup_enabled": 0, "reply_rate_pct": 0,
@@ -482,14 +505,19 @@ def main():
             f"bounce_rate_pct null={null_counts['bounce_rate_pct']} ({pct(null_counts['bounce_rate_pct'])}%), "
             f"tags null={null_counts['tags']} ({pct(null_counts['tags'])}%)")
 
-        success = mailboxes_total == len(mailboxes) and stats_total == len(mailboxes)
+        # Exit contract: the NAVREO fleet is the paging signal — its failure is
+        # exit 1. A client-workspace failure logs LOUDLY above but does not
+        # page as a fleet failure (a revoked client key must not read as our
+        # fleet breaking); verified workspaces must still reconcile exactly.
+        success = ver_ok and "navreo" in ws_pulled
+        if ws_failed:
+            log(f"WARNING: {len(ws_failed)} client workspace sweep(s) FAILED this run: {', '.join(ws_failed)}")
         if success:
-            log("Verification PASSED: mailboxes and mailbox_stats_daily counts both equal pulled count")
+            log("Verification PASSED: per-workspace mailboxes and mailbox_stats_daily counts equal pulled counts")
             log("=== Smartlead -> Supabase mailbox sync: END (exit 0) ===")
             sys.exit(0)
         else:
-            log(f"Verification FAILED: pulled={len(mailboxes)}, mailboxes_total={mailboxes_total}, "
-                f"stats_total={stats_total}")
+            log("Verification FAILED: per-workspace counts above do not reconcile")
             log("=== Smartlead -> Supabase mailbox sync: END (exit 1) ===")
             sys.exit(1)
     except SystemExit:

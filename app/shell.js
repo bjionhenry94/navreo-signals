@@ -13,6 +13,7 @@ const ICONS = {
   setter: ic8("reply", "lg"),
   training: ic8("thumbsup", "lg"),
   notifications: ic8("bell", "lg"),
+  settings: ic8("briefcase", "lg"),
 };
 
 const NAV = [
@@ -23,6 +24,7 @@ const NAV = [
   ["setter.html", "setter", "Setter"],
   ["setter-train.html", "training", "Training"],
   ["notifications.html", "notifications", "Notifications"],
+  ["settings.html", "settings", "Settings"],
 ];
 
 function renderRail(active) {
