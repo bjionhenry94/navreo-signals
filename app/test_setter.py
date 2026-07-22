@@ -1950,10 +1950,15 @@ def test_subsequence_unresolved_endpoint_filters_correctly():
                      "lead_first_name": "Bo", "message_id": "u2", "status": "auto_sent", "sent_at": recent,
                      "reply_body": "retry me", "added_to_subsequence": False,
                      "subsequence_decision": "push_failed"})
-    # excluded: opted out
+    # KEPT now (owner ruling 2026-07-22): 'none' ("no follow-up") is a mark,
+    # the thread STAYS in the tray until an explicit dismiss.
     sb.queue.append({"id": 803, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "c@x.com",
                      "message_id": "u3", "status": "sent", "sent_at": recent,
                      "added_to_subsequence": False, "subsequence_decision": "none"})
+    # excluded: explicitly dismissed from the tray
+    sb.queue.append({"id": 808, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "h2@x.com",
+                     "message_id": "u3b", "status": "sent", "sent_at": recent,
+                     "added_to_subsequence": False, "subsequence_decision": "dismissed"})
     # excluded: already pushed
     sb.queue.append({"id": 804, "workspace": "navreo", "smartlead_campaign_id": 111, "lead_email": "d@x.com",
                      "message_id": "u4", "status": "sent", "sent_at": recent,
@@ -1968,7 +1973,8 @@ def test_subsequence_unresolved_endpoint_filters_correctly():
     check("unresolved: 200 status", status == 200, (status, resp))
     check("unresolved: includes the NULL-decision sent row", 801 in ids, ids)
     check("unresolved: includes the push_failed auto_sent row", 802 in ids, ids)
-    check("unresolved: excludes the opted-out (none) row", 803 not in ids, ids)
+    check("unresolved: INCLUDES the 'none' (no follow-up) row - stays until dismissed", 803 in ids, ids)
+    check("unresolved: excludes the explicitly dismissed row", 808 not in ids, ids)
     check("unresolved: excludes the already-pushed row", 804 not in ids, ids)
     check("unresolved: excludes the row outside the 14-day window", 805 not in ids, ids)
     row801 = next((r for r in resp.get("rows", []) if r["id"] == 801), {})
@@ -2061,10 +2067,22 @@ def test_retro_decision_from_detail_view_patches_and_clears_unresolved():
     check("retro-from-detail: none patches decision 'none' only",
          row2.get("subsequence_decision") == "none" and row2.get("added_to_subsequence") is False, row2)
 
+    # Owner ruling 2026-07-22: 'No follow-up needed' is a MARK - the row STAYS
+    # in the tray. Only the pushed row (812) leaves; the 'none' row (813) stays.
     st3, r3 = setter.route_subsequence_unresolved({})
     ids = {r["id"] for r in r3.get("rows", [])}
-    check("retro-from-detail: both rows leave the unresolved feed after the decisions",
-         st3 == 200 and 812 not in ids and 813 not in ids, (st3, ids))
+    check("retro-from-detail: pushed row leaves the tray, the 'none' row STAYS",
+         st3 == 200 and 812 not in ids and 813 in ids, (st3, ids))
+
+    # 'Dismiss' is the ONLY thing that removes a 'none' row from the tray.
+    st4, r4 = setter.route_queue_action({"id": 813, "action": "subsequence_dismiss"})
+    check("retro-from-detail: dismiss succeeds", st4 == 200 and r4.get("ok") is True, (st4, r4))
+    row3 = [r for r in sb.queue if r["id"] == 813][0]
+    check("retro-from-detail: dismiss patches decision 'dismissed'",
+         row3.get("subsequence_decision") == "dismissed", row3)
+    st5, r5 = setter.route_subsequence_unresolved({})
+    check("retro-from-detail: the dismissed row finally leaves the tray",
+         st5 == 200 and 813 not in {r["id"] for r in r5.get("rows", [])}, (st5, r5))
 
 
 # ── tray reconciliation against Smartlead ground truth (2026-07-17) ────────

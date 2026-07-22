@@ -525,6 +525,14 @@
   border-radius: 999px; padding: 4px 10px; font: 500 11px var(--font-sans); cursor: pointer;
 }
 .tray-dismiss-btn:hover { background: var(--bg-sunken); color: var(--ink); }
+/* "No follow-up needed" is now a secondary MARK (the thread stays); Dismiss is
+   the remover. Same ghost look, distinct labels. */
+.tray-none-btn {
+  border: 1px solid var(--line-2); background: transparent; color: var(--ink-3);
+  border-radius: 999px; padding: 4px 10px; font: 500 11px var(--font-sans); cursor: pointer;
+}
+.tray-none-btn:hover { background: var(--bg-sunken); color: var(--ink); }
+.tray-none-tag { font-size: 10.5px; }
 .tray-row-picker { margin-top: 4px; }
 /* Detail-view retro picker keeps this class from the previous ship. */
 .sg-br-picker { flex-basis: 100%; }
@@ -1231,8 +1239,10 @@ function trayRowHtml(r) {
     </div>
     <div class="tray-row-actions">
       ${failTag}
+      ${r.subsequence_decision === "none" ? `<span class="pill n tray-none-tag">No follow-up</span>` : ""}
       <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence &#9662;</button>
-      <button class="tray-dismiss-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>
+      ${r.subsequence_decision === "none" ? "" : `<button class="tray-none-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>`}
+      <button class="tray-dismiss-btn sg-dismiss" type="button" data-id="${esc(r.id)}" title="Remove from this reminder list">Dismiss</button>
     </div>
     <div class="tray-row-picker" id="sgPicker-${esc(r.id)}" style="display:none"></div>
   </div>`;
@@ -1262,6 +1272,7 @@ function renderUnresolvedTray() {
 function wireUnresolvedTrayEvents(el) {
   el.querySelectorAll(".sg-add").forEach((btn) => btn.addEventListener("click", () => doTrayAdd(btn)));
   el.querySelectorAll(".sg-none").forEach((btn) => btn.addEventListener("click", () => doTrayNone(btn)));
+  el.querySelectorAll(".sg-dismiss").forEach((btn) => btn.addEventListener("click", () => doTrayDismiss(btn)));
   // The row body opens the FULL conversation (owner ruling 2026-07-17: a
   // retro follow-up decision shouldn't be made from a one-line snippet).
   el.querySelectorAll(".tray-row-main").forEach((main) => {
@@ -1345,6 +1356,25 @@ async function retroFollowupNone(id, btn) {
   applyRetroDecision(id, { subsequence_decision: "none" });
   await loadUnresolvedTray();
 }
+/* "Dismiss" - the only action that removes a thread from the follow-up
+   reminder tray (owner ruling 2026-07-22). The reply stays sent; this just
+   resolves the reminder (subsequence_decision='dismissed'). */
+async function retroFollowupDismiss(id, btn) {
+  const restore = busyBtn(btn, "Dismissing…");
+  if (!restore) return;
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: Number(id), action: "subsequence_dismiss" }),
+  });
+  restore();
+  if (!res.ok) {
+    showError("Couldn't dismiss: " + res.error);
+    return;
+  }
+  clearError();
+  applyRetroDecision(id, { subsequence_decision: "dismissed" });
+  await loadUnresolvedTray();
+}
 function renderTrayPicker(id, subs) {
   const picker = document.getElementById(`sgPicker-${id}`);
   if (!picker) return;
@@ -1364,6 +1394,9 @@ function doTrayAdd(btn, subSequenceId) {
 }
 function doTrayNone(btn) {
   return retroFollowupNone(btn.getAttribute("data-id"), btn);
+}
+function doTrayDismiss(btn) {
+  return retroFollowupDismiss(btn.getAttribute("data-id"), btn);
 }
 /* The tray header is static markup - wire its collapse toggle once. */
 (function wireTrayHead() {

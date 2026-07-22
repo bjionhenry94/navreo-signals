@@ -4542,9 +4542,10 @@ def _reconcile_unresolved_against_smartlead(candidates):
 
 def route_subsequence_unresolved(_params):
     """GET /api/setter/subsequence/unresolved - the tray's feed: sent/
-    auto_sent rows from the last 14 days that never got a follow-up decision
-    (added_to_subsequence isn't true AND subsequence_decision is null or
-    push_failed), reconciled against Smartlead ground truth (see
+    auto_sent rows from the last 14 days NOT added to a subsequence and NOT
+    dismissed (subsequence_decision is null / push_failed / none - a 'none'
+    "no follow-up" choice stays until an explicit Dismiss, owner ruling
+    2026-07-22), reconciled against Smartlead ground truth (see
     _reconcile_unresolved_against_smartlead - enrolments made in Smartlead's
     own UI are stamped onto the row and excluded). Workspace-scoped like
     every other queue read, newest first, capped at 50.
@@ -4568,7 +4569,11 @@ def route_subsequence_unresolved(_params):
                 if r.get("added_to_subsequence"):
                     continue
                 decision = r.get("subsequence_decision")
-                if decision not in (None, "push_failed"):
+                # Owner ruling 2026-07-22: "No follow-up needed" (decision='none')
+                # is a MARK, not a removal - the thread STAYS in the reminder tray.
+                # Only an explicit Dismiss (decision='dismissed') takes it out.
+                # ('pushed' already left via the added_to_subsequence check above.)
+                if decision == "dismissed":
                     continue
                 sent_at = r.get("sent_at") or ""
                 if sent_at and sent_at < since:
@@ -5426,14 +5431,21 @@ def route_queue_action(payload):
             _apply_patch(row, {"added_to_subsequence": True, "subsequence_decision": "pushed"})
             return 200, {"ok": True, "added_to_subsequence": True, "subsequence_id": sub_id, "detail": detail}
         if action == "subsequence_none":
-            # Banner's "No follow-up needed" - a deliberate opt-out for a
-            # sent/auto_sent row the reviewer decided doesn't need a track.
-            # A row already pushed stays pushed: this is a decision about
-            # whether to push, not a way to undo one that already happened.
+            # Tray's "No follow-up needed" - a MARK, not a removal (owner ruling
+            # 2026-07-22): the reviewer decided this sent row needs no follow-up
+            # track, but it STAYS in the tray until explicitly dismissed. A row
+            # already pushed stays pushed (this is a decision about whether to
+            # push, not a way to undo one that already happened).
             if row.get("added_to_subsequence"):
                 return 409, {"error": "This lead was already added to a subsequence."}
             _apply_patch(row, {"subsequence_decision": "none"})
             return 200, {"ok": True, "subsequence_decision": "none"}
+        if action == "subsequence_dismiss":
+            # The ONLY thing that removes a thread from the follow-up reminder
+            # tray (owner ruling 2026-07-22). Leaves status/sent untouched - it
+            # is a real sent reply; this only resolves the follow-up reminder.
+            _apply_patch(row, {"subsequence_decision": "dismissed"})
+            return 200, {"ok": True, "subsequence_decision": "dismissed"}
         if action == "save_draft":
             # Auto-save (owner ask 2026-07-16): a hand-edited draft used to live
             # ONLY in the browser's EDITED_DRAFTS map, so a failed send, a reload
