@@ -260,13 +260,11 @@
     padding: 6px 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line);
   }
   .inbox-shell.mobile-detail .detail-head { margin-bottom: 0; }
-  /* Lead context (category / campaign / decision) collapses under a
-     toggle, pinned to the top of the reply, collapsed by default. */
+  /* On phones the lead-details column sits ABOVE the reply when shown (it's
+     hidden by default here; the top-bar panel button toggles it). */
   .inbox-shell.mobile-detail .lead-panel {
     order: -1; margin: 0 0 6px; padding-top: 0; border-top: none;
   }
-  /* (collapse toggle + body rules now live in the base stylesheet so the
-     sidebar is collapsible on desktop too) */
 
   /* The Approve / Regenerate / Dismiss row becomes a fixed bottom thumb bar.
      Approve takes its own full-width top line; Regenerate + Dismiss share the
@@ -306,20 +304,24 @@
 /* Lead-column collapse (phone-only, owner ask 2026-07-22). Base = desktop:
    the toggle is hidden and the body always shows, so the sidebar is unchanged.
    The phone media block flips these to a real collapsible. */
-/* Lead-details collapse - now available on desktop too (owner ask). The
-   toggle shows everywhere; the body is hidden unless the panel has .lp-open
-   (renderDetail defaults it open on desktop, closed on phones). */
-.lp-collapse-toggle {
-  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px;
-  padding: 6px 2px 12px; background: none; border: none;
-  font: 600 12px var(--font-sans); text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--ink-3); cursor: pointer;
+/* Hide/show the WHOLE lead-details column (owner ask). The column is a flex
+   member of .inbox-shell, so when shown it PUSHES the conversation (never
+   overlaps) and when hidden the conversation takes the full width. Toggled
+   from the top bar's panel button; shown by default on desktop, hidden on
+   phones. */
+.inbox-shell.lead-hidden .lead-panel { display: none; }
+.lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; }
+.dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.lp-panel-toggle {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; min-height: 36px; padding: 0; border: 1px solid var(--line-2);
+  border-radius: 10px; background: transparent; color: var(--ink-3); cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.lp-collapse-toggle:hover { color: var(--ink); }
-.lp-collapse-toggle .lp-chev { margin-left: auto; transition: transform .18s ease; }
-.lead-panel.lp-open .lp-collapse-toggle .lp-chev { transform: rotate(180deg); }
-.lp-collapse-body { display: none; }
-.lead-panel.lp-open .lp-collapse-body { display: block; }
+.lp-panel-toggle:hover { background: var(--bg-sunken); border-color: var(--ink-3); color: var(--ink); }
+.lp-panel-toggle:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
+.lp-panel-toggle.on { background: var(--bg-sunken); color: var(--ink); }
+.lp-panel-toggle svg { width: 16px; height: 16px; }
 .dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 16px; letter-spacing: -0.01em; min-width: 0; }
 .qc-sub-chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
 
@@ -1836,9 +1838,22 @@ function backToInbox() {
    its feedback input), the follow-up gate panel directly UNDER Approve,
    then the learning block last - everything below the text box.
    Sent/auto_sent retro actions stay in the label row, unchanged. */
-// Remembered open/closed state of the collapsible sidebar (null = decide from
-// viewport on first render: open on desktop, closed on phones).
-let LEAD_PANEL_OPEN = null;
+// Remembered hidden/shown state of the WHOLE lead-details column (null =
+// decide from viewport on first render: shown on desktop, hidden on phones).
+let PANEL_HIDDEN = null;
+// Show/hide the entire lead column by toggling .lead-hidden on the shell (the
+// column is a flex member, so this pushes/expands the conversation rather than
+// overlapping it), and reflect the state on the top-bar toggle button.
+function applyLeadPanelHidden() {
+  const shell = document.getElementById("inboxShell");
+  if (shell) shell.classList.toggle("lead-hidden", !!PANEL_HIDDEN);
+  const btn = document.getElementById("panelToggleBtn");
+  if (btn) {
+    btn.classList.toggle("on", !PANEL_HIDDEN);
+    btn.setAttribute("aria-pressed", (!PANEL_HIDDEN).toString());
+    btn.title = PANEL_HIDDEN ? "Show lead details" : "Hide lead details";
+  }
+}
 function renderDetail(row) {
   const el = document.getElementById("inboxRight");
   const panelEl = document.getElementById("leadPanel");
@@ -1933,7 +1948,10 @@ function renderDetail(row) {
     <div class="detail-head">
       <div class="dh-row1">
         <h2 class="dh-name" title="reported ${esc(pulledAgo(row.created_at))}">${esc(leadName(row))} ${testChip}</h2>
-        <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
+        <div class="dh-actions">
+          <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
+          <button type="button" class="lp-panel-toggle" id="panelToggleBtn" aria-pressed="true" title="Hide lead details">${ICON_PANEL}</button>
+        </div>
       </div>
       <div class="dh-row2">
         <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
@@ -1968,24 +1986,20 @@ function renderDetail(row) {
   `;
   if (panelEl) {
     panelEl.style.display = "";
-    // Collapse wrapper: the lead details (category / campaign / decision)
-    // collapse under a "Lead details" toggle - on desktop AND phones now
-    // (owner ask). The open/closed choice is remembered across re-renders
-    // (LEAD_PANEL_OPEN), defaulting open on desktop, closed on phones. The
-    // toggle + body wrapper sit OUTSIDE leadPanelHtml, so the category picker
-    // and its handlers are untouched.
-    if (LEAD_PANEL_OPEN === null) LEAD_PANEL_OPEN = window.innerWidth > 640;
-    panelEl.innerHTML =
-      '<button type="button" class="lp-collapse-toggle" id="lpCollapseToggle" aria-expanded="' + (LEAD_PANEL_OPEN ? "true" : "false") + '">'
-      + '<span>Lead details</span><span class="lp-chev" aria-hidden="true">&#9662;</span></button>'
-      + '<div class="lp-collapse-body">' + leadPanelHtml(row) + '</div>';
-    panelEl.classList.toggle("lp-open", LEAD_PANEL_OPEN);
-    const lpToggleBtn = document.getElementById("lpCollapseToggle");
-    if (lpToggleBtn) lpToggleBtn.addEventListener("click", () => {
-      LEAD_PANEL_OPEN = panelEl.classList.toggle("lp-open");
-      lpToggleBtn.setAttribute("aria-expanded", LEAD_PANEL_OPEN ? "true" : "false");
-    });
+    // The whole lead-details column is shown/hidden as one (see
+    // applyLeadPanelHidden + the top-bar #panelToggleBtn); the panel itself is
+    // just a titled stack of sections.
+    panelEl.innerHTML = '<div class="lp-panel-head">Lead details</div>' + leadPanelHtml(row);
   }
+  // Wire the top-bar button that hides/shows the entire lead-details column,
+  // and apply the remembered state (default shown on desktop, hidden on phones).
+  if (PANEL_HIDDEN === null) PANEL_HIDDEN = window.innerWidth <= 640;
+  const panelToggleBtn = document.getElementById("panelToggleBtn");
+  if (panelToggleBtn) panelToggleBtn.addEventListener("click", () => {
+    PANEL_HIDDEN = !PANEL_HIDDEN;
+    applyLeadPanelHidden();
+  });
+  applyLeadPanelHidden();
   wireDetailEvents(el, row);
   wireLeadPanelEvents(panelEl, row);
   // Wire the category control in BOTH the sticky bar (inside el) and the
@@ -2112,6 +2126,8 @@ function leadFirstNameOr(row, fallback) {
 const ICON_GLOBE = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10Zm-2.29-2.333A17.9 17.9 0 0 1 8.027 13H4.062a8.008 8.008 0 0 0 5.648 6.667ZM10.03 13c.152 2.283.702 4.34 1.5 5.831.184.343.379.654.577.926.198-.272.393-.583.577-.926.798-1.49 1.348-3.548 1.5-5.831h-4.154Zm9.908 0h-3.965a17.9 17.9 0 0 1-1.683 6.667A8.008 8.008 0 0 0 19.938 13ZM4.062 11h3.965A17.9 17.9 0 0 1 9.71 4.333 8.008 8.008 0 0 0 4.062 11Zm5.969 0h4.153c-.152-2.283-.702-4.34-1.5-5.831-.184-.343-.379-.654-.577-.926-.198.272-.393.583-.577.926-.798 1.49-1.348 3.548-1.5 5.831Zm4.26-6.667A17.9 17.9 0 0 1 15.973 11h3.965a8.008 8.008 0 0 0-5.648-6.667Z"/></svg>`;
 const ICON_LINKEDIN = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.98 3.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM3 9h4v12H3zM10 9h3.8v1.64h.05c.53-1 1.83-2.05 3.77-2.05 4.03 0 4.78 2.65 4.78 6.1V21H16.6v-5.4c0-1.29-.03-2.95-1.8-2.95-1.8 0-2.08 1.4-2.08 2.85V21H10z"/></svg>`;
 const ICON_EXTERNAL = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 3a1 1 0 0 0 0 2h3.59l-8.3 8.29a1 1 0 1 0 1.42 1.42L19 6.41V10a1 1 0 0 0 2 0V4a1 1 0 0 0-1-1h-6Z"/><path d="M5 5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 1 0-2 0v5H5V7h5a1 1 0 0 0 0-2H5Z"/></svg>`;
+// Right-panel toggle glyph: a framed rectangle with a right-hand column.
+const ICON_PANEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><line x1="15" y1="4.5" x2="15" y2="19.5"/></svg>`;
 
 function companyBrandFromDomain(d) {
   d = String(d || "").trim().toLowerCase().replace(/^www\./, "");
