@@ -2038,6 +2038,8 @@ function companyBrandFromDomain(d) {
   if (!d) return "";
   return d.split(".")[0] || "";
 }
+function ensureHttps(u) { u = String(u || "").trim(); return u && !/^https?:\/\//i.test(u) ? "https://" + u : u; }
+function domainFromUrl(u) { u = ensureHttps(u); if (!u) return ""; try { return new URL(u).hostname.replace(/^www\./, ""); } catch (_e) { return ""; } }
 function leadInitials(row) {
   const fn = String(row.lead_first_name || "").trim();
   const ln = String(row.lead_last_name || "").trim();
@@ -2064,6 +2066,21 @@ function leadLinkedIn(row) {
     search: true,
   };
 }
+/* The two quick-link buttons (Website / LinkedIn) as one string, so a late
+   lead-contact fetch can re-render JUST this row without disturbing the
+   category picker. Website prefers the row's own domain, then Smartlead's
+   stored website. LinkedIn links the stored profile when we have it (Smartlead
+   holds `linkedin_profile`); the label is always "LinkedIn", falling back to a
+   people-search only until the profile arrives / if none is on file. */
+function leadQuickLinksHtml(row) {
+  const domain = row.company_domain || domainFromUrl(row.company_website);
+  const site = domain ? `https://${esc(domain)}` : (row.company_website ? esc(ensureHttps(row.company_website)) : "");
+  const websiteBtn = site
+    ? `<a class="lp-qbtn" href="${site}" target="_blank" rel="noopener" title="${esc(domain || row.company_website)}">${ICON_GLOBE}<span>Website</span></a>` : "";
+  const li = leadLinkedIn(row);
+  const linkedinBtn = `<a class="lp-qbtn" id="lpLinkedinBtn" href="${esc(li.href)}" target="_blank" rel="noopener" title="${esc(li.title)}">${ICON_LINKEDIN}<span>LinkedIn</span></a>`;
+  return websiteBtn + linkedinBtn;
+}
 /* Colour tone for the current-category pill: green for a positive, red for a
    clear negative, amber for uncategorised, neutral grey for everything else
    (out-of-office, wrong-person, and other non-judgement labels). */
@@ -2085,17 +2102,6 @@ function leadPanelHtml(row) {
   const subChkHtml = showSubChk
     ? `<label class="lp-subseq"><input type="checkbox" class="qc-sub" data-id="${esc(row.id)}" ${row.added_to_subsequence ? "checked" : ""}> Added to subsequence</label>`
     : "";
-
-  // Quick links. Website only when we have a domain; LinkedIn always (a search
-  // link when no stored profile, so it's never a dead end).
-  const site = row.company_domain ? `https://${esc(row.company_domain)}` : "";
-  const websiteBtn = site
-    ? `<a class="lp-qbtn" href="${site}" target="_blank" rel="noopener" title="${esc(row.company_domain)}">${ICON_GLOBE}<span>Website</span></a>` : "";
-  const li = leadLinkedIn(row);
-  // Honest label: "Find on LinkedIn" when it's a name+company search (no stored
-  // profile), plain "LinkedIn" only when we actually have the profile URL.
-  const liLabel = li.search ? "Find on LinkedIn" : "LinkedIn";
-  const linkedinBtn = `<a class="lp-qbtn" href="${esc(li.href)}" target="_blank" rel="noopener" title="${esc(li.title)}">${ICON_LINKEDIN}<span>${liLabel}</span></a>`;
 
   // Owner ruling 2026-07-14: same "no agent" fact as the list row's pill,
   // spelled out here as one muted line - agent_id = null means the campaign
@@ -2130,7 +2136,7 @@ function leadPanelHtml(row) {
         <div class="lp-sub"${row.lead_email ? ` title="${esc(row.lead_email)}"` : ""}>${row.lead_email ? esc(row.lead_email) : "No email on file"}</div>
       </div>
     </div>
-    <div class="lp-quick">${websiteBtn}${linkedinBtn}</div>
+    <div class="lp-quick" id="lpQuick">${leadQuickLinksHtml(row)}</div>
     <hr class="lp-divide">
     ${catSectionHtml}
     <div class="lp-section">
@@ -2190,6 +2196,30 @@ async function hydrateLeadCategory(row) {
     return `<option value="${esc(String(c.id))}" data-name="${esc(c.name)}"${isCur ? " disabled" : ""}>${esc(c.name)}${isCur ? " (current)" : ""}</option>`;
   }).join("");
   updateLpCatBtn();
+}
+/* Pull the lead's real LinkedIn profile + website from Smartlead (cached
+   server-side) when the reply is opened, then re-render ONLY the quick-links
+   row so it links the stored profile - a category pick in progress is never
+   lost. */
+async function hydrateLeadContact(row) {
+  if (!row || row.is_test) return;
+  const haveLi = row.lead_linkedin || row.linkedin_url || row.linkedin;
+  const haveSite = row.company_domain || row.company_website;
+  if (haveLi && haveSite) return;
+  const res = await fetchJson(`/api/setter/lead-contact?id=${encodeURIComponent(row.id)}`);
+  if (!res.ok || !res.data) return;
+  let changed = false;
+  if (res.data.linkedin && !haveLi) { row.lead_linkedin = res.data.linkedin; changed = true; }
+  if (res.data.website && !haveSite) { row.company_website = res.data.website; changed = true; }
+  if (!changed) return;
+  [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
+    const r = (list || []).find((x) => String(x.id) === String(row.id));
+    if (r) { if (res.data.linkedin) r.lead_linkedin = res.data.linkedin; if (res.data.website) r.company_website = res.data.website; }
+  });
+  if (String(selectedRowId) === String(row.id)) {
+    const q = document.getElementById("lpQuick");
+    if (q) q.innerHTML = leadQuickLinksHtml(row);
+  }
 }
 function currentDetailRow() {
   if (!selectedRowId) return null;
@@ -2271,6 +2301,7 @@ function wireLeadPanelEvents(root, row) {
     catSel.addEventListener("change", updateLpCatBtn);
     hydrateLeadCategory(row);
   }
+  hydrateLeadContact(row);
 }
 
 /* Change 1: one scrollable, chronological conversation built from

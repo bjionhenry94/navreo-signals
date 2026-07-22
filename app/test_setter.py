@@ -8484,6 +8484,34 @@ def test_recategorise_route_guards():
          code == 200 and resp.get("action") == "discarded", (code, resp))
 
 
+def test_lead_contact_route():
+    sb, http = fresh_setter()
+    setter._LEAD_CONTACT_CACHE.clear()
+    _seed_uncat_queue_row(sb, 720, 9311, "li@example.com", "li-1")
+    http.lead_by_email_result = {"id": 9001, "email": "li@example.com",
+                                 "linkedin_profile": "https://www.linkedin.com/in/li-example",
+                                 "website": "https://li-example.com",
+                                 "company_name": "Li Example", "phone_number": None}
+    code, resp = setter.route_lead_contact_get({"id": ["720"]})
+    check("lead-contact: returns the stored LinkedIn profile + website from Smartlead",
+         code == 200 and resp.get("linkedin") == "https://www.linkedin.com/in/li-example"
+         and resp.get("website") == "https://li-example.com", (code, resp))
+    hits_before = len([u for _m, u in http.calls if "/leads/" in u])
+    code2, _r2 = setter.route_lead_contact_get({"id": ["720"]})
+    hits_after = len([u for _m, u in http.calls if "/leads/" in u])
+    check("lead-contact: second call served from the 1h per-email cache",
+         code2 == 200 and hits_after == hits_before, (hits_before, hits_after))
+    _seed_uncat_queue_row(sb, 721, 9311, "testli@example.com", "li-2", is_test=True)
+    hits_b = len([u for _m, u in http.calls if "/leads/" in u])
+    code3, resp3 = setter.route_lead_contact_get({"id": ["721"]})
+    hits_a = len([u for _m, u in http.calls if "/leads/" in u])
+    check("lead-contact: a test row answers empty and never calls Smartlead",
+         code3 == 200 and resp3.get("linkedin") == "" and hits_a == hits_b,
+         (code3, resp3, hits_b, hits_a))
+    code4, _r4 = setter.route_lead_contact_get({"id": ["99999"]})
+    check("lead-contact: unknown row is a 404", code4 == 404, code4)
+
+
 def test_categories_route_serves_smartlead_list_cached():
     sb, http = fresh_setter()
     setter._CATEGORY_CACHE["val"] = None
@@ -8741,6 +8769,7 @@ if __name__ == "__main__":
     test_uncat_manual_verdict_is_untouchable()
     test_recategorise_route_convert_and_discard()
     test_recategorise_route_guards()
+    test_lead_contact_route()
     test_categories_route_serves_smartlead_list_cached()
 
     failed = run_report()

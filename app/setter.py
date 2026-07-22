@@ -5277,6 +5277,50 @@ def route_thread_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+_LEAD_CONTACT_CACHE = {}          # email(lower) -> (fetched_at, {linkedin, website, ...})
+_LEAD_CONTACT_TTL = 3600.0        # a lead's profile/website changes ~never; 1h cache
+
+
+def route_lead_contact_get(params):
+    """GET /api/setter/lead-contact?id=<queue_id> - the lead's LinkedIn profile
+    and website straight from Smartlead (the system of record), for the
+    sidebar's quick links. Smartlead already stores `linkedin_profile`, so the
+    sidebar links the REAL profile rather than a name search. Cached per email
+    for an hour; test rows and unknown leads answer empty. Never raises."""
+    try:
+        qid = _qp(params, "id", "")
+        if not qid:
+            return 400, {"error": "id is required"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=lead_email,is_test") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row:
+            return 404, {"error": "Queue row not found."}
+        email = (row.get("lead_email") or "").strip()
+        empty = {"linkedin": "", "website": "", "company_name": "", "phone": ""}
+        if not email or row.get("is_test"):
+            return 200, empty
+        now = _time.time()
+        cached = _LEAD_CONTACT_CACHE.get(email.lower())
+        if cached and (now - cached[0]) < _LEAD_CONTACT_TTL:
+            return 200, cached[1]
+        out = dict(empty)
+        try:
+            resp = _sl_get("/leads/", {"email": email})
+            if isinstance(resp, dict):
+                out = {
+                    "linkedin": (resp.get("linkedin_profile") or "").strip(),
+                    "website": (resp.get("website") or "").strip(),
+                    "company_name": (resp.get("company_name") or "").strip(),
+                    "phone": str(resp.get("phone_number") or "").strip(),
+                }
+        except Exception:  # noqa: BLE001 - a missing lookup just means no quick link
+            pass
+        _LEAD_CONTACT_CACHE[email.lower()] = (now, out)
+        return 200, out
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def _instructions_sha(text: str) -> str:
     import hashlib
     return hashlib.sha256((text or "").encode()).hexdigest()
@@ -8157,6 +8201,7 @@ GET_ROUTES = {
     "/api/setter/queue/row": route_queue_row_get,
     "/api/setter/categories": route_categories_get,
     "/api/setter/thread": route_thread_get,
+    "/api/setter/lead-contact": route_lead_contact_get,
     "/api/setter/grading": route_grading_get,
     "/api/setter/training": route_training_get,
     "/api/setter/training/share-info": route_training_share_info,
