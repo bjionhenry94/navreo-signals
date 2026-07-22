@@ -74,7 +74,7 @@
 .il-list .empty { padding: 40px 16px; }
 .il-pager { flex-shrink: 0; border-top: 1px solid var(--line); padding: 7px 10px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
 .il-pager button { padding: 4px 9px; font-size: 12px; }
-.inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 40px; }
+.inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 0 26px 40px; }
 
 /* Fixed lead-info sidebar (third column), Smartlead Lead-Overview-style but
    docked, not an overlay. Only shown once a row is selected (renderDetail
@@ -143,20 +143,16 @@
 .lp-cat-edit .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
 .lp-cat-hint { margin-top: 10px; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 .lp-cat-hint.lp-hint-err { color: var(--red); }
-/* Sticky lead-info header bar (desktop/tablet): identity + quick links +
-   category control pinned above the conversation while the thread scrolls.
-   The sidebar stays; this mirrors its key controls at the top of the reply.
-   Phones keep their own collapsible lead panel, so .detail-leadbar hides there. */
-.detail-topbar { position: sticky; top: 0; z-index: 20; background: var(--bg); padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
-.detail-leadbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
-.detail-leadbar .lp-quick { flex: 0 0 auto; margin: 0; }
-.detail-leadbar .lp-quick .lp-qbtn { flex: 0 0 auto; }
-.lp-cat-compact { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.lp-cat-compact .lp-label { display: none; }
-.lp-cat-compact .lp-cat-now { margin: 0; }
-.lp-cat-compact .lp-cat-edit { flex: 0 1 auto; }
-.lp-cat-compact .lp-cat-edit select { flex: 0 1 auto; width: 200px; max-width: 100%; min-width: 140px; }
-.lp-cat-compact .lp-cat-hint { flex: 1 1 100%; margin: 0; }
+/* Sticky lead-info header bar: one row - identity (name + replied + email) on
+   the left, Website / LinkedIn / Smartlead links on the right - pinned above
+   the conversation while it scrolls. The category control lives in the sidebar. */
+.detail-topbar { position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 16px 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+/* One-row identity meta: "replied 17m · email" sits inline after the name. */
+.dh-meta { font-weight: 400; font-size: 12.5px; color: var(--ink-3); letter-spacing: 0; }
+.dh-meta .dh-email { color: var(--ink-2); }
+/* The Website / LinkedIn / Smartlead links, content-width, on the right. */
+.dh-links { flex: 0 0 auto; margin: 0; }
+.dh-links .lp-qbtn { flex: 0 0 auto; min-height: 34px; }
 /* The decision */
 .lead-panel .lp-decision { margin-bottom: 11px; }
 .lead-panel .lp-decision-head { display: block; font-weight: 600; font-size: 13px; color: var(--ink); margin-bottom: 3px; }
@@ -207,7 +203,7 @@
 @media (max-width: 900px) {
   .inbox-shell { flex-direction: column; height: auto; min-height: 0; border: none; overflow: visible; }
   .inbox-left { width: 100%; border-right: none; border: 1px solid var(--line); border-radius: var(--radius); height: auto; }
-  .inbox-right { padding: 16px 4px 40px; height: auto; }
+  .inbox-right { padding: 0 4px 40px; height: auto; }
   .lead-panel { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 16px; max-height: none; }
   .inbox-shell:not(.mobile-detail) .inbox-right { display: none; }
   .inbox-shell:not(.mobile-detail) .lead-panel { display: none; }
@@ -259,24 +255,13 @@
     padding: 6px 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line);
   }
   .inbox-shell.mobile-detail .detail-head { margin-bottom: 0; }
-  /* Phones keep the collapsible lead panel, so the desktop sticky lead-info
-     row is hidden here to avoid showing the links + category twice. */
-  .inbox-shell.mobile-detail .detail-leadbar { display: none; }
-
-  /* Lead context (Website / LinkedIn / category / campaign) collapses under a
+  /* Lead context (category / campaign / decision) collapses under a
      toggle, pinned to the top of the reply, collapsed by default. */
   .inbox-shell.mobile-detail .lead-panel {
     order: -1; margin: 0 0 6px; padding-top: 0; border-top: none;
   }
-  .lp-collapse-toggle {
-    display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px;
-    padding: 8px 2px; background: none; border: none;
-    font: 600 13px var(--font-sans); color: var(--ink-2); cursor: pointer;
-  }
-  .lp-collapse-toggle .lp-chev { margin-left: auto; transition: transform .18s ease; }
-  .lead-panel.lp-open .lp-collapse-toggle .lp-chev { transform: rotate(180deg); }
-  .lead-panel .lp-collapse-body { display: none; }
-  .lead-panel.lp-open .lp-collapse-body { display: block; }
+  /* (collapse toggle + body rules now live in the base stylesheet so the
+     sidebar is collapsible on desktop too) */
 
   /* The Approve / Regenerate / Dismiss row becomes a fixed bottom thumb bar.
      Approve takes its own full-width top line; Regenerate + Dismiss share the
@@ -312,13 +297,25 @@
 .back-link:hover { color: var(--ink); }
 
 /* ── Detail (right pane) ──────────────────────────────────────────────── */
-.detail-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; margin-bottom: 0; }
 /* Lead-column collapse (phone-only, owner ask 2026-07-22). Base = desktop:
    the toggle is hidden and the body always shows, so the sidebar is unchanged.
    The phone media block flips these to a real collapsible. */
-.lp-collapse-toggle { display: none; }
-.lp-collapse-body { display: block; }
-.dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+/* Lead-details collapse - now available on desktop too (owner ask). The
+   toggle shows everywhere; the body is hidden unless the panel has .lp-open
+   (renderDetail defaults it open on desktop, closed on phones). */
+.lp-collapse-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px;
+  padding: 6px 2px 12px; background: none; border: none;
+  font: 600 12px var(--font-sans); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-3); cursor: pointer;
+}
+.lp-collapse-toggle:hover { color: var(--ink); }
+.lp-collapse-toggle .lp-chev { margin-left: auto; transition: transform .18s ease; }
+.lead-panel.lp-open .lp-collapse-toggle .lp-chev { transform: rotate(180deg); }
+.lp-collapse-body { display: none; }
+.lead-panel.lp-open .lp-collapse-body { display: block; }
+.dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 16px; letter-spacing: -0.01em; min-width: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .qc-sub-chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
 
 .qc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
@@ -1834,6 +1831,9 @@ function backToInbox() {
    its feedback input), the follow-up gate panel directly UNDER Approve,
    then the learning block last - everything below the text box.
    Sent/auto_sent retro actions stay in the label row, unchanged. */
+// Remembered open/closed state of the collapsible sidebar (null = decide from
+// viewport on first render: open on desktop, closed on phones).
+let LEAD_PANEL_OPEN = null;
 function renderDetail(row) {
   const el = document.getElementById("inboxRight");
   const panelEl = document.getElementById("leadPanel");
@@ -1908,10 +1908,6 @@ function renderDetail(row) {
   // this lead's conversation - one click from the chat. No per-lead URL
   // exists (opening a chat never changes the address bar), so this is the
   // closest supported jump.
-  const smartleadBtnHtml = row.lead_email
-    ? `<a class="btn sm" href="https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email)}" target="_blank" rel="noopener" title="Open this lead's conversation in Smartlead's master inbox">Open in Smartlead</a>` : "";
-  const teachBtnHtml = `<span class="small muted" title="${esc(row.created_at || "")} (when this landed in the queue)">reported ${pulledAgo(row.created_at)}</span> ${smartleadBtnHtml}`;
-
   // Did they reply after our send? Client-side scan of every known row for a
   // LATER inbound from the same lead - a later reply always creates a new
   // queue row, so ALL_ROWS is the ground truth we already have.
@@ -1930,13 +1926,9 @@ function renderDetail(row) {
     <div class="detail-topbar">
     <a class="back-link mobile-back" href="#" id="backToInboxLink">&larr; Back to inbox</a>
     <div class="detail-head">
-      <h2 class="dh-name">${esc(leadName(row))} ${testChip}
-        <span class="small muted dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span></h2>
-      ${teachBtnHtml}
-    </div>
-    <div class="detail-leadbar">
-      <div class="lp-quick">${leadQuickLinksHtml(row)}</div>
-      <div class="lp-cat lp-cat-compact">${categoryControlInner(row, true)}</div>
+      <h2 class="dh-name" title="reported ${esc(pulledAgo(row.created_at))}">${esc(leadName(row))} ${testChip}
+        <span class="dh-meta" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}${row.lead_email ? ` &middot; <span class="dh-email">${esc(row.lead_email)}</span>` : ""}</span></h2>
+      <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
     </div>
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
@@ -1965,19 +1957,22 @@ function renderDetail(row) {
   `;
   if (panelEl) {
     panelEl.style.display = "";
-    // Collapse wrapper (owner ask 2026-07-22): on phones the lead column
-    // (Website / LinkedIn / category / campaign) collapses under a toggle. The
-    // toggle + body wrapper sit OUTSIDE leadPanelHtml, so its category picker
-    // and quick-link handlers are untouched. Desktop CSS hides the toggle and
-    // always shows the body, so the sidebar looks exactly as before.
+    // Collapse wrapper: the lead details (category / campaign / decision)
+    // collapse under a "Lead details" toggle - on desktop AND phones now
+    // (owner ask). The open/closed choice is remembered across re-renders
+    // (LEAD_PANEL_OPEN), defaulting open on desktop, closed on phones. The
+    // toggle + body wrapper sit OUTSIDE leadPanelHtml, so the category picker
+    // and its handlers are untouched.
+    if (LEAD_PANEL_OPEN === null) LEAD_PANEL_OPEN = window.innerWidth > 640;
     panelEl.innerHTML =
-      '<button type="button" class="lp-collapse-toggle" id="lpCollapseToggle" aria-expanded="false">'
+      '<button type="button" class="lp-collapse-toggle" id="lpCollapseToggle" aria-expanded="' + (LEAD_PANEL_OPEN ? "true" : "false") + '">'
       + '<span>Lead details</span><span class="lp-chev" aria-hidden="true">&#9662;</span></button>'
       + '<div class="lp-collapse-body">' + leadPanelHtml(row) + '</div>';
+    panelEl.classList.toggle("lp-open", LEAD_PANEL_OPEN);
     const lpToggleBtn = document.getElementById("lpCollapseToggle");
     if (lpToggleBtn) lpToggleBtn.addEventListener("click", () => {
-      const isOpen = panelEl.classList.toggle("lp-open");
-      lpToggleBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      LEAD_PANEL_OPEN = panelEl.classList.toggle("lp-open");
+      lpToggleBtn.setAttribute("aria-expanded", LEAD_PANEL_OPEN ? "true" : "false");
     });
   }
   wireDetailEvents(el, row);
@@ -2105,6 +2100,7 @@ function leadFirstNameOr(row, fallback) {
 
 const ICON_GLOBE = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10Zm-2.29-2.333A17.9 17.9 0 0 1 8.027 13H4.062a8.008 8.008 0 0 0 5.648 6.667ZM10.03 13c.152 2.283.702 4.34 1.5 5.831.184.343.379.654.577.926.198-.272.393-.583.577-.926.798-1.49 1.348-3.548 1.5-5.831h-4.154Zm9.908 0h-3.965a17.9 17.9 0 0 1-1.683 6.667A8.008 8.008 0 0 0 19.938 13ZM4.062 11h3.965A17.9 17.9 0 0 1 9.71 4.333 8.008 8.008 0 0 0 4.062 11Zm5.969 0h4.153c-.152-2.283-.702-4.34-1.5-5.831-.184-.343-.379-.654-.577-.926-.198.272-.393.583-.577.926-.798 1.49-1.348 3.548-1.5 5.831Zm4.26-6.667A17.9 17.9 0 0 1 15.973 11h3.965a8.008 8.008 0 0 0-5.648-6.667Z"/></svg>`;
 const ICON_LINKEDIN = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.98 3.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM3 9h4v12H3zM10 9h3.8v1.64h.05c.53-1 1.83-2.05 3.77-2.05 4.03 0 4.78 2.65 4.78 6.1V21H16.6v-5.4c0-1.29-.03-2.95-1.8-2.95-1.8 0-2.08 1.4-2.08 2.85V21H10z"/></svg>`;
+const ICON_EXTERNAL = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 3a1 1 0 0 0 0 2h3.59l-8.3 8.29a1 1 0 1 0 1.42 1.42L19 6.41V10a1 1 0 0 0 2 0V4a1 1 0 0 0-1-1h-6Z"/><path d="M5 5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 1 0-2 0v5H5V7h5a1 1 0 0 0 0-2H5Z"/></svg>`;
 
 function companyBrandFromDomain(d) {
   d = String(d || "").trim().toLowerCase().replace(/^www\./, "");
@@ -2152,7 +2148,11 @@ function leadQuickLinksHtml(row) {
     ? `<a class="lp-qbtn" href="${site}" target="_blank" rel="noopener" title="${esc(domain || row.company_website)}">${ICON_GLOBE}<span>Website</span></a>` : "";
   const li = leadLinkedIn(row);
   const linkedinBtn = `<a class="lp-qbtn lp-li-btn" href="${esc(li.href)}" target="_blank" rel="noopener" title="${esc(li.title)}">${ICON_LINKEDIN}<span>LinkedIn</span></a>`;
-  return websiteBtn + linkedinBtn;
+  // "Open in Smartlead" now sits beside Website/LinkedIn as a matching button
+  // (owner ask). The master-inbox ?search= prefills this lead's conversation.
+  const smartleadBtn = row.lead_email
+    ? `<a class="lp-qbtn" href="https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email)}" target="_blank" rel="noopener" title="Open this lead's conversation in Smartlead's master inbox">${ICON_EXTERNAL}<span>Smartlead</span></a>` : "";
+  return websiteBtn + linkedinBtn + smartleadBtn;
 }
 /* Colour tone for the current-category pill: green for a positive, red for a
    clear negative, amber for uncategorised, neutral grey for everything else
@@ -2206,16 +2206,9 @@ function leadPanelHtml(row) {
   // wrapped here in the sidebar's sunken card section.
   const catSectionHtml = `<div class="lp-section lp-cat">${categoryControlInner(row, false)}</div>`;
 
+  // Identity (name / email) and the Website/LinkedIn links now live in the
+  // sticky top bar, so the sidebar leads straight with the category control.
   return `
-    <div class="lp-head">
-      <div class="lp-avatar">${esc(leadInitials(row))}</div>
-      <div class="lp-head-txt">
-        <div class="lp-name">${esc(leadName(row))}</div>
-        <div class="lp-sub"${row.lead_email ? ` title="${esc(row.lead_email)}"` : ""}>${row.lead_email ? esc(row.lead_email) : "No email on file"}</div>
-      </div>
-    </div>
-    <div class="lp-quick">${leadQuickLinksHtml(row)}</div>
-    <hr class="lp-divide">
     ${catSectionHtml}
     <div class="lp-section">
       <div class="lp-label">Campaign</div>
