@@ -199,6 +199,72 @@
   .inbox-shell.mobile-detail .mobile-back { display: inline-flex; }
 }
 
+/* ── Phone triage mode (P1 "triage stack" feel, chosen 2026-07-22) ──────────
+   Pure presentation layer over the existing mobile-detail flow: the same
+   list -> full-screen reply -> act -> auto-advance journey the setter already
+   runs, restyled for one-thumb use on the go. NOTHING here touches the send /
+   gate / edit-learning logic - those stay exactly as the desktop drives them.
+   Reached from the Slack "Respond in the Appointment Setter" link on a phone. */
+@media (max-width: 640px) {
+  .main { padding: 14px 14px 0; }
+  /* Calmer header: title + a compact "check" affordance */
+  .setter-head-row { gap: 8px 10px; margin-bottom: 8px; }
+  .sh-title { font-size: 20px; }
+  .stats-inline { width: 100%; order: 3; }
+  #checkNowBtn { padding: 8px 12px; font-size: 12.5px; }
+
+  /* Status lenses = one horizontal scroll strip of touch pills */
+  .setter-toolbar { gap: 8px; margin-bottom: 8px; }
+  .setter-toolbar .filters {
+    flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    width: 100%; padding-bottom: 2px; scrollbar-width: none;
+  }
+  .setter-toolbar .filters::-webkit-scrollbar { display: none; }
+  .setter-toolbar .filters .chip { flex: 0 0 auto; min-height: 40px; }
+  .setter-toolbar .test-toggle { order: 4; }
+  /* Admin (Agents/Settings/Try it) is not the on-the-go job - keep it, shrink it */
+  .setter-toolbar .tb-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .setter-toolbar .tb-actions .btn { padding: 7px 11px; font-size: 12.5px; }
+
+  /* Full-screen reply card: give the body room for the pinned action bar */
+  .inbox-shell.mobile-detail .inbox-right {
+    padding: 6px 14px calc(150px + env(safe-area-inset-bottom));
+  }
+  .inbox-shell.mobile-detail .mobile-back {
+    min-height: 40px; align-items: center; font-size: 14px; margin-bottom: 6px;
+  }
+  .dh-name { font-size: 18px; }
+
+  /* The Approve / Regenerate / Dismiss row becomes a fixed bottom thumb bar.
+     Approve takes its own full-width top line; Regenerate + Dismiss share the
+     line below; the gate hint wraps beneath. All existing buttons/handlers. */
+  .inbox-shell.mobile-detail .qc-actions {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    margin: 0; padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+    background: var(--bg); border-top: 1px solid var(--line);
+    box-shadow: 0 -6px 20px rgba(20, 17, 14, 0.06);
+    gap: 8px; flex-wrap: wrap; align-items: stretch;
+  }
+  .inbox-shell.mobile-detail .qc-actions .qc-send {
+    order: -1; flex: 1 1 100%; min-height: 52px; font-size: 15px;
+  }
+  .inbox-shell.mobile-detail .qc-actions .qc-split { flex: 1 1 auto; }
+  .inbox-shell.mobile-detail .qc-actions .qc-split .qc-regen { flex: 1; min-height: 48px; }
+  .inbox-shell.mobile-detail .qc-actions .qc-split .qc-regen-arrow { min-height: 48px; }
+  .inbox-shell.mobile-detail .qc-actions .qc-dismiss { flex: 1 1 auto; min-height: 48px; }
+  .inbox-shell.mobile-detail .qc-actions .gate-hint { flex: 1 1 100%; order: 6; margin-top: 2px; }
+
+  /* Follow-up gate chips: touch-sized, sitting just above the pinned bar */
+  .send-gate { margin-top: 12px; }
+  .send-gate .sg-chip { min-height: 44px; }
+
+  /* The retro follow-up picker + feedback input also live above the bar */
+  .qc-feedback, .qc-linkbar { margin-bottom: 4px; }
+
+  /* Lead-info ("how this was decided") drops below the conversation, calm */
+  .inbox-shell.mobile-detail .lead-panel { margin-top: 14px; }
+}
+
 .back-link { color: var(--ink-3); text-decoration: none; font-size: 13px; align-items: center; gap: 5px; }
 .back-link:hover { color: var(--ink); }
 
