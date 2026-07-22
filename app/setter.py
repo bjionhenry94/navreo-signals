@@ -4047,13 +4047,18 @@ def _sl_lead_id_by_email(email: str):
 
 def route_queue_recategorise(payload):
     """POST /api/setter/queue/recategorise {id, category_id, category_name} -
-    the human verdict on an uncategorised row. Order is load-bearing:
-    Smartlead is written FIRST (it is the system of record for categories);
-    only on success do `replies` and the queue row move. A CORE_FOUR choice
-    re-runs the reply through the normal intake (drafting and all) exactly as
-    if the categoriser had labelled it; anything else dismisses the row with
-    the category recorded. Manual verdicts are authoritative
-    (category_source="manual") - nothing automated may overwrite them."""
+    the human verdict on a reply's category, from either the uncategorised
+    triage banner OR the lead sidebar's "update lead category" control (which
+    can retouch an ALREADY-categorised row, e.g. to mark someone unqualified).
+    Order is load-bearing: Smartlead is written FIRST (it is the system of
+    record for categories); only on success do `replies` and the queue row
+    move. A CORE_FOUR choice keeps the lead in the normal flow - converting
+    (re-running intake, drafting and all) when there is nothing to preserve
+    (the row was uncategorised or had been filed/dismissed), or just
+    relabelling an already-live row in place so a nuance change never nukes an
+    existing draft. Anything else files the category and clears the row from
+    the Setter. Manual verdicts are authoritative (category_source="manual") -
+    nothing automated may overwrite them."""
     try:
         payload = payload or {}
         qid = payload.get("id")
@@ -4067,8 +4072,10 @@ def route_queue_recategorise(payload):
             return 404, {"error": "Queue row not found."}
         if row.get("status") in ("sent", "auto_sent"):
             return 409, {"error": "This reply was already sent - it can't be recategorised here."}
-        if not _is_uncategorised_value(row.get("category")):
-            return 409, {"error": f"This row is already categorised ('{row.get('category')}')."}
+        # An already-categorised row is fine to change now (the sidebar's
+        # "update lead category" / "mark unqualified"): was_uncat only steers
+        # the disposition below, it is no longer a gate.
+        was_uncat = _is_uncategorised_value(row.get("category"))
         if not row.get("is_test"):
             lead_id = row.get("smartlead_lead_id") or _sl_lead_id_by_email(row.get("lead_email") or "")
             if not lead_id:
@@ -4097,9 +4104,16 @@ def route_queue_recategorise(payload):
         except Exception:  # noqa: BLE001 - logging must never break the route
             pass
         if cat_name in CORE_FOUR:
-            new_row = _convert_uncat_row(row, cat_name, source="manual")
-            return 200, {"ok": True, "action": "converted", "category": cat_name,
-                         "new_id": (new_row or {}).get("id"), "status": (new_row or {}).get("status")}
+            # Convert (re-run intake so it gets a draft) only when there is
+            # nothing to preserve - the row was uncategorised, or it had been
+            # filed/dismissed and is being rescued. An already-live categorised
+            # row just gets relabelled in place, keeping its draft and status.
+            if was_uncat or row.get("status") == "dismissed":
+                new_row = _convert_uncat_row(row, cat_name, source="manual")
+                return 200, {"ok": True, "action": "converted", "category": cat_name,
+                             "new_id": (new_row or {}).get("id"), "status": (new_row or {}).get("status")}
+            _apply_patch(row, {"category": cat_name, "category_source": "manual"})
+            return 200, {"ok": True, "action": "relabelled", "category": cat_name}
         _apply_patch(row, {"category": cat_name, "category_source": "manual", "status": "dismissed",
                            "decision": "review",
                            "decision_reason": f"Recategorised manually as '{cat_name}' - removed "

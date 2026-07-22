@@ -8422,10 +8422,40 @@ def test_recategorise_route_guards():
     check("recategorise guard: unknown row is a 404", code == 404, (code, resp))
     code, resp = setter.route_queue_recategorise({"id": 999})
     check("recategorise guard: missing params is a 400", code == 400, (code, resp))
-    _seed_uncat_queue_row(sb, 703, 9310, "done@example.com", "done-1", category="Interested")
+    # An already-categorised row is no longer a 409 - the sidebar can retouch
+    # it. A non-CORE_FOUR pick files the category and clears the row from the
+    # Setter (this is the "mark unqualified" path).
+    _seed_uncat_queue_row(sb, 703, 9310, "done@example.com", "done-1",
+                          category="Interested", smartlead_lead_id=4244)
     code, resp = setter.route_queue_recategorise({"id": 703, "category_id": 3,
                                                   "category_name": "Not Interested"})
-    check("recategorise guard: an already-categorised row is a 409", code == 409, (code, resp))
+    row703 = next((r for r in sb.queue if r.get("id") == 703), None)
+    check("recategorise: an already-categorised row re-filed to a negative is discarded + dismissed",
+         code == 200 and resp.get("action") == "discarded" and row703 is not None
+         and row703.get("status") == "dismissed" and row703.get("category") == "Not Interested"
+         and row703.get("category_source") == "manual", (code, resp, row703))
+    check("recategorise: re-filing an already-categorised row still writes Smartlead",
+         any(cw[1] == "4244" and (cw[2] or {}).get("category_id") == 3
+             for cw in http.category_writes), http.category_writes)
+    # Moving an already-live categorised row between positives relabels in
+    # place - status and any draft are preserved, the pipeline never re-runs.
+    relabel_calls = []
+    real_pr = setter.process_reply
+    setter.process_reply = lambda reply, a, s, _c=relabel_calls: (_c.append(reply) or {"id": 999})
+    try:
+        _seed_uncat_queue_row(sb, 708, 9310, "keep@example.com", "keep-1",
+                              category="Interested", smartlead_lead_id=4245,
+                              draft_body="hi there", status="needs_review")
+        code, resp = setter.route_queue_recategorise({"id": 708, "category_id": 2,
+                                                      "category_name": "Meeting Request"})
+    finally:
+        setter.process_reply = real_pr
+    row708 = next((r for r in sb.queue if r.get("id") == 708), None)
+    check("recategorise: a positive->positive change relabels in place (draft + status kept, no re-draft)",
+         code == 200 and resp.get("action") == "relabelled" and row708 is not None
+         and row708.get("status") == "needs_review" and row708.get("category") == "Meeting Request"
+         and row708.get("category_source") == "manual" and row708.get("draft_body") == "hi there"
+         and len(relabel_calls) == 0, (code, resp, row708, relabel_calls))
     _seed_uncat_queue_row(sb, 704, 9310, "sent@example.com", "sent-1", status="sent")
     code, resp = setter.route_queue_recategorise({"id": 704, "category_id": 1,
                                                   "category_name": "Interested"})
