@@ -222,9 +222,10 @@
   .setter-toolbar .filters::-webkit-scrollbar { display: none; }
   .setter-toolbar .filters .chip { flex: 0 0 auto; min-height: 40px; }
   .setter-toolbar .test-toggle { order: 4; }
-  /* Admin (Agents/Settings/Try it) is not the on-the-go job - keep it, shrink it */
-  .setter-toolbar .tb-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-  .setter-toolbar .tb-actions .btn { padding: 7px 11px; font-size: 12.5px; }
+  /* Admin cluster (Autopilot pill / Agents / Settings / Try it) is not the
+     on-the-go job - hidden on phones for a clean triage view (owner ask
+     2026-07-22). Reachable on desktop, where config actually happens. */
+  .setter-toolbar .tb-actions { display: none; }
 
   /* Full-screen reply card: give the body room for the pinned action bar */
   .inbox-shell.mobile-detail .inbox-right {
