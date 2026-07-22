@@ -10547,6 +10547,17 @@ def _reply_sync_bg():
                 "action": ("positive_resweep_done" if res2.get("ok")
                            else "positive_resweep_failed"),
                 "entity": "replies", "payload": res2})
+        # Ever-positive alert sweep: LEAD-level notification guarantee over
+        # the replies archive — a new reply from a lead who was EVER positive
+        # alerts #interested-replies whatever the new category says (the
+        # 2026-07-20 gabriel@silver.dev class; see setter.run_ever_positive_alerts).
+        res3 = setter.run_ever_positive_alerts()
+        if not res3.get("skipped") and (res3.get("checked") or not res3.get("ok")):
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+                "action": ("ever_positive_done" if res3.get("ok")
+                           else "ever_positive_failed"),
+                "entity": "replies", "payload": res3})
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[reply-sync] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",

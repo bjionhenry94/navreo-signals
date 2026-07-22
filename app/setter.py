@@ -3390,6 +3390,189 @@ def run_positive_resweep(force: bool = False) -> dict:
         return summary
 
 
+# ── ever-positive alert sweep ────────────────────────────────────────────────
+# The categoriser's Slack gates all key off the CURRENT reply: routeA's
+# module 33 announces fresh POSITIVE categorisations only (Not Interested and
+# friends post nothing), and routeB's 🚨 fires only when THIS campaign's
+# existing category is positive. A lead whose positive history lives on a
+# DIFFERENT campaign id (parent vs spawned "Interested Reply"/"Meeting
+# Request" subsequence) and whose new reply categorises negative passes both
+# gates silently — proven live 2026-07-20: gabriel@silver.dev (Information
+# Request on 3356261 Jul 17, alerted) replied on subsequence 3356263, GPT said
+# Not Interested, module 7 flipped the Smartlead category, zero Slack, and the
+# thread vanished mid-conversation (replies id 19418). This sweep is the
+# LEAD-level guarantee: any newly archived reply from an ever-positive lead
+# alerts #interested-replies exactly once, whatever the new category says.
+# Positive categories are excluded here on purpose — module 33 owns fresh
+# positives and routeB owns still-positive re-replies (archived as
+# "positive-re-reply") — so this sweep can never double-post those classes.
+# Fail-closed: the notify_alerted_at marker is stamped only after the alert
+# hook ACCEPTED the post; unmarked rows retry on every 3-min tick.
+EVER_POSITIVE_HOOK = "https://hook.eu2.make.com/aag8t06k43jn0wjnvktt02rpbr2xwmec"
+POSITIVE_CATEGORY_NAMES = ("Interested", "Meeting Request", "Information Request",
+                           "Call Booked", "positive-re-reply")
+EP_WORKSPACES = ("navreo", "opan-test")  # opan-test = mock isolation; Setter reads navreo only
+EP_LOOKBACK_HOURS = 72        # scan window; the marker (not the window) stops re-alerts
+EP_NULL_GRACE_MIN = 45        # uncategorised rows younger than this are still in flight
+EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, loudly
+
+
+def _ep_stamp(row_id, kind: str):
+    """Mark a replies row handled by this sweep (notify_kind says why)."""
+    _SB("PATCH", f"replies?id=eq.{row_id}",
+        {"notify_alerted_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+         "notify_kind": kind}, prefer="return=minimal")
+
+
+def _ep_prior_positive(workspace, email: str, before_iso: str):
+    """Latest positive-category row for this lead BEFORE the given instant,
+    same workspace, ANY campaign — the ever-positive predicate."""
+    cats = ",".join(quote(c, safe="") for c in POSITIVE_CATEGORY_NAMES)
+    rows = _SB("GET", f"replies?workspace=eq.{workspace}"
+                      f"&email=ilike.{quote(email, safe='')}"
+                      f"&category=in.({cats})"
+                      f"&replied_at=lt.{quote(before_iso, safe='')}"
+                      f"&select=category,replied_at,smartlead_campaign_id"
+                      f"&order=replied_at.desc&limit=1")
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
+    return None
+
+
+def _ep_campaign_names(workspace, ids) -> dict:
+    ids = sorted({str(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = _SB("GET", f"campaigns?workspace=eq.{workspace}"
+                      f"&smartlead_campaign_id=in.({','.join(ids)})"
+                      f"&select=smartlead_campaign_id,name")
+    out = {}
+    if isinstance(rows, list):
+        for r in rows:
+            if isinstance(r, dict):
+                out[str(r.get("smartlead_campaign_id"))] = r.get("name") or ""
+    return out
+
+
+def _ep_smartlead_link(campaign_id, email: str) -> str:
+    """Best-effort master-inbox deep link for the alert. Never raises."""
+    try:
+        data = _sl_get("/leads/", {"email": email}) or {}
+        for lc in data.get("lead_campaign_data") or []:
+            if str(lc.get("campaign_id")) == str(campaign_id) and \
+                    lc.get("campaign_lead_map_id"):
+                return ("https://app.smartlead.ai/app/master-inbox?action=INBOX"
+                        f"&leadMap={lc['campaign_lead_map_id']}")
+    except Exception:  # noqa: BLE001 — the link is decoration, never load-bearing
+        pass
+    return ""
+
+
+def _ep_compose(row: dict, prior: dict, camp_names: dict) -> str:
+    cid = str(row.get("smartlead_campaign_id") or "")
+    cname = camp_names.get(cid) or f"campaign {cid}"
+    if cname in ("Interested Reply", "Meeting Request"):
+        cname += " (subsequence)"
+    pcid = str(prior.get("smartlead_campaign_id") or "")
+    pname = camp_names.get(pcid) or (f"campaign {pcid}" if pcid else "earlier campaign")
+    cat = row.get("category") or "uncategorised"
+    snippet = clean_body(row.get("reply_body") or "")[:400]
+    link = _ep_smartlead_link(row.get("smartlead_campaign_id"), row.get("email") or "")
+    lines = [
+        f"🔔 ONCE-POSITIVE lead replied — now: {cat}",
+        "---------------------------",
+        f"Lead: {row.get('email')}",
+        f"Campaign: {cname}",
+        (f"Originally positive: {prior.get('category')} on "
+         f"{str(prior.get('replied_at') or '')[:10]} ({pname})"),
+        f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
+    ]
+    if link:
+        lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
+    lines += ["", "Reply:", snippet or "(no body archived)"]
+    return "\n".join(lines)
+
+
+def run_ever_positive_alerts() -> dict:
+    """Lead-level notification guarantee over the replies archive (see the
+    section comment above). Rides every 3-min reply-sync tick. Never raises."""
+    summary = {"ok": True, "skipped": False, "checked": 0, "alerted": 0,
+               "stamped_positive": 0, "stamped_no_history": 0,
+               "deferred_null": 0, "failed_posts": 0, "capped": False,
+               "errors": 0}
+    if not _SB:
+        summary["skipped"] = True
+        return summary
+    try:
+        now = _dt.datetime.now(_dt.timezone.utc)
+        since = (now - _dt.timedelta(hours=EP_LOOKBACK_HOURS)).isoformat()
+        rows = _SB("GET", f"replies?workspace=in.({','.join(EP_WORKSPACES)})"
+                          f"&notify_alerted_at=is.null"
+                          f"&replied_at=gte.{quote(since, safe='')}"
+                          f"&select=id,workspace,smartlead_campaign_id,email,"
+                          f"replied_at,category,reply_body"
+                          f"&order=replied_at.asc&limit=200")
+        if not isinstance(rows, list):
+            summary["ok"] = False
+            summary["errors"] += 1
+            summary["error"] = "replies read returned non-list"
+            return summary
+        summary["checked"] = len(rows)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            rid = row.get("id")
+            ws = row.get("workspace")
+            email = (row.get("email") or "").strip()
+            cat = row.get("category")
+            rt = row.get("replied_at") or ""
+            if not rid or not ws or not email or not rt:
+                continue
+            if cat in POSITIVE_CATEGORY_NAMES:
+                # module 33 / routeB territory — never alert from here
+                _ep_stamp(rid, "positive-covered")
+                summary["stamped_positive"] += 1
+                continue
+            if cat is None:
+                rt_dt = _parse_iso(rt)
+                if not rt_dt or (now - rt_dt) < _dt.timedelta(minutes=EP_NULL_GRACE_MIN):
+                    summary["deferred_null"] += 1   # still in flight — next tick
+                    continue
+            prior = _ep_prior_positive(ws, email, rt)
+            if prior is None:
+                _ep_stamp(rid, "no-positive-history")
+                summary["stamped_no_history"] += 1
+                continue
+            if summary["alerted"] >= EP_POST_CAP:
+                summary["capped"] = True
+                summary["ok"] = False       # leftovers retry next tick, loudly
+                continue
+            names = _ep_campaign_names(
+                ws, [row.get("smartlead_campaign_id"),
+                     prior.get("smartlead_campaign_id")])
+            text = _ep_compose(row, prior, names)
+            posted = False
+            try:
+                _HTTP("POST", EVER_POSITIVE_HOOK, {},
+                      {"event_type": "EVER_POSITIVE_ALERT", "text": text})
+                posted = True
+            except ValueError:
+                posted = True   # Make answers a non-JSON 2xx ("Accepted") = success
+            except Exception:   # noqa: BLE001 — hook down: retry next tick
+                summary["failed_posts"] += 1
+                summary["ok"] = False
+            if posted:
+                # stamp ONLY after the hook accepted — fail-closed, retryable
+                _ep_stamp(rid, "ever-positive-alerted")
+                summary["alerted"] += 1
+        return summary
+    except Exception as e:  # noqa: BLE001 — record, never crash the cron thread
+        summary["ok"] = False
+        summary["errors"] += 1
+        summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return summary
+
+
 def _convert_uncat_row(row: dict, category: str, source: str, settings: dict = None) -> dict:
     """An uncategorised queue row just got a real CORE_FOUR category (the
     recategorise dropdown, or the categoriser filling it in late): re-run the
