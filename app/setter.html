@@ -147,9 +147,13 @@
    the left, Website / LinkedIn / Smartlead links on the right - pinned above
    the conversation while it scrolls. The category control lives in the sidebar. */
 .detail-topbar { position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 16px 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
-/* One-row identity meta: "replied 17m · email" sits inline after the name. */
-.dh-meta { font-weight: 400; font-size: 12.5px; color: var(--ink-3); letter-spacing: 0; }
-.dh-meta .dh-email { color: var(--ink-2); }
+/* Identity block, stacked: row 1 = name (left) + links (right); row 2 = email
+   (left) + replied (right); row 3 = campaign name. */
+.dh-row1 { display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; }
+.dh-row2 { display: flex; align-items: baseline; justify-content: space-between; gap: 6px 16px; flex-wrap: wrap; }
+.dh-email { font-size: 12.5px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dh-replied { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; flex-shrink: 0; }
+.dh-campaign { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The Website / LinkedIn / Smartlead links, content-width, on the right. */
 .dh-links { flex: 0 0 auto; margin: 0; }
 .dh-links .lp-qbtn { flex: 0 0 auto; min-height: 34px; }
@@ -297,7 +301,7 @@
 .back-link:hover { color: var(--ink); }
 
 /* ── Detail (right pane) ──────────────────────────────────────────────── */
-.detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; margin-bottom: 0; }
+.detail-head { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0; }
 /* Lead-column collapse (phone-only, owner ask 2026-07-22). Base = desktop:
    the toggle is hidden and the body always shows, so the sidebar is unchanged.
    The phone media block flips these to a real collapsible. */
@@ -315,7 +319,7 @@
 .lead-panel.lp-open .lp-collapse-toggle .lp-chev { transform: rotate(180deg); }
 .lp-collapse-body { display: none; }
 .lead-panel.lp-open .lp-collapse-body { display: block; }
-.dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 16px; letter-spacing: -0.01em; min-width: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 16px; letter-spacing: -0.01em; min-width: 0; }
 .qc-sub-chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
 
 .qc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
@@ -1926,9 +1930,15 @@ function renderDetail(row) {
     <div class="detail-topbar">
     <a class="back-link mobile-back" href="#" id="backToInboxLink">&larr; Back to inbox</a>
     <div class="detail-head">
-      <h2 class="dh-name" title="reported ${esc(pulledAgo(row.created_at))}">${esc(leadName(row))} ${testChip}
-        <span class="dh-meta" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}${row.lead_email ? ` &middot; <span class="dh-email">${esc(row.lead_email)}</span>` : ""}</span></h2>
-      <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
+      <div class="dh-row1">
+        <h2 class="dh-name" title="reported ${esc(pulledAgo(row.created_at))}">${esc(leadName(row))} ${testChip}</h2>
+        <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
+      </div>
+      <div class="dh-row2">
+        <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
+        <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
+      </div>
+      <div class="dh-campaign" title="${esc(campaignNameFor(row))}">${esc(campaignNameFor(row))}</div>
     </div>
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
