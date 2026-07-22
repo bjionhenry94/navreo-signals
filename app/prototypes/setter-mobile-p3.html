@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Setter · Navreo (Prototype P3)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+@font-face {
+  font-family: "Acid Grotesk";
+  src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055;
+  --brown-300:#C0B0A0; --brown-400:#A89684;
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF; --cream:#F9F0E7; --cream-50:#FCF7F1;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3; --green-text:#195C3F;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E; --amber-text:#6B4A00;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --radius:12px;
+  --focus:0 0 0 3px rgba(255,77,0,.32);
+  --toast-shadow:0 10px 30px rgba(20,17,14,.18);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-sunken);
+  color: var(--ink);
+  line-height: 1.45;
+  letter-spacing: -0.015em;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+button, input { font-family: inherit; }
+::selection { background: var(--orange-100); }
+
+/* ── Device shell: full-bleed on a real phone, centred card on a wider
+   preview browser so the same file reads well in both contexts. ───────── */
+.shell {
+  max-width: 480px; margin: 0 auto; min-height: 100dvh;
+  background: var(--bg); position: relative; overflow-x: hidden;
+  box-shadow: 0 0 60px rgba(20,17,14,.07);
+  display: flex; flex-direction: column;
+}
+
+/* ── Prototype banner (invariant 10) ─────────────────────────────────── */
+.proto-banner {
+  text-align: center; font-size: 11px; color: var(--ink-3); font-weight: 500;
+  padding: 7px 12px; background: var(--cream-50); border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+/* ── Top chrome: title, stats, search, filter pills — sticky so triage
+   controls stay reachable while the list scrolls underneath. ──────────── */
+.topbar {
+  position: sticky; top: 0; z-index: 20; background: var(--bg);
+  border-bottom: 1px solid var(--line); padding: 14px 16px 10px; flex-shrink: 0;
+}
+.page-title {
+  font-family: var(--font-display); font-weight: 400; font-size: 25px;
+  letter-spacing: -0.02em; color: var(--ink); margin-bottom: 3px;
+}
+.stats-line { font-size: 12.5px; color: var(--ink-2); margin-bottom: 12px; }
+.stats-line b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.stats-line .sep { color: var(--line-2); margin: 0 5px; }
+
+.search-field { position: relative; margin-bottom: 10px; }
+.search-field svg {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  width: 15px; height: 15px; color: var(--ink-3); pointer-events: none;
+}
+.search-field input {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 10px 14px 10px 34px; font: 400 14px var(--font-sans); color: var(--ink);
+  background: var(--bg-sunken); -webkit-appearance: none;
+}
+.search-field input:focus { outline: none; background: var(--bg); box-shadow: var(--focus); }
+.search-field input::placeholder { color: var(--ink-3); }
+.search-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 26px; height: 26px; border-radius: 50%; border: none; background: transparent;
+  color: var(--ink-3); font-size: 15px; cursor: pointer; display: none;
+  align-items: center; justify-content: center;
+}
+.search-field.has-text .search-clear { display: flex; }
+.search-field.has-text input { padding-right: 32px; }
+
+.pill-scroll {
+  display: flex; gap: 7px; overflow-x: auto; padding-bottom: 2px;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.pill-scroll::-webkit-scrollbar { display: none; }
+.fpill {
+  flex-shrink: 0; border: 1px solid var(--line-2); background: transparent; color: var(--ink-2);
+  border-radius: 999px; padding: 7px 13px; font: 500 12.5px var(--font-sans);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  min-height: 32px;
+}
+.fpill b { font-weight: 600; opacity: .6; font-variant-numeric: tabular-nums; }
+.fpill.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+.fpill.on b { opacity: .75; }
+.fpill:focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* ── List ─────────────────────────────────────────────────────────────── */
+.list-wrap { flex: 1; padding-bottom: 32px; }
+.row-list { list-style: none; }
+.row {
+  min-height: 64px; padding: 11px 16px; border-bottom: 1px solid var(--line);
+  cursor: pointer; border-left: 3px solid transparent;
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  background: var(--bg); transition: background .18s ease, border-color .18s ease,
+    opacity .28s ease, max-height .3s ease, padding .3s ease;
+}
+.row:active { background: var(--bg-sunken); }
+.row.active { background: var(--bg-sunken); border-left-color: var(--orange); }
+.row.flash { animation: rowflash 1.1s ease; }
+@keyframes rowflash {
+  0% { background: var(--orange-100); }
+  100% { background: var(--bg); }
+}
+.row.exiting {
+  opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; overflow: hidden;
+  border-bottom-color: transparent;
+}
+.row-l1 { display: flex; align-items: center; gap: 6px; }
+.row-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.row-time { font-size: 11px; color: var(--ink-3); margin-left: auto; flex-shrink: 0; white-space: nowrap; }
+.row-snippet {
+  font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-l3 { display: flex; align-items: center; gap: 6px; }
+
+.pill { font-size: 10.5px; font-weight: 500; padding: 3px 8px; border-radius: 999px; flex-shrink: 0; white-space: nowrap; }
+.pill.agent { background: var(--cream); color: var(--ink-2); }
+.pill.agent.none { background: #F2F2F0; color: var(--ink-3); }
+.pill.intent { background: #F2F2F0; color: var(--ink-2); font-weight: 500; }
+.pill.age { background: var(--bg-sunken); color: var(--ink-3); font-weight: 600; }
+.pill.age.overdue { background: var(--amber-bg); color: var(--amber-text); }
+
+.list-empty { text-align: center; color: var(--brown-400); font-size: 13px; padding: 48px 20px; }
+
+/* ── Scrim + bottom sheet ─────────────────────────────────────────────── */
+.scrim {
+  position: fixed; inset: 0; background: rgba(20,17,14,.42); z-index: 40;
+  opacity: 0; pointer-events: none; transition: opacity .25s ease;
+}
+.scrim.on { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: fixed; left: 50%; bottom: 0; width: 100%; max-width: 480px;
+  transform: translateX(-50%) translateY(100%);
+  height: 92dvh; max-height: 92dvh; background: var(--card);
+  border-radius: 20px 20px 0 0; box-shadow: 0 -10px 40px rgba(20,17,14,.22);
+  z-index: 50; display: flex; flex-direction: column; overflow: hidden;
+  transition: transform .3s cubic-bezier(.2,.9,.3,1);
+}
+.sheet.dragging { transition: none; }
+.sheet.open { transform: translateX(-50%) translateY(0); }
+
+.sheet-drag { flex-shrink: 0; padding: 9px 0 4px; display: flex; justify-content: center; cursor: grab; touch-action: none; }
+.sheet-handle { width: 38px; height: 4px; border-radius: 999px; background: var(--line-2); }
+.sheet-x {
+  position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border-radius: 50%;
+  border: none; background: var(--bg-sunken); color: var(--ink-2); font-size: 16px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; z-index: 2;
+}
+
+.sheet-body { flex: 1; overflow-y: auto; padding: 2px 18px 18px; -webkit-overflow-scrolling: touch; }
+
+.sheet-lead { padding: 4px 34px 14px 0; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.sheet-name { font-family: var(--font-sans); font-weight: 600; font-size: 18px; letter-spacing: -0.01em; color: var(--ink); }
+.sheet-role { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
+.sheet-meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+.pill.campaign { background: var(--bg-sunken); color: var(--ink-3); }
+.pill.intent-sm { background: #F2F2F0; color: var(--ink-2); }
+.sheet-replied { font-size: 11.5px; color: var(--ink-3); margin-left: auto; }
+
+.msg-lab {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--ink-3); margin-bottom: 8px;
+}
+.thread-block { margin-bottom: 18px; }
+.bubble { border-radius: 8px; padding: 9px 12px; margin-bottom: 8px; background: var(--bg-sunken); }
+.bubble:last-child { margin-bottom: 0; }
+.bubble.them { background: var(--amber-bg); }
+.bubble.them .bubble-head { color: var(--amber-text); }
+.bubble.them .bubble-body { color: var(--ink); }
+.bubble.current { background: var(--amber-bg); border: 1px solid var(--amber-line); }
+.bubble-head { font-size: 11.5px; font-weight: 600; color: var(--ink-3); margin-bottom: 3px; }
+.bubble-body { font-size: 13px; color: var(--ink-2); line-height: 1.5; white-space: pre-wrap; }
+.bubble.them .bubble-body, .bubble.current .bubble-body { color: var(--ink); }
+
+.sent-line { font-size: 12.5px; padding: 10px 13px; border-radius: 8px; margin: 0 0 12px; line-height: 1.5; }
+.sent-line.auto_sent { background: var(--green-bg); color: var(--green-text); }
+.sent-line.sent { background: var(--bg-sunken); color: var(--ink-2); }
+.sent-line.dismissed { background: #F2F2F0; color: var(--ink-2); }
+.followup-note { font-size: 12px; color: var(--ink-3); margin: -6px 0 14px; }
+
+.draft-block { margin-bottom: 16px; }
+.draft-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); margin-bottom: 8px; }
+.draft-box {
+  border: 1px solid var(--line-2); border-radius: 10px; padding: 13px 14px;
+  font-size: 13.5px; line-height: 1.65; color: var(--ink); min-height: 70px;
+}
+.draft-box:focus { outline: none; box-shadow: var(--focus); border-color: var(--line-2); }
+/* Panel fix (Sam): plain textarea, not contenteditable - predictable cursor
+   and autocorrect during one-handed edits. */
+textarea.draft-box {
+  display: block; width: 100%; font-family: var(--font-sans);
+  min-height: 150px; resize: vertical; background: var(--card);
+}
+/* Panel fix (Dee): who you're replying to stays pinned while the sheet scrolls. */
+.sheet-body .sheet-lead {
+  position: sticky; top: 0; z-index: 6; background: var(--card);
+  padding-top: 4px; padding-bottom: 6px;
+  box-shadow: 0 8px 14px -10px rgba(20,17,14,.14);
+}
+
+.learn-row { margin-top: 10px; display: none; }
+.learn-row.show { display: block; }
+.learn-chk {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font: 500 12.5px var(--font-sans); color: var(--ink-2);
+}
+.learn-chk input { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; accent-color: var(--ink); }
+.learn-hint { font-size: 11.5px; line-height: 1.5; color: var(--ink-3); margin: 4px 0 0 23px; }
+
+.send-gate { border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; background: var(--bg-sunken); margin-bottom: 4px; }
+.gate-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); margin-bottom: 10px; }
+.gate-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.gate-chip {
+  border: 1px solid var(--line-2); background: var(--card); color: var(--ink-2);
+  border-radius: 999px; padding: 8px 15px; font: 500 12.5px var(--font-sans);
+  cursor: pointer; min-height: 44px;
+}
+.gate-chip.none { border-style: dashed; }
+.gate-chip.on { background: var(--orange); border-color: var(--orange); color: #fff; }
+.gate-hint-tip {
+  font-size: 11.5px; line-height: 1.5; color: var(--ink-3); margin-top: 9px;
+}
+
+.dismissed-note {
+  font-size: 12.5px; line-height: 1.55; color: var(--ink-2); background: var(--bg-sunken);
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 13px; margin-top: 4px;
+}
+
+/* ── Pinned action bar: thumb zone, safe-area aware ──────────────────── */
+.sheet-actionbar {
+  flex-shrink: 0; border-top: 1px solid var(--line); background: var(--card);
+  padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+}
+.gate-lock-row {
+  display: none; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3);
+  margin-bottom: 8px;
+}
+.gate-lock-row.show { display: flex; }
+.why-btn {
+  border: none; background: none; padding: 0; color: var(--ink-3); font-size: 12px;
+  text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer;
+  position: relative;
+}
+.why-tip {
+  display: none; position: absolute; bottom: 22px; left: 0; width: 240px;
+  background: var(--ink); color: var(--cream-50); font-size: 11.5px; line-height: 1.5;
+  padding: 10px 12px; border-radius: 8px; z-index: 5;
+}
+.why-tip.show { display: block; }
+.actionbar-row { display: flex; align-items: center; gap: 8px; }
+.btn {
+  border: 1px solid var(--line-2); background: var(--card); color: var(--ink);
+  border-radius: 999px; padding: 12px 16px; font: 600 13.5px var(--font-sans);
+  cursor: pointer; min-height: 46px; white-space: nowrap;
+}
+.btn:focus-visible { outline: none; box-shadow: var(--focus); }
+.btn.icon-btn { flex: 0 0 46px; padding: 0; font-size: 19px; font-weight: 600; color: var(--ink-2); }
+.btn.dismiss-btn { flex: 0 0 auto; padding: 12px 15px; margin-right: 14px; color: var(--ink-3); border-color: transparent; }
+.btn.approve-btn { flex: 1; background: var(--ink); border-color: var(--ink); color: var(--cream); }
+.btn.approve-btn[disabled] { opacity: .4; cursor: not-allowed; }
+.btn.approve-btn:not([disabled]):active { background: var(--ink-2); }
+
+/* ── Overflow popover (Regenerate / Regenerate with feedback) ───────── */
+.overflow-menu {
+  position: absolute; bottom: 100%; left: 16px; margin-bottom: 8px; width: 250px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--toast-shadow); padding: 6px; display: none; z-index: 6;
+}
+.overflow-menu.show { display: block; }
+.overflow-menu button.om-item {
+  display: block; width: 100%; text-align: left; border: none; background: none;
+  padding: 11px 10px; font: 500 13px var(--font-sans); color: var(--ink); border-radius: 8px; cursor: pointer;
+}
+.overflow-menu button.om-item:active { background: var(--bg-sunken); }
+.overflow-hint-line {
+  padding: 2px 12px 8px; font-size: 10.5px; color: var(--brown-400);
+  line-height: 1.4; border-bottom: 1px solid var(--line); margin-bottom: 4px;
+}
+.om-fb { padding: 8px 10px 4px; display: none; }
+.om-fb.show { display: block; }
+.om-fb input {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 11px;
+  font: 400 12.5px var(--font-sans); margin-bottom: 7px;
+}
+.om-fb input:focus { outline: none; box-shadow: var(--focus); }
+.om-fb button.om-send { width: 100%; background: var(--ink); color: var(--cream); border: none; border-radius: 8px; padding: 9px; font: 600 12.5px var(--font-sans); cursor: pointer; }
+
+/* ── Toasts ───────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(14px);
+  background: var(--ink); color: var(--cream); font-size: 12.5px; font-weight: 500;
+  padding: 11px 18px; border-radius: 999px; box-shadow: var(--toast-shadow);
+  z-index: 90; opacity: 0; pointer-events: none; transition: opacity .22s ease, transform .22s ease;
+  display: flex; align-items: center; gap: 12px; max-width: min(420px, 88vw);
+}
+.toast.on { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+.toast button {
+  border: none; background: rgba(255,255,255,.14); color: var(--cream); border-radius: 999px;
+  padding: 5px 11px; font: 600 11.5px var(--font-sans); cursor: pointer; flex-shrink: 0; white-space: nowrap;
+}
+
+.lesson-toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(14px);
+  z-index: 91; width: min(360px, 90vw);
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--toast-shadow); padding: 14px 15px;
+  opacity: 0; pointer-events: none; transition: opacity .22s ease, transform .22s ease;
+}
+.lesson-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+.lt-head { font: 600 12.5px var(--font-sans); color: var(--ink); }
+.lt-rule { font-size: 12.5px; color: var(--ink-2); margin: 6px 0 11px; line-height: 1.5; }
+.lt-actions { display: flex; gap: 8px; }
+.lt-actions button {
+  border-radius: 999px; padding: 8px 13px; font: 600 12px var(--font-sans); cursor: pointer;
+}
+.lt-undo { border: 1px solid var(--line-2); background: var(--card); color: var(--ink); }
+.lt-keep { border: 1px solid var(--ink); background: var(--ink); color: var(--cream); }
+
+/* Body scroll-lock while the sheet is open */
+body.sheet-open .list-wrap, body.sheet-open .topbar { overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <div class="proto-banner">Prototype P3 · mock data — nothing sends</div>
+
+  <header class="topbar">
+    <h1 class="page-title">Appointment Setter</h1>
+    <p class="stats-line" id="statsLine"></p>
+    <div class="search-field" id="searchField">
+      <svg viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6.2" stroke="currentColor" stroke-width="1.6"/><line x1="13.4" y1="13.4" x2="17.5" y2="17.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input type="text" id="searchInput" placeholder="Search name, email, campaign, reply…" autocomplete="off">
+      <button type="button" class="search-clear" id="searchClear" aria-label="Clear search">&times;</button>
+    </div>
+    <div class="pill-scroll"><div class="pill-scroll" id="filterPills" style="padding:0"></div></div>
+  </header>
+
+  <main class="list-wrap">
+    <ul class="row-list" id="rowList"></ul>
+    <div class="list-empty" id="listEmpty" hidden>No replies match your search.</div>
+  </main>
+
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<section class="sheet" id="sheet" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Reply detail">
+  <div class="sheet-drag" id="sheetDrag"><div class="sheet-handle"></div></div>
+  <button class="sheet-x" id="sheetX" type="button" aria-label="Close">&times;</button>
+  <div class="sheet-body" id="sheetBody"></div>
+  <div class="sheet-actionbar" id="sheetActionbar"></div>
+</section>
+
+<div class="toast" id="toast"></div>
+<div class="lesson-toast" id="lessonToast"></div>
+
+<script>
+const REPLIES = [
+ {id:"r1", name:"Sarah Mitchell", title:"COO", company:"Meridian Fabrication", email:"sarah@meridianfab.co.uk",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Wants to book a call", status:"needs_review", age:"4m",
+  reply:"This sounds interesting. We've been burned by agencies before but the buyer-intro angle is different. How does next Tuesday look for a quick call?",
+  thread:[{who:"us", head:"You · 3 days ago", body:"Hi Sarah — quick one: are you open to intros to buyers actively sourcing UK fabrication right now? We line up 2-3 qualified buyer conversations a month for firms like Meridian. Worth a look?"},
+          {who:"them", head:"Sarah · 4 minutes ago", body:"This sounds interesting. We've been burned by agencies before but the buyer-intro angle is different. How does next Tuesday look for a quick call?"}],
+  draft:"Hi Sarah,\n\nTuesday works well — I have 10:30 or 2:15 free. Grab whichever suits here: cal.navreo.ai/sihl\n\nAnd fair point on agencies — this is why we only get paid on booked buyer conversations, not activity.\n\nBest,\nJames",
+  subseq:["Booked-call nurture","Pricing follow-up","Resource drip"]},
+ {id:"r2", name:"David Okafor", title:"Founder", company:"Brightpath Logistics", email:"david@brightpathlog.com",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Asking about pricing", status:"needs_review", age:"18m",
+  reply:"What does this cost roughly? We're comparing a couple of options this quarter.",
+  thread:[{who:"us", head:"You · 5 days ago", body:"Hi David — are you open to intros to buyers actively sourcing logistics partners? We line up qualified buyer conversations for firms like Brightpath."},
+          {who:"them", head:"David · 18 minutes ago", body:"What does this cost roughly? We're comparing a couple of options this quarter."}],
+  draft:"Hi David,\n\nStraight answer: from £1,800/mo, and we only invoice on delivered buyer conversations — if none land, you pay nothing that month.\n\nHappy to walk you through it in 15 minutes if you're comparing options: cal.navreo.ai/sihl\n\nBest,\nJames",
+  subseq:["Pricing follow-up","Booked-call nurture","Resource drip"]},
+ {id:"r3", name:"Priya Nair", title:"VP Sales", company:"Cobalt Systems", email:"priya@cobaltsystems.io",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Wants the resource", status:"needs_review", age:"41m",
+  reply:"Sure, send it over.",
+  thread:[{who:"us", head:"You · 2 days ago", body:"Hi Priya — we mapped the 214 UK companies actively hiring sales roles that fit Cobalt's ICP. Want the list?"},
+          {who:"them", head:"Priya · 41 minutes ago", body:"Sure, send it over."}],
+  draft:"Hi Priya,\n\nHere it is: navreo.ai/r/cobalt-hiring-map\n\nThe 30 with a Director+ sales hire open are flagged in column B — those tend to reply fastest. If you want us to run the outreach on the top tier, that's exactly what we do.\n\nBest,\nLilly",
+  subseq:["Resource drip","Booked-call nurture"]},
+ {id:"r4", name:"Marcus Webb", title:"MD", company:"Atlas Joinery", email:"marcus@atlasjoinery.co.uk",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Has a question", status:"needs_review", age:"1h",
+  reply:"How is this different from just hiring an SDR ourselves?",
+  thread:[{who:"us", head:"You · 6 days ago", body:"Hi Marcus — quick one: open to intros to buyers actively sourcing joinery and fit-out partners? We line up qualified buyer conversations for firms like Atlas."},
+          {who:"them", head:"Marcus · 5 days ago", body:"Maybe. Who else have you done this for?"},
+          {who:"us", head:"You · 5 days ago", body:"Mostly UK manufacturers — Sihl is the closest example, we book their buyer calls month in month out. Happy to share how it works."},
+          {who:"them", head:"Marcus · 1 hour ago", body:"How is this different from just hiring an SDR ourselves?"}],
+  draft:"Hi Marcus,\n\nAn SDR costs ~£45k loaded and takes 6 months to ramp. We turn on a working system in 2 weeks — list, copy, sending, replies — and you only pay on booked buyer conversations.\n\nIf the maths interests you, 15 minutes covers it: cal.navreo.ai/sihl\n\nBest,\nJames",
+  subseq:["Booked-call nurture","Pricing follow-up","Resource drip"]},
+ {id:"r5", name:"Elena Vasquez", title:"Director", company:"Northgate Consulting", email:"elena@northgateconsult.com",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Not interested", status:"needs_review", age:"2h",
+  reply:"Not for us right now, thanks.",
+  thread:[{who:"us", head:"You · 4 days ago", body:"Hi Elena — we help consultancies keep a steady pipeline of qualified buyer conversations. Open to a look?"},
+          {who:"them", head:"Elena · 2 hours ago", body:"Not for us right now, thanks."}],
+  draft:"Hi Elena,\n\nUnderstood — thanks for letting me know. If pipeline becomes a priority later in the year, the door's open.\n\nBest,\nLilly",
+  subseq:["Resource drip"]},
+ {id:"r6", name:"Tom Hardwick", title:"Ops Director", company:"Ferrous Engineering", email:"tom@ferrouseng.co.uk",
+  campaign:"KRG — Midlands Industrial", agent:null, intent:"Wants to book a call", status:"needs_review", age:"3h",
+  reply:"Yes — can you do Thursday afternoon?",
+  thread:[{who:"us", head:"You · 1 day ago", body:"Hi Tom — are you open to intros to buyers sourcing precision engineering right now? We line up qualified buyer conversations for firms like Ferrous."},
+          {who:"them", head:"Tom · 3 hours ago", body:"Yes — can you do Thursday afternoon?"}],
+  draft:"Hi Tom,\n\nThursday afternoon works — 2:00 or 3:30. Pick whichever suits: cal.navreo.ai/krg\n\nSpeak then,\nSam",
+  subseq:["Booked-call nurture","Pricing follow-up"]},
+ {id:"r7", name:"Jenny Lau", title:"Head of Growth", company:"Parkside Digital", email:"jenny@parksidedigital.co.uk",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Wants the resource", status:"auto_sent", age:"5h", sentMeta:"Sent automatically · 12 minutes after their reply",
+  reply:"Sounds useful — send the breakdown.",
+  thread:[{who:"us", head:"You · 3 days ago", body:"Hi Jenny — we mapped the exact outbound campaigns we'd run for Parkside. Want the breakdown?"},
+          {who:"them", head:"Jenny · 5 hours ago", body:"Sounds useful — send the breakdown."},
+          {who:"us", head:"Navreo Setter (auto) · 5 hours ago", body:"Hi Jenny,\n\nHere's the breakdown: navreo.ai/r/parkside\n\nIt maps three campaigns with the exact copy we'd use. If you want the top one live within two weeks, that's what we do.\n\nBest,\nLilly"}],
+  draft:null, subseq:[]}
+];
+
+/* ── Reference data: intent + status labels (verbatim from setter.html) ── */
+const INTENT_LABELS = {
+  send_resource: "Wants the resource", pricing: "Asking about pricing",
+  scheduling: "Wants to book a call", bespoke_request: "Wants custom work",
+  objection_or_question: "Has a question", not_interested: "Not interested",
+  unsubscribe_dnc: "Wants to be removed", ooo: "Out of office",
+  wrong_person: "Wrong person", bounce_or_system: "Bounce or automated message", other: "Other",
+};
+const FILTER_PILLS = [
+  { key: "needs_review", label: "Needs review" },
+  { key: "sent", label: "Sent" },
+  { key: "auto_sent", label: "Auto-sent" },
+  { key: "dismissed", label: "Dismissed" },
+  { key: "", label: "All" },
+];
+
+/* ── State ────────────────────────────────────────────────────────────── */
+let currentStatus = "needs_review";
+let searchQuery = "";
+let openRowId = null;
+let draftEdited = false;
+let learnOn = true;
+let gateSelection = null;    // { name } | { name: null } for "None" | null = unresolved
+let lastTapAt = {};          // per-chip timestamp, for the manual double-tap gate
+
+/* ── Small helpers ────────────────────────────────────────────────────── */
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+function fmt(n) { return String(n); }
+function textToHtml(s) { return esc(s || "").replace(/\n/g, "<br>"); }
+function plainText(html) {
+  const el = document.createElement("div");
+  el.innerHTML = String(html || "").replace(/<br\s*\/?>/gi, "\n");
+  return (el.textContent || "").replace(/[ \t]+\n/g, "\n").trim();
+}
+function firstName(name) { return String(name || "").trim().split(/\s+/)[0] || "there"; }
+function byId(id) { return REPLIES.find((r) => r.id === id) || null; }
+function ageMinutes(age) {
+  const m = /^(\d+)([mh])$/.exec(String(age || "").trim());
+  if (!m) return 0;
+  return m[2] === "h" ? Number(m[1]) * 60 : Number(m[1]);
+}
+function agentLabel(row) { return row.agent || "No agent"; }
+
+/* ── KPI / filter-pill counts, recomputed from live row state ───────── */
+function counts() {
+  const c = { needs_review: 0, sent: 0, auto_sent: 0, dismissed: 0, "": REPLIES.length };
+  REPLIES.forEach((r) => { if (c[r.status] != null) c[r.status] += 1; });
+  return c;
+}
+function renderStatsLine() {
+  const c = counts();
+  document.getElementById("statsLine").innerHTML =
+    `Needs review <b>${fmt(c.needs_review)}</b><span class="sep">·</span>Auto-sent <b>${fmt(c.auto_sent)}</b>`;
+}
+function renderFilterPills() {
+  const c = counts();
+  const wrap = document.getElementById("filterPills");
+  wrap.innerHTML = FILTER_PILLS.map((p) =>
+    `<button type="button" class="fpill${p.key === currentStatus ? " on" : ""}" data-status="${esc(p.key)}">${esc(p.label)} <b>${fmt(c[p.key])}</b></button>`
+  ).join("");
+  wrap.querySelectorAll(".fpill").forEach((b) => b.addEventListener("click", () => {
+    currentStatus = b.getAttribute("data-status");
+    renderFilterPills();
+    renderList();
+  }));
+}
+
+/* ── List rendering ───────────────────────────────────────────────────── */
+function visibleRows() {
+  const q = searchQuery.trim().toLowerCase();
+  let rows = currentStatus ? REPLIES.filter((r) => r.status === currentStatus) : REPLIES.slice();
+  if (q) {
+    rows = rows.filter((r) => [r.name, r.email, r.campaign, r.reply].map((v) => String(v || "").toLowerCase()).join(" ").includes(q));
+  }
+  return rows;
+}
+function rowHtml(row) {
+  const agentPill = row.agent
+    ? `<span class="pill agent">${esc(row.agent)}</span>`
+    : `<span class="pill agent none">No agent</span>`;
+  const overdue = row.status === "needs_review" && ageMinutes(row.age) > 15;
+  return `<li class="row" data-id="${esc(row.id)}" tabindex="0" role="button">
+    <div class="row-l1">
+      <span class="row-name">${esc(row.name)}</span>
+      ${agentPill}
+      <span class="row-time">${esc(row.age)} ago</span>
+    </div>
+    <div class="row-snippet">${esc(row.reply)}</div>
+    <div class="row-l3">
+      <span class="pill intent">${esc(row.intent)}</span>
+      <span class="pill">${esc(row.campaign)}</span>
+      <span class="pill age${overdue ? " overdue" : ""}">${esc(row.age)}</span>
+    </div>
+  </li>`;
+}
+function renderList() {
+  const rows = visibleRows();
+  const list = document.getElementById("rowList");
+  const empty = document.getElementById("listEmpty");
+  list.innerHTML = rows.map(rowHtml).join("");
+  empty.hidden = rows.length > 0;
+  list.querySelectorAll(".row").forEach((el) => {
+    if (el.getAttribute("data-id") === openRowId) el.classList.add("active");
+    el.addEventListener("click", () => openSheet(el.getAttribute("data-id")));
+  });
+}
+
+/* ── Toasts ───────────────────────────────────────────────────────────── */
+let toastTimer = null;
+function showToast(html, opts) {
+  const el = document.getElementById("toast");
+  el.innerHTML = html;
+  void el.offsetWidth;
+  el.classList.add("on");
+  if (toastTimer) clearTimeout(toastTimer);
+  const ms = (opts && opts.ms) || 2600;
+  toastTimer = setTimeout(() => el.classList.remove("on"), ms);
+  return el;
+}
+function hideToast() { document.getElementById("toast").classList.remove("on"); }
+
+function showLessonToast(rule) {
+  const el = document.getElementById("lessonToast");
+  el.innerHTML = `
+    <div class="lt-head">Learned from your edit — this now applies to every lead</div>
+    <div class="lt-rule">&ldquo;${esc(rule)}&rdquo;</div>
+    <div class="lt-actions">
+      <button type="button" class="lt-undo" id="lessonUndoBtn">Undo - forget this</button>
+      <button type="button" class="lt-keep" id="lessonKeepBtn">Keep it</button>
+    </div>`;
+  void el.offsetWidth;
+  el.classList.add("on");
+  const hide = () => el.classList.remove("on");
+  el.querySelector("#lessonKeepBtn").addEventListener("click", hide);
+  el.querySelector("#lessonUndoBtn").addEventListener("click", () => {
+    hide();
+    setTimeout(() => showToast("Undone - the agent kept nothing from that edit"), 200);
+  });
+}
+
+/* ── Sheet: open / close ─────────────────────────────────────────────── */
+function openSheet(id) {
+  openRowId = id;
+  draftEdited = false;
+  learnOn = true;
+  gateSelection = null;
+  renderList();
+  renderSheet();
+  document.body.classList.add("sheet-open");
+  document.getElementById("scrim").classList.add("on");
+  const sheet = document.getElementById("sheet");
+  sheet.classList.add("open");
+  sheet.setAttribute("aria-hidden", "false");
+  document.getElementById("sheetBody").scrollTop = 0;
+}
+function closeSheet() {
+  // Panel fix (Sam): an in-progress rewrite survives the sheet closing -
+  // it re-seeds the textarea when this reply is reopened.
+  const wipRow = byId(openRowId);
+  const wipBox = document.getElementById("draftBox");
+  if (wipRow && wipBox && wipBox.tagName === "TEXTAREA" && draftEdited && wipBox.value !== wipRow.draft) {
+    wipRow._wip = wipBox.value;
+  }
+  const sheet = document.getElementById("sheet");
+  sheet.classList.remove("open");
+  sheet.setAttribute("aria-hidden", "true");
+  document.getElementById("scrim").classList.remove("on");
+  document.body.classList.remove("sheet-open");
+  closeOverflow();
+  openRowId = null;
+  renderList();
+}
+
+/* ── Sheet: content ───────────────────────────────────────────────────── */
+function threadBubbles(row) {
+  const thread = Array.isArray(row.thread) ? row.thread : [];
+  let lastThemIdx = -1;
+  thread.forEach((m, i) => { if (m.who === "them") lastThemIdx = i; });
+  return thread.map((m, i) => {
+    const isThem = m.who === "them";
+    const current = i === lastThemIdx;
+    return `<div class="bubble${isThem ? " them" : ""}${current ? " current" : ""}">
+      <div class="bubble-head">${esc(m.head)}</div>
+      <div class="bubble-body">${textToHtml(m.body)}</div>
+    </div>`;
+  }).join("");
+}
+function leadHeaderHtml(row) {
+  return `<div class="sheet-lead">
+    <div class="sheet-name">${esc(row.name)}</div>
+    <div class="sheet-role">${esc(row.title)} at ${esc(row.company)}</div>
+    <div class="sheet-meta-row">
+      <span class="pill campaign">${esc(row.campaign)}</span>
+      <span class="pill intent-sm">${esc(row.intent)}</span>
+      <span class="sheet-replied">Replied ${esc(row.age)} ago</span>
+    </div>
+  </div>`;
+}
+function readOnlyBodyHtml(row) {
+  let sentLine = "";
+  if (row.status === "auto_sent") {
+    sentLine = `<div class="sent-line auto_sent">${esc(row.sentMeta || "Sent automatically")}</div>`;
+  } else if (row.status === "sent") {
+    sentLine = `<div class="sent-line sent">Sent by you · ${esc(row._sentAgo || "just now")}</div>`;
+  } else if (row.status === "dismissed") {
+    sentLine = `<div class="sent-line dismissed">Dismissed — removed from Needs review. Nothing was sent; the lead stays in Smartlead.</div>`;
+  }
+  const followup = (row.status === "sent" || row.status === "auto_sent")
+    ? `<div class="followup-note">Follow-up: ${row._subseqDecision ? esc(row._subseqDecision) : (row.status === "auto_sent" ? "—" : "No follow-up chosen")}</div>`
+    : "";
+  return `
+    ${leadHeaderHtml(row)}
+    <div class="thread-block">
+      <div class="msg-lab">Conversation</div>
+      ${threadBubbles(row)}
+    </div>
+    ${sentLine}
+    ${followup}
+  `;
+}
+function editableBodyHtml(row) {
+  const chips = row.subseq.map((name) =>
+    `<button type="button" class="gate-chip" data-name="${esc(name)}">${esc(name)}</button>`
+  ).join("") + `<button type="button" class="gate-chip none" data-name="">None</button>`;
+  return `
+    ${leadHeaderHtml(row)}
+    <div class="thread-block">
+      <div class="msg-lab">Conversation</div>
+      ${threadBubbles(row)}
+    </div>
+    <div class="draft-block">
+      <div class="draft-label">Draft reply · ${esc(agentLabel(row))}</div>
+      <textarea class="draft-box" id="draftBox" spellcheck="true" rows="7">${esc(row._wip || row.draft)}</textarea>
+      <div class="learn-row" id="learnRow">
+        <label class="learn-chk"><input type="checkbox" id="learnChk" checked> Learn from this edit (every future reply)</label>
+        <p class="learn-hint" id="learnHint"></p>
+      </div>
+    </div>
+  `;
+}
+/* Panel fix (Yuki/Rachel): the gate renders in the PINNED action bar, never
+   separated from the Approve button it locks by an open-ended scroll. */
+function gateBarHtml(row) {
+  const chips = row.subseq.map((name) =>
+    `<button type="button" class="gate-chip" data-name="${esc(name)}">${esc(name)}</button>`
+  ).join("") + `<button type="button" class="gate-chip none" data-name="">None</button>`;
+  return `
+    <div class="send-gate">
+      <div class="gate-label">Follow-up after this send</div>
+      <div class="gate-chips" id="gateChips">${chips}</div>
+    </div>
+  `;
+}
+function learnHintText() {
+  return learnOn
+    ? "This change becomes a lasting rule for how the agent writes to every lead — not just this one."
+    : "This edit applies to this reply only. Nothing is learned from it.";
+}
+function renderSheet() {
+  const row = byId(openRowId);
+  const body = document.getElementById("sheetBody");
+  const bar = document.getElementById("sheetActionbar");
+  if (!row) { body.innerHTML = ""; bar.innerHTML = ""; return; }
+
+  const readOnly = row.status !== "needs_review";
+  body.innerHTML = readOnly ? readOnlyBodyHtml(row) : editableBodyHtml(row);
+
+  if (readOnly) {
+    bar.innerHTML = "";
+  } else {
+    bar.innerHTML = `
+      ${gateBarHtml(row)}
+      <div class="gate-lock-row" id="gateLockRow">
+        Pick a follow-up track first
+        <button type="button" class="why-btn" id="whyBtn">(why?)<span class="why-tip" id="whyTip">Every approved reply needs an explicit follow-up decision — even &ldquo;None&rdquo; — so leads can't fall through the cracks.</span></button>
+      </div>
+      <div class="actionbar-row">
+        <button type="button" class="btn icon-btn" id="overflowBtn" aria-label="More actions" aria-haspopup="true">&#8942;</button>
+        <button type="button" class="btn dismiss-btn" id="dismissBtn" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+        <button type="button" class="btn approve-btn" id="approveBtn" disabled>Approve</button>
+      </div>
+      <div class="overflow-menu" id="overflowMenu">
+        <button type="button" class="om-item" id="regenBtn">Regenerate</button>
+        <button type="button" class="om-item" id="regenFbToggle">Regenerate with feedback</button>
+        <div class="om-fb" id="omFb">
+          <input type="text" id="omFbInput" placeholder="Tell it what to change…">
+          <button type="button" class="om-send" id="omFbSend">Regenerate with feedback</button>
+        </div>
+      </div>
+    `;
+  }
+  wireSheetEvents(row, readOnly);
+}
+
+/* ── Sheet: wiring ────────────────────────────────────────────────────── */
+function updateApproveButton() {
+  const btn = document.getElementById("approveBtn");
+  const lockRow = document.getElementById("gateLockRow");
+  if (!btn) return;
+  if (!gateSelection) {
+    btn.disabled = true; btn.textContent = "Approve";
+    if (lockRow) lockRow.classList.add("show");
+  } else {
+    btn.disabled = false;
+    btn.textContent = gateSelection.name ? `Approve + ${gateSelection.name}` : "Approve — no follow-up";
+    if (lockRow) lockRow.classList.remove("show");
+  }
+}
+function selectChip(chip) {
+  const name = chip.getAttribute("data-name") || "";
+  gateSelection = { name: name || null };
+  document.querySelectorAll(".gate-chip").forEach((c) => c.classList.toggle("on", c === chip));
+  updateApproveButton();
+}
+function toggleChip(chip) {
+  if (chip.classList.contains("on")) {
+    gateSelection = null;
+    document.querySelectorAll(".gate-chip").forEach((c) => c.classList.remove("on"));
+    updateApproveButton();
+    return;
+  }
+  selectChip(chip);
+}
+function closeOverflow() {
+  const m = document.getElementById("overflowMenu");
+  if (m) m.classList.remove("show");
+  const fb = document.getElementById("omFb");
+  if (fb) fb.classList.remove("show");
+}
+function resetDraftToOriginal(row, announce) {
+  const box = document.getElementById("draftBox");
+  if (!box) return;
+  row._wip = null;
+  box.value = row.draft;
+  draftEdited = false;
+  const learnRow = document.getElementById("learnRow");
+  if (learnRow) learnRow.classList.remove("show");
+  if (announce) showToast(announce);
+}
+function wireSheetEvents(row, readOnly) {
+  if (readOnly) return;
+
+  const draftBox = document.getElementById("draftBox");
+  // A restored work-in-progress rewrite re-arms the edited state on reopen.
+  if (row._wip && row._wip !== row.draft) {
+    draftEdited = true;
+    const lr = document.getElementById("learnRow");
+    if (row.agent && lr) {
+      lr.classList.add("show");
+      document.getElementById("learnHint").textContent = learnHintText();
+    }
+  }
+  draftBox.addEventListener("input", () => {
+    draftEdited = draftBox.value !== row.draft;
+    const learnRow = document.getElementById("learnRow");
+    if (row.agent && draftEdited) {
+      learnRow.classList.add("show");
+      document.getElementById("learnHint").textContent = learnHintText();
+    } else {
+      learnRow.classList.remove("show");
+    }
+  });
+
+  const learnChk = document.getElementById("learnChk");
+  if (learnChk) learnChk.addEventListener("change", () => {
+    learnOn = learnChk.checked;
+    document.getElementById("learnHint").textContent = learnHintText();
+  });
+
+  // Panel fix (Yuki/Dee): a chip tap ONLY picks the track - the send always
+  // needs its own deliberate Approve tap. No double-tap shortcut.
+  document.querySelectorAll(".gate-chip").forEach((chip) => {
+    chip.addEventListener("click", () => toggleChip(chip));
+  });
+
+  const whyBtn = document.getElementById("whyBtn");
+  if (whyBtn) whyBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("whyTip").classList.toggle("show");
+  });
+  document.addEventListener("click", closeWhyTipOnOutsideClick);
+
+  document.getElementById("dismissBtn").addEventListener("click", () => doDismiss(row));
+  document.getElementById("approveBtn").addEventListener("click", () => doApprove(row));
+
+  const overflowBtn = document.getElementById("overflowBtn");
+  overflowBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("overflowMenu").classList.toggle("show");
+  });
+  document.getElementById("regenBtn").addEventListener("click", () => {
+    closeOverflow();
+    const btn = document.getElementById("regenBtn");
+    showToast("Regenerating…", { ms: 700 });
+    setTimeout(() => resetDraftToOriginal(row, "Draft regenerated"), 650);
+  });
+  document.getElementById("regenFbToggle").addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("omFb").classList.toggle("show");
+  });
+  document.getElementById("omFbSend").addEventListener("click", () => {
+    const val = (document.getElementById("omFbInput").value || "").trim();
+    closeOverflow();
+    showToast("Regenerating…", { ms: 700 });
+    setTimeout(() => resetDraftToOriginal(row, val ? "Draft regenerated with your feedback" : "Draft regenerated"), 650);
+  });
+  document.getElementById("omFbInput").addEventListener("click", (e) => e.stopPropagation());
+  document.getElementById("overflowMenu").addEventListener("click", (e) => e.stopPropagation());
+
+  updateApproveButton();
+}
+function closeWhyTipOnOutsideClick() {
+  const tip = document.getElementById("whyTip");
+  if (tip) tip.classList.remove("show");
+}
+
+/* ── Approve / Dismiss ───────────────────────────────────────────────── */
+function doApprove(row) {
+  if (!gateSelection) return;
+  const draftBox = document.getElementById("draftBox");
+  const finalText = draftBox ? draftBox.value : row.draft;
+  const wasEdited = draftEdited && finalText !== row.draft;
+  const teaches = wasEdited && learnOn && !!row.agent;
+  const decisionLabel = gateSelection.name || "No follow-up";
+
+  // Record the send: flip status, keep the sent text, log the follow-up
+  // decision and append what actually went out as a new thread message so
+  // reopening this reply later shows the full, real conversation.
+  row.status = "sent";
+  row.draft = finalText;
+  row._wip = null;
+  row._subseqDecision = decisionLabel;
+  row._sentAgo = "just now";
+  row.thread = (row.thread || []).concat([{ who: "us", head: "You · just now", body: finalText }]);
+
+  closeSheet();
+  showToast(`Sent to ${esc(firstName(row.name))}`);
+  renderStatsLine();
+  renderFilterPills();
+  renderList();
+  flashNextNeedsReviewRow();
+
+  if (teaches) {
+    setTimeout(() => showLessonToast(`Match this phrasing for &ldquo;${row.intent}&rdquo; replies from ${row.agent} going forward.`), 1700);
+  }
+}
+function doDismiss(row) {
+  row.status = "dismissed";
+  lastDismissedRow = row;
+  closeSheet();
+  renderStatsLine();
+  renderFilterPills();
+  renderList();
+  // Panel fix (Dee): the dismiss is recoverable for a few seconds.
+  showToast(`Dismissed — nothing sent, the lead stays in Smartlead. <button type="button" class="toast-undo" id="undoDismissBtn">Undo</button>`, { ms: 5000 });
+}
+let lastDismissedRow = null;
+document.addEventListener("click", (e) => {
+  if (!e.target.closest || !e.target.closest("#undoDismissBtn")) return;
+  hideToast();
+  if (lastDismissedRow) {
+    lastDismissedRow.status = "needs_review";
+    lastDismissedRow = null;
+    renderStatsLine(); renderFilterPills(); renderList();
+    showToast("Restored", { ms: 1500 });
+  }
+});
+function flashNextNeedsReviewRow() {
+  const next = document.querySelector('.row[data-id]');
+  if (currentStatus === "needs_review" && next) {
+    next.classList.add("flash");
+    setTimeout(() => next.classList.remove("flash"), 1150);
+  }
+}
+
+/* ── Sheet close controls: X, scrim, drag-down on the handle ─────────── */
+document.getElementById("sheetX").addEventListener("click", closeSheet);
+document.getElementById("scrim").addEventListener("click", closeSheet);
+
+(function wireDrag() {
+  const sheet = document.getElementById("sheet");
+  const handle = document.getElementById("sheetDrag");
+  let startY = 0, dy = 0, dragging = false;
+  const onMove = (clientY) => {
+    dy = Math.max(0, clientY - startY);
+    sheet.style.transform = `translateX(-50%) translateY(${dy}px)`;
+  };
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    sheet.classList.remove("dragging");
+    sheet.style.transform = "";
+    if (dy > 110) closeSheet();
+    dy = 0;
+  };
+  handle.addEventListener("pointerdown", (e) => {
+    dragging = true; startY = e.clientY; dy = 0;
+    sheet.classList.add("dragging");
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e) => { if (dragging) onMove(e.clientY); });
+  handle.addEventListener("pointerup", onEnd);
+  handle.addEventListener("pointercancel", onEnd);
+})();
+
+/* ── Search ───────────────────────────────────────────────────────────── */
+const searchInput = document.getElementById("searchInput");
+const searchField = document.getElementById("searchField");
+searchInput.addEventListener("input", () => {
+  searchQuery = searchInput.value;
+  searchField.classList.toggle("has-text", searchQuery.length > 0);
+  renderList();
+});
+document.getElementById("searchClear").addEventListener("click", () => {
+  searchInput.value = ""; searchQuery = "";
+  searchField.classList.remove("has-text");
+  renderList();
+  searchInput.focus();
+});
+
+/* ── Boot ─────────────────────────────────────────────────────────────── */
+renderStatsLine();
+renderFilterPills();
+renderList();
+</script>
+</body>
+</html>

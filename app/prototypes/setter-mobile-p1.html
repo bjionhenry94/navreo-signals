@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Setter Mobile P1 — Triage stack</title>
+<style>
+@font-face { font-family: "Acid Grotesk"; src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --radius:12px; --focus:0 0 0 3px rgba(255,77,0,.32);
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; }
+body {
+  font-family:var(--font-sans); background:var(--bg); color:var(--ink);
+  line-height:1.45; letter-spacing:-0.015em; -webkit-font-smoothing:antialiased;
+  max-width:480px; margin:0 auto; display:flex; flex-direction:column;
+  height:100dvh; overflow:hidden;
+}
+button { font-family:var(--font-sans); cursor:pointer; }
+.proto-banner {
+  flex-shrink:0; text-align:center; font-size:11px; color:var(--ink-3);
+  padding:6px 12px; border-bottom:1px solid var(--line); background:var(--bg-sunken);
+}
+/* ── Header ── */
+.head { flex-shrink:0; padding:14px 18px 10px; }
+.head-row { display:flex; align-items:baseline; gap:10px; }
+.h-title { font-family:var(--font-display); font-weight:400; font-size:22px; letter-spacing:-0.03em; }
+.h-progress { margin-left:auto; font-size:13px; font-weight:600; color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.h-progress b { color:var(--orange-700); }
+.h-meta { display:flex; align-items:center; gap:7px; margin-top:6px; flex-wrap:wrap; min-height:24px; }
+.pill {
+  display:inline-flex; align-items:center; font-size:11px; font-weight:600;
+  padding:2px 9px; border-radius:999px; background:var(--bg-sunken); color:var(--ink-2);
+  border:1px solid var(--line);
+}
+.pill.noagent { background:transparent; border-style:dashed; color:var(--ink-3); }
+.pill.intent { background:var(--cream-50); border-color:var(--cream); color:var(--ink-2); }
+/* Status lenses (owner ask): same pills as the desktop setter, live counts. */
+.fpills {
+  display:flex; gap:8px; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  margin-top:10px; scrollbar-width:none;
+}
+.fpills::-webkit-scrollbar { display:none; }
+.fpill {
+  flex-shrink:0; min-height:40px; padding:0 14px; border-radius:999px;
+  border:1px solid var(--line-2); background:var(--card); color:var(--ink-2);
+  font:600 12.5px var(--font-sans); display:inline-flex; align-items:center; gap:6px;
+}
+.fpill b { font-weight:700; font-variant-numeric:tabular-nums; color:var(--ink-3); }
+.fpill.on { background:var(--ink); border-color:var(--ink); color:var(--cream-50); }
+.fpill.on b { color:var(--cream-50); opacity:.75; }
+/* ── Card stage ── */
+.stage { flex:1; overflow:hidden; position:relative; padding:4px 14px 10px; }
+.tcard {
+  position:absolute; inset:4px 14px 10px; background:var(--card);
+  border:1px solid var(--line); border-radius:16px;
+  box-shadow:0 10px 30px rgba(20,17,14,.08);
+  display:flex; flex-direction:column; overflow:hidden;
+  transition:transform .22s ease, opacity .22s ease;
+  touch-action:pan-y;
+}
+.tcard.exit-left { transform:translateX(-110%) rotate(-3deg); opacity:0; }
+.tcard.exit-right { transform:translateX(110%) rotate(3deg); opacity:0; }
+.tcard-scroll { flex:1; overflow-y:auto; padding:16px 16px 12px; }
+.status-strip {
+  border:1px solid var(--green-line); background:var(--green-bg); color:#195C3F;
+  border-radius:10px; padding:9px 12px; font-size:12.5px; font-weight:600; margin-bottom:12px;
+}
+.status-strip.neutral { border-color:var(--line); background:var(--bg-sunken); color:var(--ink-2); }
+.lead-head { margin-bottom:12px; }
+.lh-name { font-size:17px; font-weight:600; }
+.lh-role { font-size:12.5px; color:var(--ink-2); margin-top:1px; }
+.lh-pills { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center; }
+.age { font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; background:var(--bg-sunken); color:var(--ink-2); }
+.reply-block { border:1px solid var(--line); border-left:3px solid var(--ink); border-radius:10px; padding:11px 13px; margin-bottom:10px; background:var(--card); }
+.rb-head { font-size:11.5px; font-weight:600; color:var(--ink-3); margin-bottom:4px; }
+.rb-body { font-size:15px; line-height:1.5; color:var(--ink); }
+.thread-toggle summary {
+  list-style:none; font-size:12.5px; color:var(--ink-3); padding:8px 2px; cursor:pointer; min-height:36px; display:flex; align-items:center; gap:6px;
+}
+.thread-toggle summary::-webkit-details-marker { display:none; }
+.thread-toggle summary .chev { font-size:10px; transition:transform .2s; }
+.thread-toggle[open] summary .chev { transform:rotate(180deg); }
+.tmsg { margin-bottom:8px; padding:8px 11px; border-radius:8px; background:var(--bg-sunken); }
+.tmsg .tm-head { font-size:11px; font-weight:600; color:var(--ink-3); margin-bottom:3px; }
+.tmsg .tm-body { font-size:12.5px; color:var(--ink-2); line-height:1.5; white-space:pre-wrap; }
+.draft-block { margin-top:10px; border:1px solid var(--line-2); border-radius:10px; overflow:hidden; }
+.db-label {
+  display:flex; align-items:center; gap:8px; font-size:11px; font-weight:600; text-transform:uppercase;
+  letter-spacing:.05em; color:var(--ink-3); padding:9px 13px 0;
+}
+.db-label .edit-hint { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:500; color:var(--brown-400); font-size:11px; }
+.db-body { font-size:13.5px; line-height:1.55; color:var(--ink); padding:8px 13px 12px; white-space:pre-wrap; min-height:44px; }
+.db-body:active { background:var(--bg-sunken); }
+.db-edit { display:none; padding:8px 13px 12px; }
+.db-edit textarea {
+  width:100%; min-height:150px; border:1px solid var(--line-2); border-radius:8px; padding:10px 11px;
+  font:400 13.5px/1.55 var(--font-sans); color:var(--ink); resize:vertical;
+}
+.db-edit textarea:focus { outline:none; box-shadow:var(--focus); }
+.learn-row { display:none; margin-top:8px; }
+.learn-row label { display:flex; gap:8px; align-items:flex-start; font-size:12px; font-weight:500; color:var(--ink-2); cursor:pointer; }
+.learn-row input { margin-top:2px; width:16px; height:16px; }
+.learn-row .hint { font-size:11px; color:var(--ink-3); margin-top:3px; line-height:1.45; }
+/* ── Bottom action bar ── */
+.actionbar {
+  flex-shrink:0; display:flex; gap:8px; padding:10px 14px calc(12px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--line); background:var(--bg);
+}
+.btn {
+  min-height:48px; border-radius:11px; border:1px solid var(--line-2); background:var(--card);
+  color:var(--ink-2); font-size:13.5px; font-weight:600; padding:0 14px;
+}
+.btn:active { background:var(--bg-sunken); }
+.btn.primary { background:var(--ink); border-color:var(--ink); color:var(--cream-50); flex:1; }
+.btn.primary:active { background:#000; }
+.btn.primary[disabled] { opacity:.45; }
+.btn.wide { flex:1; }
+/* ── Gate sheet ── */
+.scrim { position:fixed; inset:0; background:rgba(20,17,14,.45); opacity:0; pointer-events:none; transition:opacity .2s; z-index:40; }
+.scrim.on { opacity:1; pointer-events:auto; }
+.gate-sheet {
+  position:fixed; left:0; right:0; bottom:0; z-index:50; max-width:480px; margin:0 auto;
+  background:var(--card); border-radius:18px 18px 0 0; border:1px solid var(--line);
+  padding:14px 18px calc(16px + env(safe-area-inset-bottom));
+  transform:translateY(105%); transition:transform .24s ease;
+}
+.gate-sheet.on { transform:translateY(0); }
+.gs-handle { width:38px; height:4px; border-radius:2px; background:var(--line-2); margin:0 auto 12px; }
+.gs-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-3); margin-bottom:10px; }
+.gs-chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.gchip {
+  min-height:44px; padding:0 15px; border-radius:999px; border:1px solid var(--line-2);
+  background:var(--card); color:var(--ink-2); font-size:13px; font-weight:600;
+}
+.gchip.none { border-style:dashed; }
+.gchip.sel { background:var(--orange); border-color:var(--orange); color:#fff; }
+.gs-hint { font-size:12px; color:var(--ink-3); margin-bottom:12px; }
+.gs-hint .why { border-bottom:1px dotted var(--ink-3); position:relative; cursor:help; }
+.gs-hint .why .tip {
+  display:none; position:absolute; bottom:20px; left:0; width:230px; background:var(--ink);
+  color:var(--cream-50); font-size:11.5px; line-height:1.5; padding:9px 11px; border-radius:8px; z-index:20;
+}
+.gs-hint .why:active .tip, .gs-hint .why:hover .tip { display:block; }
+.gs-approve { width:100%; }
+/* ── Sent state + toasts ── */
+.sent-flash {
+  position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+  background:var(--card); border-radius:16px; z-index:5; flex-direction:column; gap:10px;
+}
+.sent-flash.on { display:flex; }
+.sf-check { width:46px; height:46px; border-radius:50%; background:var(--green-bg); position:relative; }
+.sf-check::after {
+  content:""; position:absolute; left:15px; top:12px; width:12px; height:20px;
+  border:solid var(--green); border-width:0 3px 3px 0; transform:rotate(45deg);
+}
+.sf-line { font-size:14px; font-weight:600; }
+.sf-sub { font-size:12px; color:var(--ink-3); }
+.toast {
+  position:fixed; left:50%; transform:translateX(-50%) translateY(12px); bottom:calc(84px + env(safe-area-inset-bottom));
+  z-index:60; width:min(440px,92vw); background:var(--card); border:1px solid var(--line); border-radius:12px;
+  box-shadow:0 10px 30px rgba(20,17,14,.18); padding:12px 14px; opacity:0; pointer-events:none;
+  transition:opacity .2s, transform .2s;
+}
+.toast.on { opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0); }
+.toast .t-head { font-size:12.5px; font-weight:600; }
+.toast .t-rule { font-size:12.5px; color:var(--ink-2); margin:4px 0 9px; line-height:1.5; }
+.toast .t-actions { display:flex; gap:8px; }
+.toast .btn { min-height:38px; font-size:12.5px; }
+.note-toast {
+  /* Sits a band above the button toasts so it can never bury Undo/Keep. */
+  position:fixed; left:50%; transform:translateX(-50%); bottom:calc(170px + env(safe-area-inset-bottom));
+  background:var(--ink); color:var(--cream-50); font-size:12.5px; font-weight:500;
+  padding:9px 16px; border-radius:999px; opacity:0; pointer-events:none; transition:opacity .2s; z-index:60;
+}
+.note-toast.on { opacity:1; }
+/* ── Empty state ── */
+.empty-state { display:none; flex:1; align-items:center; justify-content:center; flex-direction:column; gap:8px; padding:0 30px; text-align:center; }
+.empty-state.on { display:flex; }
+.es-big { font-family:var(--font-display); font-size:26px; letter-spacing:-0.03em; }
+.es-sub { font-size:13px; color:var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="proto-banner">Prototype P1 · Triage stack · mock data — nothing sends</div>
+
+<div class="head">
+  <div class="head-row">
+    <div class="h-title">Replies</div>
+    <div class="h-progress" id="progress"></div>
+  </div>
+  <div class="h-meta" id="cardMeta"></div>
+  <div class="fpills" id="fpills"></div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="empty-state" id="emptyState">
+    <div class="es-big" id="esBig">Queue clear.</div>
+    <div class="es-sub" id="esSub"></div>
+  </div>
+</div>
+
+<div class="actionbar" id="actionbar">
+  <button class="btn" id="dismissBtn" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+  <button class="btn" id="laterBtn" type="button">Later</button>
+  <button class="btn primary" id="approveBtn" type="button">Approve</button>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="gate-sheet" id="gateSheet">
+  <div class="gs-handle"></div>
+  <div class="gs-label">Follow-up after this send</div>
+  <div class="gs-chips" id="gateChips"></div>
+  <div class="gs-hint" id="gateHint">Pick a follow-up track first
+    <span class="why">(why?<span class="tip">Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send.</span>)</span>
+  </div>
+  <button class="btn primary gs-approve" id="gateApproveBtn" type="button" disabled>Approve</button>
+</div>
+
+<div class="toast" id="dismissToast">
+  <div class="t-head">Dismissed</div>
+  <div class="t-rule">Removed from this queue only. Nothing was sent and the lead stays in Smartlead.</div>
+  <div class="t-actions">
+    <button class="btn" id="dismissUndoBtn" type="button">Undo</button>
+    <button class="btn" id="dismissOkBtn" type="button">OK</button>
+  </div>
+</div>
+<div class="toast" id="lessonToast">
+  <div class="t-head">The agent learned from your edit</div>
+  <div class="t-rule" id="lessonRule"></div>
+  <div class="t-actions">
+    <button class="btn" id="lessonUndoBtn" type="button">Undo - forget this</button>
+    <button class="btn" id="lessonOkBtn" type="button">Keep it</button>
+  </div>
+</div>
+<div class="note-toast" id="noteToast"></div>
+
+<script>
+"use strict";
+const REPLIES = [
+ {id:"r1", name:"Sarah Mitchell", title:"COO", company:"Meridian Fabrication", email:"sarah@meridianfab.co.uk",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Wants to book a call", status:"needs_review", age:"4m",
+  reply:"This sounds interesting. We've been burned by agencies before but the buyer-intro angle is different. How does next Tuesday look for a quick call?",
+  thread:[{who:"us", head:"You · 3 days ago", body:"Hi Sarah — quick one: are you open to intros to buyers actively sourcing UK fabrication right now? We line up 2-3 qualified buyer conversations a month for firms like Meridian. Worth a look?"},
+          {who:"them", head:"Sarah · 4 minutes ago", body:"This sounds interesting. We've been burned by agencies before but the buyer-intro angle is different. How does next Tuesday look for a quick call?"}],
+  draft:"Hi Sarah,\n\nTuesday works well — I have 10:30 or 2:15 free. Grab whichever suits here: cal.navreo.ai/sihl\n\nAnd fair point on agencies — this is why we only get paid on booked buyer conversations, not activity.\n\nBest,\nJames",
+  subseq:["Booked-call nurture","Pricing follow-up","Resource drip"]},
+ {id:"r2", name:"David Okafor", title:"Founder", company:"Brightpath Logistics", email:"david@brightpathlog.com",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Asking about pricing", status:"needs_review", age:"18m",
+  reply:"What does this cost roughly? We're comparing a couple of options this quarter.",
+  thread:[{who:"us", head:"You · 5 days ago", body:"Hi David — are you open to intros to buyers actively sourcing logistics partners? We line up qualified buyer conversations for firms like Brightpath."},
+          {who:"them", head:"David · 18 minutes ago", body:"What does this cost roughly? We're comparing a couple of options this quarter."}],
+  draft:"Hi David,\n\nStraight answer: from £1,800/mo, and we only invoice on delivered buyer conversations — if none land, you pay nothing that month.\n\nHappy to walk you through it in 15 minutes if you're comparing options: cal.navreo.ai/sihl\n\nBest,\nJames",
+  subseq:["Pricing follow-up","Booked-call nurture","Resource drip"]},
+ {id:"r3", name:"Priya Nair", title:"VP Sales", company:"Cobalt Systems", email:"priya@cobaltsystems.io",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Wants the resource", status:"needs_review", age:"41m",
+  reply:"Sure, send it over.",
+  thread:[{who:"us", head:"You · 2 days ago", body:"Hi Priya — we mapped the 214 UK companies actively hiring sales roles that fit Cobalt's ICP. Want the list?"},
+          {who:"them", head:"Priya · 41 minutes ago", body:"Sure, send it over."}],
+  draft:"Hi Priya,\n\nHere it is: navreo.ai/r/cobalt-hiring-map\n\nThe 30 with a Director+ sales hire open are flagged in column B — those tend to reply fastest. If you want us to run the outreach on the top tier, that's exactly what we do.\n\nBest,\nLilly",
+  subseq:["Resource drip","Booked-call nurture"]},
+ {id:"r4", name:"Marcus Webb", title:"MD", company:"Atlas Joinery", email:"marcus@atlasjoinery.co.uk",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Has a question", status:"needs_review", age:"1h",
+  reply:"How is this different from just hiring an SDR ourselves?",
+  thread:[{who:"us", head:"You · 6 days ago", body:"Hi Marcus — quick one: open to intros to buyers actively sourcing joinery and fit-out partners? We line up qualified buyer conversations for firms like Atlas."},
+          {who:"them", head:"Marcus · 5 days ago", body:"Maybe. Who else have you done this for?"},
+          {who:"us", head:"You · 5 days ago", body:"Mostly UK manufacturers — Sihl is the closest example, we book their buyer calls month in month out. Happy to share how it works."},
+          {who:"them", head:"Marcus · 1 hour ago", body:"How is this different from just hiring an SDR ourselves?"}],
+  draft:"Hi Marcus,\n\nAn SDR costs ~£45k loaded and takes 6 months to ramp. We turn on a working system in 2 weeks — list, copy, sending, replies — and you only pay on booked buyer conversations.\n\nIf the maths interests you, 15 minutes covers it: cal.navreo.ai/sihl\n\nBest,\nJames",
+  subseq:["Booked-call nurture","Pricing follow-up","Resource drip"]},
+ {id:"r5", name:"Elena Vasquez", title:"Director", company:"Northgate Consulting", email:"elena@northgateconsult.com",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Not interested", status:"needs_review", age:"2h",
+  reply:"Not for us right now, thanks.",
+  thread:[{who:"us", head:"You · 4 days ago", body:"Hi Elena — we help consultancies keep a steady pipeline of qualified buyer conversations. Open to a look?"},
+          {who:"them", head:"Elena · 2 hours ago", body:"Not for us right now, thanks."}],
+  draft:"Hi Elena,\n\nUnderstood — thanks for letting me know. If pipeline becomes a priority later in the year, the door's open.\n\nBest,\nLilly",
+  subseq:["Resource drip"]},
+ {id:"r6", name:"Tom Hardwick", title:"Ops Director", company:"Ferrous Engineering", email:"tom@ferrouseng.co.uk",
+  campaign:"KRG — Midlands Industrial", agent:null, intent:"Wants to book a call", status:"needs_review", age:"3h",
+  reply:"Yes — can you do Thursday afternoon?",
+  thread:[{who:"us", head:"You · 1 day ago", body:"Hi Tom — are you open to intros to buyers sourcing precision engineering right now? We line up qualified buyer conversations for firms like Ferrous."},
+          {who:"them", head:"Tom · 3 hours ago", body:"Yes — can you do Thursday afternoon?"}],
+  draft:"Hi Tom,\n\nThursday afternoon works — 2:00 or 3:30. Pick whichever suits: cal.navreo.ai/krg\n\nSpeak then,\nSam",
+  subseq:["Booked-call nurture","Pricing follow-up"]},
+ {id:"r7", name:"Jenny Lau", title:"Head of Growth", company:"Parkside Digital", email:"jenny@parksidedigital.co.uk",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Wants the resource", status:"auto_sent", age:"5h", sentMeta:"Sent automatically · 12 minutes after their reply",
+  reply:"Sounds useful — send the breakdown.",
+  thread:[{who:"us", head:"You · 3 days ago", body:"Hi Jenny — we mapped the exact outbound campaigns we'd run for Parkside. Want the breakdown?"},
+          {who:"them", head:"Jenny · 5 hours ago", body:"Sounds useful — send the breakdown."},
+          {who:"us", head:"Navreo Setter (auto) · 5 hours ago", body:"Hi Jenny,\n\nHere's the breakdown: navreo.ai/r/parkside\n\nIt maps three campaigns with the exact copy we'd use. If you want the top one live within two weeks, that's what we do.\n\nBest,\nLilly"}],
+  draft:null, subseq:[]}
+];
+
+/* Status lenses (owner ask): Needs review / Sent / Auto-sent / Dismissed / All. */
+const LENSES = [
+  { key: "needs_review", label: "Needs review" },
+  { key: "sent", label: "Sent" },
+  { key: "auto_sent", label: "Auto-sent" },
+  { key: "dismissed", label: "Dismissed" },
+  { key: "", label: "All" },
+];
+let lens = "needs_review";
+let idx = 0;
+let gateChoice = null;          // {choice:"push", name} | {choice:"none"}
+let edited = false, learnOn = true;
+
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const $ = id => document.getElementById(id);
+const rowsFor = k => k ? REPLIES.filter(r => r.status === k) : REPLIES.slice();
+function view() { return rowsFor(lens); }
+function current() { return view()[idx]; }
+
+function renderPills() {
+  $("fpills").innerHTML = LENSES.map(p => {
+    const n = p.key ? rowsFor(p.key).length : REPLIES.length;
+    return `<button class="fpill ${lens === p.key ? "on" : ""}" data-key="${p.key}" type="button">${p.label} <b>${n}</b></button>`;
+  }).join("");
+  $("fpills").querySelectorAll(".fpill").forEach(btn => {
+    btn.addEventListener("click", () => { lens = btn.getAttribute("data-key"); idx = 0; renderCard(); });
+  });
+}
+
+function renderProgress() {
+  const v = view();
+  $("progress").innerHTML = v.length ? `<b>${idx + 1}</b> of ${v.length}` : "0";
+}
+
+function renderMeta(r) {
+  if (!r) { $("cardMeta").innerHTML = ""; return; }
+  $("cardMeta").innerHTML = `
+    <span class="pill">${esc(r.campaign)}</span>
+    ${r.agent ? `<span class="pill">${esc(r.agent)}</span>` : `<span class="pill noagent">No agent</span>`}`;
+}
+
+function statusStripHtml(r) {
+  if (r.status === "sent") return `<div class="status-strip">${esc(r._sentNote || "Sent by you · just now")}</div>`;
+  if (r.status === "auto_sent") return `<div class="status-strip">${esc(r.sentMeta)}</div>`;
+  if (r.status === "dismissed") return `<div class="status-strip neutral">Dismissed — nothing was sent; the lead stays in Smartlead.</div>`;
+  return "";
+}
+
+function cardHtml(r) {
+  const threadN = r.thread.length;
+  const actionable = r.status === "needs_review";
+  const draftSection = actionable ? `
+    <div class="draft-block">
+      <div class="db-label">Draft reply · ${esc(r.agent || "No agent")}<span class="edit-hint">tap to edit</span></div>
+      <div class="db-body" id="draftBody">${esc(r.draft)}</div>
+      <div class="db-edit" id="draftEdit">
+        <textarea id="draftTa"></textarea>
+        <div class="learn-row" id="learnRow">
+          <label><input type="checkbox" id="learnChk" checked>
+            <span>Learn from this edit
+              <div class="hint">Your rewrite becomes a standing rule for every future reply. Untick to keep it one-off.</div>
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>` : (r.status === "sent" && r._finalText ? `
+    <div class="draft-block">
+      <div class="db-label">Your reply</div>
+      <div class="db-body">${esc(r._finalText)}</div>
+    </div>` : "");
+  return `
+  <div class="tcard-scroll">
+    ${statusStripHtml(r)}
+    <div class="lead-head">
+      <div class="lh-name">${esc(r.name)}</div>
+      <div class="lh-role">${esc(r.title)} @ ${esc(r.company)}</div>
+      <div class="lh-pills">
+        <span class="pill intent">${esc(r.intent)}</span>
+        <span class="age">${esc(r.age)}</span>
+      </div>
+    </div>
+    <div class="reply-block">
+      <div class="rb-head">${esc(r.thread.filter(m => m.who === "them").slice(-1)[0].head)}</div>
+      <div class="rb-body">${esc(r.reply)}</div>
+    </div>
+    <details class="thread-toggle" ${(!actionable || threadN > 2) ? "open" : ""}>
+      <summary><span class="chev">&#9662;</span> View thread (${threadN})</summary>
+      <div>${r.thread.map(m => `
+        <div class="tmsg"><div class="tm-head">${esc(m.head)}</div><div class="tm-body">${esc(m.body)}</div></div>`).join("")}
+      </div>
+    </details>
+    ${draftSection}
+  </div>
+  <div class="sent-flash" id="sentFlash">
+    <div class="sf-check"></div>
+    <div class="sf-line" id="sentLine"></div>
+    <div class="sf-sub" id="sentSub"></div>
+  </div>`;
+}
+
+let cardEl = null;
+function renderCard() {
+  const old = document.querySelector(".tcard");
+  if (old) old.remove();
+  const r = current();
+  renderPills(); renderProgress(); renderMeta(r);
+  gateChoice = null; edited = false; learnOn = true;
+  updateApproveLabel();
+  const actionable = !!r && r.status === "needs_review";
+  $("dismissBtn").style.display = actionable ? "" : "none";
+  $("approveBtn").style.display = actionable ? "" : "none";
+  $("laterBtn").textContent = actionable ? "Later" : "Next";
+  $("laterBtn").classList.toggle("wide", !actionable);
+  if (!r) {
+    const nr = rowsFor("needs_review").length;
+    $("esBig").textContent = lens === "needs_review" ? "Queue clear." : "Nothing here yet.";
+    $("esSub").textContent = lens === "needs_review"
+      ? `${rowsFor("sent").length} sent by you · ${rowsFor("auto_sent").length} auto-sent · ${rowsFor("dismissed").length} dismissed.`
+      : (nr ? `${nr} still waiting under Needs review.` : "");
+    $("emptyState").classList.add("on");
+    $("actionbar").style.display = "none";
+    return;
+  }
+  $("emptyState").classList.remove("on");
+  $("actionbar").style.display = "flex";
+  cardEl = document.createElement("div");
+  cardEl.className = "tcard";
+  cardEl.innerHTML = cardHtml(r);
+  $("stage").appendChild(cardEl);
+  if (actionable) wireCard(r);
+}
+
+function wireCard(r) {
+  const body = $("draftBody"), editWrap = $("draftEdit"), ta = $("draftTa");
+  body.addEventListener("click", () => {
+    body.style.display = "none"; editWrap.style.display = "block";
+    ta.value = r.draft; ta.focus();
+  });
+  ta.addEventListener("input", () => {
+    if (ta.value !== r.draft) { edited = true; $("learnRow").style.display = "block"; }
+  });
+  $("learnChk").addEventListener("change", e => { learnOn = e.target.checked; });
+  // Swipe: left = dismiss, right = approve flow. Buttons remain the equal fallback.
+  // Panel fix (Rachel/Marco/Sam): the swipe only ARMS on deliberate horizontal
+  // intent - a thumb drifting sideways while scrolling the thread never fires it.
+  let x0 = null, y0 = null, dx = 0, armed = false, killed = false;
+  cardEl.addEventListener("touchstart", e => {
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+    dx = 0; armed = false;
+    // Panel fix (Yuki): gestures that start inside the editable draft or the
+    // thread toggle belong to reading/editing, never to card triage.
+    killed = !!(e.target.closest && e.target.closest(".db-edit, .thread-toggle, textarea"));
+  }, {passive:true});
+  cardEl.addEventListener("touchmove", e => {
+    if (x0 == null || killed) return;
+    dx = e.touches[0].clientX - x0;
+    const dy = e.touches[0].clientY - y0;
+    if (!armed) {
+      if (Math.abs(dy) > 26) { killed = true; return; }               // scrolling - never a swipe
+      if (Math.abs(dx) > 30 && Math.abs(dx) > 2.2 * Math.abs(dy)) armed = true;
+      else return;
+    }
+    cardEl.style.transition = "none";
+    cardEl.style.transform = `translateX(${dx}px) rotate(${dx/40}deg)`;
+  }, {passive:true});
+  cardEl.addEventListener("touchend", () => {
+    cardEl.style.transition = "";
+    if (armed && dx < -130) { doDismiss(); }
+    else if (armed && dx > 130) { cardEl.style.transform = ""; openGate(); }
+    else { cardEl.style.transform = ""; }
+    x0 = null; y0 = null; dx = 0; armed = false; killed = false;
+  });
+}
+
+function updateApproveLabel() {
+  const lbl = gateChoice
+    ? (gateChoice.choice === "push" ? `Approve + ${gateChoice.name}` : "Approve — no follow-up")
+    : "Approve";
+  $("approveBtn").textContent = lbl;
+  $("gateApproveBtn").textContent = lbl;
+  $("gateApproveBtn").disabled = !gateChoice;
+  $("gateHint").style.display = gateChoice ? "none" : "block";
+}
+
+/* ── Gate ── */
+function openGate() {
+  const r = current(); if (!r || r.status !== "needs_review") return;
+  const chips = r.subseq.map(n => `<button class="gchip" data-name="${esc(n)}" type="button">${esc(n)}</button>`).join("")
+    + `<button class="gchip none" data-name="" type="button">None</button>`;
+  $("gateChips").innerHTML = chips;
+  // Panel fix (Yuki/Dee): a chip tap ONLY picks the track - the send always
+  // needs its own deliberate Approve tap. No double-tap shortcut.
+  $("gateChips").querySelectorAll(".gchip").forEach(ch => {
+    ch.addEventListener("click", () => {
+      const name = ch.getAttribute("data-name");
+      $("gateChips").querySelectorAll(".gchip").forEach(c => c.classList.remove("sel"));
+      ch.classList.add("sel");
+      gateChoice = name ? {choice:"push", name} : {choice:"none"};
+      updateApproveLabel();
+    });
+  });
+  $("scrim").classList.add("on");
+  $("gateSheet").classList.add("on");
+}
+/* Panel fix (Dee): backing out of the gate sheet clears the pick - Approve
+   can never fire later on a choice you'd forgotten. The approve path itself
+   passes keep=true so the send still reads its choice. */
+function closeGate(keep) {
+  $("scrim").classList.remove("on"); $("gateSheet").classList.remove("on");
+  if (keep !== true) { gateChoice = null; updateApproveLabel(); }
+}
+$("scrim").addEventListener("click", () => closeGate());
+
+/* ── Actions ── */
+function note(msg) {
+  const el = $("noteToast"); el.textContent = msg; el.classList.add("on");
+  setTimeout(() => el.classList.remove("on"), 1600);
+}
+function lessonRuleFromEdit(taVal, r) {
+  return taVal.length < r.draft.length ? "Keep replies shorter and more direct" : "Prefer the wording you rewrote for this kind of reply";
+}
+function doApprove() {
+  const r = current(); if (!r || r.status !== "needs_review") return;
+  if (!gateChoice) { openGate(); return; }
+  closeGate(true);   // keep the choice - this close IS the approve path
+  const ta = $("draftTa");
+  const finalText = (edited && ta) ? ta.value : r.draft;
+  const track = gateChoice.choice === "push" ? gateChoice.name : null;
+  $("sentLine").textContent = `Sent to ${r.name.split(" ")[0]}`;
+  $("sentSub").textContent = track ? `Follow-up: ${track}` : "No follow-up";
+  $("sentFlash").classList.add("on");
+  const wasEdited = edited && learnOn && finalText !== r.draft;
+  const rule = wasEdited ? lessonRuleFromEdit(finalText, r) : null;
+  // Panel fix (Rachel): the sent-flash is a beat, not a wait - ~300ms and
+  // the next card is live.
+  setTimeout(() => {
+    cardEl.classList.add("exit-right");
+    r.status = "sent";
+    r._finalText = finalText;
+    r._sentNote = `Sent by you · just now${track ? ` · ${track}` : " · No follow-up"}`;
+    setTimeout(() => { if (idx >= view().length) idx = 0; renderCard(); }, 240);
+    if (wasEdited) showLesson(rule); else note("Sent");
+  }, 300);
+}
+let lastDismissed = null, dismissTimer = null;
+function doDismiss() {
+  const r = current(); if (!r || r.status !== "needs_review") return;
+  closeGate();
+  cardEl.classList.add("exit-left");
+  r.status = "dismissed";   // optimistic: instant, nothing sends, lead stays in Smartlead
+  lastDismissed = r;
+  // Panel fix (Sam): the dismiss toast carries a real Undo for a few seconds.
+  $("dismissToast").classList.add("on");
+  if (dismissTimer) clearTimeout(dismissTimer);
+  dismissTimer = setTimeout(() => $("dismissToast").classList.remove("on"), 5000);
+  setTimeout(() => { if (idx >= view().length) idx = 0; renderCard(); }, 240);
+}
+$("dismissUndoBtn").addEventListener("click", () => {
+  $("dismissToast").classList.remove("on");
+  if (lastDismissed) { lastDismissed.status = "needs_review"; lastDismissed = null; renderCard(); note("Restored"); }
+});
+$("dismissOkBtn").addEventListener("click", () => $("dismissToast").classList.remove("on"));
+function doLater() {
+  const v = view(); if (!v.length) return;
+  cardEl.classList.add("exit-left");
+  setTimeout(() => { idx = (idx + 1) % view().length; renderCard(); }, 220);
+}
+function showLesson(rule) {
+  $("lessonRule").textContent = `Learned: ${rule}. This now applies to every future reply from this agent.`;
+  $("lessonToast").classList.add("on");
+}
+$("lessonUndoBtn").addEventListener("click", () => {
+  $("lessonToast").classList.remove("on");
+  note("Undone - the agent kept nothing from that edit");
+});
+$("lessonOkBtn").addEventListener("click", () => $("lessonToast").classList.remove("on"));
+
+$("approveBtn").addEventListener("click", doApprove);
+$("gateApproveBtn").addEventListener("click", doApprove);
+$("dismissBtn").addEventListener("click", doDismiss);
+$("laterBtn").addEventListener("click", doLater);
+
+renderCard();
+</script>
+</body>
+</html>

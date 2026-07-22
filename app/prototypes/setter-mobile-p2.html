@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Appointment Setter · Mobile P2</title>
+<style>
+@font-face{
+  font-family:"Acid Grotesk";
+  src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+  font-weight:400; font-style:normal; font-display:swap;
+}
+
+:root{
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055;
+  --brown-300:#C0B0A0; --brown-400:#A89684;
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --cream:#F9F0E7; --cream-50:#FCF7F1;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green-bg:#E2F1E9; --green-text:#195C3F;
+  --red:#C2371F; --red-bg:#F7DCD5;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --radius:12px;
+  --focus:0 0 0 3px rgba(255,77,0,.32);
+  --toast-shadow:0 10px 30px rgba(20,17,14,.18);
+}
+
+*{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+[hidden]{display:none !important;}
+html{height:100%; -webkit-text-size-adjust:100%;}
+body{
+  height:100%; min-height:100vh; min-height:100dvh;
+  max-width:480px; margin:0 auto;
+  display:flex; flex-direction:column; overflow-x:hidden;
+  font-family:var(--font-sans); background:var(--bg); color:var(--ink);
+  line-height:1.45; letter-spacing:-0.015em; -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit;}
+::selection{background:var(--orange-100);}
+
+/* ── Prototype banner (invariant 10) ─────────────────────────────────── */
+.proto-banner{
+  flex:0 0 auto; text-align:center; font-size:11px; color:var(--ink-3);
+  padding:6px 12px; background:var(--bg-sunken); border-bottom:1px solid var(--line);
+}
+
+/* ── Screens ──────────────────────────────────────────────────────────── */
+.screen{flex:1 1 auto; min-height:0; display:flex; flex-direction:column;}
+
+/* ── Screen 1: conversation list ─────────────────────────────────────── */
+.list-head{flex:0 0 auto; padding:18px 18px 12px;}
+.list-title{font-family:var(--font-display); font-weight:400; font-size:24px; letter-spacing:-0.02em;}
+.list-counts{margin-top:4px; font-size:12.5px; color:var(--ink-3);}
+.list-counts b{color:var(--ink-2); font-weight:600;}
+.row-list{flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch; padding-bottom:14px;}
+
+.row{
+  display:flex; align-items:flex-start; gap:11px; width:100%;
+  padding:12px 18px; border:none; border-bottom:1px solid var(--line);
+  background:var(--bg); text-align:left; cursor:pointer; min-height:44px;
+}
+.row:active{background:var(--bg-sunken);}
+.row:focus-visible{outline:none; box-shadow:inset var(--focus);}
+
+.row-avatar{
+  position:relative; flex:0 0 auto; width:40px; height:40px; border-radius:50%;
+  background:var(--bg-sunken); color:var(--ink); font:600 13.5px var(--font-sans);
+  display:flex; align-items:center; justify-content:center;
+}
+.unread-dot{
+  position:absolute; top:-1px; right:-1px; width:10px; height:10px; border-radius:50%;
+  background:var(--orange); border:2px solid var(--bg);
+}
+.row-mid{flex:1 1 auto; min-width:0;}
+.row-line1{display:flex; align-items:baseline; gap:5px; min-width:0;}
+.row-name{font:600 13.5px var(--font-sans); color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto; min-width:0;}
+.row-company{font-size:12px; color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; min-width:0;}
+.row-snippet{margin-top:2px; font-size:12.5px; color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.row-pills{display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:6px;}
+.row-time{flex:0 0 auto; font-size:10.5px; color:var(--ink-3); font-weight:500; padding-top:2px;}
+
+.pill-intent{background:#F2F2F0; color:var(--ink-2); font:500 10.5px/1.4 var(--font-sans); padding:3.5px 9px; border-radius:999px; white-space:nowrap;}
+.pill-agent{border:1px solid var(--line-2); background:var(--bg); color:var(--ink-3); font:500 10.5px/1.4 var(--font-sans); padding:3.5px 9px; border-radius:999px; white-space:nowrap;}
+.pill-agent.none{color:var(--brown-400); border-style:dashed;}
+.tag-auto{background:var(--green-bg); color:var(--green-text); font:600 10.5px/1.4 var(--font-sans); padding:3.5px 9px; border-radius:999px; white-space:nowrap;}
+.tag-sent{background:var(--bg-sunken); color:var(--ink-3); font:600 10.5px/1.4 var(--font-sans); padding:3.5px 9px; border-radius:999px; white-space:nowrap;}
+
+.empty-state{padding:40px 18px; text-align:center; color:var(--brown-400); font-size:13px;}
+
+/* ── Screen 2: chat ───────────────────────────────────────────────────── */
+.chat-head{
+  flex:0 0 auto; display:flex; align-items:flex-start; gap:8px;
+  padding:10px 10px 6px; border-bottom:1px solid var(--line);
+}
+.icon-btn{
+  width:40px; height:40px; border-radius:50%; border:none; background:transparent;
+  color:var(--ink-2); display:flex; align-items:center; justify-content:center;
+  cursor:pointer; flex:0 0 auto;
+}
+.icon-btn:active{background:var(--bg-sunken);}
+.icon-btn:disabled{opacity:.3; cursor:default;}
+.icon-btn:focus-visible{outline:none; box-shadow:var(--focus);}
+.chat-head-info{flex:1 1 auto; min-width:0; padding-top:7px;}
+.chat-head-name{font:600 15.5px var(--font-sans); color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.chat-head-sub{font-size:12px; color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px;}
+.chat-head-actions{display:flex; align-items:center; flex:0 0 auto;}
+/* Panel fix (Dee/Yuki): Dismiss lives in the bottom dock now - the corner
+   overflow is retired so Prev/Next stop competing with it for the thumb. */
+.overflow-wrap{position:relative; display:none !important;}
+.overflow-menu{
+  position:absolute; top:44px; right:0; width:236px; background:var(--card);
+  border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--toast-shadow);
+  padding:6px; z-index:50;
+}
+.overflow-item{
+  width:100%; text-align:left; background:transparent; border:none; border-radius:8px;
+  padding:9px 10px; font:600 13px var(--font-sans); color:var(--red); cursor:pointer; min-height:36px;
+}
+.overflow-item:active{background:var(--red-bg);}
+.overflow-hint{padding:2px 10px 6px; font-size:11px; line-height:1.5; color:var(--ink-3);}
+.chat-head-row2{flex:0 0 auto; padding:0 12px 10px 58px;}
+
+.thread-scroll{flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:14px 14px 10px;}
+.bubble-row{display:flex; flex-direction:column; margin-bottom:14px; max-width:84%;}
+.bubble-row.theirs{align-items:flex-start; margin-right:auto;}
+.bubble-row.mine{align-items:flex-end; margin-left:auto;}
+.bubble-head{font:600 11.5px var(--font-sans); color:var(--ink-3); margin-bottom:4px; padding:0 2px;}
+.bubble-head.auto{color:var(--green-text);}
+.bubble{border-radius:8px; padding:10px 13px; font-size:13.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word;}
+.bubble.them{background:var(--bg-sunken); color:var(--ink);}
+.bubble.us{background:var(--cream); color:var(--ink);}
+
+/* ── Bottom dock (thumb zone) ─────────────────────────────────────────── */
+.composer-dock{
+  flex:0 0 auto; border-top:1px solid var(--line); background:var(--bg);
+  padding:12px 14px calc(12px + env(safe-area-inset-bottom));
+}
+
+.gate-block{margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--line);}
+.gate-block.shake{animation:shakeX .4s;}
+@keyframes shakeX{10%,90%{transform:translateX(-1px)}20%,80%{transform:translateX(2px)}30%,50%,70%{transform:translateX(-4px)}40%,60%{transform:translateX(4px)}}
+.gate-label{font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); margin-bottom:8px;}
+.gate-chips{display:flex; flex-wrap:wrap; gap:8px;}
+.gate-chip{
+  border:1px solid var(--line-2); background:var(--bg); color:var(--ink-2);
+  border-radius:999px; padding:7px 14px; font:500 12.5px var(--font-sans);
+  cursor:pointer; min-height:44px; display:inline-flex; align-items:center;
+}
+.gate-chip:active{background:var(--bg-sunken);}
+.gate-chip:focus-visible{outline:none; box-shadow:var(--focus);}
+.gate-chip-none{border-style:dashed;}
+.gate-chip.on{background:var(--orange); border-color:var(--orange); color:#fff;}
+.gate-state{margin-top:9px; font-size:12px; color:var(--ink-3); display:flex; align-items:center; gap:5px; flex-wrap:wrap;}
+.gate-state.ready{color:var(--ink-2); font-weight:600;}
+.why{cursor:help; border-bottom:1px dotted var(--ink-3); position:relative;}
+.why-tip{
+  display:none; position:absolute; bottom:22px; left:0; width:220px;
+  background:var(--ink); color:var(--cream-50); font-size:11.5px; line-height:1.5;
+  padding:9px 11px; border-radius:8px; z-index:20; font-weight:400;
+}
+.why-tip.show{display:block;}
+
+.composer-label{font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); margin-bottom:7px;}
+.composer-row{display:flex; align-items:flex-end; gap:10px;}
+.composer-input{
+  flex:1 1 auto; resize:none; border:1px solid var(--line-2); border-radius:var(--radius);
+  background:var(--bg-sunken); color:var(--ink); font:400 16px/1.5 var(--font-sans);
+  padding:11px 13px; max-height:160px; overflow-y:auto;
+}
+.composer-input:focus{outline:none; border-color:var(--brown-300); box-shadow:var(--focus); background:var(--bg);}
+.send-btn{
+  flex:0 0 auto; width:48px; height:48px; border-radius:50%; border:none;
+  background:var(--ink); color:var(--cream); display:flex; align-items:center; justify-content:center;
+  cursor:pointer;
+}
+.send-btn:disabled{background:var(--bg-sunken); color:var(--brown-400); cursor:not-allowed;}
+.send-btn:active:not(:disabled){background:var(--ink-2);}
+.send-btn:focus-visible{outline:none; box-shadow:var(--focus);}
+
+.regen-row{display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:9px;}
+.regen-btn{
+  background:none; border:none; padding:6px 0; font:500 12px var(--font-sans);
+  color:var(--ink-3); text-decoration:underline; text-underline-offset:2px; cursor:pointer; min-height:44px;
+}
+.regen-btn:active{color:var(--ink-2);}
+.regen-btn:focus-visible{outline:none; box-shadow:var(--focus); border-radius:4px;}
+.regen-fb-panel{display:flex; gap:8px; margin-top:9px;}
+.regen-fb-panel input{
+  flex:1 1 auto; border:1px solid var(--line-2); border-radius:999px; padding:9px 14px;
+  font:400 16px var(--font-sans); color:var(--ink); background:var(--bg-sunken);
+}
+.regen-fb-panel input:focus{outline:none; box-shadow:var(--focus); background:var(--bg);}
+.regen-fb-go{
+  border:1px solid var(--line-2); background:var(--bg); border-radius:999px; padding:0 16px;
+  font:600 12.5px var(--font-sans); color:var(--ink); cursor:pointer; min-height:38px;
+}
+.regen-fb-go:focus-visible{outline:none; box-shadow:var(--focus);}
+
+.learn-row{display:flex; align-items:flex-start; gap:8px; margin-top:12px; font-size:12px; color:var(--ink-2); cursor:pointer;}
+.learn-row input{margin-top:2px; width:16px; height:16px; accent-color:var(--ink); flex:0 0 auto;}
+.learn-hint{color:var(--ink-3);}
+
+.sent-line{background:var(--bg-sunken); color:var(--ink-2); font-size:12.5px; padding:10px 13px; border-radius:8px; margin-bottom:10px;}
+.lesson-card{background:var(--ink); color:var(--cream-50); border-radius:var(--radius); padding:13px 14px; margin-bottom:10px;}
+.lesson-rule{font-size:13px; line-height:1.5; margin-bottom:10px;}
+.lesson-actions{display:flex; gap:10px;}
+.lesson-btn{
+  border:1px solid rgba(255,255,255,.28); background:transparent; color:var(--cream-50);
+  border-radius:999px; padding:7px 14px; font:600 12px var(--font-sans); cursor:pointer; min-height:36px;
+}
+.lesson-btn.ghost{border-color:transparent; color:rgba(252,247,241,.6);}
+.lesson-btn:focus-visible{outline:none; box-shadow:0 0 0 3px rgba(255,255,255,.32);}
+.lesson-undone{font-size:12px; color:var(--ink-3); margin-bottom:10px;}
+.next-reply-btn{
+  width:100%; background:var(--ink); color:var(--cream); border:none; border-radius:999px;
+  padding:13px; font:600 14px var(--font-sans); cursor:pointer; min-height:48px;
+}
+.next-reply-btn:active{background:var(--ink-2);}
+.next-reply-btn:focus-visible{outline:none; box-shadow:var(--focus);}
+
+.auto-banner{display:flex; align-items:center; gap:9px; padding:6px 2px 2px;}
+.auto-meta{font-size:12px; color:var(--ink-3);}
+
+/* ── Snackbar ─────────────────────────────────────────────────────────── */
+.snackbar{
+  position:fixed; left:50%; bottom:calc(88px + env(safe-area-inset-bottom));
+  transform:translateX(-50%) translateY(10px);
+  background:var(--ink); color:var(--cream); font:500 12.5px var(--font-sans);
+  padding:10px 16px; border-radius:999px; box-shadow:var(--toast-shadow);
+  opacity:0; transition:opacity .2s, transform .2s; z-index:100; white-space:nowrap;
+}
+.snackbar.on{opacity:1; transform:translateX(-50%) translateY(0);}
+/* Dismiss-with-Undo (panel: Dee) - matches the 5s recovery P1/P3/P4 ship. */
+.dismiss-toast{
+  position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom));
+  transform:translateX(-50%) translateY(10px); z-index:110; max-width:min(440px,92vw);
+  background:var(--card); border:1px solid var(--line); border-radius:12px;
+  box-shadow:var(--toast-shadow); padding:11px 14px; display:flex; align-items:center; gap:12px;
+  opacity:0; pointer-events:none; transition:opacity .2s, transform .2s;
+}
+.dismiss-toast.on{opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0);}
+.dismiss-toast .dt-text{font-size:12.5px; color:var(--ink-2); line-height:1.4;}
+.dismiss-toast .dt-undo{
+  flex-shrink:0; min-height:36px; padding:0 14px; border-radius:9px; border:1px solid var(--line-2);
+  background:var(--card); color:var(--ink); font:600 12.5px var(--font-sans); cursor:pointer;
+}
+/* Panel fix (Yuki): email gravity - this is a real email thread, not a text.
+   A compact To/Re strip sits above the bubbles. */
+.mail-strip{
+  padding:6px 18px; font-size:11px; color:var(--ink-3);
+  background:var(--bg-sunken); border-bottom:1px solid var(--line);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+.mail-strip b{color:var(--ink-2); font-weight:600;}
+/* ── Status filter pills (owner ask: Needs review / Sent / etc visible) ── */
+.filter-pills{
+  display:flex; gap:8px; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  padding:10px 18px 4px; scrollbar-width:none;
+}
+.filter-pills::-webkit-scrollbar{display:none;}
+.fpill{
+  flex-shrink:0; min-height:40px; padding:0 14px; border-radius:999px;
+  border:1px solid var(--line-2); background:var(--card); color:var(--ink-2);
+  font:600 12.5px var(--font-sans); display:inline-flex; align-items:center; gap:6px;
+  cursor:pointer;
+}
+.fpill b{font-weight:700; font-variant-numeric:tabular-nums; color:var(--ink-3);}
+.fpill.on{background:var(--ink); border-color:var(--ink); color:var(--cream-50);}
+.fpill.on b{color:var(--cream-50); opacity:.75;}
+</style>
+</head>
+<body>
+
+<div class="proto-banner">Prototype P2 · mock data — nothing sends</div>
+
+<div class="screen screen-list" id="screenList">
+  <div class="list-head">
+    <div class="list-title">Appointment Setter</div>
+    <div class="list-counts" id="listCounts"></div>
+  </div>
+  <div class="filter-pills" id="filterPills"></div>
+  <div class="row-list" id="rowList"></div>
+</div>
+
+<div class="screen screen-chat" id="screenChat" hidden>
+  <div class="chat-head">
+    <button class="icon-btn" id="backBtn" type="button" aria-label="Back to list">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </button>
+    <div class="chat-head-info">
+      <div class="chat-head-name" id="chatName"></div>
+      <div class="chat-head-sub" id="chatSub"></div>
+    </div>
+    <div class="chat-head-actions">
+      <button class="icon-btn" id="prevBtn" type="button" aria-label="Previous needs-review reply">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+      </button>
+      <button class="icon-btn" id="nextBtn" type="button" aria-label="Next needs-review reply">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+      </button>
+      <div class="overflow-wrap">
+        <button class="icon-btn" id="overflowBtn" type="button" aria-label="More actions">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>
+        </button>
+        <div class="overflow-menu" id="overflowMenu" hidden>
+          <button class="overflow-item" id="dismissBtn" type="button">Dismiss</button>
+          <div class="overflow-hint">Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="chat-head-row2">
+    <span class="pill-agent" id="chatAgentPill"></span>
+  </div>
+  <div class="mail-strip" id="mailStrip"></div>
+
+  <div class="thread-scroll" id="threadScroll"></div>
+
+  <div class="composer-dock" id="composerDock">
+    <div id="activeComposer">
+      <div class="gate-block" id="gateBlock">
+        <div class="gate-label">Follow-up</div>
+        <div class="gate-chips" id="gateChips"></div>
+        <div class="gate-state" id="gateState"></div>
+      </div>
+
+      <div class="composer-card">
+        <div class="composer-label" id="composerLabel">Draft</div>
+        <div class="composer-row">
+          <textarea class="composer-input" id="composerInput" rows="1" aria-label="Draft reply"></textarea>
+          <button class="send-btn" id="sendBtn" type="button" disabled aria-label="Pick a follow-up track first">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg>
+          </button>
+        </div>
+
+        <div class="regen-row">
+          <button class="regen-btn" id="dismissDockBtn" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+          <button class="regen-btn" id="regenBtn" type="button">Regenerate</button>
+          <button class="regen-btn" id="regenFbBtn" type="button">Regenerate with feedback</button>
+        </div>
+        <div class="regen-fb-panel" id="regenFbPanel" hidden>
+          <input type="text" id="regenFbInput" placeholder="Tell it what to change">
+          <button class="regen-fb-go" id="regenFbGo" type="button">Apply</button>
+        </div>
+
+        <label class="learn-row" id="learnRow" hidden>
+          <input type="checkbox" id="learnChk" checked>
+          <span>Learn from this edit<span class="learn-hint" id="learnHintText"></span></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="sent-panel" id="sentPanel" hidden>
+      <div class="sent-line" id="sentLine"></div>
+      <div class="lesson-card" id="lessonCard" hidden>
+        <div class="lesson-rule" id="lessonRuleText"></div>
+        <div class="lesson-actions">
+          <button class="lesson-btn" id="lessonUndoBtn" type="button">Undo - forget this</button>
+          <button class="lesson-btn ghost" id="lessonKeepBtn" type="button">Keep it</button>
+        </div>
+      </div>
+      <div class="lesson-undone" id="lessonUndone" hidden>Undone - the agent kept nothing from that edit</div>
+      <button class="next-reply-btn" id="nextReplyBtn" type="button">Next reply →</button>
+    </div>
+
+    <div class="auto-banner" id="autoBanner" hidden>
+      <span class="tag-auto">Auto-sent</span>
+      <span class="auto-meta" id="autoMeta"></span>
+    </div>
+    <div class="auto-banner" id="dismissBanner" hidden>
+      <span class="auto-meta">Dismissed — nothing was sent; the lead stays in Smartlead.</span>
+    </div>
+  </div>
+</div>
+
+<div class="snackbar" id="snackbar" hidden></div>
+<div class="dismiss-toast" id="dismissToast">
+  <span class="dt-text">Dismissed — nothing sent, the lead stays in Smartlead.</span>
+  <button type="button" class="dt-undo" id="dismissUndoBtn">Undo</button>
+</div>
+
+<script>
+const REPLIES = [
+ {id:"r1", name:"Sarah Mitchell", title:"COO", company:"Meridian Fabrication", email:"sarah@meridianfab.co.uk",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Wants to book a call", status:"needs_review", age:"4m",
+  reply:"This sounds interesting. We've been burned by agencies before but the buyer-intro angle is different. How does next Tuesday look for a quick call?",
+  thread:[{who:"us", head:"You · 3 days ago", body:"Hi Sarah — quick one: are you open to intros to buyers actively sourcing UK fabrication right now? We line up 2-3 qualified buyer conversations a month for firms like Meridian. Worth a look?"},
+          {who:"them", head:"Sarah · 4 minutes ago", body:"This sounds interesting. We've been burned by agencies before but the buyer-intro angle is different. How does next Tuesday look for a quick call?"}],
+  draft:"Hi Sarah,\n\nTuesday works well — I have 10:30 or 2:15 free. Grab whichever suits here: cal.navreo.ai/sihl\n\nAnd fair point on agencies — this is why we only get paid on booked buyer conversations, not activity.\n\nBest,\nJames",
+  subseq:["Booked-call nurture","Pricing follow-up","Resource drip"]},
+ {id:"r2", name:"David Okafor", title:"Founder", company:"Brightpath Logistics", email:"david@brightpathlog.com",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Asking about pricing", status:"needs_review", age:"18m",
+  reply:"What does this cost roughly? We're comparing a couple of options this quarter.",
+  thread:[{who:"us", head:"You · 5 days ago", body:"Hi David — are you open to intros to buyers actively sourcing logistics partners? We line up qualified buyer conversations for firms like Brightpath."},
+          {who:"them", head:"David · 18 minutes ago", body:"What does this cost roughly? We're comparing a couple of options this quarter."}],
+  draft:"Hi David,\n\nStraight answer: from £1,800/mo, and we only invoice on delivered buyer conversations — if none land, you pay nothing that month.\n\nHappy to walk you through it in 15 minutes if you're comparing options: cal.navreo.ai/sihl\n\nBest,\nJames",
+  subseq:["Pricing follow-up","Booked-call nurture","Resource drip"]},
+ {id:"r3", name:"Priya Nair", title:"VP Sales", company:"Cobalt Systems", email:"priya@cobaltsystems.io",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Wants the resource", status:"needs_review", age:"41m",
+  reply:"Sure, send it over.",
+  thread:[{who:"us", head:"You · 2 days ago", body:"Hi Priya — we mapped the 214 UK companies actively hiring sales roles that fit Cobalt's ICP. Want the list?"},
+          {who:"them", head:"Priya · 41 minutes ago", body:"Sure, send it over."}],
+  draft:"Hi Priya,\n\nHere it is: navreo.ai/r/cobalt-hiring-map\n\nThe 30 with a Director+ sales hire open are flagged in column B — those tend to reply fastest. If you want us to run the outreach on the top tier, that's exactly what we do.\n\nBest,\nLilly",
+  subseq:["Resource drip","Booked-call nurture"]},
+ {id:"r4", name:"Marcus Webb", title:"MD", company:"Atlas Joinery", email:"marcus@atlasjoinery.co.uk",
+  campaign:"Sihl — UK Manufacturers", agent:"Sihl Setter", intent:"Has a question", status:"needs_review", age:"1h",
+  reply:"How is this different from just hiring an SDR ourselves?",
+  thread:[{who:"us", head:"You · 6 days ago", body:"Hi Marcus — quick one: open to intros to buyers actively sourcing joinery and fit-out partners? We line up qualified buyer conversations for firms like Atlas."},
+          {who:"them", head:"Marcus · 5 days ago", body:"Maybe. Who else have you done this for?"},
+          {who:"us", head:"You · 5 days ago", body:"Mostly UK manufacturers — Sihl is the closest example, we book their buyer calls month in month out. Happy to share how it works."},
+          {who:"them", head:"Marcus · 1 hour ago", body:"How is this different from just hiring an SDR ourselves?"}],
+  draft:"Hi Marcus,\n\nAn SDR costs ~£45k loaded and takes 6 months to ramp. We turn on a working system in 2 weeks — list, copy, sending, replies — and you only pay on booked buyer conversations.\n\nIf the maths interests you, 15 minutes covers it: cal.navreo.ai/sihl\n\nBest,\nJames",
+  subseq:["Booked-call nurture","Pricing follow-up","Resource drip"]},
+ {id:"r5", name:"Elena Vasquez", title:"Director", company:"Northgate Consulting", email:"elena@northgateconsult.com",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Not interested", status:"needs_review", age:"2h",
+  reply:"Not for us right now, thanks.",
+  thread:[{who:"us", head:"You · 4 days ago", body:"Hi Elena — we help consultancies keep a steady pipeline of qualified buyer conversations. Open to a look?"},
+          {who:"them", head:"Elena · 2 hours ago", body:"Not for us right now, thanks."}],
+  draft:"Hi Elena,\n\nUnderstood — thanks for letting me know. If pipeline becomes a priority later in the year, the door's open.\n\nBest,\nLilly",
+  subseq:["Resource drip"]},
+ {id:"r6", name:"Tom Hardwick", title:"Ops Director", company:"Ferrous Engineering", email:"tom@ferrouseng.co.uk",
+  campaign:"KRG — Midlands Industrial", agent:null, intent:"Wants to book a call", status:"needs_review", age:"3h",
+  reply:"Yes — can you do Thursday afternoon?",
+  thread:[{who:"us", head:"You · 1 day ago", body:"Hi Tom — are you open to intros to buyers sourcing precision engineering right now? We line up qualified buyer conversations for firms like Ferrous."},
+          {who:"them", head:"Tom · 3 hours ago", body:"Yes — can you do Thursday afternoon?"}],
+  draft:"Hi Tom,\n\nThursday afternoon works — 2:00 or 3:30. Pick whichever suits: cal.navreo.ai/krg\n\nSpeak then,\nSam",
+  subseq:["Booked-call nurture","Pricing follow-up"]},
+ {id:"r7", name:"Jenny Lau", title:"Head of Growth", company:"Parkside Digital", email:"jenny@parksidedigital.co.uk",
+  campaign:"Navreo — Dev Agencies UK", agent:"Navreo Setter", intent:"Wants the resource", status:"auto_sent", age:"5h", sentMeta:"Sent automatically · 12 minutes after their reply",
+  reply:"Sounds useful — send the breakdown.",
+  thread:[{who:"us", head:"You · 3 days ago", body:"Hi Jenny — we mapped the exact outbound campaigns we'd run for Parkside. Want the breakdown?"},
+          {who:"them", head:"Jenny · 5 hours ago", body:"Sounds useful — send the breakdown."},
+          {who:"us", head:"Navreo Setter (auto) · 5 hours ago", body:"Hi Jenny,\n\nHere's the breakdown: navreo.ai/r/parkside\n\nIt maps three campaigns with the exact copy we'd use. If you want the top one live within two weeks, that's what we do.\n\nBest,\nLilly"}],
+  draft:null, subseq:[]}
+];
+
+/* Hand-written alternates for the mock "Regenerate" action — a fresh AI
+   draft, not a human edit, so it never triggers the Learn row. */
+const ALT_DRAFTS = {
+  r1: "Hi Sarah,\n\nHow about Tuesday at 2:15? Here's the link either way: cal.navreo.ai/sihl\n\nOn the agency point — we only get paid when a buyer call actually books, so the incentive's the same as yours.\n\nBest,\nJames",
+  r2: "Hi David,\n\nFrom £1,800/mo, invoiced only on delivered buyer conversations — no bookings, no charge that month.\n\nIf it's useful, 15 minutes walks through exactly how: cal.navreo.ai/sihl\n\nBest,\nJames",
+  r3: "Hi Priya,\n\nHere's the list: navreo.ai/r/cobalt-hiring-map\n\nColumn B flags the 30 with a Director+ sales hire open — that's usually where replies come fastest. Want us to run outreach on that top tier?\n\nBest,\nLilly",
+  r4: "Hi Marcus,\n\nShort version: an SDR is ~£45k loaded and 6 months to ramp. We're live in 2 weeks, and you only pay when a buyer conversation actually books.\n\nWorth 15 minutes to see the maths? cal.navreo.ai/sihl\n\nBest,\nJames",
+  r5: "Hi Elena,\n\nNo problem at all — appreciate you saying so. I'll leave the door open in case pipeline becomes a priority later this year.\n\nBest,\nLilly",
+  r6: "Hi Tom,\n\n2:00 or 3:30 Thursday both work — pick one here: cal.navreo.ai/krg\n\nSpeak soon,\nSam"
+};
+
+REPLIES.forEach(r => {
+  r._draft = r.draft;
+  r._edited = false;
+  r._learnOn = true;
+  r._sent = (r.status === "sent");
+  r._gate = null;
+  r._lessonRule = null;
+  r._lessonUndone = false;
+  r._altShown = false;
+  r._sentSnippet = null;
+  r._displayAge = null;
+  r._lastChipTap = null;
+});
+
+let currentId = null;
+
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+function initials(name){
+  const parts = String(name || "").trim().split(/\s+/);
+  return ((parts[0] ? parts[0][0] : "") + (parts[1] ? parts[1][0] : "")).toUpperCase();
+}
+function getRow(id){ return REPLIES.find(r => String(r.id) === String(id)); }
+function needsReviewList(){ return REPLIES.filter(r => r.status === "needs_review"); }
+
+let snackTimer = null;
+function showSnackbar(text){
+  const el = document.getElementById("snackbar");
+  el.textContent = text;
+  el.hidden = false;
+  void el.offsetWidth;
+  el.classList.add("on");
+  clearTimeout(snackTimer);
+  snackTimer = setTimeout(() => {
+    el.classList.remove("on");
+    setTimeout(() => { el.hidden = true; }, 220);
+  }, 2000);
+}
+
+/* ── Screen 1: list ───────────────────────────────────────────────────── */
+function renderCounts(){
+  const nr = REPLIES.filter(r => r.status === "needs_review").length;
+  const auto = REPLIES.filter(r => r.status === "auto_sent").length;
+  document.getElementById("listCounts").innerHTML = `Needs review <b>${nr}</b> · Auto-sent <b>${auto}</b>`;
+}
+function statusTagHtml(r){
+  if (r.status === "auto_sent") return `<span class="tag-auto">Auto-sent</span>`;
+  if (r.status === "sent") return `<span class="tag-sent">Sent</span>`;
+  return "";
+}
+function rowHtml(r){
+  const unread = r.status === "needs_review" ? `<span class="unread-dot" aria-hidden="true"></span>` : "";
+  const agentPill = r.agent ? `<span class="pill-agent">${esc(r.agent)}</span>` : `<span class="pill-agent none">No agent</span>`;
+  const snippetSrc = r._sentSnippet ? `You: ${r._sentSnippet}` : r.reply;
+  const timeSrc = r._displayAge || r.age;
+  return `
+  <button class="row" type="button" data-id="${esc(r.id)}">
+    <span class="row-avatar">${esc(initials(r.name))}${unread}</span>
+    <span class="row-mid">
+      <span class="row-line1"><span class="row-name">${esc(r.name)}</span><span class="row-company">· ${esc(r.company)}</span></span>
+      <span class="row-snippet">${esc(snippetSrc)}</span>
+      <span class="row-pills">
+        <span class="pill-intent">${esc(r.intent)}</span>
+        ${agentPill}
+        ${statusTagHtml(r)}
+      </span>
+    </span>
+    <span class="row-time">${esc(timeSrc)}</span>
+  </button>`;
+}
+/* Status lenses (owner ask): same pills as the desktop setter, live counts. */
+let activeFilter = "needs_review";
+const FILTER_PILLS = [
+  { key: "needs_review", label: "Needs review" },
+  { key: "sent", label: "Sent" },
+  { key: "auto_sent", label: "Auto-sent" },
+  { key: "dismissed", label: "Dismissed" },
+  { key: "", label: "All" },
+];
+function renderPills(){
+  const wrap = document.getElementById("filterPills");
+  wrap.innerHTML = FILTER_PILLS.map(p => {
+    const n = p.key ? REPLIES.filter(r => r.status === p.key).length : REPLIES.length;
+    return `<button class="fpill ${activeFilter === p.key ? "on" : ""}" data-key="${p.key}" type="button">${p.label} <b>${n}</b></button>`;
+  }).join("");
+  wrap.querySelectorAll(".fpill").forEach(btn => {
+    btn.addEventListener("click", () => { activeFilter = btn.getAttribute("data-key"); renderList(); });
+  });
+}
+function renderList(){
+  const wrap = document.getElementById("rowList");
+  const visible = activeFilter ? REPLIES.filter(r => r.status === activeFilter) : REPLIES.slice();
+  if (!visible.length) {
+    const emptyCopy = activeFilter === "needs_review" ? "All caught up — nothing needs review."
+      : "Nothing here yet.";
+    wrap.innerHTML = `<div class="empty-state">${emptyCopy}</div>`;
+  } else {
+    wrap.innerHTML = visible.map(rowHtml).join("");
+    wrap.querySelectorAll(".row").forEach(btn => {
+      btn.addEventListener("click", () => openChat(btn.getAttribute("data-id")));
+    });
+  }
+  renderPills();
+  renderCounts();
+}
+
+/* ── Navigation between the two screens ──────────────────────────────── */
+function openChat(id){
+  currentId = id;
+  // Panel fix (Sam): a conversation can never reopen pre-armed - any
+  // abandoned follow-up pick from an earlier pass resets on open.
+  const row = getRow(id);
+  if (row && row.status === "needs_review") row._gate = null;
+  document.getElementById("screenList").hidden = true;
+  document.getElementById("screenChat").hidden = false;
+  renderChat();
+}
+function backToList(){
+  document.getElementById("screenChat").hidden = true;
+  document.getElementById("screenList").hidden = false;
+  renderList();
+}
+document.getElementById("backBtn").addEventListener("click", backToList);
+
+function scrollThreadToEnd(){
+  const el = document.getElementById("threadScroll");
+  requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+}
+
+/* ── Screen 2: chat ───────────────────────────────────────────────────── */
+function bubbleHtml(m){
+  const mine = m.who === "us";
+  const isAuto = /Navreo Setter \(auto\)/.test(m.head || "");
+  return `<div class="bubble-row ${mine ? "mine" : "theirs"}">
+    <div class="bubble-head${isAuto ? " auto" : ""}">${esc(m.head)}</div>
+    <div class="bubble ${mine ? "us" : "them"}">${esc(m.body)}</div>
+  </div>`;
+}
+
+function updateNavButtons(r){
+  const list = needsReviewList().map(x => x.id);
+  const idx = list.indexOf(r.id);
+  let prevId, nextId;
+  if (idx === -1) {
+    prevId = list.length ? list[list.length - 1] : null;
+    nextId = list.length ? list[0] : null;
+  } else {
+    prevId = idx > 0 ? list[idx - 1] : null;
+    nextId = idx < list.length - 1 ? list[idx + 1] : null;
+  }
+  const prevBtn = document.getElementById("prevBtn");
+  const nextBtn = document.getElementById("nextBtn");
+  prevBtn.disabled = !prevId;
+  nextBtn.disabled = !nextId;
+  prevBtn.onclick = prevId ? () => openChat(prevId) : null;
+  nextBtn.onclick = nextId ? () => openChat(nextId) : null;
+}
+
+function closeOverflowMenu(){ document.getElementById("overflowMenu").hidden = true; }
+
+function renderChat(){
+  const r = getRow(currentId);
+  if (!r) { backToList(); return; }
+
+  document.getElementById("chatName").textContent = r.name;
+  document.getElementById("chatSub").textContent = `${r.company} · ${r.campaign}`;
+  document.getElementById("mailStrip").innerHTML = `To: <b>${esc(r.email)}</b> &middot; Re: <b>${esc(r.campaign)}</b>`;
+  const agentPillEl = document.getElementById("chatAgentPill");
+  if (r.agent) { agentPillEl.textContent = r.agent; agentPillEl.classList.remove("none"); }
+  else { agentPillEl.textContent = "No agent"; agentPillEl.classList.add("none"); }
+
+  document.getElementById("threadScroll").innerHTML = r.thread.map(bubbleHtml).join("");
+
+  updateNavButtons(r);
+
+  const overflowWrap = document.querySelector(".overflow-wrap");
+  overflowWrap.style.display = r.status === "needs_review" ? "" : "none";
+  closeOverflowMenu();
+
+  const activeComposer = document.getElementById("activeComposer");
+  const sentPanel = document.getElementById("sentPanel");
+  const autoBanner = document.getElementById("autoBanner");
+
+  const dismissBanner = document.getElementById("dismissBanner");
+  dismissBanner.hidden = true;
+  if (r.status === "auto_sent") {
+    activeComposer.hidden = true; sentPanel.hidden = true;
+    autoBanner.hidden = false;
+    document.getElementById("autoMeta").textContent = r.sentMeta || "";
+  } else if (r.status === "dismissed") {
+    activeComposer.hidden = true; sentPanel.hidden = true; autoBanner.hidden = true;
+    dismissBanner.hidden = false;
+  } else if (r._sent) {
+    activeComposer.hidden = true; autoBanner.hidden = true;
+    sentPanel.hidden = false;
+    renderSentPanel(r);
+  } else {
+    autoBanner.hidden = true; sentPanel.hidden = true;
+    activeComposer.hidden = false;
+    renderComposer(r);
+  }
+
+  scrollThreadToEnd();
+}
+
+/* ── Composer (draft, gate, regenerate, learn) ───────────────────────── */
+function renderComposer(r){
+  document.getElementById("composerLabel").textContent = `Draft · ${r.agent || "No agent"}`;
+  const input = document.getElementById("composerInput");
+  input.value = r._draft;
+  autosize(input);
+
+  const learnRow = document.getElementById("learnRow");
+  learnRow.hidden = !r._edited;
+  document.getElementById("learnChk").checked = r._learnOn;
+  document.getElementById("learnHintText").textContent = r._learnOn
+    ? " — becomes a standing rule for how the agent replies to every lead"
+    : " — off: this edit applies to this reply only";
+
+  document.getElementById("regenFbPanel").hidden = true;
+  document.getElementById("regenFbInput").value = "";
+
+  renderGate(r);
+}
+
+function autosize(el){
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 160) + "px";
+}
+
+document.getElementById("composerInput").addEventListener("input", (e) => {
+  const r = getRow(currentId);
+  if (!r) return;
+  autosize(e.target);
+  const val = e.target.value;
+  r._draft = val;
+  const edited = val.trim() !== (r.draft || "").trim();
+  if (edited !== r._edited) {
+    r._edited = edited;
+    document.getElementById("learnRow").hidden = !edited;
+  }
+  updateSendButton(r);
+});
+
+document.getElementById("learnChk").addEventListener("change", (e) => {
+  const r = getRow(currentId);
+  if (!r) return;
+  r._learnOn = e.target.checked;
+  document.getElementById("learnHintText").textContent = r._learnOn
+    ? " — becomes a standing rule for how the agent replies to every lead"
+    : " — off: this edit applies to this reply only";
+});
+
+/* ── Follow-up send gate (invariant 2) ───────────────────────────────── */
+function renderGate(r){
+  const chipsWrap = document.getElementById("gateChips");
+  const chips = (r.subseq || []).map(name => {
+    const on = r._gate && r._gate.type === "push" && r._gate.name === name;
+    return `<button type="button" class="gate-chip${on ? " on" : ""}" data-kind="push" data-name="${esc(name)}">${esc(name)}</button>`;
+  });
+  const noneOn = !!(r._gate && r._gate.type === "none");
+  chips.push(`<button type="button" class="gate-chip gate-chip-none${noneOn ? " on" : ""}" data-kind="none" data-name="None">None</button>`);
+  chipsWrap.innerHTML = chips.join("");
+  chipsWrap.querySelectorAll(".gate-chip").forEach(btn => attachChipHandlers(btn, r));
+
+  renderGateState(r);
+  updateSendButton(r);
+}
+
+function renderGateState(r){
+  const el = document.getElementById("gateState");
+  el.className = "gate-state" + (r._gate ? " ready" : "");
+  if (!r._gate) {
+    el.innerHTML = `Pick a follow-up track first <span class="why" id="whyTrigger" tabindex="0" role="button" aria-label="Why is this required?">(why?<span class="why-tip" id="whyTip">Every approved reply needs an explicit follow-up decision so leads can't fall through the cracks.</span>)</span>`;
+    wireWhyTooltip();
+  } else if (r._gate.type === "push") {
+    el.textContent = `Approve + ${r._gate.name}`;
+  } else {
+    el.textContent = "Approve — no follow-up";
+  }
+}
+
+function wireWhyTooltip(){
+  const trigger = document.getElementById("whyTrigger");
+  if (!trigger) return;
+  const toggle = (e) => {
+    e.stopPropagation();
+    document.getElementById("whyTip").classList.toggle("show");
+  };
+  trigger.addEventListener("click", toggle);
+  trigger.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } });
+}
+
+/* Panel ruling (Yuki/Dee): a chip tap ONLY picks the track. The send always
+   needs its own deliberate press on the send button - no double-tap path. */
+function attachChipHandlers(btn, r){
+  btn.addEventListener("click", () => {
+    r._gate = btn.getAttribute("data-kind") === "push"
+      ? { type: "push", name: btn.getAttribute("data-name") }
+      : { type: "none" };
+    renderGate(r);
+  });
+}
+
+function updateSendButton(r){
+  const btn = document.getElementById("sendBtn");
+  const input = document.getElementById("composerInput");
+  const hasText = !!(input.value && input.value.trim().length);
+  const ready = !!r._gate && hasText;
+  btn.disabled = !ready;
+  let label;
+  if (!r._gate) label = "Pick a follow-up track first (why?)";
+  else if (!hasText) label = "Write a reply before sending";
+  else label = r._gate.type === "push" ? `Approve + ${r._gate.name}` : "Approve — no follow-up";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+}
+
+function nudgeGate(){
+  const block = document.getElementById("gateBlock");
+  block.classList.remove("shake");
+  void block.offsetWidth;
+  block.classList.add("shake");
+}
+
+function attemptSend(r){
+  const input = document.getElementById("composerInput");
+  const hasText = !!(input.value && input.value.trim().length);
+  if (!r._gate || !hasText) { nudgeGate(); return; }
+  doSend(r);
+}
+
+document.getElementById("sendBtn").addEventListener("click", () => {
+  const r = getRow(currentId);
+  if (!r) return;
+  attemptSend(r);
+});
+
+/* ── Regenerate (invariant 8, secondary weight) ──────────────────────── */
+async function mockRegenerate(r){
+  const btn = document.getElementById("regenBtn");
+  const original = btn.textContent;
+  btn.textContent = "Regenerating…";
+  btn.disabled = true;
+  await new Promise(res => setTimeout(res, 550));
+  const alt = ALT_DRAFTS[r.id];
+  if (alt) {
+    r._altShown = !r._altShown;
+    r._draft = r._altShown ? alt : r.draft;
+  }
+  r._edited = false;
+  const input = document.getElementById("composerInput");
+  input.value = r._draft;
+  autosize(input);
+  document.getElementById("learnRow").hidden = true;
+  updateSendButton(r);
+  btn.textContent = original;
+  btn.disabled = false;
+  showSnackbar("Draft regenerated");
+}
+document.getElementById("regenBtn").addEventListener("click", () => {
+  const r = getRow(currentId);
+  if (r) mockRegenerate(r);
+});
+document.getElementById("regenFbBtn").addEventListener("click", () => {
+  const panel = document.getElementById("regenFbPanel");
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) document.getElementById("regenFbInput").focus();
+});
+document.getElementById("regenFbGo").addEventListener("click", async () => {
+  const r = getRow(currentId);
+  if (!r) return;
+  await mockRegenerate(r);
+  document.getElementById("regenFbPanel").hidden = true;
+  document.getElementById("regenFbInput").value = "";
+});
+document.getElementById("regenFbInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); document.getElementById("regenFbGo").click(); }
+});
+
+/* ── Send (invariant 1) ───────────────────────────────────────────────── */
+function deriveLessonRule(original, edited, r){
+  const o = (original || "").trim();
+  const e = (edited || "").trim();
+  if (e.length < o.length * 0.85) return "Keep replies shorter and more direct.";
+  if (e.length > o.length * 1.15) return "Add a bit more context before the ask.";
+  const timeRe = /\b\d{1,2}(:\d{2})?\s?(am|pm)?\b/i;
+  if (timeRe.test(e) && !timeRe.test(o)) return "Offer specific call times, not a vague window.";
+  if (/[£$]/.test(e) && !/[£$]/.test(o)) return "Lead with the number when they ask about price.";
+  return `Match this phrasing more closely for ${r.company} replies.`;
+}
+
+function doSend(r){
+  const input = document.getElementById("composerInput");
+  const finalText = (input.value || "").trim() || r._draft || r.draft;
+  r._draft = finalText;
+
+  r.thread = r.thread.concat([{ who: "us", head: "You · just now", body: finalText }]);
+
+  if (r._edited && r._learnOn) {
+    r._lessonRule = deriveLessonRule(r.draft, finalText, r);
+  }
+
+  r.status = "sent";
+  r._sent = true;
+  r._displayAge = "Just now";
+  const firstLine = finalText.split("\n").map(s => s.trim()).find(Boolean);
+  r._sentSnippet = firstLine || finalText;
+
+  renderChat();
+
+  // Panel fix (Rachel/Marco): after the send confirms, the next needs-review
+  // conversation opens by itself - announced first, and only if the user
+  // hasn't already navigated away. The Next button still works immediately.
+  const sentId = r.id;
+  setTimeout(() => {
+    if (currentId !== sentId) return;
+    if (document.getElementById("screenChat").hidden) return;
+    const next = needsReviewList()[0];
+    if (next) { showSnackbar(`Next: ${next.name}`); openChat(next.id); }
+  }, 1400);
+}
+
+function renderSentPanel(r){
+  document.getElementById("sentLine").textContent = "Sent by you · just now";
+  const lessonCard = document.getElementById("lessonCard");
+  const lessonUndone = document.getElementById("lessonUndone");
+  if (r._lessonRule) {
+    lessonCard.hidden = false;
+    lessonUndone.hidden = true;
+    document.getElementById("lessonRuleText").textContent = `Learned: ${r._lessonRule}`;
+  } else if (r._lessonUndone) {
+    lessonCard.hidden = true;
+    lessonUndone.hidden = false;
+  } else {
+    lessonCard.hidden = true;
+    lessonUndone.hidden = true;
+  }
+}
+
+document.getElementById("lessonUndoBtn").addEventListener("click", () => {
+  const r = getRow(currentId);
+  if (!r) return;
+  r._lessonRule = null;
+  r._lessonUndone = true;
+  renderSentPanel(r);
+});
+document.getElementById("lessonKeepBtn").addEventListener("click", () => {
+  document.getElementById("lessonCard").hidden = true;
+});
+document.getElementById("nextReplyBtn").addEventListener("click", () => {
+  const list = needsReviewList().map(x => x.id);
+  if (list.length) openChat(list[0]);
+  else backToList();
+});
+
+/* ── Dismiss (invariant 4) ────────────────────────────────────────────── */
+document.getElementById("overflowBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = document.getElementById("overflowMenu");
+  menu.hidden = !menu.hidden;
+});
+let lastDismissedP2 = null, dismissTimerP2 = null;
+function dismissWithUndo(r){
+  r.status = "dismissed";
+  lastDismissedP2 = r;
+  closeOverflowMenu();
+  backToList();
+  const t = document.getElementById("dismissToast");
+  t.classList.add("on");
+  if (dismissTimerP2) clearTimeout(dismissTimerP2);
+  dismissTimerP2 = setTimeout(() => t.classList.remove("on"), 5000);
+}
+document.getElementById("dismissBtn").addEventListener("click", () => {
+  const r = getRow(currentId);
+  if (r) dismissWithUndo(r);
+});
+
+/* Panel fix (Rachel/Marco): Dismiss lives in the bottom dock too - one tap,
+   no hunting in the corner overflow. Same action, kept apart from Send. */
+document.getElementById("dismissDockBtn").addEventListener("click", () => {
+  const r = getRow(currentId);
+  if (r) dismissWithUndo(r);
+});
+
+/* 5-second recovery (panel: Dee) - consistent with P1/P3/P4. */
+document.getElementById("dismissUndoBtn").addEventListener("click", () => {
+  document.getElementById("dismissToast").classList.remove("on");
+  if (lastDismissedP2) {
+    lastDismissedP2.status = "needs_review";
+    lastDismissedP2 = null;
+    renderList();
+    showSnackbar("Restored");
+  }
+});
+
+document.addEventListener("click", (e) => {
+  const menu = document.getElementById("overflowMenu");
+  if (menu && !menu.hidden && !e.target.closest(".overflow-wrap")) menu.hidden = true;
+  document.querySelectorAll(".why-tip.show").forEach(tip => {
+    if (!e.target.closest(".why")) tip.classList.remove("show");
+  });
+});
+
+/* ── Boot ─────────────────────────────────────────────────────────────── */
+renderList();
+</script>
+</body>
+</html>
