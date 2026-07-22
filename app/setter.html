@@ -236,6 +236,29 @@
   }
   .dh-name { font-size: 18px; }
 
+  /* Sticky identity bar (owner ask 2026-07-22): back + name + Open in Smartlead
+     stay pinned to the top while the conversation scrolls. */
+  .inbox-shell.mobile-detail .detail-topbar {
+    position: sticky; top: 0; z-index: 30; background: var(--bg);
+    padding: 6px 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  .inbox-shell.mobile-detail .detail-head { margin-bottom: 0; }
+
+  /* Lead context (Website / LinkedIn / category / campaign) collapses under a
+     toggle, pinned to the top of the reply, collapsed by default. */
+  .inbox-shell.mobile-detail .lead-panel {
+    order: -1; margin: 0 0 6px; padding-top: 0; border-top: none;
+  }
+  .lp-collapse-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px;
+    padding: 8px 2px; background: none; border: none;
+    font: 600 13px var(--font-sans); color: var(--ink-2); cursor: pointer;
+  }
+  .lp-collapse-toggle .lp-chev { margin-left: auto; transition: transform .18s ease; }
+  .lead-panel.lp-open .lp-collapse-toggle .lp-chev { transform: rotate(180deg); }
+  .lead-panel .lp-collapse-body { display: none; }
+  .lead-panel.lp-open .lp-collapse-body { display: block; }
+
   /* The Approve / Regenerate / Dismiss row becomes a fixed bottom thumb bar.
      Approve takes its own full-width top line; Regenerate + Dismiss share the
      line below; the gate hint wraps beneath. All existing buttons/handlers. */
@@ -271,6 +294,11 @@
 
 /* ── Detail (right pane) ──────────────────────────────────────────────── */
 .detail-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+/* Lead-column collapse (phone-only, owner ask 2026-07-22). Base = desktop:
+   the toggle is hidden and the body always shows, so the sidebar is unchanged.
+   The phone media block flips these to a real collapsible. */
+.lp-collapse-toggle { display: none; }
+.lp-collapse-body { display: block; }
 .dh-name { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
 .qc-sub-chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
 
@@ -1880,11 +1908,13 @@ function renderDetail(row) {
   }
 
   el.innerHTML = `
+    <div class="detail-topbar">
     <a class="back-link mobile-back" href="#" id="backToInboxLink">&larr; Back to inbox</a>
     <div class="detail-head">
       <h2 class="dh-name">${esc(leadName(row))} ${testChip}
         <span class="small muted dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span></h2>
       ${teachBtnHtml}
+    </div>
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
     ${errorBannerHtml}
@@ -1912,7 +1942,20 @@ function renderDetail(row) {
   `;
   if (panelEl) {
     panelEl.style.display = "";
-    panelEl.innerHTML = leadPanelHtml(row);
+    // Collapse wrapper (owner ask 2026-07-22): on phones the lead column
+    // (Website / LinkedIn / category / campaign) collapses under a toggle. The
+    // toggle + body wrapper sit OUTSIDE leadPanelHtml, so its category picker
+    // and quick-link handlers are untouched. Desktop CSS hides the toggle and
+    // always shows the body, so the sidebar looks exactly as before.
+    panelEl.innerHTML =
+      '<button type="button" class="lp-collapse-toggle" id="lpCollapseToggle" aria-expanded="false">'
+      + '<span>Lead details</span><span class="lp-chev" aria-hidden="true">&#9662;</span></button>'
+      + '<div class="lp-collapse-body">' + leadPanelHtml(row) + '</div>';
+    const lpToggleBtn = document.getElementById("lpCollapseToggle");
+    if (lpToggleBtn) lpToggleBtn.addEventListener("click", () => {
+      const isOpen = panelEl.classList.toggle("lp-open");
+      lpToggleBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    });
   }
   wireDetailEvents(el, row);
   wireLeadPanelEvents(panelEl, row);
