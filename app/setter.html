@@ -101,46 +101,62 @@
 .lead-panel .lp-line:last-child { margin-bottom: 0; }
 .lead-panel .lp-line a { color: var(--orange-700); }
 .lead-panel .lp-line.muted { color: var(--ink-3); }
-/* Quick links: Website / LinkedIn */
-.lead-panel .lp-quick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
-.lead-panel .lp-qbtn {
+/* Quick links: Website / LinkedIn. Unscoped: shared by the sidebar AND the
+   sticky header bar above the conversation. */
+.lp-quick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.lp-qbtn {
   flex: 1 1 auto; min-width: 0; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 10px;
   font-size: 12px; font-weight: 500; color: var(--ink-2); text-decoration: none; background: transparent;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.lead-panel .lp-qbtn:hover { background: var(--bg-sunken); border-color: var(--ink-3); color: var(--ink); }
-.lead-panel .lp-qbtn:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
-.lead-panel .lp-qbtn svg { width: 14px; height: 14px; flex-shrink: 0; }
-.lead-panel .lp-qbtn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-qbtn:hover { background: var(--bg-sunken); border-color: var(--ink-3); color: var(--ink); }
+.lp-qbtn:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
+.lp-qbtn svg { width: 14px; height: 14px; flex-shrink: 0; }
+.lp-qbtn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Divider between the identity zone and the rest */
 .lead-panel .lp-divide { height: 1px; background: var(--line); margin: 18px 0; border: 0; }
-/* Lead-category control - the panel's primary job, so it sits in its own
-   sunken card to announce itself and group pill + picker + hint as one unit. */
+/* Lead-category control - shared by the sidebar and the sticky header bar, so
+   the control internals are unscoped; only the sidebar's sunken CARD framing
+   stays scoped to .lead-panel. */
 .lead-panel .lp-cat { background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 14px 15px; }
 .lead-panel .lp-cat .lp-label { margin-bottom: 10px; }
-.lead-panel .lp-cat-now { margin-bottom: 11px; }
-.lead-panel .lp-cat-now .pill { font-size: 11.5px; padding: 4px 11px; }
-.lead-panel .lp-cat-now .pill.n { background: #fff; border: 1px solid var(--line-2); }
-.lead-panel .lp-cat-edit { display: flex; gap: 8px; align-items: center; }
-.lead-panel .lp-cat-edit select {
+.lp-cat-now { margin-bottom: 11px; }
+.lp-cat-now .pill { font-size: 11.5px; padding: 4px 11px; }
+.lp-cat-now .pill.n { background: #fff; border: 1px solid var(--line-2); }
+.lp-cat-edit { display: flex; gap: 8px; align-items: center; }
+.lp-cat-edit select {
   flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 8px 9px; border-radius: 9px; border: 1px solid var(--line-2);
   background: var(--bg, #fff); color: var(--ink); font: 500 12.5px var(--font-sans); cursor: pointer;
 }
-.lead-panel .lp-cat-edit select:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
-.lead-panel .lp-cat-edit .btn { flex-shrink: 0; min-height: 36px; }
+.lp-cat-edit select:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
+.lp-cat-edit .btn { flex-shrink: 0; min-height: 36px; }
 /* Update's colour tracks the CONSEQUENCE, not the wording of the label:
    dead control at rest (neutral ghost), orange to commit a positive (keeps
    them in the flow), amber for any other pick (still removes them from the
    queue - e.g. Out of Office), red for a hard-negative reject. So a removal
    never looks like a safe save. Colours come from the design-system tokens. */
-.lead-panel .lp-cat-edit .btn.primary[disabled] { opacity: 1; background: transparent; border-color: var(--line-2); color: var(--ink-3); }
-.lead-panel .lp-cat-edit .btn.caution { background: var(--amber); border-color: var(--amber); color: #fff; }
-.lead-panel .lp-cat-edit .btn.caution:hover { background: #7a5700; border-color: #7a5700; }
-.lead-panel .lp-cat-edit .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
-.lead-panel .lp-cat-edit .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
-.lead-panel .lp-cat-hint { margin-top: 10px; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
-.lead-panel .lp-cat-hint.lp-hint-err { color: var(--red); }
+.lp-cat-edit .btn.primary[disabled] { opacity: 1; background: transparent; border-color: var(--line-2); color: var(--ink-3); }
+.lp-cat-edit .btn.caution { background: var(--amber); border-color: var(--amber); color: #fff; }
+.lp-cat-edit .btn.caution:hover { background: #7a5700; border-color: #7a5700; }
+.lp-cat-edit .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.lp-cat-edit .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
+.lp-cat-hint { margin-top: 10px; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+.lp-cat-hint.lp-hint-err { color: var(--red); }
+/* Sticky lead-info header bar (desktop/tablet): identity + quick links +
+   category control pinned above the conversation while the thread scrolls.
+   The sidebar stays; this mirrors its key controls at the top of the reply.
+   Phones keep their own collapsible lead panel, so .detail-leadbar hides there. */
+.detail-topbar { position: sticky; top: 0; z-index: 20; background: var(--bg); padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.detail-leadbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.detail-leadbar .lp-quick { flex: 0 0 auto; margin: 0; }
+.detail-leadbar .lp-quick .lp-qbtn { flex: 0 0 auto; }
+.lp-cat-compact { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.lp-cat-compact .lp-label { display: none; }
+.lp-cat-compact .lp-cat-now { margin: 0; }
+.lp-cat-compact .lp-cat-edit { flex: 0 1 auto; }
+.lp-cat-compact .lp-cat-edit select { flex: 0 1 auto; width: 200px; max-width: 100%; min-width: 140px; }
+.lp-cat-compact .lp-cat-hint { flex: 1 1 100%; margin: 0; }
 /* The decision */
 .lead-panel .lp-decision { margin-bottom: 11px; }
 .lead-panel .lp-decision-head { display: block; font-weight: 600; font-size: 13px; color: var(--ink); margin-bottom: 3px; }
@@ -243,6 +259,9 @@
     padding: 6px 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line);
   }
   .inbox-shell.mobile-detail .detail-head { margin-bottom: 0; }
+  /* Phones keep the collapsible lead panel, so the desktop sticky lead-info
+     row is hidden here to avoid showing the links + category twice. */
+  .inbox-shell.mobile-detail .detail-leadbar { display: none; }
 
   /* Lead context (Website / LinkedIn / category / campaign) collapses under a
      toggle, pinned to the top of the reply, collapsed by default. */
@@ -1915,6 +1934,10 @@ function renderDetail(row) {
         <span class="small muted dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span></h2>
       ${teachBtnHtml}
     </div>
+    <div class="detail-leadbar">
+      <div class="lp-quick">${leadQuickLinksHtml(row)}</div>
+      <div class="lp-cat lp-cat-compact">${categoryControlInner(row, true)}</div>
+    </div>
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
     ${errorBannerHtml}
@@ -1959,6 +1982,12 @@ function renderDetail(row) {
   }
   wireDetailEvents(el, row);
   wireLeadPanelEvents(panelEl, row);
+  // Wire the category control in BOTH the sticky bar (inside el) and the
+  // sidebar (panelEl); hydrate the lead's contact links once (re-renders every
+  // .lp-quick on the page).
+  wireCategoryControls(el, row);
+  wireCategoryControls(panelEl, row);
+  hydrateLeadContact(row);
   reapplyEditedDraft(row.id);
   refreshThreadFor(row);
   // Cache hit already painted real chips synchronously above - wire them now.
@@ -2122,7 +2151,7 @@ function leadQuickLinksHtml(row) {
   const websiteBtn = site
     ? `<a class="lp-qbtn" href="${site}" target="_blank" rel="noopener" title="${esc(domain || row.company_website)}">${ICON_GLOBE}<span>Website</span></a>` : "";
   const li = leadLinkedIn(row);
-  const linkedinBtn = `<a class="lp-qbtn" id="lpLinkedinBtn" href="${esc(li.href)}" target="_blank" rel="noopener" title="${esc(li.title)}">${ICON_LINKEDIN}<span>LinkedIn</span></a>`;
+  const linkedinBtn = `<a class="lp-qbtn lp-li-btn" href="${esc(li.href)}" target="_blank" rel="noopener" title="${esc(li.title)}">${ICON_LINKEDIN}<span>LinkedIn</span></a>`;
   return websiteBtn + linkedinBtn;
 }
 /* Colour tone for the current-category pill: green for a positive, red for a
@@ -2136,6 +2165,27 @@ function categoryTone(name) {
   return "n";
 }
 
+/* The Lead-category control (tone pill + live Smartlead dropdown + Update),
+   shared by the sidebar and the sticky header bar. compact=true drops the
+   label and starts the hint empty (the bar shows a consequence line only once
+   a change is staged). Uses CLASSES, never ids, so both instances coexist. */
+function categoryControlInner(row, compact) {
+  const curCat = String(row.category || "").trim();
+  const catUncat = !curCat || curCat === "Uncategorizable by Ai";
+  const catPill = catUncat
+    ? `<span class="pill a">Uncategorised</span>`
+    : `<span class="pill ${categoryTone(curCat)}">${esc(curCat)}</span>`;
+  const editable = !["sent", "auto_sent"].includes(row.status);
+  const hint = compact ? "" : esc(CAT_HINT_DEFAULT);
+  return `
+      <div class="lp-label">Lead category</div>
+      <div class="lp-cat-now">${catPill}</div>
+      ${editable ? `<div class="lp-cat-edit">
+        <select class="lp-cat-sel" aria-label="Change lead category"><option value="">Loading…</option></select>
+        <button type="button" class="btn primary sm lp-cat-btn" disabled>Update</button>
+      </div>
+      <div class="lp-cat-hint">${hint}</div>` : ""}`;
+}
 /* Lead-info sidebar, top to bottom: an identity header (avatar + name +
    email), quick links (Website / LinkedIn), the editable Lead category
    control, Campaign, an always-open "The decision", and the subsequence
@@ -2152,25 +2202,9 @@ function leadPanelHtml(row) {
   // this reply came in on has nobody assigned to draft/send for it.
   const noAgentHtml = row.agent_id ? "" : `<div class="lp-line muted">No agent is assigned to this campaign.</div>`;
 
-  // Lead category: the current label as a tone pill, plus a live Smartlead
-  // dropdown to change it. Read-only once sent/auto-sent (the write is barred
-  // server-side then anyway).
-  const curCat = String(row.category || "").trim();
-  const catUncat = !curCat || curCat === "Uncategorizable by Ai";
-  const catPill = catUncat
-    ? `<span class="pill a">Uncategorised</span>`
-    : `<span class="pill ${categoryTone(curCat)}">${esc(curCat)}</span>`;
-  const catEditable = !["sent", "auto_sent"].includes(row.status);
-  const catSectionHtml = `
-    <div class="lp-section lp-cat">
-      <div class="lp-label">Lead category</div>
-      <div class="lp-cat-now">${catPill}</div>
-      ${catEditable ? `<div class="lp-cat-edit">
-        <select id="lpCatSel" aria-label="Change lead category" aria-describedby="lpCatHint"><option value="">Loading…</option></select>
-        <button type="button" class="btn primary sm" id="lpCatBtn" disabled>Update</button>
-      </div>
-      <div class="lp-cat-hint" id="lpCatHint">${esc(CAT_HINT_DEFAULT)}</div>` : ""}
-    </div>`;
+  // Lead category: the shared control (tone pill + live Smartlead dropdown),
+  // wrapped here in the sidebar's sunken card section.
+  const catSectionHtml = `<div class="lp-section lp-cat">${categoryControlInner(row, false)}</div>`;
 
   return `
     <div class="lp-head">
@@ -2180,7 +2214,7 @@ function leadPanelHtml(row) {
         <div class="lp-sub"${row.lead_email ? ` title="${esc(row.lead_email)}"` : ""}>${row.lead_email ? esc(row.lead_email) : "No email on file"}</div>
       </div>
     </div>
-    <div class="lp-quick" id="lpQuick">${leadQuickLinksHtml(row)}</div>
+    <div class="lp-quick">${leadQuickLinksHtml(row)}</div>
     <hr class="lp-divide">
     ${catSectionHtml}
     <div class="lp-section">
@@ -2217,29 +2251,26 @@ function leadDecisionHtml(row) {
   if (pricing) parts.push(pricing);
   return parts.join("") || `<div class="lp-line muted">No decision details.</div>`;
 }
-/* Fill the sidebar category dropdown from the live Smartlead list, preselecting
-   the current label so the Update button only wakes on a real change. */
-async function hydrateLeadCategory(row) {
-  const sel = document.getElementById("lpCatSel");
+/* Fill a given category <select> from the live Smartlead list. The tone pill
+   beside it already shows the CURRENT category, so nothing is preselected -
+   the dropdown is a pure "change to…" action, and the current label is greyed
+   out so it can't be re-picked. Scoped to the passed element so the sidebar
+   and the sticky-bar controls hydrate independently. */
+async function hydrateCategoryOptions(sel, row) {
   if (!sel) return;
   const cats = await fetchCategories();
-  const still = document.getElementById("lpCatSel");
-  if (!still) return;
+  if (!sel.isConnected) return;  // the control was re-rendered while we waited
   if (!cats.length) {
-    still.innerHTML = `<option value="">Couldn't load categories - try again shortly</option>`;
+    sel.innerHTML = `<option value="">Couldn't load categories - try again shortly</option>`;
     return;
   }
   const cur = String((row && row.category) || "").trim();
   const curUncat = !cur || cur === "Uncategorizable by Ai";
-  // The tone pill above already shows the CURRENT category, so the dropdown
-  // stays a pure "change to…" action (nothing preselected) - no duplicate
-  // label, and the current category is greyed out so it can't be re-picked.
   const head = `<option value="" selected>${curUncat ? "Choose a category…" : "Change category…"}</option>`;
-  still.innerHTML = head + cats.map((c) => {
+  sel.innerHTML = head + cats.map((c) => {
     const isCur = !curUncat && String(c.name).toLowerCase() === cur.toLowerCase();
     return `<option value="${esc(String(c.id))}" data-name="${esc(c.name)}"${isCur ? " disabled" : ""}>${esc(c.name)}${isCur ? " (current)" : ""}</option>`;
   }).join("");
-  updateLpCatBtn();
 }
 /* Pull the lead's real LinkedIn profile + website from Smartlead (cached
    server-side) when the reply is opened, then re-render ONLY the quick-links
@@ -2261,8 +2292,8 @@ async function hydrateLeadContact(row) {
     if (r) { if (res.data.linkedin) r.lead_linkedin = res.data.linkedin; if (res.data.website) r.company_website = res.data.website; }
   });
   if (String(selectedRowId) === String(row.id)) {
-    const q = document.getElementById("lpQuick");
-    if (q) q.innerHTML = leadQuickLinksHtml(row);
+    // Re-render every quick-links row on the page (sidebar + sticky bar).
+    document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
   }
 }
 function currentDetailRow() {
@@ -2270,52 +2301,53 @@ function currentDetailRow() {
   return (QUEUE_ROWS || []).find((r) => String(r.id) === String(selectedRowId))
       || (ALL_ROWS || []).find((r) => String(r.id) === String(selectedRowId)) || null;
 }
-/* Keep the Update button + hint honest about what the current pick will do:
-   disabled until a genuinely different category is chosen, red for a
-   disqualifying (negative) pick, and a consequence line that names the lead
-   and the outcome BEFORE the click (positive keeps them, anything else files
-   and clears). */
-function updateLpCatBtn() {
-  const sel = document.getElementById("lpCatSel");
-  const btn = document.getElementById("lpCatBtn");
+/* Keep a category control's Update button + hint honest about the current
+   pick: disabled until a genuinely different category is chosen, red for a
+   disqualifying (negative) pick, amber for any other removal, and a consequence
+   line naming the lead + outcome BEFORE the click. Scoped to the passed .lp-cat
+   block so the sidebar and sticky-bar controls stay independent; the compact
+   (sticky-bar) control keeps its hint empty at rest to stay slim. */
+function updateCatBtn(block, row) {
+  if (!block) return;
+  const sel = block.querySelector(".lp-cat-sel");
+  const btn = block.querySelector(".lp-cat-btn");
   if (!sel || !btn) return;
-  const r = currentDetailRow();
+  const r = currentDetailRow() || row;
   const cur = String((r && r.category) || "").trim().toLowerCase();
   const opt = sel.value ? sel.options[sel.selectedIndex] : null;
   const chosen = opt ? String(opt.getAttribute("data-name") || "").trim() : "";
   const enable = !!chosen && chosen.toLowerCase() !== cur;
   btn.disabled = !enable;
-  // Colour by consequence: positive keeps them (orange commit); a hard
-  // negative rejects them (red); anything else still REMOVES them from the
-  // queue (amber caution) - so a benign-looking "Out of Office" never wears
-  // the same safe orange as "keep in the flow".
+  // Colour by consequence: positive keeps them (orange commit); a hard negative
+  // rejects them (red); anything else still REMOVES them from the queue (amber
+  // caution) - so a benign-looking "Out of Office" never wears the safe orange.
   const positive = enable && CORE_FOUR_JS.some((c) => c.toLowerCase() === chosen.toLowerCase());
   const negative = enable && categoryTone(chosen) === "r";
   const caution = enable && !positive && !negative;
   btn.classList.toggle("primary", !enable || positive);
   btn.classList.toggle("danger", negative);
   btn.classList.toggle("caution", caution);
-  const hint = document.getElementById("lpCatHint");
+  const hint = block.querySelector(".lp-cat-hint");
   if (hint) {
-    // Any fresh pick clears a stale "couldn't update" error and re-states the
-    // consequence of the new choice.
     hint.classList.remove("lp-hint-err");
-    if (!enable) { hint.textContent = CAT_HINT_DEFAULT; return; }
+    const compact = block.classList.contains("lp-cat-compact");
+    if (!enable) { hint.textContent = compact ? "" : CAT_HINT_DEFAULT; return; }
     const nm = leadFirstNameOr(r, "this lead");
-    const positive = CORE_FOUR_JS.some((c) => c.toLowerCase() === chosen.toLowerCase());
     hint.textContent = positive
       ? `Keeps ${nm} in the flow.`
       : `Files ${nm} as '${chosen}' in Smartlead and clears them from the queue.`;
   }
 }
-/* Write the chosen Smartlead category. Reuses the recategorise route, which is
-   the system-of-record write: a positive keeps/rescues the lead in the flow
-   (converted), a positive->positive nudge just relabels, anything else files
-   it and drops it from the queue (discarded). */
-async function applyLeadCategory() {
-  const sel = document.getElementById("lpCatSel");
-  const btn = document.getElementById("lpCatBtn");
-  const hint = document.getElementById("lpCatHint");
+/* Write the chosen Smartlead category from a given control. Reuses the
+   recategorise route (system-of-record write): a positive keeps/rescues the
+   lead (converted), a positive->positive nudge relabels, anything else files
+   it and drops it from the queue (discarded). Scoped to the passed .lp-cat
+   block so it works from the sidebar or the sticky bar. */
+async function applyCategory(block) {
+  if (!block) return;
+  const sel = block.querySelector(".lp-cat-sel");
+  const btn = block.querySelector(".lp-cat-btn");
+  const hint = block.querySelector(".lp-cat-hint");
   if (!sel || !sel.value || !selectedRowId) return;
   const name = sel.options[sel.selectedIndex].getAttribute("data-name") || "";
   if (btn) { btn.disabled = true; btn.classList.add("busy"); }
@@ -2335,17 +2367,24 @@ async function applyLeadCategory() {
   else if (act === "discarded") selectedRowId = null;
   await loadQueue();
 }
+/* Wire every category control (.lp-cat) found under `root`: hydrate its
+   dropdown, wire change -> updateCatBtn, and its button -> applyCategory. Runs
+   for both the sidebar and the sticky bar; a data-flag guards double-wiring. */
+function wireCategoryControls(root, row) {
+  if (!root) return;
+  root.querySelectorAll(".lp-cat").forEach((block) => {
+    const sel = block.querySelector(".lp-cat-sel");
+    if (!sel || block.dataset.catWired === "1") return;
+    block.dataset.catWired = "1";
+    hydrateCategoryOptions(sel, row).then(() => updateCatBtn(block, row));
+    sel.addEventListener("change", () => updateCatBtn(block, row));
+    const btn = block.querySelector(".lp-cat-btn");
+    if (btn) btn.addEventListener("click", () => applyCategory(block));
+  });
+}
 function wireLeadPanelEvents(root, row) {
   if (!root) return;
   root.querySelectorAll(".qc-sub").forEach((chk) => chk.addEventListener("change", () => doSubsequence(chk)));
-  const catBtn = root.querySelector("#lpCatBtn");
-  if (catBtn) catBtn.addEventListener("click", applyLeadCategory);
-  const catSel = root.querySelector("#lpCatSel");
-  if (catSel) {
-    catSel.addEventListener("change", updateLpCatBtn);
-    hydrateLeadCategory(row);
-  }
-  hydrateLeadContact(row);
 }
 
 /* Change 1: one scrollable, chronological conversation built from
