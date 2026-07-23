@@ -2553,18 +2553,24 @@ function composerActionsHtml(row) {
    needed" - sitting where the composer actions normally sit, so the
    decision can be made right where the conversation was just read. */
 function needsRetroFollowup(row) {
+  // Mirror the tray feed (owner ruling 2026-07-22): a sent/auto_sent row shows
+  // the follow-up controls until it's pushed OR explicitly dismissed - a
+  // 'none' ("no follow-up") choice keeps them (so Dismiss stays reachable).
   return (row.status === "sent" || row.status === "auto_sent")
     && !row.added_to_subsequence
-    && (row.subsequence_decision == null || row.subsequence_decision === "push_failed");
+    && row.subsequence_decision !== "dismissed";
 }
 function retroFollowupHtml(row) {
   if (!needsRetroFollowup(row)) return "";
+  const isNone = row.subsequence_decision === "none";
   const failTag = row.subsequence_decision === "push_failed"
     ? `<span class="pill r">push failed — retry</span>` : "";
+  const noneTag = isNone ? `<span class="pill n">No follow-up</span>` : "";
   return `<div class="qc-actions">
-    ${failTag}
+    ${failTag}${noneTag}
     <button class="btn primary qc-retro-add" data-id="${esc(row.id)}" type="button">Add to subsequence</button>
-    <button class="btn qc-retro-none" data-id="${esc(row.id)}" type="button">No follow-up needed</button>
+    ${isNone ? "" : `<button class="btn qc-retro-none" data-id="${esc(row.id)}" type="button">No follow-up needed</button>`}
+    <button class="btn qc-retro-dismiss" data-id="${esc(row.id)}" type="button" title="Remove from the follow-up reminder list">Dismiss</button>
   </div>`;
 }
 function retroFollowupPickerHtml(row) {
@@ -2893,6 +2899,8 @@ function wireDetailEvents(root, row) {
       (subs) => renderDetailRetroPicker(btn.getAttribute("data-id"), subs))));
   root.querySelectorAll(".qc-retro-none").forEach((btn) => btn.addEventListener("click", () =>
     retroFollowupNone(btn.getAttribute("data-id"), btn)));
+  root.querySelectorAll(".qc-retro-dismiss").forEach((btn) => btn.addEventListener("click", () =>
+    retroFollowupDismiss(btn.getAttribute("data-id"), btn)));
 
   root.querySelectorAll(".qc-send").forEach((btn) => btn.addEventListener("click", () => doSend(btn)));
   root.querySelectorAll(".qc-regen").forEach((btn) => btn.addEventListener("click", () => doRedraft(btn)));
