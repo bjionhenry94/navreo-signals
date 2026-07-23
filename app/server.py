@@ -5815,50 +5815,83 @@ def _backfill_source_lists():
 # outreach-destinations. Never returns a silently-empty list on auth
 # failure: the per-platform *_error field survives into the payload.
 _CAMPAIGNS_UNIFIED_TTL_S = 600
-# Last-good HeyReach rows for the unified list. A dead/expired HeyReach key used
-# to set heyreach_error, which — via is_degraded below — made _SWRCache refuse
-# to cache EVERY recompute, so the whole list froze on its last-good snapshot
-# and newly-created campaigns (Smartlead included) never appeared. Now a
-# HeyReach outage keeps its last-good rows and never blocks fresh Smartlead
-# rows; only a NAVREO failure degrades. Mirrors _store_outreach_payload's
-# per-source last-good handling for the destinations picker.
-_CU_HR_LAST_GOOD: dict = {"rows": [], "at": 0}
+# Per-source last-good for the unified list. The list is federated across many
+# sources — navreo Smartlead + every client Smartlead workspace + HeyReach — and
+# it used to mark the WHOLE payload degraded (via is_degraded below) the moment
+# ANY one of them errored. _SWRCache refuses to cache a degraded payload, so a
+# single transient sub-fetch failure (a Smartlead 429 on any workspace under the
+# heavier multi-workspace call volume, or a HeyReach blip) made every recompute
+# get discarded and the list froze on a stale snapshot — which is why
+# newly-created campaigns stopped showing up after the workspaces rollout. Now
+# each source contributes its FRESH rows on success or its own last-good rows on
+# failure; only navreo with no rows AND no cached copy is a true degrade.
+# Mirrors _store_outreach_payload's per-source handling for the destinations
+# picker. Shape: {"sl": {workspace_id: [rows]}, "hr": [rows], "hr_at": epoch}.
+_CU_LAST_GOOD: dict = {"sl": {}, "hr": [], "hr_at": 0}
+
+
+def _sl_campaigns_for_ws(wkey, tries: int = 2):
+    """GET /campaigns for one workspace, tolerating a transient non-list
+    response — a 429/5xx comes back as an error dict (not a list), and
+    Smartlead's shared 200/min budget is easy to brush under multi-workspace
+    load. Returns the campaign list, or None if it never resolved to a list."""
+    for attempt in range(tries):
+        try:
+            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={wkey}", {})
+        except Exception:  # noqa: BLE001 — network/timeout blip → treat as transient
+            camps = None
+        if isinstance(camps, list):
+            return camps
+        if attempt + 1 < tries:
+            time.sleep(0.5)
+    return None
 
 
 def _compute_campaigns_unified(refresh: bool = False) -> dict:
     out: dict = {"rows": []}
     sl_rows, hr_rows = [], []
-    try:
-        # Federated: one fetch per enabled workspace (navreo + every connected
-        # client Smartlead), rows tagged with their owner. A client-workspace
-        # failure degrades to a note; only a NAVREO failure trips the
-        # last-good-on-error path (client rows must never nuke the whole list).
-        ws_errs = []
-        for w in ws_enabled():
-            wid = w.get("id")
-            wname = w.get("name") or wid
-            wkey = ws_key(wid)
-            if not wkey:
-                ws_errs.append(f"{wid}: no key")
-                continue
-            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={wkey}", {})
-            if not isinstance(camps, list):
-                msg = camps.get("message") if isinstance(camps, dict) else str(camps)
+    # Federated: one fetch per enabled workspace (navreo + every connected client
+    # Smartlead), rows tagged with their owner. Each workspace resolves to its
+    # FRESH rows on success or its own last-good rows on failure, so one
+    # workspace's blip can never remove another's — or its own — campaigns from
+    # the merged list, and can never freeze it.
+    ws_errs: list = []
+    navreo_fresh = False
+    for w in ws_enabled():
+        wid = w.get("id")
+        wname = w.get("name") or wid
+        wkey = ws_key(wid)
+        rows_this = None
+        if not wkey:
+            ws_errs.append(f"{wid}: no key")
+        else:
+            camps = _sl_campaigns_for_ws(wkey)
+            if camps is not None:
+                rows_this = [{"key": f"camp-sl-{c.get('id')}", "platform": "smartlead",
+                              "platform_id": c.get("id"), "name": c.get("name") or "",
+                              "status": (c.get("status") or "").upper(),
+                              "workspace": wid, "workspace_name": wname,
+                              "created_at": c.get("created_at")}
+                             for c in camps]
+                _CU_LAST_GOOD["sl"][wid] = rows_this
                 if wid == "navreo":
-                    raise RuntimeError(f"Smartlead /campaigns: {msg or 'unexpected response'}")
-                ws_errs.append(f"{wid}: {str(msg)[:80]}")
-                continue
-            sl_rows.extend([{"key": f"camp-sl-{c.get('id')}", "platform": "smartlead",
-                             "platform_id": c.get("id"), "name": c.get("name") or "",
-                             "status": (c.get("status") or "").upper(),
-                             "workspace": wid, "workspace_name": wname,
-                             "created_at": c.get("created_at")}
-                            for c in camps])
-        out["smartlead_synced_at"] = int(time.time())
-        if ws_errs:
-            out["workspace_errors"] = ws_errs
-    except Exception as e:  # noqa: BLE001
-        out["smartlead_error"] = str(e)[:150]
+                    navreo_fresh = True
+            else:
+                ws_errs.append(f"{wid}: Smartlead /campaigns unavailable")
+        if rows_this is None:
+            # fetch failed / no key → this workspace's own last-good rows, so a
+            # rate-limit blip never blanks it out of (or freezes) the list.
+            rows_this = [dict(r) for r in _CU_LAST_GOOD["sl"].get(wid, [])]
+        sl_rows.extend(rows_this)
+    out["smartlead_synced_at"] = int(time.time())
+    if ws_errs:
+        out["workspace_errors"] = ws_errs
+    # Degrade (don't cache this compute; keep serving the stored payload) ONLY
+    # when navreo is neither fresh nor recoverable from last-good — i.e. there
+    # are genuinely no navreo campaigns to show. NEVER on a HeyReach- or
+    # client-workspace-only error.
+    if not navreo_fresh and not _CU_LAST_GOOD["sl"].get("navreo"):
+        out["smartlead_error"] = "navreo campaigns unavailable (fetch failed, no cached copy)"
     try:
         for it in _hey_pages("/campaign/GetAll"):
             hr_rows.append({"key": f"camp-hr-c{it.get('id')}", "platform": "heyreach",
@@ -5867,15 +5900,15 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
                             "hr_list_id": it.get("linkedInUserListId"),
                             "created_at": it.get("creationTime") or it.get("startedAt")})
         out["heyreach_synced_at"] = int(time.time())
-        _CU_HR_LAST_GOOD["rows"] = [dict(r) for r in hr_rows]
-        _CU_HR_LAST_GOOD["at"] = int(time.time())
+        _CU_LAST_GOOD["hr"] = [dict(r) for r in hr_rows]
+        _CU_LAST_GOOD["hr_at"] = int(time.time())
     except Exception as e:  # noqa: BLE001
         out["heyreach_error"] = str(e)[:150]
         # A HeyReach outage must NOT hide fresh Smartlead campaigns (see
         # is_degraded): keep the last-good HeyReach rows and carry on.
-        hr_rows = [dict(r) for r in _CU_HR_LAST_GOOD["rows"]]
-        if _CU_HR_LAST_GOOD["at"]:
-            out["heyreach_stale_since"] = _CU_HR_LAST_GOOD["at"]
+        hr_rows = [dict(r) for r in _CU_LAST_GOOD["hr"]]
+        if _CU_LAST_GOOD["hr_at"]:
+            out["heyreach_stale_since"] = _CU_LAST_GOOD["hr_at"]
 
     # join the app's own docs: camp-sl-<id> direct; camp-hr-<listId> joins a
     # HeyReach campaign through its linkedInUserListId (a HR draft doc is
