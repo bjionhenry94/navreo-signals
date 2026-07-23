@@ -589,7 +589,7 @@
   /* -- certified insight-card grammar (23 Jul 2026): hero number + ALWAYS a chart +
         one insight line + one act line; receipts collapse behind "why?". -- */
   .nvz-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-  .nvz { display: flex; align-items: center; gap: 13px; min-height: 56px; }
+  .nvz { display: flex; align-items: center; gap: 16px; min-height: 60px; margin-top: 2px; }
   .nvz-hero { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.9rem, 4vw, 2.5rem); letter-spacing: -0.03em; line-height: 0.85; color: var(--fg); flex: 0 0 auto; }
   .nvz-hero small { font-size: 0.45em; letter-spacing: -0.01em; }
   .nvz-hero.is-red { color: var(--danger); }
@@ -1349,7 +1349,7 @@
      ============================================================ */
 
   /* -- A. homepage: compact widget modifier + 3/2/1 responsive grid -- */
-  .book-grid.book-grid--compact { gap: 12px; }
+  .book-grid.book-grid--compact { gap: 18px; }
   @media (min-width: 640px) {
     .book-grid.book-grid--compact { grid-template-columns: repeat(2, 1fr); }
   }
@@ -1357,7 +1357,7 @@
     .book-grid.book-grid--compact { grid-template-columns: repeat(3, 1fr); }
   }
 
-  .book-widget.book-widget--compact { padding: 13px 14px; gap: 8px; }
+  .book-widget.book-widget--compact { padding: 22px 22px 18px; gap: 15px; }
   .book-widget--compact .book-tag { font-size: 0.68rem; }
   .book-widget--compact .book-line { font-size: 0.98rem; font-weight: 700; }
   .book-widget--compact .action-payoff { font-size: 0.88rem; }
@@ -1851,7 +1851,7 @@
     var tag = p.tag === "fine" ? "green" : (p.tag === "decide" || p.tag === "decision") ? "red" : "amber";
     var barTone = tag === "red" ? "var(--danger)" : tag === "green" ? "var(--success)" : "var(--warning)";
     var nums = nvzNums(p.bold);
-    var hero = null, chart = "", cap = "";
+    var hero = null, chart = "", cap = "", title = "";
     var key = r.insight_key || "";
     if (key === "weekly-pulse" && (s.pos_last_week != null || nums.length >= 2)) {
       /* stats when the payload carries them, else read "88 to 58" from the text */
@@ -1862,11 +1862,13 @@
       chart = '<div class="nvz-vbars">' +
         '<span style="height:' + Math.round(100 * lastW / mx) + '%"></span>' +
         '<span class="is-hot" style="height:' + Math.round(100 * thisW / mx) + '%"></span></div>';
-      cap = "positives, " + fmtInt(lastW) + " &rarr; " + fmtInt(thisW) + " week over week";
+      cap = fmtInt(lastW) + " last week &rarr; " + fmtInt(thisW) + " this week";
+      title = "We got " + fmtInt(thisW) + " good replies this week, down from " + fmtInt(lastW) + " last week.";
     } else if (key === "kill-threshold") {
       hero = nums.length ? fmtInt(nums[0]) + "<small>+</small>" : "&mdash;";
       chart = '<div class="nvz-gauge"><span class="gfill" style="width:100%"></span><span class="gthr" style="left:40%"></span></div>';
-      cap = "sends per positive &middot; past the kill line";
+      cap = "emails needed for one good reply";
+      title = "Two campaigns need " + (nums.length ? fmtInt(nums[0]) : "2,500") + "+ emails to get one good reply. That is way too many.";
     } else if (key === "stuck-variants" || key === "dist-bug") {
       var share = (String(p.bold || "").match(/(\d+)\s*%/) || [])[1];
       var unset = nums.length > 1 ? Math.min(9, Math.round(nums[nums.length - 1])) : 4;
@@ -1874,7 +1876,8 @@
       for (var ci = 0; ci < unset; ci++) cells += "<span>v" + (ci + 2) + "</span>";
       hero = "0";
       chart = '<div class="nvz-cells">' + cells + "</div>";
-      cap = share ? ("a " + share + "% split sent nothing &middot; " + unset + " more unset") : "split configured but not firing";
+      cap = share ? ("1 broken &middot; " + unset + " not set up") : "set up but not sending";
+      title = share ? ("One email version should send " + share + "% of emails but has sent none.") : "One email version is set up but never sends.";
     } else if (key === "whole-offer-failures") {
       var vols = nvzNums((p.bold || "") + " " + (p.note || "")).filter(function (n) { return n >= 100; }).slice(0, 6);
       /* the grand total ("22,419 sends") reads first and would render as a
@@ -1889,17 +1892,22 @@
       chart = '<div class="nvz-hbars">' + vols.map(function (v) {
         return '<span style="width:' + Math.max(8, Math.round(100 * v / vmx)) + '%"></span>';
       }).join("") + "</div>";
-      cap = "positives across " + vols.length + " offers, bars sized by sends";
+      cap = "0 good replies from " + vols.length + " offers";
+      var _tot0 = nvzNums(p.bold)[0];
+      title = vols.length + " offers sent " + (_tot0 ? fmtInt(_tot0) : "thousands of") + " emails and got zero good replies.";
     } else if (key === "book-verdict") {
       var small = nums.filter(function (n) { return n > 0 && n < 20; });
       hero = nums.length ? fmtInt(nums[0]) : "&mdash;";
+      var _needs = small.reduce(function (a, b) { return a + b; }, 0);
+      if (/\bone\b/i.test(String(p.bold || ""))) _needs += 1; /* "one split is broken" - written as a word */
+      title = fmtInt(nums[0] || 0) + " good replies this week" + (nums[1] ? ", down from " + fmtInt(nums[1]) + " last week" : "") + ". " + (_needs ? _needs + " campaigns need help." : "");
       if (small.length >= 2) {
-        var reds = Math.min(9, Math.round(small[0])), ambs = Math.min(9, small.slice(1).reduce(function (a, b) { return a + b; }, 0));
+        var reds = Math.min(9, Math.round(small[0])), ambs = Math.min(9, small.slice(1).reduce(function (a, b) { return a + b; }, 0) + (/\bone\b/i.test(String(p.bold || "")) ? 1 : 0));
         var dots = "";
         for (var di = 0; di < reds; di++) dots += '<span class="is-red"></span>';
         for (var dj = 0; dj < ambs; dj++) dots += '<span class="is-amber"></span>';
         chart = '<div class="nvz-dots">' + dots + "</div>";
-        cap = "red = dead offer &middot; amber = kill line or broken split";
+        cap = "each square is a campaign that needs help";
       }
     } else if (key === "unanswered-positives" && nums.length >= 2) {
       /* first number = the waiting total, LAST number = the meeting subset
@@ -1908,7 +1916,8 @@
       var tot = nums[0], part = Math.min(nums[nums.length - 1], nums[0]);
       hero = fmtInt(part);
       chart = '<div class="nvz-seg"><span style="width:' + Math.round(100 * part / tot) + '%;background:var(--nav-orange)"></span></div>';
-      cap = fmtInt(part) + " of " + fmtInt(tot) + " waiting are meetings";
+      cap = fmtInt(part) + " of " + fmtInt(tot) + " want a meeting";
+      title = fmtInt(tot) + " people are waiting for a reply from us. " + fmtInt(part) + " of them want a meeting.";
     } else if (nums.length >= 2 && /\bof\b|\/|out of/.test(String(p.bold || ""))) {
       var t2 = Math.max(nums[0], nums[1]), p2 = Math.min(nums[0], nums[1]);
       hero = fmtInt(p2);
@@ -1921,28 +1930,26 @@
       chart = '<div class="nvz-seg"><span style="width:100%;background:' + barTone + '"></span></div>';
       cap = cap || (tag === "red" ? "needs a decision" : tag === "green" ? "healthy" : "keep watching");
     }
-    return { heroHtml: '<span class="nvz-hero is-' + tag + '">' + hero + "</span>", chartHtml: chart, cap: cap };
+    return { heroHtml: '<span class="nvz-hero is-' + tag + '">' + hero + "</span>", chartHtml: chart, cap: cap, title: title };
   }
   function nvzCard(r, kindLabel) {
     var p = r.payload || {};
     var v = nvzViz(r);
-    /* title capped at 10 words - the full sentence drops into why? */
-    var words = String(p.bold || "").split(/\s+/).filter(Boolean);
-    var title = words.slice(0, 10).join(" ");
-    var trimmed = words.length > 10;
-    if (trimmed) title = title.replace(/[.,;:]$/, "") + "&hellip;";
+    /* plain-English rewritten title (never truncated) when the key is known;
+       unknown keys keep Lilly's full sentence. The original sentence, the flag
+       name, and the owner all live behind why? - nothing is lost. */
+    var title = v.title || String(p.bold || "");
     var whyBits = [];
-    if (trimmed) whyBits.push('<p class="footnote-line">' + esc(p.bold) + "</p>");
+    whyBits.push('<p class="footnote-line">' + esc(kindLabel) + " &middot; owner: " + esc(p.owner || "Lilly") + "</p>");
+    if (v.title && p.bold) whyBits.push('<p class="footnote-line">' + esc(p.bold) + "</p>");
     if (p.note) whyBits.push('<p class="footnote-line">' + esc(p.note) + "</p>");
     if (p.source) whyBits.push('<p class="footnote-line">Source: ' + esc(p.source) + "</p>");
     return '<div class="book-widget book-widget--compact">' +
-      '<div class="nvz-head"><div class="book-tag">' + esc(kindLabel) + "</div>" +
-      '<span class="owner-chip">' + esc(p.owner || "Lilly") + "</span></div>" +
       '<div class="nvz">' + v.heroHtml + '<div class="nvz-chart">' + v.chartHtml +
       (v.cap ? '<div class="nvz-cap">' + v.cap + "</div>" : "") + "</div></div>" +
-      (title ? '<p class="book-line">' + esc(title).replace(/&amp;hellip;$/, "&hellip;") + "</p>" : "") +
+      (title ? '<p class="book-line">' + esc(title) + "</p>" : "") +
       (p.act ? '<p class="action-payoff">' + esc(p.act) + "</p>" : "") +
-      (whyBits.length ? '<details class="nvz-why"><summary></summary>' + whyBits.join("") + "</details>" : "") +
+      '<details class="nvz-why"><summary></summary>' + whyBits.join("") + "</details>" +
       "</div>";
   }
   var TAG_META = {
