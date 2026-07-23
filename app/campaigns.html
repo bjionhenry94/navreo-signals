@@ -1956,7 +1956,7 @@
       '<div class="nvz">' + v.heroHtml + '<div class="nvz-chart">' + v.chartHtml +
       (v.cap ? '<div class="nvz-cap">' + v.cap + "</div>" : "") + "</div></div>" +
       (title ? '<p class="book-line">' + esc(title) + "</p>" : "") +
-      ((v.simpleAct || p.act) ? '<p class="action-payoff">&rarr; ' + esc(String(v.simpleAct || p.act).replace(/^\s*(?:&rarr;|\u2192|->)\s*/, "")) + "</p>" : "") +
+      ((v.simpleAct || p.act) ? '<p class="action-payoff">' + esc(String(v.simpleAct || p.act).replace(/^\s*(?:\u2192|->)\s*/, "")) + "</p>" : "") +
       '<details class="nvz-why"><summary></summary>' + whyBits.join("") + "</details>" +
       "</div>";
   }
