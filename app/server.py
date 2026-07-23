@@ -5815,6 +5815,14 @@ def _backfill_source_lists():
 # outreach-destinations. Never returns a silently-empty list on auth
 # failure: the per-platform *_error field survives into the payload.
 _CAMPAIGNS_UNIFIED_TTL_S = 600
+# Last-good HeyReach rows for the unified list. A dead/expired HeyReach key used
+# to set heyreach_error, which — via is_degraded below — made _SWRCache refuse
+# to cache EVERY recompute, so the whole list froze on its last-good snapshot
+# and newly-created campaigns (Smartlead included) never appeared. Now a
+# HeyReach outage keeps its last-good rows and never blocks fresh Smartlead
+# rows; only a NAVREO failure degrades. Mirrors _store_outreach_payload's
+# per-source last-good handling for the destinations picker.
+_CU_HR_LAST_GOOD: dict = {"rows": [], "at": 0}
 
 
 def _compute_campaigns_unified(refresh: bool = False) -> dict:
@@ -5859,8 +5867,15 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
                             "hr_list_id": it.get("linkedInUserListId"),
                             "created_at": it.get("creationTime") or it.get("startedAt")})
         out["heyreach_synced_at"] = int(time.time())
+        _CU_HR_LAST_GOOD["rows"] = [dict(r) for r in hr_rows]
+        _CU_HR_LAST_GOOD["at"] = int(time.time())
     except Exception as e:  # noqa: BLE001
         out["heyreach_error"] = str(e)[:150]
+        # A HeyReach outage must NOT hide fresh Smartlead campaigns (see
+        # is_degraded): keep the last-good HeyReach rows and carry on.
+        hr_rows = [dict(r) for r in _CU_HR_LAST_GOOD["rows"]]
+        if _CU_HR_LAST_GOOD["at"]:
+            out["heyreach_stale_since"] = _CU_HR_LAST_GOOD["at"]
 
     # join the app's own docs: camp-sl-<id> direct; camp-hr-<listId> joins a
     # HeyReach campaign through its linkedInUserListId (a HR draft doc is
@@ -5907,7 +5922,11 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
 
 
 _CAMPAIGNS_UNIFIED_SWR = _SWRCache(_compute_campaigns_unified, _CAMPAIGNS_UNIFIED_TTL_S,
-                                    is_degraded=lambda p: bool(p.get("smartlead_error") or p.get("heyreach_error")),
+                                    # ONLY a navreo failure degrades. A HeyReach
+                                    # (or client-workspace) error must never stop
+                                    # fresh Smartlead campaigns from being cached
+                                    # — that was the freeze that hid new campaigns.
+                                    is_degraded=lambda p: bool(p.get("smartlead_error")),
                                     name="campaigns-unified")
 
 
