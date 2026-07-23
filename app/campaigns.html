@@ -1862,21 +1862,22 @@
       chart = '<div class="nvz-vbars">' +
         '<span style="height:' + Math.round(100 * lastW / mx) + '%"></span>' +
         '<span class="is-hot" style="height:' + Math.round(100 * thisW / mx) + '%"></span></div>';
-      cap = fmtInt(lastW) + " last week &rarr; " + fmtInt(thisW) + " this week";
+      cap = fmtInt(lastW) + " &rarr; " + fmtInt(thisW) + " this week";
       title = "We got " + fmtInt(thisW) + " good replies this week, down from " + fmtInt(lastW) + " last week.";
     } else if (key === "kill-threshold") {
       hero = nums.length ? fmtInt(nums[0]) + "<small>+</small>" : "&mdash;";
       chart = '<div class="nvz-gauge"><span class="gfill" style="width:100%"></span><span class="gthr" style="left:40%"></span></div>';
-      cap = "emails needed for one good reply";
+      cap = "emails per good reply";
       title = "Two campaigns need " + (nums.length ? fmtInt(nums[0]) : "2,500") + "+ emails to get one good reply. That is way too many.";
     } else if (key === "stuck-variants" || key === "dist-bug") {
       var share = (String(p.bold || "").match(/(\d+)\s*%/) || [])[1];
       var unset = nums.length > 1 ? Math.min(9, Math.round(nums[nums.length - 1])) : 4;
-      var cells = '<span class="is-stuck">' + (share ? share + "%" : "0") + "</span>";
-      for (var ci = 0; ci < unset; ci++) cells += "<span>v" + (ci + 2) + "</span>";
+      /* charts carry NO text (Bjion rule, 24 Jul) - the red outline alone marks the broken cell */
+      var cells = '<span class="is-stuck"></span>';
+      for (var ci = 0; ci < unset; ci++) cells += "<span></span>";
       hero = "0";
       chart = '<div class="nvz-cells">' + cells + "</div>";
-      cap = share ? ("1 broken &middot; " + unset + " not set up") : "set up but not sending";
+      cap = share ? ("1 broken &middot; " + unset + " unset") : "set up, not sending";
       title = share ? ("One email version should send " + share + "% of emails but has sent none.") : "One email version is set up but never sends.";
     } else if (key === "whole-offer-failures") {
       var vols = nvzNums((p.bold || "") + " " + (p.note || "")).filter(function (n) { return n >= 100; }).slice(0, 6);
@@ -1892,7 +1893,7 @@
       chart = '<div class="nvz-hbars">' + vols.map(function (v) {
         return '<span style="width:' + Math.max(8, Math.round(100 * v / vmx)) + '%"></span>';
       }).join("") + "</div>";
-      cap = "0 good replies from " + vols.length + " offers";
+      cap = "0 replies from " + vols.length + " offers";
       var _tot0 = nvzNums(p.bold)[0];
       title = vols.length + " offers sent " + (_tot0 ? fmtInt(_tot0) : "thousands of") + " emails and got zero good replies.";
     } else if (key === "book-verdict") {
@@ -1907,7 +1908,7 @@
         for (var di = 0; di < reds; di++) dots += '<span class="is-red"></span>';
         for (var dj = 0; dj < ambs; dj++) dots += '<span class="is-amber"></span>';
         chart = '<div class="nvz-dots">' + dots + "</div>";
-        cap = "each square is a campaign that needs help";
+        cap = "each square needs help";
       }
     } else if (key === "unanswered-positives" && nums.length >= 2) {
       /* first number = the waiting total, LAST number = the meeting subset
@@ -1916,7 +1917,7 @@
       var tot = nums[0], part = Math.min(nums[nums.length - 1], nums[0]);
       hero = fmtInt(part);
       chart = '<div class="nvz-seg"><span style="width:' + Math.round(100 * part / tot) + '%;background:var(--nav-orange)"></span></div>';
-      cap = fmtInt(part) + " of " + fmtInt(tot) + " want a meeting";
+      cap = fmtInt(part) + " of " + fmtInt(tot) + " are meetings";
       title = fmtInt(tot) + " people are waiting for a reply from us. " + fmtInt(part) + " of them want a meeting.";
     } else if (nums.length >= 2 && /\bof\b|\/|out of/.test(String(p.bold || ""))) {
       var t2 = Math.max(nums[0], nums[1]), p2 = Math.min(nums[0], nums[1]);
