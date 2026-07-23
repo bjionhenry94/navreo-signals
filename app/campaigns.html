@@ -1851,7 +1851,7 @@
     var tag = p.tag === "fine" ? "green" : (p.tag === "decide" || p.tag === "decision") ? "red" : "amber";
     var barTone = tag === "red" ? "var(--danger)" : tag === "green" ? "var(--success)" : "var(--warning)";
     var nums = nvzNums(p.bold);
-    var hero = null, chart = "", cap = "", title = "";
+    var hero = null, chart = "", cap = "", title = "", simpleAct = "";
     var key = r.insight_key || "";
     if (key === "weekly-pulse" && (s.pos_last_week != null || nums.length >= 2)) {
       /* stats when the payload carries them, else read "88 to 58" from the text */
@@ -1864,11 +1864,13 @@
         '<span class="is-hot" style="height:' + Math.round(100 * thisW / mx) + '%"></span></div>';
       cap = fmtInt(lastW) + " &rarr; " + fmtInt(thisW) + " this week";
       title = "We got " + fmtInt(thisW) + " good replies this week, down from " + fmtInt(lastW) + " last week.";
+      simpleAct = "Watch the failing offers.";
     } else if (key === "kill-threshold") {
       hero = nums.length ? fmtInt(nums[0]) + "<small>+</small>" : "&mdash;";
       chart = '<div class="nvz-gauge"><span class="gfill" style="width:100%"></span><span class="gthr" style="left:40%"></span></div>';
       cap = "emails per good reply";
       title = "Two campaigns need " + (nums.length ? fmtInt(nums[0]) : "2,500") + "+ emails to get one good reply. That is way too many.";
+      simpleAct = "Pivot or close both.";
     } else if (key === "stuck-variants" || key === "dist-bug") {
       var share = (String(p.bold || "").match(/(\d+)\s*%/) || [])[1];
       var unset = nums.length > 1 ? Math.min(9, Math.round(nums[nums.length - 1])) : 4;
@@ -1879,6 +1881,7 @@
       chart = '<div class="nvz-cells">' + cells + "</div>";
       cap = share ? ("1 broken &middot; " + unset + " unset") : "set up, not sending";
       title = share ? ("One email version should send " + share + "% of emails but has sent none.") : "One email version is set up but never sends.";
+      simpleAct = "Fix the splits in Smartlead.";
     } else if (key === "whole-offer-failures") {
       var vols = nvzNums((p.bold || "") + " " + (p.note || "")).filter(function (n) { return n >= 100; }).slice(0, 6);
       /* the grand total ("22,419 sends") reads first and would render as a
@@ -1896,12 +1899,14 @@
       cap = "0 replies from " + vols.length + " offers";
       var _tot0 = nvzNums(p.bold)[0];
       title = vols.length + " offers sent " + (_tot0 ? fmtInt(_tot0) : "thousands of") + " emails and got zero good replies.";
+      simpleAct = "Approve the rewrite briefs.";
     } else if (key === "book-verdict") {
       var small = nums.filter(function (n) { return n > 0 && n < 20; });
       hero = nums.length ? fmtInt(nums[0]) : "&mdash;";
       var _needs = small.reduce(function (a, b) { return a + b; }, 0);
       if (/\bone\b/i.test(String(p.bold || ""))) _needs += 1; /* "one split is broken" - written as a word */
       title = fmtInt(nums[0] || 0) + " good replies this week" + (nums[1] ? ", down from " + fmtInt(nums[1]) + " last week" : "") + ". " + (_needs ? _needs + " campaigns need help." : "");
+      simpleAct = "Work the list top down.";
       if (small.length >= 2) {
         var reds = Math.min(9, Math.round(small[0])), ambs = Math.min(9, small.slice(1).reduce(function (a, b) { return a + b; }, 0) + (/\bone\b/i.test(String(p.bold || "")) ? 1 : 0));
         var dots = "";
@@ -1919,6 +1924,7 @@
       chart = '<div class="nvz-seg"><span style="width:' + Math.round(100 * part / tot) + '%;background:var(--nav-orange)"></span></div>';
       cap = fmtInt(part) + " of " + fmtInt(tot) + " are meetings";
       title = fmtInt(tot) + " people are waiting for a reply from us. " + fmtInt(part) + " of them want a meeting.";
+      simpleAct = "Clear the " + fmtInt(part) + " meetings today.";
     } else if (nums.length >= 2 && /\bof\b|\/|out of/.test(String(p.bold || ""))) {
       var t2 = Math.max(nums[0], nums[1]), p2 = Math.min(nums[0], nums[1]);
       hero = fmtInt(p2);
@@ -1931,7 +1937,7 @@
       chart = '<div class="nvz-seg"><span style="width:100%;background:' + barTone + '"></span></div>';
       cap = cap || (tag === "red" ? "needs a decision" : tag === "green" ? "healthy" : "keep watching");
     }
-    return { heroHtml: '<span class="nvz-hero is-' + tag + '">' + hero + "</span>", chartHtml: chart, cap: cap, title: title };
+    return { heroHtml: '<span class="nvz-hero is-' + tag + '">' + hero + "</span>", chartHtml: chart, cap: cap, title: title, simpleAct: simpleAct };
   }
   function nvzCard(r, kindLabel) {
     var p = r.payload || {};
@@ -1943,13 +1949,14 @@
     var whyBits = [];
     whyBits.push('<p class="footnote-line">' + esc(kindLabel) + " &middot; owner: " + esc(p.owner || "Lilly") + "</p>");
     if (v.title && p.bold) whyBits.push('<p class="footnote-line">' + esc(p.bold) + "</p>");
+    if (v.simpleAct && p.act) whyBits.push('<p class="footnote-line">' + esc(p.act) + "</p>");
     if (p.note) whyBits.push('<p class="footnote-line">' + esc(p.note) + "</p>");
     if (p.source) whyBits.push('<p class="footnote-line">Source: ' + esc(p.source) + "</p>");
     return '<div class="book-widget book-widget--compact">' +
       '<div class="nvz">' + v.heroHtml + '<div class="nvz-chart">' + v.chartHtml +
       (v.cap ? '<div class="nvz-cap">' + v.cap + "</div>" : "") + "</div></div>" +
       (title ? '<p class="book-line">' + esc(title) + "</p>" : "") +
-      (p.act ? '<p class="action-payoff">' + esc(p.act) + "</p>" : "") +
+      ((v.simpleAct || p.act) ? '<p class="action-payoff">&rarr; ' + esc(String(v.simpleAct || p.act).replace(/^\s*(?:&rarr;|\u2192|->)\s*/, "")) + "</p>" : "") +
       '<details class="nvz-why"><summary></summary>' + whyBits.join("") + "</details>" +
       "</div>";
   }
