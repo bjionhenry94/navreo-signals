@@ -1630,6 +1630,10 @@
   .perfx-svg { width: 100%; height: 170px; display: block; }
   .perfx-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   .lw-src-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  @media (max-width: 520px) {
+    .campaign-run-row { flex-wrap: wrap; row-gap: 8px; }
+    .campaign-header-right { max-width: 100%; }
+  }
 </style>
 
 <div class="cockpit">
@@ -1965,6 +1969,7 @@
     attachListHandlers();
     restoreCheckoffs();
     applyPerfVisibility();
+    applyTheme(currentTheme());
   }
 
   function rowHTML(c) {
@@ -1999,7 +2004,7 @@
       '<span class="stat stat--meetings"><span class="stat-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="stat-label">Meetings</span></span>' +
       '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
-      (c.teaser ? '<span class="row-teaser">' + esc(c.teaser) + (c.drifted ? ' <span class="row-teaser--muted">&middot; written at the morning crunch; the stat columns are the newer sync</span>' : "") + "</span>" : "") +
+      (c.teaser ? '<span class="row-teaser">' + esc(c.teaser) + (c.drifted ? ' <span class="row-teaser--muted">&middot; written at the morning crunch; live totals have moved since</span>' : "") + "</span>" : "") +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") +
       "</a></div>";
   }
@@ -2517,6 +2522,7 @@
   function attachPageHandlers(c) {
     var pr = document.getElementById("page-root");
     attachThemeToggles(pr);
+    applyTheme(currentTheme());
     /* copy-prompt buttons */
     pr.querySelectorAll(".copy-prompt").forEach(function (b) {
       b.addEventListener("click", function () {
@@ -2562,8 +2568,11 @@
 
   /* ---------- theme ---------- */
   var THEME_KEY = "cockpit-theme";
+  function currentTheme() {
+    return document.documentElement.getAttribute("data-nav-theme") === "dark" ? "dark" : "light";
+  }
   function applyTheme(theme) {
-    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute("data-nav-theme", theme);
     document.querySelectorAll(".theme-toggle").forEach(function (b) {
       b.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
       var lbl = b.querySelector(".theme-toggle-label");
@@ -2581,7 +2590,7 @@
       if (b.getAttribute("data-bound")) return;
       b.setAttribute("data-bound", "1");
       b.addEventListener("click", function () {
-        var cur = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        var cur = currentTheme() === "dark" ? "light" : "dark";
         try { window.localStorage.setItem(THEME_KEY, cur); } catch (e) {}
         applyTheme(cur);
       });
