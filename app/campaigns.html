@@ -359,6 +359,26 @@
     border: 1px solid var(--border);
     white-space: nowrap;
   }
+  /* Team-shared ownership tag on a suggested action ("In progress · Jane").
+     Sits next to the owner-chip; only shown once someone has claimed/completed
+     the action via the state buttons. */
+  .assignee-tag {
+    flex: 0 0 auto;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 3px 8px 3px 20px;
+    border-radius: var(--r-pill);
+    background: var(--chip-active-bg);
+    color: var(--chip-active-fg);
+    white-space: nowrap;
+    position: relative;
+  }
+  .assignee-tag::before {
+    content: "";
+    position: absolute;
+    left: 7px; top: 50%; width: 8px; height: 8px; margin-top: -4px;
+    border-radius: 50%; background: currentColor; opacity: 0.85;
+  }
   .today-caption {
     margin-top: 10px;
     font-size: 0.72rem;
@@ -2194,15 +2214,17 @@
         var badge = p.tag === "decide" ? '<span class="badge badge--red">High</span>' : p.tag === "fine" ? '<span class="badge badge--neutral">Low</span>' : '<span class="badge badge--amber">Medium</span>';
         var prompt = "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
           " Context: " + (p.bold || "") + " Stage everything for my approval. Do not launch, upload, or save anything to Smartlead without me.";
-        h.push('<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '">' +
+        var actionKey = esc((r.scope || c.id) + "::" + (r.insight_key || ("act-" + i)));
+        h.push('<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
           '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
-          '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span></div>" +
+          '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span>" +
+          '<span class="assignee-tag" hidden></span></div>' +
           '<p class="action-how">' + esc(p.act) + "</p>" +
           (p.bold ? '<p class="action-payoff">' + esc(p.bold) + "</p>" : "") +
           '<div class="action-buttons">' +
           '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Fix this</button>' +
           '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a>' +
-          '<button type="button" class="action-state-btn" data-act="ack">Acknowledge</button>' +
+          '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
           '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
           '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
           (p.source ? '<p class="footnote-line">' + esc(p.source) + "</p>" : "") + "</div>" +
@@ -2533,34 +2555,86 @@
         }).catch(function () { window.prompt("Copy this prompt:", txt); });
       });
     });
-    /* action state buttons, localStorage-persisted */
-    var KEY = "cockpit-actions";
-    function loadA() { try { return JSON.parse(window.localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; } }
-    function saveA(o) { try { window.localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) {} }
-    pr.querySelectorAll(".action-card").forEach(function (card) {
-      var id = card.getAttribute("data-action-id");
-      var states = loadA();
-      function apply(state) {
-        card.querySelectorAll(".action-state-btn").forEach(function (x) { x.classList.remove("is-active"); });
-        var dr = card.querySelector(".action-dismissed-row");
-        var body = card.querySelector(".action-body");
-        if (state === "dismiss") { if (dr) dr.hidden = false; if (body) body.style.opacity = "0.45"; }
-        else { if (dr) dr.hidden = true; if (body) body.style.opacity = ""; }
-        if (state && state !== "dismiss") {
-          var btn = card.querySelector('.action-state-btn[data-act="' + state + '"]');
-          if (btn) btn.classList.add("is-active");
-        }
+    /* Action state buttons — TEAM-SHARED via /api/cockpit/assignments (was
+       per-browser localStorage, invisible to teammates). One owner per action:
+       "Assign to me" (ack) claims it as In progress and stamps your name;
+       whoever clicks last owns it; everyone sees who. Completed and Dismissed
+       are shared the same way. Clicking the active state again (or Undo) clears
+       it. Server is the source of truth; clicks apply optimistically then
+       reconcile with the saved row. */
+    var ASSIGN = {};   // action_key -> { state, assigned_to }
+    var ME = null;     // this viewer's login email, for "you own it" labelling
+    function assigneeName(email) {
+      if (!email) return "";
+      var local = String(email).split("@")[0];
+      var parts = local.split(/[._-]+/).filter(Boolean).map(function (w) {
+        return w.charAt(0).toUpperCase() + w.slice(1);
+      });
+      return parts.join(" ") || String(email);
+    }
+    function stateVerb(state) { return state === "ack" ? "In progress" : state === "done" ? "Completed" : "Dismissed"; }
+    function applyCard(card) {
+      var key = card.getAttribute("data-action-key");
+      var rec = ASSIGN[key] || {};
+      var state = rec.state || "";
+      var mine = rec.assigned_to && ME && rec.assigned_to.toLowerCase() === ME.toLowerCase();
+      var who = mine ? "you" : assigneeName(rec.assigned_to);
+      card.querySelectorAll(".action-state-btn").forEach(function (x) {
+        x.classList.remove("is-active", "is-acked", "is-done-state");
+      });
+      var dr = card.querySelector(".action-dismissed-row");
+      var body = card.querySelector(".action-body");
+      var tag = card.querySelector(".assignee-tag");
+      if (state === "dismiss") {
+        if (dr) { dr.hidden = false; var s = dr.querySelector("span"); if (s && s.childNodes[0]) s.childNodes[0].nodeValue = (who ? "Dismissed by " + who : "Dismissed") + " · "; }
+        if (body) body.style.opacity = "0.45";
+      } else {
+        if (dr) dr.hidden = true;
+        if (body) body.style.opacity = "";
       }
-      apply(states[id]);
+      var btn = state && state !== "dismiss" ? card.querySelector('.action-state-btn[data-act="' + state + '"]') : null;
+      if (btn) { btn.classList.add("is-active"); btn.classList.add(state === "ack" ? "is-acked" : "is-done-state"); }
+      if (tag) {
+        if ((state === "ack" || state === "done") && who) { tag.hidden = false; tag.textContent = stateVerb(state) + " · " + who; }
+        else { tag.hidden = true; tag.textContent = ""; }
+      }
+    }
+    function refreshAllCards() { pr.querySelectorAll(".action-card").forEach(applyCard); }
+    Promise.all([
+      getJSON("/api/cockpit/assignments").catch(function () { return {}; }),
+      getJSON("/api/auth/me").catch(function () { return {}; })
+    ]).then(function (res) {
+      ASSIGN = (res[0] && res[0].assignments) || {};
+      ME = (res[1] && res[1].email) || null;
+      refreshAllCards();
+    });
+    pr.querySelectorAll(".action-card").forEach(function (card) {
+      var key = card.getAttribute("data-action-key");
+      var parts = (key || "").split("::");
+      var cid = parts[0], ik = parts.slice(1).join("::");
       card.querySelectorAll(".action-state-btn, .action-undo-btn").forEach(function (b) {
         b.addEventListener("click", function () {
           var act = b.getAttribute("data-act");
-          var st2 = loadA();
-          if (act === "undo") delete st2[id];
-          else if (st2[id] === act) delete st2[id];
-          else st2[id] = act;
-          saveA(st2);
-          apply(st2[id]);
+          var cur = (ASSIGN[key] || {}).state || "";
+          var next = (act === "undo" || cur === act) ? "clear" : act;
+          var prev = ASSIGN[key];
+          /* optimistic */
+          if (next === "clear") delete ASSIGN[key];
+          else ASSIGN[key] = { state: next, assigned_to: ME };
+          applyCard(card);
+          fetch("/api/cockpit/assignments", {
+            method: "POST", credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action_key: key, campaign_id: cid, insight_key: ik, state: next })
+          }).then(function (r) { return r.json(); }).then(function (out) {
+            if (!out || out.ok === false) throw new Error((out && out.message) || "save failed");
+            if (next === "clear") delete ASSIGN[key];
+            else ASSIGN[key] = { state: out.state, assigned_to: out.assigned_to };
+            applyCard(card);
+          }).catch(function () {
+            if (prev) ASSIGN[key] = prev; else delete ASSIGN[key];
+            applyCard(card);
+          });
         });
       });
     });

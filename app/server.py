@@ -6543,6 +6543,66 @@ _COCKPIT_INSIGHTS_SWR = _SWRCache(_cockpit_insights, 120,
                                   name="cockpit-insights")
 
 
+# ── cockpit action assignments ("Assign to me") ─────────────────────────────
+# Team-shared ownership of the cockpit's Suggested-actions cards. Replaces the
+# old per-browser localStorage state: one row per action in
+# cockpit_action_assignments, keyed by the action's stable "<scope>::<key>", so
+# every teammate sees the same live "who's on what". state is 'ack' (claimed /
+# In progress), 'done' (Completed) or 'dismiss'; assigned_to is the owner's
+# login email, always taken server-side from the session (never the body).
+COCKPIT_ASSIGN_STATES = ("ack", "done", "dismiss")
+
+
+def cockpit_assignments_map() -> dict:
+    """{"<scope>::<key>": {state, assigned_to, assigned_at}} for the whole team.
+    Degrades to an empty map (never an error) so a DB blip just falls back to
+    the buttons' un-owned default rather than breaking the cockpit render."""
+    rows = sb("GET", "cockpit_action_assignments?select=action_key,state,assigned_to,assigned_at")
+    if not isinstance(rows, list):
+        return {"assignments": {}, "degraded": True}
+    out = {r.get("action_key"): {"state": r.get("state"),
+                                 "assigned_to": r.get("assigned_to"),
+                                 "assigned_at": r.get("assigned_at")}
+           for r in rows if r.get("action_key")}
+    return {"assignments": out, "degraded": False}
+
+
+def cockpit_set_assignment(payload: dict, actor: str | None):
+    """Upsert (or clear) one action's shared state. Returns (body, status).
+
+    state 'clear' deletes the row (nobody owns it — the Undo / toggle-off
+    path). Any of COCKPIT_ASSIGN_STATES stamps the row with `actor` as owner and
+    now() — single-owner by design: whoever clicks last owns it, so taking over
+    an item reassigns it to the clicker (matches "who's working on it right
+    now"). assigned_to is ALWAYS the session email, never a body field."""
+    from datetime import datetime, timezone
+    from urllib.parse import quote
+    action_key = (payload.get("action_key") or "").strip()
+    if not action_key:
+        return {"ok": False, "message": "action_key required"}, 400
+    state = (payload.get("state") or "").strip()
+    if state == "clear":
+        res = sb("DELETE", f"cockpit_action_assignments?action_key=eq.{quote(action_key, safe='')}")
+        if res is None:
+            return {"ok": False, "message": "Supabase unavailable"}, 502
+        return {"ok": True, "action_key": action_key, "cleared": True}, 200
+    if state not in COCKPIT_ASSIGN_STATES:
+        return {"ok": False, "message": f"state must be one of {COCKPIT_ASSIGN_STATES + ('clear',)}"}, 400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    row = {"action_key": action_key,
+           "campaign_id": (payload.get("campaign_id") or None),
+           "insight_key": (payload.get("insight_key") or None),
+           "state": state, "assigned_to": actor, "assigned_at": now_iso,
+           "updated_at": now_iso}
+    res = sb("POST", "cockpit_action_assignments?on_conflict=action_key", row,
+             prefer="resolution=merge-duplicates,return=representation")
+    if res is None:
+        return {"ok": False, "message": "Supabase unavailable"}, 502
+    saved = res[0] if isinstance(res, list) and res else row
+    return {"ok": True, "action_key": action_key, "state": saved.get("state"),
+            "assigned_to": saved.get("assigned_to"), "assigned_at": saved.get("assigned_at")}, 200
+
+
 def _cockpit_detail(cid) -> dict:
     """One campaign's Leads/Sources/Messaging-fallback payload, single RPC."""
     try:
@@ -13481,6 +13541,12 @@ class Handler(SimpleHTTPRequestHandler):
             # Cockpit render layer: what Claude wrote on the morning crunch
             # (live unexpired campaign_insights) + the graded track record.
             return self._json(_COCKPIT_INSIGHTS_SWR.get())
+        if path == "/api/cockpit/assignments":
+            # Team-shared ownership of the cockpit's suggested actions: who has
+            # claimed / completed / dismissed each one. Keyed by the action's
+            # stable "<scope>::<insight_key>" so every teammate's browser reads
+            # the same live state instead of the old per-browser localStorage.
+            return self._json(cockpit_assignments_map())
         if path == "/api/cockpit/campaign-detail":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -13816,6 +13882,18 @@ class Handler(SimpleHTTPRequestHandler):
             return self._qa_gate_post(path)
         if path not in _AUTH_PUBLIC_POST and not self._gate(path):
             return
+        if path == "/api/cockpit/assignments":
+            # Team-shared "Assign to me" / Completed / Dismissed on a cockpit
+            # suggested action. Body: {action_key, campaign_id, insight_key,
+            # state} where state is 'ack' | 'done' | 'dismiss' | 'clear'. The
+            # owner is the logged-in email (server-authoritative — never trust a
+            # body-supplied name), so nobody can claim work under someone else.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            body, status = cockpit_set_assignment(p, self._authed_email())
+            return self._json(body, status)
         if path in ("/api/workspaces", "/api/workspaces/delete"):
             # client-workspaces-hub: add (key validated live, then stored) /
             # one-go purge (typed-name confirm; atomic rpc). Session-gated above.
