@@ -1778,7 +1778,7 @@
         replied: s ? s.replied : null,
         positives: s ? s.positives : vs.pos,
         bounced: s ? s.bounced : null,
-        meetings: (meetings[scope] != null) ? meetings[scope] : (s && s.meetings != null ? s.meetings : vs.meetings),
+        meetings: (s && s.meetings != null) ? s.meetings : vs.meetings,
         source: s ? "scorecard" : "crunch"
       };
       var tag = vp.tag || "watch";
@@ -1857,7 +1857,7 @@
       (active != null ? fmtInt(active) + " active campaigns, " : "") +
       fmtInt(judgeable) + " at judgeable volume, " + fmtInt(nDecide) + " need a decision.</h1>");
     if (posLast != null && posThis != null) {
-      h.push('<p class="masthead-refresh">Positives: ' + fmtInt(posLast) + " last week &rarr; " + fmtInt(posThis) + " this week.</p>");
+      h.push('<p class="masthead-refresh">Positives: ' + fmtInt(posLast) + " &rarr; " + fmtInt(posThis) + " across the last two complete weeks.</p>");
     }
     h.push('<p class="lw-stamp">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + ".</p>");
     h.push("</div>");
@@ -1958,7 +1958,7 @@
       "Verdicts and teasers are written by Lilly on the morning crunch; the app only renders them. " +
       "The stat columns are always campaign lifetime; a teaser that names its own window (for example since relaunch, after a sequence re-save reset the counters) is a different counter, not a contradiction. " +
       "Ring = share of sending capacity used (sent &divide; (leads &times; 2)). Sends/positive under 1,500 is healthy; bounce above 2% is the bar. " +
-      "Meetings are counted from the meetings ledger: a different counter than Smartlead replies, not a contradiction.</p>");
+      "Meetings are the optimiser's Call Booked plus Meeting Request count per campaign: its own counter, not a Smartlead column.</p>");
     h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run.</p>");
 
     root.innerHTML = h.join("");
