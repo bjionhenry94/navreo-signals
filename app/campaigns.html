@@ -2241,7 +2241,18 @@
       acts.forEach(function (r, i) {
         var p = r.payload || {};
         var badge = p.tag === "decide" ? '<span class="badge badge--red">High</span>' : p.tag === "fine" ? '<span class="badge badge--neutral">Low</span>' : '<span class="badge badge--amber">Medium</span>';
-        var prompt = "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
+        // STEP-0 session-title line so the pasted chat is trackable in Claude Code's session list.
+        // Glue the campaign ID to the first name token (KRG-9558218): Claude Code's titler strips
+        // bare numeric IDs + punctuation, but keeps an ID that reads as one identifier token.
+        var _clean = function (s) { return (s || "").replace(/[^A-Za-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim(); };
+        var _nameTok = (_clean(c.name).split(" ")[0] || "Campaign");
+        var _glued = _nameTok + "-" + c.id;
+        var _act2 = _clean(p.act).split(" ").slice(0, 2).join(" ").toLowerCase();
+        var _titleLine = ("Campaign " + _glued + (_act2 ? " " + _act2 : "")).trim();
+        var prompt = "STEP 0 - before anything else, call your set-session-title tool " +
+          "(mcp__ccd_session_mgmt__set_session_title) with exactly this, character for character - " +
+          "do not summarize, rephrase, or drop the number: " + _titleLine + "\n\n" +
+          "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
           " Context: " + (p.bold || "") + " Stage everything for my approval. Do not launch, upload, or save anything to Smartlead without me.";
         var actionKey = esc((r.scope || c.id) + "::" + (r.insight_key || ("act-" + i)));
         h.push('<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
