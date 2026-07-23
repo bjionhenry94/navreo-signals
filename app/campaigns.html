@@ -1784,6 +1784,10 @@
       var tag = vp.tag || "watch";
       var meta = TAG_META[tag] || TAG_META.watch;
       var others = rows.filter(function (r) { return r.insight_key !== "verdict"; });
+      /* numbers moved since the crunch wrote the prose? mark the prose */
+      var drifted = !!(s && vs.sent != null && s.sent != null &&
+        (Math.abs(s.sent - vs.sent) / Math.max(1, s.sent) > 0.005 ||
+         (vs.pos != null && s.positives != null && s.positives !== vs.pos)));
       campaigns.push({
         id: scope,
         name: vp.campaign_name || (s && s.name) || ("Campaign " + scope),
@@ -1793,6 +1797,7 @@
         pillClass: meta.pillClass,
         teaser: vp.bold || "",
         note: vp.note || "",
+        drifted: drifted,
         act: vp.act || "",
         owner: vp.owner || "",
         smartleadUrl: vp.smartlead_url || ("https://app.smartlead.ai/app/email-campaign/" + scope + "/analytics"),
@@ -1932,6 +1937,7 @@
       '<div class="search-wrap"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
       '<input type="search" class="search-input" id="cockpit-search" placeholder="Search campaigns&hellip;" aria-label="Search campaigns"></div></nav>');
 
+    h.push('<p class="section-caption" id="search-count" hidden></p>');
     h.push('<div class="rows-empty-state" id="rows-empty-state" hidden><p>No campaigns match that search in this view.</p><button type="button" id="clear-filters-btn">Clear filters</button></div>');
 
     /* rows */
@@ -1977,7 +1983,7 @@
       badges += '<span class="badge ' + cls + '">' + esc(lbl) + "</span>";
     });
     return '<div class="campaign-row" id="row-c' + esc(c.id) + '" data-tier="' + c.tier + '" data-search="' + esc(search) + '">' +
-      '<a class="row-summary" href="#/c/' + esc(c.id) + '">' +
+      '<a class="row-summary" href="#/c/' + esc(c.id) + '" aria-label="' + esc(c.name) + ". " + esc(c.pill) + '. Open the campaign page.">' +
       '<span class="ring-wrap">' +
       (ringPct != null
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="sent &divide; (leads &times; 2)"><span class="ring-hole">' + ringPct + "%</span></span>"
@@ -1993,7 +1999,7 @@
       '<span class="stat stat--meetings"><span class="stat-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="stat-label">Meetings</span></span>' +
       '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
-      (c.teaser ? '<span class="row-teaser">' + esc(c.teaser) + "</span>" : "") +
+      (c.teaser ? '<span class="row-teaser">' + esc(c.teaser) + (c.drifted ? ' <span class="row-teaser--muted">&middot; written at the morning crunch; the stat columns are the newer sync</span>' : "") + "</span>" : "") +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") +
       "</a></div>";
   }
@@ -2142,6 +2148,7 @@
     h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
     if (c.teaser) h.push('<p class="wp-headline">' + esc(c.teaser) + "</p>");
     if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The Live performance card below is campaign lifetime: a different counter, not a contradiction.</p>");
+    if (c.drifted) h.push('<p class="footnote-line">Written at the morning crunch; the numbers below come from the newer Smartlead sync and have moved since.</p>');
     if (c.others.length) {
       h.push('<div class="campaign-widget-grid">');
       c.others.forEach(function (r) {
@@ -2238,7 +2245,11 @@
       }
       /* leads tiles */
       var lt = document.getElementById("leads-tiles");
-      if (lt) {
+      if (lt && !((d.leads || {}).total)) {
+        lt.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet: its leads were added before push tracking existed' +
+          (c.stats.leads != null ? " (Smartlead itself holds " + fmtInt(c.stats.leads) + " leads)" : "") +
+          ". The live audience sample below is the platform truth.</p>";
+      } else if (lt) {
         var total = (d.leads || {}).total;
         var LBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
         var tiles = '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">In the contact record</span></div>';
@@ -2379,6 +2390,7 @@
   }
 
   /* ---------- router ---------- */
+  var listScrollY = 0;
   function route() {
     var hash = window.location.hash || "#/";
     var m = hash.match(/^#\/c\/(\d+)(?:\/(messaging|leads|sources))?$/);
@@ -2400,9 +2412,10 @@
         if (hit) { window.location.replace("#/c/" + hit.id + (lm[2] ? "/" + lm[2] : "")); return; }
       }
       viewCamp.hidden = true;
+      document.getElementById("page-root").innerHTML = "";
       viewList.hidden = false;
       document.title = "The cockpit · Navreo daily briefing";
-      window.scrollTo(0, 0);
+      window.scrollTo(0, listScrollY);
       return;
     }
     var id = m[1], tab = m[2] || "overview";
@@ -2412,6 +2425,7 @@
       window.location.hash = "#/";
       return;
     }
+    if (!viewList.hidden) listScrollY = window.scrollY || 0;
     viewList.hidden = true;
     viewCamp.hidden = false;
     var pr = document.getElementById("page-root");
@@ -2452,6 +2466,17 @@
         l.hidden = !visible && !(activeFilter === tier && !q);
       });
       document.getElementById("rows-empty-state").hidden = any;
+      var scLine = document.getElementById("search-count");
+      if (scLine) {
+        if (q) {
+          var n = 0;
+          root.querySelectorAll(".campaign-row").forEach(function (r) { if (!r.hidden) n++; });
+          scLine.textContent = n + " campaign" + (n === 1 ? "" : "s") + " match" + (n === 1 ? "es" : "");
+          scLine.hidden = false;
+        } else {
+          scLine.hidden = true;
+        }
+      }
     }
     root.querySelectorAll(".filter-chip").forEach(function (b) {
       b.addEventListener("click", function () {
