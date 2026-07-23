@@ -867,6 +867,12 @@
     padding-bottom: 18px;
     border-bottom: 1px solid var(--border);
   }
+  .progress-dial { display: flex; align-items: center; gap: 10px; }
+  .dial-ring { position: relative; width: 64px; height: 64px; flex: none; }
+  .dial-track { fill: none; stroke: var(--border); stroke-width: 6; }
+  .dial-fill { fill: none; stroke: var(--nav-orange); stroke-width: 6; stroke-linecap: round; }
+  .dial-value { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 600; color: var(--fg); }
+  .dial-caption { font-size: 0.72rem; line-height: 1.35; color: var(--fg-muted); max-width: 9em; }
   .campaign-title {
     font-family: var(--font-display);
     font-weight: 400;
@@ -1808,6 +1814,7 @@
         positives: s ? s.positives : vs.pos,
         bounced: s ? s.bounced : null,
         meetings: (meetings[scope] != null) ? meetings[scope] : 0,
+        completion: (vs.completion != null) ? vs.completion : null,
         source: s ? "scorecard" : "crunch"
       };
       var tag = vp.tag || "watch";
@@ -2159,9 +2166,21 @@
     var h = [];
     h.push('<article class="campaign-page" data-cid="' + esc(c.id) + '">');
     h.push('<a href="#/" class="back-link">&larr; Campaigns</a>');
+    var dial = "";
+    if (st.completion != null) {
+      var compPct = Math.max(0, Math.min(100, st.completion));
+      var DIAL_C = 163.36; /* 2πr for r=26 */
+      dial = '<div class="progress-dial" role="img" aria-label="' + compPct.toFixed(0) + '% of the list has finished the sequence">' +
+        '<div class="dial-ring"><svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">' +
+        '<circle cx="32" cy="32" r="26" class="dial-track"/>' +
+        '<circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="' + DIAL_C + '" stroke-dashoffset="' + (DIAL_C * (1 - compPct / 100)).toFixed(1) + '" transform="rotate(-90 32 32)"/>' +
+        '</svg><span class="dial-value tnum">' + compPct.toFixed(0) + "%</span></div>" +
+        '<span class="dial-caption">of the list finished<br>the sequence</span></div>';
+    }
     h.push('<div class="campaign-header-main"><div>' +
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
       '<p class="campaign-subtitle">Navreo &middot; campaign ' + esc(c.id) + "</p></div>" +
+      dial +
       '<div class="campaign-header-right"><div class="verdict-badge-row">' +
       '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") + "</div>" +
@@ -2377,7 +2396,7 @@
         }
         return;
       }
-      root.innerHTML = versionTableHTML(m.versions, m.note);
+      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings);
     };
     if (STATE.messaging[id]) { apply(STATE.messaging[id]); return; }
     getJSON("/api/cockpit/messaging?id=" + encodeURIComponent(id)).then(function (m) {
@@ -2385,21 +2404,42 @@
     }).catch(function () { apply(null); });
   }
 
-  function versionTableHTML(versions, note) {
+  function versionTableHTML(versions, note, meetings) {
+    /* meetings land on the email STEP, never the version (Smartlead cannot
+       attribute a booking to a variant) — so the count renders once, on the
+       step's first row, and other rows of that step show a dot. */
+    var hasMeet = !!(meetings && meetings.by_step);
+    var seenStep = {};
     var rows = versions.map(function (v) {
       var ratio = (v.positives > 0 && v.sent) ? "1 per " + fmtInt(Math.round(v.sent / v.positives)) : '-<span class="ring-caption"> ' + (v.sent < 300 ? "early" : "no positives") + "</span>";
       var label = v.inline ? "inline" : (v.label || "?");
+      var meetCell = "";
+      if (hasMeet) {
+        var stepKey = v.step != null ? String(v.step) : "?";
+        if (!seenStep[stepKey]) {
+          seenStep[stepKey] = true;
+          meetCell = '<td class="tnum" data-label="Meetings">' + fmtInt(meetings.by_step[stepKey] || 0) + "</td>";
+        } else {
+          meetCell = '<td class="tnum" data-label="Meetings"><span class="ring-caption">&middot;</span></td>';
+        }
+      }
       return "<tr>" +
         "<td data-label=\"Email\">Email " + esc(v.step != null ? v.step : "?") + "</td>" +
         "<td data-label=\"Version\">" + esc(label) + "</td>" +
         '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + "</td>" +
         '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + "</td>" +
         '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + "</td>" +
-        '<td class="tnum" data-label="1 per">' + ratio + "</td></tr>";
+        '<td class="tnum" data-label="1 per">' + ratio + "</td>" + meetCell + "</tr>";
     }).join("");
+    var meetNote = "";
+    if (hasMeet) {
+      meetNote = "Meetings are Call Booked + Meeting Request replies from the archive; they belong to the email step, not the version.";
+      if (meetings.unattributed > 0) meetNote += " " + fmtInt(meetings.unattributed) + " older meeting" + (meetings.unattributed === 1 ? "" : "s") + " arrived without step info and " + (meetings.unattributed === 1 ? "is" : "are") + " not in the column.";
+    }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
-      "<thead><tr><th>Email</th><th>Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>1 per</th></tr></thead>" +
+      "<thead><tr><th>Email</th><th>Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>1 per</th>" + (hasMeet ? "<th>Meetings</th>" : "") + "</tr></thead>" +
       "<tbody>" + rows + "</tbody></table></div>" +
+      (meetNote ? '<p class="sample-footer">' + esc(meetNote) + "</p>" : "") +
       (note ? '<p class="sample-footer">' + esc(note) + "</p>" : "");
   }
 

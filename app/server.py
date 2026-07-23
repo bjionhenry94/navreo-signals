@@ -6618,8 +6618,13 @@ def _cockpit_detail(cid) -> dict:
         r = r[0] if r else None
     if isinstance(r, dict) and "cockpit_campaign_detail" in r:
         r = r.get("cockpit_campaign_detail")
-    if not isinstance(r, dict):
-        return {"error": "db_unavailable", "campaign_id": n, "degraded": True}
+    if not isinstance(r, dict) or ("leads" not in r and "message" in r):
+        # A PostgREST error body (code/message/hint) is a dict too — treating
+        # it as a payload once served "degraded: false" empties to the UI for
+        # 120s per SWR window (that was the 57014 statement-timeout mask).
+        err = r.get("message") if isinstance(r, dict) else None
+        return {"error": "db_unavailable", "campaign_id": n, "degraded": True,
+                "db_error": err}
     r["campaign_id"] = n
     r["degraded"] = False
     return r
@@ -6662,7 +6667,28 @@ def _cockpit_messaging(cid) -> dict:
             "positives": r.get("positive_reply_count") or 0,
             "bounces": r.get("bounce_count") or 0})
     versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
-    return {"campaign_id": n, "versions": versions, "degraded": False,
+    # Meetings by step, from the reply archive (Call Booked + Meeting Request —
+    # the page's standing meetings definition). Smartlead never attributes a
+    # booking to a variant; the webhook's email_seq_number gives the STEP, and
+    # older rows ingested before the webhook carried it count as unattributed.
+    mrows = sb("GET", f"replies?workspace=eq.navreo&smartlead_campaign_id=eq.{n}"
+                      "&category=in.(%22Call%20Booked%22,%22Meeting%20Request%22)"
+                      "&select=step:raw->>email_seq_number")
+    if isinstance(mrows, list):
+        by_step: dict = {}
+        unattributed = 0
+        for mr in mrows:
+            step = str(mr.get("step") or "").strip()
+            if step.isdigit():
+                by_step[step] = by_step.get(step, 0) + 1
+            else:
+                unattributed += 1
+        meetings = {"by_step": by_step, "unattributed": unattributed,
+                    "total": sum(by_step.values()) + unattributed}
+    else:
+        meetings = None  # archive unreachable: the UI omits the column rather than showing false zeros
+    return {"campaign_id": n, "versions": versions, "meetings": meetings,
+            "degraded": False,
             "note": "Smartlead counters reset when a sequence is re-saved: read as since relaunch."}
 
 
