@@ -137,7 +137,7 @@ def _pristine_fleet() -> dict:
     # failed connections — so the In warm-up / Needs reconnect flows and the
     # Overview restore-due flag can be exercised on dummy data.
     now_ms = int(time.time() * 1000)
-    _REST_DOMS = [("resting-due-mock.test", 8), ("resting-next-mock.test", 2)]
+    _REST_DOMS = [("northstar-outreach.com", 8), ("peakreply-mail.com", 2)]
     for j, (dom, days_back) in enumerate(_REST_DOMS):
         for k in range(4):
             email = f"rest{j}{k}@{dom}"
@@ -151,11 +151,33 @@ def _pristine_fleet() -> dict:
                 "email_account_id": 2000 + j * 10 + k, "tag_ids": {1},
                 "rested": True, "restedAt": now_ms - days_back * 86400000,
             }
+    # Maildoso in-warm-up case (inbox-status-truth-ui, 2026-07-23): a healthy
+    # (kind "ok") Maildoso domain with sends held (cap 0) but NOT dashboard-
+    # rested — warms externally on Maildoso's own schedule. This is the exact
+    # row that used to show a bare "warming" with no hold tag and a dead grey
+    # "warming" action, next to the rested domains' "sends paused (N)" + Restore.
+    # It must now read the SAME: "warming externally" + "sends paused (8)" +
+    # Restore, with due-back "external".
+    for k in range(8):
+        email = f"md{k}@amplifyy-send.co"
+        fleet[email] = {
+            "email": email, "domain": "amplifyy-send.co", "brand": "amplifyy",
+            "batch": "Amplifyy Mock", "from_name": "Bjion Henry",
+            "created": _days_ago(6), "tagged": True, "inCampaign": True,
+            "campaign_id": _CAMPAIGN_IDS[0],
+            "sig_state": "ok", "sig_issue": None,
+            "warmup_state": "ok", "warmup_issue": None, "cap": 0,
+            "email_account_id": 2200 + k, "tag_ids": {3},
+            "maildoso": True, "smtp_host": "smtp.maildoso.com",
+            # The cap Restore resumes them to once external warm-up is done —
+            # lets the dry-run visibly move them out of the held view.
+            "_saved_cap": 20,
+        }
     _CONN_REASONS = ["SMTP auth failed", "IMAP connection refused", "OAuth token expired"]
     for k in range(3):
-        email = f"broken{k}@reconn-mock.test"
+        email = f"broken{k}@clearpath-mail.com"
         fleet[email] = {
-            "email": email, "domain": "reconn-mock.test", "brand": "arnic",
+            "email": email, "domain": "clearpath-mail.com", "brand": "arnic",
             "batch": "Arnic Mock", "from_name": "Jacki Arnic",
             "created": _days_ago(20), "tagged": True, "inCampaign": True,
             "campaign_id": _CAMPAIGN_IDS[2],
@@ -532,7 +554,7 @@ def _inboxes(q: dict):
         "kind": kind_of(r), "warmup_status": "ACTIVE" if r["warmup_state"] != "off" else "INACTIVE",
         "reason_category": r.get("conn_reason") or r["warmup_issue"] or "",
         "cap": r["cap"], "reason": r.get("conn_reason") or r["sig_issue"] or r["warmup_issue"] or "",
-        "tags": [r["batch"]], "maildoso": False,
+        "tags": [r["batch"]], "maildoso": bool(r.get("maildoso")),
         "rested": bool(r.get("rested")), "restedAt": r.get("restedAt"),
     } for r in rows]
     fleet = list(_STATE["fleet"].values())
