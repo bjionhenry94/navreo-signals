@@ -2601,9 +2601,12 @@
       var state = rec.state || "";
       var mine = rec.assigned_to && ME && rec.assigned_to.toLowerCase() === ME.toLowerCase();
       var who = mine ? "you" : assigneeName(rec.assigned_to);
+      var DEFAULT_LABEL = { ack: "Assign to me", done: "Mark as completed", dismiss: "Dismiss" };
       card.querySelectorAll(".action-state-btn").forEach(function (x) {
         x.classList.remove("is-active", "is-acked", "is-done-state");
         x.setAttribute("aria-pressed", "false");
+        var d = x.getAttribute("data-act");
+        if (DEFAULT_LABEL[d]) x.textContent = DEFAULT_LABEL[d];
       });
       var dr = card.querySelector(".action-dismissed-row");
       var body = card.querySelector(".action-body");
@@ -2620,6 +2623,11 @@
         btn.classList.add("is-active");
         btn.classList.add(state === "ack" ? "is-acked" : "is-done-state");
         btn.setAttribute("aria-pressed", "true");
+        // Relabel the clicked button itself so the click has an unmistakable
+        // effect right where the cursor is (the header assignee-tag is easy to
+        // miss). "Assign to me" -> "In progress · you"; "Mark as completed" ->
+        // "Completed · you".
+        btn.textContent = (state === "ack" ? "In progress" : "Completed") + (who ? " · " + who : "");
       }
       if (tag) {
         if ((state === "ack" || state === "done") && who) { tag.hidden = false; tag.textContent = stateVerb(state) + " · " + who; }
