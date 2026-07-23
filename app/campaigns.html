@@ -2181,7 +2181,9 @@
     /* actions */
     var acts = c.insights.filter(function (r) { return (r.payload || {}).act; });
     if (acts.length) {
-      h.push('<div class="ov-card"><div class="card-title">Suggested actions</div><div class="actions-section">');
+      h.push('<div class="ov-card"><div class="card-title">Suggested actions</div>' +
+        (c.drifted ? '<p class="card-subtitle">Written at the morning crunch; any counts quoted here are that snapshot. The Live performance card above holds the newer sync.</p>' : "") +
+        '<div class="actions-section">');
       acts.forEach(function (r, i) {
         var p = r.payload || {};
         var badge = p.tag === "decide" ? '<span class="badge badge--red">High</span>' : p.tag === "fine" ? '<span class="badge badge--neutral">Low</span>' : '<span class="badge badge--amber">Medium</span>';
@@ -2411,6 +2413,7 @@
         });
         if (hit) { window.location.replace("#/c/" + hit.id + (lm[2] ? "/" + lm[2] : "")); return; }
       }
+      if (hash !== "#/" && hash !== "" && hash !== "#") { window.location.replace("#/"); return; }
       viewCamp.hidden = true;
       document.getElementById("page-root").innerHTML = "";
       viewList.hidden = false;
