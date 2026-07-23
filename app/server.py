@@ -6251,6 +6251,20 @@ def perf_daily(p: dict) -> dict:
             "last_synced_day": max([d for d in dates if sent_m.get(d, 0)], default=None)}
 
 
+def _perf_daily_cached(key) -> dict:
+    days, start, end, campaign = key
+    return perf_daily({"days": days, "start": start, "end": end, "campaign": campaign})
+
+
+# The perf RPC intermittently hits the DB's 8s statement timeout under load;
+# SWR keeps the last good series per parameter set and refreshes in the
+# background, so one slow read never blanks the graph for everyone.
+_PERF_DAILY_SWR = _SWRKeyedCache(
+    _perf_daily_cached, 600,
+    is_degraded=lambda p: not isinstance(p, dict) or bool(p.get("error")),
+    name="perf-daily")
+
+
 # ── Campaign scorecard (Smartlead-style per-campaign performance) ──────────
 # Powers the campaigns-list scorecard: for every signal campaign that sends to
 # a real Smartlead campaign, its live Smartlead numbers (sent / reply / positive
@@ -13454,11 +13468,11 @@ class Handler(SimpleHTTPRequestHandler):
             # ?start=&end=. Nulls (labelled absent), never fake zeros.
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            return self._json(perf_daily({
-                "days": (q.get("days") or ["30"])[0],
-                "start": (q.get("start") or [None])[0],
-                "end": (q.get("end") or [None])[0],
-                "campaign": (q.get("campaign") or [None])[0]}))
+            return self._json(_PERF_DAILY_SWR.get((
+                (q.get("days") or ["30"])[0],
+                (q.get("start") or [None])[0],
+                (q.get("end") or [None])[0],
+                (q.get("campaign") or [None])[0])))
         if path == "/api/collective-30d":
             # Homepage strip's LAST-30-DAYS top line (sent/reply/positives/meetings/
             # signals) — one cheap DB round-trip via rpc/collective_30d, SWR-cached.
