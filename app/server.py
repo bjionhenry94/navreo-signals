@@ -6698,6 +6698,68 @@ _COCKPIT_MESSAGING_SWR = _SWRKeyedCache(
     name="cockpit-messaging")
 
 
+def _email_html_to_text(html: str) -> str:
+    """Smartlead email_body HTML → readable plain text, keeping line breaks
+    and the literal {{variables}}/spintax (they ARE the copy)."""
+    t = re.sub(r"<(style|script)[^>]*>.*?</\1>", " ", html or "", flags=re.S | re.I)
+    t = re.sub(r"<br\s*/?>", "\n", t, flags=re.I)
+    t = re.sub(r"</(div|p|tr|li)>", "\n", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", "", t)
+    for ent, ch in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
+                    ("&gt;", ">"), ("&#39;", "'"), ("&quot;", '"')):
+        t = t.replace(ent, ch)
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r" ?\n ?", "\n", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def _cockpit_sequence_copy(cid) -> dict:
+    """The ACTUAL live sequence copy — subject + body for every step and
+    variant, straight from GET /campaigns/{id}/sequences. READ-ONLY: never a
+    sequences save (that resets Smartlead's variant counters)."""
+    try:
+        n = int(str(cid).strip())
+    except Exception:  # noqa: BLE001
+        return {"error": "bad_id", "degraded": True}
+    if not KEYS.get("SMARTLEAD_API_KEY"):
+        return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
+    raw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
+    seqs = raw if isinstance(raw, list) else (
+        (raw.get("data") or raw.get("sequences") or []) if isinstance(raw, dict) else [])
+    if not seqs:
+        return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
+    steps = []
+    for s in sorted(seqs, key=lambda x: x.get("seq_number") or 0):
+        variants = []
+        for v in (s.get("sequence_variants") or []):
+            if v.get("is_deleted"):
+                continue
+            # Smartlead variants inherit either field from the step when unset
+            subject = v.get("subject") if v.get("subject") is not None else s.get("subject")
+            body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
+            variants.append({"label": v.get("variant_label") or "?",
+                             "subject": (subject or "").strip(),
+                             "body": _email_html_to_text(body)[:1500]})
+        if not variants:
+            variants.append({"label": None,
+                             "subject": (s.get("subject") or "").strip(),
+                             "body": _email_html_to_text(s.get("email_body"))[:1500]})
+        sd = s.get("seq_delay_details") or {}
+        steps.append({"step": s.get("seq_number"),
+                      # Smartlead answers camelCase here (delayInDays); older
+                      # payloads used snake_case — accept both, never None-out
+                      "delay_days": sd.get("delayInDays", sd.get("delay_in_days")),
+                      "variants": variants})
+    return {"campaign_id": n, "steps": steps, "degraded": False}
+
+
+_COCKPIT_SEQCOPY_SWR = _SWRKeyedCache(
+    _cockpit_sequence_copy, 600,
+    is_degraded=lambda p: not isinstance(p, dict) or p.get("degraded"),
+    name="cockpit-seqcopy")
+
+
 # ── Cockpit LIVE status + completion (not the hourly cache) ─────────────────
 # The scorecard table is synced hourly, so its `status` and completion can be up
 # to an hour stale — wrong for "which campaigns are COMPLETED right now, ready to
@@ -13625,6 +13687,10 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(_COCKPIT_MESSAGING_SWR.get((q.get("id") or [""])[0]))
+        if path == "/api/cockpit/sequence-copy":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(_COCKPIT_SEQCOPY_SWR.get((q.get("id") or [""])[0]))
         if path == "/api/cockpit/live-status":
             # LIVE Smartlead status + completion% for the cockpit's visible
             # campaigns (?ids=1,2,3) — fresh /analytics, not the hourly cache.

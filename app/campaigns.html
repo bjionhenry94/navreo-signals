@@ -1543,6 +1543,26 @@
     align-items: center;
   }
   .seq-subject { font-size: 0.9rem; color: var(--fg); margin: 0 0 10px; }
+  .seq-variant {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 8px;
+    background: var(--bg-elevated);
+  }
+  .seq-variant summary { cursor: pointer; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .seq-variant-label { font-weight: 600; font-size: 0.82rem; color: var(--fg); }
+  .seq-variant-subject { font-size: 0.82rem; color: var(--fg-muted); }
+  .seq-variant-body {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 0.86rem;
+    line-height: 1.55;
+    color: var(--fg);
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
   .seq-subject strong { font-weight: 700; }
   .seq-subject-none { color: var(--fg-subtle); font-weight: 400; font-style: italic; }
   .seq-body-scroll {
@@ -1790,6 +1810,7 @@
     campaigns: [],       // joined rows
     byId: {},
     detail: {},          // id -> campaign-detail payload
+    seqcopy: {},         // id -> live sequence copy payload
     messaging: {},       // id -> messaging payload
     platformLeads: {},   // id -> leads page payload
     perf: null,
@@ -2620,12 +2641,20 @@
       }
     };
     if (STATE.detail[id]) { apply(STATE.detail[id]); return; }
-    getJSON("/api/cockpit/campaign-detail?id=" + encodeURIComponent(id)).then(function (d) {
-      STATE.detail[id] = d; apply(d);
-    }).catch(function () {
-      var lt = document.getElementById("leads-tiles");
-      if (lt) lt.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. Retry from the browser, nothing is cached wrong.</p>';
-    });
+    var fetchIt = function (isRetry) {
+      getJSON("/api/cockpit/campaign-detail?id=" + encodeURIComponent(id)).then(function (d) {
+        /* a degraded payload (mid-deploy, DB blip) must not stick for the
+           SPA's lifetime — render it, but refetch next visit + retry once */
+        if (d && !d.degraded) STATE.detail[id] = d;
+        else if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
+        apply(d);
+      }).catch(function () {
+        if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
+        var lt = document.getElementById("leads-tiles");
+        if (lt) lt.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. Retry from the browser, nothing is cached wrong.</p>';
+      });
+    };
+    fetchIt(false);
   }
 
   function hydrateMessaging(c) {
@@ -2648,9 +2677,61 @@
       root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings);
     };
     if (STATE.messaging[id]) { apply(STATE.messaging[id]); return; }
-    getJSON("/api/cockpit/messaging?id=" + encodeURIComponent(id)).then(function (m) {
-      STATE.messaging[id] = m; apply(m);
-    }).catch(function () { apply(null); });
+    var fetchIt = function (isRetry) {
+      getJSON("/api/cockpit/messaging?id=" + encodeURIComponent(id)).then(function (m) {
+        var healthy = m && !m.degraded && (m.versions || []).length;
+        /* only a HEALTHY payload may stick for the SPA's lifetime — caching a
+           mid-deploy failure was how the tab stayed empty until a hard reload */
+        if (healthy) STATE.messaging[id] = m;
+        else if (!isRetry) setTimeout(function () { if (!STATE.messaging[id]) fetchIt(true); }, 7000);
+        apply(m);
+      }).catch(function () {
+        if (!isRetry) setTimeout(function () { if (!STATE.messaging[id]) fetchIt(true); }, 7000);
+        apply(null);
+      });
+    };
+    fetchIt(false);
+  }
+
+  function sequenceCopyHTML(sc) {
+    var steps = sc.steps || [];
+    var parts = [];
+    steps.forEach(function (s, si) {
+      parts.push('<div class="seq-step"><div class="seq-step-header"><span class="seq-step-title">Email ' + esc(s.step != null ? s.step : "?") + "</span></div>" +
+        (s.variants || []).map(function (v, vi) {
+          var subj = v.subject ? esc(v.subject) : '<span class="ring-caption">no subject &middot; lands in the same thread</span>';
+          var open = (si === 0 && vi === 0) ? " open" : "";
+          var lab = v.label ? "Version " + esc(v.label) : "The email";
+          return '<details class="seq-variant"' + open + '><summary><span class="seq-variant-label">' + lab + '</span> <span class="seq-variant-subject">' + subj + "</span></summary>" +
+            '<div class="seq-variant-body">' + esc(v.body || "") + "</div></details>";
+        }).join("") + "</div>");
+      var next = steps[si + 1];
+      if (next && next.delay_days != null)
+        parts.push('<div class="seq-connector">Wait ' + esc(next.delay_days) + " day" + (next.delay_days === 1 ? "" : "s") + "</div>");
+    });
+    return '<p class="card-subtitle">The live copy, straight from Smartlead right now. Spintax and {{variables}} shown as written.</p>' +
+      '<div class="seq-rail">' + parts.join("") + "</div>";
+  }
+
+  function hydrateSequenceCopy(c) {
+    var id = c.id;
+    var apply = function (sc) {
+      var root = document.getElementById("sequence-root");
+      if (!root || !sc || sc.degraded || !(sc.steps || []).length) return; /* structure rail stays as the honest fallback */
+      root.innerHTML = sequenceCopyHTML(sc);
+    };
+    if (STATE.seqcopy[id]) { apply(STATE.seqcopy[id]); return; }
+    var fetchIt = function (isRetry) {
+      getJSON("/api/cockpit/sequence-copy?id=" + encodeURIComponent(id)).then(function (sc) {
+        var healthy = sc && !sc.degraded && (sc.steps || []).length;
+        if (healthy) STATE.seqcopy[id] = sc;
+        else if (!isRetry) setTimeout(function () { if (!STATE.seqcopy[id]) fetchIt(true); }, 7000);
+        apply(sc);
+      }).catch(function () {
+        if (!isRetry) setTimeout(function () { if (!STATE.seqcopy[id]) fetchIt(true); }, 7000);
+      });
+    };
+    fetchIt(false);
   }
 
   function versionTableHTML(versions, note, meetings) {
@@ -2768,7 +2849,7 @@
       pr.querySelectorAll(".tab-panel").forEach(function (p) { p.hidden = p.getAttribute("data-tab") !== tab; });
       pr.querySelectorAll(".campaign-tab").forEach(function (t) { t.classList.toggle("is-active", t.getAttribute("data-tab") === tab); });
     }
-    if (tab === "messaging") hydrateMessaging(c);
+    if (tab === "messaging") { hydrateMessaging(c); hydrateSequenceCopy(c); }
     if (tab === "leads") { hydrateDetail(c); hydratePlatformLeads(c); }
     document.title = c.name + " · The cockpit";
     window.scrollTo(0, 0);
