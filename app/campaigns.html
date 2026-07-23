@@ -2219,7 +2219,7 @@
       "Verdicts and teasers are written by Lilly on the morning crunch; the app only renders them. " +
       "The stat columns are always campaign lifetime; a teaser that names its own window (for example since relaunch, after a sequence re-save reset the counters) is a different counter, not a contradiction. " +
       "Ring = share of sending capacity used (sent &divide; (leads &times; 2)). Sends/positive under 1,500 is healthy; bounce above 2% is the bar. " +
-      "Meetings are counted from the reply archive: Call Booked plus Meeting Request replies for the campaign. Its own counter, not a Smartlead column.</p>");
+      "Meetings count people, not emails: every lead with a Call Booked or Meeting Request reply in the archive, once each, however many times the thread went back and forth. Its own counter, not a Smartlead column.</p>");
     h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run.</p>");
 
     root.innerHTML = h.join("");
@@ -2934,8 +2934,8 @@
     }).join("");
     var meetNote = "";
     if (hasMeet) {
-      meetNote = "Meetings are Call Booked + Meeting Request replies from the archive; they belong to the email step, not the version.";
-      if (meetings.unattributed > 0) meetNote += " " + fmtInt(meetings.unattributed) + " older meeting" + (meetings.unattributed === 1 ? "" : "s") + " arrived without step info and " + (meetings.unattributed === 1 ? "is" : "are") + " not in the column.";
+      meetNote = fmtInt(meetings.total || 0) + " meeting" + (meetings.total === 1 ? "" : "s") + " on this campaign — one per person, however many replies the thread produced, so this column always adds up to the overview tile. Meetings belong to the email step, not the version.";
+      if (meetings.unattributed > 0) meetNote += " " + fmtInt(meetings.unattributed) + " of them " + (meetings.unattributed === 1 ? "is" : "are") + " not tied to a step yet (the replies arrived without step info).";
     }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
       "<thead><tr><th>Email</th><th>Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>1 per</th>" + (hasMeet ? "<th>Meetings</th>" : "") + "</tr></thead>" +

@@ -6129,7 +6129,9 @@ def _campaign_source_ids(smartlead_id) -> list:
 #   leads_added — signal_leads by pulled_at UTC date (scoped to the campaign's
 #                 source ids when a campaign is selected)
 #   positives   — replies in POSITIVE_CATEGORIES by replied_at UTC date
-#   meetings    — replies in MEETING_CATEGORIES  by replied_at UTC date
+#   meetings    — distinct booked LEADS by the UTC date of their first
+#                 Call Booked / Meeting Request reply (one per person —
+#                 reply-row counting inflated chatty threads)
 #   reply_rate  — fleet: mailbox_stats_daily 30d rolling; per-campaign: 30d
 #                 trailing replies÷sent over the archive (bounded, campaign-scoped)
 # Accepts days (7/30/90/…) OR explicit start/end, plus an optional campaign
@@ -6244,7 +6246,7 @@ def perf_daily(p: dict) -> dict:
                                 if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
                 "positives": ("Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)"
                               if campaign else "Positive replies/day (whole fleet — Smartlead day-wise positive replies, stored in fleet_daily_stats)"),
-                "meetings": "Meetings/day (replies: Call Booked / Meeting Request)",
+                "meetings": "Meetings/day (people whose first Call Booked / Meeting Request reply landed that day — one per person)",
                 "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
                                if campaign else "Reply rate % (whole fleet — Smartlead day-wise replies÷sent, stored in fleet_daily_stats)"),
                 "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise bounced÷sent, stored in fleet_daily_stats)"},
@@ -6305,22 +6307,45 @@ def _scorecard_smartlead_ids() -> list:
     return ids
 
 
-def _scorecard_meetings(sl_ids: list) -> dict:
-    """{sl_id: meetings} for the covered ids, from the latest optimiser_notifications
-    row per campaign. Absent id -> not in the dict -> UI gates the tile."""
-    out = {}
-    if not sl_ids:
-        return out
+def _reply_archive_meetings(sl_ids: list | None = None) -> dict | None:
+    """{smartlead_campaign_id: meetings} from the reply archive. A meeting is a
+    PERSON: each distinct lead with at least one Call Booked / Meeting Request
+    reply counts once, however many rows their thread produced (per-row counting
+    showed "5 meetings" on a campaign where 2 people booked). Auditable by
+    construction: anyone can re-count the same rows. Returns None when the
+    archive is unreachable so callers gate rather than show false zeros."""
     from urllib.parse import quote
-    ors = ",".join(sl_ids)
-    rows = sb("GET", "optimiser_notifications?select=campaign_id,meetings,created_at"
-                     f"&campaign_id=in.({quote(ors, safe=',')})"
-                     "&order=created_at.desc") or []
-    for r in rows:
-        cid = str(r.get("campaign_id") or "")
-        if cid and cid not in out and r.get("meetings") is not None:
-            out[cid] = _sc_int(r.get("meetings"))
+    q = ("replies?select=smartlead_campaign_id,email&workspace=eq.navreo"
+         "&category=in.(%22Call%20Booked%22,%22Meeting%20Request%22)")
+    if sl_ids:
+        ors = ",".join(str(s) for s in sl_ids)
+        q += f"&smartlead_campaign_id=in.({quote(ors, safe=',')})"
+    rows = sb_get_all(q)
+    if not isinstance(rows, list):
+        return None
+    seen: set = set()
+    out: dict = {}
+    for m in rows:
+        k = str(m.get("smartlead_campaign_id") or "")
+        e = (m.get("email") or "").strip().lower()
+        if k and (k, e) not in seen:
+            seen.add((k, e))
+            out[k] = out.get(k, 0) + 1
     return out
+
+
+def _scorecard_meetings(sl_ids: list) -> dict:
+    """{sl_id: meetings} for the covered ids — distinct booked leads from the
+    reply archive (was the optimiser_notifications snapshot, which no pullable
+    source could reconcile against). A successful read fills 0 for covered ids
+    with no bookings — a real zero; an unreachable archive returns {} so the
+    UI gates the tile."""
+    if not sl_ids:
+        return {}
+    got = _reply_archive_meetings(sl_ids)
+    if got is None:
+        return {}
+    return {str(s): got.get(str(s), 0) for s in sl_ids}
 
 
 def _compute_campaign_scorecard() -> dict:
@@ -6472,12 +6497,15 @@ def _all_campaign_scorecard() -> dict:
         camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total", "status")}
         camps[sid]["workspace"] = r.get("workspace") or "navreo"
         camps[sid]["meetings"] = None
-    # meetings from the optimiser cache (latest per campaign)
+    # meetings from the reply archive: one per distinct booked lead, the same
+    # definition every other surface uses (the optimiser-cache snapshot this
+    # replaced couldn't be reconciled against any pullable source)
     try:
-        for r in (sb("GET", "optimiser_notifications?select=campaign_id,meetings,created_at&order=created_at.desc") or []):
-            cid = str(r.get("campaign_id") or "")
-            if cid in camps and camps[cid].get("meetings") is None and r.get("meetings") is not None:
-                camps[cid]["meetings"] = _sc_int(r.get("meetings"))
+        archive = _reply_archive_meetings()
+        if archive is not None:
+            for sid, c in camps.items():
+                if (c.get("workspace") or "navreo") == "navreo" and not sid.startswith("hr-"):
+                    c["meetings"] = archive.get(sid, 0)
     except Exception:  # noqa: BLE001
         pass
     # HeyReach per-campaign LinkedIn progress (people / in-progress / finished),
@@ -6526,15 +6554,11 @@ def _cockpit_insights() -> dict:
     track = sb("GET", "optimiser_track_record?select=call_date,campaign,campaign_id,"
                       "lilly_said,what_happened,verdict&order=call_date.desc&limit=30")
     gen = max((r.get("generated_at") or "" for r in rows), default=None) or None
-    # Meetings = Call Booked + Meeting Request replies in the archive, per
-    # campaign. Auditable by construction: anyone can re-count the same rows.
-    meetings: dict = {}
-    for m in (sb_get_all("replies?select=smartlead_campaign_id"
-                         "&workspace=eq.navreo"
-                         "&category=in.(%22Call%20Booked%22,%22Meeting%20Request%22)") or []):
-        k = str(m.get("smartlead_campaign_id") or "")
-        if k:
-            meetings[k] = meetings.get(k, 0) + 1
+    # Meetings = distinct leads with a Call Booked / Meeting Request reply in
+    # the archive, per campaign — one per PERSON, not per reply row (a chatty
+    # thread used to inflate the tile). Same definition as the messaging tab
+    # and the Sources tab, so every surface reconciles.
+    meetings = _reply_archive_meetings() or {}
     sc = sb("GET", "campaign_scorecard?select=updated_at&order=updated_at.desc&limit=1")
     stats_at = sc[0].get("updated_at") if isinstance(sc, list) and sc else None
     return {"insights": rows, "track_record": track if isinstance(track, list) else [],
@@ -6636,6 +6660,71 @@ _COCKPIT_DETAIL_SWR = _SWRKeyedCache(
     name="cockpit-detail")
 
 
+def _meeting_step_from_history(cid: int, email: str):
+    """Which email STEP did this lead's meeting come from? Asked of Smartlead's
+    own thread record when the archived reply rows carry no email_seq_number
+    (backstop-ingested rows never do — the categoriser-hook payload is minimal).
+    Rule, in order of trust: the first REPLY item's own email_seq_number; else
+    the seq of the SENT sharing that REPLY's stats_id; else the last
+    seq-carrying SENT before that REPLY. None when Smartlead can't say."""
+    from urllib.parse import quote
+
+    def _seq(m):
+        s = str(m.get("email_seq_number") or "").strip()
+        return s if s.isdigit() else None
+
+    try:
+        lr = _smartlead_json("GET", f"/leads/?email={quote(email)}")
+        lead = lr.get("lead") if isinstance(lr, dict) and isinstance(lr.get("lead"), dict) else lr
+        if isinstance(lr, list) and lr:
+            first = lr[0]
+            lead = first.get("lead") if isinstance(first, dict) and isinstance(first.get("lead"), dict) else first
+        lid = lead.get("id") if isinstance(lead, dict) else None
+        if not lid:
+            return None
+        hr = _smartlead_json("GET", f"/campaigns/{cid}/leads/{lid}/message-history")
+        hist = hr.get("history") if isinstance(hr, dict) else hr
+        if not isinstance(hist, list):
+            return None
+        items = [m for m in hist if isinstance(m, dict)]  # API order is chronological
+        last_sent_seq, first_reply = None, None
+        for m in items:
+            t = str(m.get("type") or "").upper()
+            if t == "SENT" and _seq(m):
+                last_sent_seq = _seq(m)
+            elif t == "REPLY":
+                first_reply = m
+                break
+        if first_reply is None:
+            return None
+        if _seq(first_reply):
+            return _seq(first_reply)
+        sid_ = first_reply.get("stats_id")
+        if sid_:
+            for m in items:
+                if (str(m.get("type") or "").upper() == "SENT"
+                        and m.get("stats_id") == sid_ and _seq(m)):
+                    return _seq(m)
+        return last_sent_seq
+    except Exception:  # noqa: BLE001 — attribution is best-effort, never break the tab
+        return None
+
+
+def _stamp_meeting_step(reply_id, step: str):
+    """Write the derived step back onto the archived reply row (raw key
+    email_seq_number_backfill) so the Smartlead lookup never repeats. The
+    original webhook payload keys are untouched — a marked enrichment."""
+    try:
+        rows = sb("GET", f"replies?id=eq.{reply_id}&select=raw")
+        raw = rows[0].get("raw") if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+        if not isinstance(raw, dict):
+            raw = {}
+        raw["email_seq_number_backfill"] = str(step)
+        sb("PATCH", f"replies?id=eq.{reply_id}", {"raw": raw}, prefer="return=minimal")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _cockpit_messaging(cid) -> dict:
     """Per-version table straight from Smartlead variant-statistics (the source
     of truth). Rows with a null seq_variant_id are inline step counters: kept
@@ -6668,23 +6757,43 @@ def _cockpit_messaging(cid) -> dict:
             "bounces": r.get("bounce_count") or 0})
     versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
     # Meetings by step, from the reply archive (Call Booked + Meeting Request —
-    # the page's standing meetings definition). Smartlead never attributes a
-    # booking to a variant; the webhook's email_seq_number gives the STEP, and
-    # older rows ingested before the webhook carried it count as unattributed.
+    # the page's standing definition: one meeting per PERSON, so this table's
+    # total always equals the overview tile). Smartlead never attributes a
+    # booking to a variant; the webhook's email_seq_number gives the STEP. A
+    # lead's earliest step-carrying reply speaks for their whole thread; leads
+    # whose rows all arrived step-less (backstop ingest strips the field) get
+    # one Smartlead history lookup each, stamped back onto the archive row so
+    # the lookup never repeats.
     mrows = sb("GET", f"replies?workspace=eq.navreo&smartlead_campaign_id=eq.{n}"
                       "&category=in.(%22Call%20Booked%22,%22Meeting%20Request%22)"
-                      "&select=step:raw->>email_seq_number")
+                      "&select=id,email,step:raw->>email_seq_number,"
+                      "stepbf:raw->>email_seq_number_backfill"
+                      "&order=replied_at.asc")
     if isinstance(mrows, list):
+        booked: dict = {}                    # email -> {row_id (first row), step}
+        for mr in mrows:
+            em = (mr.get("email") or "").strip().lower()
+            rec = booked.setdefault(em, {"row_id": mr.get("id"), "step": None})
+            s = str(mr.get("step") or mr.get("stepbf") or "").strip()
+            if rec["step"] is None and s.isdigit():
+                rec["step"] = s
+        lookups = 0
+        for em, rec in booked.items():
+            if rec["step"] is None and em and lookups < 6:  # bounded: SWR holds this 600s
+                lookups += 1
+                step = _meeting_step_from_history(n, em)
+                if step:
+                    rec["step"] = step
+                    _stamp_meeting_step(rec["row_id"], step)
         by_step: dict = {}
         unattributed = 0
-        for mr in mrows:
-            step = str(mr.get("step") or "").strip()
-            if step.isdigit():
-                by_step[step] = by_step.get(step, 0) + 1
+        for rec in booked.values():
+            if rec["step"]:
+                by_step[rec["step"]] = by_step.get(rec["step"], 0) + 1
             else:
                 unattributed += 1
         meetings = {"by_step": by_step, "unattributed": unattributed,
-                    "total": sum(by_step.values()) + unattributed}
+                    "total": len(booked)}
     else:
         meetings = None  # archive unreachable: the UI omits the column rather than showing false zeros
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
