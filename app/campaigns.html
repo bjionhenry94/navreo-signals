@@ -596,7 +596,7 @@
   .nvz-hero.is-amber { color: var(--warning); }
   .nvz-hero.is-green { color: var(--success); }
   .nvz-chart { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
-  .nvz-cap { font-size: 0.72rem; font-weight: 600; color: var(--fg-subtle); line-height: 1.25; }
+  .nvz-cap { font-size: 0.8rem; font-weight: 600; color: var(--fg-subtle); line-height: 1.25; }
   .nvz-seg { height: 12px; border-radius: 999px; background: var(--bg-inset, var(--border)); overflow: hidden; display: flex; }
   .nvz-seg > span { height: 100%; border-radius: 999px; }
   .nvz-vbars { display: flex; align-items: flex-end; gap: 4px; height: 40px; }
@@ -1359,9 +1359,9 @@
   }
 
   .book-widget.book-widget--compact { padding: 13px 14px; gap: 8px; }
-  .book-widget--compact .book-tag { font-size: 0.62rem; }
-  .book-widget--compact .book-line { font-size: 0.82rem; font-weight: 700; }
-  .book-widget--compact .action-payoff { font-size: 0.76rem; }
+  .book-widget--compact .book-tag { font-size: 0.68rem; }
+  .book-widget--compact .book-line { font-size: 0.98rem; font-weight: 700; }
+  .book-widget--compact .action-payoff { font-size: 0.88rem; }
   .book-widget--compact .footnote-line { margin: 0; }
   .book-widget--compact .where-check { margin-top: 8px; }
   .book-widget--compact .book-bignum-wrap { gap: 3px; }
@@ -1854,8 +1854,11 @@
     var nums = nvzNums(p.bold);
     var hero = null, chart = "", cap = "";
     var key = r.insight_key || "";
-    if (key === "weekly-pulse" && s.pos_last_week != null && s.pos_this_week != null) {
-      var lastW = s.pos_last_week, thisW = s.pos_this_week, mx = Math.max(lastW, thisW, 1);
+    if (key === "weekly-pulse" && (s.pos_last_week != null || nums.length >= 2)) {
+      /* stats when the payload carries them, else read "88 to 58" from the text */
+      var lastW = s.pos_last_week != null ? s.pos_last_week : nums[0];
+      var thisW = s.pos_this_week != null ? s.pos_this_week : nums[1];
+      var mx = Math.max(lastW, thisW, 1);
       hero = fmtInt(thisW) + (thisW < lastW ? "<small>&darr;</small>" : "");
       chart = '<div class="nvz-vbars">' +
         '<span style="height:' + Math.round(100 * lastW / mx) + '%"></span>' +
@@ -1924,7 +1927,13 @@
   function nvzCard(r, kindLabel) {
     var p = r.payload || {};
     var v = nvzViz(r);
+    /* title capped at 10 words - the full sentence drops into why? */
+    var words = String(p.bold || "").split(/\s+/).filter(Boolean);
+    var title = words.slice(0, 10).join(" ");
+    var trimmed = words.length > 10;
+    if (trimmed) title = title.replace(/[.,;:]$/, "") + "&hellip;";
     var whyBits = [];
+    if (trimmed) whyBits.push('<p class="footnote-line">' + esc(p.bold) + "</p>");
     if (p.note) whyBits.push('<p class="footnote-line">' + esc(p.note) + "</p>");
     if (p.source) whyBits.push('<p class="footnote-line">Source: ' + esc(p.source) + "</p>");
     return '<div class="book-widget book-widget--compact">' +
@@ -1932,7 +1941,7 @@
       '<span class="owner-chip">' + esc(p.owner || "Lilly") + "</span></div>" +
       '<div class="nvz">' + v.heroHtml + '<div class="nvz-chart">' + v.chartHtml +
       (v.cap ? '<div class="nvz-cap">' + v.cap + "</div>" : "") + "</div></div>" +
-      (p.bold ? '<p class="book-line">' + esc(p.bold) + "</p>" : "") +
+      (title ? '<p class="book-line">' + esc(title).replace(/&amp;hellip;$/, "&hellip;") + "</p>" : "") +
       (p.act ? '<p class="action-payoff">' + esc(p.act) + "</p>" : "") +
       (whyBits.length ? '<details class="nvz-why"><summary></summary>' + whyBits.join("") + "</details>" : "") +
       "</div>";
