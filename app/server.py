@@ -6526,9 +6526,13 @@ def _cockpit_insights() -> dict:
     track = sb("GET", "optimiser_track_record?select=call_date,campaign,campaign_id,"
                       "lilly_said,what_happened,verdict&order=call_date.desc&limit=30")
     gen = max((r.get("generated_at") or "" for r in rows), default=None) or None
+    # Meetings = Call Booked + Meeting Request replies in the archive, per
+    # campaign. Auditable by construction: anyone can re-count the same rows.
     meetings: dict = {}
-    for m in (sb_get_all("meetings?select=campaign_platform_id") or []):
-        k = str(m.get("campaign_platform_id") or "")
+    for m in (sb_get_all("replies?select=smartlead_campaign_id"
+                         "&workspace=eq.navreo"
+                         "&category=in.(%22Call%20Booked%22,%22Meeting%20Request%22)") or []):
+        k = str(m.get("smartlead_campaign_id") or "")
         if k:
             meetings[k] = meetings.get(k, 0) + 1
     sc = sb("GET", "campaign_scorecard?select=updated_at&order=updated_at.desc&limit=1")

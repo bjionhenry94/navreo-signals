@@ -1807,7 +1807,7 @@
         replied: s ? s.replied : null,
         positives: s ? s.positives : vs.pos,
         bounced: s ? s.bounced : null,
-        meetings: (s && s.meetings != null) ? s.meetings : vs.meetings,
+        meetings: (meetings[scope] != null) ? meetings[scope] : 0,
         source: s ? "scorecard" : "crunch"
       };
       var tag = vp.tag || "watch";
@@ -1951,6 +1951,7 @@
         }
         if (p.bold) h.push('<p class="book-line">' + esc(p.bold) + "</p>");
         if (p.act) h.push('<p class="action-payoff">' + esc(p.act) + "</p>");
+        if (p.note) h.push('<p class="footnote-line">' + esc(p.note) + "</p>");
         if (p.source) h.push('<p class="footnote-line">Source: ' + esc(p.source) + "</p>");
         h.push('<div class="book-bottom"><span class="owner-chip">' + esc(p.owner || "Lilly") + "</span></div>");
         h.push("</div>");
@@ -1988,7 +1989,7 @@
       "Verdicts and teasers are written by Lilly on the morning crunch; the app only renders them. " +
       "The stat columns are always campaign lifetime; a teaser that names its own window (for example since relaunch, after a sequence re-save reset the counters) is a different counter, not a contradiction. " +
       "Ring = share of sending capacity used (sent &divide; (leads &times; 2)). Sends/positive under 1,500 is healthy; bounce above 2% is the bar. " +
-      "Meetings are the optimiser's Call Booked plus Meeting Request count per campaign: its own counter, not a Smartlead column.</p>");
+      "Meetings are counted from the reply archive: Call Booked plus Meeting Request replies for the campaign. Its own counter, not a Smartlead column.</p>");
     h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run.</p>");
 
     root.innerHTML = h.join("");
