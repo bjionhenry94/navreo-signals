@@ -1134,6 +1134,8 @@
   .sources-section { margin-bottom: 22px; }
   .add-leads-section { margin-top: 26px; }
   .source-list-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+  .source-list-card--link { text-decoration: none; cursor: pointer; }
+  .source-list-card--link:hover { border-color: var(--nav-ink-3); }
   .source-list-card {
     display: flex;
     align-items: baseline;
@@ -1543,26 +1545,6 @@
     align-items: center;
   }
   .seq-subject { font-size: 0.9rem; color: var(--fg); margin: 0 0 10px; }
-  .seq-variant {
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 12px;
-    margin-top: 8px;
-    background: var(--bg-elevated);
-  }
-  .seq-variant summary { cursor: pointer; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
-  .seq-variant-label { font-weight: 600; font-size: 0.82rem; color: var(--fg); }
-  .seq-variant-subject { font-size: 0.82rem; color: var(--fg-muted); }
-  .seq-variant-body {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font-size: 0.86rem;
-    line-height: 1.55;
-    color: var(--fg);
-    margin-top: 8px;
-    border-top: 1px solid var(--border);
-    padding-top: 8px;
-  }
   .seq-subject strong { font-weight: 700; }
   .seq-subject-none { color: var(--fg-subtle); font-weight: 400; font-style: italic; }
   .seq-body-scroll {
@@ -2616,8 +2598,14 @@
         } else {
           sr.innerHTML = '<div class="source-list-cards">' + srcs.map(function (s) {
             var dd = s.at ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(s.at)) : "";
-            return '<div class="source-list-card"><span class="source-list-name">' + esc(s.list_name || "List") + "</span>" +
-              '<span class="source-list-meta">' + fmtInt(s.rows) + " people &middot; pushed to " + esc(s.platform ? s.platform.charAt(0).toUpperCase() + s.platform.slice(1) : "Smartlead") + " &middot; " + esc(dd) + "</span></div>";
+            var inner = '<span class="source-list-name">' + esc(s.list_name || "List") + "</span>" +
+              '<span class="source-list-meta">' + fmtInt(s.rows) + " people &middot; pushed to " + esc(s.platform ? s.platform.charAt(0).toUpperCase() + s.platform.slice(1) : "Smartlead") + " &middot; " + esc(dd) +
+              (s.list_id ? ' &middot; <span class="action-link">View the list</span>' : "") + "</span>";
+            /* the card deep-links to the list's own page in the tool when the
+               push recorded a list_id; old pushes without one stay plain */
+            return s.list_id
+              ? '<a class="source-list-card source-list-card--link" href="/app/lists.html#' + esc(s.list_id) + '">' + inner + "</a>"
+              : '<div class="source-list-card">' + inner + "</div>";
           }).join("") + "</div>";
         }
       }
@@ -2693,23 +2681,56 @@
     fetchIt(false);
   }
 
+  function resolveSpin(text) {
+    /* {a|b|c} -> a, innermost-first until stable, so the copy reads like the
+       email a lead receives. {{merge_tags}} have no pipe and never match. */
+    var t = text || "", prev;
+    do {
+      prev = t;
+      t = t.replace(/\{([^{}|]*(?:\|[^{}]*)+)\}/g, function (_, opts) { return opts.split("|")[0]; });
+    } while (t !== prev);
+    return t;
+  }
+
+  function seqRichText(text) {
+    /* escape, then mark {{merge_tags}} / %signature% / spintax-date tags,
+       then paragraphs: blank line = new <p>, single break = <br> */
+    var marked = esc(text || "").replace(/\{\{[^}]+\}\}|%signature%/g, function (m) {
+      return '<span class="mergetag">' + m + "</span>";
+    });
+    return marked.split(/\n\s*\n/).map(function (para) {
+      return "<p>" + para.replace(/\n/g, "<br>") + "</p>";
+    }).join("");
+  }
+
   function sequenceCopyHTML(sc) {
     var steps = sc.steps || [];
     var parts = [];
     steps.forEach(function (s, si) {
-      parts.push('<div class="seq-step"><div class="seq-step-header"><span class="seq-step-title">Email ' + esc(s.step != null ? s.step : "?") + "</span></div>" +
-        (s.variants || []).map(function (v, vi) {
-          var subj = v.subject ? esc(v.subject) : '<span class="ring-caption">no subject &middot; lands in the same thread</span>';
-          var open = (si === 0 && vi === 0) ? " open" : "";
-          var lab = v.label ? "Version " + esc(v.label) : "The email";
-          return '<details class="seq-variant"' + open + '><summary><span class="seq-variant-label">' + lab + '</span> <span class="seq-variant-subject">' + subj + "</span></summary>" +
-            '<div class="seq-variant-body">' + esc(v.body || "") + "</div></details>";
-        }).join("") + "</div>");
+      var stepNo = s.step != null ? s.step : "?";
+      var variants = s.variants || [];
+      var pills = "";
+      if (variants.length > 1) {
+        pills = '<div class="seq-version-pills" aria-label="Email ' + esc(stepNo) + ' versions">' +
+          variants.map(function (v, vi) {
+            return '<button type="button" class="seq-pill' + (vi === 0 ? " is-active" : "") + '" data-step="' + esc(stepNo) + '" data-version="' + esc(v.label || "?") + '" aria-pressed="' + (vi === 0 ? "true" : "false") + '">' + esc(v.label || "?") + "</button>";
+          }).join("") + "</div>";
+      }
+      var panels = variants.map(function (v, vi) {
+        var subj = v.subject
+          ? '<span class="seq-subject-text">' + seqRichText(resolveSpin(v.subject)) .replace(/^<p>|<\/p>$/g, "") + "</span>"
+          : '<span class="seq-subject-text seq-subject-none">(no subject, reply in thread)</span>';
+        return '<div class="seq-version-panel" data-step="' + esc(stepNo) + '" data-version="' + esc(v.label || "?") + '"' + (vi === 0 ? "" : " hidden") + ">" +
+          '<p class="seq-subject"><strong>Subject:</strong> ' + subj + "</p>" +
+          '<div class="seq-body-scroll">' + seqRichText(resolveSpin(v.body)) + "</div></div>";
+      }).join("");
+      parts.push('<div class="seq-step"><div class="seq-step-header"><span class="seq-step-title">Email ' + esc(stepNo) + "</span>" + pills + "</div>" +
+        '<div class="seq-body">' + panels + "</div></div>");
       var next = steps[si + 1];
       if (next && next.delay_days != null)
         parts.push('<div class="seq-connector">Wait ' + esc(next.delay_days) + " day" + (next.delay_days === 1 ? "" : "s") + "</div>");
     });
-    return '<p class="card-subtitle">The live copy, straight from Smartlead right now. Spintax and {{variables}} shown as written.</p>' +
+    return '<p class="card-subtitle">Read-only mirror of what\'s live in Smartlead: steps, wait gaps, subjects and bodies. Click a version pill to see its copy. Spun lines are shown as one clean rendering.</p>' +
       '<div class="seq-rail">' + parts.join("") + "</div>";
   }
 
@@ -2719,6 +2740,22 @@
       var root = document.getElementById("sequence-root");
       if (!root || !sc || sc.degraded || !(sc.steps || []).length) return; /* structure rail stays as the honest fallback */
       root.innerHTML = sequenceCopyHTML(sc);
+      /* version pills swap the shown subject+body within their step */
+      root.querySelectorAll(".seq-pill").forEach(function (pill) {
+        pill.addEventListener("click", function () {
+          var step = pill.closest(".seq-step");
+          if (!step) return;
+          var version = pill.getAttribute("data-version");
+          step.querySelectorAll(".seq-pill").forEach(function (p) {
+            var on = p === pill;
+            p.classList.toggle("is-active", on);
+            p.setAttribute("aria-pressed", on ? "true" : "false");
+          });
+          step.querySelectorAll(".seq-version-panel").forEach(function (panel) {
+            panel.hidden = panel.getAttribute("data-version") !== version;
+          });
+        });
+      });
     };
     if (STATE.seqcopy[id]) { apply(STATE.seqcopy[id]); return; }
     var fetchIt = function (isRetry) {
