@@ -6698,6 +6698,46 @@ _COCKPIT_MESSAGING_SWR = _SWRKeyedCache(
     name="cockpit-messaging")
 
 
+# ── Cockpit LIVE status + completion (not the hourly cache) ─────────────────
+# The scorecard table is synced hourly, so its `status` and completion can be up
+# to an hour stale — wrong for "which campaigns are COMPLETED right now, ready to
+# recontact?". This endpoint hits Smartlead /analytics fresh for exactly the
+# campaign ids the cockpit is showing (parallel, capped) and returns the LIVE
+# status + completion% (completed ÷ total leads) per campaign. Auto-federates to
+# client workspaces via _smartlead_json's campaign-id → workspace resolution.
+def _cockpit_live_status(ids_csv: str) -> dict:
+    from datetime import datetime, timezone
+    from concurrent.futures import ThreadPoolExecutor
+    ids = [s for s in (i.strip() for i in (ids_csv or "").split(",")) if s.isdigit()]
+    ids = list(dict.fromkeys(ids))[:150]  # de-dupe, hard cap so one page can't stampede Smartlead
+
+    def one(cid):
+        try:
+            data = _smartlead_json("GET", f"/campaigns/{cid}/analytics")
+            m = _parse_smartlead_analytics(data)
+        except Exception:  # noqa: BLE001 — one bad id must not blank the board
+            return cid, None
+        total, completed = m.get("total") or 0, m.get("completed") or 0
+        comp = round(completed / total * 100) if total else None
+        return cid, {"status": m.get("status") or "", "completed": completed,
+                     "total": total, "completion": comp}
+
+    out = {}
+    if ids:
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            for cid, rec in ex.map(one, ids):
+                if rec is not None:
+                    out[cid] = rec
+    return {"campaigns": out, "checked_at": datetime.now(timezone.utc).isoformat(),
+            "requested": len(ids), "resolved": len(out)}
+
+
+_COCKPIT_LIVE_STATUS_SWR = _SWRKeyedCache(
+    _cockpit_live_status, 45,  # short: fresh-from-Smartlead, but a 45s shield stops toggle-stampede
+    is_degraded=lambda p: not isinstance(p, dict) or not p.get("campaigns"),
+    name="cockpit-live-status")
+
+
 # ── Collective last-30-days top line (homepage strip) ──────────────────────
 # The strip above the campaign list is a LAST-30-DAYS window, not all-time.
 # Everything is one DB round-trip via rpc/collective_30d:
@@ -13585,6 +13625,12 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(_COCKPIT_MESSAGING_SWR.get((q.get("id") or [""])[0]))
+        if path == "/api/cockpit/live-status":
+            # LIVE Smartlead status + completion% for the cockpit's visible
+            # campaigns (?ids=1,2,3) — fresh /analytics, not the hourly cache.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(_COCKPIT_LIVE_STATUS_SWR.get((q.get("ids") or [""])[0]))
         if path == "/api/campaign-platform-leads":
             # One page of a campaign's real platform leads for the detail Leads tab.
             from urllib.parse import parse_qs, urlparse

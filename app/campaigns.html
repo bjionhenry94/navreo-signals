@@ -455,6 +455,67 @@
     color: var(--fg-subtle);
     pointer-events: none;
   }
+  /* live status + completion control bar */
+  .live-bar {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 14px 18px;
+    flex-wrap: wrap;
+  }
+  .live-filter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .live-filter-label, .live-sort-label {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--fg-subtle);
+  }
+  .live-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .live-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 12px; border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong); background: var(--bg-elevated);
+    color: var(--fg-muted); font-size: 0.78rem; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+    transition: background var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+  }
+  .live-chip:hover { border-color: var(--nav-ink-3); }
+  .live-chip:disabled, .live-sort-btn:disabled { opacity: 0.45; cursor: default; pointer-events: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  @media (prefers-reduced-motion: reduce) { .live-dot.is-loading { animation: none; } }
+  .live-chip .lc-count { font-variant-numeric: tabular-nums; opacity: 0.7; }
+  .live-chip .lc-count:empty { display: none; }
+  .live-chip.is-active {
+    background: var(--chip-active-bg); border-color: var(--chip-active-bg); color: var(--chip-active-fg);
+  }
+  .live-sort-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 13px; border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong); background: var(--bg-elevated);
+    color: var(--fg-muted); font-size: 0.78rem; font-weight: 600; cursor: pointer;
+    font-family: inherit;
+    transition: background var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+  }
+  .live-sort-btn:hover { border-color: var(--nav-ink-3); }
+  .live-sort-btn.is-active {
+    background: var(--nav-orange); border-color: var(--nav-orange); color: #fff;
+  }
+  .live-meta {
+    display: inline-flex; align-items: center; gap: 8px; margin-left: auto;
+    font-size: 0.74rem; color: var(--fg-subtle);
+  }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); flex: 0 0 auto; }
+  .live-dot.is-ok { background: #2f9e44; }
+  .live-dot.is-error { background: #e03131; }
+  .live-dot.is-loading { background: var(--nav-orange); animation: livePulse 1s ease-in-out infinite; }
+  @keyframes livePulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+  .live-refresh {
+    border: none; background: none; color: var(--nav-orange);
+    font-size: 0.74rem; font-weight: 600; cursor: pointer; font-family: inherit; padding: 0;
+    text-decoration: underline;
+  }
+  .row-live { display: inline-flex; align-items: center; gap: 4px; }
+  .row-live-dot { width: 6px; height: 6px; border-radius: 50%; background: #2f9e44; display: inline-block; }
+  @media (max-width: 640px) { .live-meta { margin-left: 0; width: 100%; } }
+
   .rows-empty-state {
     margin-top: 14px;
     padding: 22px;
@@ -1731,7 +1792,12 @@
     detail: {},          // id -> campaign-detail payload
     messaging: {},       // id -> messaging payload
     platformLeads: {},   // id -> leads page payload
-    perf: null
+    perf: null,
+    liveStatus: {},      // id -> {status, completion, completed, total} straight from Smartlead
+    liveCheckedAt: null, // ISO stamp of the live check
+    liveLoading: false,
+    liveError: false,
+    view: { tier: "all", status: "all", sort: "default", q: "" }  // current list controls
   };
   var TAG_META = {
     decision: { tier: "decision", pill: "Needs a decision", pillClass: "v-red", badge: "badge--red" },
@@ -1772,6 +1838,7 @@
       document.getElementById("list-root").hidden = false;
       route();
       loadPerf(0);
+      loadLiveStatus();
     }).catch(function (e) {
       if (String(e.message) === "auth") return;
       document.getElementById("list-loading").hidden = true;
@@ -1975,21 +2042,31 @@
       '<div class="search-wrap"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
       '<input type="search" class="search-input" id="cockpit-search" placeholder="Search campaigns&hellip;" aria-label="Search campaigns"></div></nav>');
 
-    h.push('<p class="section-caption" id="search-count" hidden></p>');
-    h.push('<div class="rows-empty-state" id="rows-empty-state" hidden><p>No campaigns match that search in this view.</p><button type="button" id="clear-filters-btn">Clear filters</button></div>');
+    /* live status + completion control bar — checks Smartlead live, not the cache */
+    h.push('<div class="live-bar" id="live-bar">' +
+      '<div class="live-filter" role="group" aria-label="Filter by live campaign status">' +
+      '<span class="live-filter-label">Live status</span>' +
+      '<div class="live-chips" id="live-status-chips">' +
+      '<button type="button" class="live-chip is-active" data-status="all" aria-pressed="true">All</button>' +
+      '<button type="button" class="live-chip" data-status="active" aria-pressed="false">Active <span class="lc-count tnum" data-count="active"></span></button>' +
+      '<button type="button" class="live-chip" data-status="paused" aria-pressed="false">Paused <span class="lc-count tnum" data-count="paused"></span></button>' +
+      '<button type="button" class="live-chip" data-status="completed" aria-pressed="false">Completed <span class="lc-count tnum" data-count="completed"></span></button>' +
+      '<button type="button" class="live-chip" data-status="archived" aria-pressed="false">Archived <span class="lc-count tnum" data-count="archived"></span></button>' +
+      '<button type="button" class="live-chip" data-status="drafted" aria-pressed="false">Draft <span class="lc-count tnum" data-count="drafted"></span></button>' +
+      "</div></div>" +
+      '<div class="live-sort">' +
+      '<button type="button" class="live-sort-btn" id="sort-completion-btn" aria-pressed="false" title="Order campaigns by how far through their sequence the leads are — the ones nearest done are your recontact candidates.">Sort by completion &darr;</button>' +
+      '</div>' +
+      '<div class="live-meta" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>' +
+      '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>' +
+      "</div>");
 
-    /* rows */
-    h.push('<section aria-label="Campaigns"><div class="section-label">Campaigns</div><div class="campaign-rows" id="campaign-rows">');
-    var tiers = [["decision", "Needs a decision", nDecide], ["watch", "Watch", nWatch], ["fine", "Fine", nFine]];
-    tiers.forEach(function (t) {
-      if (!t[2]) return;
-      h.push('<div class="section-label rows-tier-label" data-tier-label="' + t[0] + '">' + t[1] + ' <span class="tnum">(' + t[2] + ")</span></div>");
-      cs.forEach(function (c) {
-        if (c.tier !== t[0]) return;
-        h.push(rowHTML(c));
-      });
-    });
-    h.push("</div></section>");
+    h.push('<p class="section-caption" id="search-count" hidden></p>');
+    h.push('<div class="sr-only" role="status" aria-live="polite" id="rows-live-region"></div>');
+    h.push('<div class="rows-empty-state" id="rows-empty-state" hidden><p id="rows-empty-text">No campaigns match that filter in this view.</p><button type="button" id="clear-filters-btn">Clear filters</button></div>');
+
+    /* rows — filled by renderRows() so live status/completion controls can reshape it */
+    h.push('<section aria-label="Campaigns"><div class="section-label">Campaigns</div><div class="campaign-rows" id="campaign-rows"></div></section>');
 
     /* footer */
     h.push('<p class="footer-fine">Every number on this page comes from the live Supabase cache and the daily Smartlead sync. ' +
@@ -2000,10 +2077,171 @@
     h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run.</p>");
 
     root.innerHTML = h.join("");
+    renderRows();
+    renderLiveMeta();
     attachListHandlers();
     restoreCheckoffs();
     applyPerfVisibility();
     applyTheme(currentTheme());
+  }
+
+  /* live status bucket for a campaign from the LIVE Smartlead check */
+  function liveBucket(id) {
+    var ls = STATE.liveStatus && STATE.liveStatus[id];
+    if (!ls || !ls.status) return "unknown";
+    var s = String(ls.status).toUpperCase();
+    if (s.indexOf("COMPLET") !== -1) return "completed";
+    if (s.indexOf("ARCHIV") !== -1) return "archived";
+    if (s.indexOf("DRAFT") !== -1) return "drafted";
+    if (s.indexOf("PAUS") !== -1 || s.indexOf("STOP") !== -1) return "paused";
+    if (s.indexOf("ACTIVE") !== -1 || s.indexOf("START") !== -1 || s.indexOf("RUNNING") !== -1) return "active";
+    return "other";
+  }
+  function liveCompletion(id) {
+    var ls = STATE.liveStatus && STATE.liveStatus[id];
+    return (ls && ls.completion != null) ? ls.completion : null;
+  }
+
+  /* Build #campaign-rows honouring the current tier filter, live-status filter,
+     search, and completion sort. Rows are plain <a> — no per-row JS — so a full
+     innerHTML rebuild on every control change is safe. */
+  function renderRows() {
+    var container = document.getElementById("campaign-rows");
+    if (!container) return;
+    var v = STATE.view;
+    var q = (v.q || "").toLowerCase().trim();
+    var cs = STATE.campaigns || [];
+    var visible = cs.filter(function (c) {
+      if (!(v.tier === "all" || c.tier === v.tier)) return false;
+      if (!(v.status === "all" || liveBucket(c.id) === v.status)) return false;
+      if (q) {
+        var hay = (c.name + " " + c.pill + " " + c.tier).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+    var flat = (v.sort === "completion") || (v.status !== "all");
+    var h = [];
+    if (v.sort === "completion") {
+      visible = visible.slice().sort(function (a, b) {
+        var ca = liveCompletion(a.id), cb = liveCompletion(b.id);
+        if (ca == null && cb == null) return 0;
+        if (ca == null) return 1;   // unknown sinks to the bottom
+        if (cb == null) return -1;
+        return cb - ca;             // most complete first
+      });
+    }
+    if (flat) {
+      visible.forEach(function (c) { h.push(rowHTML(c)); });
+    } else {
+      var tiers = [["decision", "Needs a decision"], ["watch", "Watch"], ["fine", "Fine"]];
+      tiers.forEach(function (t) {
+        var group = visible.filter(function (c) { return c.tier === t[0]; });
+        if (!group.length) return;
+        h.push('<div class="section-label rows-tier-label" data-tier-label="' + t[0] + '">' + t[1] + ' <span class="tnum">(' + group.length + ")</span></div>");
+        group.forEach(function (c) { h.push(rowHTML(c)); });
+      });
+    }
+    container.innerHTML = h.join("");
+    var STATUS_LABEL = { active: "Active", paused: "Paused", completed: "Completed", archived: "Archived", drafted: "Draft" };
+    var empty = document.getElementById("rows-empty-state");
+    if (empty) empty.hidden = visible.length > 0;
+    var emptyTxt = document.getElementById("rows-empty-text");
+    if (emptyTxt && !visible.length) {
+      emptyTxt.textContent = (v.status !== "all")
+        ? "No " + (STATUS_LABEL[v.status] || v.status) + " campaigns" + (q ? " match that search" : " right now") + "."
+        : (q ? "No campaigns match that search in this view." : "No campaigns in this view.");
+    }
+    var scLine = document.getElementById("search-count");
+    if (scLine) {
+      if (q || v.status !== "all") {
+        var lbl = (v.status !== "all") ? (STATUS_LABEL[v.status] || v.status) + " " : "";
+        scLine.textContent = visible.length + " " + lbl + "campaign" + (visible.length === 1 ? "" : "s") + " shown";
+        scLine.hidden = false;
+      } else { scLine.hidden = true; }
+    }
+    var live = document.getElementById("rows-live-region");
+    if (live) live.textContent = visible.length + " campaign" + (visible.length === 1 ? "" : "s") + " shown" +
+      (v.sort === "completion" ? ", sorted by completion" : "");
+  }
+
+  /* Live-check meta line + per-status counts */
+  function renderLiveMeta() {
+    var dot = document.getElementById("live-dot");
+    var txt = document.getElementById("live-meta-text");
+    var refresh = document.getElementById("live-refresh-btn");
+    if (!txt) return;
+    if (STATE.liveLoading) {
+      if (dot) dot.className = "live-dot is-loading";
+      txt.textContent = "Checking Smartlead live… (up to ~30s)";
+      if (refresh) refresh.hidden = true;
+    } else if (STATE.liveError) {
+      if (dot) dot.className = "live-dot is-error";
+      txt.textContent = "Live check unavailable — showing cached status";
+      if (refresh) refresh.hidden = false;
+    } else if (STATE.liveCheckedAt) {
+      if (dot) dot.className = "live-dot is-ok";
+      txt.textContent = "Live from Smartlead · checked " + localStamp(STATE.liveCheckedAt);
+      if (refresh) refresh.hidden = false;
+    } else {
+      if (dot) dot.className = "live-dot";
+      txt.textContent = "";
+    }
+    // per-status counts on the chips
+    var counts = { active: 0, paused: 0, completed: 0, archived: 0, drafted: 0 };
+    (STATE.campaigns || []).forEach(function (c) {
+      var b = liveBucket(c.id);
+      if (counts[b] != null) counts[b]++;
+    });
+    ["active", "paused", "completed", "archived", "drafted"].forEach(function (k) {
+      var el = document.querySelector('.lc-count[data-count="' + k + '"]');
+      if (el) el.textContent = STATE.liveCheckedAt ? counts[k] : "";
+    });
+    // Live-status filter + completion sort only make sense once the live check
+    // has landed — disable them until then so a click can't show a false empty.
+    // Once landed, a status with a zero live count is also disabled: no point
+    // clicking into a known-empty view (unless it's the one already selected).
+    var pending = !STATE.liveCheckedAt;
+    ["active", "paused", "completed", "archived", "drafted"].forEach(function (k) {
+      var b = document.querySelector('.live-chip[data-status="' + k + '"]');
+      if (b) b.disabled = pending || (counts[k] === 0 && STATE.view.status !== k);
+    });
+    var sb = document.getElementById("sort-completion-btn");
+    if (sb) sb.disabled = pending;
+  }
+
+  /* Fetch LIVE status + completion for every visible campaign, then repaint. */
+  function loadLiveStatus() {
+    var ids = (STATE.campaigns || []).map(function (c) { return c.id; })
+      .filter(function (id) { return /^\d+$/.test(String(id)); });
+    if (!ids.length) return;
+    STATE.liveLoading = true; STATE.liveError = false;
+    renderLiveMeta();
+    getJSON("/api/cockpit/live-status?ids=" + encodeURIComponent(ids.join(",")))
+      .then(function (r) {
+        STATE.liveLoading = false;
+        STATE.liveStatus = (r && r.campaigns) || {};
+        STATE.liveCheckedAt = (r && r.checked_at) || new Date().toISOString();
+        STATE.liveError = !r || !r.campaigns || Object.keys(STATE.liveStatus).length === 0;
+        renderLiveMeta();
+        renderRows();
+      })
+      .catch(function () {
+        STATE.liveLoading = false; STATE.liveError = true;
+        renderLiveMeta();
+      });
+  }
+
+  /* Subtitle status bit: LIVE status + completion% when the live check has
+     landed, else the cached scorecard status. A live chip carries a dot. */
+  function rowStatusBit(c) {
+    var ls = STATE.liveStatus && STATE.liveStatus[c.id];
+    if (ls && ls.status) {
+      var comp = (ls.completion != null) ? " &middot; " + ls.completion + "% complete" : "";
+      return ' &middot; <span class="row-live"><span class="row-live-dot"></span>' +
+        esc(String(ls.status).toLowerCase()) + "</span>" + comp;
+    }
+    return c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "";
   }
 
   function rowHTML(c) {
@@ -2028,7 +2266,7 @@
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="sent &divide; (leads &times; 2)"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
       '<span class="ring-caption">list worked</span></span>' +
-      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + (c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "") + "</span></span>" +
+      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span></span>" +
       '<span class="stat stat--leads"><span class="stat-num tnum">' + fmtInt(st.leads) + '</span><span class="stat-label">Leads</span></span>' +
       '<span class="stat stat--sent"><span class="stat-num tnum">' + fmtInt(st.sent) + '</span><span class="stat-label">Emails sent</span></span>' +
       '<span class="stat stat--reply"><span class="stat-num tnum">' + (st.replied != null ? fmtInt(st.replied) + (replyPct != null ? " (" + replyPct + "%)" : "") : "-") + '</span><span class="stat-label">Replies</span></span>' +
@@ -2540,49 +2778,50 @@
   /* ---------- handlers ---------- */
   function attachListHandlers() {
     var root = document.getElementById("list-root");
-    /* filters */
-    var activeFilter = "all";
-    function applyFilter() {
-      var q = (document.getElementById("cockpit-search").value || "").toLowerCase().trim();
-      var any = false;
-      root.querySelectorAll(".campaign-row").forEach(function (r) {
-        var ok = (activeFilter === "all" || r.getAttribute("data-tier") === activeFilter) &&
-          (!q || (r.getAttribute("data-search") || "").indexOf(q) !== -1);
-        r.hidden = !ok;
-        if (ok) any = true;
-      });
-      root.querySelectorAll(".rows-tier-label").forEach(function (l) {
-        var tier = l.getAttribute("data-tier-label");
-        var visible = (activeFilter === "all" && !q);
-        l.hidden = !visible && !(activeFilter === tier && !q);
-      });
-      document.getElementById("rows-empty-state").hidden = any;
-      var scLine = document.getElementById("search-count");
-      if (scLine) {
-        if (q) {
-          var n = 0;
-          root.querySelectorAll(".campaign-row").forEach(function (r) { if (!r.hidden) n++; });
-          scLine.textContent = n + " campaign" + (n === 1 ? "" : "s") + " match" + (n === 1 ? "es" : "");
-          scLine.hidden = false;
-        } else {
-          scLine.hidden = true;
-        }
-      }
-    }
+    /* tier filters */
     root.querySelectorAll(".filter-chip").forEach(function (b) {
       b.addEventListener("click", function () {
         root.querySelectorAll(".filter-chip").forEach(function (x) { x.classList.remove("is-active"); x.setAttribute("aria-pressed", "false"); });
         b.classList.add("is-active"); b.setAttribute("aria-pressed", "true");
-        activeFilter = b.getAttribute("data-filter");
-        applyFilter();
+        STATE.view.tier = b.getAttribute("data-filter");
+        renderRows();
       });
     });
-    document.getElementById("cockpit-search").addEventListener("input", applyFilter);
+    /* live status filters */
+    root.querySelectorAll(".live-chip").forEach(function (b) {
+      b.addEventListener("click", function () {
+        root.querySelectorAll(".live-chip").forEach(function (x) { x.classList.remove("is-active"); x.setAttribute("aria-pressed", "false"); });
+        b.classList.add("is-active"); b.setAttribute("aria-pressed", "true");
+        STATE.view.status = b.getAttribute("data-status");
+        renderRows();
+      });
+    });
+    /* completion sort toggle */
+    var sortBtn = document.getElementById("sort-completion-btn");
+    if (sortBtn) sortBtn.addEventListener("click", function () {
+      var on = STATE.view.sort === "completion";
+      STATE.view.sort = on ? "default" : "completion";
+      sortBtn.classList.toggle("is-active", !on);
+      sortBtn.setAttribute("aria-pressed", (!on).toString());
+      renderRows();
+    });
+    /* live refresh */
+    var refreshBtn = document.getElementById("live-refresh-btn");
+    if (refreshBtn) refreshBtn.addEventListener("click", function () {
+      STATE.liveCheckedAt = null; loadLiveStatus();
+    });
+    /* search */
+    document.getElementById("cockpit-search").addEventListener("input", function () {
+      STATE.view.q = document.getElementById("cockpit-search").value || "";
+      renderRows();
+    });
     var clearBtn = document.getElementById("clear-filters-btn");
     if (clearBtn) clearBtn.addEventListener("click", function () {
       document.getElementById("cockpit-search").value = "";
-      var all = root.querySelector('.filter-chip[data-filter="all"]');
-      if (all) all.click();
+      STATE.view.q = ""; STATE.view.tier = "all"; STATE.view.status = "all";
+      root.querySelectorAll(".filter-chip").forEach(function (x) { var a = x.getAttribute("data-filter") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
+      root.querySelectorAll(".live-chip").forEach(function (x) { var a = x.getAttribute("data-status") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
+      renderRows();
     });
     /* today chips */
     root.querySelectorAll(".chip-num").forEach(function (b) {
