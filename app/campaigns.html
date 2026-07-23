@@ -1792,6 +1792,7 @@
         pill: vp.pill || meta.pill,
         pillClass: meta.pillClass,
         teaser: vp.bold || "",
+        note: vp.note || "",
         act: vp.act || "",
         owner: vp.owner || "",
         smartleadUrl: vp.smartlead_url || ("https://app.smartlead.ai/app/email-campaign/" + scope + "/analytics"),
@@ -1949,6 +1950,7 @@
     /* footer */
     h.push('<p class="footer-fine">Every number on this page comes from the live Supabase cache and the daily Smartlead sync. ' +
       "Verdicts and teasers are written by Lilly on the morning crunch; the app only renders them. " +
+      "The stat columns are always campaign lifetime; a teaser that names its own window (for example since relaunch, after a sequence re-save reset the counters) is a different counter, not a contradiction. " +
       "Ring = share of sending capacity used (sent &divide; (leads &times; 2)). Sends/positive under 1,500 is healthy; bounce above 2% is the bar. " +
       "Meetings are counted from the meetings ledger: a different counter than Smartlead replies, not a contradiction.</p>");
     h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run.</p>");
@@ -2139,6 +2141,7 @@
     h.push('<div class="tab-panel" data-tab="overview"' + (tab !== "overview" ? " hidden" : "") + ">");
     h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
     if (c.teaser) h.push('<p class="wp-headline">' + esc(c.teaser) + "</p>");
+    if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The Live performance card below is campaign lifetime: a different counter, not a contradiction.</p>");
     if (c.others.length) {
       h.push('<div class="campaign-widget-grid">');
       c.others.forEach(function (r) {
@@ -2147,6 +2150,7 @@
           '<div class="book-tag">' + esc(KIND_LABEL[r.insight_key] || r.insight_key) + (p.tag ? " &middot; " + esc(p.tag) : "") + "</div>" +
           (p.bold ? '<p class="book-line">' + esc(p.bold) + "</p>" : "") +
           (p.act ? '<p class="action-payoff">' + esc(p.act) + "</p>" : "") +
+          (p.note ? '<p class="footnote-line">' + esc(p.note) + "</p>" : "") +
           (p.source ? '<p class="footnote-line">' + esc(p.source) + "</p>" : "") +
           '<div class="book-bottom"><span class="owner-chip">' + esc(p.owner || "Lilly") + "</span></div></div>");
       });
