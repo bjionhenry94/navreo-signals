@@ -956,18 +956,17 @@
     display: flex;
     flex-wrap: wrap;
     align-items: flex-start;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 12px 22px;
     margin-top: 16px;
     padding-bottom: 18px;
     border-bottom: 1px solid var(--border);
   }
-  .progress-dial { display: flex; align-items: center; gap: 10px; }
+  .progress-dial { display: flex; align-items: center; gap: 10px; align-self: center; }
   .dial-ring { position: relative; width: 64px; height: 64px; flex: none; }
   .dial-track { fill: none; stroke: var(--border); stroke-width: 6; }
   .dial-fill { fill: none; stroke: var(--nav-orange); stroke-width: 6; stroke-linecap: round; }
   .dial-value { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 600; color: var(--fg); }
-  .dial-caption { font-size: 0.72rem; line-height: 1.35; color: var(--fg-muted); max-width: 9em; }
   .campaign-title {
     font-family: var(--font-display);
     font-weight: 400;
@@ -976,7 +975,7 @@
     color: var(--fg);
   }
   .campaign-subtitle { font-size: 0.82rem; color: var(--fg-subtle); margin-top: 4px; }
-  .campaign-header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  .campaign-header-right { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
   .campaign-run-status { font-size: 0.74rem; color: var(--fg-subtle); white-space: nowrap; }
   .campaign-run-row { display: flex; align-items: center; gap: 8px; }
   .campaign-tabs {
@@ -2544,13 +2543,11 @@
         '<div class="dial-ring"><svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">' +
         '<circle cx="32" cy="32" r="26" class="dial-track"/>' +
         '<circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="' + DIAL_C + '" stroke-dashoffset="' + (DIAL_C * (1 - compPct / 100)).toFixed(1) + '" transform="rotate(-90 32 32)"/>' +
-        '</svg><span class="dial-value tnum">' + compPct.toFixed(0) + "%</span></div>" +
-        '<span class="dial-caption">of the list finished<br>the sequence</span></div>';
+        '</svg><span class="dial-value tnum">' + compPct.toFixed(0) + "%</span></div></div>";
     }
-    h.push('<div class="campaign-header-main"><div>' +
+    h.push('<div class="campaign-header-main">' + dial + '<div>' +
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
       '<p class="campaign-subtitle">Navreo &middot; campaign ' + esc(c.id) + "</p></div>" +
-      dial +
       '<div class="campaign-header-right"><div class="verdict-badge-row">' +
       '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") + "</div>" +
