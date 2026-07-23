@@ -6493,6 +6493,107 @@ _CAMPAIGN_SCORECARD_SWR = _SWRCache(
     name="campaign-scorecard")
 
 
+# ── Cockpit (campaigns.html) render-layer endpoints ────────────────────────
+# The cockpit page is the render layer for the Lilly Optimizer. Claude (the AI
+# layer) writes verdicts and insights into Supabase campaign_insights on the
+# morning crunch; these endpoints only READ what Claude wrote plus the synced
+# stats tables. The analysis never runs in the app.
+
+def _cockpit_insights() -> dict:
+    """All live, unexpired campaign_insights rows + the graded track record."""
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = sb_get_all(
+        "campaign_insights?select=scope,insight_key,payload,generated_at"
+        f"&status=eq.live&expires_at=gt.{now_iso}&order=generated_at.desc")
+    if not isinstance(rows, list):
+        return {"error": "db_unavailable", "insights": [], "track_record": [],
+                "generated_at": None, "degraded": True}
+    track = sb("GET", "optimiser_track_record?select=call_date,campaign,campaign_id,"
+                      "lilly_said,what_happened,verdict&order=call_date.desc&limit=30")
+    gen = max((r.get("generated_at") or "" for r in rows), default=None) or None
+    meetings: dict = {}
+    for m in (sb_get_all("meetings?select=campaign_platform_id") or []):
+        k = str(m.get("campaign_platform_id") or "")
+        if k:
+            meetings[k] = meetings.get(k, 0) + 1
+    sc = sb("GET", "campaign_scorecard?select=updated_at&order=updated_at.desc&limit=1")
+    stats_at = sc[0].get("updated_at") if isinstance(sc, list) and sc else None
+    return {"insights": rows, "track_record": track if isinstance(track, list) else [],
+            "generated_at": gen, "meetings_by_campaign": meetings,
+            "stats_updated_at": stats_at, "degraded": False}
+
+
+_COCKPIT_INSIGHTS_SWR = _SWRCache(_cockpit_insights, 120,
+                                  is_degraded=lambda p: not p or p.get("degraded"),
+                                  name="cockpit-insights")
+
+
+def _cockpit_detail(cid) -> dict:
+    """One campaign's Leads/Sources/Messaging-fallback payload, single RPC."""
+    try:
+        n = int(str(cid).strip())
+    except Exception:  # noqa: BLE001
+        return {"error": "bad_id", "degraded": True}
+    r = sb("POST", "rpc/cockpit_campaign_detail", {"cid": n})
+    if isinstance(r, list):                 # defensive: PostgREST wrapping
+        r = r[0] if r else None
+    if isinstance(r, dict) and "cockpit_campaign_detail" in r:
+        r = r.get("cockpit_campaign_detail")
+    if not isinstance(r, dict):
+        return {"error": "db_unavailable", "campaign_id": n, "degraded": True}
+    r["campaign_id"] = n
+    r["degraded"] = False
+    return r
+
+
+_COCKPIT_DETAIL_SWR = _SWRKeyedCache(
+    _cockpit_detail, 120,
+    is_degraded=lambda p: not isinstance(p, dict) or p.get("degraded"),
+    name="cockpit-detail")
+
+
+def _cockpit_messaging(cid) -> dict:
+    """Per-version table straight from Smartlead variant-statistics (the source
+    of truth). Rows with a null seq_variant_id are inline step counters: kept
+    only when they actually sent. Counters reset on sequence re-save, so the
+    payload carries the standing since-relaunch note."""
+    try:
+        n = int(str(cid).strip())
+    except Exception:  # noqa: BLE001
+        return {"error": "bad_id", "degraded": True}
+    if not KEYS.get("SMARTLEAD_API_KEY"):
+        return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
+    data = _smartlead_json("GET", f"/campaigns/{n}/variant-statistics")
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
+    versions = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sent = r.get("sent_count") or 0
+        if r.get("seq_variant_id") is None and not sent:
+            continue
+        versions.append({
+            "step": r.get("seq_number"),
+            "label": r.get("variant_label"),
+            "inline": r.get("seq_variant_id") is None,
+            "sent": sent,
+            "replies": r.get("reply_count") or 0,
+            "positives": r.get("positive_reply_count") or 0,
+            "bounces": r.get("bounce_count") or 0})
+    versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
+    return {"campaign_id": n, "versions": versions, "degraded": False,
+            "note": "Smartlead counters reset when a sequence is re-saved: read as since relaunch."}
+
+
+_COCKPIT_MESSAGING_SWR = _SWRKeyedCache(
+    _cockpit_messaging, 600,
+    is_degraded=lambda p: not isinstance(p, dict) or p.get("degraded"),
+    name="cockpit-messaging")
+
+
 # ── Collective last-30-days top line (homepage strip) ──────────────────────
 # The strip above the campaign list is a LAST-30-DAYS window, not all-time.
 # Everything is one DB round-trip via rpc/collective_30d:
@@ -13362,6 +13463,18 @@ class Handler(SimpleHTTPRequestHandler):
             # Homepage strip's LAST-30-DAYS top line (sent/reply/positives/meetings/
             # signals) — one cheap DB round-trip via rpc/collective_30d, SWR-cached.
             return self._json(_COLLECTIVE_30D_SWR.get())
+        if path == "/api/cockpit/insights":
+            # Cockpit render layer: what Claude wrote on the morning crunch
+            # (live unexpired campaign_insights) + the graded track record.
+            return self._json(_COCKPIT_INSIGHTS_SWR.get())
+        if path == "/api/cockpit/campaign-detail":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(_COCKPIT_DETAIL_SWR.get((q.get("id") or [""])[0]))
+        if path == "/api/cockpit/messaging":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(_COCKPIT_MESSAGING_SWR.get((q.get("id") or [""])[0]))
         if path == "/api/campaign-platform-leads":
             # One page of a campaign's real platform leads for the detail Leads tab.
             from urllib.parse import parse_qs, urlparse
