@@ -1788,6 +1788,7 @@
       (byScope[r.scope] = byScope[r.scope] || []).push(r);
     });
     var campaigns = [];
+    STATE.midSync = 0;
     Object.keys(byScope).forEach(function (scope) {
       if (scope === "book") return;
       var rows = byScope[scope];
@@ -1796,6 +1797,10 @@
       var vp = (verdict && verdict.payload) || {};
       var s = sc[scope] || null;
       var vs = vp.stats || {};
+      /* mid-sync guard: the daily scorecard sync briefly writes zeros while it
+         refills. A zero row that the crunch KNOWS sent thousands is mid-sync,
+         not truth: fall back to the crunch snapshot and say so. */
+      if (s && (s.sent || 0) === 0 && (vs.sent || 0) > 0) { s = null; STATE.midSync = (STATE.midSync || 0) + 1; }
       var stats = {
         leads: s ? s.total : vs.leads,
         sent: s ? s.sent : vs.sent,
@@ -1883,7 +1888,8 @@
     if (posLast != null && posThis != null) {
       h.push('<p class="masthead-refresh">Positives: ' + fmtInt(posLast) + " &rarr; " + fmtInt(posThis) + " across the last two complete weeks.</p>");
     }
-    h.push('<p class="lw-stamp">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + ".</p>");
+    h.push('<p class="lw-stamp">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + "." +
+      (STATE.midSync ? " <strong>Smartlead sync in progress: " + STATE.midSync + " row" + (STATE.midSync === 1 ? "" : "s") + " showing the morning-crunch snapshot until it finishes.</strong>" : "") + "</p>");
     h.push("</div>");
     h.push('<div class="masthead-right">' + themeToggleHTML() + trackPillHTML() + "</div>");
     h.push("</header>");
@@ -1945,7 +1951,7 @@
         }
         if (p.bold) h.push('<p class="book-line">' + esc(p.bold) + "</p>");
         if (p.act) h.push('<p class="action-payoff">' + esc(p.act) + "</p>");
-        if (p.source) h.push('<p class="footnote-line">' + esc(p.source) + "</p>");
+        if (p.source) h.push('<p class="footnote-line">Source: ' + esc(p.source) + "</p>");
         h.push('<div class="book-bottom"><span class="owner-chip">' + esc(p.owner || "Lilly") + "</span></div>");
         h.push("</div>");
       });
@@ -2183,7 +2189,7 @@
           (p.bold ? '<p class="book-line">' + esc(p.bold) + "</p>" : "") +
           (p.act ? '<p class="action-payoff">' + esc(p.act) + "</p>" : "") +
           (p.note ? '<p class="footnote-line">' + esc(p.note) + "</p>" : "") +
-          (p.source ? '<p class="footnote-line">' + esc(p.source) + "</p>" : "") +
+          (p.source ? '<p class="footnote-line">Source: ' + esc(p.source) + "</p>" : "") +
           '<div class="book-bottom"><span class="owner-chip">' + esc(p.owner || "Lilly") + "</span></div></div>");
       });
       h.push("</div>");
@@ -2192,7 +2198,10 @@
     }
     h.push("</div>");
     h.push('<div class="ov-card"><div class="card-title">Live performance</div>' +
-      '<p class="card-subtitle">Campaign-to-date from the daily Smartlead sync (positives = Smartlead\'s interested mark). Synced ' + esc(localStamp(STATE.insights.stats_updated_at)) + ".</p>" +
+      '<p class="card-subtitle">Campaign-to-date (positives = Smartlead\'s interested mark). ' +
+      (c.stats.source === "crunch"
+        ? "From the morning-crunch snapshot: the Smartlead sync is refilling right now."
+        : "From the daily Smartlead sync, synced " + esc(localStamp(STATE.insights.stats_updated_at)) + ".") + "</p>" +
       '<div class="perf-grid">' +
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.leads) + '</span><span class="perf-label">Leads</span></div>' +
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.sent) + '</span><span class="perf-label">Emails sent</span></div>' +
@@ -2227,7 +2236,7 @@
           '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
           '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
           '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
-          (p.source ? '<p class="footnote-line">' + esc(p.source) + "</p>" : "") + "</div>" +
+          (p.source ? '<p class="footnote-line">Source: ' + esc(p.source) + "</p>" : "") + "</div>" +
           '<div class="action-dismissed-row" hidden><span>Dismissed &middot; <button type="button" class="action-undo-btn" data-act="undo">Undo</button></span></div></div>');
       });
       h.push("</div></div>");
@@ -2547,12 +2556,25 @@
     applyTheme(currentTheme());
     /* copy-prompt buttons */
     pr.querySelectorAll(".copy-prompt").forEach(function (b) {
+      b.setAttribute("aria-live", "polite");
       b.addEventListener("click", function () {
         var txt = b.getAttribute("data-prompt") || "";
-        (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () {
-          var old = b.textContent; b.textContent = "Paste prompt in a new chat";
-          setTimeout(function () { b.textContent = old; }, 2600);
-        }).catch(function () { window.prompt("Copy this prompt:", txt); });
+        var old = b.getAttribute("data-label") || b.textContent;
+        b.setAttribute("data-label", old);
+        function done(msg) { b.textContent = msg; setTimeout(function () { b.textContent = old; }, 2600); }
+        function legacyCopy() {
+          try {
+            var ta = document.createElement("textarea");
+            ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
+            document.body.appendChild(ta); ta.select();
+            var ok = document.execCommand("copy");
+            document.body.removeChild(ta);
+            done(ok ? "Copied. Paste in a new chat." : "Copy blocked by the browser.");
+          } catch (e) { done("Copy blocked by the browser."); }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(function () { done("Copied. Paste in a new chat."); }, legacyCopy);
+        } else { legacyCopy(); }
       });
     });
     /* Action state buttons — TEAM-SHARED via /api/cockpit/assignments (was
@@ -2581,6 +2603,7 @@
       var who = mine ? "you" : assigneeName(rec.assigned_to);
       card.querySelectorAll(".action-state-btn").forEach(function (x) {
         x.classList.remove("is-active", "is-acked", "is-done-state");
+        x.setAttribute("aria-pressed", "false");
       });
       var dr = card.querySelector(".action-dismissed-row");
       var body = card.querySelector(".action-body");
@@ -2593,20 +2616,23 @@
         if (body) body.style.opacity = "";
       }
       var btn = state && state !== "dismiss" ? card.querySelector('.action-state-btn[data-act="' + state + '"]') : null;
-      if (btn) { btn.classList.add("is-active"); btn.classList.add(state === "ack" ? "is-acked" : "is-done-state"); }
+      if (btn) {
+        btn.classList.add("is-active");
+        btn.classList.add(state === "ack" ? "is-acked" : "is-done-state");
+        btn.setAttribute("aria-pressed", "true");
+      }
       if (tag) {
         if ((state === "ack" || state === "done") && who) { tag.hidden = false; tag.textContent = stateVerb(state) + " · " + who; }
         else { tag.hidden = true; tag.textContent = ""; }
       }
     }
-    function refreshAllCards() { pr.querySelectorAll(".action-card").forEach(applyCard); }
     Promise.all([
       getJSON("/api/cockpit/assignments").catch(function () { return {}; }),
       getJSON("/api/auth/me").catch(function () { return {}; })
     ]).then(function (res) {
       ASSIGN = (res[0] && res[0].assignments) || {};
       ME = (res[1] && res[1].email) || null;
-      refreshAllCards();
+      pr.querySelectorAll(".action-card").forEach(applyCard);
     });
     pr.querySelectorAll(".action-card").forEach(function (card) {
       var key = card.getAttribute("data-action-key");
