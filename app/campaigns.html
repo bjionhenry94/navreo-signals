@@ -1773,31 +1773,30 @@
   .lw-banner button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 12px; color: inherit; }
   .lw-loading { padding: 48px 0; text-align: center; color: var(--muted); font-size: 14px; }
   .lw-stamp { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
-  .perfx-card { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); padding: 16px 18px; margin: 18px 0; }
+  .perfx-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-elevated); padding: 16px 18px; margin: 18px 0; }
   .perfx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .perfx-title { font-weight: 700; font-size: 15px; }
   .perfx-toggle { display: flex; gap: 6px; }
-  .perfx-toggle button { font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 3px 10px; }
-  .perfx-toggle button.is-active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-  .perfx-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
-  .perfx-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
-  .perfx-svg-wrap { overflow-x: auto; }
-  .perfx-svg { width: 100%; height: 170px; display: block; }
-  .perfx-note { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
-  /* One box per stat — house KPI-card shape (see deliverability BOUNCE-RATE / SENT-DAY cards) */
+  .perfx-toggle button { font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: inherit; border-radius: 999px; padding: 3px 10px; }
+  .perfx-toggle button.is-active { background: var(--chip-active-bg); color: var(--chip-active-fg); border-color: var(--chip-active-bg); }
+  .perfx-note { font-size: 12px; color: var(--fg-subtle); margin: 10px 0 0; }
+  /* One box per stat — house KPI-card shape (see deliverability BOUNCE-RATE / SENT-DAY cards).
+     NOTE: this file's tokens are --fg-muted/--fg-subtle/--border/--bg-elevated —
+     there is NO --muted/--line/--card here; an undefined var() in an SVG stroke
+     computes to no stroke at all (the invisible-lines bug). */
   .perfx-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 0; }
-  .perfx-box { flex: 1 1 200px; min-width: 168px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 15px; background: var(--card); }
-  .perfx-lab { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+  .perfx-box { flex: 1 1 200px; min-width: 168px; border: 1px solid var(--border); border-radius: 10px; padding: 12px 15px; background: var(--bg-elevated); }
+  .perfx-lab { font-size: 11.5px; color: var(--fg-subtle); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
   .perfx-num { font-size: 22px; font-weight: 700; margin-top: 3px; }
-  .perfx-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .perfx-sub { font-size: 11.5px; color: var(--fg-subtle); margin-top: 2px; }
   .perfx-spark { margin-top: 8px; line-height: 0; }
   .perfx-spark svg { width: 100%; height: 48px; display: block; }
-  .perfx-line { stroke: var(--muted); }
-  .perfx-thr  { stroke: var(--muted); stroke-opacity: 0.55; }
+  .perfx-line { stroke: var(--fg-muted); }
+  .perfx-thr  { stroke: var(--fg-subtle); stroke-opacity: 0.55; }
   .perfx-delta { font-size: 11.5px; font-weight: 600; margin-top: 8px; }
   .perfx-delta.up { color: var(--success); }
   .perfx-delta.down { color: var(--danger); }
-  .perfx-delta.flat { color: var(--muted); font-weight: 500; }
+  .perfx-delta.flat { color: var(--fg-subtle); font-weight: 500; }
   .lw-src-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
   @media (max-width: 520px) {
     .campaign-run-row { flex-wrap: wrap; row-gap: 8px; }
@@ -1850,9 +1849,10 @@
      Report, embedded from notifications.html). Scoped under .cockpit so the
      color rules beat the generic `.cockpit a` inherit. */
   .cockpit .page-tabs {
-    display: flex; gap: 22px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 26px;
+    /* Bar removed from view (user request 2026-07-24): the lone "Campaigns" tab
+       carried no information. Elements stay in the DOM — the hash router still
+       toggles them and #/optimisations remains reachable by URL. */
+    display: none;
   }
   .cockpit .page-tab {
     padding: 0 2px 11px; font-size: 0.86rem; font-weight: 600;
@@ -2282,14 +2282,9 @@
       '<div class="perfx-grid" id="perfx-grid"></div>' +
       '<p class="perfx-note" id="perfx-note"></p></div>');
 
-    /* Across the book */
-    if (STATE.book.length) {
-      h.push('<section aria-label="Across the book"><div class="section-label">Across the book</div><div class="book-grid book-grid--compact">');
-      STATE.book.forEach(function (r) {
-        h.push(nvzCard(r, KIND_LABEL[r.insight_key] || r.insight_key));
-      });
-      h.push("</div></section>");
-    }
+    /* "Across the book" moved to the Fleet health audit (deliverability) page,
+       just under its tabs — owner request. The book rows are still fetched into
+       STATE.book (harmless) but no longer rendered here. */
 
     /* filter bar — search + live status (checked against Smartlead, not the cache) */
     h.push('<nav class="filter-bar" aria-label="Filter campaigns">' +
