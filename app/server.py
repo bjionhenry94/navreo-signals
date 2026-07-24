@@ -4126,7 +4126,7 @@ def pool_pulls_pull(p: dict):
     seg = str(p.get("id") or p.get("seg") or "").replace("pp-", "").strip().upper()
     rows = sb("GET", f"pool_pulls?seg=eq.{urllib.parse.quote(seg)}")
     if not isinstance(rows, list) or not rows:
-        return {"ok": False, "message": f"No pull record for pool {seg or '?'}."}, 404
+        return 404, {"ok": False, "message": f"No pull record for pool {seg or '?'}."}
     pool = rows[0]
     try:
         size = max(1, min(2000, int(p.get("size") or 500)))
@@ -4134,16 +4134,16 @@ def pool_pulls_pull(p: dict):
         size = 500
     lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY") or ""
     if not lm_key:
-        return {"ok": False, "message": "LISTMINT_API_KEY isn't set on this server."}, 503
+        return 503, {"ok": False, "message": "LISTMINT_API_KEY isn't set on this server."}
     sl_key = ws_key_for_campaign(pool["campaign_id"]) or os.environ.get("SMARTLEAD_API_KEY") or ""
     with _JOB_CREATE_LOCK:
         if _pool_active_job(pool["id"]):
-            return {"ok": False, "message": "A pull is already running for this pool — wait for it to finish."}, 409
+            return 409, {"ok": False, "message": "A pull is already running for this pool — wait for it to finish."}
         sb("PATCH", f"pool_pulls?id=eq.{pool['id']}", {"status": "pulling"})
         job = _new_job("pool_pull", f"Pull {size} more · pool {seg}", pool["campaign_id"])
         job["pool_id"] = pool["id"]
         _enqueue_job(_pool_pull_worker, job, (job, pool, size, lm_key, sl_key))
-    return {"ok": True, "job_id": job["id"]}, 202
+    return 202, {"ok": True, "job_id": job["id"]}
 
 
 LISTS_POST_ROUTES = {
