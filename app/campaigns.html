@@ -1893,7 +1893,14 @@
   .cockpit .review-badge .caret { transition: transform .2s; flex: 0 0 auto; }
   .cockpit .review-badge[aria-expanded="true"] { background: var(--nav-orange); color: #fff; }
   .cockpit .review-badge[aria-expanded="true"] .caret { transform: rotate(180deg); }
-  .cockpit .row-optim { background: var(--sunken); border-top: 1px solid var(--border); padding: 8px 22px 16px; }
+  .cockpit .row-optim { background: var(--bg-elevated); border-top: 1px solid var(--border); padding: 8px 22px 16px; }
+  .cockpit .opt-why { margin-top: 10px; }
+  .cockpit .opt-why summary { cursor: pointer; font-size: 0.75rem; font-weight: 700; color: var(--nav-orange-600); list-style: none; }
+  .cockpit .opt-why summary::-webkit-details-marker { display: none; }
+  .cockpit .opt-why summary::before { content: "\25B8  "; font-size: 0.6rem; }
+  .cockpit .opt-why[open] summary::before { content: "\25BE  "; }
+  .cockpit .opt-why-body { margin: 8px 0 0; padding-left: 18px; font-size: 0.82rem; line-height: 1.55; color: var(--fg-muted); }
+  .cockpit .opt-why-body li { margin: 2px 0; }
   .cockpit .row-optim .actions-section { display: flex; flex-direction: column; gap: 10px; }
   .cockpit .row-optim-empty { margin: 6px 2px; color: var(--fg-subtle); font-size: 13px; }
   .cockpit .action-top { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
@@ -1995,7 +2002,7 @@
     liveCheckedAt: null, // ISO stamp of the live check
     liveLoading: false,
     liveError: false,
-    view: { tier: "all", status: "all", sort: "default", preset: "all", q: "" }  // current list controls
+    view: { tier: "all", status: "all", sort: "default", preset: "all", client: "all", q: "" }  // current list controls
   };
   /* -- certified insight-card grammar (23 Jul 2026, panel 8.4): every card =
         hero number + its OWN chart + one insight line + one act line + why?
@@ -2584,6 +2591,20 @@
       "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
       " Context: " + (p.bold || "") + " Stage everything for my approval. Do not launch, upload, or save anything to Smartlead without me.";
     var actionKey = esc((r.scope || c.id) + "::" + (r.insight_key || ("act-" + i)));
+    /* "Why?" expander — the reasoning behind the recommendation, from the
+       payload the crunch already ships (headline reason + the numbers). */
+    var st2 = p.stats || {};
+    var whyBits = [];
+    if (p.bold) whyBits.push(esc(p.bold));
+    if (st2.sent != null) whyBits.push(fmtInt(st2.sent) + " emails sent" + (st2.leads ? " to " + fmtInt(st2.leads) + " leads" : "") + (st2.completion != null ? " &middot; " + st2.completion + "% of the list worked" : ""));
+    if (st2.reply_rate != null) whyBits.push(st2.reply_rate + "% reply rate" + (st2.pos != null ? " &middot; " + fmtInt(st2.pos) + " positive " + (st2.pos === 1 ? "reply" : "replies") : ""));
+    if (st2.ratio) whyBits.push("1 positive per " + fmtInt(st2.ratio) + " sends &mdash; healthy is under 1,500");
+    if (st2.meetings) whyBits.push(fmtInt(st2.meetings) + " meeting" + (st2.meetings === 1 ? "" : "s") + " booked");
+    if (p.note) whyBits.push(esc(p.note));
+    var whyHTML = whyBits.length
+      ? '<details class="opt-why"><summary>Why?</summary><ul class="opt-why-body">' +
+        whyBits.map(function (w) { return "<li>" + w + "</li>"; }).join("") + "</ul></details>"
+      : "";
     return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
       '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
       '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span>" +
@@ -2596,7 +2617,7 @@
       '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
       '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
       '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
-      (p.source ? '<p class="footnote-line">Source: ' + esc(p.source) + "</p>" : "") + "</div>" +
+      whyHTML + "</div>" +
       '<div class="action-dismissed-row" hidden><span>Dismissed &middot; <button type="button" class="action-undo-btn" data-act="undo">Undo</button></span></div></div>';
   }
 
@@ -3495,15 +3516,16 @@
     });
   }
   function wireActionCards(root) {
-    /* "Fix inside of Claude" — opens a fresh Claude chat, prompt pre-filled.
-       stopPropagation so a card living inside a row link never navigates. */
+    /* "Fix inside of Claude" — opens the Claude DESKTOP app (claude:// deep
+       link), prompt pre-filled; deliberately no web fallback. stopPropagation
+       so a card living inside a row link never navigates. */
     root.querySelectorAll(".copy-prompt").forEach(function (b) {
       if (b.getAttribute("data-fix-bound")) return;
       b.setAttribute("data-fix-bound", "1");
       b.addEventListener("click", function (e) {
         e.preventDefault(); e.stopPropagation();
         var txt = b.getAttribute("data-prompt") || "";
-        try { window.open("https://claude.ai/new?q=" + encodeURIComponent(txt), "_blank", "noopener"); } catch (_e) {}
+        try { window.location.href = "claude://new?q=" + encodeURIComponent(txt); } catch (_e) {}
       });
     });
     actLoadOnce(function () { root.querySelectorAll(".action-card").forEach(actApplyCard); });
