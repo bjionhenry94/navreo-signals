@@ -2759,8 +2759,13 @@
     var grid = document.getElementById("perfx-grid");
     if (!p || !grid) return;
     var n = (p.days || []).length;
-    var k = Math.min(days, n);
-    var idx0 = n - k;
+    if (!n) return;
+    // Slice by CALENDAR dates, not slots: the series is weekdays-only, so
+    // "last 30 slots" would silently span six weeks.
+    var endT = new Date(p.days[n - 1] + "T00:00:00Z").getTime();
+    var cutoff = endT - (days - 1) * 86400000;
+    var idx0 = 0;
+    while (idx0 < n && new Date(p.days[idx0] + "T00:00:00Z").getTime() < cutoff) idx0++;
     function slice(a) { return (a || []).slice(idx0); }
     function sum(a) { var s = null, i; for (i = 0; i < a.length; i++) if (a[i] != null) s = (s || 0) + a[i]; return s; }
     function last(a) { var i; for (i = a.length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; }
