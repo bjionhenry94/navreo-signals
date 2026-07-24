@@ -354,6 +354,15 @@ tr.var-winner td.var-flagcell { color: var(--green); }
    (the separate status pill was removed), so it keeps the light-blue "In
    progress" palette instead of the greyed disabled look. */
 .btn.done-ack, .btn.done-ack[disabled] { background: #E4EFFC; color: #1F5AA8; border-color: #E4EFFC; opacity: 1; }
+
+/* ══ Embed mode ══
+   Inside campaigns.html's "Optimisations" tab (?embed=1) the cockpit already
+   supplies rail, gutters and the page scrollbar, so this page sheds its own
+   chrome. min-height must go too: the parent sizes the iframe to
+   scrollHeight, and a 100vh floor would stop it ever shrinking to fit. */
+html.embed .app { min-height: 0; }
+html.embed .main { padding: 0 0 24px; }
+html.embed #nav-jobs-tab, html.embed #nav-jobs-panel { display: none !important; }
 </style>
 </head>
 <body>
@@ -442,7 +451,15 @@ tr.var-winner td.var-flagcell { color: var(--green); }
 </div>
 <script src="shell.js"></script>
 <script>
-document.getElementById("rail").outerHTML = renderRail("notifications");
+/* Embedded in campaigns.html's Optimisations tab (?embed=1): drop the rail —
+   the cockpit provides the shell. Standalone visits keep the full chrome; the
+   report lives under Campaigns now, so the rail highlights that tab. */
+if (new URLSearchParams(location.search).has("embed")) {
+  document.documentElement.classList.add("embed");
+  document.getElementById("rail").outerHTML = "";
+} else {
+  document.getElementById("rail").outerHTML = renderRail("campaigns");
+}
 
 /* Real notifications tab: reads the live optimiser_notifications table via
    GET /api/notifications, renders it AS the lilly-optimiser Priority Report

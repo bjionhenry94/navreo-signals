@@ -1798,6 +1798,23 @@
     mask: var(--icon) center / contain no-repeat;
   }
   .ic8.lg { width: 24px; height: 24px; }
+
+  /* page-level tabs: Campaigns | Optimisations (the lilly-optimiser Priority
+     Report, embedded from notifications.html). Scoped under .cockpit so the
+     color rules beat the generic `.cockpit a` inherit. */
+  .cockpit .page-tabs {
+    display: flex; gap: 22px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 26px;
+  }
+  .cockpit .page-tab {
+    padding: 0 2px 11px; font-size: 0.86rem; font-weight: 600;
+    color: var(--fg-subtle); border-bottom: 2px solid transparent;
+    margin-bottom: -1px; white-space: nowrap;
+  }
+  .cockpit .page-tab:hover { color: var(--fg); }
+  .cockpit .page-tab.is-active { color: var(--fg); border-bottom-color: var(--nav-orange); }
+  #optim-frame { display: block; width: 100%; border: 0; min-height: 480px; }
 </style>
 
 <div class="app">
@@ -1805,6 +1822,11 @@
 <main>
 
 <div class="cockpit">
+
+  <div class="page-tabs">
+    <a class="page-tab is-active" id="ptab-campaigns" href="#/">Campaigns</a>
+    <a class="page-tab" id="ptab-optim" href="#/optimisations">Optimisations</a>
+  </div>
 
   <div class="lw-banner" id="lw-error" hidden>
     <span id="lw-error-text">Live data is unavailable right now.</span>
@@ -1819,6 +1841,10 @@
   <div id="view-campaign" hidden>
     <div class="lw-loading" id="page-loading" hidden>Loading campaign&hellip;</div>
     <div id="page-root"></div>
+  </div>
+
+  <div id="view-optim" hidden>
+    <iframe id="optim-frame" title="Campaign Optimisation Priority Report"></iframe>
   </div>
 
 </div>
@@ -2948,6 +2974,26 @@
   var listScrollY = 0;
   function route() {
     var hash = window.location.hash || "#/";
+    /* top-level page tab: #/optimisations shows the embedded Priority Report;
+       every other hash is the campaigns side (list or detail). Handled before
+       the campaign matcher so the unknown-hash fallback never eats it. */
+    var optim = hash === "#/optimisations";
+    document.getElementById("ptab-campaigns").classList.toggle("is-active", !optim);
+    document.getElementById("ptab-optim").classList.toggle("is-active", optim);
+    var viewOptim = document.getElementById("view-optim");
+    if (optim) {
+      var vl = document.getElementById("view-list");
+      if (!vl.hidden) listScrollY = window.scrollY || 0;
+      vl.hidden = true;
+      document.getElementById("view-campaign").hidden = true;
+      var fr = document.getElementById("optim-frame");
+      if (!fr.getAttribute("src")) fr.src = "notifications.html?embed=1";
+      viewOptim.hidden = false;
+      document.title = "Optimisations · Navreo";
+      window.scrollTo(0, 0);
+      return;
+    }
+    viewOptim.hidden = true;
     var m = hash.match(/^#\/c\/(\d+)(?:\/(messaging|leads|sources))?$/);
     var viewList = document.getElementById("view-list");
     var viewCamp = document.getElementById("view-campaign");
@@ -3001,6 +3047,25 @@
     window.scrollTo(0, 0);
   }
   window.addEventListener("hashchange", route);
+
+  /* The embedded report grows the iframe to its content height so the cockpit
+     keeps the single page scrollbar (no scroll-within-scroll). Same-origin, so
+     the frame's document is readable; a ResizeObserver inside the frame tracks
+     the report's collapsible sections. */
+  (function () {
+    var fr = document.getElementById("optim-frame");
+    function fit() {
+      try {
+        var d = fr.contentDocument;
+        if (d && d.documentElement) fr.style.height = Math.max(d.documentElement.scrollHeight, 480) + "px";
+      } catch (e) { /* frame not ready */ }
+    }
+    fr.addEventListener("load", function () {
+      fit();
+      try { new fr.contentWindow.ResizeObserver(fit).observe(fr.contentDocument.body); }
+      catch (e) { setInterval(fit, 900); }
+    });
+  })();
 
   /* ---------- handlers ---------- */
   function attachListHandlers() {

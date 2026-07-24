@@ -10,10 +10,9 @@ function ic8(name, cls = "") {
 const ICONS = {
   dashboard: ic8("home", "lg"),
   campaigns: ic8("send", "lg"),
-  lists: ic8("data", "lg"),
+  lists: ic8("people", "lg"),
   deliverability: ic8("check", "lg"),
   setter: ic8("reply", "lg"),
-  notifications: ic8("bell", "lg"),
   settings: ic8("settings.svg", "lg"),
 };
 
@@ -23,7 +22,6 @@ const NAV = [
   ["lists.html", "lists", "Lists"],
   ["deliverability.html", "deliverability", "Deliverability"],
   ["setter.html", "setter", "Setter"],
-  ["notifications.html", "notifications", "Notifications"],
 ];
 
 function renderRail(active) {
