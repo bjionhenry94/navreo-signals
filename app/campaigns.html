@@ -2724,14 +2724,22 @@
     return '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" aria-hidden="true">' + thresh +
       '<path class="perfx-line" d="' + path.replace(/\s+$/, "") + '" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>' + dot + '</svg>';
   }
-  /* "▲/▼ N vs last week" chip — last 7 slots vs the 7 before them. Counts sum,
-     rate/ratio average. good ("up"/"down") sets the colour direction; null = neutral. */
-  function perfDelta(vals, kind, good) {
+  /* "▲/▼ N vs last week" chip — last 7 CALENDAR days vs the 7 before, windowed
+     by the actual dates (the series is weekdays-only, so slot counting would
+     silently span 1.4 weeks). Counts sum, rate/ratio average. good ("up"/"down")
+     sets the colour direction; null = neutral. */
+  function perfDelta(vals, kind, good, days) {
     var n = vals.length, i;
-    if (n < 8) return "";
-    function win(a) { var o = []; for (i = 0; i < a.length; i++) if (a[i] != null) o.push(a[i]); return o; }
-    var cur = win(vals.slice(Math.max(0, n - 7)));
-    var prev = win(vals.slice(Math.max(0, n - 14), Math.max(0, n - 7)));
+    if (!n || !days || days.length !== n) return "";
+    function ts(d) { return new Date(d + "T00:00:00Z").getTime(); }
+    var endT = ts(days[n - 1]), WK = 7 * 86400000;
+    var cur = [], prev = [];
+    for (i = 0; i < n; i++) {
+      if (vals[i] == null) continue;
+      var t = ts(days[i]);
+      if (t > endT - WK) cur.push(vals[i]);
+      else if (t > endT - 2 * WK) prev.push(vals[i]);
+    }
     if (!cur.length || !prev.length) return "";
     function agg(a) { var s = 0, j; for (j = 0; j < a.length; j++) s += a[j]; return kind === "count" ? s : s / a.length; }
     var delta = agg(cur) - agg(prev);
@@ -2776,7 +2784,7 @@
         '<div class="perfx-lab">' + esc(b.name) + "</div>" +
         '<div class="perfx-num tnum">' + b.hero + "</div>" +
         '<div class="perfx-spark" data-box="' + bi + '">' + perfSpark(b.vals, b.color) + "</div>" +
-        perfDelta(b.vals, b.kind, b.good) + "</div>";
+        perfDelta(b.vals, b.kind, b.good, winDays) + "</div>";
     });
     grid.innerHTML = out;
     attachPerfTips(grid, boxes, winDays);

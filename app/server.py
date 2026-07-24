@@ -6245,6 +6245,18 @@ def perf_daily(p: dict) -> dict:
     leads_added = bounded(la_m)
     meetings = bounded(mtg_m)
 
+    # Weekends off: the fleet doesn't send Sat/Sun, so those days are dead air
+    # (0 sent, a few stray replies) that saw-tooths every trend line. The series
+    # is weekdays only — the chart joins Fri→Mon directly; nothing is invented.
+    last_synced = max([d for d in dates if sent_m.get(d, 0)], default=None)
+    keep = [i for i in range(ndays) if (start + _td(days=i)).weekday() < 5]
+
+    def wkd(a):
+        return [a[i] for i in keep]
+    dates = wkd(dates)
+    sent, positives, reply_rate, bounce_rate = wkd(sent), wkd(positives), wkd(reply_rate), wkd(bounce_rate)
+    leads_added, meetings = wkd(leads_added), wkd(meetings)
+
     return {"days": dates, "campaign": campaign,
             "sent": sent, "leads_added": leads_added, "positives": positives,
             "meetings": meetings, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
@@ -6259,7 +6271,7 @@ def perf_daily(p: dict) -> dict:
                 "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
                                if campaign else "Reply rate % (whole fleet — Smartlead day-wise replies÷sent, stored in fleet_daily_stats)"),
                 "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise bounced÷sent, stored in fleet_daily_stats)"},
-            "last_synced_day": max([d for d in dates if sent_m.get(d, 0)], default=None)}
+            "last_synced_day": last_synced}
 
 
 def _perf_daily_cached(key) -> dict:
