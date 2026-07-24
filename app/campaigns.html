@@ -2598,7 +2598,7 @@
     if (p.bold) whyBits.push(esc(p.bold));
     if (st2.sent != null) whyBits.push(fmtInt(st2.sent) + " emails sent" + (st2.leads ? " to " + fmtInt(st2.leads) + " leads" : "") + (st2.completion != null ? " &middot; " + st2.completion + "% of the list worked" : ""));
     if (st2.reply_rate != null) whyBits.push(st2.reply_rate + "% reply rate" + (st2.pos != null ? " &middot; " + fmtInt(st2.pos) + " positive " + (st2.pos === 1 ? "reply" : "replies") : ""));
-    if (st2.ratio) whyBits.push("1 positive per " + fmtInt(st2.ratio) + " sends &mdash; healthy is under 1,500");
+    if (st2.ratio && st2.pos > 0) whyBits.push("1 positive per " + fmtInt(st2.ratio) + " sends &mdash; healthy is under 1,500");
     if (st2.meetings) whyBits.push(fmtInt(st2.meetings) + " meeting" + (st2.meetings === 1 ? "" : "s") + " booked");
     if (p.note) whyBits.push(esc(p.note));
     var whyHTML = whyBits.length
