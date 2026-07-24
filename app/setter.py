@@ -5904,7 +5904,85 @@ def route_subsequence_push(payload):
         return 500, {"error": str(e)[:300]}
 
 
+# ── redraft as a background job (owner report 2026-07-25: "whenever I try to
+# regenerate a response from a blank, I get [502]") ────────────────────────
+# A redraft on a row with no stored classification runs classify -> draft ->
+# proofread back to back, three model round trips. Measured live on an 8KB
+# reply: 25-42s, which sits right on the gateway's limit - a slow model call
+# tips it over and the proxy answers 502 while the work is still running (and
+# usually SUCCEEDS a moment later, so the reviewer sees an error over a draft
+# that did get written). Long work does not belong in a request: the POST now
+# starts a job and answers immediately, and the UI polls this for the result.
+_REDRAFT_JOBS = {}
+_REDRAFT_JOBS_LOCK = threading.Lock()
+_REDRAFT_JOB_TTL = 900          # keep a finished job readable for 15 minutes
+
+
+def _redraft_jobs_gc():
+    """Drop finished jobs older than the TTL. In-memory by design - a job lost
+    to a restart is recoverable, because _redraft_sync persists the draft to
+    the row before it returns (the client re-reads the row in that case)."""
+    now = _time.time()
+    for jid in [k for k, v in _REDRAFT_JOBS.items()
+                if now - (v.get("at") or 0) > _REDRAFT_JOB_TTL]:
+        _REDRAFT_JOBS.pop(jid, None)
+
+
+def _redraft_job_worker(job_id: str, payload: dict):
+    try:
+        status, body = _redraft_sync(payload)
+        state = "done" if status == 200 else "error"
+    except Exception as e:  # noqa: BLE001 - a worker must never take the thread down silently
+        status, body, state = 500, {"error": str(e)[:300]}, "error"
+        print(f"[setter] redraft job {job_id} crashed: {e}", file=sys.stderr)
+    with _REDRAFT_JOBS_LOCK:
+        _REDRAFT_JOBS[job_id] = {"state": state, "status": status, "body": body,
+                                 "at": _time.time()}
+
+
+def route_redraft_status(params):
+    """GET /api/setter/queue/redraft/status?job=<id> - state of a background
+    redraft. An unknown id answers state="unknown" (not an error): the server
+    may have restarted, and the caller's correct move is to re-read the row,
+    whose draft was persisted before the job finished."""
+    try:
+        job_id = _qp(params, "job", "")
+        if not job_id:
+            return 400, {"error": "job is required"}
+        with _REDRAFT_JOBS_LOCK:
+            _redraft_jobs_gc()
+            job = _REDRAFT_JOBS.get(job_id)
+        if not job:
+            return 200, {"state": "unknown"}
+        if job.get("state") == "running":
+            return 200, {"state": "running"}
+        out = {"state": job.get("state"), "status": job.get("status")}
+        out.update(job.get("body") or {})
+        return 200, out
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def route_queue_redraft(payload):
+    """POST /api/setter/queue/redraft. With {"async": true} this starts a job
+    and returns 202 {"job_id": ...} immediately - see the note above. Without
+    it, behaviour is byte-for-byte what it always was, so older clients and
+    every existing test are unaffected."""
+    payload = payload or {}
+    if not payload.get("async"):
+        return _redraft_sync(payload)
+    if not payload.get("id"):
+        return 400, {"error": "id is required"}
+    job_id = uuid.uuid4().hex[:16]
+    with _REDRAFT_JOBS_LOCK:
+        _redraft_jobs_gc()
+        _REDRAFT_JOBS[job_id] = {"state": "running", "at": _time.time()}
+    threading.Thread(target=_redraft_job_worker, args=(job_id, payload),
+                    daemon=True, name="setter-redraft").start()
+    return 202, {"job_id": job_id, "state": "running"}
+
+
+def _redraft_sync(payload):
     try:
         payload = payload or {}
         qid = payload.get("id")
@@ -8646,6 +8724,7 @@ GET_ROUTES = {
     "/api/setter/subsequences": route_subsequences_get,
     "/api/setter/subsequence/unresolved": route_subsequence_unresolved,
     "/api/setter/poll/status": route_poll_status,
+    "/api/setter/queue/redraft/status": route_redraft_status,
 }
 
 POST_ROUTES = {

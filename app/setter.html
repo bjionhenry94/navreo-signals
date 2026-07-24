@@ -3439,6 +3439,47 @@ function showLessonToast(rowId, rule, undoable) {
   // you answer it or when the next lesson replaces it.
 }
 
+/* Regenerating is SLOW - on a row with no stored classification it is three
+   model round trips (classify, draft, proofread), measured live at 25-42s on
+   a long reply. Held open as one request that sits right on the gateway's
+   limit, which is why a regenerate from a blank draft intermittently came
+   back "Request failed (502)" while the work was actually still running and
+   usually succeeding (owner report 2026-07-25). So: start a job, poll it.
+
+   Returns the same {ok, data, error} shape fetchJson does, so callers are
+   unchanged. Falls back cleanly in two directions - a server that answers
+   synchronously (no job_id) is used as-is, and a job lost to a restart is
+   recovered by re-reading the row, whose draft was persisted before the job
+   ended. */
+async function runRedraftJob(payload, onTick) {
+  const res = await fetchJson("/api/setter/queue/redraft", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, async: true }),
+  });
+  if (!res.ok) return res;
+  const jobId = res.data && res.data.job_id;
+  if (!jobId) return res;                       // answered synchronously - done already
+  const deadline = Date.now() + 240000;
+  let ticks = 0;
+  while (Date.now() < deadline) {
+    await sleep(2000);
+    if (onTick) onTick(++ticks * 2);
+    const st = await fetchJson(`/api/setter/queue/redraft/status?job=${encodeURIComponent(jobId)}`);
+    if (!st.ok) continue;                       // a network blip must not kill the wait
+    const state = st.data && st.data.state;
+    if (state === "running") continue;
+    if (state === "unknown") {
+      const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`);
+      return (rowRes.ok && rowRes.data && rowRes.data.row)
+        ? { ok: true, data: { row: rowRes.data.row, feedback_note: "" } }
+        : { ok: false, error: "the draft was regenerated but the result couldn't be read back - reload to see it" };
+    }
+    if (state === "error") return { ok: false, error: (st.data && st.data.error) || "the regenerate failed" };
+    return { ok: true, data: st.data };         // done
+  }
+  return { ok: false, error: "this is taking longer than usual - the draft may still land, give it a moment and reload" };
+}
+
 async function doRedraft(btn, feedback, scope) {
   const restore = busyBtn(btn, "Regenerating…");
   if (!restore) return;
@@ -3448,8 +3489,9 @@ async function doRedraft(btn, feedback, scope) {
   // scope: "remember" persists this feedback into the agent's own memory, so
   // every future draft applies it too - not just this one regeneration.
   if (scope === "remember" && feedback) payload.scope = "remember";
-  const res = await fetchJson("/api/setter/queue/redraft", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  const res = await runRedraftJob(payload, (secs) => {
+    // 40 seconds of a silent spinner reads as broken; say it is still working.
+    btn.textContent = secs < 10 ? "Regenerating…" : `Regenerating… ${secs}s`;
   });
   restore();
   if (!res.ok) {
@@ -3497,8 +3539,10 @@ async function doDraftAnyway(btn) {
   const restore = busyBtn(btn, "Drafting…");
   if (!restore) return;
   const id = btn.getAttribute("data-id");
-  const res = await fetchJson("/api/setter/queue/redraft", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id) }),
+  // Same background job as Regenerate - this is the very path that 502'd,
+  // since a row with no draft has no stored classification either.
+  const res = await runRedraftJob({ id: Number(id) }, (secs) => {
+    btn.textContent = secs < 10 ? "Drafting…" : `Drafting… ${secs}s`;
   });
   restore();
   if (!res.ok) {

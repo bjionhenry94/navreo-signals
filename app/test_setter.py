@@ -2086,6 +2086,47 @@ def test_agent_adoption_busts_the_read_caches():
          busted["n"] >= 1, busted)
 
 
+def test_redraft_async_job_returns_immediately_and_reports_its_result():
+    import time as _time_mod
+    """Regenerating from a blank draft is three model round trips (25-42s
+    live), which sat on the gateway timeout and surfaced as a 502 while the
+    work was still running. The POST must hand back a job at once."""
+    sb, http = fresh_setter()
+    calls = {"n": 0}
+
+    def fake_sync(payload):
+        calls["n"] += 1
+        return 200, {"row": {"id": payload.get("id")}, "feedback_note": ""}
+
+    real = setter._redraft_sync
+    setter._redraft_sync = fake_sync
+    try:
+        status, resp = setter.route_queue_redraft({"id": 931, "async": True})
+        check("redraft job: POST answers 202 with a job id immediately",
+             status == 202 and resp.get("job_id") and resp.get("state") == "running", (status, resp))
+        job = resp.get("job_id")
+        for _ in range(50):
+            st, body = setter.route_redraft_status({"job": [job]})
+            if body.get("state") != "running":
+                break
+            _time_mod.sleep(0.05)
+        check("redraft job: the status route reports done and carries the row",
+             st == 200 and body.get("state") == "done" and (body.get("row") or {}).get("id") == 931,
+             (st, body))
+        check("redraft job: the work ran exactly once", calls["n"] == 1, calls)
+        st2, body2 = setter.route_redraft_status({"job": ["no-such-job"]})
+        check("redraft job: an unknown id is 'unknown', not an error (server may have restarted)",
+             st2 == 200 and body2.get("state") == "unknown", (st2, body2))
+        st3, body3 = setter.route_redraft_status({})
+        check("redraft job: a missing job id is a 400", st3 == 400, (st3, body3))
+        # No async flag -> the original synchronous contract, unchanged.
+        s4, r4 = setter.route_queue_redraft({"id": 931})
+        check("redraft job: without async the call is still synchronous",
+             s4 == 200 and (r4.get("row") or {}).get("id") == 931, (s4, r4))
+    finally:
+        setter._redraft_sync = real
+
+
 def test_subsequence_dismiss_is_idempotent():
     """#6: dismissing an already-dismissed row is success, not an error. The
     error banner plus the full tray repaint was the reported 'restart'."""
@@ -9023,6 +9064,7 @@ if __name__ == "__main__":
     # busts the read caches and spawns rewarm threads. Those land in whatever
     # test is running next and break the round-trip COUNT assertions.
     test_agent_adoption_busts_the_read_caches()
+    test_redraft_async_job_returns_immediately_and_reports_its_result()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
