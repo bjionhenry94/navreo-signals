@@ -853,6 +853,10 @@ let selectedRowId = null;
    landing scroll must fire ONCE per row opened, never once per repaint (owner
    report 2026-07-25: "when scrolling the messages it jumps around a lot"). */
 let _lastScrolledRowId = null;
+/* Fingerprint of what the open conversation is currently SHOWING, so a queue
+   reload repaints it when the facts changed and leaves it alone when they
+   didn't. See refreshOpenDetail. */
+let _lastDetailSignature = null;
 let inboxSearchQuery = "";
 /* rowId -> last edited (unsent) draft HTML, so a background refresh never
    clobbers text the user is mid-way through editing */
@@ -1180,8 +1184,47 @@ async function loadQueue(prefetch) {
   renderQueueFilters();
   renderClientFilter();
   renderQueue();
+  refreshOpenDetail();
   hydrateAllRows();  // background: full corpus (threads + search + instant pills)
   loadUnresolvedTray();
+}
+
+/* The OPEN conversation is a fourth surface, and it used to be the only one
+   loadQueue never refreshed - it repainted the stats, the chips and the list
+   and left the pane you were actually reading on stale data. That is how
+   assigning an agent looked broken (owner report 2026-07-25): the save
+   worked, the list row updated, and the conversation kept its old "No agent
+   is assigned to this campaign" prompt. Twelve call sites shared that gap; it
+   is closed here once rather than patched per caller.
+
+   Two guards, because a repaint is not always welcome:
+   - never while the reviewer is typing in THIS row (a repaint would eat the
+     caret and the half-written reply),
+   - only when something the pane actually shows has changed, so the routine
+     3-minute reload is still a no-op. */
+function detailSignature(r) {
+  if (!r) return "";
+  return [r.agent_id, r.status, r.decision, r.decision_reason, r.category,
+          r.subsequence_decision, r.added_to_subsequence, r.draft_subject,
+          (r.draft_body || "").length, (r.sent_body || "").length].join("|");
+}
+function isTypingIn(rowId) {
+  const el = document.activeElement;
+  if (!el || el === document.body) return false;
+  const owner = el.closest ? el.closest("[data-id]") : null;
+  if (owner && String(owner.getAttribute("data-id")) !== String(rowId)) return false;
+  return el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
+}
+function refreshOpenDetail() {
+  if (selectedRowId == null) return;
+  const row = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId))
+           || ALL_ROWS.find((r) => String(r.id) === String(selectedRowId));
+  if (!row) return;
+  if (isTypingIn(selectedRowId)) return;
+  const sig = detailSignature(row);
+  if (sig === _lastDetailSignature) return;
+  _lastDetailSignature = sig;
+  renderDetail(row);
 }
 
 /* ── Unresolved-followup TRAY (2026-07-17, P3 design) ─────────────────────
@@ -1861,6 +1904,9 @@ function selectRow(id) {
   // empty (found live by a tester).
   const row = QUEUE_ROWS.find((r) => String(r.id) === String(id))
            || ALL_ROWS.find((r) => String(r.id) === String(id));
+  // A different row means a different pane: re-baseline the fingerprint so
+  // refreshOpenDetail compares like with like on the next queue reload.
+  _lastDetailSignature = detailSignature(row);
   renderDetail(row || null);
 }
 
@@ -4127,17 +4173,9 @@ document.getElementById("agentSaveBtn").addEventListener("click", async () => {
   showWebhookWarnings(res.data && res.data.webhooks);
   await loadAgentsAndCampaigns();
   await loadQueue();
-  // loadQueue re-renders the LIST and the chips but never the open
-  // conversation, so after assigning an agent the pane you were looking at
-  // still said "No agent is assigned to this campaign" and still offered the
-  // Assign button - the save had worked and nothing on screen said so (owner
-  // report 2026-07-25: "I tried to assign an agent and it didn't work").
-  // Repaint the open row, and name what changed.
-  if (selectedRowId != null) {
-    const row = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId))
-             || ALL_ROWS.find((r) => String(r.id) === String(selectedRowId));
-    if (row) renderDetail(row);
-  }
+  // The open conversation repaints itself now - loadQueue's refreshOpenDetail
+  // covers this and every other caller that changes the row on screen. Just
+  // name what happened.
   protoNote(assigned ? `${name} now handles ${assigned.name}` : "Agent saved");
 });
 
