@@ -1348,13 +1348,20 @@
      8. ROUND 15 -- compact widget grammar, row badges, campaign grids
      ============================================================ */
 
-  /* -- A. homepage: compact widget modifier + 3/2/1 responsive grid -- */
-  .book-grid.book-grid--compact { gap: 18px; }
-  @media (min-width: 640px) {
-    .book-grid.book-grid--compact { grid-template-columns: repeat(2, 1fr); }
+  /* -- A. homepage: compact widget modifier -- one-row horizontal swipe strip at every width -- */
+  .book-grid.book-grid--compact {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    gap: 18px;
+    padding-bottom: 6px;
+    scrollbar-width: thin;
   }
-  @media (min-width: 1024px) {
-    .book-grid.book-grid--compact { grid-template-columns: repeat(3, 1fr); }
+  .book-grid.book-grid--compact > .book-widget {
+    flex: 0 0 clamp(300px, 32%, 380px);
+    scroll-snap-align: start;
   }
 
   .book-widget.book-widget--compact { padding: 22px 22px 18px; gap: 15px; }
