@@ -3050,21 +3050,25 @@
 
   /* The embedded report grows the iframe to its content height so the cockpit
      keeps the single page scrollbar (no scroll-within-scroll). Same-origin, so
-     the frame's document is readable; a ResizeObserver inside the frame tracks
-     the report's collapsible sections. */
+     the frame's document is readable. Sized by a poll, NOT ResizeObserver:
+     RO/rAF delivery rides the rendering pipeline and is throttled to silence
+     in embedded webviews (verified live — zero deliveries even on real body
+     growth), while timers keep running. The poll only works while the tab is
+     visible and only writes when the height actually changed. */
   (function () {
     var fr = document.getElementById("optim-frame");
     function fit() {
       try {
         var d = fr.contentDocument;
-        if (d && d.documentElement) fr.style.height = Math.max(d.documentElement.scrollHeight, 480) + "px";
+        if (!d || !d.documentElement) return;
+        var h = Math.max(d.documentElement.scrollHeight, 480);
+        if (fr.offsetHeight !== h) fr.style.height = h + "px";
       } catch (e) { /* frame not ready */ }
     }
-    fr.addEventListener("load", function () {
-      fit();
-      try { new fr.contentWindow.ResizeObserver(fit).observe(fr.contentDocument.body); }
-      catch (e) { setInterval(fit, 900); }
-    });
+    fr.addEventListener("load", fit);
+    setInterval(function () {
+      if (!document.getElementById("view-optim").hidden) fit();
+    }, 700);
   })();
 
   /* ---------- handlers ---------- */
