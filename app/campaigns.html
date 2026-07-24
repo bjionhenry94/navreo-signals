@@ -537,6 +537,7 @@
   .row-live { display: inline-flex; align-items: center; gap: 4px; }
   .row-live-dot { width: 6px; height: 6px; border-radius: 50%; background: #2f9e44; display: inline-block; }
   @media (max-width: 640px) { .live-meta { margin-left: 0; width: 100%; } }
+  .live-meta--left { margin-left: 0; margin-top: 10px; }
 
   .rows-empty-state {
     margin-top: 14px;
@@ -2280,18 +2281,16 @@
         return '<button type="button" class="filter-chip view-chip' + (on ? " is-active" : "") +
           '" data-preset="' + k + '" aria-pressed="' + on + '" title="' + esc(p.note) + '">' + esc(p.label) + "</button>";
       }).join("") +
-      "</div>" +
-      '<div class="live-meta" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>' +
-      '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>' +
-      "</div>");
-    h.push('<p class="view-note" id="view-note">' + esc(PRESETS.all.note) + "</p>");
+      "</div></div>");
+    h.push('<div class="live-meta live-meta--left" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>' +
+      '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>');
 
     h.push('<p class="section-caption" id="search-count" hidden></p>');
     h.push('<div class="sr-only" role="status" aria-live="polite" id="rows-live-region"></div>');
     h.push('<div class="rows-empty-state" id="rows-empty-state" hidden><p id="rows-empty-text">No campaigns match that filter in this view.</p><button type="button" id="clear-filters-btn">Clear filters</button></div>');
 
     /* rows — filled by renderRows() so live status/completion controls can reshape it */
-    h.push('<section aria-label="Campaigns"><div class="section-label">Campaigns</div><div class="campaign-rows" id="campaign-rows"></div></section>');
+    h.push('<section aria-label="Campaigns"><div class="campaign-rows" id="campaign-rows"></div></section>');
 
     /* footer */
     h.push('<p class="footer-fine">Every number on this page comes from the live Supabase cache and the daily Smartlead sync. ' +
