@@ -2243,6 +2243,7 @@
       var st = c.stats;
       c.ratio = (st.positives > 0 && st.sent) ? Math.round(st.sent / st.positives) : null;
       c.sortKey = (st.positives === 0 || st.positives == null) ? (1e12 + (st.sent || 0)) : c.ratio;
+      c.client = clientOf(c);
     });
     var tierOrder = { decision: 0, watch: 1, fine: 2 };
     campaigns.sort(function (a, b) {
@@ -2282,10 +2283,25 @@
     }
   }
 
+  /* Client a campaign belongs to. There is no client field — it lives in the
+     name, so we strip any Recontact/Reconnect prefix and take the leading token
+     before the first delimiter (| – / or a spaced hyphen). Names like
+     "Reconnect 2.0: Amplifyy - ..." → "Amplifyy", "Navreo | Distributors" →
+     "Navreo", "Arnic – Sales Leaders" → "Arnic". */
+  function clientOf(c) {
+    var n = String(c.name || "").replace(/^\s*(new\s+)?(recontact|reconnect)\b[^:]*:\s*/i, "");
+    n = n.split(/\s*\|\s*|\s*–\s*|\s+-\s+|\s*\/\s*/)[0].trim();
+    if (!n) n = String(c.name || "").trim().split(/\s+/)[0] || "Other";
+    return n;
+  }
+
   /* ---------- list view ---------- */
   function renderList() {
     var root = document.getElementById("list-root");
     var cs = STATE.campaigns;
+    var clientList = cs.map(function (c) { return c.client; })
+      .filter(function (v, i, a) { return v && a.indexOf(v) === i; })
+      .sort(function (a, b) { return a.localeCompare(b); });
     var nDecide = cs.filter(function (c) { return c.tier === "decision"; }).length;
     var nWatch = cs.filter(function (c) { return c.tier === "watch"; }).length;
     var nFine = cs.filter(function (c) { return c.tier === "fine"; }).length;
@@ -2315,6 +2331,13 @@
       '<div class="search-wrap"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
       '<input type="search" class="search-input" id="cockpit-search" placeholder="Search a campaign or client&hellip;" aria-label="Search campaigns"></div>' +
       '<span class="filter-bar-spacer"></span>' +
+      '<label class="status-picker"><span class="status-picker-label">Client</span>' +
+      '<select class="status-select" id="client-select" aria-label="Filter by client">' +
+      '<option value="all">All clients</option>' +
+      clientList.map(function (cl) {
+        return '<option value="' + esc(cl) + '"' + (STATE.view.client === cl ? " selected" : "") + ">" + esc(cl) + "</option>";
+      }).join("") +
+      '</select></label>' +
       '<label class="status-picker"><span class="status-picker-label">Status</span>' +
       '<select class="status-select" id="status-select" aria-label="Filter by live campaign status">' +
       '<option value="all">All statuses</option>' +
@@ -2388,9 +2411,10 @@
     var cs = STATE.campaigns || [];
     var visible = cs.filter(function (c) {
       if (!(v.tier === "all" || c.tier === v.tier)) return false;
+      if (!(v.client === "all" || c.client === v.client)) return false;
       if (!(v.status === "all" || liveBucket(c.id) === v.status)) return false;
       if (q) {
-        var hay = (c.name + " " + c.pill + " " + c.tier).toLowerCase();
+        var hay = (c.name + " " + c.pill + " " + c.tier + " " + (c.client || "")).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
       }
       return true;
@@ -3386,6 +3410,12 @@
         renderRows();
       });
     });
+    /* client dropdown */
+    var clientSel = document.getElementById("client-select");
+    if (clientSel) clientSel.addEventListener("change", function () {
+      STATE.view.client = clientSel.value;
+      renderRows();
+    });
     /* live status dropdown */
     var statusSel = document.getElementById("status-select");
     if (statusSel) statusSel.addEventListener("change", function () {
@@ -3405,8 +3435,9 @@
     var clearBtn = document.getElementById("clear-filters-btn");
     if (clearBtn) clearBtn.addEventListener("click", function () {
       document.getElementById("cockpit-search").value = "";
-      STATE.view.q = ""; STATE.view.tier = "all"; STATE.view.status = "all"; STATE.view.preset = "all";
+      STATE.view.q = ""; STATE.view.tier = "all"; STATE.view.status = "all"; STATE.view.preset = "all"; STATE.view.client = "all";
       var sel = document.getElementById("status-select"); if (sel) sel.value = "all";
+      var csel = document.getElementById("client-select"); if (csel) csel.value = "all";
       root.querySelectorAll(".view-chip").forEach(function (x) { var a = x.getAttribute("data-preset") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
       if (viewNote) viewNote.textContent = (PRESETS.all || {}).note || "";
       renderRows();
