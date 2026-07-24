@@ -1168,6 +1168,37 @@
   .sample-footer { margin-top: 10px; font-size: 0.76rem; color: var(--fg-subtle); }
   .status-note { margin-top: 12px; font-size: 0.78rem; color: var(--fg-subtle); }
 
+  /* -- Leads tab data-viz: the status split and the reply mix are drawn, not just listed -- */
+  /* Everyone's status: one segmented bar, the whole contact record end to end. */
+  .statusbar { display: flex; height: 16px; border-radius: 999px; overflow: hidden;
+    background: var(--sunken); margin: 2px 0 12px; }
+  .statusbar span { height: 100%; display: block; min-width: 2px; }
+  .statusbar span.s-started   { background: #1971C2; }
+  .statusbar span.s-working   { background: #E8590C; }
+  .statusbar span.s-finished  { background: #2F9E44; }
+  .statusbar span.s-paused    { background: #E7A63A; }
+  .statusbar span.s-blocked   { background: #E03131; }
+  .statuskey { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;
+    font-size: 0.74rem; color: var(--fg-subtle); }
+  .statuskey span { display: inline-flex; align-items: center; gap: 5px; }
+  .statuskey i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+
+  /* Replies by category: volume bars, longest is the whole width. */
+  .catbars { display: flex; flex-direction: column; gap: 9px; }
+  .catrow { display: grid; grid-template-columns: minmax(96px, 150px) 1fr auto;
+    align-items: center; gap: 11px; }
+  .catrow .cat-l { font-size: 0.8rem; color: var(--fg-muted); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .catrow .cat-track { background: var(--sunken); border-radius: 999px; height: 14px; overflow: hidden; }
+  .catrow .cat-fill { display: block; height: 100%; border-radius: 999px; background: var(--nav-orange);
+    min-width: 3px; }
+  .catrow .cat-fill.is-quiet { background: var(--neutral-warm, #C0B0A0); }
+  .catrow .cat-n { font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  @media (max-width: 560px) {
+    .catrow { grid-template-columns: 1fr auto; }
+    .catrow .cat-track { grid-column: 1 / -1; }
+  }
+
   /* sources tab */
   .source-cards {
     display: grid;
@@ -2898,22 +2929,8 @@
 
     /* overview */
     h.push('<div class="tab-panel" data-tab="overview"' + (tab !== "overview" ? " hidden" : "") + ">");
-    h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
-    if (c.teaser) h.push('<p class="wp-headline">' + esc(c.teaser) + "</p>");
-    if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The Live performance card below is campaign lifetime: a different counter, not a contradiction.</p>");
-    if (c.drifted) h.push('<p class="footnote-line">Written at the morning crunch; the numbers below come from the newer Smartlead sync and have moved since.</p>');
-    if (c.others.length) {
-      h.push('<div class="campaign-widget-grid">');
-      c.others.forEach(function (r) {
-        h.push(nvzCard(r, KIND_LABEL[r.insight_key] || r.insight_key));
-      });
-      h.push("</div>");
-    } else {
-      h.push('<p class="card-subtitle">' + (c.ghost
-        ? "This campaign is not in today's briefing — the morning crunch only writes up campaigns that are running. The numbers below are live from the daily sync."
-        : "No open flags beyond the verdict. That is the whole picture.") + "</p>");
-    }
-    h.push("</div>");
+    /* Live performance leads the tab: the live numbers are what a strategist opens
+       the page for, so they sit above the written-up picture. */
     h.push('<div class="ov-card"><div class="card-title">Live performance</div>' +
       '<p class="card-subtitle">Campaign-to-date (positives = Smartlead\'s interested mark). ' +
       (c.stats.source === "crunch"
@@ -2929,6 +2946,22 @@
       "</div>" +
       (c.ratio ? '<p class="lw-src-note">Sends per positive: 1 per ' + fmtInt(c.ratio) + " (" + fmtInt(st.sent) + " &divide; " + fmtInt(st.positives) + "). Under 1,500 is healthy.</p>" : "") +
       "</div>");
+    h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
+    if (c.teaser) h.push('<p class="wp-headline">' + esc(c.teaser) + "</p>");
+    if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The Live performance card above is campaign lifetime: a different counter, not a contradiction.</p>");
+    if (c.drifted) h.push('<p class="footnote-line">Written at the morning crunch; the numbers above come from the newer Smartlead sync and have moved since.</p>');
+    if (c.others.length) {
+      h.push('<div class="campaign-widget-grid">');
+      c.others.forEach(function (r) {
+        h.push(nvzCard(r, KIND_LABEL[r.insight_key] || r.insight_key));
+      });
+      h.push("</div>");
+    } else {
+      h.push('<p class="card-subtitle">' + (c.ghost
+        ? "This campaign is not in today's briefing — the morning crunch only writes up campaigns that are running. The numbers above are live from the daily sync."
+        : "No open flags beyond the verdict. That is the whole picture.") + "</p>");
+    }
+    h.push("</div>");
     /* actions */
     var acts = c.insights.filter(function (r) { return (r.payload || {}).act; });
     if (acts.length) {
@@ -2990,6 +3023,81 @@
           : '<div class="source-list-card">' + inner + "</div>";
       }).join("") + "</div>";
     });
+  }
+
+  /* "Pull more" panel: standing pool_pulls record + one-button gated pull.
+     The pull runs server-side as a polled job (sweep, ListMint, audit,
+     upload) — this panel only starts it and narrates progress. */
+  function hydratePoolPull(c) {
+    getJSON("/api/pool-pulls").then(function (d) {
+      var pool = ((d && d.pools) || []).find(function (p) { return String(p.campaign_id) === String(c.id); });
+      var sec = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-section');
+      if (!pool || !sec) return;
+      sec.hidden = false;
+      var host = document.getElementById("pool-pull-root");
+      if (!host) {
+        host = document.createElement("div");
+        host.id = "pool-pull-root";
+        sec.appendChild(host);
+      }
+      renderPoolPull(host, pool, c);
+      if (pool.active_job) poolPullPoll(host, pool.seg, c);
+    }).catch(function () {});
+  }
+
+  function poolStageLine(j) {
+    var st = { selecting: "Selecting the next batch…", sweeping: "Sweeping for collisions…",
+               verifying: "Verifying emails", uploading: "Uploading verified leads" }[j.stage] || "Working…";
+    var pr = j.progress && j.progress.total ? " " + fmtInt(j.progress.done) + "/" + fmtInt(j.progress.total) : "";
+    return st + pr;
+  }
+
+  function renderPoolPull(host, pool, c) {
+    var busy = !!pool.active_job;
+    var lb = pool.last_batch || null;
+    host.innerHTML =
+      '<div class="source-list-card" style="margin-top:10px;display:block">' +
+      '<span class="source-list-name">Pull more from this pool</span>' +
+      '<span class="source-list-meta">' + fmtInt(pool.pulled_ok) + " pulled &middot; " +
+        fmtInt(pool.remaining) + " remaining of " + fmtInt(pool.total_pool) + "</span>" +
+      '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">' +
+      '<input id="pp-size" type="number" min="1" max="2000" value="500" style="width:90px;padding:7px 8px;border:1px solid var(--border-strong);border-radius:8px;font:inherit" ' + (busy ? "disabled" : "") + ">" +
+      '<button id="pp-go" class="action-state-btn" style="background:#E8590C;color:#fff;border-color:transparent" ' + (busy ? "disabled" : "") + ">Pull more</button></div>" +
+      '<div id="pp-status" class="footnote-line" style="margin-top:6px">' +
+      (busy ? poolStageLine(pool.active_job)
+            : (lb ? "Last pull: " + fmtInt(lb.pushed) + " verified added &middot; " + fmtInt(lb.verify_failed) +
+                    " failed verification &middot; " + fmtInt(lb.live_dropped) + " dropped as collisions"
+                  : "Runs the gated pipeline — sweep, email verification, audit, upload. The campaign stays drafted; nothing sends.")) +
+      "</div></div>";
+    var btn = document.getElementById("pp-go");
+    if (btn) btn.onclick = function () {
+      var size = parseInt((document.getElementById("pp-size") || {}).value, 10) || 500;
+      btn.disabled = true;
+      var st = document.getElementById("pp-status");
+      if (st) st.textContent = "Starting…";
+      fetch("/api/pool-pulls/pull", { method: "POST", body: JSON.stringify({ seg: pool.seg, size: size }) })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j.ok) {
+            if (st) st.textContent = j.message || "Couldn't start the pull.";
+            btn.disabled = false;
+            return;
+          }
+          poolPullPoll(host, pool.seg, c);
+        })
+        .catch(function () { if (st) st.textContent = "Couldn't reach the server — try again."; btn.disabled = false; });
+    };
+  }
+
+  function poolPullPoll(host, seg, c) {
+    setTimeout(function () {
+      getJSON("/api/pool-pulls").then(function (d) {
+        var pool = ((d && d.pools) || []).find(function (p) { return p.seg === seg; });
+        if (!pool || !document.getElementById("pool-pull-root")) return;
+        renderPoolPull(host, pool, c);
+        if (pool.active_job) poolPullPoll(host, seg, c);
+      }).catch(function () { poolPullPoll(host, seg, c); });
+    }, 4000);
   }
 
   function hydrateDetail(c) {

@@ -3960,6 +3960,192 @@ def list_pulls_pull(p: dict) -> tuple:
 # POST /api/lists/* dispatch — kept OUT of ROUTES because these handlers
 # return (status, body) so validation/trigger failures answer with real 4xx
 # codes (ROUTES handlers always answer 200). do_POST checks this map first.
+# ── Pool pulls: gated "Pull more" for recontact source pools ────────────────
+# A standing pool_pulls record per pool (total/pulled/remaining) + a one-button
+# pull that runs the SAME gated pipeline as chat: selection per the pool's
+# ruling (RPC pool_pull_prepare stages + sweeps candidates), a live Smartlead
+# enrollment check, ListMint verify (cache-TTL skip, ledger, verdicts→people),
+# a list_upload_qa_runs audit row, then test-lead-first push. NEVER the raw
+# sample-pull path — that pushes unverified rows.
+_POOL_GOOD = ("good", "ok", "valid", "catch_all_valid")
+_POOL_KEEP = ("valid", "catch_all_valid")
+_POOL_CLIENT_RE = re.compile(
+    r"^(arnic|amplifyy|byteplus|push ?group|olivia|wantmoreleads|disco|qwintiq"
+    r"|heygrand|wordbank|krg|asteri|sihl|okan)", re.I)
+
+
+def _pool_active_job(pool_id) -> bool:
+    with JOBS_LOCK:
+        return any(j.get("kind") == "pool_pull" and j.get("pool_id") == pool_id
+                   and j["status"] in ("queued", "running") for j in JOBS.values())
+
+
+def _pool_stage(job, stage, **counts):
+    job["stage"] = stage
+    if counts:
+        job["counts"].update(counts)
+    _job_persist(job)
+
+
+def _pool_pull_worker(job, pool, size, lm_key, sl_key):
+    import urllib.parse
+    from datetime import datetime, timezone
+    seg, cid = pool["seg"], pool["campaign_id"]
+    _job_started(job)
+    try:
+        _pool_stage(job, "selecting")
+        prep = sb("POST", "rpc/pool_pull_prepare", {"p_seg": seg, "p_take": size}) or {}
+        # batch: verified-unpushed first (free), then unverified clean, pool order
+        rows = sb("GET", "r250k_agrade?select=email,name,title,company,country,linkedin_url,icebreaker,lm_result"
+                          f"&seg=eq.{seg}&flag=is.null&pushed_at=is.null"
+                          f"&or=(lm_result.is.null,lm_result.in.({','.join(_POOL_GOOD)}))"
+                          f"&order=lm_result.nullslast,src_row&limit={size}") or []
+        if not rows:
+            _pool_stage(job, "done", added=0, note="pool exhausted for this ruling")
+            _job_finished(job, "done")
+            return
+        # live enrollment check (same-client ACTIVE collisions drop; law:
+        # cross-client is NOT a collision — dossier only)
+        _pool_stage(job, "sweeping", batch=len(rows))
+        camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={sl_key}", {}) or []
+        active_names = {c.get("id"): (c.get("name") or "") for c in camps
+                        if isinstance(c, dict) and (c.get("status") or "").upper() == "ACTIVE"}
+        live_dropped = 0
+        for r in list(rows):
+            time.sleep(0.35)
+            try:
+                hit = http_json("GET", f"{SMARTLEAD_BASE}/leads?api_key={sl_key}"
+                                        f"&email={urllib.parse.quote(r['email'])}", {})
+            except Exception:  # noqa: BLE001 — one flaky lookup never kills the pull
+                continue
+            for lc in ((hit or {}).get("lead_campaign_data") or []):
+                ocid = lc.get("campaign_id")
+                nm = active_names.get(ocid, "")
+                if ocid and ocid != cid and nm and not _POOL_CLIENT_RE.match(nm):
+                    sb("PATCH", f"r250k_agrade?seg=eq.{seg}&email=eq.{urllib.parse.quote(r['email'])}",
+                       {"flag": "live_active_collision", "flag_detail": nm[:200]})
+                    rows.remove(r)
+                    live_dropped += 1
+                    break
+        # verify the unverified share
+        todo = [r for r in rows if not r.get("lm_result")]
+        _pool_stage(job, "verifying", to_verify=len(todo), live_dropped=live_dropped)
+        vfail = 0
+        done_v = 0
+        for i in range(0, len(todo), _LM_CHUNK):
+            chunk = todo[i:i + _LM_CHUNK]
+            res = _listmint_verify_batch([r["email"] for r in chunk], lm_key)
+            if not isinstance(res, dict):
+                res = {}
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for r in chunk:
+                v = (res.get(r["email"]) or "no_result").strip() or "no_result"
+                r["lm_result"] = v
+                sb("PATCH", f"r250k_agrade?seg=eq.{seg}&email=eq.{urllib.parse.quote(r['email'])}",
+                   {"lm_result": v, "verify_source": "listmint"})
+                if v != "no_result":
+                    sb("POST", "people?on_conflict=email",
+                       [{"email": r["email"], "email_verification": v, "email_verified_at": now_iso}],
+                       prefer="resolution=merge-duplicates,return=minimal")
+                if v not in _POOL_KEEP:
+                    vfail += 1
+            _meter_verify_calls("listmint", cid, len(chunk))
+            done_v += len(chunk)
+            job["progress"] = {"done": done_v, "total": len(todo)}
+            _job_persist(job)
+            time.sleep(1.0)
+        keeps = [r for r in rows if (r.get("lm_result") or "") in _POOL_GOOD]
+        # audit row BEFORE the first push (upload-gate law)
+        audit = sb("POST", "list_upload_qa_runs",
+                   [{"campaign_id": cid, "campaign_name": f"Recontact 250k — {seg} (Pull more)",
+                     "list_source": f"pool_pulls {pool['id']}", "rows_in": len(rows),
+                     "rows_uploaded": 0,
+                     "checks": {"pipeline": "pool-pull gated: RPC sweep + live check + ListMint",
+                                "email_verification": "verify-or-drop enforced"},
+                     "overrides": [], "recontact_hits": {"live_dropped": live_dropped},
+                     "verdict": "pass", "report_path": f"pool_pulls {pool['id']}"}],
+                   prefer="return=representation")
+        audit_id = (audit[0].get("id") if isinstance(audit, list) and audit else None)
+        _pool_stage(job, "uploading", verified=len(keeps), verify_failed=vfail)
+        pushed = 0
+        if keeps:
+            def lead_of(r):
+                parts = (r.get("name") or "").strip().split()
+                first = (parts[0].capitalize() if parts and (parts[0].isupper() or parts[0].islower())
+                         else (parts[0] if parts else ""))
+                cf = {"company_name": (r.get("company") or "").strip(),
+                      "data_source": f"recontact-250k-pool-{seg}"}
+                for k, fld in (("Icebreaker", "icebreaker"), ("Title", "title"),
+                               ("Country", "country"), ("LinkedIn", "linkedin_url")):
+                    if (r.get(fld) or "").strip():
+                        cf[k] = r[fld].strip()
+                return {"email": r["email"], "first_name": first,
+                        "last_name": " ".join(parts[1:]), "custom_fields": cf}
+            probe = http_json("POST", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={sl_key}",
+                              {}, {"lead_list": [lead_of(keeps[0])]})
+            if not isinstance(probe, dict) or probe.get("upload_count") is None and not probe.get("ok"):
+                raise RuntimeError(f"test lead failed: {str(probe)[:160]}")
+            sb("PATCH", f"r250k_agrade?seg=eq.{seg}&email=eq.{urllib.parse.quote(keeps[0]['email'])}",
+               {"pushed_at": datetime.now(timezone.utc).isoformat()})
+            pushed = 1
+            for i in range(1, len(keeps), 100):
+                batch = keeps[i:i + 100]
+                res = http_json("POST", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={sl_key}",
+                                {}, {"lead_list": [lead_of(r) for r in batch]})
+                if not isinstance(res, dict) or (res.get("upload_count") is None and not res.get("ok")):
+                    raise RuntimeError(f"batch push failed at {pushed}: {str(res)[:160]}")
+                now_iso = datetime.now(timezone.utc).isoformat()
+                ems = ",".join('"' + r["email"] + '"' for r in batch)
+                sb("PATCH", f"r250k_agrade?seg=eq.{seg}&email=in.({ems})", {"pushed_at": now_iso})
+                pushed += len(batch)
+                job["progress"] = {"done": pushed, "total": len(keeps)}
+                _job_persist(job)
+                time.sleep(1.0)
+        if audit_id:
+            sb("PATCH", f"list_upload_qa_runs?id=eq.{audit_id}", {"rows_uploaded": pushed})
+        summary = {"pushed": pushed, "verify_failed": vfail, "live_dropped": live_dropped,
+                   "at": datetime.now(timezone.utc).isoformat()}
+        sb("PATCH", f"pool_pulls?id=eq.{pool['id']}",
+           {"pulled_ok": (pool.get("pulled_ok") or 0) + pushed,
+            "dropped": (pool.get("dropped") or 0) + vfail + live_dropped,
+            "remaining": max(0, (pool.get("remaining") or 0) - pushed - vfail - live_dropped),
+            "last_pull_at": summary["at"], "last_batch": summary, "status": "idle",
+            "updated_at": summary["at"]})
+        _pool_stage(job, "done", **summary)
+        _job_finished(job, "done")
+    except Exception as e:  # noqa: BLE001 — every sub-step already wrote back; job is resumable
+        try:
+            sb("PATCH", f"pool_pulls?id=eq.{pool['id']}", {"status": "idle"})
+        except Exception:  # noqa: BLE001
+            pass
+        _job_finished(job, "failed", str(e)[:300])
+
+
+def pool_pulls_pull(p: dict):
+    import urllib.parse
+    seg = str(p.get("id") or p.get("seg") or "").replace("pp-", "").strip().upper()
+    rows = sb("GET", f"pool_pulls?seg=eq.{urllib.parse.quote(seg)}")
+    if not isinstance(rows, list) or not rows:
+        return {"ok": False, "message": f"No pull record for pool {seg or '?'}."}, 404
+    pool = rows[0]
+    try:
+        size = max(1, min(2000, int(p.get("size") or 500)))
+    except (TypeError, ValueError):
+        size = 500
+    lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY") or ""
+    if not lm_key:
+        return {"ok": False, "message": "LISTMINT_API_KEY isn't set on this server."}, 503
+    sl_key = ws_key_for_campaign(pool["campaign_id"]) or os.environ.get("SMARTLEAD_API_KEY") or ""
+    with _JOB_CREATE_LOCK:
+        if _pool_active_job(pool["id"]):
+            return {"ok": False, "message": "A pull is already running for this pool — wait for it to finish."}, 409
+        sb("PATCH", f"pool_pulls?id=eq.{pool['id']}", {"status": "pulling"})
+        job = _new_job("pool_pull", f"Pull {size} more · pool {seg}", pool["campaign_id"])
+        job["pool_id"] = pool["id"]
+        _enqueue_job(_pool_pull_worker, job, (job, pool, size, lm_key, sl_key))
+    return {"ok": True, "job_id": job["id"]}, 202
+
+
 LISTS_POST_ROUTES = {
     "/api/lists/folder": lists_create_folder,
     "/api/lists/folder/rename": lists_folder_rename,
@@ -3970,6 +4156,7 @@ LISTS_POST_ROUTES = {
     "/api/lists/rows/delete": lists_rows_delete,
     "/api/lists/delete": lists_delete,
     "/api/list_pulls/pull": list_pulls_pull,
+    "/api/pool-pulls/pull": pool_pulls_pull,
 }
 
 
@@ -13735,6 +13922,20 @@ class Handler(SimpleHTTPRequestHandler):
                                                   (q.get("verdict") or ["unqualified"])[0]))
         if path == "/api/qa-history":
             return self._json(read_json_list(QA_HISTORY))
+        if path == "/api/pool-pulls":
+            rows = sb("GET", "pool_pulls?order=seg") or []
+            if not isinstance(rows, list):
+                return self._json({"error": "supabase_unavailable",
+                                    "message": "Couldn't reach the database - try again."}, 503)
+            with JOBS_LOCK:
+                act = {j.get("pool_id"): {"job_id": j["id"], "status": j["status"],
+                                           "progress": j.get("progress"), "counts": j.get("counts"),
+                                           "stage": j.get("stage")}
+                       for j in JOBS.values() if j.get("kind") == "pool_pull"
+                       and j["status"] in ("queued", "running")}
+            for r in rows:
+                r["active_job"] = act.get(r.get("id"))
+            return self._json({"pools": rows})
         if path == "/api/campaign-drafts":
             drafts, fetch_failed = _cached_campaign_drafts()
             if fetch_failed and not drafts:
