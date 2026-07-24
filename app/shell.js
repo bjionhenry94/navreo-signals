@@ -1,8 +1,10 @@
 /* Shared shell: rail nav, data loading, small helpers. */
 
-/* Icons8 "Windows 10" set, rendered via CSS mask so they inherit color */
+/* Icons8 "Windows 10" set, rendered via CSS mask so they inherit color.
+   Pass a bare name for icons/<name>.png, or a full filename (e.g. "settings.svg"). */
 function ic8(name, cls = "") {
-  return `<span class="ic8 ${cls}" style="--icon:url('icons/${name}.png')"></span>`;
+  const file = name.includes(".") ? name : `${name}.png`;
+  return `<span class="ic8 ${cls}" style="--icon:url('icons/${file}')"></span>`;
 }
 
 const ICONS = {
@@ -11,9 +13,8 @@ const ICONS = {
   lists: ic8("data", "lg"),
   deliverability: ic8("check", "lg"),
   setter: ic8("reply", "lg"),
-  training: ic8("thumbsup", "lg"),
   notifications: ic8("bell", "lg"),
-  settings: ic8("briefcase", "lg"),
+  settings: ic8("settings.svg", "lg"),
 };
 
 const NAV = [
@@ -22,9 +23,7 @@ const NAV = [
   ["lists.html", "lists", "Lists"],
   ["deliverability.html", "deliverability", "Deliverability"],
   ["setter.html", "setter", "Setter"],
-  ["setter-train.html", "training", "Training"],
   ["notifications.html", "notifications", "Notifications"],
-  ["settings.html", "settings", "Settings"],
 ];
 
 function renderRail(active) {
@@ -35,7 +34,7 @@ function renderRail(active) {
     <a class="logo" href="index.html" title="Navreo">n</a>
     ${items}
     <div class="spacer"></div>
-    <div class="avatar">BH</div>
+    <a class="nav-i ${active === "settings" ? "on" : ""}" href="settings.html" title="Settings">${ICONS.settings}</a>
   </nav>`;
 }
 
