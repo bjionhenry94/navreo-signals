@@ -2401,9 +2401,8 @@
   function rowStatusBit(c) {
     var ls = STATE.liveStatus && STATE.liveStatus[c.id];
     if (ls && ls.status) {
-      var comp = (ls.completion != null) ? " &middot; " + ls.completion + "% complete" : "";
       return ' &middot; <span class="row-live"><span class="row-live-dot"></span>' +
-        esc(String(ls.status).toLowerCase()) + "</span>" + comp;
+        esc(String(ls.status).toLowerCase()) + "</span>";
     }
     return c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "";
   }
@@ -2429,7 +2428,7 @@
       (ringPct != null
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="sent &divide; (leads &times; 2)"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
-      '<span class="ring-caption">list worked</span></span>' +
+      '</span>' +
       '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span></span>" +
       '<span class="stat stat--leads"><span class="stat-num tnum">' + fmtInt(st.leads) + '</span><span class="stat-label">Leads</span></span>' +
       '<span class="stat stat--sent"><span class="stat-num tnum">' + fmtInt(st.sent) + '</span><span class="stat-label">Emails sent</span></span>' +
@@ -2440,7 +2439,6 @@
       '<span class="stat stat--meetings"><span class="stat-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="stat-label">Meetings</span></span>' +
       '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
-      (c.teaser ? '<span class="row-teaser">' + esc(c.teaser) + (c.drifted ? ' <span class="row-teaser--muted">&middot; written at the morning crunch; live totals have moved since</span>' : "") + "</span>" : "") +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") +
       "</a></div>";
   }
