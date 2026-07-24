@@ -1783,7 +1783,19 @@
   .perfx-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
   .perfx-svg-wrap { overflow-x: auto; }
   .perfx-svg { width: 100%; height: 170px; display: block; }
-  .perfx-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .perfx-note { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+  /* One box per stat — house KPI-card shape (see deliverability BOUNCE-RATE / SENT-DAY cards) */
+  .perfx-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 0; }
+  .perfx-box { flex: 1 1 200px; min-width: 168px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 15px; background: var(--card); }
+  .perfx-lab { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+  .perfx-num { font-size: 22px; font-weight: 700; margin-top: 3px; }
+  .perfx-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .perfx-spark { margin-top: 8px; line-height: 0; }
+  .perfx-spark svg { width: 100%; height: 48px; display: block; }
+  .perfx-delta { font-size: 11.5px; font-weight: 600; margin-top: 8px; }
+  .perfx-delta.up { color: var(--success); }
+  .perfx-delta.down { color: var(--danger); }
+  .perfx-delta.flat { color: var(--muted); font-weight: 500; }
   .lw-src-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
   @media (max-width: 520px) {
     .campaign-run-row { flex-wrap: wrap; row-gap: 8px; }
@@ -2239,13 +2251,7 @@
       '<button type="button" data-days="7">7d</button>' +
       '<button type="button" data-days="30" class="is-active">30d</button>' +
       '<button type="button" data-days="90">90d</button></div></div>' +
-      '<div class="perfx-legend">' +
-      '<span><i style="background:#1971C2"></i>Emails sent</span>' +
-      '<span><i style="background:#0CA678"></i>Leads added</span>' +
-      '<span><i style="background:#2F9E44"></i>Reply rate %</span>' +
-      '<span><i style="background:#7048E8"></i>Positives</span>' +
-      '<span><i style="background:#E8590C"></i>Meetings</span></div>' +
-      '<div class="perfx-svg-wrap"><svg class="perfx-svg" id="perfx-svg" viewBox="0 0 900 170" preserveAspectRatio="none" aria-label="Performance chart"></svg></div>' +
+      '<div class="perfx-grid" id="perfx-grid"></div>' +
       '<p class="perfx-note" id="perfx-note"></p></div>');
 
     /* Across the book */
@@ -2549,50 +2555,94 @@
       });
     });
   }
+  /* One continuous (jagged, day-by-day) trend line in the house KPI style: a
+     missing day connects straight across, a dashed reference line marks the
+     window average, and a coloured endpoint dot sits on the latest real point. */
+  function perfSpark(vals, color) {
+    var W = 300, H = 48, PADX = 5, PADY = 7, i;
+    var nums = [];
+    for (i = 0; i < vals.length; i++) if (vals[i] != null) nums.push(vals[i]);
+    if (nums.length < 2) return '<div style="height:' + H + 'px"></div>';
+    var mean = 0; for (i = 0; i < nums.length; i++) mean += nums[i]; mean /= nums.length;
+    var lo = Math.min.apply(null, nums), hi = Math.max.apply(null, nums);
+    lo = Math.min(lo, mean); hi = Math.max(hi, mean);
+    if (hi === lo) hi = lo + 1;
+    var n = vals.length;
+    function x(i) { return PADX + (n <= 1 ? 0 : i / (n - 1) * (W - PADX * 2)); }
+    function y(v) { return H - PADY - ((v - lo) / (hi - lo)) * (H - PADY * 2); }
+    var path = "", last = null;
+    for (i = 0; i < n; i++) {
+      if (vals[i] == null) continue;
+      var px = x(i), py = y(vals[i]);
+      path += (last ? "L" : "M") + px.toFixed(1) + "," + py.toFixed(1) + " ";
+      last = { x: px, y: py };
+    }
+    if (!path || !last) return '<div style="height:' + H + 'px"></div>';
+    var ty = y(mean).toFixed(1);
+    var thresh = '<line x1="' + PADX + '" y1="' + ty + '" x2="' + (W - PADX).toFixed(1) + '" y2="' + ty +
+      '" stroke="var(--muted)" stroke-opacity="0.55" stroke-width="1.5" stroke-dasharray="5,4" vector-effect="non-scaling-stroke"/>';
+    var dot = '<circle cx="' + last.x.toFixed(1) + '" cy="' + last.y.toFixed(1) + '" r="4" fill="' + color + '"/>';
+    return '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" aria-hidden="true">' + thresh +
+      '<path d="' + path.replace(/\s+$/, "") + '" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>' + dot + '</svg>';
+  }
+  /* "▲/▼ N vs last week" chip — last 7 slots vs the 7 before them. Counts sum,
+     rate/ratio average. good ("up"/"down") sets the colour direction; null = neutral. */
+  function perfDelta(vals, kind, good) {
+    var n = vals.length, i;
+    if (n < 8) return "";
+    function win(a) { var o = []; for (i = 0; i < a.length; i++) if (a[i] != null) o.push(a[i]); return o; }
+    var cur = win(vals.slice(Math.max(0, n - 7)));
+    var prev = win(vals.slice(Math.max(0, n - 14), Math.max(0, n - 7)));
+    if (!cur.length || !prev.length) return "";
+    function agg(a) { var s = 0, j; for (j = 0; j < a.length; j++) s += a[j]; return kind === "count" ? s : s / a.length; }
+    var delta = agg(cur) - agg(prev);
+    var rounded = kind === "count" ? Math.round(delta) : Math.round(delta * 10) / 10;
+    var arrow = rounded > 0 ? "▲" : (rounded < 0 ? "▼" : "–");
+    var cls = "flat";
+    if (good && rounded !== 0) cls = ((good === "up") === (rounded > 0)) ? "up" : "down";
+    var abs = Math.abs(rounded);
+    var num = kind === "count" ? fmtInt(abs) : (kind === "rate" ? abs.toFixed(1) + "pt" : fmtInt(Math.round(abs)));
+    return '<div class="perfx-delta ' + cls + '">' + arrow + " " + num + " vs last week</div>";
+  }
+  /* Four boxes, one per stat, each with its own trend line. Replaces the old
+     five-line chart. Counts = window totals, reply rate = latest non-null fleet
+     point, emails-per-positive = sum(sent)/sum(positives). Nothing is estimated. */
   function drawPerf(days) {
     var p = STATE.perf;
-    var svg = document.getElementById("perfx-svg");
-    if (!p || !svg) return;
+    var grid = document.getElementById("perfx-grid");
+    if (!p || !grid) return;
     var n = (p.days || []).length;
     var k = Math.min(days, n);
     var idx0 = n - k;
-    var W = 900, H = 170, PAD = 6;
     function slice(a) { return (a || []).slice(idx0); }
-    var series = [
-      { d: slice(p.sent), color: "#1971C2", dash: "", axis: "count" },
-      { d: slice(p.leads_added), color: "#0CA678", dash: "5,4", axis: "count" },
-      { d: slice(p.reply_rate), color: "#2F9E44", dash: "", axis: "rate" },
-      { d: slice(p.positives), color: "#7048E8", dash: "", axis: "small" },
-      { d: slice(p.meetings), color: "#E8590C", dash: "", axis: "small" }
+    function sum(a) { var s = null, i; for (i = 0; i < a.length; i++) if (a[i] != null) s = (s || 0) + a[i]; return s; }
+    function last(a) { var i; for (i = a.length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; }
+    var sent = slice(p.sent), rr = slice(p.reply_rate), pos = slice(p.positives), mtg = slice(p.meetings);
+    var perPos = [], i;
+    for (i = 0; i < sent.length; i++) {
+      perPos.push((sent[i] != null && pos[i] != null && pos[i] > 0) ? sent[i] / pos[i] : null);
+    }
+    var totalSent = sum(sent), totalPos = sum(pos), totalMtg = sum(mtg), lastRr = last(rr);
+    var ratioHero = (totalSent != null && totalPos != null && totalPos > 0) ? "1 : " + fmtInt(Math.round(totalSent / totalPos)) : "—";
+    var boxes = [
+      { name: "Emails sent", hero: totalSent == null ? "—" : fmtInt(totalSent), sub: "window total · dashed = daily average", color: "#1971C2", vals: sent, kind: "count", good: null },
+      { name: "Reply rate", hero: lastRr == null ? "—" : lastRr + "%", sub: "latest fleet reading · dashed = average", color: "#2F9E44", vals: rr, kind: "rate", good: "up" },
+      { name: "Emails per positive", hero: ratioHero, sub: "sends ÷ positives · dashed = average", color: "#7048E8", vals: perPos, kind: "ratio", good: "down" },
+      { name: "Meetings booked", hero: totalMtg == null ? "—" : fmtInt(totalMtg), sub: "window total · dashed = daily average", color: "#E8590C", vals: mtg, kind: "count", good: "up" }
     ];
-    function maxOf(arrs) {
-      var m = 0;
-      arrs.forEach(function (a) { a.forEach(function (v) { if (v != null && v > m) m = v; }); });
-      return m || 1;
-    }
-    var maxCount = maxOf([series[0].d, series[1].d]);
-    var maxRate = maxOf([series[2].d]);
-    var maxSmall = maxOf([series[3].d, series[4].d]);
     var out = "";
-    series.forEach(function (s) {
-      var max = s.axis === "count" ? maxCount : s.axis === "rate" ? maxRate : maxSmall;
-      var pts = [];
-      s.d.forEach(function (v, i) {
-        if (v == null) { if (pts.length) { out += poly(pts, s); pts = []; } return; }
-        var x = PAD + (k <= 1 ? 0 : i / (k - 1) * (W - 2 * PAD));
-        var y = H - PAD - (v / max * (H - 2 * PAD));
-        pts.push(x.toFixed(1) + "," + y.toFixed(1));
-      });
-      if (pts.length) out += poly(pts, s);
+    boxes.forEach(function (b) {
+      out += '<div class="perfx-box">' +
+        '<div class="perfx-lab">' + esc(b.name) + "</div>" +
+        '<div class="perfx-num tnum">' + b.hero + "</div>" +
+        '<div class="perfx-sub">' + esc(b.sub) + "</div>" +
+        '<div class="perfx-spark">' + perfSpark(b.vals, b.color) + "</div>" +
+        perfDelta(b.vals, b.kind, b.good) + "</div>";
     });
-    function poly(pts, s) {
-      return '<polyline fill="none" stroke="' + s.color + '" stroke-width="2"' +
-        (s.dash ? ' stroke-dasharray="' + s.dash + '"' : "") + ' points="' + pts.join(" ") + '"/>';
-    }
-    svg.innerHTML = out;
+    grid.innerHTML = out;
     var d0 = (p.days || [])[idx0], d1 = (p.days || [])[n - 1];
     document.getElementById("perfx-note").textContent =
-      d0 && d1 ? d0 + " to " + d1 + " · counts share the left scale; reply rate and the small counts (positives, meetings) are drawn on their own scales so the shape reads." : "";
+      d0 && d1 ? d0 + " to " + d1 + " · each box shows the daily trend across the window · dashed line = window average · change compares the last 7 days to the 7 before" : "";
   }
 
   /* ---------- campaign page ---------- */
