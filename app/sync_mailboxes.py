@@ -348,11 +348,24 @@ def upsert_batch(table: str, rows: list, batch_index: int, supabase_url: str, su
 
 
 def write_batches(table: str, rows: list, supabase_url: str, supabase_key: str) -> int:
+    # PostgREST bulk upserts demand identical key sets across every row in a
+    # request (PGRST102 "All object keys must match"). Rows legitimately differ
+    # in shape — e.g. campaign_count is omitted for a workspace whose campaign
+    # sweep was incomplete — so group rows by their exact key set and batch
+    # within each group. Never pad missing keys with nulls: a null would
+    # overwrite the last-known value merge-duplicates is meant to preserve.
+    groups: dict = {}
+    for row in rows:
+        groups.setdefault(frozenset(row.keys()), []).append(row)
+    if len(groups) > 1:
+        log(f"{table}: {len(groups)} distinct row shapes — batching each shape separately "
+            f"(sizes: {', '.join(str(len(g)) for g in groups.values())})")
     batches = 0
-    for i in range(0, len(rows), BATCH_SIZE):
-        batch = rows[i:i + BATCH_SIZE]
-        batches += 1
-        upsert_batch(table, batch, batches, supabase_url, supabase_key)
+    for shaped in groups.values():
+        for i in range(0, len(shaped), BATCH_SIZE):
+            batch = shaped[i:i + BATCH_SIZE]
+            batches += 1
+            upsert_batch(table, batch, batches, supabase_url, supabase_key)
     log(f"{table}: wrote {batches} batch(es) totalling {len(rows)} rows")
     return batches
 
@@ -480,12 +493,25 @@ def main():
         log("Verifying row counts in Supabase ...")
         ver_ok = True
         for wid, pulled in ws_pulled.items():
-            m_total = verify_count("mailboxes", f"workspace=eq.{wid}", supabase_url, supabase_key)
+            # Verify what THIS RUN wrote, not the whole table: the mailboxes
+            # table legitimately keeps rows for accounts since deleted from
+            # Smartlead (upserts never delete), so a whole-table equality check
+            # can never pass once the fleet shrinks — and a check that can't
+            # pass is a bug. Anchor on this run's last_synced_at stamp; for the
+            # per-day stats table (keyed smartlead_id+stat_date, no such stamp)
+            # require at least the pulled count — other same-day writers may
+            # add rows, but ours must all be present.
+            # URL-encode the timestamp: its "+00:00" offset reads as a space
+            # in a query string and 400s the request.
+            from urllib.parse import quote as _q
+            m_run = verify_count("mailboxes",
+                                 f"workspace=eq.{wid}&last_synced_at=eq.{_q(now_iso_str)}",
+                                 supabase_url, supabase_key)
             s_total = verify_count("mailbox_stats_daily",
                                    f"stat_date=eq.{today_str}&workspace=eq.{wid}",
                                    supabase_url, supabase_key)
-            log(f"[{wid}] pulled={pulled} mailboxes_total={m_total} stats_total_today={s_total}")
-            if not (m_total == pulled and s_total == pulled):
+            log(f"[{wid}] pulled={pulled} mailboxes_written_this_run={m_run} stats_total_today={s_total}")
+            if not (m_run == pulled and (s_total or 0) >= pulled):
                 ver_ok = False
 
         # Null-rate check (in-memory, matches what was written)
