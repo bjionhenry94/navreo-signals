@@ -3987,6 +3987,22 @@ def _pool_stage(job, stage, **counts):
     _job_persist(job)
 
 
+def _pool_sl(method, url, body=None, tries=5):
+    """Smartlead call that rides out the shared 200/min budget: 429/5xx backs
+    off and retries instead of failing the whole pull (other workers share the
+    same key). Raises only after `tries` consecutive failures."""
+    last = None
+    for a in range(tries):
+        try:
+            return http_json(method, url, {}, body)
+        except Exception as e:  # noqa: BLE001 — includes HTTPError 429
+            last = e
+            if "429" not in str(e) and a >= 1:
+                raise
+            time.sleep(20 * (a + 1))
+    raise last
+
+
 def _pool_pull_worker(job, pool, size, lm_key, sl_key):
     import urllib.parse
     from datetime import datetime, timezone
@@ -4007,15 +4023,15 @@ def _pool_pull_worker(job, pool, size, lm_key, sl_key):
         # live enrollment check (same-client ACTIVE collisions drop; law:
         # cross-client is NOT a collision — dossier only)
         _pool_stage(job, "sweeping", batch=len(rows))
-        camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={sl_key}", {}) or []
+        camps = _pool_sl("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={sl_key}") or []
         active_names = {c.get("id"): (c.get("name") or "") for c in camps
                         if isinstance(c, dict) and (c.get("status") or "").upper() == "ACTIVE"}
         live_dropped = 0
         for r in list(rows):
             time.sleep(0.35)
             try:
-                hit = http_json("GET", f"{SMARTLEAD_BASE}/leads?api_key={sl_key}"
-                                        f"&email={urllib.parse.quote(r['email'])}", {})
+                hit = _pool_sl("GET", f"{SMARTLEAD_BASE}/leads?api_key={sl_key}"
+                                       f"&email={urllib.parse.quote(r['email'])}", tries=2)
             except Exception:  # noqa: BLE001 — one flaky lookup never kills the pull
                 continue
             for lc in ((hit or {}).get("lead_campaign_data") or []):
@@ -4081,8 +4097,8 @@ def _pool_pull_worker(job, pool, size, lm_key, sl_key):
                         cf[k] = r[fld].strip()
                 return {"email": r["email"], "first_name": first,
                         "last_name": " ".join(parts[1:]), "custom_fields": cf}
-            probe = http_json("POST", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={sl_key}",
-                              {}, {"lead_list": [lead_of(keeps[0])]})
+            probe = _pool_sl("POST", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={sl_key}",
+                             {"lead_list": [lead_of(keeps[0])]})
             if not isinstance(probe, dict) or probe.get("upload_count") is None and not probe.get("ok"):
                 raise RuntimeError(f"test lead failed: {str(probe)[:160]}")
             sb("PATCH", f"r250k_agrade?seg=eq.{seg}&email=eq.{urllib.parse.quote(keeps[0]['email'])}",
@@ -4090,8 +4106,8 @@ def _pool_pull_worker(job, pool, size, lm_key, sl_key):
             pushed = 1
             for i in range(1, len(keeps), 100):
                 batch = keeps[i:i + 100]
-                res = http_json("POST", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={sl_key}",
-                                {}, {"lead_list": [lead_of(r) for r in batch]})
+                res = _pool_sl("POST", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={sl_key}",
+                               {"lead_list": [lead_of(r) for r in batch]})
                 if not isinstance(res, dict) or (res.get("upload_count") is None and not res.get("ok")):
                     raise RuntimeError(f"batch push failed at {pushed}: {str(res)[:160]}")
                 now_iso = datetime.now(timezone.utc).isoformat()
