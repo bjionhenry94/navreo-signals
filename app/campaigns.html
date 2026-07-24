@@ -1860,6 +1860,32 @@
   .cockpit .page-tab:hover { color: var(--fg); }
   .cockpit .page-tab.is-active { color: var(--fg); border-bottom-color: var(--nav-orange); }
   #optim-frame { display: block; width: 100%; border: 0; min-height: 480px; }
+
+  /* ---- inline "Review N" optimiser badge + panel (merged Optimisations tab) ---- */
+  .cockpit .review-badge {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 700; padding: 6px 11px; border-radius: 999px;
+    background: var(--nav-orange-100); color: var(--nav-orange-600);
+    border: 1px solid var(--nav-orange); cursor: pointer; white-space: nowrap;
+    transition: background .15s, box-shadow .15s, color .15s;
+  }
+  .cockpit .review-badge:hover { background: var(--nav-orange); color: #fff; box-shadow: 0 2px 10px rgba(255,77,0,0.28); }
+  .cockpit .review-badge:focus-visible { outline: 2px solid var(--nav-orange); outline-offset: 2px; }
+  .cockpit .review-badge b { font-variant-numeric: tabular-nums; }
+  .cockpit .review-badge .caret { transition: transform .2s; flex: 0 0 auto; }
+  .cockpit .review-badge[aria-expanded="true"] { background: var(--nav-orange); color: #fff; }
+  .cockpit .review-badge[aria-expanded="true"] .caret { transform: rotate(180deg); }
+  .cockpit .row-optim { background: var(--sunken); border-top: 1px solid var(--border); padding: 8px 22px 16px; }
+  .cockpit .row-optim .actions-section { display: flex; flex-direction: column; gap: 10px; }
+  .cockpit .row-optim-empty { margin: 6px 2px; color: var(--fg-subtle); font-size: 13px; }
+  .cockpit .action-top { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+  .cockpit .opt-smartlead {
+    margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--fg-subtle);
+    text-decoration: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  }
+  .cockpit .opt-smartlead:hover { color: var(--fg-muted); text-decoration: underline; }
+  .cockpit .ext-ic { vertical-align: -1px; opacity: 0.85; }
+  .cockpit .copy-prompt .ext-ic { margin-left: 3px; }
 </style>
 
 <div class="app">
@@ -1870,7 +1896,7 @@
 
   <div class="page-tabs">
     <a class="page-tab is-active" id="ptab-campaigns" href="#/">Campaigns</a>
-    <a class="page-tab" id="ptab-optim" href="#/optimisations">Optimisations</a>
+    <a class="page-tab" id="ptab-optim" href="#/optimisations" hidden>Optimisations</a>
   </div>
 
   <div class="lw-banner" id="lw-error" hidden>
@@ -2487,6 +2513,14 @@
       var cls = (TAG_META[tg] || TAG_META.watch).badge;
       badges += '<span class="badge ' + cls + '">' + esc(lbl) + "</span>";
     });
+    /* "Review N" badge: N = optimiser actions for this campaign, already in
+       memory on c.insights (no fetch). Clicking it expands the inline optim
+       panel (a sibling of the row link, so its own clicks never navigate);
+       clicking anywhere else on the row opens the campaign page as before. */
+    var nOpt = campaignActs(c).length;
+    var reviewBadge = nOpt > 0
+      ? '<span class="review-badge" role="button" tabindex="0" data-review="' + esc(c.id) + '" aria-controls="optim-c' + esc(c.id) + '" aria-expanded="false" aria-label="Review ' + nOpt + ' optimisation' + (nOpt === 1 ? "" : "s") + ' for this campaign">Review <b class="tnum">' + nOpt + "</b>" + REVIEW_CARET + "</span>"
+      : "";
     return '<div class="campaign-row" id="row-c' + esc(c.id) + '" data-tier="' + c.tier + '" data-search="' + esc(search) + '">' +
       '<a class="row-summary" href="#/c/' + esc(c.id) + '" aria-label="' + esc(c.name) + ". " + esc(c.pill) + '. Open the campaign page.">' +
       '<span class="ring-wrap">' +
@@ -2503,9 +2537,56 @@
       '<span class="stat stat--bounce"><span class="stat-num tnum">' + (bouncePct != null ? bouncePct + "%" : "-") + '</span><span class="stat-label">Bounce rate</span></span>' +
       '<span class="stat stat--meetings"><span class="stat-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="stat-label">Meetings</span></span>' +
       '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
+      reviewBadge +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") +
-      "</a></div>";
+      "</a>" +
+      '<div class="row-optim" id="optim-c' + esc(c.id) + '" hidden></div>' +
+      "</div>";
+  }
+
+  /* the optimiser actions attached to a campaign (already loaded on the
+     scorecard as c.insights — the same rows the campaign page's "Suggested
+     actions" render from). Used for the row's "Review N" count + inline panel. */
+  function campaignActs(c) {
+    return (c.insights || []).filter(function (r) { return (r.payload || {}).act; });
+  }
+
+  var REVIEW_CARET = '<svg class="caret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+  var EXT_ICON = '<svg class="ext-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+  /* Build one inline optimiser card. Shared by the campaign page's "Suggested
+     actions" and the list's inline "Review N" panel, so both surfaces stay in
+     lock-step. Keeps the .action-card / .action-state-btn / data-action-key
+     contract the shared wiring (wireActionCards) depends on. */
+  function actionCardHTML(c, r, i) {
+    var p = r.payload || {};
+    var badge = p.tag === "decide" ? '<span class="badge badge--red">High</span>' : p.tag === "fine" ? '<span class="badge badge--neutral">Low</span>' : '<span class="badge badge--amber">Medium</span>';
+    var _clean = function (s) { return (s || "").replace(/[^A-Za-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim(); };
+    var _nameTok = (_clean(c.name).split(" ")[0] || "Campaign");
+    var _glued = _nameTok + "-" + c.id;
+    var _act2 = _clean(p.act).split(" ").slice(0, 2).join(" ").toLowerCase();
+    var _titleLine = ("Campaign " + _glued + (_act2 ? " " + _act2 : "")).trim();
+    var prompt = "STEP 0 - before anything else, call your set-session-title tool " +
+      "(mcp__ccd_session_mgmt__set_session_title) with exactly this, character for character - " +
+      "do not summarize, rephrase, or drop the number: " + _titleLine + "\n\n" +
+      "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
+      " Context: " + (p.bold || "") + " Stage everything for my approval. Do not launch, upload, or save anything to Smartlead without me.";
+    var actionKey = esc((r.scope || c.id) + "::" + (r.insight_key || ("act-" + i)));
+    return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
+      '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
+      '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span>" +
+      '<span class="assignee-tag" hidden></span>' +
+      '<a class="opt-smartlead" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead ' + EXT_ICON + "</a></div>" +
+      '<p class="action-how">' + esc(p.act) + "</p>" +
+      (p.bold ? '<p class="action-payoff">' + esc(p.bold) + "</p>" : "") +
+      '<div class="action-buttons">' +
+      '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Fix inside of Claude ' + EXT_ICON + "</button>" +
+      '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
+      '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
+      '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
+      (p.source ? '<p class="footnote-line">Source: ' + esc(p.source) + "</p>" : "") + "</div>" +
+      '<div class="action-dismissed-row" hidden><span>Dismissed &middot; <button type="button" class="action-undo-btn" data-act="undo">Undo</button></span></div></div>';
   }
 
   function themeToggleHTML() {
@@ -2724,36 +2805,7 @@
         (c.drifted ? '<p class="card-subtitle">Written at the morning crunch; any counts quoted here are that snapshot. The Live performance card above holds the newer sync.</p>' : "") +
         '<div class="actions-section">');
       acts.forEach(function (r, i) {
-        var p = r.payload || {};
-        var badge = p.tag === "decide" ? '<span class="badge badge--red">High</span>' : p.tag === "fine" ? '<span class="badge badge--neutral">Low</span>' : '<span class="badge badge--amber">Medium</span>';
-        // STEP-0 session-title line so the pasted chat is trackable in Claude Code's session list.
-        // Glue the campaign ID to the first name token (KRG-9558218): Claude Code's titler strips
-        // bare numeric IDs + punctuation, but keeps an ID that reads as one identifier token.
-        var _clean = function (s) { return (s || "").replace(/[^A-Za-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim(); };
-        var _nameTok = (_clean(c.name).split(" ")[0] || "Campaign");
-        var _glued = _nameTok + "-" + c.id;
-        var _act2 = _clean(p.act).split(" ").slice(0, 2).join(" ").toLowerCase();
-        var _titleLine = ("Campaign " + _glued + (_act2 ? " " + _act2 : "")).trim();
-        var prompt = "STEP 0 - before anything else, call your set-session-title tool " +
-          "(mcp__ccd_session_mgmt__set_session_title) with exactly this, character for character - " +
-          "do not summarize, rephrase, or drop the number: " + _titleLine + "\n\n" +
-          "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
-          " Context: " + (p.bold || "") + " Stage everything for my approval. Do not launch, upload, or save anything to Smartlead without me.";
-        var actionKey = esc((r.scope || c.id) + "::" + (r.insight_key || ("act-" + i)));
-        h.push('<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
-          '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
-          '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span>" +
-          '<span class="assignee-tag" hidden></span></div>' +
-          '<p class="action-how">' + esc(p.act) + "</p>" +
-          (p.bold ? '<p class="action-payoff">' + esc(p.bold) + "</p>" : "") +
-          '<div class="action-buttons">' +
-          '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Fix this</button>' +
-          '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a>' +
-          '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
-          '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
-          '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
-          (p.source ? '<p class="footnote-line">Source: ' + esc(p.source) + "</p>" : "") + "</div>" +
-          '<div class="action-dismissed-row" hidden><span>Dismissed &middot; <button type="button" class="action-undo-btn" data-act="undo">Undo</button></span></div></div>');
+        h.push(actionCardHTML(c, r, i));
       });
       h.push("</div></div>");
     }
@@ -3287,131 +3339,179 @@
       if (viewNote) viewNote.textContent = (PRESETS.all || {}).note || "";
       renderRows();
     });
+    /* Inline "Review N" optimiser panels. Delegated on the rows container (which
+       is rebuilt via innerHTML on every filter/search change) so one binding
+       survives all rebuilds. The badge lives inside the row link, so we swallow
+       its click (preventDefault + stopPropagation) to stop the row navigating;
+       every other click on the row still opens the campaign page as before. */
+    var rowsC = document.getElementById("campaign-rows");
+    if (rowsC && !rowsC.getAttribute("data-optim-bound")) {
+      rowsC.setAttribute("data-optim-bound", "1");
+      var toggleReview = function (badge) {
+        var id = badge.getAttribute("data-review");
+        var panel = document.getElementById("optim-c" + id);
+        if (!panel) return;
+        var willOpen = panel.hidden;
+        panel.hidden = !willOpen;
+        badge.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        if (willOpen) {
+          var cs = STATE.campaigns || [], c = null;
+          for (var i = 0; i < cs.length; i++) { if (String(cs[i].id) === String(id)) { c = cs[i]; break; } }
+          if (c) openRowOptim(c, panel);
+        }
+      };
+      rowsC.addEventListener("click", function (e) {
+        var badge = e.target.closest && e.target.closest(".review-badge");
+        if (!badge) return;
+        e.preventDefault(); e.stopPropagation();
+        toggleReview(badge);
+      });
+      rowsC.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+        var badge = e.target.closest && e.target.closest(".review-badge");
+        if (!badge) return;
+        e.preventDefault(); e.stopPropagation();
+        toggleReview(badge);
+      });
+    }
     attachThemeToggles(root);
   }
 
-  function attachPageHandlers(c) {
-    var pr = document.getElementById("page-root");
-    attachThemeToggles(pr);
-    applyTheme(currentTheme());
-    /* copy-prompt buttons */
-    pr.querySelectorAll(".copy-prompt").forEach(function (b) {
-      b.setAttribute("aria-live", "polite");
-      b.addEventListener("click", function () {
-        var txt = b.getAttribute("data-prompt") || "";
-        var old = b.getAttribute("data-label") || b.textContent;
-        b.setAttribute("data-label", old);
-        function done(msg) { b.textContent = msg; setTimeout(function () { b.textContent = old; }, 2600); }
-        function legacyCopy() {
-          try {
-            var ta = document.createElement("textarea");
-            ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
-            document.body.appendChild(ta); ta.select();
-            var ok = document.execCommand("copy");
-            document.body.removeChild(ta);
-            done(ok ? "Copied. Paste in a new chat." : "Copy blocked by the browser.");
-          } catch (e) { done("Copy blocked by the browser."); }
-        }
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(txt).then(function () { done("Copied. Paste in a new chat."); }, legacyCopy);
-        } else { legacyCopy(); }
-      });
+  /* ---------- shared optimiser-action wiring ----------
+     Used by BOTH the campaign page's "Suggested actions" and the list's inline
+     "Review N" panels, so the two surfaces behave identically and share one
+     assignment fetch + one in-memory ASSIGN map (a click on either surface is
+     reflected everywhere). "Fix inside of Claude" opens a fresh Claude chat with
+     the prompt pre-filled; the state buttons stay TEAM-SHARED via
+     /api/cockpit/assignments (one owner per action, reconciled server-side). */
+  var ACT_ASSIGN = {};   // action_key -> { state, assigned_to }
+  var ACT_ME = null;     // this viewer's login email, for "you own it" labelling
+  var ACT_LOADED = false;
+  function actAssigneeName(email) {
+    if (!email) return "";
+    var local = String(email).split("@")[0];
+    var parts = local.split(/[._-]+/).filter(Boolean).map(function (w) {
+      return w.charAt(0).toUpperCase() + w.slice(1);
     });
-    /* Action state buttons — TEAM-SHARED via /api/cockpit/assignments (was
-       per-browser localStorage, invisible to teammates). One owner per action:
-       "Assign to me" (ack) claims it as In progress and stamps your name;
-       whoever clicks last owns it; everyone sees who. Completed and Dismissed
-       are shared the same way. Clicking the active state again (or Undo) clears
-       it. Server is the source of truth; clicks apply optimistically then
-       reconcile with the saved row. */
-    var ASSIGN = {};   // action_key -> { state, assigned_to }
-    var ME = null;     // this viewer's login email, for "you own it" labelling
-    function assigneeName(email) {
-      if (!email) return "";
-      var local = String(email).split("@")[0];
-      var parts = local.split(/[._-]+/).filter(Boolean).map(function (w) {
-        return w.charAt(0).toUpperCase() + w.slice(1);
-      });
-      return parts.join(" ") || String(email);
+    return parts.join(" ") || String(email);
+  }
+  function actStateVerb(state) { return state === "ack" ? "In progress" : state === "done" ? "Completed" : "Dismissed"; }
+  function actApplyCard(card) {
+    var key = card.getAttribute("data-action-key");
+    var rec = ACT_ASSIGN[key] || {};
+    var state = rec.state || "";
+    var mine = rec.assigned_to && ACT_ME && rec.assigned_to.toLowerCase() === ACT_ME.toLowerCase();
+    var who = mine ? "you" : actAssigneeName(rec.assigned_to);
+    var DEFAULT_LABEL = { ack: "Assign to me", done: "Mark as completed", dismiss: "Dismiss" };
+    card.querySelectorAll(".action-state-btn").forEach(function (x) {
+      x.classList.remove("is-active", "is-acked", "is-done-state");
+      x.setAttribute("aria-pressed", "false");
+      var d = x.getAttribute("data-act");
+      if (DEFAULT_LABEL[d]) x.textContent = DEFAULT_LABEL[d];
+    });
+    var dr = card.querySelector(".action-dismissed-row");
+    var body = card.querySelector(".action-body");
+    var tag = card.querySelector(".assignee-tag");
+    if (state === "dismiss") {
+      if (dr) { dr.hidden = false; var s = dr.querySelector("span"); if (s && s.childNodes[0]) s.childNodes[0].nodeValue = (who ? "Dismissed by " + who : "Dismissed") + " · "; }
+      if (body) body.style.opacity = "0.45";
+    } else {
+      if (dr) dr.hidden = true;
+      if (body) body.style.opacity = "";
     }
-    function stateVerb(state) { return state === "ack" ? "In progress" : state === "done" ? "Completed" : "Dismissed"; }
-    function applyCard(card) {
-      var key = card.getAttribute("data-action-key");
-      var rec = ASSIGN[key] || {};
-      var state = rec.state || "";
-      var mine = rec.assigned_to && ME && rec.assigned_to.toLowerCase() === ME.toLowerCase();
-      var who = mine ? "you" : assigneeName(rec.assigned_to);
-      var DEFAULT_LABEL = { ack: "Assign to me", done: "Mark as completed", dismiss: "Dismiss" };
-      card.querySelectorAll(".action-state-btn").forEach(function (x) {
-        x.classList.remove("is-active", "is-acked", "is-done-state");
-        x.setAttribute("aria-pressed", "false");
-        var d = x.getAttribute("data-act");
-        if (DEFAULT_LABEL[d]) x.textContent = DEFAULT_LABEL[d];
-      });
-      var dr = card.querySelector(".action-dismissed-row");
-      var body = card.querySelector(".action-body");
-      var tag = card.querySelector(".assignee-tag");
-      if (state === "dismiss") {
-        if (dr) { dr.hidden = false; var s = dr.querySelector("span"); if (s && s.childNodes[0]) s.childNodes[0].nodeValue = (who ? "Dismissed by " + who : "Dismissed") + " · "; }
-        if (body) body.style.opacity = "0.45";
-      } else {
-        if (dr) dr.hidden = true;
-        if (body) body.style.opacity = "";
-      }
-      var btn = state && state !== "dismiss" ? card.querySelector('.action-state-btn[data-act="' + state + '"]') : null;
-      if (btn) {
-        btn.classList.add("is-active");
-        btn.classList.add(state === "ack" ? "is-acked" : "is-done-state");
-        btn.setAttribute("aria-pressed", "true");
-        // Relabel the clicked button itself so the click has an unmistakable
-        // effect right where the cursor is (the header assignee-tag is easy to
-        // miss). "Assign to me" -> "In progress · you"; "Mark as completed" ->
-        // "Completed · you".
-        btn.textContent = (state === "ack" ? "In progress" : "Completed") + (who ? " · " + who : "");
-      }
-      if (tag) {
-        if ((state === "ack" || state === "done") && who) { tag.hidden = false; tag.textContent = stateVerb(state) + " · " + who; }
-        else { tag.hidden = true; tag.textContent = ""; }
-      }
+    var btn = state && state !== "dismiss" ? card.querySelector('.action-state-btn[data-act="' + state + '"]') : null;
+    if (btn) {
+      btn.classList.add("is-active");
+      btn.classList.add(state === "ack" ? "is-acked" : "is-done-state");
+      btn.setAttribute("aria-pressed", "true");
+      btn.textContent = (state === "ack" ? "In progress" : "Completed") + (who ? " · " + who : "");
     }
+    if (tag) {
+      if ((state === "ack" || state === "done") && who) { tag.hidden = false; tag.textContent = actStateVerb(state) + " · " + who; }
+      else { tag.hidden = true; tag.textContent = ""; }
+    }
+  }
+  function actLoadOnce(cb) {
+    if (ACT_LOADED) { cb(); return; }
     Promise.all([
       getJSON("/api/cockpit/assignments").catch(function () { return {}; }),
       getJSON("/api/auth/me").catch(function () { return {}; })
     ]).then(function (res) {
-      ASSIGN = (res[0] && res[0].assignments) || {};
-      ME = (res[1] && res[1].email) || null;
-      pr.querySelectorAll(".action-card").forEach(applyCard);
+      ACT_ASSIGN = (res[0] && res[0].assignments) || {};
+      ACT_ME = (res[1] && res[1].email) || null;
+      ACT_LOADED = true;
+      cb();
     });
-    pr.querySelectorAll(".action-card").forEach(function (card) {
+  }
+  function wireActionCards(root) {
+    /* "Fix inside of Claude" — opens a fresh Claude chat, prompt pre-filled.
+       stopPropagation so a card living inside a row link never navigates. */
+    root.querySelectorAll(".copy-prompt").forEach(function (b) {
+      if (b.getAttribute("data-fix-bound")) return;
+      b.setAttribute("data-fix-bound", "1");
+      b.addEventListener("click", function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var txt = b.getAttribute("data-prompt") || "";
+        try { window.open("https://claude.ai/new?q=" + encodeURIComponent(txt), "_blank", "noopener"); } catch (_e) {}
+      });
+    });
+    actLoadOnce(function () { root.querySelectorAll(".action-card").forEach(actApplyCard); });
+    root.querySelectorAll(".action-card").forEach(function (card) {
+      if (card.getAttribute("data-act-bound")) return;
+      card.setAttribute("data-act-bound", "1");
       var key = card.getAttribute("data-action-key");
       var parts = (key || "").split("::");
       var cid = parts[0], ik = parts.slice(1).join("::");
       card.querySelectorAll(".action-state-btn, .action-undo-btn").forEach(function (b) {
-        b.addEventListener("click", function () {
+        b.addEventListener("click", function (e) {
+          e.preventDefault(); e.stopPropagation();
           var act = b.getAttribute("data-act");
-          var cur = (ASSIGN[key] || {}).state || "";
+          var cur = (ACT_ASSIGN[key] || {}).state || "";
           var next = (act === "undo" || cur === act) ? "clear" : act;
-          var prev = ASSIGN[key];
-          /* optimistic */
-          if (next === "clear") delete ASSIGN[key];
-          else ASSIGN[key] = { state: next, assigned_to: ME };
-          applyCard(card);
+          var prev = ACT_ASSIGN[key];
+          if (next === "clear") delete ACT_ASSIGN[key];
+          else ACT_ASSIGN[key] = { state: next, assigned_to: ACT_ME };
+          actApplyCard(card);
           fetch("/api/cockpit/assignments", {
             method: "POST", credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action_key: key, campaign_id: cid, insight_key: ik, state: next })
           }).then(function (r) { return r.json(); }).then(function (out) {
             if (!out || out.ok === false) throw new Error((out && out.message) || "save failed");
-            if (next === "clear") delete ASSIGN[key];
-            else ASSIGN[key] = { state: out.state, assigned_to: out.assigned_to };
-            applyCard(card);
+            if (next === "clear") delete ACT_ASSIGN[key];
+            else ACT_ASSIGN[key] = { state: out.state, assigned_to: out.assigned_to };
+            actApplyCard(card);
           }).catch(function () {
-            if (prev) ASSIGN[key] = prev; else delete ASSIGN[key];
-            applyCard(card);
+            if (prev) ACT_ASSIGN[key] = prev; else delete ACT_ASSIGN[key];
+            actApplyCard(card);
           });
         });
       });
     });
+  }
+
+  /* Populate a row's inline "Review N" panel from the campaign's in-memory
+     acts (no fetch), then wire it with the shared handler. Idempotent. */
+  function openRowOptim(c, panel) {
+    if (panel.getAttribute("data-loaded")) return;
+    panel.setAttribute("data-loaded", "1");
+    var acts = campaignActs(c);
+    if (!acts.length) {
+      panel.innerHTML = '<p class="row-optim-empty">Nothing to review right now — this campaign is healthy.</p>';
+      return;
+    }
+    var h = ['<div class="actions-section">'];
+    acts.forEach(function (r, i) { h.push(actionCardHTML(c, r, i)); });
+    h.push("</div>");
+    panel.innerHTML = h.join("");
+    wireActionCards(panel);
+  }
+
+  function attachPageHandlers(c) {
+    var pr = document.getElementById("page-root");
+    attachThemeToggles(pr);
+    applyTheme(currentTheme());
+    wireActionCards(pr);
   }
 
   /* ---------- theme ---------- */
