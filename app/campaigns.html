@@ -2590,7 +2590,9 @@
       });
       h.push("</div>");
     } else {
-      h.push('<p class="card-subtitle">No open flags beyond the verdict. That is the whole picture.</p>');
+      h.push('<p class="card-subtitle">' + (c.ghost
+        ? "This campaign is not in today's briefing — the morning crunch only writes up campaigns that are running. The numbers below are live from the daily sync."
+        : "No open flags beyond the verdict. That is the whole picture.") + "</p>");
     }
     h.push("</div>");
     h.push('<div class="ov-card"><div class="card-title">Live performance</div>' +
@@ -2668,10 +2670,36 @@
 
     /* sources */
     h.push('<div class="tab-panel" data-tab="sources"' + (tab !== "sources" ? " hidden" : "") + ">" +
+      '<div class="sources-section" id="draft-sources-section" hidden><div class="section-label">Drafted sources</div><div id="draft-sources-root"></div></div>' +
       '<div class="sources-section"><div class="section-label">Sources</div><div id="sources-root"><p class="lw-loading">Loading push history&hellip;</p></div></div></div>');
 
     h.push("</div></article>");
     return h.join("");
+  }
+
+  /* Drafted sources: tool source docs bound to this campaign (camp-sl-<id>),
+     e.g. a recontact pool staged against a drafted campaign. Separate root from
+     the push-history fill below so the two hydrations never clobber each other. */
+  function hydrateDraftSources(c) {
+    if (!STATE.slimSourcesP) STATE.slimSourcesP = getJSON("/api/sources?slim=1").catch(function () { return null; });
+    STATE.slimSourcesP.then(function (all) {
+      var mine = (Array.isArray(all) ? all : []).filter(function (s) {
+        return String(s.campaign_id) === "camp-sl-" + c.id;
+      });
+      var sec = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-section');
+      if (!sec || !mine.length) return;
+      sec.hidden = false;
+      document.getElementById("draft-sources-root").innerHTML = '<div class="source-list-cards">' + mine.map(function (s) {
+        var n = s.total != null ? s.total : ((s.prospects || []).length || null);
+        var inner = '<span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
+          '<span class="source-list-meta">' + (n != null ? "~" + fmtInt(n) + " people staged" : "Sized on the first pull") +
+          " &middot; drafted, nothing sends" +
+          (s.list_id ? ' &middot; <span class="action-link">View the list</span>' : "") + "</span>";
+        return s.list_id
+          ? '<a class="source-list-card source-list-card--link" href="/app/lists.html#' + esc(s.list_id) + '">' + inner + "</a>"
+          : '<div class="source-list-card">' + inner + "</div>";
+      }).join("") + "</div>";
+    });
   }
 
   function hydrateDetail(c) {
@@ -2972,6 +3000,45 @@
 
   /* ---------- router ---------- */
   var listScrollY = 0;
+  /* A campaign outside today's crunch (drafted, or not yet briefed) still gets
+     a page: live stats from the scorecard, no insight prose. Without this every
+     deep link to a draft bounced back to the list. Only ids the scorecard
+     knows are real get a page — junk ids still bounce. */
+  function ghostRow(id) {
+    var sc = ((STATE.scorecard || {}).campaigns || {})[String(id)];
+    if (!sc) return null;
+    return {
+      id: String(id), name: "Campaign " + id, ghost: true,
+      slStatus: sc.status || "", tag: "watch", tier: TAG_META.watch.tier,
+      pill: "Not in today's briefing", pillClass: "v-amber",
+      teaser: "", note: "", drifted: false, act: "", owner: "",
+      smartleadUrl: "https://app.smartlead.ai/app/email-campaign/" + id + "/analytics",
+      stats: { leads: sc.total, sent: sc.sent, replied: sc.replied, positives: sc.positives,
+               bounced: sc.bounced, meetings: 0, completion: null, source: "scorecard" },
+      insights: [], others: []
+    };
+  }
+
+  /* The scorecard has no names — patch the ghost's title in from the unified
+     mirror once it arrives (fetched lazily, once per session). */
+  function fillGhostName(c) {
+    if (!STATE.unifiedP) STATE.unifiedP = getJSON("/api/campaigns-unified").catch(function () { return null; });
+    STATE.unifiedP.then(function (u) {
+      var row = ((u && u.rows) || []).find(function (r) { return r.key === "camp-sl-" + c.id; });
+      if (!row || !row.name) return;
+      c.name = row.name;
+      var page = document.querySelector('.campaign-page[data-cid="' + c.id + '"]');
+      if (!page) return;
+      var t = page.querySelector(".campaign-title");
+      if (t) t.textContent = row.name;
+      if (row.status) {
+        var rs = page.querySelector(".campaign-run-status");
+        if (rs) rs.textContent = "Runs in Smartlead · " + String(row.status).toLowerCase();
+      }
+      document.title = row.name + " · The cockpit";
+    });
+  }
+
   function route() {
     var hash = window.location.hash || "#/";
     /* top-level page tab: #/optimisations shows the embedded Priority Report;
@@ -3021,7 +3088,7 @@
       return;
     }
     var id = m[1], tab = m[2] || "overview";
-    var c = STATE.byId[id];
+    var c = STATE.byId[id] || ghostRow(id);
     if (!c) {
       viewCamp.hidden = true; viewList.hidden = false;
       window.location.hash = "#/";
@@ -3036,6 +3103,8 @@
       pr.innerHTML = campaignPageHTML(c, tab);
       attachPageHandlers(c);
       hydrateDetail(c);
+      hydrateDraftSources(c);
+      if (c.ghost) fillGhostName(c);
     } else {
       /* just switch tab */
       pr.querySelectorAll(".tab-panel").forEach(function (p) { p.hidden = p.getAttribute("data-tab") !== tab; });
