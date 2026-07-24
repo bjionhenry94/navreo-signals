@@ -1356,11 +1356,14 @@
     scroll-snap-type: x proximity;
     -webkit-overflow-scrolling: touch;
     gap: 18px;
-    padding-bottom: 6px;
-    scrollbar-width: thin;
+    padding-bottom: 2px;
+    scrollbar-width: none;
   }
+  .book-grid.book-grid--compact::-webkit-scrollbar { display: none; }
   .book-grid.book-grid--compact > .book-widget {
-    flex: 0 0 clamp(300px, 32%, 380px);
+    /* just under a third so the next card always bleeds in at the edge */
+    flex: 0 0 31%;
+    min-width: 280px;
     scroll-snap-align: start;
   }
 
