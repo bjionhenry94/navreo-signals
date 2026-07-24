@@ -3162,7 +3162,7 @@
       (busy ? poolStageLine(pool.active_job)
             : (lb ? "Last pull: " + fmtInt(lb.pushed) + " verified added &middot; " + fmtInt(lb.verify_failed) +
                     " failed verification &middot; " + fmtInt(lb.live_dropped) + " dropped as collisions"
-                  : "Runs the gated pipeline — sweep, email verification, audit, upload. The campaign stays drafted; nothing sends.")) +
+                  : "Runs the gated pipeline — collision sweep, then email verification (spends ListMint credits on emails without a fresh verdict), audit, upload. The campaign stays drafted; nothing sends.")) +
       "</div></div>";
     var btn = document.getElementById("pp-go");
     if (btn) btn.onclick = function () {
