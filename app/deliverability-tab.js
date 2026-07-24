@@ -383,6 +383,10 @@
     // ~2-min campaign-membership sweep on a cold server, so `computing`
     // responses re-poll until ready. status: idle | loading | ready | error.
     plan: { status: "idle", data: null, ts: 0, error: null, pollTimer: null },
+    // "Across the book" cross-campaign insight cards (GET /api/cockpit/insights,
+    // scope==="book") — moved here from the campaigns home. status: idle |
+    // loading | ready | error; rows are the raw book insight rows.
+    book: { status: "idle", rows: [], started: false },
   };
   function isLive() { return DATA.mode === "live"; }
   const AUDIT_POLL_MS = 10000;         // GET /_audit poll interval while a run is in flight
@@ -1522,6 +1526,56 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 .dlv .disclose>summary::before{content:'▸';font-size:10px;color:var(--ink-3);transition:transform .15s ease}
 .dlv .disclose[open]>summary::before{transform:rotate(90deg)}
 .dlv .disclose .dc{border:none;border-top:1px solid var(--line);border-radius:0}
+/* -- "Across the book" cross-campaign insight cards, moved here from the
+   campaigns home (owner request). Ported verbatim from campaigns.html's
+   certified insight-card grammar (hero number + its own chart + one insight
+   line + one act line + why?), with the design tokens remapped to navreo.css
+   (--fg->--ink, --bg-elevated->--card, --danger->--red, etc.). Everything is
+   scoped under .dlv-book so it can't collide with the .dlv- sections above. -- */
+.dlv-book{margin:14px 0 22px}
+.dlv-book .section-label{font-size:.68rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px}
+.dlv-book .book-grid--compact{display:flex;flex-wrap:nowrap;overflow-x:auto;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;gap:18px;padding-bottom:2px;scrollbar-width:none}
+.dlv-book .book-grid--compact::-webkit-scrollbar{display:none}
+.dlv-book .book-grid--compact>.book-widget{flex:0 0 31%;min-width:280px;scroll-snap-align:start}
+.dlv-book .book-widget{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;display:flex;flex-direction:column;gap:10px}
+.dlv-book .book-widget--compact{padding:22px 22px 18px;gap:15px}
+.dlv-book .book-line{font-size:.92rem;font-weight:600;line-height:1.4;color:var(--ink);letter-spacing:-.005em}
+.dlv-book .book-widget--compact .book-line{font-size:.98rem;font-weight:700}
+.dlv-book .action-payoff{font-size:.8rem;color:var(--ink-3);line-height:1.5;margin:0}
+.dlv-book .book-widget--compact .action-payoff{font-size:.88rem}
+.dlv-book .footnote-line{font-size:.7rem;color:var(--ink-3);margin:0 0 14px}
+.dlv-book .book-widget--compact .footnote-line{margin:0}
+.dlv-book .nvz{display:flex;align-items:center;gap:16px;min-height:60px;margin-top:2px}
+.dlv-book .nvz-hero{font-family:var(--font-display);font-weight:400;font-size:clamp(1.9rem,4vw,2.5rem);letter-spacing:-.03em;line-height:.85;color:var(--ink);flex:0 0 auto}
+.dlv-book .nvz-hero small{font-size:.45em;letter-spacing:-.01em}
+.dlv-book .nvz-hero.is-red{color:var(--red)}
+.dlv-book .nvz-hero.is-amber{color:var(--amber)}
+.dlv-book .nvz-hero.is-green{color:var(--green)}
+.dlv-book .nvz-chart{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;justify-content:center}
+.dlv-book .nvz-cap{font-size:.8rem;font-weight:600;color:var(--ink-3);line-height:1.25}
+.dlv-book .nvz-seg{height:12px;border-radius:999px;background:var(--bg-sunken);overflow:hidden;display:flex}
+.dlv-book .nvz-seg>span{height:100%;border-radius:999px}
+.dlv-book .nvz-vbars{display:flex;align-items:flex-end;gap:4px;height:40px}
+.dlv-book .nvz-vbars>span{flex:1;min-width:4px;border-radius:2px 2px 0 0;background:var(--ink-3);opacity:.45}
+.dlv-book .nvz-vbars>span.is-hot{background:var(--red);opacity:1}
+.dlv-book .nvz-gauge{height:12px;border-radius:999px;background:var(--bg-sunken);position:relative}
+.dlv-book .nvz-gauge>.gfill{position:absolute;left:0;top:0;height:100%;border-radius:999px;background:var(--red)}
+.dlv-book .nvz-gauge>.gthr{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);opacity:.65}
+.dlv-book .nvz-cells{display:flex;gap:4px}
+.dlv-book .nvz-cells>span{flex:1;height:24px;border-radius:5px;background:var(--bg-sunken);display:flex;align-items:center;justify-content:center;font-size:.58rem;font-weight:700;color:var(--ink-3)}
+.dlv-book .nvz-cells>span.is-stuck{background:transparent;border:1.5px solid var(--red);color:var(--red)}
+.dlv-book .nvz-hbars{display:flex;flex-direction:column;gap:3px}
+.dlv-book .nvz-hbars>span{height:5px;border-radius:999px;background:var(--red);opacity:.9}
+.dlv-book .nvz-dots{display:flex;gap:5px;flex-wrap:wrap}
+.dlv-book .nvz-dots>span{width:13px;height:13px;border-radius:4px}
+.dlv-book .nvz-dots>span.is-red{background:var(--red)}
+.dlv-book .nvz-dots>span.is-amber{background:var(--amber)}
+.dlv-book .nvz-why{margin-top:1px}
+.dlv-book .nvz-why>summary{font-size:.7rem;color:var(--ink-3);cursor:pointer;list-style:none;user-select:none;border-top:1px dashed var(--line);padding-top:8px}
+.dlv-book .nvz-why>summary::-webkit-details-marker{display:none}
+.dlv-book .nvz-why>summary::before{content:"why? ";color:var(--orange);font-weight:700}
+.dlv-book .nvz-why[open]>summary::before{content:"hide "}
+.dlv-book .nvz-why .footnote-line{margin:6px 0 0}
 `;
     const st = document.createElement("style");
     st.id = "dlv-styles";
@@ -2509,6 +2563,153 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return `<div class="tabs dlv-subtabs" role="tablist">` +
       DLV_SUBTABS.map(([id, label]) => `<button class="tab ${dlvSubtab === id ? "on" : ""}" data-act="dlv-subtab" data-subtab="${id}" role="tab" aria-selected="${dlvSubtab === id}">${esc(label)}</button>`).join("") +
       `</div>`;
+  }
+
+  /* ============================================================
+     "Across the book" — cross-campaign insight cards, moved here
+     from the campaigns home (owner request). The card grammar
+     (nvzNums/nvzViz/nvzCard/KIND_LABEL) is ported verbatim from
+     campaigns.html so the cards render identically; only the data
+     feed differs — GET /api/cockpit/insights, scope==="book".
+     ============================================================ */
+  const BOOK_KIND_LABEL = {
+    "dist-bug": "split not set", "variant-fix": "version fix", "kill-threshold": "kill line",
+    "list-audit": "list audit", "stuck-variants": "stuck splits", "unanswered-positives": "waiting on a human",
+    "weekly-pulse": "weekly pulse", "book-verdict": "book verdict", "whole-offer-failures": "dead offers",
+  };
+  function bookFmtInt(n) {
+    if (n == null || isNaN(n)) return "-";
+    return Number(n).toLocaleString("en-GB");
+  }
+  function nvzNums(text) {
+    return (String(text || "").match(/\d[\d,]*(?:\.\d+)?/g) || []).map((t) => parseFloat(t.replace(/,/g, "")));
+  }
+  function nvzViz(r) {
+    const fmtInt = bookFmtInt;
+    var p = r.payload || {};
+    var s = p.stats || {};
+    var tag = p.tag === "fine" ? "green" : (p.tag === "decide" || p.tag === "decision") ? "red" : "amber";
+    var barTone = tag === "red" ? "var(--red)" : tag === "green" ? "var(--green)" : "var(--amber)";
+    var nums = nvzNums(p.bold);
+    var hero = null, chart = "", cap = "", title = "", simpleAct = "";
+    var key = r.insight_key || "";
+    if (key === "weekly-pulse" && (s.pos_last_week != null || nums.length >= 2)) {
+      var lastW = s.pos_last_week != null ? s.pos_last_week : nums[0];
+      var thisW = s.pos_this_week != null ? s.pos_this_week : nums[1];
+      var mx = Math.max(lastW, thisW, 1);
+      hero = fmtInt(thisW) + (thisW < lastW ? "<small>&darr;</small>" : "");
+      chart = '<div class="nvz-vbars">' +
+        '<span style="height:' + Math.round(100 * lastW / mx) + '%"></span>' +
+        '<span class="is-hot" style="height:' + Math.round(100 * thisW / mx) + '%"></span></div>';
+      cap = fmtInt(lastW) + " &rarr; " + fmtInt(thisW) + " this week";
+      title = "We got " + fmtInt(thisW) + " good replies this week, down from " + fmtInt(lastW) + " last week.";
+      simpleAct = "Watch the failing offers.";
+    } else if (key === "kill-threshold") {
+      hero = nums.length ? fmtInt(nums[0]) + "<small>+</small>" : "&mdash;";
+      chart = '<div class="nvz-gauge"><span class="gfill" style="width:100%"></span><span class="gthr" style="left:40%"></span></div>';
+      cap = "emails per good reply";
+      title = "Two campaigns need " + (nums.length ? fmtInt(nums[0]) : "2,500") + "+ emails to get one good reply. That is way too many.";
+      simpleAct = "Pivot or close both.";
+    } else if (key === "stuck-variants" || key === "dist-bug") {
+      var share = (String(p.bold || "").match(/(\d+)\s*%/) || [])[1];
+      var unset = nums.length > 1 ? Math.min(9, Math.round(nums[nums.length - 1])) : 4;
+      var cells = '<span class="is-stuck"></span>';
+      for (var ci = 0; ci < unset; ci++) cells += "<span></span>";
+      hero = "0";
+      chart = '<div class="nvz-cells">' + cells + "</div>";
+      cap = share ? ("1 broken &middot; " + unset + " unset") : "set up, not sending";
+      title = share ? ("One email version should send " + share + "% of emails but has sent none.") : "One email version is set up but never sends.";
+      simpleAct = "Fix the splits in Smartlead.";
+    } else if (key === "whole-offer-failures") {
+      var vols = nvzNums((p.bold || "") + " " + (p.note || "")).filter((n) => n >= 100).slice(0, 6);
+      if (vols.length > 2) {
+        var rest = vols.slice(1).reduce((a, b) => a + b, 0);
+        if (vols[0] >= rest * 0.9) vols = vols.slice(1);
+      }
+      if (vols.length < 2) vols = [5, 4, 3, 2, 1];
+      var vmx = Math.max.apply(null, vols);
+      hero = '0';
+      chart = '<div class="nvz-hbars">' + vols.map((v) => '<span style="width:' + Math.max(8, Math.round(100 * v / vmx)) + '%"></span>').join("") + "</div>";
+      cap = "0 replies from " + vols.length + " offers";
+      var _tot0 = nvzNums(p.bold)[0];
+      title = vols.length + " offers sent " + (_tot0 ? fmtInt(_tot0) : "thousands of") + " emails and got zero good replies.";
+      simpleAct = "Approve the rewrite briefs.";
+    } else if (key === "book-verdict") {
+      var small = nums.filter((n) => n > 0 && n < 20);
+      hero = nums.length ? fmtInt(nums[0]) : "&mdash;";
+      var _needs = small.reduce((a, b) => a + b, 0);
+      if (/\bone\b/i.test(String(p.bold || ""))) _needs += 1;
+      title = fmtInt(nums[0] || 0) + " good replies this week" + (nums[1] ? ", down from " + fmtInt(nums[1]) + " last week" : "") + ". " + (_needs ? _needs + " campaigns need help." : "");
+      simpleAct = "Work the list top down.";
+      if (small.length >= 2) {
+        var reds = Math.min(9, Math.round(small[0])), ambs = Math.min(9, small.slice(1).reduce((a, b) => a + b, 0) + (/\bone\b/i.test(String(p.bold || "")) ? 1 : 0));
+        var dots = "";
+        for (var di = 0; di < reds; di++) dots += '<span class="is-red"></span>';
+        for (var dj = 0; dj < ambs; dj++) dots += '<span class="is-amber"></span>';
+        chart = '<div class="nvz-dots">' + dots + "</div>";
+        cap = "each square needs help";
+      }
+    } else if (key === "unanswered-positives" && nums.length >= 2) {
+      var tot = nums[0], part = Math.min(nums[nums.length - 1], nums[0]);
+      hero = fmtInt(part);
+      chart = '<div class="nvz-seg"><span style="width:' + Math.round(100 * part / tot) + '%;background:var(--orange)"></span></div>';
+      cap = fmtInt(part) + " of " + fmtInt(tot) + " are meetings";
+      title = fmtInt(tot) + " people are waiting for a reply from us. " + fmtInt(part) + " of them want a meeting.";
+      simpleAct = "Clear the " + fmtInt(part) + " meetings today.";
+    } else if (nums.length >= 2 && /\bof\b|\/|out of/.test(String(p.bold || ""))) {
+      var t2 = Math.max(nums[0], nums[1]), p2 = Math.min(nums[0], nums[1]);
+      hero = fmtInt(p2);
+      chart = '<div class="nvz-seg"><span style="width:' + Math.round(100 * p2 / Math.max(t2, 1)) + '%;background:' + barTone + '"></span></div>';
+      cap = fmtInt(p2) + " of " + fmtInt(t2);
+    }
+    if (hero == null) hero = nums.length ? fmtInt(nums[0]) : "&bull;";
+    if (!chart) {
+      chart = '<div class="nvz-seg"><span style="width:100%;background:' + barTone + '"></span></div>';
+      cap = cap || (tag === "red" ? "needs a decision" : tag === "green" ? "healthy" : "keep watching");
+    }
+    return { heroHtml: '<span class="nvz-hero is-' + tag + '">' + hero + "</span>", chartHtml: chart, cap: cap, title: title, simpleAct: simpleAct };
+  }
+  function nvzCard(r, kindLabel) {
+    var p = r.payload || {};
+    var v = nvzViz(r);
+    var title = v.title || String(p.bold || "");
+    var whyBits = [];
+    whyBits.push('<p class="footnote-line">' + esc(kindLabel) + " &middot; owner: " + esc(p.owner || "Lilly") + "</p>");
+    if (v.title && p.bold) whyBits.push('<p class="footnote-line">' + esc(p.bold) + "</p>");
+    if (v.simpleAct && p.act) whyBits.push('<p class="footnote-line">' + esc(p.act) + "</p>");
+    if (p.note) whyBits.push('<p class="footnote-line">' + esc(p.note) + "</p>");
+    if (p.source) whyBits.push('<p class="footnote-line">Source: ' + esc(p.source) + "</p>");
+    return '<div class="book-widget book-widget--compact">' +
+      '<div class="nvz">' + v.heroHtml + '<div class="nvz-chart">' + v.chartHtml +
+      (v.cap ? '<div class="nvz-cap">' + v.cap + "</div>" : "") + "</div></div>" +
+      (title ? '<p class="book-line">' + esc(title) + "</p>" : "") +
+      ((v.simpleAct || p.act) ? '<p class="action-payoff">' + esc(String(v.simpleAct || p.act).replace(/^\s*(?:→|->)\s*/, "")) + "</p>" : "") +
+      '<details class="nvz-why"><summary></summary>' + whyBits.join("") + "</details>" +
+      "</div>";
+  }
+  function renderBook() {
+    var rows = (DATA.book && DATA.book.rows) || [];
+    if (!rows.length) return "";
+    return '<section class="dlv-book" aria-label="Across the book"><div class="section-label">Across the book</div>' +
+      '<div class="book-grid book-grid--compact">' +
+      rows.map((r) => nvzCard(r, BOOK_KIND_LABEL[r.insight_key] || r.insight_key)).join("") +
+      "</div></section>";
+  }
+  // One-shot fetch of the cross-campaign "book" insight rows; repaints in place
+  // once they land so the cards appear under the tabs without blocking boot.
+  function loadBook() {
+    if (DATA.book.started) return;
+    DATA.book.started = true;
+    DATA.book.status = "loading";
+    fetch("/api/cockpit/insights", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        var ins = (j && j.insights) || [];
+        DATA.book.rows = ins.filter((r) => r && r.scope === "book");
+        DATA.book.status = "ready";
+        paintPage();
+      })
+      .catch(() => { DATA.book.status = "error"; });
   }
 
   /* Essentialism pass: onboarding coach + "? Show tips" removed — the page's
@@ -4479,9 +4680,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       renderDataBanner(),
       renderHeaderTabs(),
       renderSubtabBar(),
+      renderBook(), // "Across the book" cards, moved here — sits just under the tabs
       panel,
       renderFooter(),
     ].join("");
+    loadBook(); // one-shot; repaints in place when the book rows land
     root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { if (foldState[d.id] != null) d.open = foldState[d.id]; });
     paintManagerRows(); // no-ops safely (guarded on $id("dlv-mgr-body")) unless the manager panel is in the DOM
     scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
