@@ -6217,9 +6217,18 @@ def perf_daily(p: dict) -> dict:
                 return [(fmap[d].get(field) if (d in fmap and fmap[d].get(field) is not None) else None) for d in dates]
             sent = [int(v) if v is not None else None for v in _fg("sent")]
             positives = [int(v) if v is not None else None for v in _fg("positives")]
-            reply_rate = [float(v) if v is not None else None for v in _fg("reply_rate")]
+            # A % needs a real denominator: on a near-idle day (weekend dribble)
+            # replies land against a handful of sends and the stored "rate" reads
+            # 30%+ (2026-07-18: 6 replies / 16 sent = 37.5). Below the floor the
+            # day is null — a labelled "no data" gap, never a fake spike. Raw
+            # counts in fleet_daily_stats stay untouched.
+            RATE_MIN_SENT = 1000
+            _rr = _fg("reply_rate")
+            reply_rate = [(float(_rr[i]) if (_rr[i] is not None and (sent[i] or 0) >= RATE_MIN_SENT) else None)
+                          for i in range(ndays)]
             bounce_rate = [(round(int(fmap[d]["bounced"]) * 100.0 / int(fmap[d]["sent"]), 2)
-                            if (d in fmap and fmap[d].get("sent")) else None) for d in dates]
+                            if (d in fmap and int(fmap[d].get("sent") or 0) >= RATE_MIN_SENT) else None)
+                           for d in dates]
         else:
             # Table not populated yet → live deliverability series (Smartlead day-wise).
             lookback = min(90, max(7, (today - start).days + 1))
