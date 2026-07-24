@@ -1773,13 +1773,13 @@
   .lw-banner button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 12px; color: inherit; }
   .lw-loading { padding: 48px 0; text-align: center; color: var(--muted); font-size: 14px; }
   .lw-stamp { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
-  .perfx-card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-elevated); padding: 16px 18px; margin: 18px 0; }
+  /* No outer border box — the per-stat boxes carry their own chrome. */
+  .perfx-card { margin: 18px 0; }
   .perfx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .perfx-title { font-weight: 700; font-size: 15px; }
   .perfx-toggle { display: flex; gap: 6px; }
   .perfx-toggle button { font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: inherit; border-radius: 999px; padding: 3px 10px; }
   .perfx-toggle button.is-active { background: var(--chip-active-bg); color: var(--chip-active-fg); border-color: var(--chip-active-bg); }
-  .perfx-note { font-size: 12px; color: var(--fg-subtle); margin: 10px 0 0; }
   /* One box per stat — house KPI-card shape (see deliverability BOUNCE-RATE / SENT-DAY cards).
      NOTE: this file's tokens are --fg-muted/--fg-subtle/--border/--bg-elevated —
      there is NO --muted/--line/--card here; an undefined var() in an SVG stroke
@@ -1788,8 +1788,7 @@
   .perfx-box { flex: 1 1 200px; min-width: 168px; border: 1px solid var(--border); border-radius: 10px; padding: 12px 15px; background: var(--bg-elevated); }
   .perfx-lab { font-size: 11.5px; color: var(--fg-subtle); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
   .perfx-num { font-size: 22px; font-weight: 700; margin-top: 3px; }
-  .perfx-sub { font-size: 11.5px; color: var(--fg-subtle); margin-top: 2px; }
-  .perfx-spark { margin-top: 8px; line-height: 0; }
+  .perfx-spark { margin-top: 10px; line-height: 0; cursor: crosshair; }
   .perfx-spark svg { width: 100%; height: 48px; display: block; }
   .perfx-line { stroke: var(--fg-muted); }
   .perfx-thr  { stroke: var(--fg-subtle); stroke-opacity: 0.55; }
@@ -1797,6 +1796,15 @@
   .perfx-delta.up { color: var(--success); }
   .perfx-delta.down { color: var(--danger); }
   .perfx-delta.flat { color: var(--fg-subtle); font-weight: 500; }
+  /* day-by-day hover tooltip on the trend lines */
+  .perfx-tip {
+    position: fixed; z-index: 60; pointer-events: none;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong);
+    border-radius: 8px; padding: 6px 10px; font-size: 12px; line-height: 1.4;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap;
+  }
+  .perfx-tip .tip-day { color: var(--fg-subtle); font-size: 11px; }
+  .perfx-tip .tip-val { font-weight: 700; font-variant-numeric: tabular-nums; }
   .lw-src-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
   @media (max-width: 520px) {
     .campaign-run-row { flex-wrap: wrap; row-gap: 8px; }
@@ -2279,8 +2287,7 @@
       '<button type="button" data-days="7">7d</button>' +
       '<button type="button" data-days="30" class="is-active">30d</button>' +
       '<button type="button" data-days="90">90d</button></div></div>' +
-      '<div class="perfx-grid" id="perfx-grid"></div>' +
-      '<p class="perfx-note" id="perfx-note"></p></div>');
+      '<div class="perfx-grid" id="perfx-grid"></div></div>');
 
     /* "Across the book" moved to the Fleet health audit (deliverability) page,
        just under its tabs — owner request. The book rows are still fetched into
@@ -2704,25 +2711,63 @@
     }
     var totalSent = sum(sent), totalPos = sum(pos), totalMtg = sum(mtg), lastRr = last(rr);
     var ratioHero = (totalSent != null && totalPos != null && totalPos > 0) ? "1 : " + fmtInt(Math.round(totalSent / totalPos)) : "—";
+    var winDays = (p.days || []).slice(idx0);
     var boxes = [
-      { name: "Emails sent", hero: totalSent == null ? "—" : fmtInt(totalSent), sub: "window total · dashed = daily average", color: "#1971C2", vals: sent, kind: "count", good: null },
-      { name: "Reply rate", hero: lastRr == null ? "—" : lastRr + "%", sub: "latest fleet reading · dashed = average", color: "#2F9E44", vals: rr, kind: "rate", good: "up" },
-      { name: "Emails per positive", hero: ratioHero, sub: "sends ÷ positives · dashed = average", color: "#7048E8", vals: perPos, kind: "ratio", good: "down" },
-      { name: "Meetings booked", hero: totalMtg == null ? "—" : fmtInt(totalMtg), sub: "window total · dashed = daily average", color: "#E8590C", vals: mtg, kind: "count", good: "up" }
+      { name: "Emails sent", hero: totalSent == null ? "—" : fmtInt(totalSent), color: "#1971C2", vals: sent, kind: "count", good: null },
+      { name: "Reply rate", hero: lastRr == null ? "—" : lastRr + "%", color: "#2F9E44", vals: rr, kind: "rate", good: "up" },
+      { name: "Emails per positive", hero: ratioHero, color: "#7048E8", vals: perPos, kind: "ratio", good: "down" },
+      { name: "Meetings booked", hero: totalMtg == null ? "—" : fmtInt(totalMtg), color: "#E8590C", vals: mtg, kind: "count", good: "up" }
     ];
     var out = "";
-    boxes.forEach(function (b) {
+    boxes.forEach(function (b, bi) {
       out += '<div class="perfx-box">' +
         '<div class="perfx-lab">' + esc(b.name) + "</div>" +
         '<div class="perfx-num tnum">' + b.hero + "</div>" +
-        '<div class="perfx-sub">' + esc(b.sub) + "</div>" +
-        '<div class="perfx-spark">' + perfSpark(b.vals, b.color) + "</div>" +
+        '<div class="perfx-spark" data-box="' + bi + '">' + perfSpark(b.vals, b.color) + "</div>" +
         perfDelta(b.vals, b.kind, b.good) + "</div>";
     });
     grid.innerHTML = out;
-    var d0 = (p.days || [])[idx0], d1 = (p.days || [])[n - 1];
-    document.getElementById("perfx-note").textContent =
-      d0 && d1 ? d0 + " to " + d1 + " · each box shows the daily trend across the window · dashed line = window average · change compares the last 7 days to the 7 before" : "";
+    attachPerfTips(grid, boxes, winDays);
+  }
+  /* Hover tooltip: cursor x maps back to a day index; shows that day's date and
+     value ("no data" for a null day). One shared floating tip element. */
+  function perfTipEl() {
+    var t = document.getElementById("perfx-tip");
+    if (!t) {
+      t = document.createElement("div");
+      t.id = "perfx-tip"; t.className = "perfx-tip"; t.hidden = true;
+      document.body.appendChild(t);
+    }
+    return t;
+  }
+  function perfTipFmt(kind, v) {
+    if (v == null) return "no data";
+    if (kind === "rate") return (Math.round(v * 100) / 100) + "%";
+    if (kind === "ratio") return "1 : " + fmtInt(Math.round(v));
+    return fmtInt(v);
+  }
+  function attachPerfTips(grid, boxes, days) {
+    var tip = perfTipEl();
+    grid.querySelectorAll(".perfx-spark").forEach(function (sp) {
+      var b = boxes[parseInt(sp.getAttribute("data-box"), 10)];
+      if (!b) return;
+      sp.addEventListener("mousemove", function (e) {
+        var rect = sp.getBoundingClientRect();
+        if (!rect.width || !days.length) return;
+        var frac = (e.clientX - rect.left) / rect.width;
+        var i = Math.round(frac * (days.length - 1));
+        if (i < 0) i = 0; if (i > days.length - 1) i = days.length - 1;
+        tip.innerHTML = '<div class="tip-day">' + esc(days[i] || "") + "</div>" +
+          '<div class="tip-val">' + esc(b.name) + ": " + perfTipFmt(b.kind, b.vals[i]) + "</div>";
+        tip.hidden = false;
+        var tw = tip.offsetWidth, th = tip.offsetHeight;
+        var tx = e.clientX + 12, ty = rect.top - th - 8;
+        if (tx + tw > window.innerWidth - 8) tx = e.clientX - tw - 12;
+        if (ty < 8) ty = rect.bottom + 8;
+        tip.style.left = tx + "px"; tip.style.top = ty + "px";
+      });
+      sp.addEventListener("mouseleave", function () { tip.hidden = true; });
+    });
   }
 
   /* ---------- campaign page ---------- */
