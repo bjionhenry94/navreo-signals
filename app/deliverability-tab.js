@@ -196,8 +196,14 @@
      ============================================================ */
   // Flags a REAL domain-health row for the rotation view (live logic — used
   // by derive() and the domain-health CSV exports).
+  // Maildoso replies structurally lower than Gmail/Outlook, so the 0.8% fleet
+  // floor unfairly parks it. Owner ruling 2026-07-24: Maildoso is exempt from the
+  // fleet floor and only goes to warm-up when it replies under its OWN 0.5% floor
+  // AND has real send volume behind it (>= minSent). It warms externally, so a
+  // low-volume box (can't earn a reply rate while capped) is never parked on noise.
+  var MAILDOSO_FLOOR = 0.5;
   function dhFlag(d, minSent, cutoff) {
-    if (d.maildoso) return "maildoso";
+    if (d.maildoso) return (d.sent >= minSent && d.reply_rate < MAILDOSO_FLOOR) ? "warmup" : "maildoso";
     if (d.sent < minSent) return "ok";
     return d.reply_rate < cutoff ? "warmup" : (d.reply_rate < 1 ? "watch" : "ok");
   }
@@ -936,7 +942,10 @@
     const restingCount = Object.keys(resting).length;
     const recovered = dhRows.filter((d) => (resting[d.domain] || 0) > 0 && d.sent >= minSent && d.reply_rate >= cutoff).map((d) => d.domain);
     const sized = dhRows.filter((d) => d.sent >= minSent).length;
-    const maildosoN = dhRows.filter((d) => d.maildoso).length;
+    // A Maildoso domain under its 0.5% floor (on real volume) now flags "warmup"
+    // and belongs in the floor tally, NOT the "warming externally" bucket — count
+    // only the still-warming Maildoso here so keep/flagged stay mutually exclusive.
+    const maildosoN = dhRows.filter((d) => d.maildoso && d.flag !== "warmup").length;
     const domainHealthCounts = { total: dhRows.length, sized, flagged: flaggedTotal, keep: Math.max(0, sized - flaggedTotal - maildosoN), maildoso: maildosoN, resting: restingCount };
 
     const blockedRows = A.inboxRows.filter((r) => r.kind === "blocked");
