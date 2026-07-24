@@ -831,7 +831,7 @@
 
   .row-summary {
     display: grid;
-    grid-template-columns: 60px minmax(160px,1.3fr) minmax(68px,110px) minmax(68px,110px) minmax(64px,110px) minmax(56px,110px) minmax(92px,110px) minmax(64px,110px) minmax(56px,110px) minmax(148px,auto) 18px;
+    grid-template-columns: 60px minmax(160px,1.3fr) minmax(68px,110px) minmax(68px,110px) minmax(64px,110px) minmax(56px,110px) minmax(92px,110px) minmax(64px,110px) minmax(56px,110px) minmax(104px,auto) 18px;
     align-items: center;
     gap: 12px 8px;
     padding: 20px 22px;
@@ -1330,11 +1330,12 @@
     }
     .row-summary .ring-wrap { order: 1; }
     .row-summary .row-id { order: 2; flex: 1 1 auto; min-width: 120px; }
-    .row-summary .chevron { order: 3; align-self: center; }
-    .row-summary .stat { order: 4; flex: 1 1 42%; }
-    .row-summary .verdict-pill { order: 5; margin-top: 10px; flex: 1 1 100%; }
-    .row-summary .row-teaser { order: 6; flex: 1 1 100%; margin-top: 8px; }
+    .row-summary .review-badge { order: 3; align-self: center; margin-left: auto; }
+    .row-summary .chevron { order: 4; align-self: center; }
+    .row-summary .stat { order: 5; flex: 1 1 42%; }
     .row-summary .stat--reply { display: none; }
+    .cockpit .row-optim { padding: 8px 16px 14px; }
+    .cockpit .row-optim .action-buttons { gap: 8px; }
     .book-grid { grid-template-columns: 1fr; }
   }
 
@@ -1881,6 +1882,12 @@
   }
   .cockpit .review-badge:hover { background: var(--nav-orange); color: #fff; box-shadow: 0 2px 10px rgba(255,77,0,0.28); }
   .cockpit .review-badge:focus-visible { outline: 2px solid var(--nav-orange); outline-offset: 2px; }
+  .cockpit .review-badge { justify-self: start; }
+  .cockpit .review-badge--clear {
+    background: transparent; color: var(--fg-subtle); border-color: var(--border);
+    cursor: default; font-weight: 600;
+  }
+  .cockpit .review-badge--clear:hover { background: transparent; color: var(--fg-subtle); box-shadow: none; }
   .cockpit .review-badge b { font-variant-numeric: tabular-nums; }
   .cockpit .review-badge .caret { transition: transform .2s; flex: 0 0 auto; }
   .cockpit .review-badge[aria-expanded="true"] { background: var(--nav-orange); color: #fff; }
@@ -2524,7 +2531,7 @@
     var nOpt = campaignActs(c).length;
     var reviewBadge = nOpt > 0
       ? '<span class="review-badge" role="button" tabindex="0" data-review="' + esc(c.id) + '" aria-controls="optim-c' + esc(c.id) + '" aria-expanded="false" aria-label="Review ' + nOpt + ' optimisation' + (nOpt === 1 ? "" : "s") + ' for this campaign">Review <b class="tnum">' + nOpt + "</b>" + REVIEW_CARET + "</span>"
-      : "";
+      : '<span class="review-badge review-badge--clear" aria-hidden="true">All clear</span>';
     return '<div class="campaign-row" id="row-c' + esc(c.id) + '" data-tier="' + c.tier + '" data-search="' + esc(search) + '">' +
       '<a class="row-summary" href="#/c/' + esc(c.id) + '" aria-label="' + esc(c.name) + ". " + esc(c.pill) + '. Open the campaign page.">' +
       '<span class="ring-wrap">' +
@@ -2540,7 +2547,6 @@
       '<span class="stat stat--sendspos"><span class="stat-num tnum" title="Sends per warm lead. Under 1,500 is healthy.">' + (c.ratio ? "1 per " + fmtInt(c.ratio) : "-") + '</span><span class="stat-label">Sends/positive</span></span>' +
       '<span class="stat stat--bounce"><span class="stat-num tnum">' + (bouncePct != null ? bouncePct + "%" : "-") + '</span><span class="stat-label">Bounce rate</span></span>' +
       '<span class="stat stat--meetings"><span class="stat-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="stat-label">Meetings</span></span>' +
-      '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
       reviewBadge +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") +
