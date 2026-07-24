@@ -233,10 +233,52 @@ def test_empty_window_noop():
     check("empty window: ok", s["ok"] is True and s["gap"] == 0)
 
 
+# ── 5. empty-body reply: retries within grace, marked seen past it ───────────
+# (the melissa@infiuss.com incident: a blank send whose HTML strips to ""
+#  pinned the watermark for 3 days, 2026-07-21 → 2026-07-24)
+
+EMPTY_HTML = "<html><body><div dir=\"ltr\"><br></div></body></html>"
+
+
+def test_empty_body_young_stays_unseen_and_freezes_watermark():
+    now = dt.datetime.now(dt.timezone.utc)
+    young = base_row("77", now - dt.timedelta(minutes=30))
+    state = FakeState(watermark=_iso(now - dt.timedelta(hours=1)))
+    hook = HookRecorder()
+    wire(state, [young], hook)
+    setter.hydrate_lead = lambda cid, email, mid: (True, {"reply_email_body": EMPTY_HTML}, "")
+    s = setter.run_reply_sync()
+    check("young empty body: counted as error, not skipped_empty",
+          s["errors"] == 1 and s["skipped_empty"] == 0)
+    check("young empty body: NOT marked seen", f"77-{young['last_reply_time']}" not in state.seen)
+    check("young empty body: watermark frozen",
+          setter._parse_iso(s["watermark_after"]) == setter._parse_iso(s["watermark_before"]))
+    check("young empty body: nothing posted", len(hook.posts) == 0)
+
+
+def test_empty_body_past_grace_marked_seen_watermark_advances():
+    now = dt.datetime.now(dt.timezone.utc)
+    stale = base_row("99", now - dt.timedelta(hours=setter.EMPTY_BODY_GRACE_H + 1))
+    state = FakeState(watermark=_iso(now - dt.timedelta(hours=setter.EMPTY_BODY_GRACE_H + 2)))
+    hook = HookRecorder()
+    wire(state, [stale], hook)
+    setter.hydrate_lead = lambda cid, email, mid: (True, {"reply_email_body": EMPTY_HTML}, "")
+    s = setter.run_reply_sync()
+    mid = f"99-{stale['last_reply_time']}"
+    check("stale empty body: marked seen", mid in state.seen)
+    check("stale empty body: skipped_empty=1, no errors",
+          s["skipped_empty"] == 1 and s["errors"] == 0)
+    check("stale empty body: watermark advanced past it",
+          setter._parse_iso(s["watermark_after"]) > setter._parse_iso(s["watermark_before"]))
+    check("stale empty body: nothing posted", len(hook.posts) == 0)
+
+
 if __name__ == "__main__":
     test_first_run_shape_and_key()
     test_dedup_second_run_noop()
     test_skip_when_already_in_replies()
     test_cap_hit_reports_failed_with_gap()
     test_empty_window_noop()
+    test_empty_body_young_stays_unseen_and_freezes_watermark()
+    test_empty_body_past_grace_marked_seen_watermark_advances()
     sys.exit(1 if report() else 0)

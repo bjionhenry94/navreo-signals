@@ -3006,6 +3006,11 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
 # NEVER re-implements GPT categorisation; NEVER calls an MCP tool.
 CATEGORISER_HOOK = "https://hook.eu2.make.com/6mda3nqyrtm8u4x9ihilymra4z70aaug"
 REPLY_SYNC_CAP = 300           # replies processed per run; overflow => run FAILED with gap
+EMPTY_BODY_GRACE_H = 6         # empty-bodied reply older than this = mark seen, stop retrying
+#   (a genuinely blank reply — e.g. an accidental empty send whose HTML strips
+#   to "" — must not pin the watermark forever: it froze the whole backstop
+#   from 2026-07-21 to 2026-07-24. Within the grace window we still retry,
+#   which covers Smartlead's thread-indexing lag for real bodies.)
 _REPLY_SYNC_FIRST_WINDOW_H = 2  # a fresh/empty watermark seeds at now-minus-2h
 
 
@@ -3089,8 +3094,9 @@ def run_reply_sync() -> dict:
     Never raises. ok=False (report FAILED) on a cap-hit, with `gap` = replies
     left unprocessed this run (a lower bound when `overflow`)."""
     summary = {"ok": True, "checked": 0, "posted": 0, "skipped_seen": 0,
-               "skipped_archived": 0, "errors": 0, "gap": 0, "overflow": False,
-               "watermark_before": None, "watermark_after": None, "first_run": False}
+               "skipped_archived": 0, "skipped_empty": 0, "errors": 0, "gap": 0,
+               "overflow": False, "watermark_before": None,
+               "watermark_after": None, "first_run": False}
     if not _SB or not _sl_key():
         summary["ok"] = False
         summary["errors"] += 1
@@ -3153,8 +3159,15 @@ def run_reply_sync() -> dict:
                     handled = True
                 else:
                     # No body yet (thread not indexed) — leave UNSEEN, do not
-                    # advance past it; a later tick retries.
-                    summary["errors"] += 1
+                    # advance past it; a later tick retries. Past the grace
+                    # window the emptiness is permanent, not indexing lag:
+                    # mark seen so the watermark can cross it.
+                    if rt_dt and (now - rt_dt) > _dt.timedelta(hours=EMPTY_BODY_GRACE_H):
+                        _mark_reply_seen(mid)
+                        summary["skipped_empty"] += 1
+                        handled = True
+                    else:
+                        summary["errors"] += 1
             # Watermark only crosses a CONTIGUOUS run of handled replies, so a
             # gap (unhandled reply) freezes it there and nothing downstream is lost.
             if handled and not frozen:
@@ -3360,8 +3373,15 @@ def run_positive_resweep(force: bool = False) -> dict:
                                               (r.get("lead_email") or "").strip(), None)
                 text = clean_body(data.get("reply_email_body") or "") if ok else ""
                 if not text:
-                    # thread not hydrated yet — leave unseen, retry next sweep
-                    summary["errors"] += 1
+                    # thread not hydrated yet — leave unseen, retry next sweep;
+                    # but past the grace window the body is permanently empty
+                    # (blank send), so mark seen instead of re-hydrating forever.
+                    rt_dt = _parse_iso(r.get("last_reply_time"))
+                    if rt_dt and (now - rt_dt) > _dt.timedelta(hours=EMPTY_BODY_GRACE_H):
+                        to_mark.append(mid)
+                        summary["skipped_empty"] = summary.get("skipped_empty", 0) + 1
+                    else:
+                        summary["errors"] += 1
                     continue
                 payload = {
                     "event_type": "EMAIL_REPLY",
