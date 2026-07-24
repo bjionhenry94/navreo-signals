@@ -537,7 +537,8 @@
   .row-live { display: inline-flex; align-items: center; gap: 4px; }
   .row-live-dot { width: 6px; height: 6px; border-radius: 50%; background: #2f9e44; display: inline-block; }
   @media (max-width: 640px) { .live-meta { margin-left: 0; width: 100%; } }
-  .live-meta--left { margin-left: 0; margin-top: 10px; }
+  .live-meta--perf { margin-left: auto; align-self: center; }
+  @media (max-width: 640px) { .live-meta--perf { margin-left: 0; width: auto; } }
 
   .rows-empty-state {
     margin-top: 14px;
@@ -2252,7 +2253,7 @@
      sort collapse into one row. "all" keeps the priority-grouped triage view
      (needs a decision → watch → fine); the rest are flat metric sorts. */
   var PRESETS = {
-    all:       { label: "All Optimisations", note: "Everything by priority: needs a decision, then watch, then fine." },
+    all:       { label: "All Priorities", note: "Everything by priority: needs a decision, then watch, then fine." },
     meetings:  { label: "Most meetings",     key: "meetings",  note: "Every campaign, best meeting-getters on top." },
     positives: { label: "Most positives",    key: "positives", note: "Every campaign, most positive replies on top." },
     efficient: { label: "Most efficient",    key: "sendsmtg", asc: true, note: "Fewest emails needed per meeting booked." },
@@ -2290,6 +2291,8 @@
     /* perf chart card */
     h.push('<div class="perfx-card" id="perfx-card" hidden>' +
       '<div class="perfx-head"><span class="perfx-title">Performance, whole fleet</span>' +
+      '<div class="live-meta live-meta--perf" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>' +
+      '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>' +
       '<div class="perfx-toggle" role="group" aria-label="Window">' +
       '<button type="button" data-days="7">7d</button>' +
       '<button type="button" data-days="30" class="is-active">30d</button>' +
@@ -2325,8 +2328,6 @@
           '" data-preset="' + k + '" aria-pressed="' + on + '" title="' + esc(p.note) + '">' + esc(p.label) + "</button>";
       }).join("") +
       "</div></div>");
-    h.push('<div class="live-meta live-meta--left" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>' +
-      '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>');
 
     h.push('<p class="section-caption" id="search-count" hidden></p>');
     h.push('<div class="sr-only" role="status" aria-live="polite" id="rows-live-region"></div>');
