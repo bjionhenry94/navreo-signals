@@ -1865,11 +1865,6 @@
       return r.json();
     });
   }
-  function todayKey() {
-    var d = new Date();
-    return "cockpit-today-" + d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
-  }
-
   /* ---------- state ---------- */
   var STATE = {
     insights: null,      // /api/cockpit/insights payload
@@ -2139,72 +2134,17 @@
   }
 
   /* ---------- list view ---------- */
-  function bookStat(key) {
-    var out = null;
-    STATE.book.forEach(function (r) {
-      var s = (r.payload || {}).stats || {};
-      if (s[key] != null && out == null) out = s[key];
-    });
-    return out;
-  }
-  function bookRow(kind) {
-    var out = null;
-    STATE.book.forEach(function (r) { if (r.insight_key === kind) out = r; });
-    return out;
-  }
-
   function renderList() {
     var root = document.getElementById("list-root");
     var cs = STATE.campaigns;
     var nDecide = cs.filter(function (c) { return c.tier === "decision"; }).length;
     var nWatch = cs.filter(function (c) { return c.tier === "watch"; }).length;
     var nFine = cs.filter(function (c) { return c.tier === "fine"; }).length;
-    var active = bookStat("active");
-    var judgeable = bookStat("judgeable") || cs.length;
-    var posLast = bookStat("pos_last_week");
-    var posThis = bookStat("pos_this_week");
-    var dateLine = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
     var crunchAt = STATE.insights.generated_at;
     var statsAt = STATE.insights.stats_updated_at;
 
     var h = [];
-    h.push('<header class="masthead"><div>');
-    h.push('<h1 class="masthead-line">' + esc(dateLine) + ": " +
-      (active != null ? fmtInt(active) + " active campaigns, " : "") +
-      fmtInt(judgeable) + " at judgeable volume, " + fmtInt(nDecide) + " need a decision.</h1>");
-    if (posLast != null && posThis != null) {
-      h.push('<p class="masthead-refresh">Positives: ' + fmtInt(posLast) + " &rarr; " + fmtInt(posThis) + " across the last two complete weeks.</p>");
-    }
-    h.push('<p class="lw-stamp">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + "." +
-      (STATE.midSync ? " <strong>Smartlead sync in progress: " + STATE.midSync + " row" + (STATE.midSync === 1 ? "" : "s") + " showing the morning-crunch snapshot until it finishes.</strong>" : "") + "</p>");
-    h.push("</div>");
-    h.push('<div class="masthead-right">' + themeToggleHTML() + trackPillHTML() + "</div>");
-    h.push("</header>");
-
-    /* Today strip: up to 5 acts, book first, then worst decide campaigns */
-    var chips = [];
-    STATE.book.forEach(function (r) {
-      var p = r.payload || {};
-      if (p.act && chips.length < 5 && r.insight_key !== "book-verdict") {
-        chips.push({ title: p.act, owner: p.owner || "Lilly", target: "#top", kind: "book" });
-      }
-    });
-    cs.forEach(function (c) {
-      if (c.tier === "decision" && c.act && chips.length < 5) {
-        chips.push({ title: c.act + " (" + c.name + ")", owner: c.owner || "Bjion", target: "#/c/" + c.id, kind: "row" });
-      }
-    });
-    if (chips.length) {
-      h.push('<section class="today-strip" aria-label="Today\'s decisions"><div class="today-strip-label">Today, in order</div><div class="today-grid">');
-      chips.forEach(function (ch, i) {
-        h.push('<div class="today-chip' + (i === 0 ? " today-chip--primary" : "") + '">' +
-          '<button type="button" class="chip-num" data-checkoff="' + (i + 1) + '" aria-pressed="false"><span class="num-text">' + (i + 1) + "</span></button>" +
-          '<button type="button" class="chip-body" data-nav="' + esc(ch.target) + '">' +
-          '<span class="today-chip-title">' + esc(ch.title) + "</span>" +
-          '<span class="owner-chip">' + esc(ch.owner) + "</span></button></div>");
-      });
-      h.push('</div><p class="today-caption">Tap a number to mark it done. Saves on this device, resets each morning.</p></section>');
-    }
+    h.push('<h1 class="sr-only">Campaigns</h1>');
 
     /* perf chart card */
     h.push('<div class="perfx-card" id="perfx-card" hidden>' +
@@ -2272,13 +2212,13 @@
       "The stat columns are always campaign lifetime; a teaser that names its own window (for example since relaunch, after a sequence re-save reset the counters) is a different counter, not a contradiction. " +
       "Ring = share of sending capacity used (sent &divide; (leads &times; 2)). Sends/positive under 1,500 is healthy; bounce above 2% is the bar. " +
       "Meetings count people, not emails: every lead with a Call Booked or Meeting Request reply in the archive, once each, however many times the thread went back and forth. Its own counter, not a Smartlead column.</p>");
-    h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run.</p>");
+    h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run." +
+      (STATE.midSync ? " <strong>Smartlead sync in progress: " + STATE.midSync + " row" + (STATE.midSync === 1 ? "" : "s") + " showing the morning-crunch snapshot until it finishes.</strong>" : "") + "</p>");
 
     root.innerHTML = h.join("");
     renderRows();
     renderLiveMeta();
     attachListHandlers();
-    restoreCheckoffs();
     applyPerfVisibility();
     applyTheme(currentTheme());
   }
@@ -2486,23 +2426,6 @@
       '<span class="theme-toggle-label">Dark</span></button>';
   }
 
-  function trackPillHTML() {
-    var tr = (STATE.insights || {}).track_record || [];
-    if (!tr.length) return "";
-    var right = tr.filter(function (r) { return /^right/i.test(r.verdict || ""); }).length;
-    var graded = tr.filter(function (r) { return /^(right|wrong)/i.test(r.verdict || ""); }).length;
-    var rows = tr.map(function (r) {
-      var d = r.call_date ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(r.call_date)) : "";
-      return "<tr><td class=\"tnum\" data-label=\"Date\">" + esc(d) + "</td><td data-label=\"Campaign\">" + esc(r.campaign || "") +
-        "</td><td data-label=\"Lilly said\">" + esc(r.lilly_said || "") + "</td><td data-label=\"What happened\">" + esc(r.what_happened || "") +
-        "</td><td class=\"" + (/^right/i.test(r.verdict || "") ? "tv-right" : "tnum") + "\" data-label=\"Verdict\">" + esc(r.verdict || "") + "</td></tr>";
-    }).join("");
-    return '<details class="track-pill" id="track-record"><summary>Track record ' + right + "/" + graded + "</summary>" +
-      '<div class="track-pop"><div class="track-pop-title">' + tr.length + ' logged calls, graded weekly. Live from the optimiser track record.</div>' +
-      '<div class="track-table-wrap"><table class="track-table"><thead><tr><th>Date</th><th>Campaign</th><th>Lilly said</th><th>What happened</th><th>Verdict</th></tr></thead><tbody>' +
-      rows + "</tbody></table></div></div></details>";
-  }
-
   /* ---------- perf chart ---------- */
   function perfHasData(p) {
     if (!p || !(p.days || []).length) return false;
@@ -2620,7 +2543,7 @@
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") + "</div>" +
       '<div class="campaign-run-row"><span class="campaign-run-status">Runs in Smartlead' + (c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "") + "</span>" +
       '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a>' +
-      themeToggleHTML() + "</div></div></div>");
+      "</div></div></div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
       '<a href="#/c/' + esc(c.id) + '/messaging" class="campaign-tab' + (tab === "messaging" ? " is-active" : "") + '" data-tab="messaging">Messaging</a>' +
@@ -3127,21 +3050,6 @@
       root.querySelectorAll(".live-chip").forEach(function (x) { var a = x.getAttribute("data-status") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
       renderRows();
     });
-    /* today chips */
-    root.querySelectorAll(".chip-num").forEach(function (b) {
-      b.addEventListener("click", function () {
-        var pressed = b.getAttribute("aria-pressed") === "true";
-        b.setAttribute("aria-pressed", pressed ? "false" : "true");
-        saveCheckoffs();
-      });
-    });
-    root.querySelectorAll(".chip-body[data-nav]").forEach(function (b) {
-      b.addEventListener("click", function () {
-        var t = b.getAttribute("data-nav");
-        if (t && t.charAt(0) === "#" && t !== "#top") window.location.hash = t.slice(1);
-        else window.scrollTo(0, 0);
-      });
-    });
     attachThemeToggles(root);
   }
 
@@ -3300,21 +3208,21 @@
     });
   }
 
-  /* ---------- today check-offs ---------- */
-  function saveCheckoffs() {
-    var arr = [];
-    document.querySelectorAll('.chip-num[aria-pressed="true"]').forEach(function (b) { arr.push(b.getAttribute("data-checkoff")); });
-    try { window.localStorage.setItem(todayKey(), JSON.stringify(arr)); } catch (e) {}
-  }
-  function restoreCheckoffs() {
-    var arr = [];
-    try { arr = JSON.parse(window.localStorage.getItem(todayKey()) || "[]"); } catch (e) {}
-    arr.forEach(function (n) {
-      var b = document.querySelector('.chip-num[data-checkoff="' + n + '"]');
-      if (b) b.setAttribute("aria-pressed", "true");
-    });
+  /* the shared rail (shell.js) has no theme control of its own — the cockpit
+     is the only dark-mode-aware page, so its toggle mounts into the rail
+     bottom here, below the Settings cog */
+  function mountRailThemeToggle() {
+    var rail = document.querySelector(".rail");
+    if (!rail || rail.querySelector(".theme-toggle")) return;
+    var tmp = document.createElement("div");
+    tmp.innerHTML = themeToggleHTML();
+    var btn = tmp.firstElementChild;
+    btn.className += " theme-toggle--icon";
+    rail.appendChild(btn);
+    attachThemeToggles(rail);
   }
 
+  mountRailThemeToggle();
   initTheme();
   boot();
 })();
