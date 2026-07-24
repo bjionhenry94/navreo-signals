@@ -3123,7 +3123,28 @@
       } else if (lt) {
         var total = (d.leads || {}).total;
         var LBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
-        var tiles = '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">In the contact record</span></div>';
+        /* One segmented bar across the whole contact record, so the split reads at a
+           glance before the tiles spell it out. Only drawn when the statuses actually
+           foot to the total, otherwise the widths would lie. */
+        var CLS = { STARTED: "s-started", INPROGRESS: "s-working", COMPLETED: "s-finished",
+                    PAUSED: "s-paused", BLOCKED: "s-blocked" };
+        var COL = { STARTED: "#1971C2", INPROGRESS: "#E8590C", COMPLETED: "#2F9E44",
+                    PAUSED: "#E7A63A", BLOCKED: "#E03131" };
+        var stArr = (d.lead_statuses || []).filter(function (s) { return (s.n || 0) > 0; });
+        var stSum = stArr.reduce(function (a, s) { return a + (s.n || 0); }, 0);
+        var tiles = "";
+        if (total && stSum === total && stArr.length) {
+          tiles += '<div class="statusbar">' + stArr.map(function (s) {
+            return '<span class="' + (CLS[s.k] || "s-started") + '" style="width:' +
+              ((s.n / total) * 100).toFixed(2) + '%" title="' + esc(LBL[s.k] || s.k) + " " +
+              fmtInt(s.n) + '"></span>';
+          }).join("") + "</div>";
+          tiles += '<div class="statuskey">' + stArr.map(function (s) {
+            return '<span><i style="background:' + (COL[s.k] || "#1971C2") + '"></i>' +
+              esc(LBL[s.k] || s.k) + " " + fmtInt(s.n) + "</span>";
+          }).join("") + "</div>";
+        }
+        tiles += '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">In the contact record</span></div>';
         (d.lead_statuses || []).forEach(function (s) {
           tiles += '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(s.n) + '</span><span class="perf-label">' + esc(LBL[s.k] || s.k) + "</span></div>";
         });
@@ -3145,9 +3166,18 @@
           rm.innerHTML = '<p class="card-subtitle">No replies captured in the archive for this campaign yet.</p>';
         } else {
           var tot = reps.reduce(function (a, r) { return a + (r.n || 0); }, 0);
-          rm.innerHTML = '<div class="leads-table-wrap"><table class="leads-table"><thead><tr><th>Category</th><th>Count</th></tr></thead><tbody>' +
-            reps.map(function (r) { return "<tr><td data-label=\"Category\">" + esc(r.k) + '</td><td class="tnum" data-label="Count">' + fmtInt(r.n) + "</td></tr>"; }).join("") +
-            "</tbody></table></div><p class=\"sample-footer\">" + fmtInt(tot) + " archived replies, from the reply archive (30-day categoriser window plus history): a different counter than Smartlead's lifetime replies column, not a contradiction.</p>";
+          /* Volume bars instead of a two-column table: the shape of the reply mix is the
+             point, and the counts still sit at the end of each bar. Bars are scaled to the
+             biggest category so the smallest ones stay visible. */
+          var top = reps.reduce(function (a, r) { return Math.max(a, r.n || 0); }, 0) || 1;
+          var QUIET = /out of office|uncategorised|uncategorized/i;
+          rm.innerHTML = '<div class="catbars">' + reps.map(function (r) {
+            return '<div class="catrow"><span class="cat-l" title="' + esc(r.k) + '">' + esc(r.k) + "</span>" +
+              '<span class="cat-track"><i class="cat-fill' + (QUIET.test(r.k) ? " is-quiet" : "") +
+              '" style="width:' + Math.max(((r.n || 0) / top) * 100, 1.5).toFixed(1) + '%"></i></span>' +
+              '<span class="cat-n tnum">' + fmtInt(r.n) + "</span></div>";
+          }).join("") + "</div>" +
+            "<p class=\"sample-footer\">" + fmtInt(tot) + " archived replies, from the reply archive (30-day categoriser window plus history): a different counter than Smartlead's lifetime replies column, not a contradiction.</p>";
         }
       }
       /* sources */
