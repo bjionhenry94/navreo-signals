@@ -498,6 +498,28 @@
   .live-sort-btn.is-active {
     background: var(--nav-orange); border-color: var(--nav-orange); color: #fff;
   }
+  /* P4 filter/sort bar: search + status picker + ready-made view chips */
+  .filter-bar-spacer { flex: 1 1 auto; }
+  .status-picker { display: inline-flex; align-items: center; gap: 8px; }
+  .status-picker-label {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--fg-subtle);
+  }
+  .status-select {
+    padding: 8px 30px 8px 13px; border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong); background: var(--bg-elevated);
+    color: var(--fg); font-size: 0.82rem; font-weight: 600; font-family: inherit;
+    cursor: pointer; -webkit-appearance: none; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6055' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center;
+  }
+  .status-select:hover { border-color: var(--nav-ink-3); }
+  .status-select:disabled { opacity: 0.45; cursor: default; }
+  .view-bar { margin-top: 12px; }
+  .view-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .view-note {
+    margin: 8px 0 0; font-size: 0.8rem; color: var(--fg-subtle);
+  }
   .live-meta {
     display: inline-flex; align-items: center; gap: 8px; margin-left: auto;
     font-size: 0.74rem; color: var(--fg-subtle);
@@ -1916,7 +1938,7 @@
     liveCheckedAt: null, // ISO stamp of the live check
     liveLoading: false,
     liveError: false,
-    view: { tier: "all", status: "all", sort: "default", q: "" }  // current list controls
+    view: { tier: "all", status: "all", sort: "default", preset: "all", q: "" }  // current list controls
   };
   /* -- certified insight-card grammar (23 Jul 2026, panel 8.4): every card =
         hero number + its OWN chart + one insight line + one act line + why?
@@ -2169,6 +2191,33 @@
     STATE.book = (byScope.book || []).map(function (r) { return r; });
   }
 
+  /* ---------- ready-made views ----------
+     Each chip filters AND sorts in one tap, so the old tier chips + completion
+     sort collapse into one row. "all" keeps the priority-grouped triage view
+     (needs a decision → watch → fine); the rest are flat metric sorts. */
+  var PRESETS = {
+    all:       { label: "All Optimisations", note: "Everything by priority: needs a decision, then watch, then fine." },
+    meetings:  { label: "Most meetings",     key: "meetings",  note: "Every campaign, best meeting-getters on top." },
+    positives: { label: "Most positives",    key: "positives", note: "Every campaign, most positive replies on top." },
+    efficient: { label: "Most efficient",    key: "sendsmtg", asc: true, note: "Fewest emails needed per meeting booked." },
+    remaining: { label: "Most left to send", key: "remaining", note: "Most people still to be contacted, biggest first." },
+    biggest:   { label: "Biggest lists",     key: "leads",     note: "Every campaign by total lead count." }
+  };
+  var PRESET_ORDER = ["all", "meetings", "positives", "efficient", "remaining", "biggest"];
+  function presetMetric(c, key) {
+    var s = c.stats || {};
+    switch (key) {
+      case "meetings":  return s.meetings || 0;
+      case "positives": return s.positives || 0;
+      case "leads":     return s.leads || 0;
+      // people still to contact: leads minus those already started (~sent ÷ 2 emails each)
+      case "remaining": return Math.max(0, (s.leads || 0) - Math.round((s.sent || 0) / 2));
+      // emails burnt per meeting booked — lower is better; no meetings sinks to the bottom
+      case "sendsmtg":  return (s.meetings > 0) ? (s.sent || 0) / s.meetings : Infinity;
+      default: return 0;
+    }
+  }
+
   /* ---------- list view ---------- */
   function renderList() {
     var root = document.getElementById("list-root");
@@ -2207,33 +2256,35 @@
       h.push("</div></section>");
     }
 
-    /* filter bar */
-    h.push('<nav class="filter-bar" aria-label="Filter campaigns"><div class="filter-chips" role="group">' +
-      '<button type="button" class="filter-chip is-active" data-filter="all" aria-pressed="true">All <span class="fc-count tnum">' + cs.length + "</span></button>" +
-      '<button type="button" class="filter-chip" data-filter="decision" aria-pressed="false">Needs a decision <span class="fc-count tnum">' + nDecide + "</span></button>" +
-      '<button type="button" class="filter-chip" data-filter="watch" aria-pressed="false">Watch <span class="fc-count tnum">' + nWatch + "</span></button>" +
-      '<button type="button" class="filter-chip" data-filter="fine" aria-pressed="false">Fine <span class="fc-count tnum">' + nFine + "</span></button></div>" +
+    /* filter bar — search + live status (checked against Smartlead, not the cache) */
+    h.push('<nav class="filter-bar" aria-label="Filter campaigns">' +
       '<div class="search-wrap"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
-      '<input type="search" class="search-input" id="cockpit-search" placeholder="Search campaigns&hellip;" aria-label="Search campaigns"></div></nav>');
+      '<input type="search" class="search-input" id="cockpit-search" placeholder="Search a campaign or client&hellip;" aria-label="Search campaigns"></div>' +
+      '<span class="filter-bar-spacer"></span>' +
+      '<label class="status-picker"><span class="status-picker-label">Status</span>' +
+      '<select class="status-select" id="status-select" aria-label="Filter by live campaign status">' +
+      '<option value="all">All statuses</option>' +
+      '<option value="active">Active</option>' +
+      '<option value="paused">Paused</option>' +
+      '<option value="completed">Completed</option>' +
+      '<option value="drafted">Draft</option>' +
+      '<option value="archived">Archived</option>' +
+      '</select></label></nav>');
 
-    /* live status + completion control bar — checks Smartlead live, not the cache */
-    h.push('<div class="live-bar" id="live-bar">' +
-      '<div class="live-filter" role="group" aria-label="Filter by live campaign status">' +
-      '<span class="live-filter-label">Live status</span>' +
-      '<div class="live-chips" id="live-status-chips">' +
-      '<button type="button" class="live-chip is-active" data-status="all" aria-pressed="true">All</button>' +
-      '<button type="button" class="live-chip" data-status="active" aria-pressed="false">Active <span class="lc-count tnum" data-count="active"></span></button>' +
-      '<button type="button" class="live-chip" data-status="paused" aria-pressed="false">Paused <span class="lc-count tnum" data-count="paused"></span></button>' +
-      '<button type="button" class="live-chip" data-status="completed" aria-pressed="false">Completed <span class="lc-count tnum" data-count="completed"></span></button>' +
-      '<button type="button" class="live-chip" data-status="archived" aria-pressed="false">Archived <span class="lc-count tnum" data-count="archived"></span></button>' +
-      '<button type="button" class="live-chip" data-status="drafted" aria-pressed="false">Draft <span class="lc-count tnum" data-count="drafted"></span></button>' +
-      "</div></div>" +
-      '<div class="live-sort">' +
-      '<button type="button" class="live-sort-btn" id="sort-completion-btn" aria-pressed="false" title="Order campaigns by how far through their sequence the leads are — the ones nearest done are your recontact candidates.">Sort by completion &darr;</button>' +
-      '</div>' +
+    /* view bar — ready-made views: each one filters AND sorts in one tap */
+    h.push('<div class="live-bar view-bar" id="live-bar">' +
+      '<div class="view-chips" id="view-chips" role="group" aria-label="Choose a view">' +
+      PRESET_ORDER.map(function (k) {
+        var p = PRESETS[k];
+        var on = k === "all";
+        return '<button type="button" class="filter-chip view-chip' + (on ? " is-active" : "") +
+          '" data-preset="' + k + '" aria-pressed="' + on + '" title="' + esc(p.note) + '">' + esc(p.label) + "</button>";
+      }).join("") +
+      "</div>" +
       '<div class="live-meta" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>' +
       '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>' +
       "</div>");
+    h.push('<p class="view-note" id="view-note">' + esc(PRESETS.all.note) + "</p>");
 
     h.push('<p class="section-caption" id="search-count" hidden></p>');
     h.push('<div class="sr-only" role="status" aria-live="polite" id="rows-live-region"></div>');
@@ -2294,15 +2345,13 @@
       }
       return true;
     });
-    var flat = (v.sort === "completion") || (v.status !== "all");
+    var preset = PRESETS[v.preset] || PRESETS.all;
+    var flat = (v.preset !== "all") || (v.status !== "all");
     var h = [];
-    if (v.sort === "completion") {
+    if (v.preset !== "all" && preset.key) {
       visible = visible.slice().sort(function (a, b) {
-        var ca = liveCompletion(a.id), cb = liveCompletion(b.id);
-        if (ca == null && cb == null) return 0;
-        if (ca == null) return 1;   // unknown sinks to the bottom
-        if (cb == null) return -1;
-        return cb - ca;             // most complete first
+        var va = presetMetric(a, preset.key), vb = presetMetric(b, preset.key);
+        return preset.asc ? (va - vb) : (vb - va);   // asc for "fewest emails per meeting"
       });
     }
     if (flat) {
@@ -2336,7 +2385,7 @@
     }
     var live = document.getElementById("rows-live-region");
     if (live) live.textContent = visible.length + " campaign" + (visible.length === 1 ? "" : "s") + " shown" +
-      (v.sort === "completion" ? ", sorted by completion" : "");
+      (v.preset !== "all" ? ", " + (PRESETS[v.preset] || {}).label : "");
   }
 
   /* Live-check meta line + per-status counts */
@@ -2361,27 +2410,28 @@
       if (dot) dot.className = "live-dot";
       txt.textContent = "";
     }
-    // per-status counts on the chips
+    // per-status counts + enable/disable on the Status dropdown options
     var counts = { active: 0, paused: 0, completed: 0, archived: 0, drafted: 0 };
     (STATE.campaigns || []).forEach(function (c) {
       var b = liveBucket(c.id);
       if (counts[b] != null) counts[b]++;
     });
-    ["active", "paused", "completed", "archived", "drafted"].forEach(function (k) {
-      var el = document.querySelector('.lc-count[data-count="' + k + '"]');
-      if (el) el.textContent = STATE.liveCheckedAt ? counts[k] : "";
-    });
-    // Live-status filter + completion sort only make sense once the live check
-    // has landed — disable them until then so a click can't show a false empty.
-    // Once landed, a status with a zero live count is also disabled: no point
-    // clicking into a known-empty view (unless it's the one already selected).
+    // The Status picker only makes sense once the live check has landed — disable
+    // the whole picker until then so a pick can't show a false empty. Once landed,
+    // a status with a zero live count is disabled (unless it's the one selected),
+    // and its live count shows in the option label.
     var pending = !STATE.liveCheckedAt;
-    ["active", "paused", "completed", "archived", "drafted"].forEach(function (k) {
-      var b = document.querySelector('.live-chip[data-status="' + k + '"]');
-      if (b) b.disabled = pending || (counts[k] === 0 && STATE.view.status !== k);
-    });
-    var sb = document.getElementById("sort-completion-btn");
-    if (sb) sb.disabled = pending;
+    var sel = document.getElementById("status-select");
+    if (sel) {
+      sel.disabled = pending;
+      var LBL = { active: "Active", paused: "Paused", completed: "Completed", archived: "Archived", drafted: "Draft" };
+      Array.prototype.forEach.call(sel.options, function (opt) {
+        var k = opt.value;
+        if (k === "all") return;
+        opt.textContent = LBL[k] + (STATE.liveCheckedAt ? " (" + counts[k] + ")" : "");
+        opt.disabled = !pending && counts[k] === 0 && STATE.view.status !== k;
+      });
+    }
   }
 
   /* Fetch LIVE status + completion for every visible campaign, then repaint. */
@@ -3151,31 +3201,22 @@
   /* ---------- handlers ---------- */
   function attachListHandlers() {
     var root = document.getElementById("list-root");
-    /* tier filters */
-    root.querySelectorAll(".filter-chip").forEach(function (b) {
+    var viewNote = document.getElementById("view-note");
+    /* ready-made views — each chip filters + sorts in one tap */
+    root.querySelectorAll(".view-chip").forEach(function (b) {
       b.addEventListener("click", function () {
-        root.querySelectorAll(".filter-chip").forEach(function (x) { x.classList.remove("is-active"); x.setAttribute("aria-pressed", "false"); });
+        root.querySelectorAll(".view-chip").forEach(function (x) { x.classList.remove("is-active"); x.setAttribute("aria-pressed", "false"); });
         b.classList.add("is-active"); b.setAttribute("aria-pressed", "true");
-        STATE.view.tier = b.getAttribute("data-filter");
+        var k = b.getAttribute("data-preset");
+        STATE.view.preset = k;
+        if (viewNote) viewNote.textContent = (PRESETS[k] || {}).note || "";
         renderRows();
       });
     });
-    /* live status filters */
-    root.querySelectorAll(".live-chip").forEach(function (b) {
-      b.addEventListener("click", function () {
-        root.querySelectorAll(".live-chip").forEach(function (x) { x.classList.remove("is-active"); x.setAttribute("aria-pressed", "false"); });
-        b.classList.add("is-active"); b.setAttribute("aria-pressed", "true");
-        STATE.view.status = b.getAttribute("data-status");
-        renderRows();
-      });
-    });
-    /* completion sort toggle */
-    var sortBtn = document.getElementById("sort-completion-btn");
-    if (sortBtn) sortBtn.addEventListener("click", function () {
-      var on = STATE.view.sort === "completion";
-      STATE.view.sort = on ? "default" : "completion";
-      sortBtn.classList.toggle("is-active", !on);
-      sortBtn.setAttribute("aria-pressed", (!on).toString());
+    /* live status dropdown */
+    var statusSel = document.getElementById("status-select");
+    if (statusSel) statusSel.addEventListener("change", function () {
+      STATE.view.status = statusSel.value;
       renderRows();
     });
     /* live refresh */
@@ -3191,9 +3232,10 @@
     var clearBtn = document.getElementById("clear-filters-btn");
     if (clearBtn) clearBtn.addEventListener("click", function () {
       document.getElementById("cockpit-search").value = "";
-      STATE.view.q = ""; STATE.view.tier = "all"; STATE.view.status = "all";
-      root.querySelectorAll(".filter-chip").forEach(function (x) { var a = x.getAttribute("data-filter") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
-      root.querySelectorAll(".live-chip").forEach(function (x) { var a = x.getAttribute("data-status") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
+      STATE.view.q = ""; STATE.view.tier = "all"; STATE.view.status = "all"; STATE.view.preset = "all";
+      var sel = document.getElementById("status-select"); if (sel) sel.value = "all";
+      root.querySelectorAll(".view-chip").forEach(function (x) { var a = x.getAttribute("data-preset") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
+      if (viewNote) viewNote.textContent = (PRESETS.all || {}).note || "";
       renderRows();
     });
     attachThemeToggles(root);
