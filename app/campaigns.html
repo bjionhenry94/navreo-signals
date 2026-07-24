@@ -1168,75 +1168,6 @@
   .sample-footer { margin-top: 10px; font-size: 0.76rem; color: var(--fg-subtle); }
   .status-note { margin-top: 12px; font-size: 0.78rem; color: var(--fg-subtle); }
 
-  /* -- Live performance data-viz: the funnel and the two rate gauges -- */
-  .funnel { display: flex; flex-direction: column; gap: 7px; margin: 4px 0 16px; }
-  .fn-row { display: grid; grid-template-columns: minmax(88px, 132px) 1fr auto minmax(44px, auto);
-    align-items: center; gap: 11px; }
-  .fn-l { font-size: 0.78rem; color: var(--fg-muted); white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; }
-  .fn-track { background: var(--sunken); border-radius: 999px; height: 13px; overflow: hidden; }
-  .fn-fill { display: block; height: 100%; border-radius: 999px; }
-  .fn-fill.fn-leads { background: #1971C2; }
-  .fn-fill.fn-sent { background: #7048E8; }
-  .fn-fill.fn-replied { background: #E8590C; }
-  .fn-fill.fn-pos { background: #2F9E44; }
-  .fn-fill.fn-meet { background: #2F9E44; }
-  .fn-zero { display: block; height: 100%; }
-  .fn-n { font-size: 0.86rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .fn-n.is-bad { color: var(--red, #C2371F); }
-  .fn-pct { font-size: 0.72rem; color: var(--fg-subtle); font-variant-numeric: tabular-nums;
-    text-align: right; }
-
-  .gauges { display: flex; flex-direction: column; gap: 8px; margin-top: 14px;
-    padding-top: 13px; border-top: 1px dashed var(--line); }
-  .gg-row { display: grid; grid-template-columns: minmax(88px, 132px) 1fr auto auto;
-    align-items: center; gap: 11px; }
-  .gg-l { font-size: 0.78rem; color: var(--fg-muted); white-space: nowrap; }
-  .gg-track { position: relative; background: var(--sunken); border-radius: 999px; height: 13px; }
-  .gg-fill { display: block; height: 100%; border-radius: 999px; }
-  .gg-fill.is-ok { background: #2F9E44; }
-  .gg-fill.is-bad { background: #E03131; }
-  .gg-thr { position: absolute; right: 0; top: -3px; bottom: -3px; width: 2px;
-    background: var(--fg-muted); border-radius: 1px; }
-  .gg-n { font-size: 0.86rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .gg-n.is-bad { color: var(--red, #C2371F); }
-  .gg-thr-l { font-size: 0.72rem; color: var(--fg-subtle); white-space: nowrap; }
-  @media (max-width: 560px) {
-    .fn-row, .gg-row { grid-template-columns: 1fr auto auto; }
-    .fn-track, .gg-track { grid-column: 1 / -1; order: 3; }
-  }
-
-  /* -- Leads tab data-viz: the status split and the reply mix are drawn, not just listed -- */
-  /* Everyone's status: one segmented bar, the whole contact record end to end. */
-  .statusbar { display: flex; height: 16px; border-radius: 999px; overflow: hidden;
-    background: var(--sunken); margin: 2px 0 12px; }
-  .statusbar span { height: 100%; display: block; min-width: 2px; }
-  .statusbar span.s-started   { background: #1971C2; }
-  .statusbar span.s-working   { background: #E8590C; }
-  .statusbar span.s-finished  { background: #2F9E44; }
-  .statusbar span.s-paused    { background: #E7A63A; }
-  .statusbar span.s-blocked   { background: #E03131; }
-  .statuskey { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;
-    font-size: 0.74rem; color: var(--fg-subtle); }
-  .statuskey span { display: inline-flex; align-items: center; gap: 5px; }
-  .statuskey i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
-
-  /* Replies by category: volume bars, longest is the whole width. */
-  .catbars { display: flex; flex-direction: column; gap: 9px; }
-  .catrow { display: grid; grid-template-columns: minmax(96px, 150px) 1fr auto;
-    align-items: center; gap: 11px; }
-  .catrow .cat-l { font-size: 0.8rem; color: var(--fg-muted); overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .catrow .cat-track { background: var(--sunken); border-radius: 999px; height: 14px; overflow: hidden; }
-  .catrow .cat-fill { display: block; height: 100%; border-radius: 999px; background: var(--nav-orange);
-    min-width: 3px; }
-  .catrow .cat-fill.is-quiet { background: var(--neutral-warm, #C0B0A0); }
-  .catrow .cat-n { font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  @media (max-width: 560px) {
-    .catrow { grid-template-columns: 1fr auto; }
-    .catrow .cat-track { grid-column: 1 / -1; }
-  }
-
   /* sources tab */
   .source-cards {
     display: grid;
@@ -2969,67 +2900,11 @@
     h.push('<div class="tab-panel" data-tab="overview"' + (tab !== "overview" ? " hidden" : "") + ">");
     /* Live performance leads the tab: the live numbers are what a strategist opens
        the page for, so they sit above the written-up picture. */
-    /* The funnel, drawn. Every stage is a share of the lead count, so the drop from
-       leads to sent to replies to positives is the shape of the card, not something
-       the reader has to work out from six separate numbers. Tiny non-zero stages keep
-       a visible sliver; a true zero draws nothing and says so. */
-    var fnBase = st.leads || st.sent || 0;
-    var fnStages = [
-      { l: "Leads", v: st.leads, k: "leads" },
-      { l: "Emails sent", v: st.sent, k: "sent" },
-      { l: "Replies", v: st.replied, k: "replied" },
-      { l: "Positive replies", v: st.positives, k: "pos" },
-      { l: "Meetings", v: st.meetings != null ? st.meetings : 0, k: "meet" }
-    ].filter(function (s) { return s.v != null; });
-    var funnel = "";
-    if (fnBase > 0 && fnStages.length > 1) {
-      funnel = '<div class="funnel">' + fnStages.map(function (s) {
-        var pct = fnBase ? (s.v / fnBase) * 100 : 0;
-        var w = s.v > 0 ? Math.max(pct, 0.6) : 0;
-        return '<div class="fn-row"><span class="fn-l">' + esc(s.l) + "</span>" +
-          '<span class="fn-track">' + (s.v > 0
-            ? '<i class="fn-fill fn-' + s.k + '" style="width:' + w.toFixed(2) + '%"></i>'
-            : '<i class="fn-zero"></i>') + "</span>" +
-          '<span class="fn-n tnum' + (s.v === 0 ? " is-bad" : "") + '">' + fmtInt(s.v) + "</span>" +
-          '<span class="fn-pct tnum">' + (s.v > 0 ? pct.toFixed(pct < 1 ? 2 : 0) + "%" : "none") + "</span>" +
-          "</div>";
-      }).join("") + "</div>";
-    }
-    /* Two rates against the bars they are judged by. Both thresholds are the ones this
-       page already states in words: the 1% reply floor and the 1,500 sends-per-positive
-       line. Fill is capped at 100% so a bad number cannot overflow its track. */
-    function gaugeRow(label, val, unit, thr, thrLabel, worseIsHigh) {
-      var pctOfThr = thr ? Math.min((val / thr) * 100, 100) : 0;
-      var bad = worseIsHigh ? val > thr : val < thr;
-      return '<div class="gg-row"><span class="gg-l">' + esc(label) + "</span>" +
-        '<span class="gg-track"><i class="gg-fill' + (bad ? " is-bad" : " is-ok") +
-        '" style="width:' + pctOfThr.toFixed(1) + '%"></i><u class="gg-thr"></u></span>' +
-        '<span class="gg-n tnum' + (bad ? " is-bad" : "") + '">' + val + unit + "</span>" +
-        '<span class="gg-thr-l">' + esc(thrLabel) + "</span></div>";
-    }
-    var gauges = "";
-    if (replyPct != null || c.ratio) {
-      var gr = "";
-      if (replyPct != null) {
-        gr += gaugeRow("Reply rate", parseFloat(replyPct), "%", 1, "floor 1%", false);
-      }
-      if (c.ratio) {
-        /* Inverted: the further past the kill line, the fuller and redder the bar. */
-        var over = Math.min((c.ratio / 1500) * 100, 100);
-        gr += '<div class="gg-row"><span class="gg-l">Sends per positive</span>' +
-          '<span class="gg-track"><i class="gg-fill' + (c.ratio > 1500 ? " is-bad" : " is-ok") +
-          '" style="width:' + over.toFixed(1) + '%"></i><u class="gg-thr"></u></span>' +
-          '<span class="gg-n tnum' + (c.ratio > 1500 ? " is-bad" : "") + '">' + fmtInt(c.ratio) + "</span>" +
-          '<span class="gg-thr-l">kill line 1,500</span></div>';
-      }
-      gauges = '<div class="gauges">' + gr + "</div>";
-    }
     h.push('<div class="ov-card"><div class="card-title">Live performance</div>' +
       '<p class="card-subtitle">Campaign-to-date (positives = Smartlead\'s interested mark). ' +
       (c.stats.source === "crunch"
         ? "From the morning-crunch snapshot: the Smartlead sync is refilling right now."
         : "From the daily Smartlead sync, synced " + esc(localStamp(STATE.insights.stats_updated_at)) + ".") + "</p>" +
-      funnel +
       '<div class="perf-grid">' +
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.leads) + '</span><span class="perf-label">Leads</span></div>' +
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.sent) + '</span><span class="perf-label">Emails sent</span></div>' +
@@ -3038,7 +2913,6 @@
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.bounced) + '</span><span class="perf-label">Bounced' + (bouncePct != null ? ' <span class="perf-sub tnum">(' + bouncePct + "%)</span>" : "") + "</span></div>" +
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="perf-label">Meetings</span></div>' +
       "</div>" +
-      gauges +
       (c.ratio ? '<p class="lw-src-note">Sends per positive: 1 per ' + fmtInt(c.ratio) + " (" + fmtInt(st.sent) + " &divide; " + fmtInt(st.positives) + "). Under 1,500 is healthy.</p>" : "") +
       "</div>");
     h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
@@ -3218,28 +3092,7 @@
       } else if (lt) {
         var total = (d.leads || {}).total;
         var LBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
-        /* One segmented bar across the whole contact record, so the split reads at a
-           glance before the tiles spell it out. Only drawn when the statuses actually
-           foot to the total, otherwise the widths would lie. */
-        var CLS = { STARTED: "s-started", INPROGRESS: "s-working", COMPLETED: "s-finished",
-                    PAUSED: "s-paused", BLOCKED: "s-blocked" };
-        var COL = { STARTED: "#1971C2", INPROGRESS: "#E8590C", COMPLETED: "#2F9E44",
-                    PAUSED: "#E7A63A", BLOCKED: "#E03131" };
-        var stArr = (d.lead_statuses || []).filter(function (s) { return (s.n || 0) > 0; });
-        var stSum = stArr.reduce(function (a, s) { return a + (s.n || 0); }, 0);
-        var tiles = "";
-        if (total && stSum === total && stArr.length) {
-          tiles += '<div class="statusbar">' + stArr.map(function (s) {
-            return '<span class="' + (CLS[s.k] || "s-started") + '" style="width:' +
-              ((s.n / total) * 100).toFixed(2) + '%" title="' + esc(LBL[s.k] || s.k) + " " +
-              fmtInt(s.n) + '"></span>';
-          }).join("") + "</div>";
-          tiles += '<div class="statuskey">' + stArr.map(function (s) {
-            return '<span><i style="background:' + (COL[s.k] || "#1971C2") + '"></i>' +
-              esc(LBL[s.k] || s.k) + " " + fmtInt(s.n) + "</span>";
-          }).join("") + "</div>";
-        }
-        tiles += '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">In the contact record</span></div>';
+        var tiles = '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">In the contact record</span></div>';
         (d.lead_statuses || []).forEach(function (s) {
           tiles += '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(s.n) + '</span><span class="perf-label">' + esc(LBL[s.k] || s.k) + "</span></div>";
         });
@@ -3261,18 +3114,9 @@
           rm.innerHTML = '<p class="card-subtitle">No replies captured in the archive for this campaign yet.</p>';
         } else {
           var tot = reps.reduce(function (a, r) { return a + (r.n || 0); }, 0);
-          /* Volume bars instead of a two-column table: the shape of the reply mix is the
-             point, and the counts still sit at the end of each bar. Bars are scaled to the
-             biggest category so the smallest ones stay visible. */
-          var top = reps.reduce(function (a, r) { return Math.max(a, r.n || 0); }, 0) || 1;
-          var QUIET = /out of office|uncategorised|uncategorized/i;
-          rm.innerHTML = '<div class="catbars">' + reps.map(function (r) {
-            return '<div class="catrow"><span class="cat-l" title="' + esc(r.k) + '">' + esc(r.k) + "</span>" +
-              '<span class="cat-track"><i class="cat-fill' + (QUIET.test(r.k) ? " is-quiet" : "") +
-              '" style="width:' + Math.max(((r.n || 0) / top) * 100, 1.5).toFixed(1) + '%"></i></span>' +
-              '<span class="cat-n tnum">' + fmtInt(r.n) + "</span></div>";
-          }).join("") + "</div>" +
-            "<p class=\"sample-footer\">" + fmtInt(tot) + " archived replies, from the reply archive (30-day categoriser window plus history): a different counter than Smartlead's lifetime replies column, not a contradiction.</p>";
+          rm.innerHTML = '<div class="leads-table-wrap"><table class="leads-table"><thead><tr><th>Category</th><th>Count</th></tr></thead><tbody>' +
+            reps.map(function (r) { return "<tr><td data-label=\"Category\">" + esc(r.k) + '</td><td class="tnum" data-label="Count">' + fmtInt(r.n) + "</td></tr>"; }).join("") +
+            "</tbody></table></div><p class=\"sample-footer\">" + fmtInt(tot) + " archived replies, from the reply archive (30-day categoriser window plus history): a different counter than Smartlead's lifetime replies column, not a contradiction.</p>";
         }
       }
       /* sources */
