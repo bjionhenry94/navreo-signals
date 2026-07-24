@@ -634,8 +634,6 @@
       <div class="tb-actions">
         <span class="pill autopilot-pill" id="autopilotPill" title="Open the Agents drawer"></span>
         <button class="btn" id="openAgentsBtn" type="button">Agents</button>
-        <button class="btn" id="openSettingsBtn" type="button">Settings</button>
-        <button class="btn" id="openTryItBtn" type="button">Try it</button>
       </div>
     </div>
 
@@ -688,32 +686,19 @@
       <div class="small muted" id="autopilotSwitchArmedNote" style="display:none;margin:-12px 0 20px"></div>
 
       <div id="webhookWarnBanner" class="warn-banner" style="display:none"></div>
+      <div id="assignPrompt" class="warn-banner" style="display:none"></div>
 
       <div id="agentsList" class="agents-grid"></div>
       <button class="btn" id="newAgentBtn" type="button" style="margin-top:14px">+ New agent</button>
-    </div>
-  </div>
-</div>
 
-<!-- Settings drawer -->
-<div id="settingsDrawerOverlay" class="slideover-overlay">
-  <div class="slideover">
-    <div class="slideover-h">
-      <h3>Settings</h3>
-      <button class="slideover-close" id="settingsDrawerClose" type="button" aria-label="Close">&times;</button>
+      <!-- Calendar settings (owner ask 2026-07-25: the toolbar's "Settings" and
+           "Try it" buttons were removed. Try it is gone entirely; these two
+           fields are the ONLY way to set the Calendly token and the work-day
+           window that every proposed call time comes from, so they moved in
+           here beside the agents rather than becoming unreachable. -->
+      <div class="lp-label" style="margin:26px 0 8px">Calendar</div>
+      <div id="settingsBody"></div>
     </div>
-    <div class="slideover-body" id="settingsBody"></div>
-  </div>
-</div>
-
-<!-- Try it drawer -->
-<div id="tryItDrawerOverlay" class="slideover-overlay">
-  <div class="slideover">
-    <div class="slideover-h">
-      <h3>Try it</h3>
-      <button class="slideover-close" id="tryItDrawerClose" type="button" aria-label="Close">&times;</button>
-    </div>
-    <div class="slideover-body" id="tryItBody"></div>
   </div>
 </div>
 
@@ -859,6 +844,11 @@ function extractUrls(text) {
 
 /* inbox-specific state */
 let selectedRowId = null;
+/* Which row the conversation pane last auto-scrolled for. renderDetail re-runs
+   on every thread refresh / redraft / retro decision / queue reload, and the
+   landing scroll must fire ONCE per row opened, never once per repaint (owner
+   report 2026-07-25: "when scrolling the messages it jumps around a lot"). */
+let _lastScrolledRowId = null;
 let inboxSearchQuery = "";
 /* rowId -> last edited (unsent) draft HTML, so a background refresh never
    clobbers text the user is mid-way through editing */
@@ -1148,7 +1138,6 @@ async function loadAgentsAndCampaigns() {
   renderAutopilotSwitch();
   renderAgents();
   renderSettings();
-  renderTryIt();
 }
 
 /* Perf architecture (2026-07-16): the list paints from a SLIM fetch
@@ -1321,7 +1310,7 @@ function applyRetroDecision(id, patch) {
 async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
   const restore = busyBtn(btn, "Adding…");
   if (!restore) return;
-  const payload = { id: Number(id), action: "subsequence", checked: true };
+  const payload = { id: id, action: "subsequence", checked: true };
   if (subSequenceId) payload.sub_sequence_id = subSequenceId;
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -1345,7 +1334,7 @@ async function retroFollowupNone(id, btn) {
   if (!restore) return;
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: Number(id), action: "subsequence_none" }),
+    body: JSON.stringify({ id: id, action: "subsequence_none" }),
   });
   restore();
   if (!res.ok) {
@@ -1362,18 +1351,31 @@ async function retroFollowupNone(id, btn) {
 async function retroFollowupDismiss(id, btn) {
   const restore = busyBtn(btn, "Dismissing…");
   if (!restore) return;
+  // Optimistic, and the id goes over the wire AS GIVEN. Number(id) silently
+  // loses precision on a large row id, which produced a 404 that read as a
+  // random error followed by the whole tray repainting (owner report
+  // 2026-07-25: "it comes up with this error and then it kind of restarts").
+  const wasIn = unresolvedRows.some((r) => String(r.id) === String(id));
+  unresolvedRows = unresolvedRows.filter((r) => String(r.id) !== String(id));
+  renderUnresolvedTray();
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: Number(id), action: "subsequence_dismiss" }),
+    body: JSON.stringify({ id: id, action: "subsequence_dismiss" }),
   });
   restore();
   if (!res.ok) {
+    // Put it back exactly where it was and say so - never a silent drop, and
+    // never a full-tray reload (that reload IS the "restart" that was
+    // reported: it collapsed the picker and lost the reviewer's place).
+    if (wasIn) { await loadUnresolvedTray(); }
     showError("Couldn't dismiss: " + res.error);
     return;
   }
   clearError();
   applyRetroDecision(id, { subsequence_decision: "dismissed" });
-  await loadUnresolvedTray();
+  // Refresh in the BACKGROUND: the row is already off screen, so a slow tray
+  // fetch can't make the click feel like it failed.
+  loadUnresolvedTray();
 }
 function renderTrayPicker(id, subs) {
   const picker = document.getElementById(`sgPicker-${id}`);
@@ -1473,20 +1475,14 @@ function clientPillRows(all, status) {
 /* ── Slim stats row ────────────────────────────────────── */
 function renderKpis() {
   const el = document.getElementById("statsInline");
-  const nr = KPIS.needs_review ?? 0;
   const as = KPIS.auto_sent_today ?? 0;
   const avg = KPIS.avg_response_mins_7d;
   const avgTxt = avg == null ? "–" : Math.round(avg) + "m";
-  // The server total counts real leads only. When test rows are on screen,
-  // fold the visible test needs-review rows INTO the headline number (with a
-  // "(N test)" tag) so the number always matches what the eye sees below it.
-  const testNeeds = visibleInboxRows().filter((r) => r.is_test && r.status === "needs_review").length;
-  const shown = nr + testNeeds;
-  const testNote = testNeeds > 0
-    ? ` <span class="muted">(${fmt(testNeeds)} test)</span>` : "";
+  // "Needs review" is NOT repeated here (owner ask 2026-07-25: "I don't need
+  // the 'needs review' twice on the setter page"). The filter chip directly
+  // below carries the live count and is also the control that filters to it,
+  // so this strip keeps only the facts the chips don't already state.
   el.innerHTML = `
-    <span>Needs review <b class="${shown > 0 ? "amber" : ""}">${fmt(shown)}</b>${testNote}</span>
-    <span class="sep">·</span>
     <span>Auto-sent today <b>${fmt(as)}</b></span>
     <span class="sep">·</span>
     <span>Avg response <b>${esc(avgTxt)}</b></span>
@@ -1497,8 +1493,15 @@ function renderKpis() {
 function renderQueueFilters() {
   const wrap = document.getElementById("queueFilters");
   const counts = KPIS.counts || {};
+  // The server counts real leads only. The Needs-review chip is now the ONLY
+  // place that number appears (the stats strip stopped repeating it - owner
+  // ask 2026-07-25), so it inherits the fold the strip used to do: visible
+  // TEST needs-review rows are added in, so the badge always matches what the
+  // eye sees in the list below it.
+  const testNeeds = visibleInboxRows().filter((r) => r.is_test && r.status === "needs_review").length;
   wrap.innerHTML = FILTER_PILLS.map((p) => {
-    const n = counts[p.count];
+    let n = counts[p.count];
+    if (typeof n === "number" && p.key === "needs_review") n += testNeeds;
     const badge = (typeof n === "number") ? ` <b class="n">${fmt(n)}</b>` : "";
     return `<button type="button" class="chip ${p.key === currentStatus ? "on" : ""}" data-status="${esc(p.key)}">${esc(p.label)}${badge}</button>`;
   }).join("");
@@ -1895,6 +1898,7 @@ function renderDetail(row) {
     // full-screen empty pane with the list hidden behind it. The lead-info
     // sidebar has nothing to show either, so it's hidden entirely.
     selectedRowId = null;
+    _lastScrolledRowId = null;   // nothing open: the next row opened lands fresh
     document.getElementById("inboxShell").classList.remove("mobile-detail");
     el.innerHTML = `<div class="empty">Select a reply on the left.</div>`;
     if (panelEl) { panelEl.style.display = "none"; panelEl.innerHTML = ""; }
@@ -2056,15 +2060,13 @@ function renderDetail(row) {
   updateApproveButton(row.id);
 }
 
-/* "How this was decided" - shared content builder used by both the fixed
-   lead-info sidebar (see leadPanelHtml) and the Try-it drawer
-   (renderTryItResult), so the two never drift out of sync on what "decided"
-   actually shows. Absorbs what the old top-of-page banner used to say
+/* "How this was decided" - content builder for the fixed lead-info sidebar
+   (see leadPanelHtml). Absorbs what the old top-of-page banner used to say
    (decision + full reason, bolded, first) plus every fact that used to live
    in the removed chips row / dh-meta line. opts.skipIdentity omits the
    Email/Campaign lines - the sidebar already shows those in its own LEAD /
-   CAMPAIGN blocks just above, so the Try-it drawer keeps calling this
-   WITHOUT opts and sees the identity lines exactly as before. */
+   CAMPAIGN blocks just above. (It used to be shared with the Try-it drawer,
+   removed 2026-07-25 on owner ask.) */
 /* Explicit autopilot verdict (owner ruling 2026-07-15): even with the master
    switch off, say plainly whether this WOULD have gone out on its own, and why
    not when it wouldn't. Computed read-time by the server (would_auto_send /
@@ -2257,10 +2259,15 @@ function leadPanelHtml(row) {
     ? `<label class="lp-subseq"><input type="checkbox" class="qc-sub" data-id="${esc(row.id)}" ${row.added_to_subsequence ? "checked" : ""}> Added to subsequence</label>`
     : "";
 
-  // Owner ruling 2026-07-14: same "no agent" fact as the list row's pill,
-  // spelled out here as one muted line - agent_id = null means the campaign
-  // this reply came in on has nobody assigned to draft/send for it.
-  const noAgentHtml = row.agent_id ? "" : `<div class="lp-line muted">No agent is assigned to this campaign.</div>`;
+  // Owner ruling 2026-07-14: same "no agent" fact as the list row's pill.
+  // Owner ask 2026-07-25: it must PROMPT you to assign one, not just state
+  // the fact - so the line now carries a button that opens the Agents drawer
+  // with this campaign's id in hand (see wireAssignAgentPrompt).
+  const noAgentHtml = row.agent_id ? "" : `
+    <div class="lp-line muted lp-noagent">No agent is assigned to this campaign, so nothing is drafted for it automatically.</div>
+    <button class="btn sm lp-assign-agent" type="button"
+      data-campaign-id="${esc(row.smartlead_campaign_id || "")}"
+      data-campaign-name="${esc(campaignNameFor(row))}">Assign an agent</button>`;
 
   // Lead category: the shared control (tone pill + live Smartlead dropdown),
   // wrapped here in the sidebar's sunken card section.
@@ -2418,6 +2425,15 @@ async function applyCategory(block) {
   const act = res.data && res.data.action;
   if (act === "converted") selectedRowId = (res.data && res.data.new_id) || null;
   else if (act === "discarded") selectedRowId = null;
+  // A re-label on a SENT thread can take it out of "Sent without follow-up"
+  // (non-positive categories - owner ask 2026-07-25), so refresh that tray too
+  // instead of leaving a stale reminder on screen.
+  if (act === "relabelled_sent" && hint) {
+    hint.textContent = (res.data && res.data.removed_from_followup)
+      ? "Category updated - removed from the follow-up reminder."
+      : "Category updated.";
+  }
+  loadUnresolvedTray();
   await loadQueue();
 }
 /* Wire every category control (.lp-cat) found under `root`: hydrate its
@@ -2438,6 +2454,36 @@ function wireCategoryControls(root, row) {
 function wireLeadPanelEvents(root, row) {
   if (!root) return;
   root.querySelectorAll(".qc-sub").forEach((chk) => chk.addEventListener("change", () => doSubsequence(chk)));
+  root.querySelectorAll(".lp-assign-agent").forEach((btn) => btn.addEventListener("click", () =>
+    startAssignAgent(btn.getAttribute("data-campaign-id"), btn.getAttribute("data-campaign-name"))));
+}
+
+/* ── Assign-an-agent prompt (owner ask 2026-07-25) ───────────────────────
+   "If no agent is assigned to a campaign in the setter, it prompts you to
+   assign the campaign." The button below the no-agent line parks this
+   campaign as PENDING and opens the Agents drawer: picking any agent (or
+   "+ New agent") opens its editor with this campaign already ticked, so the
+   assignment is two clicks instead of hunting for the id in a checklist.
+   The pending campaign is dropped when the drawer closes - it never leaks
+   into an unrelated agent edit. */
+let PENDING_ASSIGN_CAMPAIGN = null;
+function startAssignAgent(campaignId, campaignName) {
+  if (!campaignId) return;
+  PENDING_ASSIGN_CAMPAIGN = { id: String(campaignId), name: campaignName || `Campaign ${campaignId}` };
+  renderAssignPrompt();
+  openDrawer("agentsDrawerOverlay");
+}
+function clearAssignAgent() {
+  PENDING_ASSIGN_CAMPAIGN = null;
+  renderAssignPrompt();
+}
+function renderAssignPrompt() {
+  const el = document.getElementById("assignPrompt");
+  if (!el) return;
+  if (!PENDING_ASSIGN_CAMPAIGN) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "";
+  el.innerHTML = `Assigning <b>${esc(PENDING_ASSIGN_CAMPAIGN.name)}</b> - pick the agent that should handle it
+    (or add a new one). It will already be ticked in the campaign list.`;
 }
 
 /* Change 1: one scrollable, chronological conversation built from
@@ -2445,11 +2491,64 @@ function wireLeadPanelEvents(root, row) {
    rendered last and visually emphasised - replaces the old separate "Their
    reply" card and "What we sent earlier" details. Test rows carry no real
    thread, so that case naturally falls back to just the current reply. */
+/* Links survive the clean (owner ask 2026-07-25: "in the messages between me
+   and them ... previous messages, it should still include the links").
+   cleanBody strips EVERY tag, so an <a href="X">book a call</a> in an earlier
+   message used to arrive as the bare words "book a call" with the URL gone -
+   exactly the links (booking, resource) you need to see when judging what was
+   already offered.
+
+   Two-pass, escape-safe: before cleanBody runs, each anchor is swapped for a
+   sentinel carrying its index; cleanBody + esc() then treat the whole body as
+   untrusted text as before (no lead-authored HTML ever reaches the DOM); only
+   afterwards do the sentinels become <a> tags built from an ESCAPED href we
+   vetted ourselves. Bare URLs the sender typed without a tag get linkified in
+   the same final pass. */
+const _URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+/gi;
+const _ANCHOR_RE = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+/* Sentinel token: alphanumeric only, so cleanBody's tag-strip and
+   whitespace-collapse passes and esc()'s entity pass all leave it exactly as
+   written. A space-padded marker did NOT survive - cleanBody trims the ends
+   and collapses runs, which ate the padding on any message that opened or
+   closed with a link. */
+const _LNK_RE = /NAVREOLNK(\d+)ENDLNK/g;
+function _safeHref(u) {
+  const s = String(u || "").trim();
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+function _linkTag(href, label) {
+  return `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label || href)}</a>`;
+}
 function convoMsgHtml(who, when, body, emphasize, inbound) {
-  const text = cleanBody(body);
+  const links = [];
+  const park = (href, label) => {
+    links.push({ href, label });
+    return `NAVREOLNK${links.length - 1}ENDLNK`;
+  };
+  // Pass 1 - park real anchors straight off the RAW body, before cleanBody
+  // strips the tag and takes the href with it.
+  const parked = String(body == null ? "" : body).replace(_ANCHOR_RE, (m, href, label) => {
+    const safe = _safeHref(unescapeEntities(href));
+    if (!safe) return label;                 // mailto:, tel:, junk - keep the words, drop the link
+    const text = cleanBody(label).replace(/\s+/g, " ").trim();
+    return park(safe, text || safe);
+  });
+  // Pass 2 - clean exactly as before, then park bare URLs someone typed as
+  // plain text. Both run while the text is still UNESCAPED, so an "&" inside
+  // a query string is captured once and escaped once.
+  const text = cleanBody(parked).replace(_URL_RE, (u) => park(u, u));
+  // Pass 3 - escape the whole body (it is still untrusted lead text; no
+  // sender-authored HTML ever reaches the DOM), THEN swap each sentinel for
+  // an anchor built from the href we vetted ourselves.
+  const html = esc(text)
+    .replace(_LNK_RE, (m, i) => {
+      const l = links[Number(i)];
+      return l ? _linkTag(l.href, l.label) : "";
+    })
+    .replace(/\n/g, "<br>");
   return `<div class="thread-msg${inbound ? " them" : ""}${emphasize ? " current" : ""}">
-    <div class="tm-head">${esc(who)} · ${pulledAgo(when)}</div>
-    <div class="tm-body">${esc(text).replace(/\n/g, "<br>") || "<i>No content.</i>"}</div>
+    <div class="tm-head">${esc(who)} &middot; ${pulledAgo(when)}</div>
+    <div class="tm-body">${html || "<i>No content.</i>"}</div>
   </div>`;
 }
 function convoHtml(row) {
@@ -2867,10 +2966,17 @@ function wireDetailEvents(root, row) {
   // on long threads, start the centre pane at the CURRENT reply so the
   // newest message and the composer are what you land on, with the history
   // available by scrolling up.
+  // ONLY when the OPEN ROW ACTUALLY CHANGED (owner report 2026-07-25: "when
+  // scrolling the messages it jumps around a lot"). renderDetail re-runs on
+  // every background thread refresh, retro follow-up decision, redraft and
+  // queue reload - each of those used to yank the pane back to the current
+  // message mid-read. Landing position is a per-row event, not a per-paint one.
   const curMsg = root.querySelector(".thread-msg.current");
-  if (curMsg && root.scrollHeight > root.clientHeight) {
+  const rowKey = String((row && row.id) != null ? row.id : "");
+  if (curMsg && rowKey && rowKey !== _lastScrolledRowId && root.scrollHeight > root.clientHeight) {
     curMsg.scrollIntoView({ block: "center" });
   }
+  if (rowKey) _lastScrolledRowId = rowKey;
 
   const teachBtn = root.querySelector("#teachAgentBtn");
   if (teachBtn) teachBtn.addEventListener("click", () => openTeachAgentModal(teachBtn.getAttribute("data-agent-id"), teachBtn.getAttribute("data-id")));
@@ -3307,7 +3413,31 @@ async function doRedraft(btn, feedback, scope) {
   // feedback - rendered by composerFeedbackHtml on the next paint.
   const note = String((res.data && res.data.feedback_note) || "").trim();
   if (note) REDRAFT_NOTES[String(id)] = note; else delete REDRAFT_NOTES[String(id)];
+  // Paint the draft we were JUST handed, rather than waiting for loadQueue()
+  // to fetch it back. The queue GET is served from a short-TTL cache, so a
+  // regenerate could repaint the OLD draft and read as "nothing happened" -
+  // the other half of the first-Regenerate-after-assigning-an-agent report
+  // (owner, 2026-07-25). loadQueue still runs after, for counts and pills.
+  applyRedraftedRow(id, res.data && res.data.row);
   loadQueue();
+}
+
+/* Merge a server-returned row into both client row sets and repaint the open
+   conversation from it. QUEUE_ROWS and ALL_ROWS can hold DISTINCT objects for
+   the same id (separate fetches), so both are updated - same rule as
+   doDismiss's optimistic path. */
+function applyRedraftedRow(id, fresh) {
+  if (!fresh) return;
+  let merged = null;
+  [QUEUE_ROWS, ALL_ROWS].forEach((set) => (set || []).forEach((r) => {
+    if (String(r.id) === String(id)) {
+      // Keep the locally-grafted thread when the response didn't carry one.
+      const keptThread = fresh.thread === undefined ? r.thread : fresh.thread;
+      Object.assign(r, fresh, { thread: keptThread });
+      merged = r;
+    }
+  }));
+  if (merged && String(selectedRowId) === String(id)) renderDetail(merged);
 }
 
 /* no_action rows have no draft yet - same redraft endpoint builds one, then
@@ -3335,6 +3465,7 @@ async function doDraftAnyway(btn) {
   if (rrow && !rrow.draft_body) {
     showDetailError("No draft kept: " + (rrow.decision_reason || "the agent decided no reply is needed."));
   }
+  applyRedraftedRow(id, rrow);
   loadQueue();
 }
 
@@ -3417,15 +3548,52 @@ async function doSubsequence(chk) {
   protoNote(checked ? "Pushed to Smartlead subsequence" : "Saved");
 }
 
+/* ── "Check for new replies" (owner report 2026-07-25) ───────────────────
+   The sweep is a background thread that can run for a minute or more (up to
+   15 replies, each a classify + draft round trip). The button used to reload
+   the queue on a fixed 2.5s timer, so it reported "Checked for new replies"
+   while the sweep was still working and the new reply appeared only on some
+   later, unrelated reload. It now WAITS for the sweep to finish (the server
+   stamps setter_poll_done when it does) and reports what it actually found. */
+async function pollStamp() {
+  const res = await fetchJson("/api/setter/poll/status");
+  return (res.ok && res.data && res.data.last_done) || null;
+}
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+/* Resolves with the finished status once last_done moves past `before`, or
+   null if it hasn't landed inside timeoutMs (the sweep keeps running - we
+   just stop blocking the button on it). */
+async function waitForPollDone(before, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(2000);
+    const res = await fetchJson("/api/setter/poll/status");
+    if (res.ok && res.data && res.data.last_done && res.data.last_done !== before) return res.data;
+  }
+  return null;
+}
+function pollResultNote(done) {
+  if (!done) return "Still checking - new replies will appear as they land";
+  if (done.action === "setter_poll_failed") return "The reply check hit an error";
+  const s = done.summary || {};
+  const n = (s.queued || 0) + (s.agentless || 0) + (s.uncategorised || 0);
+  if (!n) return "No new replies";
+  return n === 1 ? "1 new reply" : `${n} new replies`;
+}
 document.getElementById("checkNowBtn").addEventListener("click", async () => {
   const btn = document.getElementById("checkNowBtn");
   const restore = busyBtn(btn, "Checking…");
   if (!restore) return;
+  const before = await pollStamp();
   const res = await fetchJson("/api/setter/poll", { method: "POST" });
   if (!res.ok) { restore(); showError("Couldn't check for new replies: " + res.error); return; }
   if (res.data && res.data.busy) protoNote("Already checking, hang on…");
   clearError();
-  setTimeout(async () => { await loadQueue(); restore(); protoNote("Checked for new replies"); }, 2500);
+  const done = await waitForPollDone(before, 90000);
+  await loadQueue();
+  sizeInboxShell();
+  restore();
+  protoNote(pollResultNote(done));
 });
 
 document.getElementById("showTestChk").addEventListener("change", () => { inboxPage = 1; renderQueue(); renderKpis(); });
@@ -3473,7 +3641,7 @@ document.addEventListener("keydown", (e) => {
     const tag = active.tagName;
     if (active.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   }
-  const overlaysOpen = ["agentsDrawerOverlay", "settingsDrawerOverlay", "tryItDrawerOverlay", "agentModalOverlay",
+  const overlaysOpen = ["agentsDrawerOverlay", "agentModalOverlay",
                         "teachAgentModalOverlay", "shareTrainModalOverlay"]
     .some((id) => { const o = document.getElementById(id); return o && o.classList.contains("on"); });
   if (overlaysOpen) return;
@@ -3505,24 +3673,16 @@ setInterval(() => {
 function openDrawer(id) { document.getElementById(id).classList.add("on"); }
 function closeDrawer(id) { document.getElementById(id).classList.remove("on"); }
 
-document.getElementById("openAgentsBtn").addEventListener("click", () => openDrawer("agentsDrawerOverlay"));
-document.getElementById("autopilotPill").addEventListener("click", () => openDrawer("agentsDrawerOverlay"));
-document.getElementById("agentsDrawerClose").addEventListener("click", () => closeDrawer("agentsDrawerOverlay"));
+document.getElementById("openAgentsBtn").addEventListener("click", () => { clearAssignAgent(); openDrawer("agentsDrawerOverlay"); });
+document.getElementById("autopilotPill").addEventListener("click", () => { clearAssignAgent(); openDrawer("agentsDrawerOverlay"); });
+document.getElementById("agentsDrawerClose").addEventListener("click", () => { closeDrawer("agentsDrawerOverlay"); clearAssignAgent(); });
 document.getElementById("agentsDrawerOverlay").addEventListener("click", (e) => {
-  if (e.target.id === "agentsDrawerOverlay") closeDrawer("agentsDrawerOverlay");
+  if (e.target.id === "agentsDrawerOverlay") { closeDrawer("agentsDrawerOverlay"); clearAssignAgent(); }
 });
 
-document.getElementById("openSettingsBtn").addEventListener("click", () => openDrawer("settingsDrawerOverlay"));
-document.getElementById("settingsDrawerClose").addEventListener("click", () => closeDrawer("settingsDrawerOverlay"));
-document.getElementById("settingsDrawerOverlay").addEventListener("click", (e) => {
-  if (e.target.id === "settingsDrawerOverlay") closeDrawer("settingsDrawerOverlay");
-});
-
-document.getElementById("openTryItBtn").addEventListener("click", () => openDrawer("tryItDrawerOverlay"));
-document.getElementById("tryItDrawerClose").addEventListener("click", () => closeDrawer("tryItDrawerOverlay"));
-document.getElementById("tryItDrawerOverlay").addEventListener("click", (e) => {
-  if (e.target.id === "tryItDrawerOverlay") closeDrawer("tryItDrawerOverlay");
-});
+/* Settings and Try it lost their toolbar buttons (owner ask 2026-07-25).
+   Try it is gone; the Calendly/work-hours fields now render inside the
+   Agents drawer, so they need no drawer wiring of their own. */
 
 /* ── Autopilot master switch ───────────────────────────── */
 let autopilotArmed = false;
@@ -3856,6 +4016,10 @@ function openAgentModal(id) {
   const agent = id ? (AGENTS.find((a) => String(a.id) === String(id)) || {}) : {};
   editingAgentId = id || null;
   selectedCampaignIds = new Set((agent.campaign_ids || []).map((x) => String(x)));
+  // Arrived here from a "No agent is assigned to this campaign" prompt: tick
+  // that campaign for the reviewer (owner ask 2026-07-25). Still just a
+  // pre-tick - nothing is saved until they press Save.
+  if (PENDING_ASSIGN_CAMPAIGN) selectedCampaignIds.add(String(PENDING_ASSIGN_CAMPAIGN.id));
   document.getElementById("agentModalTitle").textContent = id ? "Edit agent" : "New agent";
   document.getElementById("agentDeleteBtn").style.display = id ? "" : "none";
   document.getElementById("agentModalErr").style.display = "none";
@@ -4062,79 +4226,6 @@ async function saveSettings() {
   await loadAgentsAndCampaigns();
 }
 
-/* ── Try it ────────────────────────────────────────────── */
-function renderTryIt() {
-  const el = document.getElementById("tryItBody");
-  el.innerHTML = `
-    <div class="small muted" style="margin-bottom:12px">Simulate an inbound reply. Nothing is ever sent.</div>
-    <div class="field">
-      <label>Campaign</label>
-      <select id="tiCampaign">
-        <option value="">Select a campaign…</option>
-        ${CAMPAIGNS.map((c) => `<option value="${c.id}">${esc(c.name || "Campaign " + c.id)}</option>`).join("")}
-      </select>
-    </div>
-    <div class="field" style="display:flex;gap:14px">
-      <div style="flex:1"><label>First name</label><input type="text" id="tiFirstName" placeholder="Jamie"></div>
-      <div style="flex:1"><label>Email</label><input type="text" id="tiEmail" value="test@example.com"></div>
-    </div>
-    <div class="field"><label>Company domain (optional)</label><input type="text" id="tiDomain" placeholder="example.com"></div>
-    <div class="field"><label>Message</label><textarea id="tiBody" style="min-height:90px" placeholder="e.g. Sure, send it over!"></textarea></div>
-    <button class="btn primary" id="tiRunBtn" type="button">Run test</button>
-    <div id="tiResult" style="margin-top:16px"></div>
-  `;
-  document.getElementById("tiRunBtn").addEventListener("click", runTryIt);
-}
-
-async function runTryIt() {
-  const resultEl = document.getElementById("tiResult");
-  const campaign_id = Number(document.getElementById("tiCampaign").value);
-  if (!campaign_id) { resultEl.innerHTML = `<div class="err-banner" style="display:block">Pick a campaign first.</div>`; return; }
-  const payload = {
-    campaign_id,
-    email: document.getElementById("tiEmail").value.trim() || "test@example.com",
-    first_name: document.getElementById("tiFirstName").value.trim(),
-    company_domain: document.getElementById("tiDomain").value.trim(),
-    body: document.getElementById("tiBody").value,
-  };
-  const btn = document.getElementById("tiRunBtn");
-  const restore = busyBtn(btn, "Running…");
-  if (!restore) return;
-  const res = await fetchJson("/api/setter/test/inject", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-  });
-  restore();
-  if (!res.ok) { resultEl.innerHTML = `<div class="err-banner" style="display:block">${esc(res.error || "Something went wrong")}</div>`; return; }
-  resultEl.innerHTML = renderTryItResult(res.data.row || res.data);
-  loadQueue();
-}
-
-/* Rendered with the same building blocks as the inbox detail pane (chips,
-   email-shaped draft, collapsed "How this was decided") so a simulated
-   reply looks like the real thing - just without the row id the
-   Send/Regenerate/Dismiss actions need, since a Try-it row is never
-   persisted to the queue. Shares howDecidedContentHtml with the real detail
-   pane (see there) so the decision + reason is never explained twice or
-   differently in two places. */
-function renderTryItResult(row) {
-  const cls = row.classification || {};
-  const allIntents = cls.all_intents || [];
-  const autoOpen = row.decision === "review" && allIntents.includes("pricing");
-  const chips = [`<span class="pill n">${intentLabel(cls.primary_intent)}</span>`];
-  if (cls.confidence != null) chips.push(`<span class="pill n">${Math.round(cls.confidence * 100)}% sure</span>`);
-  chips.push(`<span class="pill ${row.decision === "auto_send" ? "g" : (row.decision === "review" ? "a" : "n")}">${esc(row.decision || row.status || "")}</span>`);
-  return `
-    <div class="msg-card" style="border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin:0">
-      <div class="qc-chips">${chips.join("")}</div>
-      <div class="msg-card-lab" style="margin-top:10px">Your reply</div>
-      ${row.draft_body ? `<div class="qc-draft">${row.draft_body}</div>` : `<div class="small muted">No draft was generated for this reply.</div>`}
-      ${row.classification ? `<details class="thread-details" style="margin-top:14px" ${autoOpen ? "open" : ""}>
-        <summary>How this was decided</summary>
-        <div class="thread-list">${howDecidedContentHtml(row)}</div>
-      </details>` : ""}
-    </div>`;
-}
-
 /* ── Boot ──────────────────────────────────────────────── */
 /* Owner ruling 2026-07-15: opening a thread auto-refreshes it with the
    latest emails. The stored snapshot renders instantly; a live re-hydrate
@@ -4178,6 +4269,10 @@ document.addEventListener("click", (e) => {
   // agents (client filter + agent labels read those maps), so nothing renders
   // with empty data - only the network waits overlap.
   const queueP = fetchJson(`/api/setter/queue?status=${encodeURIComponent(currentStatus)}&limit=200&fields=list`);
+  // Stamp of the last completed sweep BEFORE this page kicks its own, so the
+  // boot wait below can tell "finished" from "was already finished". Fired as
+  // a promise, never awaited here - first paint must not wait on it.
+  const bootStampP = pollStamp().catch(() => null);
   // Real-inbox freshness (owner ruling 2026-07-15): every page load STILL
   // kicks a reply-check automatically - it's just off the critical path now,
   // fire-and-forget, so it no longer blocks first paint. The delayed reload
@@ -4186,10 +4281,16 @@ document.addEventListener("click", (e) => {
   await loadAgentsAndCampaigns();
   await loadQueue(queueP);
   sizeInboxShell();
-  kickP.then((kick) => {
+  kickP.then(async (kick) => {
     if (kick && kick.ok) {
+      // Same wait-for-the-sweep rule as the button (owner report 2026-07-25):
+      // the old 2.5s timer reloaded long before the sweep had intaken
+      // anything, so a reply that arrived just before you opened the page
+      // stayed invisible until some later reload.
       protoNote("Checking for new replies…");
-      setTimeout(async () => { await loadQueue(); sizeInboxShell(); }, 2500);
+      await waitForPollDone(await bootStampP, 90000);
+      await loadQueue();
+      sizeInboxShell();
     }
   });
 })();

@@ -522,7 +522,8 @@ def _parse_iso(s):
     return d if d.tzinfo else d.replace(tzinfo=_dt.timezone.utc)
 
 
-def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
+def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc,
+               exclude_isos=None, not_before_utc=None, horizon_days_override=None) -> list:
     """avail_iso: raw ISO8601 UTC availability from Calendly. Filters to
     workdays, [work_start, work_end) lead-local hours, within the next
     HORIZON_WORKING_DAYS working days, >= 20h out. Earliest-slot rule: the
@@ -530,7 +531,19 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
     the same day at least 2 hours later if one exists, else the next
     available day's earliest slot. Returns [{iso, label, link}]. link uses
     settings['_agent'] (calendly_event_url) and settings['_lead']
-    (first_name/last_name/email)."""
+    (first_name/last_name/email).
+
+    The three optional arguments exist for "Regenerate with feedback" (owner
+    report 2026-07-25: "offer different times" / "offer next week" made no
+    difference). They only ever NARROW or SHIFT the real calendar - a time
+    that Calendly did not return can never be produced this way, so the
+    never-invent rule is untouched:
+      exclude_isos          - local ISO strings already proposed, skipped now
+                              ("offer different times")
+      not_before_utc        - hard floor replacing the 20h one ("next week")
+      horizon_days_override - widen the search window to reach that floor
+    Every existing call site passes none of them and behaves exactly as before."""
+    exclude = {str(x) for x in (exclude_isos or [])}
     settings = settings or {}
     agent = settings.get("_agent") or {}
     lead = settings.get("_lead") or {}
@@ -546,9 +559,23 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
     except (TypeError, ValueError):
         work_start, work_end = 9, 17
     horizon_days = HORIZON_WORKING_DAYS
+    try:
+        if horizon_days_override:
+            horizon_days = max(horizon_days, int(horizon_days_override))
+    except (TypeError, ValueError):
+        pass
 
     now_utc = _parse_iso(now_utc) if not isinstance(now_utc, _dt.datetime) else (
         now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
+    floor_utc = now_utc + _dt.timedelta(hours=20)
+    if not_before_utc is not None:
+        try:
+            nb = _parse_iso(not_before_utc) if not isinstance(not_before_utc, _dt.datetime) else not_before_utc
+            if nb.tzinfo is None:
+                nb = nb.replace(tzinfo=_dt.timezone.utc)
+            floor_utc = max(floor_utc, nb)
+        except (ValueError, TypeError):
+            pass
 
     local_now = now_utc.astimezone(zi)
     window_end_date = local_now.date()
@@ -573,7 +600,9 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
             continue
         if local.date() > window_end_date:
             continue
-        if (utc_dt - now_utc) < _dt.timedelta(hours=20):
+        if utc_dt < floor_utc:
+            continue
+        if exclude and local.isoformat() in exclude:
             continue
         candidates.append((local, utc_dt))
 
@@ -599,6 +628,139 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc) -> list:
         local_iso = local.isoformat()
         out.append({"iso": local_iso, "label": _slot_label(local), "link": _slot_link(agent, lead, local_iso)})
     return out
+
+
+# ── how hard to push for a call on this turn (owner report 2026-07-25) ────
+
+# Phrases in the LEAD's newest message that mean a call is already settled -
+# proposing times again reads as not having listened.
+# HARD markers stand on their own.
+_CALL_SETTLED_RE = re.compile(
+    r"\b(i(?:'ve| have)? booked|just booked|booked (?:a|the) (?:call|slot|time)|"
+    r"invite (?:is )?(?:sent|accepted)|see you (?:then|on|at)|"
+    r"calendar invite|call is (?:booked|set))\b", re.IGNORECASE)
+# SOFT markers only count alongside an actual day or time. "That works" and
+# "does X work" are the give-away here: "does the pricing work for a smaller
+# list?" is a question to answer, not a call being agreed - reading it as
+# settled would suppress the call ask on exactly the replies that need one.
+_CALL_SETTLED_SOFT_RE = re.compile(
+    r"\b(works for me|that works|how about|confirmed|"
+    r"i'?m free|does (?:\w+\s+){0,3}(?:work|suit))\b", re.IGNORECASE)
+_TIME_TOKEN_RE = re.compile(
+    r"\b(mon|tue|tues|wed|weds|thu|thur|thurs|fri|"
+    r"monday|tuesday|wednesday|thursday|friday|"
+    r"tomorrow|next week|this week|\d{1,2}\s*(?:am|pm)|\d{1,2}:\d{2}|o'?clock)\b",
+    re.IGNORECASE)
+# Marks in OUR side of the thread that a call has already been proposed.
+_CALL_OFFERED_RE = re.compile(
+    r"\b(would you be free|are you free|book a call|grab a slot|my availability|"
+    r"a good time for us to talk|find a time)\b", re.IGNORECASE)
+
+
+def call_ask_for(classification: dict, body_text: str, thread_text: str, first_touch: bool = True) -> str:
+    """"required" | "only_if_relevant" | "avoid" - how hard THIS draft should
+    push for a call. See the call_ask rule in DRAFT_SYSTEM.
+
+    Owner report 2026-07-25: "when someone replies beyond the first message,
+    sometimes the drafted response is a little bit out of touch ... just tries
+    to continue offering a call even when it's not relevant." The call-times
+    mandate was unconditional, so turn 3 of a conversation re-pitched a call
+    the lead had already accepted or already declined to talk about.
+
+    Deliberately conservative: only a clear signal moves it off "required", so
+    a first-touch positive still gets the standard two-times ask."""
+    classification = classification or {}
+    intents = set(classification.get("all_intents") or [])
+    primary = classification.get("primary_intent") or ""
+    body = _strip_quoted(str(body_text or ""))
+    # They are asking to book, or asking about times: always ask.
+    if "scheduling" in intents or primary == "scheduling":
+        return "required"
+    # They have settled the call themselves - answering with two fresh times
+    # is the exact "out of touch" reply that was reported.
+    if _CALL_SETTLED_RE.search(body):
+        return "avoid"
+    if _CALL_SETTLED_SOFT_RE.search(body) and _TIME_TOKEN_RE.search(body):
+        return "avoid"
+    if first_touch:
+        return "required"
+    # Later turn, not about scheduling, and we have already put a call on the
+    # table: answer what they actually asked, offer times only if it helps.
+    if _CALL_OFFERED_RE.search(str(thread_text or "")):
+        return "only_if_relevant"
+    return "required"
+
+
+# ── "offer different times" / "offer next week" (owner report 2026-07-25) ──
+
+_FB_DIFFERENT_RE = re.compile(
+    r"\b(different|other|alternative|another|new|fresh)\s+(times?|slots?|days?|dates?)\b"
+    r"|\bnot those times\b|\bchange the times?\b|\bsome other time\b", re.IGNORECASE)
+_FB_NEXT_WEEK_RE = re.compile(r"\b(next|following)\s+week\b", re.IGNORECASE)
+_FB_IN_WEEKS_RE = re.compile(r"\bin\s+(\d+|a|one|two|three)\s+weeks?\b", re.IGNORECASE)
+_WEEK_WORDS = {"a": 1, "one": 1, "two": 2, "three": 3}
+_FB_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
+
+
+def time_feedback_plan(feedback: str, tz: str, now_utc):
+    """Reads reviewer feedback for a request about WHEN to offer, and returns
+    {"want_change", "not_before_utc", "horizon", "said"} - or None when the
+    feedback says nothing about times.
+
+    This never invents a time: it only tells pick_slots to skip the slots
+    already proposed and/or to start looking from a later date. Whatever comes
+    back is still a real slot Calendly returned.
+
+    Owner report 2026-07-25: "when you use regenerate and give it feedback
+    like offer different times, or offer next week it doesn't matter"."""
+    text = str(feedback or "").strip()
+    if not text:
+        return None
+    want_diff = bool(_FB_DIFFERENT_RE.search(text))
+    weeks_out = 0
+    if _FB_NEXT_WEEK_RE.search(text):
+        weeks_out = 1
+    m = _FB_IN_WEEKS_RE.search(text)
+    if m:
+        word = (m.group(1) or "").strip().lower()
+        weeks_out = max(weeks_out, int(word) if word.isdigit() else _WEEK_WORDS.get(word, 1))
+    weekday_target = None
+    low = text.lower()
+    for i, day in enumerate(_FB_WEEKDAYS):
+        if re.search(r"\b" + day + r"\b", low):
+            weekday_target = i
+            break
+    if not (want_diff or weeks_out or weekday_target is not None):
+        return None
+    try:
+        zi = ZoneInfo(tz or "Europe/London")
+    except Exception:  # noqa: BLE001
+        zi = ZoneInfo("Europe/London")
+    now_utc = _parse_iso(now_utc) if not isinstance(now_utc, _dt.datetime) else (
+        now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
+    local_now = now_utc.astimezone(zi)
+    not_before, horizon, said = None, None, []
+    if weeks_out:
+        # Start of the Nth week ahead, lead-local.
+        days_to_monday = (7 - local_now.weekday()) + 7 * (weeks_out - 1)
+        start = (local_now + _dt.timedelta(days=days_to_monday)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        not_before = start.astimezone(_dt.timezone.utc)
+        horizon = HORIZON_WORKING_DAYS + 5 * (weeks_out + 1)
+        said.append("next week" if weeks_out == 1 else f"in {weeks_out} weeks")
+    elif weekday_target is not None:
+        ahead = (weekday_target - local_now.weekday()) % 7
+        if ahead == 0:
+            ahead = 7
+        start = (local_now + _dt.timedelta(days=ahead)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        not_before = start.astimezone(_dt.timezone.utc)
+        horizon = HORIZON_WORKING_DAYS + 5
+        said.append(_FB_WEEKDAYS[weekday_target].capitalize())
+    if want_diff:
+        said.append("different times")
+    return {"want_change": True, "not_before_utc": not_before, "horizon": horizon,
+            "said": " and ".join(said) or "different times"}
 
 
 # ── draft lint ────────────────────────────────────────────────────────────
@@ -1002,7 +1164,7 @@ Rules:
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
-- Whenever slots are supplied and slot_status is "ok" you MUST include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. This is not optional and does not depend on the intent: a resource send, a pricing answer, or a question we can't fully answer all still get the two call times when live slots exist. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
+- Whenever slots are supplied and slot_status is "ok" you MUST include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. This is the DEFAULT and does not depend on the intent: a resource send, a pricing answer, or a question we can't fully answer all still get the two call times when live slots exist. Two things, and only these two, override that default. FIRST, call_ask: when call_ask is "avoid" the lead is already sorted for a call (a time is agreed, they have booked, or they have just told you when they are free) or has asked something that a fresh call pitch would talk straight past - answer THAT message on its own terms and do not propose times again; when call_ask is "only_if_relevant" a call has already been offered earlier in this thread and their latest message is not about scheduling, so lead with the actual answer and only reach for times if the answer genuinely needs a call; when call_ask is "required" or absent, the default above stands. Never re-propose times a lead has already turned down or already accepted. SECOND, reviewer_feedback about WHICH times to offer ("offer different times", "offer next week"): the slots you have been given have ALREADY been re-picked from the real calendar to match that request, so propose exactly the slots in front of you and do not apologise for or refer to the times a previous draft proposed. You still never invent a time: if the feedback asks for times the calendar cannot supply, say so in feedback_note and use the fallback ladder instead of making one up. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
 - If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
@@ -1046,6 +1208,16 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "current_datetime_utc": _dt.datetime.now(_dt.timezone.utc).strftime(
             "%A, %d %B %Y, %H:%M UTC"),
     }
+    # How hard to push for a call on THIS turn - see the call_ask rule in
+    # DRAFT_SYSTEM. Owner report 2026-07-25: "when someone replies beyond the
+    # first message, sometimes the drafted response ... just tries to continue
+    # offering a call even when it's not relevant." The mandate used to be
+    # unconditional, so a second- or third-turn reply got a fresh call pitch
+    # no matter what the lead had actually said. Callers that don't compute it
+    # (every pre-existing one) leave it absent and get the old default.
+    call_ask = str(reply.get("call_ask") or "").strip()
+    if call_ask in ("required", "only_if_relevant", "avoid"):
+        payload["call_ask"] = call_ask
     # Thread continuity (multi-turn autonomy): when the reply dict carries the
     # recent thread text (hydrate_lead already collects it - norm[-6:] - the
     # caller just needs to pass it through), give the drafter that context so
@@ -1745,6 +1917,13 @@ def _save_agent(doc: dict) -> dict:
                      "decision_reason": "Agent assigned after intake - hit Regenerate for a "
                                         "drafted reply, or reply manually.",
                      "updated_at": now})
+                # Adoption changed queue rows through a RAW _SB call, which -
+                # unlike _apply_patch - leaves the short-TTL read caches holding
+                # the pre-assign rows (agent_id null, old decision_reason). The
+                # page then kept repainting the stale row after a Regenerate, so
+                # the first attempt looked like it did nothing and the second,
+                # once the TTL had expired, "worked" (owner report 2026-07-25).
+                _bust_read_caches()
             except Exception:  # noqa: BLE001 - adoption is follow-through, not the save itself
                 pass
     return doc
@@ -2916,9 +3095,16 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     draft_subject, draft_body = None, None
     if wants_draft:
         try:
+            # call_ask (owner report 2026-07-25): on a later turn the lead's
+            # newest message decides whether a call gets pitched again - the
+            # two-call-times paragraph is no longer unconditional.
+            _inbound_turns = sum(1 for m in (row.get("thread") or [])
+                                 if isinstance(m, dict) and str(m.get("type") or "").upper() != "SENT")
             d = draft_reply(
                 {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text,
-                 "first_outbound": first_outbound, "thread_text": thread_text},
+                 "first_outbound": first_outbound, "thread_text": thread_text,
+                 "call_ask": call_ask_for(classification, body_text, thread_text,
+                                          first_touch=_inbound_turns <= 1)},
                 agent, classification, slots, slot_status, sender_first, regen_feedback=mem_digest)
             draft_subject, draft_body = d.get("subject"), d.get("html")
             if draft_body:
@@ -3778,8 +3964,15 @@ def run_poll() -> dict:
         # campaign_ids=in.(...) filter - agentless campaigns have no agent
         # doc to source campaign ids from, so the workspace itself is the
         # only scope left; the category gate keeps the sweep to positives.
+        # NEWEST first (owner report 2026-07-25: "when we get an email it pushes
+        # it in Slack but ... it's not there" in the setter). The page is capped
+        # at 200 and the already-queued check runs AFTER the fetch, so ordering
+        # ascending meant a busy 48h window filled all 200 rows with replies
+        # that were already in the queue and the brand-new one - the only one
+        # that mattered - never made the page at all. Fetch newest-first, then
+        # process oldest-first below so intake order is unchanged.
         replies = _SB("GET", f"replies?workspace=eq.{WORKSPACE}&category={CORE_FOUR_CATEGORY_FILTER}"
-                             f"&replied_at=gte.{quote(since, safe='')}&order=replied_at.asc&limit=200"
+                             f"&replied_at=gte.{quote(since, safe='')}&order=replied_at.desc&limit=200"
                              f"&select=id,smartlead_campaign_id,email,replied_at,category,"
                              f"reply_subject,reply_body,smartlead_message_id")
         if not isinstance(replies, list):
@@ -3790,6 +3983,10 @@ def run_poll() -> dict:
             print(f"[setter] run_poll: replies GET returned {type(replies).__name__}, not a "
                   f"list - PostgREST query failed", file=sys.stderr)
             return summary
+        # Fetched newest-first (see above) so nothing recent is starved; walk
+        # them oldest-first so a thread's replies still intake in order.
+        replies = sorted([r for r in replies if isinstance(r, dict)],
+                         key=lambda r: r.get("replied_at") or "")
         processed = 0
         for r in replies:
             if processed >= 15:
@@ -4090,8 +4287,13 @@ def route_queue_recategorise(payload):
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
-        if row.get("status") in ("sent", "auto_sent"):
-            return 409, {"error": "This reply was already sent - it can't be recategorised here."}
+        # A SENT thread can now be re-labelled (owner ask 2026-07-25). It is
+        # strictly a LABEL change - Smartlead + `replies` + the row's category,
+        # never the status, the draft or anything on the send path. The point
+        # is the follow-up reminder: marking a sent lead Not Interested has to
+        # take them OUT of "Sent without follow-up", which needs the label to
+        # be changeable on exactly the rows that tray is made of.
+        sent_row = row.get("status") in ("sent", "auto_sent")
         # An already-categorised row is fine to change now (the sidebar's
         # "update lead category" / "mark unqualified"): was_uncat only steers
         # the disposition below, it is no longer a gate.
@@ -4123,6 +4325,16 @@ def route_queue_recategorise(payload):
                      action="recategorise", entity="setter_queue", entity_id=qid)
         except Exception:  # noqa: BLE001 - logging must never break the route
             pass
+        if sent_row:
+            # Label-only path. A non-positive label also resolves the follow-up
+            # reminder ('dismissed'), which is the whole reason this branch
+            # exists; a positive label leaves the reminder exactly as it was.
+            patch = {"category": cat_name, "category_source": "manual"}
+            if not _followup_category_ok(cat_name):
+                patch["subsequence_decision"] = "dismissed"
+            _apply_patch(row, patch)
+            return 200, {"ok": True, "action": "relabelled_sent", "category": cat_name,
+                         "removed_from_followup": "subsequence_decision" in patch}
         if cat_name in CORE_FOUR:
             # Convert (re-run intake so it gets a draft) only when there is
             # nothing to preserve - the row was uncategorised, or it had been
@@ -4560,6 +4772,73 @@ def _reconcile_unresolved_against_smartlead(candidates):
     return kept
 
 
+# Categories a SENT thread may still be chased on. Union of every positive
+# label the tool recognises anywhere (the categoriser's CORE_FOUR, the
+# classifier's POSITIVE_CATEGORIES, and the ever-positive sweep's
+# POSITIVE_CATEGORY_NAMES) so no positive is ever dropped from the reminder by
+# a naming difference between the three lists.
+# Owner ask 2026-07-25: "if someone in the setter has their lead category
+# updated to something which is not positive, they shouldn't then be added to
+# the send follow-up reminder" - a lead who has since been marked Not
+# Interested / unqualified / wrong person is not someone to chase.
+FOLLOWUP_POSITIVE_CATEGORIES = (set(CORE_FOUR) | set(POSITIVE_CATEGORIES)
+                                | set(POSITIVE_CATEGORY_NAMES))
+
+# subsequence_decision values that mean "already decided, keep it out of the
+# reminder tray" (setter_queue is schema-frozen - these are new VALUES in the
+# existing text column, never a new column):
+#   dismissed    - explicit Dismiss (owner ruling 2026-07-22)
+#   none_at_send - the send-gate's "no follow-up" choice, made AT send time
+#   pushing      - a send-gate "push" choice whose Smartlead call is in flight
+# 'none' is deliberately NOT here: that is the tray's own "No follow-up
+# needed" MARK, which stays until dismissed (owner ruling 2026-07-22).
+RESOLVED_DECISIONS = ("dismissed", "none_at_send", "pushing")
+# A 'pushing' row whose worker never finished (process restart mid-push) must
+# not vanish forever - after this it resurfaces as unresolved.
+PUSHING_GRACE_MIN = 15
+
+
+def _followup_category_ok(category) -> bool:
+    """True when this lead's category still justifies a follow-up reminder.
+    An unknown/empty category returns True - "not categorised yet" is not the
+    same as "not positive", and a silent drop is the worse failure."""
+    name = str(category or "").strip()
+    if not name:
+        return True
+    return name in FOLLOWUP_POSITIVE_CATEGORIES
+
+
+def _fresh_categories_for(rows: list) -> dict:
+    """{message_id: category} from the `replies` table for these queue rows, in
+    ONE batched GET. The queue row's own `category` is stamped at intake and
+    goes stale when someone re-labels the lead in Smartlead's master inbox
+    (which is where the owner's re-labels actually happen); `replies` is what
+    the categoriser and reply-sync keep current. Best-effort: any failure
+    returns {} and the caller falls back to the row's stored category."""
+    mids = []
+    for r in rows:
+        mid = str((r or {}).get("source_message_id") or (r or {}).get("message_id") or "").strip()
+        if mid:
+            mids.append(mid)
+    if not mids or not _SB:
+        return {}
+    try:
+        # PostgREST in.() needs each value double-quoted (message ids carry
+        # <>, @ and dots). Cap the batch so a huge tray can't build a URL that
+        # blows the request line.
+        quoted = ",".join('"' + m.replace('"', "") + '"' for m in mids[:50])
+        in_list = quote(quoted, safe='",')
+        got = _SB("GET", f"replies?workspace=eq.{WORKSPACE}"
+                         f"&smartlead_message_id=in.({in_list})"
+                         f"&select=smartlead_message_id,category&limit=100")
+        if isinstance(got, list):
+            return {str(g.get("smartlead_message_id")): g.get("category")
+                    for g in got if isinstance(g, dict) and g.get("smartlead_message_id")}
+    except Exception:  # noqa: BLE001 - freshness is a bonus, never a blocker
+        pass
+    return {}
+
+
 def route_subsequence_unresolved(_params):
     """GET /api/setter/subsequence/unresolved - the tray's feed: sent/
     auto_sent rows from the last 14 days NOT added to a subsequence and NOT
@@ -4593,7 +4872,28 @@ def route_subsequence_unresolved(_params):
                 # is a MARK, not a removal - the thread STAYS in the reminder tray.
                 # Only an explicit Dismiss (decision='dismissed') takes it out.
                 # ('pushed' already left via the added_to_subsequence check above.)
-                if decision == "dismissed":
+                # Owner ask 2026-07-25: a decision made AT SEND (the send-gate's
+                # own follow-up chips) also counts as resolved - re-listing a
+                # thread whose follow-up you just chose is what made this tray
+                # pop open after every single send. See RESOLVED_DECISIONS.
+                if decision in RESOLVED_DECISIONS:
+                    if decision != "pushing":
+                        continue
+                    # 'pushing' is only trusted inside its grace window, so a
+                    # push whose worker died with the process resurfaces here
+                    # instead of disappearing silently.
+                    try:
+                        age_min = (_dt.datetime.now(_dt.timezone.utc)
+                                   - _parse_iso(r.get("sent_at"))).total_seconds() / 60.0
+                    except (ValueError, TypeError, AttributeError):
+                        age_min = 0.0
+                    if age_min < PUSHING_GRACE_MIN:
+                        continue
+                # Owner ask 2026-07-25: a lead re-labelled to a non-positive
+                # category is not someone to chase. The stored category is the
+                # first gate; _fresh_categories_for re-checks the survivors
+                # against `replies` (where a master-inbox re-label lands).
+                if not _followup_category_ok(r.get("category")):
                     continue
                 sent_at = r.get("sent_at") or ""
                 if sent_at and sent_at < since:
@@ -4606,7 +4906,19 @@ def route_subsequence_unresolved(_params):
                     "subsequence_decision": decision,
                 }))
         candidates.sort(key=lambda c: c[1].get("sent_at") or "", reverse=True)
-        out = _reconcile_unresolved_against_smartlead(candidates[:50])
+        candidates = candidates[:50]
+        # Second category gate, one batched GET: `replies` carries the label a
+        # master-inbox re-categorise wrote, which the queue row never sees.
+        fresh = _fresh_categories_for([c[0] for c in candidates])
+        if fresh:
+            kept = []
+            for row_raw, item in candidates:
+                mid = str(row_raw.get("source_message_id") or row_raw.get("message_id") or "")
+                if mid in fresh and not _followup_category_ok(fresh[mid]):
+                    continue
+                kept.append((row_raw, item))
+            candidates = kept
+        out = _reconcile_unresolved_against_smartlead(candidates)
         out.sort(key=lambda r: r.get("sent_at") or "", reverse=True)
         return 200, {"rows": out}
     except Exception as e:  # noqa: BLE001
@@ -5250,6 +5562,34 @@ def route_queue_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def route_poll_status(_params):
+    """GET /api/setter/poll/status - when the last reply-check FINISHED and
+    what it found.
+
+    Owner report 2026-07-25: "even when you click 'Check for new replies' it
+    still doesn't show." The sweep is fire-and-forget on a background thread
+    and a full tick (up to 15 replies, each a classify + draft round trip) runs
+    far longer than the fixed 2.5s the button used to wait before reloading -
+    so the reload landed BEFORE the new reply had been intaken, every time.
+    The button now waits on this instead of a timer, and reports a real count.
+
+    Deliberately uncached (unlike _last_poll_done_at, which rides on every
+    queue GET): this is polled a handful of times per click and its whole job
+    is to notice a change the moment it happens."""
+    try:
+        if not _SB:
+            return 200, {"ok": True, "last_done": None, "summary": {}}
+        rows = _SB("GET", "app_activity_log?action=in.(setter_poll_done,setter_poll_failed)"
+                          "&order=ts.desc&limit=1&select=ts,action,payload")
+        r = rows[0] if isinstance(rows, list) and rows else None
+        if not isinstance(r, dict):
+            return 200, {"ok": True, "last_done": None, "summary": {}}
+        return 200, {"ok": True, "last_done": r.get("ts"), "action": r.get("action"),
+                     "summary": r.get("payload") if isinstance(r.get("payload"), dict) else {}}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def route_queue_row_get(params):
     """GET /api/setter/queue/row?id=X - one full queue row by id, annotated
     exactly like the list rows (same _annotate_queue_row pass). Added for the
@@ -5464,6 +5804,16 @@ def route_queue_action(payload):
             # The ONLY thing that removes a thread from the follow-up reminder
             # tray (owner ruling 2026-07-22). Leaves status/sent untouched - it
             # is a real sent reply; this only resolves the follow-up reminder.
+            # IDEMPOTENT (owner report 2026-07-25: "when I dismiss some of the
+            # conversations listed as sent without follow-up, it comes up with
+            # this error and then it kind of restarts"). Dismissing a row that
+            # is already dismissed - a double-click, a stale tray still showing
+            # a row another tab resolved, a retry after a slow response - is
+            # SUCCESS, not a 404/409. The tray reload that follows an error was
+            # the "restart"; the honest answer is that the row is where the
+            # reviewer wanted it.
+            if row.get("subsequence_decision") == "dismissed":
+                return 200, {"ok": True, "subsequence_decision": "dismissed", "already": True}
             _apply_patch(row, {"subsequence_decision": "dismissed"})
             return 200, {"ok": True, "subsequence_decision": "dismissed"}
         if action == "save_draft":
@@ -5505,12 +5855,24 @@ def route_queue_action(payload):
                 # key at all (old clients, autopilot) leaves the decision NULL
                 # exactly as before - the unresolved banner is what catches
                 # those, not a forced choice at send time.
+                # Owner ask 2026-07-25: "every time that I send a message in the
+                # setter, it automatically gets opened in the Send Follow-Up
+                # section, even if I've already selected a follow-up." A gate
+                # choice IS the follow-up decision, so it must resolve the
+                # reminder rather than land the row back in it:
+                #   none -> 'none_at_send' (distinct from the tray's own 'none'
+                #           MARK, which still stays put per 2026-07-22)
+                #   push -> 'pushing' stamped SYNCHRONOUSLY, before the worker
+                #           starts, so the tray reload that follows the send
+                #           never catches the row mid-flight. The worker then
+                #           moves it to 'pushed' or 'push_failed' as before.
                 sub_choice = payload.get("subsequence")
                 if isinstance(sub_choice, dict):
                     choice = sub_choice.get("choice")
                     if choice == "none":
-                        _apply_patch(row, {"subsequence_decision": "none"})
+                        _apply_patch(row, {"subsequence_decision": "none_at_send"})
                     elif choice == "push":
+                        _apply_patch(row, {"subsequence_decision": "pushing"})
                         _subsequence_choice_async(row, sub_choice.get("sub_sequence_id"))
             return 200, {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
         return 400, {"error": f"Unknown action '{action}'."}
@@ -5615,11 +5977,31 @@ def route_queue_redraft(payload):
         eff_settings["_agent"] = agent
         eff_settings["_lead"] = {"first_name": row.get("lead_first_name"), "last_name": row.get("lead_last_name"),
                                  "email": row.get("lead_email")}
+        # "offer different times" / "offer next week" (owner report 2026-07-25):
+        # read the typed feedback for a WHEN request and re-pick the slots from
+        # the real calendar to match it. Nothing is invented - the plan only
+        # skips slots this row already proposed and/or moves the floor forward.
+        time_plan = time_feedback_plan(feedback_text, tz, now)
         slots, slot_status = [], "not_configured"
+        slot_note = ""
         if tz:
             slot_status, avail, _serr = get_calendly_availability(agent, eff_settings, now)
             if slot_status == "ok":
-                slots = pick_slots(avail, tz, eff_settings, now)
+                if time_plan:
+                    prior = [str(s.get("iso")) for s in (row.get("slots") or []) if isinstance(s, dict)]
+                    slots = pick_slots(avail, tz, eff_settings, now,
+                                       exclude_isos=prior,
+                                       not_before_utc=time_plan.get("not_before_utc"),
+                                       horizon_days_override=time_plan.get("horizon"))
+                    if not slots:
+                        # The calendar genuinely has nothing matching. Fall back
+                        # to the normal pick and SAY SO rather than silently
+                        # re-offering the same times as if nothing was asked.
+                        slots = pick_slots(avail, tz, eff_settings, now)
+                        slot_note = (f"You asked for {time_plan['said']}, but the calendar has no "
+                                     f"free slot that matches inside the booking window.")
+                else:
+                    slots = pick_slots(avail, tz, eff_settings, now)
                 if not slots:
                     slot_status = "none_available"
         thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
@@ -5640,15 +6022,33 @@ def route_queue_redraft(payload):
         mem_digest = _agent_memory_digest(agent)
         mem_digest = mem_digest[:max(REVIEWER_FEEDBACK_CAP - len(rules_block) - len(feedback_text) - 4, 0)]
         combined_feedback = "\n".join([x for x in (mem_digest, feedback_text) if x])
+        # When the WHEN request was actioned, say so plainly at the very front
+        # of the feedback: without it the drafter can read "offer next week"
+        # beside a next-week slot list and still hedge about the old times.
+        if time_plan:
+            marker = (f"TIMES ALREADY RE-PICKED: the slots below are the {time_plan['said']} you "
+                      f"asked for. Propose exactly these and do not mention the previous times."
+                      if not slot_note else f"COULD NOT RE-PICK TIMES: {slot_note}")
+            combined_feedback = marker + "\n" + combined_feedback
         combined_feedback = _prefix_latest_rules(rules_block, combined_feedback)
         # No live thread re-read on a redraft (the row doesn't keep a from_name
         # separate from its stored thread) - resolves to the agent's own
         # configured identity via _sender_first_for, same as every other
         # non-live surface. See owner bug report 2026-07-14.
+        # call_ask: a redraft on a later turn must not re-pitch a call the lead
+        # already settled or never asked about (owner report 2026-07-25).
+        # Explicit time feedback always forces "required" - the reviewer is
+        # asking for times, so times are the point of this draft.
+        redraft_body_text = clean_body(row.get("reply_body") or "")
+        # "Later turn" = the lead has replied more than once in this thread.
+        inbound_turns = sum(1 for m in (row.get("thread") or [])
+                            if isinstance(m, dict) and str(m.get("type") or "").upper() != "SENT")
+        call_ask = "required" if time_plan else call_ask_for(
+            classification, redraft_body_text, thread_text, first_touch=inbound_turns <= 1)
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
              "first_outbound": row.get("first_outbound") or "",
-             "thread_text": thread_text},
+             "thread_text": thread_text, "call_ask": call_ask},
             agent, classification, slots, slot_status, sender_first=_sender_first_for(agent),
             regen_feedback=combined_feedback)
         draft_html = d.get("html")
@@ -5723,8 +6123,13 @@ def route_queue_redraft(payload):
         # Transient, response-only (setter_queue schema-freeze: never a new
         # column): the drafter's can't-comply explanation for the TYPED
         # feedback, surfaced only when the reviewer actually typed some.
-        return 200, {"row": {**row, **patch},
-                     "feedback_note": (d.get("feedback_note") or "") if feedback_text else ""}
+        # slot_note is OUR finding, not the model's: when the calendar could not
+        # honour "next week"/"different times" the reviewer must be told, even
+        # if the drafter said nothing about it.
+        note = (d.get("feedback_note") or "") if feedback_text else ""
+        if slot_note:
+            note = (slot_note + " " + note).strip()
+        return 200, {"row": {**row, **patch}, "feedback_note": note}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -8240,6 +8645,7 @@ GET_ROUTES = {
     "/api/setter/edit-lesson": route_edit_lesson_get,
     "/api/setter/subsequences": route_subsequences_get,
     "/api/setter/subsequence/unresolved": route_subsequence_unresolved,
+    "/api/setter/poll/status": route_poll_status,
 }
 
 POST_ROUTES = {

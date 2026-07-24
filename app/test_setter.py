@@ -1842,8 +1842,11 @@ def test_send_gate_choice_none_records_decision():
                                              "subsequence": {"choice": "none"}})
     check("send-gate none: send still returns ok", status == 200 and resp.get("ok") is True, (status, resp))
     row = [r for r in sb.queue if r["id"] == 701][0]
-    check("send-gate none: subsequence_decision recorded as 'none'",
-         row.get("subsequence_decision") == "none", row)
+    # Owner ask 2026-07-25: a "no follow-up" chosen AT SEND is a resolved
+    # decision and must leave the reminder tray, unlike the tray's own "No
+    # follow-up needed" MARK ('none'), which still stays put per 2026-07-22.
+    check("send-gate none: subsequence_decision recorded as 'none_at_send'",
+         row.get("subsequence_decision") == "none_at_send", row)
     check("send-gate none: added_to_subsequence untouched (false)",
          row.get("added_to_subsequence") is False, row)
 
@@ -1984,6 +1987,180 @@ def test_subsequence_unresolved_endpoint_filters_correctly():
          and "sounds good" in (row801.get("reply_snippet") or ""), row801)
     check("unresolved: row carries company_domain for the tray's company line",
          row801.get("company_domain") == "annco.com", row801)
+
+
+# ── owner feedback batch, 2026-07-25 ──────────────────────────────────────
+
+def test_unresolved_excludes_send_gate_decisions_and_non_positive_categories():
+    """#3 + #4 of the 2026-07-25 feedback: a follow-up decided AT SEND must not
+    land back in the reminder tray, and a lead re-labelled to a non-positive
+    category must drop out of it."""
+    sb, http = fresh_setter()
+    recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat(timespec="seconds")
+    stale = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=3)).isoformat(timespec="seconds")
+
+    def q(rid, **kw):
+        row = {"id": rid, "workspace": "navreo", "smartlead_campaign_id": 111,
+               "lead_email": f"l{rid}@x.com", "message_id": f"m{rid}", "status": "sent",
+               "sent_at": recent, "added_to_subsequence": False,
+               "subsequence_decision": None, "category": "Interested"}
+        row.update(kw)
+        sb.queue.append(row)
+
+    q(901)                                            # kept: undecided positive
+    q(902, subsequence_decision="none")               # kept: tray MARK (2026-07-22)
+    q(903, subsequence_decision="none_at_send")       # gone: decided at send
+    fresh = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    q(904, subsequence_decision="pushing", sent_at=fresh)  # gone: push in flight
+    q(905, subsequence_decision="pushing", sent_at=stale)  # back: push never finished
+    q(906, category="Not Interested")                 # gone: no longer positive
+    q(907, category="Out of Office")                  # gone: no longer positive
+    q(908, category=None)                             # kept: unknown != non-positive
+    q(909, category="Call Booked")                    # kept: still a positive label
+
+    status, resp = setter.route_subsequence_unresolved({})
+    ids = {r["id"] for r in resp.get("rows", [])}
+    check("unresolved 2026-07-25: 200 status", status == 200, (status, resp))
+    check("unresolved 2026-07-25: undecided positive still listed", 901 in ids, ids)
+    check("unresolved 2026-07-25: tray 'none' MARK still listed (2026-07-22 ruling intact)",
+         902 in ids, ids)
+    check("unresolved 2026-07-25: send-gate 'none' is NOT re-listed", 903 not in ids, ids)
+    check("unresolved 2026-07-25: an in-flight push is NOT re-listed", 904 not in ids, ids)
+    check("unresolved 2026-07-25: a push stuck past the grace window resurfaces", 905 in ids, ids)
+    check("unresolved 2026-07-25: 'Not Interested' is dropped", 906 not in ids, ids)
+    check("unresolved 2026-07-25: 'Out of Office' is dropped", 907 not in ids, ids)
+    check("unresolved 2026-07-25: an uncategorised row is KEPT (unknown is not negative)",
+         908 in ids, ids)
+    check("unresolved 2026-07-25: 'Call Booked' is kept", 909 in ids, ids)
+
+
+def test_send_gate_push_stamps_pushing_before_the_worker_runs():
+    """#4: the tray reload that follows a send must never catch a push
+    mid-flight and re-list the thread the reviewer just resolved."""
+    sb, http = fresh_setter()
+    seen = {}
+    real = setter._subsequence_choice_async
+
+    def spy(row, override):
+        seen["decision_at_spawn"] = row.get("subsequence_decision")
+        stored = [r for r in sb.queue if r["id"] == row["id"]]
+        seen["stored_at_spawn"] = stored[0].get("subsequence_decision") if stored else None
+        return None
+
+    sb.queue.append(_gate_row(710))
+    setter._subsequence_choice_async = spy
+    try:
+        status, resp = setter.route_queue_action({"id": 710, "action": "send",
+                                                 "subsequence": {"choice": "push"}})
+    finally:
+        setter._subsequence_choice_async = real
+    check("send-gate push: send still returns ok", status == 200 and resp.get("ok") is True,
+         (status, resp))
+    check("send-gate push: 'pushing' is stored BEFORE the worker is spawned",
+         seen.get("stored_at_spawn") == "pushing", seen)
+
+
+def test_subsequence_dismiss_is_idempotent():
+    """#6: dismissing an already-dismissed row is success, not an error. The
+    error banner plus the full tray repaint was the reported 'restart'."""
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 911, "workspace": "navreo", "smartlead_campaign_id": 111,
+                     "lead_email": "d@x.com", "message_id": "d1", "status": "sent",
+                     "added_to_subsequence": False, "subsequence_decision": None})
+    s1, r1 = setter.route_queue_action({"id": 911, "action": "subsequence_dismiss"})
+    s2, r2 = setter.route_queue_action({"id": 911, "action": "subsequence_dismiss"})
+    check("dismiss idempotent: first call 200", s1 == 200 and r1.get("ok") is True, (s1, r1))
+    check("dismiss idempotent: second call also 200, flagged 'already'",
+         s2 == 200 and r2.get("ok") is True and r2.get("already") is True, (s2, r2))
+    row = [r for r in sb.queue if r["id"] == 911][0]
+    check("dismiss idempotent: row stays dismissed and stays sent",
+         row.get("subsequence_decision") == "dismissed" and row.get("status") == "sent", row)
+
+
+def test_pick_slots_honours_exclude_and_not_before():
+    """#1: "offer different times" / "offer next week" must actually move the
+    proposed times - and only ever to slots the calendar really returned."""
+    now = dt.datetime(2026, 7, 6, 9, 0, tzinfo=dt.timezone.utc)          # a Monday
+    avail = [(now + dt.timedelta(days=d, hours=h)).isoformat()
+             for d in (1, 2, 3, 8, 9) for h in (1, 4)]
+    settings = {"work_start": 9, "work_end": 17, "_agent": {}, "_lead": {}}
+    base = setter.pick_slots(avail, "Europe/London", settings, now)
+    check("pick_slots: unchanged default still returns two slots", len(base) == 2, base)
+
+    diff = setter.pick_slots(avail, "Europe/London", settings, now,
+                            exclude_isos=[s["iso"] for s in base])
+    check("pick_slots: exclude_isos returns DIFFERENT times",
+         diff and not ({s["iso"] for s in diff} & {s["iso"] for s in base}), (base, diff))
+
+    next_monday = dt.datetime(2026, 7, 13, 0, 0, tzinfo=dt.timezone.utc)
+    nxt = setter.pick_slots(avail, "Europe/London", settings, now,
+                           not_before_utc=next_monday, horizon_days_override=15)
+    check("pick_slots: not_before_utc pushes every slot past the floor",
+         nxt and all(s["iso"] >= "2026-07-13" for s in nxt), nxt)
+    check("pick_slots: every returned slot came from the real availability list",
+         all(any(a.startswith(s["iso"][:10]) for a in avail) for s in nxt), (avail, nxt))
+
+
+def test_time_feedback_plan_reads_the_ask():
+    """#1: the parser behind "offer different times" / "offer next week"."""
+    now = dt.datetime(2026, 7, 6, 9, 0, tzinfo=dt.timezone.utc)          # a Monday
+    check("time feedback: plain feedback is not a time request",
+         setter.time_feedback_plan("make it shorter and warmer", "Europe/London", now) is None)
+    diff = setter.time_feedback_plan("offer different times", "Europe/London", now)
+    check("time feedback: 'different times' is recognised, no date floor",
+         diff and diff["want_change"] and diff["not_before_utc"] is None, diff)
+    nxt = setter.time_feedback_plan("offer next week please", "Europe/London", now)
+    lon = setter.ZoneInfo("Europe/London")
+    check("time feedback: 'next week' sets the floor to LOCAL midnight on the following Monday",
+         nxt and nxt["not_before_utc"]
+         and nxt["not_before_utc"].astimezone(lon).date() == dt.date(2026, 7, 13)
+         and nxt["not_before_utc"].astimezone(lon).hour == 0, nxt)
+    wed = setter.time_feedback_plan("can you offer Wednesday instead", "Europe/London", now)
+    check("time feedback: a named weekday sets LOCAL midnight on that day as the floor",
+         wed and wed["not_before_utc"]
+         and wed["not_before_utc"].astimezone(lon).date() == dt.date(2026, 7, 8), wed)
+
+
+def test_call_ask_for_stops_repitching_a_settled_call():
+    """#7: a later-turn reply must answer what was actually said instead of
+    pitching a call again."""
+    offered = "Would you be free for a call on Tuesday at 2pm?"
+    check("call_ask: a scheduling intent always asks",
+         setter.call_ask_for({"all_intents": ["scheduling"]}, "when suits you?", offered,
+                            first_touch=False) == "required")
+    check("call_ask: first touch always asks",
+         setter.call_ask_for({"all_intents": ["send_resource"]}, "sure, send it over",
+                            "", first_touch=True) == "required")
+    check("call_ask: a lead who has already booked is never re-pitched",
+         setter.call_ask_for({"all_intents": ["other"]}, "I've booked a slot, see you then",
+                            offered, first_touch=False) == "avoid")
+    check("call_ask: a later-turn question after a call was offered answers first",
+         setter.call_ask_for({"all_intents": ["objection_or_question"]},
+                            "how does the pricing work for a smaller list?",
+                            offered, first_touch=False) == "only_if_relevant")
+    check("call_ask: a later turn with no call ever offered still asks",
+         setter.call_ask_for({"all_intents": ["objection_or_question"]},
+                            "what does it cost?", "thanks for getting back to me",
+                            first_touch=False) == "required")
+
+
+def test_run_poll_fetches_newest_first_but_processes_oldest_first():
+    """#5: an asc-ordered 200-row page starved brand-new replies out of the
+    sweep entirely on a busy 48h window."""
+    sb, http = fresh_setter()
+    setter.run_poll()
+    paths = [c[1] for c in sb.calls if c[0] == "GET" and str(c[1]).startswith("replies?")]
+    check("run_poll: the sweep did query the replies table", bool(paths), sb.calls[:6])
+    # The POSITIVE sweep is the one the report is about: it is the wide query
+    # (every core-four reply in 48h, capped at 200) where a busy window pushed
+    # the newest reply off the page. The narrower uncategorised sweeps that
+    # follow keep their own ascending order - their grace-window logic depends
+    # on it and their result sets are nowhere near their cap.
+    positive = [p for p in paths if "category=in." in str(p)]
+    check("run_poll: the core-four sweep asks for NEWEST first",
+         positive and all("order=replied_at.desc" in str(p) for p in positive), positive)
+    check("run_poll: the core-four sweep no longer asks for oldest first",
+         not any("order=replied_at.asc" in str(p) for p in positive), positive)
 
 
 def test_subsequence_none_action_patches_decision_and_409s_if_added():
@@ -8474,10 +8651,30 @@ def test_recategorise_route_guards():
          and row708.get("status") == "needs_review" and row708.get("category") == "Meeting Request"
          and row708.get("category_source") == "manual" and row708.get("draft_body") == "hi there"
          and len(relabel_calls) == 0, (code, resp, row708, relabel_calls))
+    # A SENT row is now re-labellable (owner ask 2026-07-25) - LABEL ONLY. The
+    # point is the follow-up reminder: a sent thread re-labelled to a
+    # non-positive must drop out of "Sent without follow-up", which is a tray
+    # made entirely of sent rows. Status, draft and send path stay untouched.
     _seed_uncat_queue_row(sb, 704, 9310, "sent@example.com", "sent-1", status="sent")
     code, resp = setter.route_queue_recategorise({"id": 704, "category_id": 1,
                                                   "category_name": "Interested"})
-    check("recategorise guard: a sent row is a 409", code == 409, (code, resp))
+    row704 = next((r for r in sb.queue if r.get("id") == 704), None)
+    check("recategorise: a sent row is relabelled, not rejected",
+         code == 200 and resp.get("action") == "relabelled_sent"
+         and row704 is not None and row704.get("category") == "Interested"
+         and row704.get("status") == "sent", (code, resp, row704))
+    check("recategorise: a POSITIVE relabel on a sent row leaves the follow-up reminder alone",
+         resp.get("removed_from_followup") is False
+         and row704.get("subsequence_decision") is None, (resp, row704))
+    _seed_uncat_queue_row(sb, 7041, 9310, "sent2@example.com", "sent-2", status="auto_sent")
+    code, resp = setter.route_queue_recategorise({"id": 7041, "category_id": 9,
+                                                  "category_name": "Not Interested"})
+    row7041 = next((r for r in sb.queue if r.get("id") == 7041), None)
+    check("recategorise: a NON-POSITIVE relabel on a sent row resolves the follow-up reminder",
+         code == 200 and resp.get("removed_from_followup") is True
+         and row7041.get("subsequence_decision") == "dismissed", (code, resp, row7041))
+    check("recategorise: the non-positive relabel never changed the sent status",
+         row7041.get("status") == "auto_sent", row7041)
     row = _seed_uncat_queue_row(sb, 705, 9310, "down@example.com", "down-1", smartlead_lead_id=555)
     http.category_write_error = RuntimeError("smartlead down")
     code, resp = setter.route_queue_recategorise({"id": 705, "category_id": 1,
@@ -8589,6 +8786,13 @@ if __name__ == "__main__":
     test_send_gate_failed_send_never_teaches_subsequence_decision()
     test_subsequences_endpoint_returns_mapped_list_and_caches()
     test_subsequence_unresolved_endpoint_filters_correctly()
+    test_unresolved_excludes_send_gate_decisions_and_non_positive_categories()
+    test_send_gate_push_stamps_pushing_before_the_worker_runs()
+    test_subsequence_dismiss_is_idempotent()
+    test_pick_slots_honours_exclude_and_not_before()
+    test_time_feedback_plan_reads_the_ask()
+    test_call_ask_for_stops_repitching_a_settled_call()
+    test_run_poll_fetches_newest_first_but_processes_oldest_first()
     test_subsequence_none_action_patches_decision_and_409s_if_added()
     test_queue_row_get_returns_annotated_row()
     test_queue_row_get_is_workspace_scoped()
