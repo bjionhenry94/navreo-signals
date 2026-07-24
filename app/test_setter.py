@@ -2060,6 +2060,32 @@ def test_send_gate_push_stamps_pushing_before_the_worker_runs():
          seen.get("stored_at_spawn") == "pushing", seen)
 
 
+def test_agent_adoption_busts_the_read_caches():
+    """#2: assigning a campaign to an agent adopts that campaign's orphaned
+    queue rows through a RAW _SB PATCH, which - unlike _apply_patch - does not
+    clear the short-TTL queue read caches. The page then kept serving the
+    pre-assign row (agent_id null, old decision_reason), so the first
+    Regenerate looked like it did nothing and the second, once the TTL had
+    expired, 'worked'."""
+    sb, http = fresh_setter()
+    busted = {"n": 0}
+    real_bust = setter._bust_read_caches
+    setter._bust_read_caches = lambda *a, **k: busted.__setitem__("n", busted["n"] + 1)
+    try:
+        sb.queue.append({"id": 921, "workspace": "navreo", "smartlead_campaign_id": 4242,
+                         "lead_email": "orphan@x.com", "message_id": "o1",
+                         "status": "needs_review", "is_test": False, "agent_id": None})
+        setter._save_agent({"id": "agent-adopt-test", "name": "Adopt", "enabled": True,
+                            "campaign_ids": [4242]})
+    finally:
+        setter._bust_read_caches = real_bust
+    row = [r for r in sb.queue if r["id"] == 921][0]
+    check("adoption: the orphaned row is claimed by the new agent",
+         row.get("agent_id") == "agent-adopt-test", row)
+    check("adoption: the read caches are busted so the UI stops serving the pre-assign row",
+         busted["n"] >= 1, busted)
+
+
 def test_subsequence_dismiss_is_idempotent():
     """#6: dismissing an already-dismissed row is success, not an error. The
     error banner plus the full tray repaint was the reported 'restart'."""
@@ -8993,6 +9019,10 @@ if __name__ == "__main__":
     test_recategorise_route_guards()
     test_lead_contact_route()
     test_categories_route_serves_smartlead_list_cached()
+    # Registered LAST on purpose: it calls _save_agent, whose adoption path now
+    # busts the read caches and spawns rewarm threads. Those land in whatever
+    # test is running next and break the round-trip COUNT assertions.
+    test_agent_adoption_busts_the_read_caches()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
