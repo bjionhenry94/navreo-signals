@@ -2455,12 +2455,13 @@ _NOTIFICATIONS_TTL_S = 60  # G1/S1: unfiltered /api/notifications was a single
 
 
 def _compute_notifications_list(key: tuple) -> list:
-    """key = (slim, status, priority, client, client_id) - see api_notifications()."""
+    """key = (slim, status, priority, client, client_id, campaign_id) - see api_notifications()."""
     from urllib.parse import quote
-    slim, status, priority, client, client_id = key
+    slim, status, priority, client, client_id, campaign_id = key
     select_param = [f"select={quote(NOTIFICATIONS_SLIM_SELECT, safe=',')}"] if slim else []
     filters = [f"{k}=eq.{quote(v, safe='')}"
-               for k, v in (("status", status), ("priority", priority), ("client", client)) if v]
+               for k, v in (("status", status), ("priority", priority), ("client", client),
+                            ("campaign_id", campaign_id)) if v]
 
     def _fetch(extra_filters: list):
         parts = select_param + filters + extra_filters + ["order=created_at.desc"]
@@ -2531,7 +2532,8 @@ def api_notifications(qs: dict) -> list:
     priority = (qs.get("priority") or [""])[0]
     client = (qs.get("client") or [""])[0]
     client_id = (qs.get("client_id") or [""])[0].strip()
-    key = (slim, status, priority, client, client_id)
+    campaign_id = (qs.get("campaign_id") or [""])[0].strip()
+    key = (slim, status, priority, client, client_id, campaign_id)
     return _NOTIFICATIONS_SWR.get(key)
 
 

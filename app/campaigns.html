@@ -1893,7 +1893,26 @@
   .cockpit .review-badge .caret { transition: transform .2s; flex: 0 0 auto; }
   .cockpit .review-badge[aria-expanded="true"] { background: var(--nav-orange); color: #fff; }
   .cockpit .review-badge[aria-expanded="true"] .caret { transform: rotate(180deg); }
-  .cockpit .row-optim { background: var(--bg-elevated); border-top: 1px solid var(--border); padding: 8px 22px 16px; }
+  .cockpit .row-optim { background: var(--sunken); border-top: 1px solid var(--border); padding: 12px 22px 16px; }
+  /* proto look: white card on the grey panel, no number circle, loud orange Fix */
+  .cockpit .row-optim .action-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .cockpit .row-optim .action-num { display: none; }
+  .cockpit .action-card .copy-prompt { background: var(--nav-orange); border-color: var(--nav-orange); color: #fff; font-weight: 700; }
+  .cockpit .action-card .copy-prompt:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); color: #fff; }
+  /* full Why? breakdown (the old Optimisations tab's story, inline) */
+  .cockpit .why-block { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+  .cockpit .why-block-title { margin: 0 0 4px; font-weight: 700; font-size: 0.85rem; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .cockpit .why-block-detail { margin: 0; font-size: 0.82rem; color: var(--fg-muted); line-height: 1.5; }
+  .cockpit .why-block-impact { margin: 4px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
+  .cockpit .why-empty { margin: 8px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
+  .cockpit .why-var-wrap { overflow-x: auto; margin-top: 10px; }
+  .cockpit .why-var-table { border-collapse: collapse; width: 100%; font-size: 0.78rem; }
+  .cockpit .why-var-table th { text-align: left; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-subtle); padding: 6px 8px; border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
+  .cockpit .why-var-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .cockpit .why-var-table td.wv-angle { min-width: 220px; color: var(--fg-muted); }
+  .cockpit .why-var-table tr.wv-struck td { text-decoration: line-through; color: var(--danger); text-decoration-color: var(--danger); }
+  .cockpit .why-var-table tr.wv-inactive td { color: var(--fg-subtle); }
+  .cockpit .why-legend { margin: 8px 0 0; font-size: 0.72rem; color: var(--fg-subtle); }
   .cockpit .opt-why { margin-top: 10px; }
   .cockpit .opt-why summary { cursor: pointer; font-size: 0.75rem; font-weight: 700; color: var(--nav-orange-600); list-style: none; }
   .cockpit .opt-why summary::-webkit-details-marker { display: none; }
@@ -2625,10 +2644,12 @@
     if (st2.ratio && st2.pos > 0) whyBits.push("1 positive per " + fmtInt(st2.ratio) + " sends &mdash; healthy is under 1,500");
     if (st2.meetings) whyBits.push(fmtInt(st2.meetings) + " meeting" + (st2.meetings === 1 ? "" : "s") + " booked");
     if (p.note) whyBits.push(esc(p.note));
-    var whyHTML = whyBits.length
-      ? '<details class="opt-why"><summary>Why?</summary><ul class="opt-why-body">' +
-        whyBits.map(function (w) { return "<li>" + w + "</li>"; }).join("") + "</ul></details>"
-      : "";
+    /* Always rendered: the quick numbers show instantly, and the full
+       breakdown (the old Optimisations tab's story — priority, prose,
+       strikethrough variant table) lazy-loads into .why-full on first open. */
+    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '"><summary>Why?</summary>' +
+      (whyBits.length ? '<ul class="opt-why-body">' + whyBits.map(function (w) { return "<li>" + w + "</li>"; }).join("") + "</ul>" : "") +
+      '<div class="why-full"></div></details>';
     return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
       '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
       '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span>" +
@@ -2636,12 +2657,13 @@
       '<a class="opt-smartlead" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead ' + EXT_ICON + "</a></div>" +
       '<p class="action-how">' + esc(p.act) + "</p>" +
       (p.bold ? '<p class="action-payoff">' + esc(p.bold) + "</p>" : "") +
+      whyHTML +
       '<div class="action-buttons">' +
       '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Fix inside of Claude ' + EXT_ICON + "</button>" +
       '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
       '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
       '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
-      whyHTML + "</div>" +
+      "</div>" +
       '<div class="action-dismissed-row" hidden><span>Dismissed &middot; <button type="button" class="action-undo-btn" data-act="undo">Undo</button></span></div></div>';
   }
 
@@ -3572,6 +3594,23 @@
         try { window.location.href = "claude://new?q=" + encodeURIComponent(txt); } catch (_e) {}
       });
     });
+    /* Why? full breakdown — the old Optimisations tab's per-campaign story
+       (priority + prose + strikethrough variant table), lazy-fetched on the
+       FIRST open of a card's Why?, one request per campaign, cached. */
+    root.querySelectorAll(".opt-why[data-why-cid]").forEach(function (d) {
+      if (d.getAttribute("data-why-bound")) return;
+      d.setAttribute("data-why-bound", "1");
+      d.addEventListener("toggle", function () {
+        if (!d.open) return;
+        var box = d.querySelector(".why-full");
+        if (!box || box.getAttribute("data-loaded")) return;
+        box.setAttribute("data-loaded", "1");
+        box.innerHTML = '<p class="why-empty">Loading the full breakdown&hellip;</p>';
+        whyBreakdownFetch(d.getAttribute("data-why-cid")).then(function (rows) {
+          box.innerHTML = whyBreakdownHTML(Array.isArray(rows) ? rows : null);
+        });
+      });
+    });
     actLoadOnce(function () { root.querySelectorAll(".action-card").forEach(actApplyCard); });
     root.querySelectorAll(".action-card").forEach(function (card) {
       if (card.getAttribute("data-act-bound")) return;
@@ -3605,6 +3644,47 @@
         });
       });
     });
+  }
+
+  /* ---------- Why? full-breakdown data (optimiser_notifications) ---------- */
+  var WHY_CACHE = {};   // campaign_id -> Promise<rows>
+  function whyBreakdownFetch(cid) {
+    if (!WHY_CACHE[cid]) {
+      WHY_CACHE[cid] = getJSON("/api/notifications?slim=1&campaign_id=" + encodeURIComponent(cid))
+        .catch(function () { delete WHY_CACHE[cid]; return null; });
+    }
+    return WHY_CACHE[cid];
+  }
+  function whyVariantsTable(vs) {
+    if (!vs || !vs.length) return "";
+    var h = ['<div class="why-var-wrap"><table class="why-var-table"><thead><tr>' +
+      "<th>Email</th><th>Variant</th><th>Split</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th>Angle</th></tr></thead><tbody>"];
+    vs.forEach(function (v) {
+      var flags = v.flags || [];
+      var cls = flags.indexOf("failing") !== -1 ? ' class="wv-struck"'
+        : (flags.indexOf("disabled") !== -1 || flags.indexOf("zero_distribution") !== -1) ? ' class="wv-inactive"' : "";
+      h.push("<tr" + cls + "><td>Email " + esc(String(v.email)) + "</td><td>" + esc(String(v.variant)) + '</td><td class="tnum">' +
+        (v.distribution_pct != null ? v.distribution_pct + "%" : "-") + '</td><td class="tnum">' + fmtInt(v.sent) +
+        '</td><td class="tnum">' + fmtInt(v.replies) + '</td><td class="tnum">' + fmtInt(v.positives) +
+        '</td><td class="tnum">' + fmtInt(v.meetings) + '</td><td class="wv-angle">' + esc(v.angle || "") + "</td></tr>");
+    });
+    h.push("</tbody></table></div>" +
+      '<p class="why-legend"><s>Struck through</s> = our recommendation to get rid of that variant. Split shows what is actually live right now.</p>');
+    return h.join("");
+  }
+  function whyBreakdownHTML(rows) {
+    if (!rows || !rows.length) return '<p class="why-empty">No open optimiser findings for this campaign beyond the numbers above.</p>';
+    var h = [];
+    rows.forEach(function (n) {
+      var pr = n.priority || "";
+      var b = pr === "High" ? "badge--red" : pr === "Medium" ? "badge--amber" : "badge--neutral";
+      h.push('<div class="why-block">' +
+        '<p class="why-block-title">' + (pr ? '<span class="badge ' + b + '">' + esc(pr) + "</span> " : "") + esc(n.title || n.suggested_action || "") + "</p>" +
+        (n.detail ? '<p class="why-block-detail">' + esc(n.detail) + "</p>" : "") +
+        (n.impact_reason ? '<p class="why-block-impact">' + esc(n.impact_reason) + "</p>" : "") +
+        whyVariantsTable(n.variants) + "</div>");
+    });
+    return h.join("");
   }
 
   /* Populate a row's inline "Review N" panel from the campaign's in-memory
