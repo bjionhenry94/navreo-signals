@@ -592,6 +592,10 @@
 .checklist { border: 1px solid var(--line-2); border-radius: 8px; max-height: 170px; overflow-y: auto; padding: 6px; }
 .checklist label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; border-radius: 6px; cursor: pointer; }
 .checklist label:hover { background: var(--bg-sunken); }
+/* The campaign you arrived to assign: pinned first and visibly the one that
+   matters, so an editor holding 140 other campaigns can't read as "nothing
+   happened" (owner report 2026-07-25). */
+.checklist label.ag-camp-pending { background: var(--amber-bg); border: 1px solid var(--amber-line); font-weight: 600; }
 .intent-checks label { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 7px; cursor: pointer; }
 .slider-row { display: flex; align-items: center; gap: 10px; }
 .slider-row input[type=range] { flex: 1; }
@@ -3983,14 +3987,31 @@ function renderCampaignChecklist() {
   const search = (searchEl ? searchEl.value : "").toLowerCase().trim();
   const list = document.getElementById("agCampaignList");
   if (!list) return;
-  const filtered = CAMPAIGNS.filter((c) => !search || String(c.name || "").toLowerCase().includes(search) || String(c.id).includes(search));
+  let filtered = CAMPAIGNS.filter((c) => !search || String(c.name || "").toLowerCase().includes(search) || String(c.id).includes(search));
+  // Arrived from an "Assign an agent" prompt: that campaign goes FIRST and is
+  // flagged. Fix 2026-07-25 (owner: "I tried to assign an agent and it didn't
+  // work") - it was already ticked, but it sat at position 140 of 142 in a
+  // 168px-tall scroller parked at the top, so the editor looked untouched and
+  // there was no way to tell the new campaign from the 13 already assigned.
+  const pend = PENDING_ASSIGN_CAMPAIGN ? String(PENDING_ASSIGN_CAMPAIGN.id) : null;
+  if (pend) {
+    const hit = filtered.find((c) => String(c.id) === pend);
+    filtered = filtered.filter((c) => String(c.id) !== pend);
+    // Not in the campaign list at all (a subsequence, or a campaign the setter
+    // has never listed)? Show it anyway - it is still perfectly assignable,
+    // and silently dropping it is how this looked broken in the first place.
+    filtered.unshift(hit || { id: PENDING_ASSIGN_CAMPAIGN.id, name: PENDING_ASSIGN_CAMPAIGN.name });
+  }
   if (!filtered.length) {
     list.innerHTML = `<div class="small muted" style="padding:6px">No campaigns found.</div>`;
     return;
   }
-  list.innerHTML = filtered.map((c) =>
-    `<label><input type="checkbox" class="ag-camp-chk" value="${c.id}" ${selectedCampaignIds.has(String(c.id)) ? "checked" : ""}> ${esc(c.name || "Campaign " + c.id)} <span class="muted small">#${c.id}</span></label>`
-  ).join("");
+  list.innerHTML = filtered.map((c) => {
+    const isPend = pend && String(c.id) === pend;
+    return `<label class="${isPend ? "ag-camp-pending" : ""}"><input type="checkbox" class="ag-camp-chk" value="${c.id}" ${selectedCampaignIds.has(String(c.id)) ? "checked" : ""}> ${esc(c.name || "Campaign " + c.id)} <span class="muted small">#${c.id}</span>${isPend ? ` <span class="pill a">assigning this one</span>` : ""}</label>`;
+  }).join("");
+  // and make sure it is what you are looking at
+  if (pend) list.scrollTop = 0;
 }
 
 function wireAgentModalEvents() {
@@ -4099,11 +4120,25 @@ document.getElementById("agentSaveBtn").addEventListener("click", async () => {
   });
   restore();
   if (!res.ok) { showAgentModalErr("Couldn't save this agent: " + res.error); return; }
+  const assigned = PENDING_ASSIGN_CAMPAIGN;
   closeAgentModal();
-  protoNote("Agent saved");
+  closeDrawer("agentsDrawerOverlay");
+  clearAssignAgent();
   showWebhookWarnings(res.data && res.data.webhooks);
   await loadAgentsAndCampaigns();
   await loadQueue();
+  // loadQueue re-renders the LIST and the chips but never the open
+  // conversation, so after assigning an agent the pane you were looking at
+  // still said "No agent is assigned to this campaign" and still offered the
+  // Assign button - the save had worked and nothing on screen said so (owner
+  // report 2026-07-25: "I tried to assign an agent and it didn't work").
+  // Repaint the open row, and name what changed.
+  if (selectedRowId != null) {
+    const row = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId))
+             || ALL_ROWS.find((r) => String(r.id) === String(selectedRowId));
+    if (row) renderDetail(row);
+  }
+  protoNote(assigned ? `${name} now handles ${assigned.name}` : "Agent saved");
 });
 
 function showWebhookWarnings(webhooks) {
