@@ -3061,100 +3061,143 @@
   /* Drafted sources: tool source docs bound to this campaign (camp-sl-<id>),
      e.g. a recontact pool staged against a drafted campaign. Separate root from
      the push-history fill below so the two hydrations never clobber each other. */
+  /* Drafted sources + pull-more, unified (P4 ruling, 25 Jul 2026): the source
+     card itself carries pulled / not-yet-pulled and a "+ Add people" button -
+     "we pulled from that list; plenty left; pull more from it." The pull runs
+     server-side as a polled job (sweep, ListMint, audit, upload). */
   function hydrateDraftSources(c) {
     if (!STATE.slimSourcesP) STATE.slimSourcesP = getJSON("/api/sources?slim=1").catch(function () { return null; });
-    STATE.slimSourcesP.then(function (all) {
-      var mine = (Array.isArray(all) ? all : []).filter(function (s) {
-        return String(s.campaign_id) === "camp-sl-" + c.id;
-      });
-      var sec = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-section');
-      if (!sec || !mine.length) return;
-      sec.hidden = false;
-      document.getElementById("draft-sources-root").innerHTML = '<div class="source-list-cards">' + mine.map(function (s) {
-        var n = s.total != null ? s.total : ((s.prospects || []).length || null);
-        var inner = '<span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
-          '<span class="source-list-meta">' + (n != null ? "~" + fmtInt(n) + " people staged" : "Sized on the first pull") +
-          " &middot; drafted, nothing sends" +
-          (s.list_id ? ' &middot; <span class="action-link">View the list</span>' : "") + "</span>";
-        return s.list_id
-          ? '<a class="source-list-card source-list-card--link" href="/app/lists.html#' + esc(s.list_id) + '">' + inner + "</a>"
-          : '<div class="source-list-card">' + inner + "</div>";
-      }).join("") + "</div>";
-    });
-  }
-
-  /* "Pull more" panel: standing pool_pulls record + one-button gated pull.
-     The pull runs server-side as a polled job (sweep, ListMint, audit,
-     upload) — this panel only starts it and narrates progress. */
-  function hydratePoolPull(c) {
-    getJSON("/api/pool-pulls").then(function (d) {
-      var pool = ((d && d.pools) || []).find(function (p) { return String(p.campaign_id) === String(c.id); });
-      var sec = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-section');
-      if (!pool || !sec) return;
-      sec.hidden = false;
-      var host = document.getElementById("pool-pull-root");
-      if (!host) {
-        host = document.createElement("div");
-        host.id = "pool-pull-root";
-        sec.appendChild(host);
-      }
-      renderPoolPull(host, pool, c);
-      if (pool.active_job) poolPullPoll(host, pool.seg, c);
-    }).catch(function () {});
-  }
-
-  function poolStageLine(j) {
-    var st = { selecting: "Selecting the next batch…", sweeping: "Sweeping for collisions…",
-               verifying: "Verifying emails", uploading: "Uploading verified leads" }[j.stage] || "Working…";
-    var pr = j.progress && j.progress.total ? " " + fmtInt(j.progress.done) + "/" + fmtInt(j.progress.total) : "";
-    return st + pr;
-  }
-
-  function renderPoolPull(host, pool, c) {
-    var busy = !!pool.active_job;
-    var lb = pool.last_batch || null;
-    host.innerHTML =
-      '<div class="source-list-card" style="margin-top:10px;display:block">' +
-      '<span class="source-list-name">Pull more from this pool</span>' +
-      '<span class="source-list-meta">' + fmtInt(pool.pulled_ok) + " pulled &middot; " +
-        fmtInt(pool.remaining) + " remaining of " + fmtInt(pool.total_pool) + "</span>" +
-      '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">' +
-      '<input id="pp-size" type="number" min="1" max="2000" value="500" style="width:90px;padding:7px 8px;border:1px solid var(--border-strong);border-radius:8px;font:inherit" ' + (busy ? "disabled" : "") + ">" +
-      '<button id="pp-go" class="action-state-btn" style="background:#E8590C;color:#fff;border-color:transparent" ' + (busy ? "disabled" : "") + ">Pull more</button></div>" +
-      '<div id="pp-status" class="footnote-line" style="margin-top:6px">' +
-      (busy ? poolStageLine(pool.active_job)
-            : (lb ? "Last pull: " + fmtInt(lb.pushed) + " verified added &middot; " + fmtInt(lb.verify_failed) +
-                    " failed verification &middot; " + fmtInt(lb.live_dropped) + " dropped as collisions"
-                  : "Runs the gated pipeline — collision sweep, then email verification (spends ListMint credits on emails without a fresh verdict), audit, upload. The campaign stays drafted; nothing sends.")) +
-      "</div></div>";
-    var btn = document.getElementById("pp-go");
-    if (btn) btn.onclick = function () {
-      var size = parseInt((document.getElementById("pp-size") || {}).value, 10) || 500;
-      btn.disabled = true;
-      var st = document.getElementById("pp-status");
-      if (st) st.textContent = "Starting…";
-      fetch("/api/pool-pulls/pull", { method: "POST", body: JSON.stringify({ seg: pool.seg, size: size }) })
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-          if (!j.ok) {
-            if (st) st.textContent = j.message || "Couldn't start the pull.";
-            btn.disabled = false;
-            return;
+    Promise.all([STATE.slimSourcesP, getJSON("/api/pool-pulls").catch(function () { return null; })])
+      .then(function (rs) {
+        var all = rs[0];
+        var pools = ((rs[1] || {}).pools) || [];
+        var mine = (Array.isArray(all) ? all : []).filter(function (s) {
+          return String(s.campaign_id) === "camp-sl-" + c.id;
+        });
+        var sec = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-section');
+        if (!sec || !mine.length) return;
+        sec.hidden = false;
+        function poolOf(s) {
+          return pools.find(function (p) { return p.list_id === s.list_id && String(p.campaign_id) === String(c.id); }) || null;
+        }
+        document.getElementById("draft-sources-root").innerHTML = '<div class="source-list-cards">' + mine.map(function (s) {
+          var pool = poolOf(s);
+          if (pool) {
+            var unpulled = pool.remaining;
+            return '<div class="source-list-card" data-pool="' + esc(pool.id) + '" style="display:flex;align-items:center;gap:14px">' +
+              '<div style="flex:1;min-width:0"><span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
+              '<span class="source-list-meta">' + fmtInt(pool.pulled_ok) + " pulled &middot; " + fmtInt(unpulled) +
+              " not yet pulled of " + fmtInt(pool.total_pool) +
+              (s.list_id ? ' &middot; <a class="action-link" href="/app/lists.html#' + esc(s.list_id) + '">View the list</a>' : "") + "</span>" +
+              '<span class="source-list-meta" data-pool-note>' + poolNoteHTML(pool) + "</span></div>" +
+              '<div data-pool-act style="flex:0 0 auto"></div></div>';
           }
-          poolPullPoll(host, pool.seg, c);
-        })
-        .catch(function () { if (st) st.textContent = "Couldn't reach the server — try again."; btn.disabled = false; });
+          var n = s.total != null ? s.total : ((s.prospects || []).length || null);
+          var inner = '<span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
+            '<span class="source-list-meta">' + (n != null ? "~" + fmtInt(n) + " people staged" : "Sized on the first pull") +
+            " &middot; drafted, nothing sends" +
+            (s.list_id ? ' &middot; <span class="action-link">View the list</span>' : "") + "</span>";
+          return s.list_id
+            ? '<a class="source-list-card source-list-card--link" href="/app/lists.html#' + esc(s.list_id) + '">' + inner + "</a>"
+            : '<div class="source-list-card">' + inner + "</div>";
+        }).join("") + "</div>";
+        mine.forEach(function (s) {
+          var pool = poolOf(s);
+          if (pool) paintPoolCard(c, pool);
+        });
+      });
+  }
+
+  function poolNoteHTML(pool) {
+    var j = pool.active_job;
+    if (j) {
+      var st = { selecting: "Selecting the next batch…", sweeping: "Checking for people we shouldn't contact…",
+                 verifying: "Verifying emails", uploading: "Adding verified people" }[j.stage] || "Working…";
+      var pr = j.progress && j.progress.total ? " " + fmtInt(j.progress.done) + "/" + fmtInt(j.progress.total) : "";
+      return st + pr;
+    }
+    var lb = pool.last_batch;
+    if (lb) return "Last add: " + fmtInt(lb.pushed) + " verified added &middot; " + fmtInt(lb.verify_failed) +
+                   " failed verification &middot; " + fmtInt(lb.live_dropped) + " dropped as collisions";
+    return "";
+  }
+
+  function paintPoolCard(c, pool) {
+    var card = document.querySelector('.campaign-page[data-cid="' + c.id + '"] [data-pool="' + pool.id + '"]');
+    if (!card) return;
+    card.querySelector("[data-pool-note]").innerHTML = poolNoteHTML(pool);
+    var act = card.querySelector("[data-pool-act]");
+    if (pool.active_job) {
+      act.innerHTML = '<span class="source-list-meta">Working&hellip;</span>';
+      poolCardPoll(c, pool.id);
+      return;
+    }
+    act.innerHTML = '<button class="action-state-btn" style="background:#E8590C;color:#fff;border-color:transparent" data-pool-add>+ Add people</button>';
+    act.querySelector("[data-pool-add]").onclick = function (e) {
+      e.preventDefault();
+      var btn = this;
+      var pop = document.createElement("div");
+      pop.style.cssText = "position:absolute;z-index:30;background:#fff;border:1px solid var(--border-strong);" +
+        "border-radius:12px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.12);max-width:260px";
+      pop.innerHTML = '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+        [500, 1000, 2000].map(function (n) {
+          return '<button class="action-state-btn" data-n="' + n + '">+' + fmtInt(n) + "</button>";
+        }).join("") + "</div>" +
+        '<div class="source-list-meta">Checks everyone first, then verifies emails - spends credits on unchecked addresses. Nothing sends.</div>';
+      var r = btn.getBoundingClientRect();
+      pop.style.left = Math.max(10, r.right - 270) + "px";
+      pop.style.top = (r.bottom + window.scrollY + 6) + "px";
+      document.body.appendChild(pop);
+      pop.addEventListener("click", function (ev) {
+        var nb = ev.target.closest("[data-n]");
+        if (!nb) return;
+        pop.remove();
+        act.innerHTML = '<span class="source-list-meta">Starting&hellip;</span>';
+        fetch("/api/pool-pulls/pull", { method: "POST", body: JSON.stringify({ seg: pool.seg, size: +nb.dataset.n }) })
+          .then(function (res) { return res.json(); })
+          .then(function (j) {
+            if (!j.ok) {
+              card.querySelector("[data-pool-note]").textContent = j.message || "Couldn't start the pull.";
+              paintPoolCardIdleBtn(c, pool);
+              return;
+            }
+            poolCardPoll(c, pool.id);
+          })
+          .catch(function () {
+            card.querySelector("[data-pool-note]").textContent = "Couldn't reach the server - try again.";
+            paintPoolCardIdleBtn(c, pool);
+          });
+      });
+      setTimeout(function () {
+        document.addEventListener("click", function close(ev) {
+          if (!pop.contains(ev.target) && ev.target !== btn) { pop.remove(); document.removeEventListener("click", close); }
+        });
+      }, 0);
     };
   }
 
-  function poolPullPoll(host, seg, c) {
+  function paintPoolCardIdleBtn(c, pool) {
+    pool.active_job = null;
+    paintPoolCard(c, pool);
+  }
+
+  function poolCardPoll(c, poolId) {
     setTimeout(function () {
       getJSON("/api/pool-pulls").then(function (d) {
-        var pool = ((d && d.pools) || []).find(function (p) { return p.seg === seg; });
-        if (!pool || !document.getElementById("pool-pull-root")) return;
-        renderPoolPull(host, pool, c);
-        if (pool.active_job) poolPullPoll(host, seg, c);
-      }).catch(function () { poolPullPoll(host, seg, c); });
+        var pool = ((d && d.pools) || []).find(function (p) { return p.id === poolId; });
+        var card = document.querySelector('.campaign-page[data-cid="' + c.id + '"] [data-pool="' + poolId + '"]');
+        if (!pool || !card) return;
+        card.querySelector("[data-pool-note]").innerHTML = poolNoteHTML(pool);
+        var metas = card.querySelectorAll(".source-list-meta");
+        if (!pool.active_job) {
+          metas[0].innerHTML = fmtInt(pool.pulled_ok) + " pulled &middot; " + fmtInt(pool.remaining) +
+            " not yet pulled of " + fmtInt(pool.total_pool) +
+            ' &middot; <a class="action-link" href="/app/lists.html#' + esc(pool.list_id) + '">View the list</a>';
+          paintPoolCard(c, pool);
+          return;
+        }
+        poolCardPoll(c, poolId);
+      }).catch(function () { poolCardPoll(c, poolId); });
     }, 4000);
   }
 
@@ -3560,7 +3603,6 @@
       attachPageHandlers(c);
       hydrateDetail(c);
       hydrateDraftSources(c);
-      hydratePoolPull(c);
       if (c.ghost) fillGhostName(c);
     } else {
       /* just switch tab */
