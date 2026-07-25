@@ -3651,6 +3651,18 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           const k = mgrRowKey(r);
           if (!seen.has(k)) { seen.add(k); out.push(r); }
         });
+        // Ghost drain: the full-fleet census (bundle.liveZeroCap, from the
+        // daily Smartlead mirror) says these domains have ZERO cap-0 boxes —
+        // they finished warm-up long ago and only linger here because the
+        // backend's truncated views / a stale ledger row still name them.
+        // Domains the census doesn't know (absent from domainBoxes) stay.
+        const lz = b.liveZeroCap, known = b.domainBoxes || {};
+        if (lz) {
+          return out.filter((r) => {
+            const d = String(r.domain || "").toLowerCase();
+            return !(known[d] > 0 && !(lz[d] > 0));
+          });
+        }
         return out;
       }
       return [];
@@ -4061,7 +4073,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // "warming" with no hold tag and a dead grey "warming" action (read as
         // broken / not-actionable), while a rested domain showed
         // "sends paused (N)" + Restore for the SAME real state.
-        const heldN = rows.filter((r) => r.cap === 0 || r.rested).length || rows.length;
+        // Live cap-0 truth wins over the cached (2,000-row-truncated) backend
+        // views — the frozen view count is what painted "sends paused (14)"
+        // on domains whose 52 boxes were all back at 2/day.
+        const _lzMap = isLive() ? (bundleData() || {}).liveZeroCap : null;
+        const _lzKey = String(dom).toLowerCase();
+        const heldN = (_lzMap && _lzMap[_lzKey] != null) ? _lzMap[_lzKey]
+          : (rows.filter((r) => r.cap === 0 || r.rested).length || rows.length);
         const isMaildoso = rows.some((r) => r.maildoso);
         const led = domDue(dom, rows); // real ledger/rest due-back, if any
         const isDueNow = !isMaildoso && dueSet.has(String(dom).toLowerCase());
@@ -4099,11 +4117,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
             : "Not due back yet — restoring now ends its warm-up early";
         // Put the caution ON the row (not just in a hover) so a fast clicker sees
         // why a not-ready Restore is the quiet one — "not due yet" / "check Maildoso".
-        const actNote = isMaildoso
+        let actNote = isMaildoso
           ? `<span class="dlv-mb-dom" style="margin-right:8px" title="Check Maildoso's own dashboard for warm-up progress first">check Maildoso</span>`
           : !isDueNow
             ? `<span class="dlv-mb-dom" style="margin-right:8px" title="Restoring now would end its warm-up early">not due yet</span>`
             : "";
+        // A failed restore must outlive its toast: name the failure on the row
+        // until a later attempt succeeds. The Restore button IS the retry.
+        const rowErr = (S.A.restoreErrors || {})[dom];
+        if (rowErr) actNote = `<span class="dlv-tag blocked" style="margin-right:8px" title="${esc(rowErr)} — click Restore to retry">last restore failed</span>` + actNote;
         // Carry the row's true state on the button so the confirm dialog can warn
         // correctly in BOTH live (bundle-backed) and local modes — S.A.inboxRows
         // is empty in live mode, so the handler can't re-derive it there.
@@ -4545,6 +4567,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <div class="dlv-modal-head"><h3>Enable warmup on <span id="dlv-wu-n">0</span> mailbox(es) <span id="dlv-wu-brk" class="dlv-field-hint"></span></h3><button class="x" data-act="close-modal" data-modal="dlv-wu-overlay">&times;</button></div>
         <div class="dlv-modal-body">
           <p class="small muted" id="dlv-wu-std" style="margin-bottom:6px"></p>
+          <div class="small" id="dlv-wu-live" style="margin-bottom:10px;display:none"></div>
           <p class="small muted" style="margin-bottom:12px">Warmup quietly exchanges emails between our own inboxes so providers see healthy activity — it protects deliverability. Mailboxes with it off, or set differently from the fleet standard, are listed here.</p>
           <label class="dlv-field-label">Which mailboxes? <span class="dlv-field-hint">— tick the ones to fix (all ticked to start; ticks are kept while you search)</span></label>
           <input class="dlv-input" id="dlv-wu-search" type="text" placeholder="Type to narrow the list… (e.g. henry, or a domain)" style="margin:6px 0 0" data-act="wu-search">
@@ -5310,10 +5333,40 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     $id("dlv-wu-brk").textContent = brkParts.length ? "(" + brkParts.join(" · ") + ")" : "";
     $id("dlv-wu-search").value = "";
     const std = S.A.warmupConfig.standard || "";
-    if (std) { const p = std.split("/"); if (p[0]) $id("dlv-wu-reply").value = p[0]; if (p[1]) $id("dlv-wu-perday").value = p[1]; $id("dlv-wu-std").textContent = "Your fleet's most common setting is " + p[0] + "% reply · " + p[1] + " warm-up/day (pre-filled below)."; }
-    else $id("dlv-wu-std").textContent = "No fleet standard detected — using the Navreo default (35/day · 5 ramp-up · 38% reply).";
+    if (std) { const p = std.split("/"); if (p[0]) $id("dlv-wu-reply").value = p[0]; if (p[1]) $id("dlv-wu-perday").value = p[1]; $id("dlv-wu-std").textContent = "Suggested (house default): your fleet's most common setting is " + p[0] + "% reply · " + p[1] + " warm-up/day (pre-filled below)."; }
+    else $id("dlv-wu-std").textContent = "Suggested (house default): no fleet standard detected — using the Navreo default (35/day · 5 ramp-up · 38% reply).";
     wuPaintList();
     openModal("dlv-wu-overlay");
+    wuLoadLiveSettings();
+  }
+  // What each mailbox has RIGHT NOW, read from Smartlead at modal-open — so
+  // the user can see the truth before overwriting it (they had no way to know
+  // whether the suggestion matched what was there before). Non-blocking: the
+  // modal never waits, and a failed read says so instead of guessing.
+  function wuLoadLiveSettings() {
+    const box = $id("dlv-wu-live");
+    if (!box) return;
+    const gen = (UI.wu.liveGen = (UI.wu.liveGen || 0) + 1);
+    const emails = UI.wu.rows.map((r) => r.email).filter(Boolean).slice(0, 100);
+    if (!emails.length || !isLive()) { box.style.display = "none"; return; }
+    box.style.display = "";
+    box.innerHTML = `<span class="muted">Reading current settings live from Smartlead…</span>`;
+    fetch("/api/warmup-live", { method: "POST", headers: { "Content-Type": "application/json" },
+      credentials: "same-origin", body: JSON.stringify({ emails }) })
+      .then((r) => r.json())
+      .then((j) => {
+        if (gen !== UI.wu.liveGen) return; // modal was re-opened — stale response
+        if (!j || !j.ok) { box.innerHTML = `<span class="muted">Couldn't read live settings from Smartlead — showing the house suggestion only.</span>`; return; }
+        const when = j.read_at ? new Date(j.read_at) : new Date();
+        const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || "").split("/").pop().replace(/_/g, " ");
+        const rows = (j.rows || []).map((r) => r.error
+          ? `<div class="dlv-mb-dom">${esc(r.email)} · <span class="dlv-tag blocked">read failed</span></div>`
+          : `<div class="dlv-mb-dom">${esc(r.email)} · ${r.warmup_status === "ACTIVE" ? "warming" : `<b>warm-up OFF</b>`} · ${r.per_day != null ? r.per_day + "/day" : "—"} · ${r.reply_rate != null ? r.reply_rate + "% reply" : "—"}${r.reputation != null ? " · rep " + r.reputation + "%" : ""}</div>`).join("");
+        const miss = (j.missing || []).length ? `<div class="dlv-mb-dom muted">${j.missing.length} not found in Smartlead: ${esc(j.missing.slice(0, 3).join(", "))}${j.missing.length > 3 ? "…" : ""}</div>` : "";
+        box.innerHTML = `<div style="font-weight:600;margin-bottom:4px">Current settings — read live from Smartlead just now (${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${tz ? " " + tz : ""})</div>` +
+          `<div style="max-height:120px;overflow-y:auto">${rows}${miss}</div>`;
+      })
+      .catch(() => { if (gen === UI.wu.liveGen) box.innerHTML = `<span class="muted">Couldn't read live settings from Smartlead — showing the house suggestion only.</span>`; });
   }
   function wuKind(r) { return r.configKind === "wrong" ? "wrong settings" : "warmup off"; }
   // The rows the search currently shows — selection actions (master tickbox,
@@ -6520,12 +6573,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       toast(domain + " queued for reactivation — track it in the Tasks panel", "ok");
       paintPage();
       pollDlvJob(jobId).then((job) => {
+        const c = job.counts || {};
         if (job.status === "done") {
-          toast("Reactivated " + domain + " — " + ((job.counts && job.counts.resumed) || 0) + " mailbox(es)", "ok");
+          if (S.A.restoreErrors) delete S.A.restoreErrors[domain];
+          // resumed:0 is not a win to brag about — the server cleared the
+          // stale ledger row; say that instead of "Reactivated — 0 mailbox(es)".
+          if (c.note && !(c.resumed > 0)) toast(domain + ": " + c.note, "ok");
+          else toast("Reactivated " + domain + " — " + (c.resumed || 0) + " mailbox(es)", "ok");
         } else {
           if (prevResting != null) S.A.domainHealth.resting[domain] = prevResting;
           if (prevDue != null) S.A.domainHealth.restingDue[domain] = prevDue;
-          toast("Reactivate failed for " + domain + ": " + (job.error || job.status), "err");
+          // Keep the failure ON the row (survives the toast + a reload).
+          const msg = String((c.domain_errors && c.domain_errors[domain]) || job.error || job.status || "failed").slice(0, 160);
+          (S.A.restoreErrors = S.A.restoreErrors || {})[domain] = msg;
+          toast("Reactivate failed for " + domain + ": " + msg, "err");
         }
         invalidateMgrDh(); saveState(); paintPage();
       }).catch(() => { toast("Reactivate status unknown for " + domain + " — check the Tasks panel", "err"); });
