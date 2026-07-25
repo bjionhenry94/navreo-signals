@@ -4500,12 +4500,21 @@ def _sweep_orphan_jobs(grace_s: int):
     """
     from datetime import datetime, timedelta, timezone
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace_s)).isoformat()
+    # A row can only be reaped across owners once it is DAYS-stale — long past
+    # any rolling-deploy overlap — so the storm guards above stay intact while
+    # a dev-box orphan can't sit "running" in production's task panel forever.
+    ancient_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     try:
         from urllib.parse import quote
+        sel = ("&select=id,owner,kind,campaign_id,mode,label,auto_remove,"
+               "resume_count,auto_resumed,max_new,updated_at")
         stuck = sb("GET", "app_jobs?status=in.(running,queued)"
-                          f"&updated_at=lt.{quote(cutoff, safe='')}"
-                          "&select=id,owner,kind,campaign_id,mode,label,auto_remove,"
-                          "resume_count,auto_resumed,max_new")
+                          f"&updated_at=lt.{quote(cutoff, safe='')}" + sel)
+        # NULL updated_at rows fail every `lt.` filter (SQL: NULL < x is not
+        # true), so they were invisible to this sweep forever — the exact shape
+        # of the 2026-07-25 zombie (pool_pull 61f9e9643c, no timestamps at all).
+        stuck = (stuck or []) + (sb("GET", "app_jobs?status=in.(running,queued)"
+                                           "&updated_at=is.null" + sel) or [])
     except Exception:  # noqa: BLE001 — best-effort; never block boot or the sweeper
         return
     with JOBS_LOCK:
@@ -4513,8 +4522,11 @@ def _sweep_orphan_jobs(grace_s: int):
     for r in (stuck or []):
         owner = r.get("owner")
         mine = (owner == _SERVER_INSTANCE) or (owner is None and _ON_RENDER)
-        if not mine or r["id"] in live_here:
-            continue  # another instance's job, or genuinely running right here
+        # Ancient rows (>24h silent, or no heartbeat column at all) are dead no
+        # matter which instance wrote them — their process is long gone.
+        ancient = (r.get("updated_at") is None) or (str(r.get("updated_at")) < ancient_cutoff)
+        if (not (mine or ancient)) or r["id"] in live_here:
+            continue  # another instance's live-ish job, or genuinely running right here
         try:
             sb("PATCH", f"app_jobs?id=eq.{r['id']}",
                {"status": "interrupted",
@@ -4693,20 +4705,31 @@ _JOB_QUEUE: "_queue.Queue" = _queue.Queue()
 _JOB_WORKERS = 1
 _JOB_SEQ = [0]  # monotonic enqueue counter — lets the UI order/number the queue
 
+# Fast lane for warm-up pause/resume jobs. These are short audit-backend calls
+# with no ListMint involvement, but they used to share the single-slot queue —
+# so one hung pool/verify worker starved every Restore click into a forever-
+# "queued" job (owner report 2026-07-25: days of Restore clicks, none ran).
+# They get their own queue + dedicated dispatcher so a slow provider job can
+# never block a mailbox-state action.
+_FAST_JOB_QUEUE: "_queue.Queue" = _queue.Queue()
+_FAST_JOB_KIND_PREFIXES = ("warmup_",)
+
 
 def _enqueue_job(fn, job, args):
     """Queue a job's worker instead of spawning it immediately. The job is
     already `queued` in JOBS/app_jobs; the dispatcher flips it to running when
-    a worker slot frees."""
+    a worker slot frees. Warm-up jobs ride the fast lane (see above)."""
     with JOBS_LOCK:
         _JOB_SEQ[0] += 1
         job["queue_seq"] = _JOB_SEQ[0]
-    _JOB_QUEUE.put((fn, job, args))
+    fast = str(job.get("kind") or "").startswith(_FAST_JOB_KIND_PREFIXES)
+    (_FAST_JOB_QUEUE if fast else _JOB_QUEUE).put((fn, job, args))
 
 
-def _job_dispatcher():
+def _job_dispatcher(q: "_queue.Queue" = None):
+    q = q if q is not None else _JOB_QUEUE
     while True:
-        fn, job, args = _JOB_QUEUE.get()
+        fn, job, args = q.get()
         try:
             # Cancelled while it sat in the queue? Honour it without doing any
             # provider work — the cancel route set the flag on the queued job.
@@ -4722,7 +4745,7 @@ def _job_dispatcher():
             except Exception:  # noqa: BLE001
                 pass
         finally:
-            _JOB_QUEUE.task_done()
+            q.task_done()
 
 
 def _mv_verify_one(email: str, mv_key: str) -> str:
@@ -5673,8 +5696,12 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
     _job_started(job)
     try:
         rest = f"warmup-{op}?domain=" + quote(",".join(domains), safe="")
-        j = _deliv_backend_json("POST", rest, timeout=170)
+        j = _deliv_backend_json_retry("POST", rest, timeout=170)
         if isinstance(j, dict) and j.get("error"):
+            msg = str(j["error"])[:160]
+            with JOBS_LOCK:
+                job["counts"] = {"domains": len(domains),
+                                 "domain_errors": {d: msg for d in domains}}
             _job_finished(job, "failed", str(j["error"])[:300])
             return
         key = "paused" if op == "pause" else "resumed"
@@ -5682,12 +5709,37 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
         counts = {"domains": len(domains), key: n}
         if isinstance(j, dict) and j.get("failed"):
             counts["failed"] = j["failed"]
+        if op == "resume":
+            # The domains are no longer resting — whether boxes were actually
+            # resumed (n>0) or the audit service had nothing held (n==0, the
+            # ghost-row case: the row could never leave the In-warm-up tab
+            # because ONLY the 2-hourly bundle sweep deletes ledger rows).
+            # Clear their ledger rows now so the tab and the restore queue
+            # reconcile on the next paint instead of next sweep.
+            if n == 0:
+                counts["note"] = ("0 resumed — the audit service no longer held "
+                                  "these domain(s) as resting; cleared from the "
+                                  "restore queue.")
+            doms = _safe_domains([d.lower() for d in domains])
+            if doms and not _deliv_mock_on():
+                try:
+                    for i in range(0, len(doms), 80):
+                        sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
+                                     % ",".join(doms[i:i + 80]))
+                except Exception as e:  # noqa: BLE001 — cleanup is best-effort
+                    counts["note"] = (counts.get("note", "")
+                                      + " (ledger cleanup failed: " + str(e)[:80] + ")").strip()
+                _restore_plan_invalidate()
         with JOBS_LOCK:
             job["counts"] = counts
         log_activity("/api/warmup-job", payload={"op": op, "domains": domains[:20], **counts},
                      actor="deliverability", action="warmup_" + op, entity="domain")
         _job_finished(job, "done")
     except Exception as e:  # noqa: BLE001 — the whole point is surfacing the real failure
+        msg = str(e)[:160]
+        with JOBS_LOCK:
+            job["counts"] = {"domains": len(domains),
+                             "domain_errors": {d: msg for d in domains}}
         _job_finished(job, "failed", str(e)[:300])
 
 
@@ -5704,6 +5756,47 @@ def api_warmup_job(p: dict):
     job = _new_job("warmup_" + op, label, None)
     _enqueue_job(_warmup_job_worker, job, (job, op, domains))
     return {"job_id": job["id"]}, 202
+
+
+def api_warmup_live(p: dict):
+    """Read a handful of mailboxes' CURRENT warm-up settings straight from
+    Smartlead — the Re-enable modal shows these as ground truth next to the
+    house-default suggestion, so the user can see what a mailbox actually has
+    before overwriting it (owner report 2026-07-25: 'I don't even know if
+    that's what it was before'). Read-only; never guesses: a mailbox that
+    can't be resolved or read comes back in `missing`/with an error."""
+    from datetime import datetime, timezone
+    emails = sorted({str(e).strip().lower() for e in (p.get("emails") or [])
+                     if str(e).strip()})[:100]
+    if not emails:
+        return {"error": "missing_emails"}, 400
+    ids: dict = {}
+    try:
+        for i in range(0, len(emails), 100):
+            r = _smartlead_json("POST", "/email-accounts/tag-list",
+                                {"email_ids": emails[i:i + 100]})
+            for row in ((r or {}).get("data") or []):
+                if row.get("email_account_id") and row.get("email_id"):
+                    ids[str(row["email_id"]).lower()] = row["email_account_id"]
+    except Exception as e:  # noqa: BLE001 — resolution failure fails the read, loudly
+        return {"error": "smartlead_unreachable", "message": str(e)[:200]}, 502
+    rows, missing = [], [e for e in emails if e not in ids]
+    for e in emails:
+        if e not in ids:
+            continue
+        try:
+            acct = _smartlead_json("GET", f"/email-accounts/{ids[e]}/") or {}
+            wd = acct.get("warmup_details") or {}
+            rows.append({"email": e, "id": ids[e],
+                         "warmup_status": wd.get("status") or "INACTIVE",
+                         "per_day": wd.get("max_email_per_day"),
+                         "reply_rate": wd.get("reply_rate"),
+                         "reputation": wd.get("warmup_reputation"),
+                         "message_per_day": acct.get("message_per_day")})
+        except Exception as ex:  # noqa: BLE001 — one dead account must not kill the batch
+            rows.append({"email": e, "id": ids[e], "error": str(ex)[:120]})
+    return {"ok": True, "rows": rows, "missing": missing,
+            "read_at": datetime.now(timezone.utc).isoformat()}, 200
 
 
 def _smartlead_json(method: str, path: str, body: dict | None = None, timeout: float = 60,
@@ -11909,17 +12002,40 @@ def _deliv_bundle_run_bg_inner():
     # mirror (full fleet, daily-synced); mock mode counts its own fake fleet.
     try:
         boxes = {}
+        zero = {}
+        census_fresh = False
         if _deliv_mock_on():
             for r in (_deliv_backend_get("inboxes?view=all&batch=").get("rows") or []):
                 d = (r.get("domain") or "").lower()
                 if d:
                     boxes[d] = boxes.get(d, 0) + 1
+                    if not (r.get("cap") or 0):
+                        zero[d] = zero.get(d, 0) + 1
+            census_fresh = True
         else:
-            for r in sb_get_all("mailboxes?select=domain") or []:
+            newest = ""
+            for r in sb_get_all("mailboxes?select=domain,message_per_day,last_synced_at") or []:
                 d = (r.get("domain") or "").lower()
                 if d:
                     boxes[d] = boxes.get(d, 0) + 1
+                    if not (r.get("message_per_day") or 0):
+                        zero[d] = zero.get(d, 0) + 1
+                ts = str(r.get("last_synced_at") or "")
+                if ts > newest:
+                    newest = ts
+            # The census is only trustworthy while the nightly Smartlead sync
+            # is alive — a mirror that stopped updating days ago must never
+            # drive ledger deletes or hide rows.
+            from datetime import datetime, timedelta, timezone
+            census_fresh = bool(boxes) and newest >= (
+                datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
         out["domainBoxes"] = boxes
+        # sends-paused truth: per-domain count of cap-0 boxes across the FULL
+        # fleet (the audit backend's views truncate at 2,000 rows, so counting
+        # its rows undercounts big domains and ghosts linger). Domains absent
+        # from this map are UNKNOWN, not ghost-free — client keeps them.
+        if census_fresh:
+            out["liveZeroCap"] = zero
     except Exception as e:  # noqa: BLE001
         out["errors"]["domainBoxes"] = str(e)[:200]
     # Due-back dates for every rested domain on display — ledger-derived in
@@ -11952,9 +12068,29 @@ def _deliv_bundle_run_bg_inner():
             # truncation: a missing row must not reset a domain's clock.
             trunc = any(bool((out["views"].get(v) or {}).get("truncated"))
                         for v in ("rested", "inwarmup"))
+            # Ghost drain: a domain whose FULL-fleet census says zero cap-0
+            # boxes is not resting, whatever the (truncated) backend views or
+            # a stale ledger row claim. Ghosts leave the union AND get their
+            # own targeted ledger delete on census evidence alone — the
+            # absence-based delete below keeps its both-views-healthy gate so
+            # a flaky pull still can't mass-reset rest clocks. Domains the
+            # census doesn't know (client-workspace fleets) are untouched.
+            lz = out.get("liveZeroCap")
+            known = out.get("domainBoxes") or {}
+            ghosts = set()
+            if isinstance(lz, dict):
+                ghosts = {d for d in union_doms
+                          if known.get(d, 0) > 0 and lz.get(d, 0) == 0}
+                union_doms -= ghosts
             out["restDue"] = _deliv_resting_ledger_sync(
                 union_doms,
                 allow_delete=("rested" in out["views"]) and ("inwarmup" in out["views"]) and not trunc)
+            gdoms = _safe_domains(sorted(ghosts))
+            if gdoms and not _deliv_mock_on():
+                for gi in range(0, len(gdoms), 80):
+                    sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
+                                 % ",".join(gdoms[gi:gi + 80]))
+                _restore_plan_invalidate()
     except Exception as e:  # noqa: BLE001
         out["errors"]["restDue"] = str(e)[:200]
     # A partial refresh must not clobber keys the last complete bundle had:
@@ -11971,8 +12107,12 @@ def _deliv_bundle_run_bg_inner():
             for dkey in (str(d) for d in _DELIV_BUNDLE_WINDOWS):
                 if ("dh" + dkey) in out["errors"] and dkey in (prev.get("dh") or {}):
                     out["dh"][dkey] = prev["dh"][dkey]
-            for k in ("domainBoxes", "restDue"):
-                if k in out["errors"] and k in prev:
+            # liveZeroCap shares the domainBoxes try-block, so its failure is
+            # recorded under that error key; carry it on that signal only —
+            # a merely-stale census (key absent, no error) must NOT be revived.
+            for k, ek in (("domainBoxes", "domainBoxes"), ("restDue", "restDue"),
+                          ("liveZeroCap", "domainBoxes")):
+                if ek in out["errors"] and k in prev and k not in out:
                     out[k] = prev[k]
     ok = bool(out["views"]) or bool(out["dh"])
     err = json.dumps(out["errors"])[:300] if out["errors"] else None
@@ -12282,6 +12422,33 @@ def _deliv_backend_json(method: str, rest: str, timeout: float = 60):
                      body={} if method == "POST" else None, timeout=timeout)
 
 
+def _deliv_backend_json_retry(method: str, rest: str, timeout: float = 60,
+                              delays: tuple = (5, 15, 30)):
+    """_deliv_backend_json with backoff on the audit service's cold starts.
+
+    Render spins the service down when idle; the first call back 502/503s and
+    every warm-up job used to die on that single shot (six 502-failed
+    warmup_resume jobs in app_jobs, 2026-07-24). Gateway-shaped failures
+    (502/503/504, unreachable, timeout) retry after each delay; anything else
+    — 4xx, unconfigured, mock errors — raises immediately. A returned dict is
+    a backend-level ANSWER (even {"error": ...}) and is never retried."""
+    import socket
+    import urllib.error
+    last = None
+    for i, delay in enumerate((None,) + tuple(delays)):
+        if delay:
+            time.sleep(delay)
+        try:
+            return _deliv_backend_json(method, rest, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            if e.code not in (502, 503, 504):
+                raise
+            last = e
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as e:
+            last = e
+    raise last
+
+
 def _restore_blob() -> dict:
     _deliv_audit_restore()
     with _DELIV_AUDIT_LOCK:
@@ -12444,6 +12611,20 @@ def _restore_entries():
             entries.append({"id": "auto-" + dom.lower(), "domains": [dom],
                             "restoredDate": iso(ts - _DELIV_REST_DAYS_MS), "dueDate": iso(ts),
                             "source": "auto"})
+    # Ghost filter: an entry whose every domain has zero cap-0 boxes in the
+    # full-fleet census has nothing to restore — reminder-sourced rows can
+    # keep naming long-restored domains forever otherwise. Unknown domains
+    # (absent from the census) are kept.
+    with _DELIV_BUNDLE_LOCK:
+        _bd = _DELIV_BUNDLE.get("data") if isinstance(_DELIV_BUNDLE.get("data"), dict) else {}
+        lz = _bd.get("liveZeroCap")
+        known_boxes = _bd.get("domainBoxes") or {}
+    if isinstance(lz, dict):
+        def _ghost(d):
+            dl = str(d).lower()
+            return known_boxes.get(dl, 0) > 0 and lz.get(dl, 0) == 0
+        entries = [e for e in entries
+                   if not (e.get("domains") and all(_ghost(d) for d in e["domains"]))]
     today = date.today()
     sweep = None
     with _RESTORE_SWEEP_LOCK:
@@ -12598,7 +12779,7 @@ def api_restore_live(p: dict):
         r = {"domain": pl["domain"], "resumed": None, "attached_requested": 0,
              "verified_attached": None, "errors": []}
         try:  # 1. audit service clears rested state + restores any zeroed caps
-            wr = _deliv_backend_json("POST", "warmup-resume?domain=" + quote(pl["domain"]), timeout=90)
+            wr = _deliv_backend_json_retry("POST", "warmup-resume?domain=" + quote(pl["domain"]), timeout=90)
             r["resumed"] = (wr or {}).get("resumed") or (wr or {}).get("reactivated") or 0
         except Exception as e:  # noqa: BLE001
             r["errors"].append("warmup-resume: " + str(e)[:160])
@@ -13605,6 +13786,24 @@ class Handler(SimpleHTTPRequestHandler):
                 data = json.dumps(obj).encode()
             except (ValueError, UnicodeDecodeError):
                 pass  # non-JSON upstream reply — forward untouched
+        # A successful warmup-resume ends those domains' rest — retire their
+        # ledger rows NOW (whatever this surface: bulk "Restore all due" comes
+        # through here) instead of waiting for the 2-hourly bundle sweep. Same
+        # reconcile the warmup-job worker does; best-effort, never blocks the
+        # response.
+        if method == "POST" and status == 200 and _rest_path == "warmup-resume":
+            try:
+                from urllib.parse import parse_qs, urlparse
+                _q = parse_qs(urlparse(self.path).query)
+                _doms = _safe_domains([d.strip().lower()
+                                       for d in (_q.get("domain") or [""])[0].split(",") if d.strip()])
+                if _doms:
+                    for _i in range(0, len(_doms), 80):
+                        sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
+                                     % ",".join(_doms[_i:_i + 80]))
+                    _restore_plan_invalidate()
+            except Exception:  # noqa: BLE001 — cleanup must never break the proxy reply
+                pass
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store")
@@ -14350,6 +14549,7 @@ class Handler(SimpleHTTPRequestHandler):
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
         "/api/cron/reply-sync", "/api/notify/positive-card",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
+        "/api/warmup-live",  # read-only Smartlead read — must not nuke SWR caches
     }
 
     def do_POST(self):
@@ -14689,6 +14889,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_warmup_job(payload)
             return self._json(body, status)
+        if path == "/api/warmup-live":
+            try:
+                payload = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_warmup_live(payload)
+            return self._json(body, status)
         if path == "/api/process-new-selected":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -14989,6 +15196,8 @@ if __name__ == "__main__":
     # limit — extra jobs wait in `queued` until a worker frees.
     for _ in range(_JOB_WORKERS):
         threading.Thread(target=_job_dispatcher, daemon=True).start()
+    # Fast lane: warm-up pause/resume never wait behind a pool/verify worker.
+    threading.Thread(target=_job_dispatcher, args=(_FAST_JOB_QUEUE,), daemon=True).start()
     # Mark dead in-flight jobs 'interrupted' (never re-run — the user resumes on
     # demand): once at boot with a short grace window, then a 5-minute sweeper
     # for zombies born during deploy overlap after this boot's pass ran.
