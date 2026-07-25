@@ -3706,7 +3706,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const b = bundleData();
       if (!b || !b.views) return null;
       const v = (name) => (((b.views[name] || {}).rows) || []);
-      if (flow === "notwarming") return b.views.warmupoff ? v("warmupoff") : null;
+      // Maildoso boxes warm EXTERNALLY by design — "warmup off" is their
+      // normal state, not a problem, so they don't belong in a tab whose job
+      // is surfacing broken warm-up (owner ruling 2026-07-25). The count line
+      // still names how many are excluded so the boxes never look lost.
+      if (flow === "notwarming") return b.views.warmupoff ? v("warmupoff").filter((r) => !r.maildoso) : null;
       if (flow === "reconnect") return b.views.reconnect ? v("reconnect") : null;
       if (flow === "inwarmup") {
         if (!b.views.inwarmup && !b.views.rested) return null;
@@ -3748,7 +3752,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       return [];
     }
     const A = S.A;
-    if (flow === "notwarming") return A.inboxRows.filter((r) => r.kind === "warmupoff");
+    if (flow === "notwarming") return A.inboxRows.filter((r) => r.kind === "warmupoff" && !r.maildoso);
     if (flow === "reconnect") return A.inboxRows.filter((r) => r.kind === "reconnect");
     if (flow === "inwarmup") return A.inboxRows.filter((r) => r.kind === "ok" && (r.cap === 0 || r.rested));
     return [];
@@ -3927,7 +3931,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // states with similar names, so each chip says what its state MEANS.
     const CHIP_TIPS = {
       floor: "Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest",
-      notwarming: "Mailboxes with warmup switched OFF — nothing is rebuilding their reputation (Maildoso warms externally, by design)",
+      notwarming: "Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix. Maildoso fleets are not listed: they warm externally on Maildoso's own schedule, so warmup-off is their normal state.",
       inwarmup: "Sends held while warming — the cap is 0 so no cold sends go out. Maildoso warms externally (on its own schedule); the rest warm in Smartlead with a due-back date. Restore any of them to resume sending.",
       reconnect: "Mailboxes whose connection failed — silently sending nothing until reconnected",
     };
@@ -4112,7 +4116,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const mbxTotal = _cLz
       ? doms.reduce((s, d) => s + (_cLz[String(d).toLowerCase()] != null ? _cLz[String(d).toLowerCase()] : groups.get(d).filter((r) => !r._censusOnly).length), 0)
       : all.length;
-    if (cnt) cnt.textContent = doms.length + " domain(s) · " + mbxTotal + " mailbox(es)" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + truncNote + mgrFreshNote();
+    // The excluded Maildoso fleet is named, never silently missing: 600 boxes
+    // vanishing from "Not warming" with no explanation reads as data loss.
+    let mdNote = "";
+    if (flow === "notwarming" && isLive()) {
+      const _wo = ((((bundleData() || {}).views || {}).warmupoff || {}).rows) || [];
+      const _mdN = _wo.filter((r) => r.maildoso).length;
+      if (_mdN) mdNote = " · " + _mdN + " Maildoso mailbox(es) not listed — they warm externally on Maildoso's own schedule (warmup off there is by design)";
+    }
+    if (cnt) cnt.textContent = doms.length + " domain(s) · " + mbxTotal + " mailbox(es)" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + mdNote + truncNote + mgrFreshNote();
     // Due set from the shared reconcile() — the SAME set the Today restore
     // card headlines and the restore action acts on. Blacklist FLAGS, never
     // blocks (owner ruling 2026-07-15): blacklisted domains ARE in dueSet and
