@@ -3148,31 +3148,46 @@
         "Walk me through choosing how many to add (presets 500 / 1,000 / 2,000), tell me the estimated " +
         "email-verification credit spend BEFORE anything runs, then run the gated pull and report how many " +
         "were added, failed verification, or dropped as collisions. /pull-more-wizard";
-      var pop = document.createElement("div");
-      pop.style.cssText = "position:absolute;z-index:30;background:#fff;border:1px solid var(--border-strong);" +
-        "border-radius:12px;padding:14px;box-shadow:0 6px 24px rgba(0,0,0,.12);width:340px;max-width:92vw";
-      pop.innerHTML = '<div class="source-list-name" style="display:block;margin-bottom:6px">Add people with Claude</div>' +
-        '<textarea readonly style="width:100%;height:120px;font:12px/1.45 ui-monospace,monospace;border:1px solid var(--border-strong);border-radius:8px;padding:8px;resize:none;color:var(--fg-subtle)"></textarea>' +
-        '<button class="action-state-btn" data-copy style="background:#E8590C;color:#fff;border-color:transparent;width:100%;justify-content:center;margin-top:8px">Copy prompt</button>' +
-        '<div class="source-list-meta" style="display:block;margin-top:8px">Paste it into Claude \u2014 it confirms the amount and credit spend, runs the checked pull, and reports back here.</div>';
-      pop.querySelector("textarea").value = prompt;
-      var r = btn.getBoundingClientRect();
-      pop.style.left = Math.max(10, r.right - 350) + "px";
-      pop.style.top = (r.bottom + window.scrollY + 6) + "px";
-      document.body.appendChild(pop);
-      pop.querySelector("[data-copy]").onclick = function () {
-        var ta = pop.querySelector("textarea");
-        ta.select();
-        var ok = false;
-        try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
-        if (navigator.clipboard) navigator.clipboard.writeText(prompt).catch(function () {});
-        this.textContent = "Copied \u2014 paste into Claude";
-      };
-      setTimeout(function () {
-        document.addEventListener("click", function close(ev) {
-          if (!pop.contains(ev.target) && ev.target !== btn) { pop.remove(); document.removeEventListener("click", close); }
-        });
-      }, 0);
+      function toast(msg) {
+        var t = document.getElementById("pool-toast");
+        if (t) t.remove();
+        t = document.createElement("div");
+        t.id = "pool-toast";
+        t.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:60;" +
+          "background:#141414;color:#fff;border-radius:12px;padding:12px 18px;font-size:0.9rem;" +
+          "box-shadow:0 8px 28px rgba(0,0,0,.25);max-width:92vw;text-align:center";
+        t.textContent = msg;
+        document.body.appendChild(t);
+        setTimeout(function () { t.remove(); }, 6000);
+      }
+      function fallbackPopover() {
+        var pop = document.createElement("div");
+        pop.style.cssText = "position:absolute;z-index:30;background:#fff;border:1px solid var(--border-strong);" +
+          "border-radius:12px;padding:14px;box-shadow:0 6px 24px rgba(0,0,0,.12);width:340px;max-width:92vw";
+        pop.innerHTML = '<div class="source-list-name" style="display:block;margin-bottom:6px">Copy this, paste into Claude</div>' +
+          '<textarea readonly style="width:100%;height:120px;font:12px/1.45 ui-monospace,monospace;border:1px solid var(--border-strong);border-radius:8px;padding:8px;resize:none;color:var(--fg-subtle)"></textarea>';
+        pop.querySelector("textarea").value = prompt;
+        var r = btn.getBoundingClientRect();
+        pop.style.left = Math.max(10, r.right - 350) + "px";
+        pop.style.top = (r.bottom + window.scrollY + 6) + "px";
+        document.body.appendChild(pop);
+        pop.querySelector("textarea").select();
+        setTimeout(function () {
+          document.addEventListener("click", function close(ev) {
+            if (!pop.contains(ev.target) && ev.target !== btn) { pop.remove(); document.removeEventListener("click", close); }
+          });
+        }, 0);
+      }
+      var old = btn.textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(prompt).then(function () {
+          btn.textContent = "Copied \u2713";
+          setTimeout(function () { btn.textContent = old; }, 2500);
+          toast("Prompt copied \u2014 paste it into Claude. It confirms the amount and credit spend, then runs the checked pull.");
+        }).catch(fallbackPopover);
+      } else {
+        fallbackPopover();
+      }
     };
   }
 
