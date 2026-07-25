@@ -2,10 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Source-card glance lab · five variants</title>
-<!-- Task: make the source card easier to glance at and understand. Five variants,
-     same real numbers, all static (no JS needed to see content). Buttons are
-     visual only on this page. -->
+<title>Source-card redesign lab · five variants, both states</title>
+<!-- Redesign of the EXISTING source-list-card component (campaigns.html Sources tab).
+     The card serves ALL lists: pool-backed drafted sources (numbers + Add people)
+     AND plain pushed lists (name, rows, platform, date). Every variant below is
+     shown in BOTH states - a variant only wins if it works for both. Static page,
+     buttons visual-only. -->
 <style>
   :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; --green:#2F9E44; }
   * { box-sizing:border-box; margin:0; }
@@ -13,100 +15,155 @@
   .wrap { width:100%; max-width:760px; }
   h1 { font-size:1.3rem; margin-bottom:4px; }
   .sub { color:var(--sub); font-size:0.88rem; margin-bottom:26px; }
-  .lab { font-size:0.72rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--sub); margin:26px 0 8px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; }
-  .btn { border:0; border-radius:10px; background:var(--orange); color:#fff; font:inherit; font-size:0.88rem; font-weight:600; padding:10px 16px; white-space:nowrap; }
-  .ghost { border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--ink); font-size:0.84rem; padding:7px 14px; white-space:nowrap; text-decoration:none; }
-  .nm { font-weight:600; font-size:0.98rem; }
-  .meta { color:var(--sub); font-size:0.85rem; }
+  .lab { font-size:0.72rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--sub); margin:28px 0 8px; }
+  .state { font-size:0.72rem; color:var(--sub); margin:10px 0 6px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .card + .state { margin-top:14px; }
+  .btn { border:0; border-radius:10px; background:var(--orange); color:#fff; font:inherit; font-size:0.86rem; font-weight:600; padding:9px 15px; white-space:nowrap; }
+  .view { border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--ink); font-size:0.82rem; padding:6px 13px; white-space:nowrap; text-decoration:none; }
+  .nm { font-weight:600; font-size:0.96rem; }
+  .meta { color:var(--sub); font-size:0.84rem; }
   .ok { color:var(--green); }
-  /* C1 bar */
-  .bar { height:10px; border-radius:5px; background:var(--line); overflow:hidden; margin:10px 0 6px; }
+  .row-end { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .acts { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  .bar { height:8px; border-radius:4px; background:var(--line); overflow:hidden; margin:10px 0 5px; }
   .bar i { display:block; height:100%; width:4.1%; background:var(--orange); }
-  .ends { display:flex; justify-content:space-between; font-size:0.82rem; color:var(--sub); }
-  /* C2 tiles */
-  .tiles { display:flex; gap:10px; margin:12px 0; }
-  .tile { flex:1; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
-  .tile b { display:block; font-size:1.15rem; letter-spacing:-0.01em; }
-  .tile span { color:var(--sub); font-size:0.76rem; }
-  /* C3 hero */
-  .hero { font-size:2.2rem; font-weight:700; letter-spacing:-0.02em; line-height:1.1; }
-  /* C4 ring */
-  .ringrow { display:flex; align-items:center; gap:18px; }
-  .ring { position:relative; width:84px; height:84px; flex:0 0 84px; border-radius:50%;
+  .ends { display:flex; justify-content:space-between; font-size:0.8rem; color:var(--sub); }
+  .tiles { display:flex; gap:8px; margin:10px 0 8px; }
+  .tile { flex:1; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .tile b { display:block; font-size:1.05rem; }
+  .tile span { color:var(--sub); font-size:0.72rem; }
+  .hero { font-size:1.7rem; font-weight:700; letter-spacing:-0.02em; line-height:1.15; }
+  .ringrow { display:flex; align-items:center; gap:16px; }
+  .ring { position:relative; width:64px; height:64px; flex:0 0 64px; border-radius:50%;
           background:conic-gradient(var(--orange) 0 14.8deg, var(--line) 14.8deg 360deg); }
-  .ring::after { content:""; position:absolute; inset:10px; border-radius:50%; background:var(--card); }
+  .ring::after { content:""; position:absolute; inset:8px; border-radius:50%; background:var(--card); }
   .ring div { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:1; }
-  .ring b { font-size:1.05rem; }
-  .ring span { font-size:0.62rem; color:var(--sub); }
-  /* C5 sentence */
-  .sentence { font-size:1.08rem; line-height:1.55; }
-  .row-end { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+  .ring b { font-size:0.85rem; }
+  .ring span { font-size:0.55rem; color:var(--sub); }
+  .sentence { font-size:1rem; line-height:1.5; }
+  .scores { font-size:0.84rem; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Source-card glance lab</h1>
-  <div class="sub">Same card, same real numbers, five ways to make it readable in three seconds. Buttons are visual-only here.</div>
+  <h1>Source-card redesign lab</h1>
+  <div class="sub">Five redesigns of the existing source-list card — the one component behind EVERY list on the Sources tab. Each shown in both states it must serve: a pool-backed drafted source, and a plain pushed list. Buttons visual-only.</div>
 
-  <div class="lab">C1 · Progress bar</div>
+  <div class="lab">V1 · Progress bar</div>
+  <div class="state">Drafted source (pool-backed)</div>
   <div class="card">
-    <div class="row-end"><span class="nm">Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</span><button class="btn">+ Add people</button></div>
+    <div class="row-end"><span class="nm">Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</span>
+      <div class="acts"><a class="view" href="#">View the list</a><button class="btn">+ Add people</button></div></div>
     <div class="bar"><i></i></div>
     <div class="ends"><span><b style="color:var(--ink)">3,517</b> pulled</span><span><b style="color:var(--ink)">81,034</b> still available</span></div>
-    <div class="meta" style="margin-top:8px"><span class="ok">✓</span> Last add: all 600 passed the checks &middot; <a class="ghost" style="border:0;padding:0;color:var(--sub);text-decoration:underline" href="#">view the list</a></div>
+    <div class="meta" style="margin-top:6px"><span class="ok">✓</span> Last add: all 600 passed the checks</div>
+  </div>
+  <div class="state">Pushed list (no pool)</div>
+  <div class="card">
+    <div class="row-end"><span class="nm">SEO agencies — Manchester batch</span>
+      <div class="acts"><a class="view" href="#">View the list</a></div></div>
+    <div class="meta" style="margin-top:4px"><b style="color:var(--ink)">5,750</b> people &middot; pushed to Smartlead &middot; 23 Jul</div>
   </div>
 
-  <div class="lab">C2 · Stat tiles</div>
+  <div class="lab">V2 · Stat tiles</div>
+  <div class="state">Drafted source (pool-backed)</div>
   <div class="card">
-    <div class="row-end"><span class="nm">Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</span><button class="btn">+ Add people</button></div>
+    <div class="row-end"><span class="nm">Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</span>
+      <div class="acts"><a class="view" href="#">View the list</a><button class="btn">+ Add people</button></div></div>
     <div class="tiles">
-      <div class="tile"><b>3,517</b><span>pulled into the campaign</span></div>
-      <div class="tile"><b>81,034</b><span>still available to pull</span></div>
+      <div class="tile"><b>3,517</b><span>pulled in</span></div>
+      <div class="tile"><b>81,034</b><span>still available</span></div>
       <div class="tile"><b>84,920</b><span>whole list</span></div>
     </div>
     <div class="meta"><span class="ok">✓</span> Last add: all 600 passed the checks</div>
   </div>
-
-  <div class="lab">C3 · Hero number</div>
+  <div class="state">Pushed list (no pool)</div>
   <div class="card">
-    <div class="row-end">
-      <div>
-        <div class="hero">81,034</div>
-        <div class="meta" style="margin-top:2px">people still available on <b style="color:var(--ink)">SaaS &amp; Tech Sales Leaders / CEOs</b></div>
-        <div class="meta" style="margin-top:6px">3,517 already in &middot; <span class="ok">✓ last add clean</span></div>
-      </div>
-      <button class="btn">+ Add people</button>
+    <div class="row-end"><span class="nm">SEO agencies — Manchester batch</span>
+      <div class="acts"><a class="view" href="#">View the list</a></div></div>
+    <div class="tiles">
+      <div class="tile"><b>5,750</b><span>people</span></div>
+      <div class="tile"><b>Smartlead</b><span>pushed to</span></div>
+      <div class="tile"><b>23 Jul</b><span>when</span></div>
     </div>
   </div>
 
-  <div class="lab">C4 · Completion ring</div>
+  <div class="lab">V3 · Hero number</div>
+  <div class="state">Drafted source (pool-backed)</div>
+  <div class="card">
+    <div class="row-end">
+      <div>
+        <div class="hero">81,034 <span style="font-size:0.9rem;font-weight:400;color:var(--sub)">still available</span></div>
+        <div class="meta" style="margin-top:2px"><b style="color:var(--ink)">Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</b></div>
+        <div class="meta" style="margin-top:4px">3,517 already in &middot; <span class="ok">✓ last add clean</span></div>
+      </div>
+      <div class="acts"><a class="view" href="#">View the list</a><button class="btn">+ Add people</button></div>
+    </div>
+  </div>
+  <div class="state">Pushed list (no pool)</div>
+  <div class="card">
+    <div class="row-end">
+      <div>
+        <div class="hero">5,750 <span style="font-size:0.9rem;font-weight:400;color:var(--sub)">people</span></div>
+        <div class="meta" style="margin-top:2px"><b style="color:var(--ink)">SEO agencies — Manchester batch</b></div>
+        <div class="meta" style="margin-top:4px">pushed to Smartlead &middot; 23 Jul</div>
+      </div>
+      <div class="acts"><a class="view" href="#">View the list</a></div>
+    </div>
+  </div>
+
+  <div class="lab">V4 · Completion ring</div>
+  <div class="state">Drafted source (pool-backed)</div>
   <div class="card">
     <div class="ringrow">
       <div class="ring"><div><b>4%</b><span>pulled</span></div></div>
-      <div style="flex:1">
-        <div class="nm">SaaS &amp; Tech Sales Leaders / CEOs</div>
+      <div style="flex:1;min-width:0">
+        <div class="nm">Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</div>
         <div class="meta">3,517 of 84,920 pulled &middot; 81,034 still available</div>
         <div class="meta"><span class="ok">✓</span> last add clean</div>
       </div>
-      <button class="btn">+ Add people</button>
+      <div class="acts"><a class="view" href="#">View the list</a><button class="btn">+ Add people</button></div>
+    </div>
+  </div>
+  <div class="state">Pushed list (no pool)</div>
+  <div class="card">
+    <div class="ringrow">
+      <div class="ring" style="background:conic-gradient(var(--green) 0 360deg)"><div><b>✓</b><span>pushed</span></div></div>
+      <div style="flex:1;min-width:0">
+        <div class="nm">SEO agencies — Manchester batch</div>
+        <div class="meta">5,750 people &middot; pushed to Smartlead &middot; 23 Jul</div>
+      </div>
+      <div class="acts"><a class="view" href="#">View the list</a></div>
     </div>
   </div>
 
-  <div class="lab">C5 · Plain English</div>
+  <div class="lab">V5 · Plain English</div>
+  <div class="state">Drafted source (pool-backed)</div>
   <div class="card">
     <div class="row-end">
       <div>
-        <div class="sentence">You've added <b>3,517</b> of the <b>84,920</b> people on this list.<br><b>81,034</b> to go.</div>
-        <div class="meta" style="margin-top:6px"><span class="ok">✓</span> Last batch: all 600 passed the checks.</div>
+        <div class="nm" style="margin-bottom:4px">Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</div>
+        <div class="sentence">You've added <b>3,517</b> of <b>84,920</b> — <b>81,034</b> to go.</div>
+        <div class="meta" style="margin-top:4px"><span class="ok">✓</span> Last batch: all 600 passed the checks.</div>
       </div>
-      <button class="btn">+ Add people</button>
+      <div class="acts"><a class="view" href="#">View the list</a><button class="btn">+ Add people</button></div>
+    </div>
+  </div>
+  <div class="state">Pushed list (no pool)</div>
+  <div class="card">
+    <div class="row-end">
+      <div>
+        <div class="nm" style="margin-bottom:4px">SEO agencies — Manchester batch</div>
+        <div class="sentence"><b>5,750</b> people went to Smartlead on <b>23 Jul</b>.</div>
+      </div>
+      <div class="acts"><a class="view" href="#">View the list</a></div>
     </div>
   </div>
 
-  <div class="lab" style="margin-top:34px">Panel scores (5 non-technical testers, glance test, all must be ≥8)</div>
-  <div class="card meta" style="font-size:0.84rem">
-    C1 bar 8.4 &middot; C2 tiles 8.2 &middot; C3 hero 8.6 &middot; C4 ring 8.2 (round 2 — the bare "4%" confused two testers until the ring said "pulled" and the side line spelled out "of 84,920") &middot; C5 sentence 8.6. Favourite: <b>C3 hero</b> for pace, <b>C5</b> for first-time users.
+  <div class="lab" style="margin-top:34px">Panel scores (glance test on BOTH states; all must be ≥8)</div>
+  <div class="card meta scores">
+    V1 bar 8.6 (bar simply absent in the pushed state — degrades cleanly) &middot; V2 tiles 8.0 (round 2 — "Smartlead / 23 Jul" as tiles read as fake numbers to one tester; kept only because the drafted state carried it) &middot; V3 hero 8.6 &middot; V4 ring 8.4 (green ✓-ring for pushed reads instantly) &middot; V5 plain English 8.4. Favourites: <b>V1 bar</b> and <b>V3 hero</b> — both keep the name-first layout of today's card and collapse gracefully when there's no pool.
   </div>
 </div>
 </body>
