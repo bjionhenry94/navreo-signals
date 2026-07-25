@@ -3846,15 +3846,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const resting = (D && D.resting) || (S.A.domainHealth && S.A.domainHealth.resting) || {};
       Object.keys(rd).forEach((dom) => { if ((resting[dom] || 0) > 0 && rd[dom]) restMap[dom] = rd[dom]; });
     }
-    // Maildoso fleets are parked by design and never come due — the server
-    // bundle already filters them out of restDue; this strips them from the
-    // pre-bundle fallback map too so no surface ever counts them as due.
-    const md = new Set((((bundleData() || {}).maildosoDomains) || []).map((d) => String(d).toLowerCase()));
-    if (md.size) {
-      const clean = {};
-      Object.keys(restMap).forEach((dom) => { if (!md.has(String(dom).toLowerCase())) clean[dom] = restMap[dom]; });
-      restMap = clean;
-    }
+    // Maildoso rests count due like everyone else's — the due-back is a plain
+    // timer from when the domain was parked (owner ruling 2026-07-25), so no
+    // surface filters them out any more.
     const rec = (typeof RestoreReconcile !== "undefined" && RestoreReconcile && RestoreReconcile.reconcile) ? RestoreReconcile.reconcile : _localReconcile;
     return rec({ restDue: restMap, blacklist: blDomainSet(), now: Date.now() });
   }
@@ -4150,7 +4144,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         ? ` <b>${dueN} ${dueN === 1 ? "domain is" : "domains are"} ready to switch back on now</b> — Restore is highlighted on ${dueN === 1 ? "that row" : "those rows"}.`
         : ` Nothing is due to switch back on yet — the “Due back” column shows when each will be ready.`;
       const mdLine = anyMd
-        ? ` Maildoso domains warm up outside Smartlead on their own schedule, so their due-back shows “on Maildoso” — check Maildoso for their progress before restoring.`
+        ? ` Maildoso domains rest on the same timer as everyone else — their warm-up itself runs on Maildoso, but the due-back date counts down from when they were parked here.`
         : "";
       const ovLink = `<a data-act="dlv-subtab" data-subtab="overview" style="color:#c2410c;text-decoration:underline;cursor:pointer">Overview tab</a>`;
       capEl.innerHTML = `These are the inboxes currently warming up — quietly building sender reputation before any cold email goes out. <b>None of these ${mbxTotal} are sending right now</b>; sending is held while they warm (normal, not a fault). Inboxes that are already live aren’t listed here — see the ${ovLink} for the whole fleet.${dueLine}${mdLine}`;
@@ -4196,17 +4190,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           : (rows.filter((r) => r.cap === 0 || r.rested).length || rows.length);
         const isMaildoso = rows.some((r) => r.maildoso);
         const led = domDue(dom, rows); // real ledger/rest due-back, if any
-        const isDueNow = !isMaildoso && dueSet.has(String(dom).toLowerCase());
-        // Maildoso warms on its OWN external schedule — a local "due in Nd"
-        // countdown there is a fabricated signal, so say "external" honestly.
-        // Non-Maildoso keeps the owner ruling (2026-07-15): always a date, the
-        // pending-stamp now+7d when the ledger row hasn't landed yet — rendered
-        // calm (green "ready now" when due, never alarm-red).
-        // "on Maildoso" (not the bare word "external", which CSM testers read as
-        // broken/missing data) — a place, honestly, since there is no local timer.
-        const dueCell = isMaildoso
-          ? `<span class="dlv-tag md" title="Warms on Maildoso's own schedule — there is no local 7-day rest timer; check Maildoso for progress">on Maildoso</span>${blDomainSet().has(String(dom).toLowerCase()) ? ` <span class="dlv-tag blocked" title="This domain is on a public blacklist — restoring resumes sending from a listed domain">blacklisted</span>` : ""}`
-          : dueChipCalm(led || Date.now() + 7 * 864e5);
+        const isDueNow = dueSet.has(String(dom).toLowerCase());
+        // ONE clock for every row, Maildoso included (owner ruling 2026-07-25):
+        // the due-back is a plain timer from when the domain was parked — it
+        // was never a warm-up-reputation readout, so Maildoso gets the same
+        // date chip as everyone else (2026-07-15 ruling: always a date, the
+        // pending-stamp now+7d when the ledger row hasn't landed yet).
+        const dueCell = dueChipCalm(led || Date.now() + 7 * 864e5)
+          + (blDomainSet().has(String(dom).toLowerCase()) ? ` <span class="dlv-tag blocked" title="This domain is on a public blacklist — restoring resumes sending from a listed domain">blacklisted</span>` : "");
         // A due-now row's warm-up rest is DONE — the green "ready now" beside it
         // says so, so the status stays lean (just the hold) to avoid three tags
         // that all read the same (CSM panel note). Warming/external rows keep the
@@ -4227,18 +4218,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // quieter secondary Restore so a fast clicker can't mistake three
         // identical orange buttons for "all ready". Restore = capacity-resume
         // (resume sending), NOT a warmup re-enable — safe for Maildoso.
-        const restoreTip = isMaildoso
-          ? "Resume Smartlead sending. Only do this once Maildoso warm-up is complete (check Maildoso)."
-          : isDueNow
-            ? "Warm-up rest is complete — restore the saved daily cap and resume sending"
-            : "Not due back yet — restoring now ends its warm-up early";
-        // Put the caution ON the row (not just in a hover) so a fast clicker sees
-        // why a not-ready Restore is the quiet one — "not due yet" / "check Maildoso".
-        let actNote = isMaildoso
-          ? `<span class="dlv-mb-dom" style="margin-right:8px" title="Check Maildoso's own dashboard for warm-up progress first">check Maildoso</span>`
-          : !isDueNow
-            ? `<span class="dlv-mb-dom" style="margin-right:8px" title="Restoring now would end its warm-up early">not due yet</span>`
-            : "";
+        const restoreTip = isDueNow
+          ? "Rest timer is up — restore the saved daily cap and resume sending"
+          : "Not due back yet — restoring now ends its rest early";
+        // Put the caution ON the row (not just in a hover) so a fast clicker
+        // sees why a not-ready Restore is the quiet one.
+        let actNote = !isDueNow
+          ? `<span class="dlv-mb-dom" style="margin-right:8px" title="Restoring now would end its rest early">not due yet</span>`
+          : "";
         // A failed restore must outlive its toast: name the failure on the row
         // until a later attempt succeeds. The Restore button IS the retry.
         const rowErr = (S.A.restoreErrors || {})[dom];
@@ -4246,7 +4233,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // Carry the row's true state on the button so the confirm dialog can warn
         // correctly in BOTH live (bundle-backed) and local modes — S.A.inboxRows
         // is empty in live mode, so the handler can't re-derive it there.
-        const stAttr = isMaildoso ? ` data-md="1"` : ((led && led > Date.now()) ? ` data-due="${led}"` : "");
+        const stAttr = (led && led > Date.now()) ? ` data-due="${led}"` : "";
         action = `${actNote}<button class="btn sm ${isDueNow ? "primary" : ""}" data-act="domain-reactivate" data-domain="${esc(dom)}"${stAttr} title="${restoreTip}">Restore</button>`;
       } else { // reconnect
         const reasons = [...new Set(rows.map((r) => r.reason_category || "conn fail"))].slice(0, 2);
@@ -4265,21 +4252,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         } else if (flow === "inwarmup") {
           // Per-box status mirrors the domain vocabulary: a box is HELD when its
           // cap is 0 or it's rested, so it shows "sends paused" too. Maildoso
-          // boxes are "warming externally" with no local due timer ("external").
+          // rides the SAME rest timer as everyone else (owner ruling 2026-07-25).
           const md = !!r.maildoso;
           const held = r.cap === 0 || r.rested;
-          let dueCell;
-          if (md) {
-            dueCell = `<span class="dlv-mb-dom" title="Warms on Maildoso's own schedule">on Maildoso</span>`;
-          } else {
-            // Per-box due follows the DOMAIN's ledger date — the backend's
-            // per-mailbox restedAt is re-stamped every sweep and can't be shown.
-            // Never "—" (owner ruling 2026-07-15): ledger date, else the local
-            // fallback, else the pending entry-stamp's now+7d.
-            const rowDue = restDueFor(r.domain) || (bundleRestDue() ? null : (r.restedAt ? r.restedAt + 7 * 864e5 : null)) || Date.now() + 7 * 864e5;
-            const left = rowDue - Date.now();
-            dueCell = left <= 0 ? `<span class="dlv-tag ok" title="Ready to switch back on">ready now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`;
-          }
+          // Per-box due follows the DOMAIN's ledger date — the backend's
+          // per-mailbox restedAt is re-stamped every sweep and can't be shown.
+          // Never "—" (owner ruling 2026-07-15): ledger date, else the local
+          // fallback, else the pending entry-stamp's now+7d.
+          const rowDue = restDueFor(r.domain) || (bundleRestDue() ? null : (r.restedAt ? r.restedAt + 7 * 864e5 : null)) || Date.now() + 7 * 864e5;
+          const left = rowDue - Date.now();
+          const dueCell = left <= 0 ? `<span class="dlv-tag ok" title="Ready to switch back on">ready now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`;
           const warm = md ? "warming externally" : "warming";
           smid = `<td style="text-align:right"><span class="dlv-mb-dom">${r.cap === 0 ? "0/day" : r.cap + "/day"}</span></td><td style="text-align:right">${dueCell}</td><td><span class="dlv-mb-dom">${warm}${held ? " · sends paused" : ""}</span></td>`;
           sact = "";
@@ -6668,21 +6650,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // visible safety net on the not-ready rows). Read off the button's data-*
     // (set by the renderer) so it works in live mode too, where S.A.inboxRows is
     // empty. This only changes the confirm wording — the resume is unchanged.
-    const _isMd = !!(btn && btn.dataset && btn.dataset.md === "1");
+    // Maildoso rows use the SAME date-based caution as everyone else now
+    // (owner ruling 2026-07-25: the rest is a plain timer, not a warm-up-
+    // reputation gate — the old check-Maildoso checkbox is retired).
     const _dueTs = btn && btn.dataset && btn.dataset.due ? Number(btn.dataset.due) : 0;
     let _caution = "", _extra;
-    if (_isMd) {
-      // Maildoso warms externally — this tool can't see its progress, so the
-      // resume is gated behind a checkbox the setter must tick to confirm they
-      // checked Maildoso. A real guard, not just a note (CSM panel 2026-07-23).
-      _caution = "\n\nThis domain warms up on Maildoso, outside Smartlead. Resuming here starts Smartlead sending — only do it once Maildoso's own warm-up is complete.";
-      _extra = `<label class="small" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-top:10px"><input type="checkbox" id="dlv-confirm-extra-check" style="margin-top:2px"><span>I've checked Maildoso and its warm-up for this domain is complete.</span></label>`;
-    } else if (_dueTs && _dueTs > Date.now()) {
-      _caution = "\n\nHeads up: not due back until " + new Date(_dueTs).toLocaleDateString() + " — restoring now ends its warm-up early.";
+    if (_dueTs && _dueTs > Date.now()) {
+      _caution = "\n\nHeads up: not due back until " + new Date(_dueTs).toLocaleDateString() + " — restoring now ends its rest early.";
     }
     const ok = await dlvConfirm("Reactivate " + domain + "?\n\nRestores each mailbox to its saved daily cap and resumes sending." + _caution + "\n\nProceed?", { title: "Reactivate domain", extraHtml: _extra });
     if (!ok) return;
-    if (_isMd && !confirmExtraChecked()) { toast("Tick the box to confirm Maildoso warm-up is complete before restoring.", "err"); return; }
     if (isLive()) {
       const jobId = await submitWarmupJob("resume", [domain], btn);
       if (jobId == null) return;

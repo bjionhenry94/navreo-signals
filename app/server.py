@@ -5785,27 +5785,12 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
     _job_started(job)
     try:
         doms_all = _safe_domains([d.lower() for d in domains])
+        # Maildoso rests ride the SAME clock and the same Restore as everyone
+        # else (owner ruling 2026-07-25: the due-back is a plain timer from
+        # when we parked them, not a warm-up-reputation gate — the earlier
+        # never-resume gate is retired). The true-up below restores them to
+        # the house 15/day like any non-OUTLOOK box.
         skipped_md = []
-        if op == "resume" and doms_all and not _deliv_mock_on():
-            # Maildoso gate (owner ruling 2026-07-24): those fleets warm
-            # externally and are parked at cap 0 BY DESIGN — a resume must
-            # never touch them, whoever sends them here.
-            try:
-                md_rows = sb("GET", "mailboxes?domain=in.(%s)&smtp_host=ilike.*maildoso*&select=domain"
-                                    % ",".join(doms_all)) or []
-                md = {str(r.get("domain") or "").lower() for r in md_rows}
-                skipped_md = sorted(d for d in doms_all if d in md)
-                doms_all = [d for d in doms_all if d not in md]
-                domains = [d for d in domains if d.lower() not in md]
-            except Exception:  # noqa: BLE001 — gate is best-effort; the UI filters too
-                pass
-        if op == "resume" and not domains:
-            with JOBS_LOCK:
-                job["counts"] = {"domains": 0, "resumed": 0, "skipped_maildoso": skipped_md,
-                                 "note": "All requested domains are Maildoso — they warm "
-                                         "externally by design; nothing to resume."}
-            _job_finished(job, "done")
-            return
         rest = f"warmup-{op}?domain=" + quote(",".join(domains), safe="")
         j = _deliv_backend_json_retry("POST", rest, timeout=170)
         if isinstance(j, dict) and j.get("error"):
@@ -12314,18 +12299,14 @@ def _deliv_bundle_run_bg_inner():
                 # still deserve a rest clock — without this they render (the
                 # client synthesizes their rows) but with no due-back date,
                 # and "ledger 95 vs tab 94" style splits reappear. Maildoso
-                # stays out (parked by design, never due).
+                # included: its rest is a plain timer like everyone else's
+                # (owner ruling 2026-07-25 — due-back = parked-at + 7d, not a
+                # warm-up-reputation readout).
                 union_doms |= {d for d, n in lz.items()
-                               if n > 0 and d not in mdoms and d not in union_doms}
+                               if n > 0 and d not in union_doms}
             out["restDue"] = _deliv_resting_ledger_sync(
                 union_doms,
                 allow_delete=("rested" in out["views"]) and ("inwarmup" in out["views"]) and not trunc)
-            # Maildoso fleets warm externally and are parked at cap 0 BY DESIGN
-            # (owner ruling 2026-07-24) — they never "come due", so they must
-            # not sit on the restore clock every due-surface reads (the Today
-            # card / "Restore all due" counted 19 parked generics as due).
-            if mdoms:
-                out["restDue"] = {d: v for d, v in out["restDue"].items() if d not in mdoms}
             out["maildosoDomains"] = sorted(mdoms)
             gdoms = _safe_domains(sorted(ghosts))
             if gdoms and not _deliv_mock_on():
