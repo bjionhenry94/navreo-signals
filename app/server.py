@@ -12176,6 +12176,33 @@ def _deliv_bundle_run_bg():
             _DELIV_BUNDLE.update(running=False, error=str(e)[:300])
 
 
+_INSTANTLY_BASE = "https://api.instantly.ai/api/v2"
+
+
+def _instantly_accounts():
+    """Every sending account in the Instantly workspace — that is where the
+    Maildoso fleet actually warms (Smartlead only ever sees those boxes as
+    'warmup off / external'). v2 API, Bearer key, /accounts paginated via
+    next_starting_after. Raises when the key isn't configured so the bundle
+    records a real error instead of silently painting 'all warming'."""
+    key = KEYS.get("INSTANTLY_API_KEY")
+    if not key:
+        raise RuntimeError("INSTANTLY_API_KEY not configured on this host")
+    items, after, pages = [], None, 0
+    while True:
+        u = _INSTANTLY_BASE + "/accounts?limit=100"
+        if after:
+            u += "&starting_after=" + urllib.parse.quote(str(after))
+        d = http_json("GET", u, {"Authorization": "Bearer " + key}, timeout=45) or {}
+        batch = d.get("items") or []
+        items.extend(batch)
+        after = d.get("next_starting_after")
+        pages += 1
+        if not after or not batch or pages > 80:
+            break
+    return items
+
+
 def _deliv_bundle_run_bg_inner():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
@@ -12316,6 +12343,38 @@ def _deliv_bundle_run_bg_inner():
                 _restore_plan_invalidate()
     except Exception as e:  # noqa: BLE001
         out["errors"]["restDue"] = str(e)[:200]
+    # Instantly truth for the Maildoso fleet (owner request 2026-07-25): those
+    # boxes warm on Instantly, so the manager reads their REAL warm-up state
+    # from Instantly on every bundle refresh — per-domain aggregates for the
+    # In-warm-up rows, plus a per-box list of anything NOT warming so the
+    # Not-warming tab can surface real gaps instead of hiding the fleet.
+    if not _deliv_mock_on():
+        try:
+            idoms, inw = {}, []
+            for a in _instantly_accounts():
+                email = str(a.get("email") or "").lower()
+                dom = email.rpartition("@")[2]
+                if not dom:
+                    continue
+                g = idoms.setdefault(dom, {"boxes": 0, "warming": 0, "off": 0, "score_sum": 0.0})
+                sc = a.get("stat_warmup_score") or 0
+                g["boxes"] += 1
+                g["score_sum"] += sc
+                if a.get("warmup_status") == 1:
+                    g["warming"] += 1
+                else:
+                    g["off"] += 1
+                    inw.append({"email": email, "domain": dom, "score": sc,
+                                "status": a.get("status")})
+            out["instantly"] = {
+                "asOf": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "domains": {d: {"boxes": g["boxes"], "warming": g["warming"], "off": g["off"],
+                                "avgScore": round(g["score_sum"] / g["boxes"], 1) if g["boxes"] else 0}
+                            for d, g in idoms.items()},
+                "notWarming": inw,
+            }
+        except Exception as e:  # noqa: BLE001 — key missing / API down: keep last good data
+            out["errors"]["instantly"] = str(e)[:200]
     # A partial refresh must not clobber keys the last complete bundle had:
     # carry forward every view/window that ERRORED this sweep (keyed on error
     # presence, never on emptiness, so a legitimately-emptied view is not
@@ -12335,7 +12394,7 @@ def _deliv_bundle_run_bg_inner():
             # a merely-stale census (key absent, no error) must NOT be revived.
             for k, ek in (("domainBoxes", "domainBoxes"), ("restDue", "restDue"),
                           ("liveZeroCap", "domainBoxes"), ("liveZeroCapAsOf", "domainBoxes"),
-                          ("maildosoDomains", "domainBoxes")):
+                          ("maildosoDomains", "domainBoxes"), ("instantly", "instantly")):
                 if ek in out["errors"] and k in prev and k not in out:
                     out[k] = prev[k]
     ok = bool(out["views"]) or bool(out["dh"])
@@ -15164,6 +15223,38 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "invalid_json"}, 400)
             body, status = api_warmup_job(payload)
             return self._json(body, status)
+        if path == "/api/instantly/warmup-enable":
+            # Re-enable warm-up on Instantly boxes (the Maildoso fleet warms
+            # THERE — the Smartlead "never re-enable Maildoso warmup" ruling is
+            # Smartlead-only). Instantly's enable endpoint is idempotent and
+            # reversible; ~100 emails per upstream call.
+            try:
+                payload = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            emails = [str(x).strip().lower() for x in (payload.get("emails") or [])
+                      if "@" in str(x)]
+            if not emails:
+                return self._json({"ok": False, "error": "no_emails"}, 400)
+            ikey = KEYS.get("INSTANTLY_API_KEY")
+            if not ikey:
+                return self._json({"ok": False, "error": "not_configured",
+                                   "message": "INSTANTLY_API_KEY is not set on this host."}, 503)
+            enabled, errors = 0, []
+            for i in range(0, len(emails), 100):
+                chunk = emails[i:i + 100]
+                try:
+                    http_json("POST", _INSTANTLY_BASE + "/accounts/warmup/enable",
+                              {"Authorization": "Bearer " + ikey}, {"emails": chunk}, timeout=60)
+                    enabled += len(chunk)
+                except Exception as e:  # noqa: BLE001 — report per-chunk, never half-lie
+                    errors.append(str(e)[:120])
+            log_activity(path, {"emails": emails[:20], "requested": len(emails),
+                                "enabled": enabled, "errors": errors},
+                         action="instantly_warmup_enable", entity="mailbox")
+            return self._json({"ok": not errors, "requested": len(emails),
+                               "enabled": enabled, "errors": errors},
+                              200 if not errors else 502)
         if path == "/api/warmup-live":
             try:
                 payload = json.loads(self._post_body.decode() or "{}")

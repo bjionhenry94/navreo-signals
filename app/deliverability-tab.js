@@ -3710,7 +3710,19 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // normal state, not a problem, so they don't belong in a tab whose job
       // is surfacing broken warm-up (owner ruling 2026-07-25). The count line
       // still names how many are excluded so the boxes never look lost.
-      if (flow === "notwarming") return b.views.warmupoff ? v("warmupoff").filter((r) => !r.maildoso) : null;
+      if (flow === "notwarming") {
+        if (!b.views.warmupoff) return null;
+        const sm = v("warmupoff").filter((r) => !r.maildoso);
+        // Instantly truth (the Maildoso fleet warms THERE, not in Smartlead):
+        // any Instantly box whose warm-up is OFF is a real gap and belongs in
+        // this tab — checked live on every bundle refresh.
+        const inst = (((b.instantly || {}).notWarming) || []).map((a) => ({
+          id: "inst-" + a.email, email: a.email, domain: a.domain,
+          provider: "Instantly", instantly: true, maildoso: false,
+          tags: ["Instantly"], cap: null, warmup_status: "OFF (Instantly)",
+          score: a.score, kind: "warmupoff" }));
+        return sm.concat(inst);
+      }
       if (flow === "reconnect") return b.views.reconnect ? v("reconnect") : null;
       if (flow === "inwarmup") {
         if (!b.views.inwarmup && !b.views.rested) return null;
@@ -3786,7 +3798,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // checkbox, skipped by select-all and the domain checkbox). The fix modal's
   // own warning stays as the second net.
   function mgrRowSelectable(r) {
-    return !(UI.mgr.flow === "notwarming" && r.maildoso);
+    // Instantly rows are excluded too: the bulk Re-enable acts on SMARTLEAD
+    // warm-up — Instantly boxes have their own per-row/per-domain button.
+    return !(UI.mgr.flow === "notwarming" && (r.maildoso || r.instantly));
   }
 
   // Ledger-backed due-back dates ({domain: due_ms}) — the ONLY trustworthy
@@ -3925,7 +3939,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // states with similar names, so each chip says what its state MEANS.
     const CHIP_TIPS = {
       floor: "Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest",
-      notwarming: "Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix. Maildoso fleets are not listed: they warm externally on Maildoso's own schedule, so warmup-off is their normal state.",
+      notwarming: "Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix. Maildoso fleets warm on Instantly and are checked there live on every refresh: their boxes appear here only when Instantly says warm-up is off.",
       inwarmup: "Sends held while warming — the cap is 0 so no cold sends go out. Maildoso warms externally (on its own schedule); the rest warm in Smartlead with a due-back date. Restore any of them to resume sending.",
       reconnect: "Mailboxes whose connection failed — silently sending nothing until reconnected",
     };
@@ -4116,7 +4130,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (flow === "notwarming" && isLive()) {
       const _wo = ((((bundleData() || {}).views || {}).warmupoff || {}).rows) || [];
       const _mdN = _wo.filter((r) => r.maildoso).length;
-      if (_mdN) mdNote = " · " + _mdN + " Maildoso mailbox(es) not listed — they warm externally on Maildoso's own schedule (warmup off there is by design)";
+      if (_mdN) {
+        // The Instantly check replaces the old blind "external — by design"
+        // shrug: the fleet warms on Instantly and we now read it live.
+        const _ib = (bundleData() || {}).instantly;
+        const _iOff = _ib ? ((_ib.notWarming || []).length) : null;
+        mdNote = " · " + _mdN + " Maildoso mailbox(es) hidden from Smartlead's warmup-off list — they warm on Instantly"
+          + (_ib ? (_iOff ? ` (checked live: ${_iOff} NOT warming — listed above)` : " (checked live: all warming ✓)")
+                 : " (Instantly not reachable this refresh)");
+      }
     }
     if (cnt) cnt.textContent = doms.length + " domain(s) · " + mbxTotal + " mailbox(es)" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + mdNote + truncNote + mgrFreshNote();
     // Due set from the shared reconcile() — the SAME set the Today restore
@@ -4131,7 +4153,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (bw) {
       const n = UI.mgr.sel.size;
       if (flow === "reconnect") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reconnect">Reconnect (${n})</button>`;
-      else if (flow === "notwarming") bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reenable">Re-enable (${n})</button>`;
+      else if (flow === "notwarming") {
+        bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reenable">Re-enable (${n})</button>`;
+        // Instantly rows sit outside the Smartlead selection — one honest
+        // button re-enables warm-up for ALL of them in Instantly at once.
+        const _instN = all.filter((r) => r.instantly).length;
+        if (_instN) bw.innerHTML += ` <button class="btn sm" data-act="inst-warmup-all" title="Switch warm-up back on in Instantly for every Instantly box listed (idempotent, reversible)">Re-enable all on Instantly (${_instN})</button>`;
+      }
       else bw.innerHTML = dueN ? `<button class="btn sm primary" data-act="domain-restore-due">Restore all due (${dueN} ${dueN === 1 ? "domain" : "domains"})</button>` : "";
     }
     // Plain-English caption, always visible (no hover) — the single most-asked-
@@ -4144,7 +4172,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         ? ` <b>${dueN} ${dueN === 1 ? "domain is" : "domains are"} ready to switch back on now</b> — Restore is highlighted on ${dueN === 1 ? "that row" : "those rows"}.`
         : ` Nothing is due to switch back on yet — the “Due back” column shows when each will be ready.`;
       const mdLine = anyMd
-        ? ` Maildoso domains rest on the same timer as everyone else — their warm-up itself runs on Maildoso, but the due-back date counts down from when they were parked here.`
+        ? ` Maildoso domains rest on the same timer as everyone else — their warm-up itself runs on Instantly (shown live per row), but the due-back date counts down from when they were parked here.`
         : "";
       const ovLink = `<a data-act="dlv-subtab" data-subtab="overview" style="color:#c2410c;text-decoration:underline;cursor:pointer">Overview tab</a>`;
       capEl.innerHTML = `These are the inboxes currently warming up — quietly building sender reputation before any cold email goes out. <b>None of these ${mbxTotal} are sending right now</b>; sending is held while they warm (normal, not a fault). Inboxes that are already live aren’t listed here — see the ${ovLink} for the whole fleet.${dueLine}${mdLine}`;
@@ -4163,12 +4191,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // the view rows truncate at 2,000, so rows.length under-counts big
       // domains ("· 5 mbx" beside "sends paused (52)", tester panel finding).
       const _domBoxes = (isLive() && ((bundleData() || {}).domainBoxes || {})[String(dom).toLowerCase()]) || rows.filter((r) => !r._censusOnly).length || rows.length;
-      const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${_domBoxes} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}</div></td>`;
+      const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${_domBoxes} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}${rows.some((r) => r.instantly) ? ` <span class="dlv-tag md" title="These boxes live in the Instantly workspace">Instantly</span>` : ""}</div></td>`;
       let mid = "", action = "";
       if (flow === "notwarming") {
         const batches = [...new Set(rows.flatMap((r) => r.tags || []))].slice(0, 3);
-        mid = `<td><div class="dlv-mb-dom">${batches.join(" · ")}</div></td><td><span class="dlv-tag inactive">warmup off</span>${maildoso ? ` <span class="dlv-mb-dom">external — by design</span>` : ""}</td>`;
-        action = maildoso ? `<span class="dlv-mb-dom">no action</span>` : `<button class="btn sm" data-act="open-warmup-fix">Re-enable…</button>`;
+        const instGrp = rows.some((r) => r.instantly);
+        mid = `<td><div class="dlv-mb-dom">${batches.join(" · ")}</div></td><td><span class="dlv-tag inactive">warmup off</span>${instGrp ? ` <span class="dlv-mb-dom" title="This fleet warms on Instantly — warm-up there is OFF, which is a real gap">on Instantly — should be warming</span>` : maildoso ? ` <span class="dlv-mb-dom">external — by design</span>` : ""}</td>`;
+        action = instGrp ? `<button class="btn sm" data-act="inst-warmup-domain" data-domain="${esc(dom)}" title="Switch warm-up back on in Instantly for every listed box on ${esc(dom)} (idempotent, reversible)">Re-enable on Instantly</button>`
+          : maildoso ? `<span class="dlv-mb-dom">no action</span>` : `<button class="btn sm" data-act="open-warmup-fix">Re-enable…</button>`;
       } else if (flow === "inwarmup") {
         // ── ONE status vocabulary (inbox-status-truth-ui, 2026-07-23) ──
         // Every row in THIS view has sends HELD (cap 0 or rested), so the status
@@ -4202,8 +4232,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // says so, so the status stays lean (just the hold) to avoid three tags
         // that all read the same (CSM panel note). Warming/external rows keep the
         // warm word because it explains WHY they're held.
+        // Maildoso fleets warm on Instantly — when the bundle carries a live
+        // Instantly readout for this domain, show the REAL state (avg health
+        // score, any boxes with warm-up off) instead of a blind "externally".
+        const _iRec = isMaildoso ? (((bundleData() || {}).instantly || {}).domains || {})[String(dom).toLowerCase()] : null;
         const warmTag = isMaildoso
-          ? `<span class="dlv-tag md" title="Warm-up runs on Maildoso, outside Smartlead — Smartlead sends are held here on purpose">warming externally</span> `
+          ? (_iRec
+            ? `<span class="dlv-tag ${_iRec.off ? "blocked" : "md"}" title="Read live from Instantly at the last refresh — this fleet warms there (${_iRec.warming}/${_iRec.boxes} boxes warming, avg health score ${_iRec.avgScore})">warming on Instantly · score ${_iRec.avgScore}${_iRec.off ? ` · ${_iRec.off} NOT warming` : ""}</span> `
+            : `<span class="dlv-tag md" title="Warm-up runs on Instantly (Maildoso fleet), outside Smartlead — Smartlead sends are held here on purpose">warming externally</span> `)
           : isDueNow
             ? ``
             : `<span class="dlv-tag md" title="Warm-up is running underneath — only cold sends are held">warming</span> `;
@@ -4247,8 +4283,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const sck = selectable ? `<td class="ck">${mgrRowSelectable(r) ? `<input type="checkbox" ${UI.mgr.sel.has(key) ? "checked" : ""} data-act="mgr-row-select" data-id="${esc(key)}">` : ""}</td>` : "";
         let smid = "", sact = "";
         if (flow === "notwarming") {
-          smid = `<td><div class="dlv-mb-dom">${(r.tags || []).slice(0, 2).join(" · ")}</div></td><td><span class="dlv-mb-dom">${esc(r.warmup_status || "INACTIVE")}</span></td>`;
-          sact = r.maildoso ? "" : `<button class="btn sm" data-act="reenable-one" data-id="${esc(key)}">Re-enable</button>`;
+          smid = `<td><div class="dlv-mb-dom">${(r.tags || []).slice(0, 2).join(" · ")}</div></td><td><span class="dlv-mb-dom">${esc(r.warmup_status || "INACTIVE")}${r.instantly && r.score != null ? ` · score ${r.score}` : ""}</span></td>`;
+          sact = r.instantly ? `<button class="btn sm" data-act="inst-warmup-one" data-email="${esc(r.email)}">Re-enable (Instantly)</button>`
+            : r.maildoso ? "" : `<button class="btn sm" data-act="reenable-one" data-id="${esc(key)}">Re-enable</button>`;
         } else if (flow === "inwarmup") {
           // Per-box status mirrors the domain vocabulary: a box is HELD when its
           // cap is 0 or it's rested, so it shows "sends paused" too. Maildoso
@@ -4262,7 +4299,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           const rowDue = restDueFor(r.domain) || (bundleRestDue() ? null : (r.restedAt ? r.restedAt + 7 * 864e5 : null)) || Date.now() + 7 * 864e5;
           const left = rowDue - Date.now();
           const dueCell = left <= 0 ? `<span class="dlv-tag ok" title="Ready to switch back on">ready now</span>` : `<span class="dlv-mb-dom">in ${Math.ceil(left / 864e5)}d</span>`;
-          const warm = md ? "warming externally" : "warming";
+          const _iD = md ? (((bundleData() || {}).instantly || {}).domains || {})[String(r.domain || "").toLowerCase()] : null;
+          const warm = md ? (_iD ? `warming on Instantly (avg score ${_iD.avgScore})` : "warming externally") : "warming";
           smid = `<td style="text-align:right"><span class="dlv-mb-dom">${r.cap === 0 ? "0/day" : r.cap + "/day"}</span></td><td style="text-align:right">${dueCell}</td><td><span class="dlv-mb-dom">${warm}${held ? " · sends paused" : ""}</span></td>`;
           sact = "";
         } else {
@@ -6911,6 +6949,39 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     toast("Reconnect queued", "ok");
     paintPage();
   }
+  // Re-enable warm-up on INSTANTLY boxes (the Maildoso fleet warms there).
+  // The Smartlead "never re-enable Maildoso warmup" ruling is Smartlead-only:
+  // Instantly's enable endpoint is the fleet's normal, idempotent switch.
+  async function instantlyWarmupEnable(emails, btn) {
+    emails = (emails || []).filter(Boolean);
+    if (!emails.length) return;
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="dlv-spinner" style="width:13px;height:13px"></span>'; }
+    let j = null;
+    try {
+      const resp = await fetch("/api/instantly/warmup-enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ emails }) });
+      j = await resp.json();
+    } catch (e) { j = null; }
+    if (!j || j.ok === false) {
+      toast("Instantly re-enable failed" + (j && (j.message || (j.errors || [])[0]) ? ": " + (j.message || j.errors[0]) : ""), "err");
+      if (btn) { btn.disabled = false; btn.textContent = label || "Re-enable on Instantly"; }
+      return;
+    }
+    // Optimistic reconcile so the tab repaints honestly NOW; the next bundle
+    // refresh re-reads Instantly for the confirmed state.
+    const b = bundleData();
+    if (b && b.instantly) {
+      const set = new Set(emails.map((e) => String(e).toLowerCase()));
+      b.instantly.notWarming = (b.instantly.notWarming || []).filter((a) => !set.has(String(a.email).toLowerCase()));
+      set.forEach((em) => {
+        const rec = (b.instantly.domains || {})[em.split("@")[1]];
+        if (rec && rec.off > 0) { rec.off -= 1; rec.warming += 1; }
+      });
+    }
+    toast("Warm-up re-enabled on Instantly (" + (j.enabled != null ? j.enabled : emails.length) + " box" + (emails.length === 1 ? "" : "es") + ")", "ok");
+    paintPage();
+  }
+
   async function reenableOne(key, btn) {
     key = String(key);
     const r = mgrLocalRow(key);
@@ -7683,6 +7754,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (act === "domain-reactivate-recovered") { runAct(act, () => domainReactivateRecovered(t)); return; }
     if (act === "reconnect-one") { runAct(act, () => reconnectOne(String(t.dataset.id), t)); return; }
     if (act === "reenable-one") { runAct(act, () => reenableOne(String(t.dataset.id), t)); return; }
+    if (act === "inst-warmup-one") { runAct(act, () => instantlyWarmupEnable([String(t.dataset.email)], t)); return; }
+    if (act === "inst-warmup-domain") { runAct(act, () => instantlyWarmupEnable((rowsForFlow("notwarming") || []).filter((r) => r.instantly && r.domain === t.dataset.domain).map((r) => r.email), t)); return; }
+    if (act === "inst-warmup-all") { runAct(act, () => instantlyWarmupEnable((rowsForFlow("notwarming") || []).filter((r) => r.instantly).map((r) => r.email), t)); return; }
     if (act === "bulk-reconnect") { runAct(act, () => bulkAction("reconnect", t)); return; }
     if (act === "bulk-reenable") { runAct(act, () => bulkAction("reenable", t)); return; }
     if (act === "bulk-warmup") { runAct(act, () => bulkAction("warmup", t)); return; }
