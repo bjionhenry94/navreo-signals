@@ -891,9 +891,9 @@
      under the client/status subtitle — pulsing dot + sources · freshness ·
      people found this week. Only campaigns with live signal sources get it. */
   .row-signal {
-    display: flex; align-items: baseline; gap: 6px;
+    display: flex; align-items: center; gap: 6px;
     font-size: 0.76rem; font-weight: 600; color: var(--success);
-    margin-top: 3px; white-space: normal; /* wraps - the name column is narrow and this line must never truncate */
+    margin-top: 3px; white-space: nowrap; /* short format is sized to the column - one line, never wraps */
   }
   .sig-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex: 0 0 auto; animation: sigpulse 1.8s ease-out infinite; }
   @keyframes sigpulse {
@@ -2697,10 +2697,13 @@
   function rowSignalBit(c) {
     var s = STATE.signalsByCamp && STATE.signalsByCamp[String(c.id)];
     if (!s || !s.live) return "";
-    var bits = [s.live + " live source" + (s.live === 1 ? "" : "s")];
-    if (s.last_pull) bits.push("pulled " + sigAgo(s.last_pull));
-    if (s.week) bits.push("+" + fmtInt(s.week) + " this week");
-    return '<span class="row-signal"><i class="sig-dot"></i>' + esc(bits.join(" · ")) + "</span>";
+    /* one line, never wraps (owner ruling): sources + weekly adds only;
+       pull freshness lives in the tooltip */
+    var line = s.live + " source" + (s.live === 1 ? "" : "s") + " · +" + fmtInt(s.week || 0) + " this week";
+    var tip = s.live + " live signal source" + (s.live === 1 ? "" : "s") +
+      (s.last_pull ? " · last pulled " + sigAgo(s.last_pull) : "") +
+      " · " + fmtInt(s.week || 0) + " people found in the last 7 days";
+    return '<span class="row-signal" title="' + esc(tip) + '"><i class="sig-dot"></i>' + esc(line) + "</span>";
   }
   function loadSignalsByCamp() {
     if (STATE.signalsByCampP) return;
