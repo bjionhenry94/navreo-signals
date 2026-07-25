@@ -3762,6 +3762,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const resting = (D && D.resting) || (S.A.domainHealth && S.A.domainHealth.resting) || {};
       Object.keys(rd).forEach((dom) => { if ((resting[dom] || 0) > 0 && rd[dom]) restMap[dom] = rd[dom]; });
     }
+    // Maildoso fleets are parked by design and never come due — the server
+    // bundle already filters them out of restDue; this strips them from the
+    // pre-bundle fallback map too so no surface ever counts them as due.
+    const md = new Set((((bundleData() || {}).maildosoDomains) || []).map((d) => String(d).toLowerCase()));
+    if (md.size) {
+      const clean = {};
+      Object.keys(restMap).forEach((dom) => { if (!md.has(String(dom).toLowerCase())) clean[dom] = restMap[dom]; });
+      restMap = clean;
+    }
     const rec = (typeof RestoreReconcile !== "undefined" && RestoreReconcile && RestoreReconcile.reconcile) ? RestoreReconcile.reconcile : _localReconcile;
     return rec({ restDue: restMap, blacklist: blDomainSet(), now: Date.now() });
   }

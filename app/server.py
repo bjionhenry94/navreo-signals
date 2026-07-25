@@ -5695,6 +5695,28 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
     from urllib.parse import quote
     _job_started(job)
     try:
+        doms_all = _safe_domains([d.lower() for d in domains])
+        skipped_md = []
+        if op == "resume" and doms_all and not _deliv_mock_on():
+            # Maildoso gate (owner ruling 2026-07-24): those fleets warm
+            # externally and are parked at cap 0 BY DESIGN — a resume must
+            # never touch them, whoever sends them here.
+            try:
+                md_rows = sb("GET", "mailboxes?domain=in.(%s)&smtp_host=ilike.*maildoso*&select=domain"
+                                    % ",".join(doms_all)) or []
+                md = {str(r.get("domain") or "").lower() for r in md_rows}
+                skipped_md = sorted(d for d in doms_all if d in md)
+                doms_all = [d for d in doms_all if d not in md]
+                domains = [d for d in domains if d.lower() not in md]
+            except Exception:  # noqa: BLE001 — gate is best-effort; the UI filters too
+                pass
+        if op == "resume" and not domains:
+            with JOBS_LOCK:
+                job["counts"] = {"domains": 0, "resumed": 0, "skipped_maildoso": skipped_md,
+                                 "note": "All requested domains are Maildoso — they warm "
+                                         "externally by design; nothing to resume."}
+            _job_finished(job, "done")
+            return
         rest = f"warmup-{op}?domain=" + quote(",".join(domains), safe="")
         j = _deliv_backend_json_retry("POST", rest, timeout=170)
         if isinstance(j, dict) and j.get("error"):
@@ -5707,42 +5729,82 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
         key = "paused" if op == "pause" else "resumed"
         n = int((j or {}).get(key) or 0)
         counts = {"domains": len(domains), key: n}
+        if skipped_md:
+            counts["skipped_maildoso"] = skipped_md
         if isinstance(j, dict) and j.get("failed"):
             counts["failed"] = j["failed"]
-        doms = _safe_domains([d.lower() for d in domains])
+        doms = doms_all
+        job_status = "done"
         if op == "resume":
-            # The domains are no longer resting — whether boxes were actually
-            # resumed (n>0) or the audit service had nothing held (n==0, the
-            # ghost-row case: the row could never leave the In-warm-up tab
-            # because ONLY the 2-hourly bundle sweep deletes ledger rows).
-            # Clear their ledger rows now so the tab and the restore queue
-            # reconcile on the next paint instead of next sweep.
             if n == 0:
-                counts["note"] = ("0 resumed — the audit service no longer held "
-                                  "these domain(s) as resting; cleared from the "
-                                  "restore queue.")
+                counts["note"] = ("0 resumed by the audit service — truing up any "
+                                  "still-parked box directly in Smartlead.")
             if doms and not _deliv_mock_on():
-                try:
-                    for i in range(0, len(doms), 80):
-                        sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
-                                     % ",".join(doms[i:i + 80]))
-                except Exception as e:  # noqa: BLE001 — cleanup is best-effort
-                    counts["note"] = (counts.get("note", "")
-                                      + " (ledger cleanup failed: " + str(e)[:80] + ")").strip()
-                # Mirror reconcile: the cap-0 census reads the nightly-synced
-                # mailboxes mirror, so without this a resumed domain would keep
-                # its "sends paused" badge until tomorrow's sync. Restore the
-                # house caps (Outlook 2/day, everything else 15) — the nightly
-                # sync trues up any box the backend set differently.
+                # Verified restore (2026-07-25): the audit service resumes only
+                # the boxes ITS inventory knows, and that inventory has run far
+                # behind the fleet (it knew 1 of 22 navreodemand.digital boxes).
+                # A resume that silently misses boxes is exactly how rest clocks
+                # reset forever: the ledger row is deleted here, the boxes stay
+                # cap-0 in Smartlead, and the next sweep re-inserts the domain
+                # at "now" — the stuck-at-7d loop. So true-up every still-parked
+                # box in Smartlead DIRECTLY, and only retire the ledger row of a
+                # domain whose boxes all actually landed.
+                held = {}
                 try:
                     for i in range(0, len(doms), 40):
-                        chunk = ",".join(doms[i:i + 40])
-                        sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
-                                    "&account_type=eq.OUTLOOK" % chunk, {"message_per_day": 2})
-                        sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
-                                    "&account_type=neq.OUTLOOK" % chunk, {"message_per_day": 15})
-                except Exception:  # noqa: BLE001 — nightly sync self-corrects
-                    pass
+                        for r in sb("GET", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                           "&select=domain,smartlead_id,account_type,workspace"
+                                           % ",".join(doms[i:i + 40])) or []:
+                            held.setdefault(str(r.get("domain") or "").lower(), []).append(r)
+                except Exception as e:  # noqa: BLE001 — fall through: no rows read means
+                    counts["note"] = (counts.get("note", "")  # nothing deleted below either
+                                      + " (mirror read failed: " + str(e)[:80] + ")").strip()
+                capped, dom_errors = 0, {}
+                ok_doms = [d for d in doms if not held.get(d)]  # nothing parked → clean
+                for d, rows in held.items():
+                    errs, last = 0, ""
+                    for r in rows:
+                        cap = 2 if (r.get("account_type") == "OUTLOOK") else 15
+                        try:
+                            _smartlead_json("POST", f"/email-accounts/{r['smartlead_id']}",
+                                            {"max_email_per_day": cap},
+                                            workspace=r.get("workspace") or "navreo")
+                            capped += 1
+                        except Exception as e:  # noqa: BLE001 — keep going; report per domain
+                            errs += 1
+                            last = str(e)[:80]
+                        time.sleep(0.35)  # shared 200req/min Smartlead budget
+                    if errs:
+                        dom_errors[d] = f"{errs}/{len(rows)} box(es) failed cap restore: {last}"
+                    else:
+                        ok_doms.append(d)
+                counts["smartlead_capped"] = capped
+                if dom_errors:
+                    counts["domain_errors"] = dom_errors
+                    if not ok_doms:
+                        job_status = "failed"
+                if ok_doms:
+                    try:
+                        for i in range(0, len(ok_doms), 80):
+                            sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
+                                         % ",".join(ok_doms[i:i + 80]))
+                    except Exception as e:  # noqa: BLE001 — cleanup is best-effort
+                        counts["note"] = (counts.get("note", "")
+                                          + " (ledger cleanup failed: " + str(e)[:80] + ")").strip()
+                    # Mirror reconcile: the cap-0 census reads the nightly-synced
+                    # mailboxes mirror, so without this a resumed domain would keep
+                    # its "sends paused" badge until tomorrow's sync. Restore the
+                    # house caps (Outlook 2/day, everything else 15) — the nightly
+                    # sync trues up any box the backend set differently.
+                    try:
+                        for i in range(0, len(ok_doms), 40):
+                            chunk = ",".join(ok_doms[i:i + 40])
+                            sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                        "&account_type=eq.OUTLOOK" % chunk, {"message_per_day": 2})
+                            sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                        "&account_type=neq.OUTLOOK" % chunk, {"message_per_day": 15})
+                    except Exception:  # noqa: BLE001 — nightly sync self-corrects
+                        pass
                 _restore_plan_invalidate()
         if op == "pause" and doms and not _deliv_mock_on():
             # Symmetric freshness fix: a domain paused through the tool must
@@ -5766,7 +5828,8 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
             job["counts"] = counts
         log_activity("/api/warmup-job", payload={"op": op, "domains": domains[:20], **counts},
                      actor="deliverability", action="warmup_" + op, entity="domain")
-        _job_finished(job, "done")
+        _job_finished(job, job_status,
+                      "every domain failed its Smartlead cap restore" if job_status == "failed" else None)
     except Exception as e:  # noqa: BLE001 — the whole point is surfacing the real failure
         msg = str(e)[:160]
         with JOBS_LOCK:
@@ -12032,6 +12095,7 @@ def _deliv_bundle_run_bg_inner():
     # of "Warm up domain" BEFORE the click. The backend's inboxes endpoint
     # truncates at 2,000 rows, so live counts come from the Supabase mailboxes
     # mirror (full fleet, daily-synced); mock mode counts its own fake fleet.
+    mdoms = set()  # Maildoso-fleet domains — parked by design, never "due back"
     try:
         boxes = {}
         zero = {}
@@ -12046,12 +12110,14 @@ def _deliv_bundle_run_bg_inner():
             census_fresh = True
         else:
             newest = ""
-            for r in sb_get_all("mailboxes?select=domain,message_per_day,last_synced_at") or []:
+            for r in sb_get_all("mailboxes?select=domain,message_per_day,last_synced_at,smtp_host") or []:
                 d = (r.get("domain") or "").lower()
                 if d:
                     boxes[d] = boxes.get(d, 0) + 1
                     if not (r.get("message_per_day") or 0):
                         zero[d] = zero.get(d, 0) + 1
+                    if "maildoso" in str(r.get("smtp_host") or "").lower():
+                        mdoms.add(d)
                 ts = str(r.get("last_synced_at") or "")
                 if ts > newest:
                     newest = ts
@@ -12117,6 +12183,13 @@ def _deliv_bundle_run_bg_inner():
             out["restDue"] = _deliv_resting_ledger_sync(
                 union_doms,
                 allow_delete=("rested" in out["views"]) and ("inwarmup" in out["views"]) and not trunc)
+            # Maildoso fleets warm externally and are parked at cap 0 BY DESIGN
+            # (owner ruling 2026-07-24) — they never "come due", so they must
+            # not sit on the restore clock every due-surface reads (the Today
+            # card / "Restore all due" counted 19 parked generics as due).
+            if mdoms:
+                out["restDue"] = {d: v for d, v in out["restDue"].items() if d not in mdoms}
+            out["maildosoDomains"] = sorted(mdoms)
             gdoms = _safe_domains(sorted(ghosts))
             if gdoms and not _deliv_mock_on():
                 for gi in range(0, len(gdoms), 80):
