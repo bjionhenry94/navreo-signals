@@ -2698,9 +2698,9 @@
   function rowSignalBit(c) {
     var s = STATE.signalsByCamp && STATE.signalsByCamp[String(c.id)];
     if (!s || !s.live) return "";
-    /* one line, never wraps (owner ruling): sources + weekly adds only;
-       pull freshness lives in the tooltip */
-    var line = s.live + " source" + (s.live === 1 ? "" : "s") + " · +" + fmtInt(s.week || 0) + " this week";
+    /* one line, never wraps (owner ruling): "LIVE SIGNALS · +N this week";
+       source count + pull freshness live in the tooltip */
+    var line = "LIVE SIGNALS · +" + fmtInt(s.week || 0) + " this week";
     var tip = s.live + " live signal source" + (s.live === 1 ? "" : "s") +
       (s.last_pull ? " · last pulled " + sigAgo(s.last_pull) : "") +
       " · " + fmtInt(s.week || 0) + " people found in the last 7 days";
