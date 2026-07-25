@@ -887,6 +887,21 @@
     text-overflow: ellipsis;
   }
 
+  /* Live-signal line on the list row (P1 ship, 25 Jul 2026): its own line
+     under the client/status subtitle — pulsing dot + sources · freshness ·
+     people found this week. Only campaigns with live signal sources get it. */
+  .row-signal {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.76rem; font-weight: 600; color: var(--success);
+    margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sig-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex: 0 0 auto; animation: sigpulse 1.8s ease-out infinite; }
+  @keyframes sigpulse {
+    0% { box-shadow: 0 0 0 0 rgba(46, 125, 91, 0.45); }
+    70% { box-shadow: 0 0 0 6px rgba(46, 125, 91, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(46, 125, 91, 0); }
+  }
+
   .stat { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .stat-num {
     display: block;
@@ -2451,6 +2466,7 @@
 
     /* rows — filled by renderRows() so live status/completion controls can reshape it */
     h.push('<section aria-label="Campaigns"><div class="campaign-rows" id="campaign-rows"></div></section>');
+    loadSignalsByCamp(); // one-shot; the signal lines paint in when the rollup lands
 
     /* footer */
     h.push('<p class="footer-fine">Every number on this page comes from the live Supabase cache and the daily Smartlead sync. ' +
@@ -2674,6 +2690,26 @@
     return c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "";
   }
 
+  /* Live-signal line (P1 ship, 25 Jul 2026): "● 2 live sources · pulled 2 h
+     ago · +45 this week" under the client line. Data is the per-campaign
+     rollup on /api/signals/daily (5-min SWR server-side); one fetch fills the
+     whole list, rows repaint in place when it lands. */
+  function rowSignalBit(c) {
+    var s = STATE.signalsByCamp && STATE.signalsByCamp[String(c.id)];
+    if (!s || !s.live) return "";
+    var bits = [s.live + " live source" + (s.live === 1 ? "" : "s")];
+    if (s.last_pull) bits.push("pulled " + sigAgo(s.last_pull));
+    if (s.week) bits.push("+" + fmtInt(s.week) + " this week");
+    return '<span class="row-signal"><i class="sig-dot"></i>' + esc(bits.join(" · ")) + "</span>";
+  }
+  function loadSignalsByCamp() {
+    if (STATE.signalsByCampP) return;
+    STATE.signalsByCampP = getJSON("/api/signals/daily").then(function (j) {
+      STATE.signalsByCamp = (j && j.campaigns) || {};
+      renderRows(); // repaint in place - rows already on screen pick the line up
+    }).catch(function () { STATE.signalsByCamp = null; });
+  }
+
   function rowHTML(c) {
     var st = c.stats;
     var ringPct = (st.leads && st.sent != null) ? Math.min(100, Math.round(st.sent / (st.leads * 2) * 100)) : null;
@@ -2704,7 +2740,7 @@
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="sent &divide; (leads &times; 2)"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
       '</span>' +
-      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span></span>" +
+      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span>" + rowSignalBit(c) + "</span>" +
       '<span class="stat stat--leads"><span class="stat-num tnum">' + fmtInt(st.leads) + '</span><span class="stat-label">Leads</span></span>' +
       '<span class="stat stat--sent"><span class="stat-num tnum">' + fmtInt(st.sent) + '</span><span class="stat-label">Emails sent</span></span>' +
       '<span class="stat stat--reply"><span class="stat-num tnum">' + (st.replied != null ? fmtInt(st.replied) + (replyPct != null ? " (" + replyPct + "%)" : "") : "-") + '</span><span class="stat-label">Replies</span></span>' +
