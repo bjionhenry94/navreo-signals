@@ -5842,6 +5842,7 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
                                         "&account_type=neq.OUTLOOK" % chunk, {"message_per_day": 15})
                     except Exception:  # noqa: BLE001 — nightly sync self-corrects
                         pass
+                    _deliv_bundle_apply_action("resume", ok_doms)
                 _restore_plan_invalidate()
         if op == "pause" and doms and not _deliv_mock_on():
             # Symmetric freshness fix: a domain paused through the tool must
@@ -5868,6 +5869,7 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
                     job["counts"] = counts
             except Exception:  # noqa: BLE001 — nightly sync + bundle sweep self-correct
                 pass
+            _deliv_bundle_apply_action("pause", doms)
             _restore_plan_invalidate()
         with JOBS_LOCK:
             job["counts"] = counts
@@ -5925,6 +5927,26 @@ def api_warmup_live(p: dict):
             for row in ((r or {}).get("data") or []):
                 if row.get("email_account_id") and row.get("email_id"):
                     ids[str(row["email_id"]).lower()] = row["email_account_id"]
+        # Batch poisoning guard (tester panel 2026-07-25, reproduced 3/3): one
+        # unknown/stale address can make tag-list return NOTHING for the whole
+        # batch, and a cold first call can under-resolve — both then read as an
+        # authoritative "not found in Smartlead" for mailboxes that exist.
+        # Re-resolve the leftovers one-by-one before believing "missing".
+        unresolved = [e for e in emails if e not in ids]
+        for e in unresolved[:25]:
+            try:
+                r = _smartlead_json("POST", "/email-accounts/tag-list", {"email_ids": [e]})
+                for row in ((r or {}).get("data") or []):
+                    if row.get("email_account_id") and row.get("email_id"):
+                        ids[str(row["email_id"]).lower()] = row["email_account_id"]
+            except Exception:  # noqa: BLE001 — the batch answer stands for this one
+                pass
+        if not ids:
+            # Zero resolutions across the whole request is a failed READ, not
+            # evidence of absence — say so instead of painting "N not found".
+            return {"error": "resolution_failed",
+                    "message": "Smartlead returned no matches for any address — "
+                               "read failed, not proof the mailboxes are gone."}, 502
     except Exception as e:  # noqa: BLE001 — resolution failure fails the read, loudly
         return {"error": "smartlead_unreachable", "message": str(e)[:200]}, 502
     rows, missing = [], [e for e in emails if e not in ids]
@@ -12543,6 +12565,40 @@ _RESTORE_LEDGER_SWR = {"rows": None, "ts": 0.0}
 _RESTORE_PLAN_TTL_S = 300
 
 
+def _deliv_bundle_apply_action(op: str, doms):
+    """Surgically patch the SERVED bundle cache the moment a warm-up action
+    lands, then persist it — so a fresh page load (any session, any teammate)
+    sees the truth immediately instead of a ghost 'sends paused' row until the
+    next full rebuild (tester panel 2026-07-25: a verified 8-domain restore
+    still rendered as held+due 17 minutes later to passive viewers)."""
+    doms = [str(d).lower() for d in (doms or []) if d]
+    if not doms or _deliv_mock_on():
+        return
+    with _DELIV_BUNDLE_LOCK:
+        b = _DELIV_BUNDLE.get("data")
+        if not isinstance(b, dict) or b.get("mock"):
+            return
+        lz = b.get("liveZeroCap")
+        rd = b.get("restDue")
+        known = b.get("domainBoxes") or {}
+        for d in doms:
+            if op == "resume":
+                if isinstance(lz, dict):
+                    lz.pop(d, None)
+                if isinstance(rd, dict):
+                    rd.pop(d, None)
+            elif op == "pause":
+                if isinstance(lz, dict) and known.get(d):
+                    lz[d] = known[d]
+                if isinstance(rd, dict) and d not in rd:
+                    rd[d] = int(time.time() * 1000) + _DELIV_REST_DAYS_MS
+        snapshot = b
+    try:
+        _deliv_bundle_persist(snapshot)
+    except Exception:  # noqa: BLE001 — persistence is belt-and-braces here
+        pass
+
+
 def _restore_plan_invalidate():
     _RESTORE_REM_SWR.update(rems=None, src=None, ts=0.0)
     _RESTORE_LEDGER_SWR.update(rows=None, ts=0.0)
@@ -13979,6 +14035,7 @@ class Handler(SimpleHTTPRequestHandler):
                                     "&account_type=eq.OUTLOOK" % _ck, {"message_per_day": 2})
                         sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
                                     "&account_type=neq.OUTLOOK" % _ck, {"message_per_day": 15})
+                    _deliv_bundle_apply_action("resume", _doms)
                     _restore_plan_invalidate()
             except Exception:  # noqa: BLE001 — cleanup must never break the proxy reply
                 pass

@@ -4041,7 +4041,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     else doms.sort((a, b) => groups.get(b).length - groups.get(a).length || a.localeCompare(b));
     const selectable = flow !== "inwarmup";
     const truncNote = flowTruncated(flow) ? " · mailbox detail limited to the first 2,000 (every domain still listed)" : "";
-    if (cnt) cnt.textContent = doms.length + " domain(s) · " + all.length + " mailbox(es)" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + truncNote + mgrFreshNote();
+    // Mailbox total from the census for the In-warm-up flow — the rendered
+    // row count (all.length) under-counts when the views truncate (said
+    // "2,769" while 3,411 boxes were actually held, tester panel finding).
+    const _cLz = (flow === "inwarmup" && isLive()) ? (bundleData() || {}).liveZeroCap : null;
+    const mbxTotal = _cLz
+      ? doms.reduce((s, d) => s + (_cLz[String(d).toLowerCase()] != null ? _cLz[String(d).toLowerCase()] : groups.get(d).filter((r) => !r._censusOnly).length), 0)
+      : all.length;
+    if (cnt) cnt.textContent = doms.length + " domain(s) · " + mbxTotal + " mailbox(es)" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + truncNote + mgrFreshNote();
     // Due set from the shared reconcile() — the SAME set the Today restore
     // card headlines and the restore action acts on. Blacklist FLAGS, never
     // blocks (owner ruling 2026-07-15): blacklisted domains ARE in dueSet and
@@ -4070,7 +4077,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         ? ` Maildoso domains warm up outside Smartlead on their own schedule, so their due-back shows “on Maildoso” — check Maildoso for their progress before restoring.`
         : "";
       const ovLink = `<a data-act="dlv-subtab" data-subtab="overview" style="color:#c2410c;text-decoration:underline;cursor:pointer">Overview tab</a>`;
-      capEl.innerHTML = `These are the inboxes currently warming up — quietly building sender reputation before any cold email goes out. <b>None of these ${all.length} are sending right now</b>; sending is held while they warm (normal, not a fault). Inboxes that are already live aren’t listed here — see the ${ovLink} for the whole fleet.${dueLine}${mdLine}`;
+      capEl.innerHTML = `These are the inboxes currently warming up — quietly building sender reputation before any cold email goes out. <b>None of these ${mbxTotal} are sending right now</b>; sending is held while they warm (normal, not a fault). Inboxes that are already live aren’t listed here — see the ${ovLink} for the whole fleet.${dueLine}${mdLine}`;
     }
     const html = doms.map((dom) => {
       const rows = groups.get(dom);
@@ -4134,7 +4141,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
             ? ``
             : `<span class="dlv-tag md" title="Warm-up is running underneath — only cold sends are held">warming</span> `;
         const heldTag = `<span class="dlv-tag inactive" title="Send cap is 0 — no cold sends go out while it warms">sends paused (${heldN})</span>`;
-        mid = `<td style="text-align:right">${rows.length}</td><td style="text-align:right">${dueCell}</td>
+        // ONE number per row: the census count (same source as the badge and
+        // the "· N mbx" header) — the rendered-row count showed "1" on a
+        // synthesized row and "47" beside "(52)" on truncated ones.
+        mid = `<td style="text-align:right">${(_lzMap && _lzMap[_lzKey] != null) ? _lzMap[_lzKey] : rows.filter((r) => !r._censusOnly).length || rows.length}</td><td style="text-align:right">${dueCell}</td>
           <td>${warmTag}${heldTag}</td>`;
         // Every held row is restorable (continuity), but only a DUE-NOW row gets
         // the primary/act-now emphasis — not-yet-due and Maildoso rows get a
