@@ -893,9 +893,11 @@
   .row-signal {
     display: flex; align-items: center; gap: 6px;
     font-size: 0.76rem; font-weight: 600; color: var(--success);
-    margin-top: 3px; white-space: nowrap; /* short format is sized to the column - one line, never wraps */
-    overflow: hidden; text-overflow: ellipsis; /* only bites on very narrow windows - beats painting over the stats */
+    white-space: nowrap;
   }
+  /* full-width strip under the whole row (owner ruling: never clip) - same
+     placement trick as .badge-strip */
+  .row-summary .row-signal { grid-column: 1 / -1; margin-top: 6px; }
   .sig-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex: 0 0 auto; animation: sigpulse 1.8s ease-out infinite; }
   @keyframes sigpulse {
     0% { box-shadow: 0 0 0 0 rgba(46, 125, 91, 0.45); }
@@ -1495,6 +1497,7 @@
 
   @media (max-width: 768px) {
     .row-summary .badge-strip { order: 7; flex: 1 1 100%; margin-top: 6px; }
+    .row-summary .row-signal { order: 6; flex: 1 1 100%; margin-top: 6px; }
   }
   @media (max-width: 640px) {
     .campaign-widget-grid { grid-template-columns: 1fr; }
@@ -2744,7 +2747,7 @@
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="sent &divide; (leads &times; 2)"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
       '</span>' +
-      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span>" + rowSignalBit(c) + "</span>" +
+      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span></span>" +
       '<span class="stat stat--leads"><span class="stat-num tnum">' + fmtInt(st.leads) + '</span><span class="stat-label">Leads</span></span>' +
       '<span class="stat stat--sent"><span class="stat-num tnum">' + fmtInt(st.sent) + '</span><span class="stat-label">Emails sent</span></span>' +
       '<span class="stat stat--reply"><span class="stat-num tnum">' + (st.replied != null ? fmtInt(st.replied) + (replyPct != null ? " (" + replyPct + "%)" : "") : "-") + '</span><span class="stat-label">Replies</span></span>' +
@@ -2754,6 +2757,7 @@
       '<span class="stat stat--meetings"><span class="stat-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="stat-label">Meetings</span></span>' +
       reviewBadge +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
+      rowSignalBit(c) +
       (badges ? '<span class="badge-strip">' + badges + "</span>" : "") +
       "</a>" +
       '<div class="row-optim" id="optim-c' + esc(c.id) + '" hidden></div>' +
