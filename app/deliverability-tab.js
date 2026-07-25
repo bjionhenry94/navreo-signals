@@ -3719,7 +3719,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const inst = (((b.instantly || {}).notWarming) || []).map((a) => ({
           id: "inst-" + a.email, email: a.email, domain: a.domain,
           provider: "Instantly", instantly: true, maildoso: false,
-          tags: ["Instantly"], cap: null, warmup_status: "OFF (Instantly)",
+          tags: ["Instantly"], cap: null,
+          // -1 etc. = Instantly refuses to warm this box (its enable job
+          // silently skips it) — a different, worse state than plain OFF.
+          warmup_status: (a.warmup_status != null && a.warmup_status < 0) ? "BLOCKED (Instantly)" : "OFF (Instantly)",
+          instBlocked: a.warmup_status != null && a.warmup_status < 0,
           score: a.score, kind: "warmupoff" }));
         return sm.concat(inst);
       }
@@ -4196,7 +4200,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (flow === "notwarming") {
         const batches = [...new Set(rows.flatMap((r) => r.tags || []))].slice(0, 3);
         const instGrp = rows.some((r) => r.instantly);
-        mid = `<td><div class="dlv-mb-dom">${batches.join(" · ")}</div></td><td><span class="dlv-tag inactive">warmup off</span>${instGrp ? ` <span class="dlv-mb-dom" title="This fleet warms on Instantly — warm-up there is OFF, which is a real gap">on Instantly — should be warming</span>` : maildoso ? ` <span class="dlv-mb-dom">external — by design</span>` : ""}</td>`;
+        const instBlk = rows.some((r) => r.instBlocked);
+        mid = `<td><div class="dlv-mb-dom">${batches.join(" · ")}</div></td><td><span class="dlv-tag ${instBlk ? "blocked" : "inactive"}">${instBlk ? "warm-up blocked" : "warmup off"}</span>${instGrp ? ` <span class="dlv-mb-dom" title="${instBlk ? "Instantly refuses to warm these boxes — its enable job skips them; fix inside Instantly (receiving/connection or support)" : "This fleet warms on Instantly — warm-up there is OFF, which is a real gap"}">on Instantly — ${instBlk ? "re-enable refused, fix in Instantly" : "should be warming"}</span>` : maildoso ? ` <span class="dlv-mb-dom">external — by design</span>` : ""}</td>`;
         action = instGrp ? `<button class="btn sm" data-act="inst-warmup-domain" data-domain="${esc(dom)}" title="Switch warm-up back on in Instantly for every listed box on ${esc(dom)} (idempotent, reversible)">Re-enable on Instantly</button>`
           : maildoso ? `<span class="dlv-mb-dom">no action</span>` : `<button class="btn sm" data-act="open-warmup-fix">Re-enable…</button>`;
       } else if (flow === "inwarmup") {
@@ -6962,23 +6967,28 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const resp = await fetch("/api/instantly/warmup-enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ emails }) });
       j = await resp.json();
     } catch (e) { j = null; }
-    if (!j || j.ok === false) {
+    if (!j || (j.ok === false && !(j.enabled > 0))) {
       toast("Instantly re-enable failed" + (j && (j.message || (j.errors || [])[0]) ? ": " + (j.message || j.errors[0]) : ""), "err");
       if (btn) { btn.disabled = false; btn.textContent = label || "Re-enable on Instantly"; }
       return;
     }
-    // Optimistic reconcile so the tab repaints honestly NOW; the next bundle
-    // refresh re-reads Instantly for the confirmed state.
+    // Reconcile ONLY the boxes the server VERIFIED flipped (it re-reads each
+    // account after the enable job) — refused boxes stay listed as blocked.
     const b = bundleData();
-    if (b && b.instantly) {
-      const set = new Set(emails.map((e) => String(e).toLowerCase()));
-      b.instantly.notWarming = (b.instantly.notWarming || []).filter((a) => !set.has(String(a.email).toLowerCase()));
-      set.forEach((em) => {
+    const okSet = new Set((j.enabled_emails || []).map((e) => String(e).toLowerCase()));
+    if (b && b.instantly && okSet.size) {
+      b.instantly.notWarming = (b.instantly.notWarming || []).filter((a) => !okSet.has(String(a.email).toLowerCase()));
+      okSet.forEach((em) => {
         const rec = (b.instantly.domains || {})[em.split("@")[1]];
         if (rec && rec.off > 0) { rec.off -= 1; rec.warming += 1; }
       });
     }
-    toast("Warm-up re-enabled on Instantly (" + (j.enabled != null ? j.enabled : emails.length) + " box" + (emails.length === 1 ? "" : "es") + ")", "ok");
+    if (j.refused && j.refused.length) {
+      toast((j.enabled ? j.enabled + " re-enabled · " : "") + (j.message || j.refused.length + " refused by Instantly — fix inside Instantly"), j.enabled ? "warn" : "err");
+      if (btn) { btn.disabled = false; btn.textContent = label || "Re-enable on Instantly"; }
+    } else {
+      toast("Warm-up re-enabled on Instantly (" + (j.enabled != null ? j.enabled : emails.length) + " box" + (emails.length === 1 ? "" : "es") + ") — verified", "ok");
+    }
     paintPage();
   }
 

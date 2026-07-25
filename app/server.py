@@ -2347,9 +2347,33 @@ def _compute_signals_daily() -> dict:
     if rest:
         series.append({"id": "__other", "name": f"Other sources ({len(rest)})",
                        "counts": [sum(by_day[d].get(sid, 0) for sid in rest) for d in days]})
+    # per-campaign rollup for the campaigns-list signal line (P1 ship, 25 Jul
+    # 2026): live source count, freshest pull, people found in the last 7 days.
+    # Keyed by the Smartlead campaign id the list already renders by.
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+    week_by_src: dict = {}
+    for day in days:
+        if day >= week_ago:
+            for sid, n in by_day[day].items():
+                week_by_src[sid] = week_by_src.get(sid, 0) + n
+    campaigns: dict = {}
+    for d in drafts:
+        if str(d.get("mechanism") or d.get("type") or "").lower() not in sig_mechs:
+            continue
+        cid = str(d.get("campaign_id") or "")
+        if not cid.startswith("camp-sl-"):
+            continue
+        c = campaigns.setdefault(cid[8:], {"live": 0, "week": 0, "last_pull": None})
+        if d.get("active") is not False:
+            c["live"] += 1
+        lp = d.get("last_pull")
+        if lp and (not c["last_pull"] or str(lp) > str(c["last_pull"])):
+            c["last_pull"] = lp
+        c["week"] += week_by_src.get(str(d.get("id")), 0)
     return {"days": days,
             "all": [sum(by_day[d].values()) for d in days],
             "series": series,
+            "campaigns": campaigns,
             "asof": datetime.now(timezone.utc).isoformat()}
 
 
@@ -4342,8 +4366,18 @@ def update_source(p: dict) -> dict:
                     pr["verdict"] = p["verdict"]
                     status = "rejected" if p["verdict"] == "reject" else "qualified"
                     if p["verdict"] == "keep" and dest:
-                        push = push_prospect(pr, dest, client_id=d.get("client_id"))  # real API push, idempotent + suppression-checked
-                        sent = [k for k, v in push["tools"].items() if v.get("ok")]
+                        # mandatory ListMint gate (owner ruling 25 Jul 2026): a manual
+                        # Keep sends a real email, so it verifies like every pull path.
+                        _signal_verify_gate([pr], d.get("campaign_id"))
+                        _blocked = _sig_gate_blocks(pr)
+                        if _blocked == "bad":
+                            pr["verdict"] = "reject"
+                            status = "rejected"
+                        elif _blocked:
+                            pass  # unverified (outage) - verdict saves, push holds for autopilot retry
+                        else:
+                            push = push_prospect(pr, dest, client_id=d.get("client_id"))  # real API push, idempotent + suppression-checked
+                        sent = [k for k, v in push["tools"].items() if v.get("ok")] if push else []
                         if sent:
                             status = "pushed"
                             pushed_to = "+".join(
@@ -8832,17 +8866,98 @@ def push_prospect(pr: dict, dest: dict, client_id=None) -> dict:
     return {"ok": bool(tools) and all(v.get("ok") for v in tools.values()), "tools": tools}
 
 
+_SIG_LM_PASS = ("good", "catch_all")
+# cached people.email_verification rows carry BOTH vocabularies: normalized
+# verdicts (verify jobs / MV) and raw ListMint results (pool-pull worker).
+_SIG_LM_NORM = {"good": "good", "ok": "good", "valid": "good",
+                "catch_all": "catch_all", "catch_all_valid": "catch_all",
+                "bad": "bad", "invalid": "bad", "catch_all_invalid": "bad"}
+
+
+def _signal_verify_gate(prs: list, meter_id=None) -> None:
+    """MANDATORY ListMint gate on the signal pipeline (owner ruling 25 Jul
+    2026): every pulled lead with an email is verified before it can reach
+    outreach. Stamps pr['lm_verdict'] (good | catch_all | bad | unknown) on
+    every prospect that has an email; callers push only good/catch_all,
+    reject bad, and hold unknown for the next tick — fail-closed, so an
+    unverified email never sends, but a ListMint outage never rejects anyone.
+    60-day two-tier verdict cache first (_cached_verdicts), so retries and
+    re-pushes never re-spend credits; fresh verdicts persist through
+    _persist_verdicts and are metered in provider_usage."""
+    todo = [pr for pr in (prs or [])
+            if pr.get("email") and _SIG_LM_NORM.get(pr.get("lm_verdict") or "") is None]
+    if not todo:
+        return
+    cached = _cached_verdicts([pr["email"] for pr in todo])
+    fresh = []
+    for pr in todo:
+        hit = _SIG_LM_NORM.get(((cached.get(str(pr["email"]).lower()) or {}).get("verdict") or "").lower())
+        if hit:
+            pr["lm_verdict"] = hit
+        else:
+            fresh.append(pr)
+    if not fresh:
+        return
+    lm_key = KEYS.get("LISTMINT_API_KEY") or os.environ.get("LISTMINT_API_KEY") or ""
+    if not lm_key:
+        for pr in fresh:
+            pr["lm_verdict"] = "unknown"  # no key on this box -> nothing unverified sends
+        return
+    for i in range(0, len(fresh), _LM_CHUNK):
+        if i:
+            time.sleep(1.0)  # pace chunks - same rhythm as _listmint_pass
+        chunk = fresh[i:i + _LM_CHUNK]
+        res = _listmint_verify_batch([pr["email"] for pr in chunk], lm_key)
+        if not isinstance(res, dict):
+            res = {}
+        persist = []
+        for pr in chunk:
+            lm = res.get(pr["email"])
+            pr["lm_verdict"] = _LM_MAP.get(lm, "unknown")
+            if lm in _LM_MAP:
+                persist.append({"email": pr["email"], "verdict": _LM_MAP[lm], "lm_result": lm})
+        if persist:
+            _persist_verdicts(persist, meter_id, "listmint")
+        _meter_verify_calls("listmint", meter_id, sum(1 for pr in chunk if res.get(pr["email"])))
+
+
+def _sig_gate_blocks(pr: dict) -> str:
+    """'' = clear to push; 'bad' = reject; 'hold' = unverified, retry later.
+    Email-less prospects ride the LinkedIn route untouched by the gate."""
+    if not pr.get("email"):
+        return ""
+    v = pr.get("lm_verdict") or "unknown"
+    if v == "bad":
+        return "bad"
+    return "" if v in _SIG_LM_PASS else "hold"
+
+
 def auto_push_new_leads(src: dict) -> list:
     """Autopilot: push every un-pushed, un-rejected prospect on the source
     through the email-exclusive router. Mutates prospects (stamps + verdicts);
-    the CALLER persists the drafts file. Returns evidence rows."""
+    the CALLER persists the drafts file. Returns evidence rows. Every email
+    passes the mandatory ListMint gate before its first push."""
     dest = resolve_destination(src)
     if not (dest.get("smartlead_campaign_id") or dest.get("heyreach_list_id") or dest.get("heyreach_list_name")):
         return []
     out = []
+    _signal_verify_gate([pr for pr in (src.get("prospects") or [])
+                         if not (pr.get("pushed") or pr.get("verdict") == "reject")],
+                        src.get("campaign_id"))
     for pr in (src.get("prospects") or []):
         if pr.get("pushed") or pr.get("verdict") == "reject":
             continue
+        blocked = _sig_gate_blocks(pr)
+        if blocked == "bad":
+            pr["verdict"] = "reject"
+            if pr.get("linkedin"):
+                sb("PATCH", f"signal_leads?source_id=eq.{src['id']}&linkedin_url=eq.{pr['linkedin']}",
+                   {"status": "rejected"})
+            out.append({"name": pr.get("name"), "company": pr.get("company"), "email": pr.get("email"),
+                        "ok": False, "tools": {"verify": "email failed ListMint verification - rejected"}})
+            continue
+        if blocked:
+            continue  # unverified this tick (outage/no key) - held back, retried next tick
         push = push_prospect(pr, dest, client_id=src.get("client_id"))
         sent = [k for k, v in push["tools"].items() if v.get("ok")]
         if sent:
@@ -8941,6 +9056,7 @@ def _drain_backlog_leads(src: dict, dest: dict, seen: set, cap: int = 100) -> li
     if not isinstance(rows, list):
         return []
     out = []
+    batch = []
     for r in rows:
         lu = r.get("linkedin_url") or ""
         em = str(r.get("email") or "").lower()
@@ -8949,6 +9065,18 @@ def _drain_backlog_leads(src: dict, dest: dict, seen: set, cap: int = 100) -> li
         pr = {"name": r.get("full_name"), "email": r.get("email"), "company": r.get("company"),
               "title": r.get("title"), "domain": r.get("domain"),
               "linkedin": lu if lu.startswith("http") else "", "icebreaker": r.get("icebreaker")}
+        batch.append((r, pr))
+    _signal_verify_gate([pr for _, pr in batch], src.get("campaign_id"))
+    for r, pr in batch:
+        blocked = _sig_gate_blocks(pr)
+        if blocked == "bad":
+            sb("PATCH", f"signal_leads?id=eq.{r['id']}", {"status": "rejected"})
+            out.append({"name": pr.get("name"), "company": pr.get("company"), "email": pr.get("email"),
+                        "ok": False, "backlog": True,
+                        "tools": {"verify": "email failed ListMint verification - rejected"}})
+            continue
+        if blocked:
+            continue  # unverified this tick - stays status='new', retried next sweep
         push = push_prospect(pr, dest, client_id=src.get("client_id"))
         sent = [k for k, v in push["tools"].items() if v.get("ok")]
         if sent:
@@ -12387,7 +12515,8 @@ def _deliv_bundle_run_bg_inner():
                 else:
                     g["off"] += 1
                     inw.append({"email": email, "domain": dom, "score": sc,
-                                "status": a.get("status")})
+                                "status": a.get("status"),
+                                "warmup_status": a.get("warmup_status")})
             out["instantly"] = {
                 "asOf": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "domains": {d: {"boxes": g["boxes"], "warming": g["warming"], "off": g["off"],
@@ -15293,21 +15422,57 @@ class Handler(SimpleHTTPRequestHandler):
             if not ikey:
                 return self._json({"ok": False, "error": "not_configured",
                                    "message": "INSTANTLY_API_KEY is not set on this host."}, 503)
-            enabled, errors = 0, []
+            jobs, errors = [], []
             for i in range(0, len(emails), 100):
                 chunk = emails[i:i + 100]
                 try:
-                    http_json("POST", _INSTANTLY_BASE + "/accounts/warmup/enable",
-                              {"Authorization": "Bearer " + ikey}, {"emails": chunk}, timeout=60)
-                    enabled += len(chunk)
+                    j = http_json("POST", _INSTANTLY_BASE + "/accounts/warmup/enable",
+                                  {"Authorization": "Bearer " + ikey}, {"emails": chunk}, timeout=60)
+                    if isinstance(j, dict) and j.get("id"):
+                        jobs.append(str(j["id"]))
                 except Exception as e:  # noqa: BLE001 — report per-chunk, never half-lie
                     errors.append(str(e)[:120])
+            # Enable is an async background job AND it silently skips accounts
+            # Instantly won't warm (verified live 2026-07-25: warmup-blocked
+            # boxes come back "success" untouched). Wait for the jobs, then
+            # VERIFY per box — the response reports what actually flipped,
+            # never what was merely requested.
+            deadline = time.time() + 45
+            for jid in jobs:
+                while time.time() < deadline:
+                    try:
+                        js = http_json("GET", _INSTANTLY_BASE + "/background-jobs/" + jid,
+                                       {"Authorization": "Bearer " + ikey}, timeout=20) or {}
+                        if str(js.get("status")) in ("success", "completed", "failed"):
+                            break
+                    except Exception:  # noqa: BLE001 — verify below decides anyway
+                        break
+                    time.sleep(3)
+            flipped, refused = [], []
+            for em in emails:
+                try:
+                    a = http_json("GET", _INSTANTLY_BASE + "/accounts/" + urllib.parse.quote(em),
+                                  {"Authorization": "Bearer " + ikey}, timeout=20) or {}
+                    if a.get("warmup_status") == 1:
+                        flipped.append(em)
+                    else:
+                        refused.append({"email": em, "warmup_status": a.get("warmup_status")})
+                except Exception:  # noqa: BLE001 — unreadable = unverified, count as refused
+                    refused.append({"email": em, "warmup_status": None})
+            msg = None
+            if refused:
+                codes = ",".join(sorted({str(r["warmup_status"]) for r in refused}))
+                msg = ("Instantly refused %d box(es) — the enable job ran but warm-up stayed off "
+                       "(warmup_status %s). Those accounts are blocked from warming at Instantly's "
+                       "end and need attention inside Instantly (receiving/connection, or support)."
+                       % (len(refused), codes))
             log_activity(path, {"emails": emails[:20], "requested": len(emails),
-                                "enabled": enabled, "errors": errors},
+                                "enabled": len(flipped), "refused": len(refused),
+                                "errors": errors},
                          action="instantly_warmup_enable", entity="mailbox")
-            return self._json({"ok": not errors, "requested": len(emails),
-                               "enabled": enabled, "errors": errors},
-                              200 if not errors else 502)
+            return self._json({"ok": not errors and not refused, "requested": len(emails),
+                               "enabled": len(flipped), "enabled_emails": flipped,
+                               "refused": refused, "message": msg, "errors": errors}, 200)
         if path == "/api/warmup-live":
             try:
                 payload = json.loads(self._post_body.decode() or "{}")
