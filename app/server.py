@@ -12236,6 +12236,13 @@ def _deliv_bundle_run_bg_inner():
                 ghosts = {d for d in union_doms
                           if known.get(d, 0) > 0 and lz.get(d, 0) == 0}
                 union_doms -= ghosts
+                # Census-held domains the truncated views dropped entirely
+                # still deserve a rest clock — without this they render (the
+                # client synthesizes their rows) but with no due-back date,
+                # and "ledger 95 vs tab 94" style splits reappear. Maildoso
+                # stays out (parked by design, never due).
+                union_doms |= {d for d, n in lz.items()
+                               if n > 0 and d not in mdoms and d not in union_doms}
             out["restDue"] = _deliv_resting_ledger_sync(
                 union_doms,
                 allow_delete=("rested" in out["views"]) and ("inwarmup" in out["views"]) and not trunc)
