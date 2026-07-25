@@ -750,6 +750,58 @@ def infer_client_id(client_name: str, campaign_name: str) -> str | None:
 
 # -- report maths ------------------------------------------------------------
 
+# Short, readable audience labels for bullets. The CLIENT_CONTEXT personas are
+# full sentences ("VP/Head/Director of Sales at software dev agencies, AI
+# transformation firms, ... 51-200 employees"), which are correct for a Claude
+# prompt but unreadable inside a one-line recommendation.
+PERSONA_SHORT = {
+    "Navreo": "dev agency sales leaders",
+    "Navreo (secondary)": "property management leads",
+    "Arnic": "SaaS heads of sales",
+    "Amplifyy": "Amazon sellers",
+    "Olivia Duncan": "interior design owners",
+    "PestCo": "pest control owners",
+    "Valsoft": "vertical software founders",
+}
+
+
+def short_persona(ctx: dict) -> str:
+    """A few-word label for who this campaign targets, or "" when unknown.
+
+    The Specificity Contract (see lilly-optimiser SKILL.md) requires every
+    recommendation to name a campaign-specific object, not just a number: "the
+    SEO agency list" beats "the list". A per-campaign ICP override wins over
+    the client default; both get trimmed to a leading clause that fits a
+    bullet. Returns "" rather than a placeholder so callers can degrade to
+    plain grammar instead of emitting "the this list"."""
+    cid, client = str(ctx.get("cid")), ctx.get("client") or "Unknown"
+    override = CAMPAIGN_ICP_OVERRIDES.get(cid)
+    if override:
+        p = override.split(",")[0].split(" at ")[-1].split(" (")[0].strip().rstrip(".")
+        if p and not p.lower().startswith(("unknown", "limited context")):
+            return p if len(p) <= 34 else p[:31].rsplit(" ", 1)[0]
+    return PERSONA_SHORT.get(client, "")
+
+
+def list_label(ctx: dict) -> str:
+    """"the SaaS heads of sales list" / "the lead list" when the ICP is unknown."""
+    p = short_persona(ctx)
+    return f"the {p} list" if p else "the lead list"
+
+
+def audience_suffix(ctx: dict) -> str:
+    """" for Amazon sellers" or "" - never a dangling preposition."""
+    p = short_persona(ctx)
+    return f" for {p}" if p else ""
+
+
+def pos_txt(sent: int, positives: int) -> str:
+    """"1,022 per positive" or "no positives yet" - never the bare "inf/pos",
+    which reads like a bug on a card a CSM is meant to act on."""
+    return (f"{ratio_txt(sent, positives)} per positive" if positives > 0
+            else "no positives yet")
+
+
 def ratio(sent: int, positives: int):
     return round(sent / positives, 1) if positives > 0 else None
 
@@ -1069,9 +1121,19 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                          f"Sent {sent:,}, Leads {ctx['total_leads']:,}, Completion {comp:.0f}% "
                          f"(sent / (leads x 2)). Status: {title}."),
                      "suggested_action": title})
+        # Says WHICH list to reload and how much runway is left, not just the
+        # completion percentage (which every lifecycle card carries).
+        left = max(0, ctx["total_leads"] * EMAILS_PER_LEAD - sent)
+        runway = (f"{left:,} sends of runway left" if left
+                  else "the list is fully worked")
+        lifecycle_bullet = (
+            f"Reload {list_label(ctx)}: {runway} on "
+            f"{ctx['total_leads']:,} leads, {comp:.0f}% through."
+            if lifecycle_action == "upload_leads" else
+            f"Decide on {list_label(ctx)}: {comp:.0f}% through "
+            f"({sent:,} sent on {ctx['total_leads']:,} leads), refill it or close it.")
         actions.append({"tier": "Low", "action_type": lifecycle_action,
-                        "bullet": f"{title}: campaign is {comp:.0f}% complete "
-                                  f"({sent:,} sent against {ctx['total_leads']:,} leads x 2)."})
+                        "bullet": lifecycle_bullet})
 
     # ---- Section 4: variant analysis (only campaigns under 60% completion) --
     include_s4 = comp is None or comp < 60
@@ -1090,9 +1152,22 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                          "action_type": "replace_variants",
                          "detail": clean_text(detail),
                          "suggested_action": "Replace the offer angle across all variants"})
+            # Name the angles that are actually dying. "Draft replacement
+            # angles for every active variant" is true of every failing
+            # campaign in the book and so tells the CSM nothing (Specificity
+            # Contract S1: name the thing).
+            live_angles = [m["angle"] for vid, m in variant_index.items()
+                           if not m["is_deleted"] and (m["distribution_pct"] or 0) > 0
+                           and m.get("angle")]
+            shown = live_angles[:2]
+            angle_txt = (" and ".join(f'"{a}"' for a in shown) + " angle"
+                         + ("s" if len(shown) > 1 else "")
+                         + (f" (and {len(live_angles) - 2} more)"
+                            if len(live_angles) > 2 else "")
+                         if shown else "the offer angle on every active variant")
             actions.append({"tier": "High", "action_type": "replace_variants",
-                            "bullet": f"Whole offer failing: {sent:,} sent, 0 positives at campaign "
-                                      "level. Draft replacement angles for every active variant."})
+                            "bullet": f"Retire the {angle_txt}{audience_suffix(ctx)}: "
+                                      f"{sent:,} sent, 0 positives at campaign level."})
         else:
             # per-variant calls on judged Email 1+ variants
             failing = [v for v in judged if is_failing(v["sent"], v["positives"])]
@@ -1126,9 +1201,9 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                     for s in judged)
                 if v["positives"] == 0 and sib_performing and step_sibs_active:
                     call, a_type, prio = "Clear loser - disable", "disable_loser", "Medium"
-                    bullet = (f"Disable Email {v['seq_number']} Var {v['label']} "
-                              f"({v['sent']:,} sent, 0 positives while siblings perform). "
-                              "Disable only, never delete.")
+                    bullet = (f"Disable Var {v['label']} on Email {v['seq_number']}, its "
+                              f"\"{v['angle']}\" angle is at {v['sent']:,} sends and 0 positives "
+                              "while its siblings convert. Disable only, never delete.")
                     loser_line = (f"Email {v['seq_number']} Var {v['label']} needs disabling "
                                   f"({v['sent']:,} sent, 0 positives while siblings perform).")
                     rewrite_note = ""
@@ -1140,17 +1215,16 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                         " The follow-up copy has failed and needs rewriting."
                         if v["seq_number"] >= 2 else
                         " The copy has failed and needs rewriting.")
-                    bullet = (f"Rewrite Email {v['seq_number']} Var {v['label']} "
-                              f"({v['sent']:,} sent, {v['positives']} pos, "
-                              f"{ratio_txt(v['sent'], v['positives'])}/pos) - it is the only active "
-                              "variant on this step, so there is no sibling to absorb traffic. "
-                              "The copy has failed and needs rewriting.")
+                    bullet = (f"Rewrite Var {v['label']} on Email {v['seq_number']}, its "
+                              f"\"{v['angle']}\" angle is at {v['sent']:,} sends and "
+                              f"{pos_txt(v['sent'], v['positives'])}. It is the only active "
+                              "variant on this step, so there is no sibling to absorb traffic.")
                 else:
                     call, a_type, prio = "REPLACE", "replace_variants", "High"
                     rewrite_note = ""
-                    bullet = (f"Replace Email {v['seq_number']} Var {v['label']} "
-                              f"({v['sent']:,} sent, {v['positives']} pos, "
-                              f"{ratio_txt(v['sent'], v['positives'])}/pos - under 1 positive per 800).")
+                    bullet = (f"Swap Var {v['label']} on Email {v['seq_number']}, its "
+                              f"\"{v['angle']}\" angle is at {v['sent']:,} sends and "
+                              f"{pos_txt(v['sent'], v['positives'])} (under the 1 per 800 bar).")
                 rows.append({**row_base(ctx), "finding_type": "variant_call", "section": 4,
                              "priority": prio, "action_type": a_type,
                              "title": f"Variant call: Email {v['seq_number']} Var {v['label']}",
@@ -1177,9 +1251,10 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                              "sent": winner["sent"], "positive": winner["positives"],
                              "sent_pos_ratio": ratio(winner["sent"], winner["positives"])})
                 actions.append({"tier": "Medium", "action_type": "scale_winner",
-                                "bullet": f"Scale Email {winner['seq_number']} Var {winner['label']} "
-                                          f"(winner at {wr} sends/positive); build new variants on its "
-                                          "angle and add one challenger at 20%."})
+                                "bullet": f"Promote Var {winner['label']} on Email {winner['seq_number']}, "
+                                          f"its \"{winner['angle']}\" angle is winning at {wr} per "
+                                          f"positive on {winner['sent']:,} sends. Build the next variants "
+                                          "on it and add one challenger at 20%."})
                 winner_line = (f"Email {winner['seq_number']} Var {winner['label']} is the winner at "
                                f"{wr} sends/positive.")
             # Email 2 analysis (own row, same 800 threshold)
@@ -1197,8 +1272,10 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                                  "sent": email2["sent"], "positive": email2["positives"],
                                  "sent_pos_ratio": e2r})
                     actions.append({"tier": "High", "action_type": "replace_variants",
-                                    "bullet": f"Rewrite Email 2 ({email2['sent']:,} sent, "
-                                              f"{email2['positives']} positives past the 800-send bar)."})
+                                    "bullet": f"Rewrite the Email 2 follow-up{audience_suffix(ctx)}: "
+                                              f"{email2['sent']:,} sends, "
+                                              f"{pos_txt(email2['sent'], email2['positives'])} past the "
+                                              "800-send bar."})
                 else:
                     # flip rule: Email 2 clearly outperforming Email 1
                     e1_best = None
@@ -1237,11 +1314,14 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                          "Run lilly-list-audit to confirm the enrolled leads match the intended "
                          "persona, and check deliverability in parallel."),
                      "suggested_action": "Run lilly-list-audit + check deliverability"})
+        # Names the persona and this campaign's own reply count. The old
+        # bullet was identical on every sub-1% campaign except the percentage,
+        # which is what made 21 cards read the same (Specificity Contract).
         actions.append({"tier": "Medium", "action_type": "run_list_audit",
-                        "bullet": f"Reply rate {ctx['reply_rate']:.2f}% (under 1%): run a lead list "
-                                  "audit (lilly-list-audit) to confirm the right people are enrolled, "
-                                  "and check deliverability (spam placement, reputation, warmup) in "
-                                  "parallel."})
+                        "bullet": f"Audit {list_label(ctx)}: {ctx['replies']} replies "
+                                  f"on {sent:,} sends is {ctx['reply_rate']:.2f}%, under the 1% "
+                                  "floor. Wrong people or the spam folder; check deliverability "
+                                  "in parallel."})
 
     # ---- Section 6: variant distribution flags ------------------------------
     email2_has_null_sends = bool(email2 and email2["sent"] > 0)
@@ -1276,8 +1356,9 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
     if kill:
         slug = CLIENT_SLUG.get(ctx["client"], "unknown")
         actions.append({"tier": "High", "action_type": "kill_threshold_pivot",
-                        "bullet": (f"Kill threshold reached ({sent:,} sent, ratio "
-                                   f"{ratio_txt(sent, positives)}, threshold 15,000+ sent at 2,500+/pos). "
+                        "bullet": (f"Pivot off {short_persona(ctx) or 'this ICP'} at "
+                                   f"{pos_txt(sent, positives)} across {sent:,} sends "
+                                   f"(past the 15,000 sent at 2,500+/pos kill line). "
                                    "This ICP likely is not working. Recommend a pivot (new ICP, adjusted "
                                    "targeting, or different channel). Pausing the campaign is the only "
                                    "API-safe act; the pivot itself is CSM ideation - await CSM decision, "
