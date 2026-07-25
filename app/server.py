@@ -15172,7 +15172,11 @@ class Handler(SimpleHTTPRequestHandler):
                                                   "reason": (p or {}).get("error") or "nothing to change"},
                                          actor="cron", action="reply-caps", entity="deliverability")
                             return
-                        j = _deliv_backend_json_retry("POST", "reply-caps?mode=apply", timeout=170)
+                        # Apply is a LONG mutation (2,000+ box writes ran past
+                        # 170s on 2026-07-25) — one attempt with a wide budget,
+                        # never the retry wrapper: re-firing a timed-out apply
+                        # stacks concurrent sweeps on the backend.
+                        j = _deliv_backend_json("POST", "reply-caps?mode=apply", timeout=600)
                         log_activity("/api/cron/reply-caps",
                                      payload={"changed": (j or {}).get("changed"),
                                               "failed": (j or {}).get("failed"),
