@@ -13191,7 +13191,7 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                     "/api/cron/fleet-stats", "/api/cron/reply-sync",
+                     "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/cron/reply-caps",
                      "/api/notify/positive-card",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
@@ -14903,7 +14903,7 @@ class Handler(SimpleHTTPRequestHandler):
     _CLEAR_CACHE_EXEMPT_POST = {
         "/api/auth/login", "/api/cron/pull-all", "/api/cron/heyreach-sync",
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
-        "/api/cron/reply-sync", "/api/notify/positive-card",
+        "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/notify/positive-card",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
         "/api/warmup-live",  # read-only Smartlead read — must not nuke SWR caches
     }
@@ -14987,7 +14987,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                   "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/setter/poll",
+                   "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/setter/poll",
                    "/api/notify/positive-card"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
@@ -15024,6 +15024,37 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
                 log_activity(path, actor="cron", action="sync", entity="mailboxes")
                 threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/cron/reply-caps":
+                # Automatic reply-rate cap tiering (owner ruling 2026-07-25:
+                # "make it automatic" — the button had run once ever). Same
+                # engine and guardrails as the manual flow: preview first,
+                # apply only when it names changes; Outlook/Azure only,
+                # Maildoso excluded, resting and below-0.8% domains untouched,
+                # the backend saves its backup. Everything lands in the
+                # activity feed so cap moves are never silent.
+                def _reply_caps_bg():
+                    try:
+                        p = _deliv_backend_json_retry("POST", "reply-caps?mode=preview", timeout=150)
+                        n = int((p or {}).get("mailboxesToChange") or 0)
+                        if (isinstance(p, dict) and p.get("error")) or n == 0:
+                            log_activity("/api/cron/reply-caps",
+                                         payload={"changed": 0, "skipped": True,
+                                                  "reason": (p or {}).get("error") or "nothing to change"},
+                                         actor="cron", action="reply-caps", entity="deliverability")
+                            return
+                        j = _deliv_backend_json_retry("POST", "reply-caps?mode=apply", timeout=170)
+                        log_activity("/api/cron/reply-caps",
+                                     payload={"changed": (j or {}).get("changed"),
+                                              "failed": (j or {}).get("failed"),
+                                              "domains": (p or {}).get("domains"),
+                                              "tierCount": (p or {}).get("tierCount")},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                        _deliv_bundle_start(force=True)  # badges reflect the new caps now
+                    except Exception as e:  # noqa: BLE001 — a failed run must be visible, not fatal
+                        log_activity("/api/cron/reply-caps", payload={"error": str(e)[:200]},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                threading.Thread(target=_reply_caps_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/notify/positive-card":
                 # Categoriser → client-card hook bypass (query params only —
