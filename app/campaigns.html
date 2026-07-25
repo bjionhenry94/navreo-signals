@@ -3085,11 +3085,11 @@
           if (pool) {
             var unpulled = pool.remaining;
             return '<div class="source-list-card" data-pool="' + esc(pool.id) + '" style="display:flex;align-items:center;gap:14px">' +
-              '<div style="flex:1;min-width:0"><span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
-              '<span class="source-list-meta">' + fmtInt(pool.pulled_ok) + " pulled &middot; " + fmtInt(unpulled) +
+              '<div style="flex:1;min-width:0"><span class="source-list-name" style="display:block">' + esc(s.name || "Source") + "</span>" +
+              '<span class="source-list-meta" style="display:block;margin-top:2px">' + fmtInt(pool.pulled_ok) + " pulled &middot; " + fmtInt(unpulled) +
               " not yet pulled of " + fmtInt(pool.total_pool) +
               (s.list_id ? ' &middot; <a class="action-link" href="/app/lists.html#' + esc(s.list_id) + '">View the list</a>' : "") + "</span>" +
-              '<span class="source-list-meta" data-pool-note>' + poolNoteHTML(pool) + "</span></div>" +
+              '<span class="source-list-meta" data-pool-note style="display:block;margin-top:2px">' + poolNoteHTML(pool) + "</span></div>" +
               '<div data-pool-act style="flex:0 0 auto"></div></div>';
           }
           var n = s.total != null ? s.total : ((s.prospects || []).length || null);
