@@ -949,6 +949,9 @@
   .verdict-pill.v-red   { background: var(--danger-bg);  color: var(--danger);  border-color: var(--danger-bd); }
   .verdict-pill.v-green { background: var(--success-bg); color: var(--success); border-color: var(--success-bd); }
   .verdict-pill.v-fine  { background: transparent; color: var(--success); border-color: var(--border); font-weight: 600; }
+  /* not yet crunched: deliberately quiet, it is an absence of opinion not a verdict */
+  .verdict-pill.v-neutral { background: transparent; color: var(--fg-subtle); border-color: var(--border); font-weight: 600; }
+  .footer-updated.coverage-warn { color: var(--danger); }
 
   .chevron { width: 14px; height: 14px; color: var(--fg-subtle); justify-self: end; }
 
@@ -2021,7 +2024,11 @@
     liveCheckedAt: null, // ISO stamp of the live check
     liveLoading: false,
     liveError: false,
-    view: { tier: "all", status: "all", sort: "default", preset: "all", client: "all", q: "" }  // current list controls
+    /* status opens on "active": the list is now the WHOLE inventory (~700 rows
+       incl. hundreds of old drafts), and the campaigns anyone opens this page
+       for are the running ones. Nothing is hidden, it is one dropdown away and
+       the coverage line states every bucket's count out loud. */
+    view: { tier: "all", status: "active", sort: "default", preset: "all", client: "all", q: "" }  // current list controls
   };
   /* -- certified insight-card grammar (23 Jul 2026, panel 8.4): every card =
         hero number + its OWN chart + one insight line + one act line + why?
@@ -2151,7 +2158,9 @@
   var TAG_META = {
     decision: { tier: "decision", pill: "Needs a decision", pillClass: "v-red", badge: "badge--red" },
     watch:    { tier: "watch",    pill: "Watch",            pillClass: "v-amber", badge: "badge--amber" },
-    fine:     { tier: "fine",     pill: "Fine",             pillClass: "v-green", badge: "badge--green" }
+    fine:     { tier: "fine",     pill: "Fine",             pillClass: "v-green", badge: "badge--green" },
+    /* No crunch has reached this campaign yet. Its numbers are still real. */
+    unreviewed: { tier: "unreviewed", pill: "Not yet reviewed", pillClass: "v-neutral", badge: "badge--neutral" }
   };
   TAG_META.decide = TAG_META.decision;
   var KIND_LABEL = {
@@ -2180,7 +2189,16 @@
     ]).then(function (res) {
       STATE.insights = res[0];
       STATE.scorecard = res[1];
-      if (!STATE.insights || STATE.insights.degraded) throw new Error("insights degraded");
+      /* The inventory is what draws the rows now, so a degraded crunch cache is
+         no longer fatal: the list still renders, every row just reads "Not yet
+         reviewed". Only a missing INVENTORY can empty this page. */
+      if (!STATE.insights || STATE.insights.degraded) {
+        STATE.insights = { insights: [], track_record: [], meetings_by_campaign: {},
+                           generated_at: null, stats_updated_at: null };
+        STATE.insightsDown = true;
+      }
+      var scCount = Object.keys(((STATE.scorecard || {}).campaigns) || {}).length;
+      if (!scCount) throw new Error("campaign inventory unavailable");
       join();
       renderList();
       document.getElementById("list-loading").hidden = true;
@@ -2209,11 +2227,32 @@
       if (!r || !r.scope) return;
       (byScope[r.scope] = byScope[r.scope] || []).push(r);
     });
+    /* ROW SOURCE = the campaign inventory (campaign_scorecard), NOT the crunch
+       cache. Insights decorate a row; they no longer create one. Before this,
+       join() looped byScope, so a campaign Lilly had not written about could not
+       render at all however healthy it was: on 24 Jul 2026 that was 45 rows out
+       of 1,053 tracked campaigns, hiding 91 ACTIVE ones. Main-workspace
+       campaigns only; connected client workspaces have their own hub. */
+    var scopes = [], seenScope = {};
+    Object.keys(sc).forEach(function (id) {
+      var r = sc[id] || {};
+      if ((r.workspace || "navreo") !== "navreo") return;
+      seenScope[id] = 1; scopes.push(id);
+    });
+    /* and the other direction: an insight for something the inventory sync has
+       not caught up with yet still renders. A row is never lost to a sync lag. */
+    Object.keys(byScope).forEach(function (scope) {
+      if (scope === "book" || seenScope[scope]) return;
+      seenScope[scope] = 1; scopes.push(scope);
+    });
+    STATE.coverage = { tracked: scopes.length, reviewed: 0 };
+
     var campaigns = [];
     STATE.midSync = 0;
-    Object.keys(byScope).forEach(function (scope) {
-      if (scope === "book") return;
-      var rows = byScope[scope];
+    scopes.forEach(function (scope) {
+      var rows = byScope[scope] || [];
+      var reviewed = rows.length > 0;
+      if (reviewed) STATE.coverage.reviewed++;
       var verdict = null;
       rows.forEach(function (r) { if (r.insight_key === "verdict") verdict = r; });
       var vp = (verdict && verdict.payload) || {};
@@ -2233,7 +2272,9 @@
         completion: (vs.completion != null) ? vs.completion : null,
         source: s ? "scorecard" : "crunch"
       };
-      var tag = vp.tag || "watch";
+      /* An un-crunched campaign gets an honest neutral state, never a made-up
+         verdict: real numbers, no prose, "Not yet reviewed". */
+      var tag = reviewed ? (vp.tag || "watch") : "unreviewed";
       var meta = TAG_META[tag] || TAG_META.watch;
       var others = rows.filter(function (r) { return r.insight_key !== "verdict"; });
       /* numbers moved since the crunch wrote the prose? mark the prose */
@@ -2244,8 +2285,8 @@
         id: scope,
         name: vp.campaign_name || (s && s.name) || ("Campaign " + scope),
         slStatus: (s && s.status) || "",
-        tag: tag, tier: meta.tier,
-        pill: vp.pill || meta.pill,
+        tag: tag, tier: meta.tier, reviewed: reviewed,
+        pill: reviewed ? (vp.pill || meta.pill) : meta.pill,
         pillClass: meta.pillClass,
         teaser: vp.bold || "",
         note: vp.note || "",
@@ -2264,7 +2305,7 @@
       c.sortKey = (st.positives === 0 || st.positives == null) ? (1e12 + (st.sent || 0)) : c.ratio;
       c.client = clientOf(c);
     });
-    var tierOrder = { decision: 0, watch: 1, fine: 2 };
+    var tierOrder = { decision: 0, watch: 1, fine: 2, unreviewed: 3 };
     campaigns.sort(function (a, b) {
       if (tierOrder[a.tier] !== tierOrder[b.tier]) return tierOrder[a.tier] - tierOrder[b.tier];
       return (b.sortKey || 0) - (a.sortKey || 0);
@@ -2359,12 +2400,13 @@
       '</select></label>' +
       '<label class="status-picker"><span class="status-picker-label">Status</span>' +
       '<select class="status-select" id="status-select" aria-label="Filter by live campaign status">' +
-      '<option value="all">All statuses</option>' +
-      '<option value="active">Active</option>' +
-      '<option value="paused">Paused</option>' +
-      '<option value="completed">Completed</option>' +
-      '<option value="drafted">Draft</option>' +
-      '<option value="archived">Archived</option>' +
+      /* bound to STATE.view.status so the opening pick (active) shows selected */
+      [["all", "All statuses"], ["active", "Active"], ["paused", "Paused"],
+       ["completed", "Completed"], ["drafted", "Draft"], ["archived", "Archived"]]
+        .map(function (o) {
+          return '<option value="' + o[0] + '"' +
+            (STATE.view.status === o[0] ? " selected" : "") + ">" + o[1] + "</option>";
+        }).join("") +
       '</select></label></nav>');
 
     /* view bar — ready-made views: each one filters AND sorts in one tap */
@@ -2391,6 +2433,23 @@
       "The stat columns are always campaign lifetime; a teaser that names its own window (for example since relaunch, after a sequence re-save reset the counters) is a different counter, not a contradiction. " +
       "Ring = share of sending capacity used (sent &divide; (leads &times; 2)). Sends/positive under 1,500 is healthy; bounce above 2% is the bar. " +
       "Meetings count people, not emails: every lead with a Call Booked or Meeting Request reply in the archive, once each, however many times the thread went back and forth. Its own counter, not a Smartlead column.</p>");
+    /* Coverage guard. The list used to render only what Lilly had crunched, so a
+       campaign she had not reached was simply absent and nothing said so. Now the
+       inventory drives the rows and this line reconciles the three counts out
+       loud. Unaccounted-for is rows the inventory has that the page did not draw:
+       it must be 0, and it shouts if it is not. */
+    var cov = STATE.coverage || { tracked: 0, reviewed: 0 };
+    var drawn = (STATE.campaigns || []).length;
+    var unaccounted = Math.max(0, cov.tracked - drawn);
+    h.push('<p class="footer-updated' + (unaccounted ? " coverage-warn" : "") + '">' +
+      (unaccounted
+        ? "<strong>Coverage problem: " + fmtInt(unaccounted) + " tracked campaign" +
+          (unaccounted === 1 ? "" : "s") + " did not render. Tell Lilly in chat.</strong> "
+        : "") +
+      fmtInt(cov.tracked) + " campaigns tracked &middot; " + fmtInt(drawn) + " on this page &middot; " +
+      fmtInt(cov.reviewed) + " reviewed by Lilly &middot; " + fmtInt(unaccounted) + " unaccounted for. " +
+      "Reviewed means she has written a verdict; the rest still show their real Smartlead numbers. " +
+      "Client-workspace campaigns live in the client hub, not here.</p>");
     h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run." +
       (STATE.midSync ? " <strong>Smartlead sync in progress: " + STATE.midSync + " row" + (STATE.midSync === 1 ? "" : "s") + " showing the morning-crunch snapshot until it finishes.</strong>" : "") + "</p>");
 
@@ -2405,8 +2464,18 @@
   /* live status bucket for a campaign from the LIVE Smartlead check */
   function liveBucket(id) {
     var ls = STATE.liveStatus && STATE.liveStatus[id];
-    if (!ls || !ls.status) return "unknown";
-    var s = String(ls.status).toUpperCase();
+    var raw = (ls && ls.status) ? String(ls.status) : "";
+    /* The live check is hard-capped at 150 ids server-side so one page load
+       cannot stampede Smartlead. With the full inventory on the list most rows
+       will not have a live answer, so fall back to the synced status rather than
+       dumping them in "unknown" and emptying the Status filter. The row chip
+       already says which is live (it carries a dot) and which is cached. */
+    if (!raw) {
+      var c = STATE.byId && STATE.byId[id];
+      raw = (c && c.slStatus) || "";
+    }
+    if (!raw) return "unknown";
+    var s = raw.toUpperCase();
     if (s.indexOf("COMPLET") !== -1) return "completed";
     if (s.indexOf("ARCHIV") !== -1) return "archived";
     if (s.indexOf("DRAFT") !== -1) return "drafted";
@@ -2450,7 +2519,12 @@
     if (flat) {
       visible.forEach(function (c) { h.push(rowHTML(c)); });
     } else {
-      var tiers = [["decision", "Needs a decision"], ["watch", "Watch"], ["fine", "Fine"]];
+      /* The fourth group is not optional. This list used to be three groups
+         because only crunched campaigns could reach it; now the inventory drives
+         the rows, so leaving "unreviewed" out of this array would silently drop
+         every campaign Lilly has not written up, which is the whole bug. */
+      var tiers = [["decision", "Needs a decision"], ["watch", "Watch"], ["fine", "Fine"],
+                   ["unreviewed", "Not yet reviewed"]];
       tiers.forEach(function (t) {
         var group = visible.filter(function (c) { return c.tier === t[0]; });
         if (!group.length) return;
@@ -2509,11 +2583,11 @@
       var b = liveBucket(c.id);
       if (counts[b] != null) counts[b]++;
     });
-    // The Status picker only makes sense once the live check has landed — disable
-    // the whole picker until then so a pick can't show a false empty. Once landed,
-    // a status with a zero live count is disabled (unless it's the one selected),
-    // and its live count shows in the option label.
-    var pending = !STATE.liveCheckedAt;
+    // The picker used to be disabled until the live check landed, because before
+    // the cached fallback a pick could show a false empty. Every row now buckets
+    // off the synced status straight away, so the picker is usable on first
+    // paint; the live check only sharpens the counts when it lands.
+    var pending = false;
     var sel = document.getElementById("status-select");
     if (sel) {
       sel.disabled = pending;
@@ -2521,16 +2595,31 @@
       Array.prototype.forEach.call(sel.options, function (opt) {
         var k = opt.value;
         if (k === "all") return;
-        opt.textContent = LBL[k] + (STATE.liveCheckedAt ? " (" + counts[k] + ")" : "");
-        opt.disabled = !pending && counts[k] === 0 && STATE.view.status !== k;
+        opt.textContent = LBL[k] + " (" + counts[k] + ")";
+        opt.disabled = counts[k] === 0 && STATE.view.status !== k;
       });
     }
   }
 
   /* Fetch LIVE status + completion for every visible campaign, then repaint. */
   function loadLiveStatus() {
-    var ids = (STATE.campaigns || []).map(function (c) { return c.id; })
-      .filter(function (id) { return /^\d+$/.test(String(id)); });
+    /* The endpoint hard-caps at 150 ids, and the list is now the whole
+       inventory, so choose WHICH 150 rather than letting the cap pick for us:
+       running campaigns first (their status is the one that actually moves),
+       then paused/stopped, then the rest. Everything not sent keeps its synced
+       status via the liveBucket fallback, so no row goes blank. */
+    function livePriority(c) {
+      var s = String(c.slStatus || "").toUpperCase();
+      if (s.indexOf("ACTIVE") !== -1 || s.indexOf("START") !== -1) return 0;
+      if (s.indexOf("PAUS") !== -1 || s.indexOf("STOP") !== -1) return 1;
+      if (s.indexOf("COMPLET") !== -1) return 2;
+      return 3;
+    }
+    var ids = (STATE.campaigns || []).slice()
+      .sort(function (a, b) { return livePriority(a) - livePriority(b); })
+      .map(function (c) { return c.id; })
+      .filter(function (id) { return /^\d+$/.test(String(id)); })
+      .slice(0, 150);
     if (!ids.length) return;
     STATE.liveLoading = true; STATE.liveError = false;
     renderLiveMeta();
@@ -2926,8 +3015,8 @@
       });
       h.push("</div>");
     } else {
-      h.push('<p class="card-subtitle">' + (c.ghost
-        ? "This campaign is not in today's briefing — the morning crunch only writes up campaigns that are running. The numbers above are live from the daily sync."
+      h.push('<p class="card-subtitle">' + ((c.ghost || c.reviewed === false)
+        ? "Lilly has not written this campaign up yet, so there is no verdict and there are no flags. The numbers above are the real ones from the daily Smartlead sync."
         : "No open flags beyond the verdict. That is the whole picture.") + "</p>");
     }
     h.push("</div>");

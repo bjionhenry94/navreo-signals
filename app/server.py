@@ -6654,6 +6654,28 @@ _SCORECARD_SYNC_INTERVAL_S = 3600  # hourly; campaign stats don't move fast and
 _SCORECARD_SYNC_LOCK = threading.Lock()
 
 
+def _scorecard_prune(wid: str, live_ids: set) -> None:
+    """Drop cached rows for campaigns this workspace no longer has. Compares
+    against the cache rather than issuing a blind NOT-IN delete, so the request
+    stays small and a mismatch is visible in the log."""
+    try:
+        col = "workspace.is.null,workspace.eq." + wid if wid == "navreo" else "workspace.eq." + wid
+        rows = sb_get_all(f"campaign_scorecard?select=smartlead_campaign_id&or=({col})")
+        if not isinstance(rows, list):
+            return
+        stale = [r["smartlead_campaign_id"] for r in rows
+                 if r.get("smartlead_campaign_id") not in live_ids]
+        if not stale:
+            return
+        for i in range(0, len(stale), 100):
+            chunk = ",".join(str(s) for s in stale[i:i + 100])
+            sb("DELETE", f"campaign_scorecard?smartlead_campaign_id=in.({chunk})",
+               prefer="return=minimal")
+        print(f"[scorecard-sync] {wid}: pruned {len(stale)} deleted campaign(s)", flush=True)
+    except Exception as e:  # noqa: BLE001 — pruning must never abort a sync cycle
+        print(f"[scorecard-sync] {wid}: prune failed: {e}", flush=True)
+
+
 def _scorecard_sync_all():
     """Fetch /analytics for every Smartlead campaign and upsert to the
     campaign_scorecard cache. Paced under Smartlead's 200/min budget; one bad
@@ -6671,6 +6693,13 @@ def _scorecard_sync_all():
             if not isinstance(camps, list):
                 print(f"[scorecard-sync] {wid}: campaign list unavailable: {camps}", flush=True)
                 continue
+            # Prune: a campaign deleted in Smartlead used to linger in the cache
+            # forever, so the tool showed campaigns that no longer exist. Only
+            # ever prune off a NON-EMPTY list — a rate-limited or empty response
+            # must never be read as "the workspace has no campaigns" and wipe it.
+            live_ids = {c.get("id") for c in camps if c.get("id")}
+            if live_ids:
+                _scorecard_prune(wid, live_ids)
             for c in camps:
                 cid = c.get("id")
                 if not cid:
@@ -6721,6 +6750,10 @@ def _all_campaign_scorecard() -> dict:
     for r in (rows or []):
         sid = str(r.get("smartlead_campaign_id"))
         camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total", "status")}
+        # name was selected but never returned, so every campaign the crunch had
+        # not written up rendered as "Campaign <id>". The list is the whole
+        # inventory now, so the synced name is the only title most rows get.
+        camps[sid]["name"] = r.get("name") or ""
         camps[sid]["workspace"] = r.get("workspace") or "navreo"
         camps[sid]["meetings"] = None
     # meetings from the reply archive: one per distinct booked lead, the same
