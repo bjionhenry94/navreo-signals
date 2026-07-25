@@ -5709,6 +5709,7 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
         counts = {"domains": len(domains), key: n}
         if isinstance(j, dict) and j.get("failed"):
             counts["failed"] = j["failed"]
+        doms = _safe_domains([d.lower() for d in domains])
         if op == "resume":
             # The domains are no longer resting — whether boxes were actually
             # resumed (n>0) or the audit service had nothing held (n==0, the
@@ -5720,7 +5721,6 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
                 counts["note"] = ("0 resumed — the audit service no longer held "
                                   "these domain(s) as resting; cleared from the "
                                   "restore queue.")
-            doms = _safe_domains([d.lower() for d in domains])
             if doms and not _deliv_mock_on():
                 try:
                     for i in range(0, len(doms), 80):
@@ -5729,7 +5729,39 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
                 except Exception as e:  # noqa: BLE001 — cleanup is best-effort
                     counts["note"] = (counts.get("note", "")
                                       + " (ledger cleanup failed: " + str(e)[:80] + ")").strip()
+                # Mirror reconcile: the cap-0 census reads the nightly-synced
+                # mailboxes mirror, so without this a resumed domain would keep
+                # its "sends paused" badge until tomorrow's sync. Restore the
+                # house caps (Outlook 2/day, everything else 15) — the nightly
+                # sync trues up any box the backend set differently.
+                try:
+                    for i in range(0, len(doms), 40):
+                        chunk = ",".join(doms[i:i + 40])
+                        sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                    "&account_type=eq.OUTLOOK" % chunk, {"message_per_day": 2})
+                        sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                    "&account_type=neq.OUTLOOK" % chunk, {"message_per_day": 15})
+                except Exception:  # noqa: BLE001 — nightly sync self-corrects
+                    pass
                 _restore_plan_invalidate()
+        if op == "pause" and doms and not _deliv_mock_on():
+            # Symmetric freshness fix: a domain paused through the tool must
+            # show in the In-warm-up tab NOW, not after tonight's mirror sync.
+            # Zero its mirror caps and stamp its ledger row (ignore-duplicates
+            # keeps an established rest clock) so due-back dates exist at once.
+            from datetime import datetime, timezone
+            try:
+                for i in range(0, len(doms), 40):
+                    sb("PATCH", "mailboxes?domain=in.(%s)" % ",".join(doms[i:i + 40]),
+                       {"message_per_day": 0})
+                now_iso = datetime.now(timezone.utc).isoformat()
+                sb("POST", "deliverability_resting_ledger?on_conflict=domain",
+                   [{"domain": d, "first_rested_at": now_iso, "approx": False,
+                     "last_seen_at": now_iso} for d in doms],
+                   prefer="resolution=ignore-duplicates,return=minimal")
+            except Exception:  # noqa: BLE001 — nightly sync + bundle sweep self-correct
+                pass
+            _restore_plan_invalidate()
         with JOBS_LOCK:
             job["counts"] = counts
         log_activity("/api/warmup-job", payload={"op": op, "domains": domains[:20], **counts},
@@ -13801,6 +13833,15 @@ class Handler(SimpleHTTPRequestHandler):
                     for _i in range(0, len(_doms), 80):
                         sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
                                      % ",".join(_doms[_i:_i + 80]))
+                    # Mirror reconcile — same freshness fix as the job worker:
+                    # without it the resumed domain keeps its "sends paused"
+                    # badge until tonight's sync (house caps; sync trues up).
+                    for _i in range(0, len(_doms), 40):
+                        _ck = ",".join(_doms[_i:_i + 40])
+                        sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                    "&account_type=eq.OUTLOOK" % _ck, {"message_per_day": 2})
+                        sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                    "&account_type=neq.OUTLOOK" % _ck, {"message_per_day": 15})
                     _restore_plan_invalidate()
             except Exception:  # noqa: BLE001 — cleanup must never break the proxy reply
                 pass
