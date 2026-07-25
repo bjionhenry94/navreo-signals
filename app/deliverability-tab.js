@@ -3658,10 +3658,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // Domains the census doesn't know (absent from domainBoxes) stay.
         const lz = b.liveZeroCap, known = b.domainBoxes || {};
         if (lz) {
-          return out.filter((r) => {
+          const kept = out.filter((r) => {
             const d = String(r.domain || "").toLowerCase();
             return !(known[d] > 0 && !(lz[d] > 0));
           });
+          // Truncation rescue: the backend views cap at 2,000 rows, so a
+          // domain can hold cap-0 boxes (census) yet have NO view rows at all
+          // — invisible in this tab even while the restore ledger counts it
+          // (tester panel 2026-07-25: 5 domains / 108 boxes hidden). Give any
+          // such domain a synthetic row so it renders, counts, and restores.
+          const have = new Set(kept.map((r) => String(r.domain || "").toLowerCase()));
+          const mdSet = new Set(b.maildosoDomains || []);
+          Object.keys(lz).forEach((d) => {
+            if (lz[d] > 0 && !have.has(d)) {
+              kept.push({ id: "census-" + d, email: "", domain: d, provider: "",
+                          maildoso: mdSet.has(d), tags: [], cap: 0, warmup_status: "",
+                          kind: "ok", rested: true, restedAt: null,
+                          _censusOnly: true });
+            }
+          });
+          return kept;
         }
         return out;
       }
@@ -3935,7 +3951,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // The count line names the exact verdict maths — floor %, min-sent gate,
     // window — so the number that produced the flags is never hidden away.
     const { minSent } = dhCutoffMin();
-    if (cnt) cnt.textContent = rows.length + " below the " + cutoff + "% floor · min " + minSent + " sent · last " + (UI.mgr.windowDays || 7) + " days" + (D.restingCount ? " · " + D.restingCount + " resting fleet-wide" : "") + mgrFreshNote();
+    if (cnt) cnt.textContent = rows.length + " below the " + cutoff + "% floor · min " + minSent + " sent · last " + (UI.mgr.windowDays || 7) + " days" + (D.restingCount ? " · " + D.restingCount + " resting or recovering fleet-wide (audit's own clock — the In warm-up tab counts domains, not boxes)" : "") + mgrFreshNote();
     const bulk = $id("dlv-mgr-bulk");
     if (bulk) {
       let b = "";
@@ -4024,14 +4040,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     else if (flow === "notwarming") doms.sort((a, b) => (isMd(a) ? 1 : 0) - (isMd(b) ? 1 : 0) || groups.get(b).length - groups.get(a).length || a.localeCompare(b));
     else doms.sort((a, b) => groups.get(b).length - groups.get(a).length || a.localeCompare(b));
     const selectable = flow !== "inwarmup";
-    const truncNote = flowTruncated(flow) ? " · first 2,000 mailboxes shown" : "";
+    const truncNote = flowTruncated(flow) ? " · mailbox detail limited to the first 2,000 (every domain still listed)" : "";
     if (cnt) cnt.textContent = doms.length + " domain(s) · " + all.length + " mailbox(es)" + (selectable ? " · " + UI.mgr.sel.size + " selected" : "") + truncNote + mgrFreshNote();
-    // Blacklist-aware due set from the shared reconcile() — the SAME set the
-    // Today restore card headlines and the restore action acts on, so the row
-    // emphasis, the bulk button, and the confirm can never disagree (a
-    // blacklisted domain, which restore-live 409s, is never counted "due").
+    // Due set from the shared reconcile() — the SAME set the Today restore
+    // card headlines and the restore action acts on. Blacklist FLAGS, never
+    // blocks (owner ruling 2026-07-15): blacklisted domains ARE in dueSet and
+    // restorable; the confirm names how many are listed. dueN counts the
+    // reconcile set directly so button, card, and action can never disagree,
+    // even if a due domain were somehow missing a rendered row.
     const dueSet = flow === "inwarmup" ? new Set(restoreReconcileNow(D).dueDomains) : new Set();
-    const dueN = doms.filter((dom) => dueSet.has(String(dom).toLowerCase())).length;
+    const dueN = dueSet.size;
     const bw = $id("dlv-mgr-bulk");
     if (bw) {
       const n = UI.mgr.sel.size;
@@ -4064,7 +4082,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const allSel = selKeys.length > 0 && selKeys.every((k) => UI.mgr.sel.has(k));
       const ck = selectable ? `<td class="ck">${selKeys.length ? `<input type="checkbox" ${allSel ? "checked" : ""} data-act="mgr-dom-select" data-domain="${esc(dom)}" title="Select all ${selKeys.length} mailboxes on ${esc(dom)}">` : ""}</td>` : "";
       const maildoso = rows.some((r) => r.maildoso);
-      const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${rows.length} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}</div></td>`;
+      // Header count from the full-fleet census when it knows the domain —
+      // the view rows truncate at 2,000, so rows.length under-counts big
+      // domains ("· 5 mbx" beside "sends paused (52)", tester panel finding).
+      const _domBoxes = (isLive() && ((bundleData() || {}).domainBoxes || {})[String(dom).toLowerCase()]) || rows.filter((r) => !r._censusOnly).length || rows.length;
+      const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${_domBoxes} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}</div></td>`;
       let mid = "", action = "";
       if (flow === "notwarming") {
         const batches = [...new Set(rows.flatMap((r) => r.tags || []))].slice(0, 3);
@@ -4100,7 +4122,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // "on Maildoso" (not the bare word "external", which CSM testers read as
         // broken/missing data) — a place, honestly, since there is no local timer.
         const dueCell = isMaildoso
-          ? `<span class="dlv-tag md" title="Warms on Maildoso's own schedule — there is no local 7-day rest timer; check Maildoso for progress">on Maildoso</span>`
+          ? `<span class="dlv-tag md" title="Warms on Maildoso's own schedule — there is no local 7-day rest timer; check Maildoso for progress">on Maildoso</span>${blDomainSet().has(String(dom).toLowerCase()) ? ` <span class="dlv-tag blocked" title="This domain is on a public blacklist — restoring resumes sending from a listed domain">blacklisted</span>` : ""}`
           : dueChipCalm(led || Date.now() + 7 * 864e5);
         // A due-now row's warm-up rest is DONE — the green "ready now" beside it
         // says so, so the status stays lean (just the hold) to avoid three tags
@@ -5356,7 +5378,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const box = $id("dlv-wu-live");
     if (!box) return;
     const gen = (UI.wu.liveGen = (UI.wu.liveGen || 0) + 1);
-    const emails = UI.wu.rows.map((r) => r.email).filter(Boolean).slice(0, 100);
+    const allEmails = UI.wu.rows.map((r) => r.email).filter(Boolean);
+    const emails = allEmails.slice(0, 100);
+    const sliceNote = allEmails.length > emails.length
+      ? ` <span class="muted">(showing the first ${emails.length} of ${allEmails.length})</span>` : "";
     if (!emails.length || !isLive()) { box.style.display = "none"; return; }
     box.style.display = "";
     box.innerHTML = `<span class="muted">Reading current settings live from Smartlead…</span>`;
@@ -5372,7 +5397,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           ? `<div class="dlv-mb-dom">${esc(r.email)} · <span class="dlv-tag blocked">read failed</span></div>`
           : `<div class="dlv-mb-dom">${esc(r.email)} · ${r.warmup_status === "ACTIVE" ? "warming" : `<b>warm-up OFF</b>`} · ${r.per_day != null ? r.per_day + "/day" : "—"} · ${r.reply_rate != null ? r.reply_rate + "% reply" : "—"}${r.reputation != null ? " · rep " + r.reputation + "%" : ""}</div>`).join("");
         const miss = (j.missing || []).length ? `<div class="dlv-mb-dom muted">${j.missing.length} not found in Smartlead: ${esc(j.missing.slice(0, 3).join(", "))}${j.missing.length > 3 ? "…" : ""}</div>` : "";
-        box.innerHTML = `<div style="font-weight:600;margin-bottom:4px">Current settings — read live from Smartlead just now (${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${tz ? " " + tz : ""})</div>` +
+        box.innerHTML = `<div style="font-weight:600;margin-bottom:4px">Current settings — read live from Smartlead just now (${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${tz ? " " + tz : ""})${sliceNote}</div>` +
           `<div style="max-height:120px;overflow-y:auto">${rows}${miss}</div>`;
       })
       .catch(() => { if (gen === UI.wu.liveGen) box.innerHTML = `<span class="muted">Couldn't read live settings from Smartlead — showing the house suggestion only.</span>`; });
@@ -6598,7 +6623,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           toast("Reactivate failed for " + domain + ": " + msg, "err");
         }
         invalidateMgrDh(); saveState(); paintPage();
-      }).catch(() => { toast("Reactivate status unknown for " + domain + " — check the Tasks panel", "err"); });
+      }).catch(() => {
+        // Poll lost (network blip / sleep): leave a row-level trace so the
+        // uncertainty survives the toast — the jobs ledger has the truth.
+        (S.A.restoreErrors = S.A.restoreErrors || {})[domain] = "restore status unknown — check the Tasks panel";
+        saveState(); paintPage();
+        toast("Reactivate status unknown for " + domain + " — check the Tasks panel", "err");
+      });
       return;
     }
     const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
@@ -6640,7 +6671,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       pollDlvJob(jobId).then((job) => {
         const c = job.counts || {};
         if (job.status === "done") {
-          let msg = "Moved " + domains.length + " flagged domain(s) to warm-up — " + (c.paused || 0) + " mailbox(es) resting, due back in 7d";
+          // held_boxes = every box now at cap 0 (the true blast radius);
+          // c.paused only counts boxes the backend newly zeroed, which
+          // under-tells on a retry ("6" for a 624-box hold).
+          let msg = "Moved " + domains.length + " flagged domain(s) to warm-up — " + (c.held_boxes || c.paused || 0) + " mailbox(es) resting, due back in 7d";
           if (c.failed) msg += " · " + c.failed + " failed (rate limit) — re-run to finish, it's safe";
           toast(msg, c.failed ? "err" : "ok");
         } else {
@@ -6682,24 +6716,38 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!ok) return;
     let resumed = 0;
     if (isLive()) {
-      // Same per-domain warmup-resume call the row-level Restore uses — no
-      // assumptions about CSV support on the backend; failures name the domain.
-      const orig = btn ? btn.innerHTML : null;
-      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="dlv-spinner"></span> Restoring…'; }
-      const failed = [];
-      for (const domain of domains) {
-        try {
-          const j = await apiPost("warmup-resume?domain=" + encodeURIComponent(domain), null, { timeout: 60000 });
-          if (j && j.error) { failed.push(domain); continue; }
-          resumed += (j && j.resumed) || 0;
-          delete S.A.domainHealth.resting[domain];
-          delete S.A.domainHealth.restingDue[domain];
-        } catch (e) { failed.push(domain); }
-      }
-      if (btn) { btn.disabled = false; if (orig != null) btn.innerHTML = orig; }
-      invalidateMgrDh();
-      if (failed.length) toast("Restore failed for " + failed.join(", ") + " — safe to retry", "err");
-    } else {
+      // Same fast-lane job the row-level Restore uses (tester panel
+      // 2026-07-25: the old synchronous per-domain loop here bypassed the
+      // retry/backoff, the honest 0-resumed note, the ledger reconcile, AND
+      // the sticky per-row failure tags — the whole repaired failure design).
+      const jobId = await submitWarmupJob("resume", domains, btn);
+      if (jobId == null) return;
+      domains.forEach((domain) => {
+        delete S.A.domainHealth.resting[domain];
+        delete S.A.domainHealth.restingDue[domain];
+      });
+      logAction({ action: "warmup_resume", mailboxes: 0, domains: domains.length, scope: "due restore" });
+      saveState();
+      toast(domains.length + " domain(s) queued for restore — track it in the Tasks panel", "ok");
+      paintPage();
+      pollDlvJob(jobId).then((job) => {
+        const c = job.counts || {};
+        if (job.status === "done") {
+          domains.forEach((d) => { if (S.A.restoreErrors) delete S.A.restoreErrors[d]; });
+          if (c.note && !(c.resumed > 0)) toast(c.note, "ok");
+          else toast("Restored " + (c.resumed || 0) + " mailbox(es) across " + domains.length + " domain(s)", "ok");
+        } else {
+          const errs = c.domain_errors || {};
+          domains.forEach((d) => {
+            (S.A.restoreErrors = S.A.restoreErrors || {})[d] = String(errs[d] || job.error || job.status || "failed").slice(0, 160);
+          });
+          toast("Restore failed: " + String(job.error || job.status).slice(0, 120) + " — safe to retry", "err");
+        }
+        invalidateMgrDh(); saveState(); paintPage();
+      }).catch(() => { toast("Restore status unknown — check the Tasks panel", "err"); });
+      return;
+    }
+    {
       domains.forEach((domain) => {
         const mbx = S.A.inboxRows.filter((r) => r.domain === domain);
         mbx.forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; } else if (r.cap === 0) r.cap = 20; });
@@ -7750,8 +7798,40 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // repaints once the probe (and any background /run) resolve. Short-circuits
     // on later mounts (tab switches) via DATA.probed so it runs at most once.
     bootData();
+    hydrateRestoreErrors();
     return true;
   };
+
+  // Rebuild the sticky "last restore failed" tags from the DURABLE jobs
+  // ledger — sessionStorage dies with the tab, but the failures don't
+  // (tester panel 2026-07-25: a teammate or a new browser never saw them).
+  // Chronological replay: a later successful restore clears the tag.
+  function hydrateRestoreErrors() {
+    if (DATA.restoreErrorsHydrated) return;
+    DATA.restoreErrorsHydrated = true;
+    fetch("/api/jobs", { credentials: "same-origin" }).then((r) => r.json()).then((j) => {
+      const jobs = (j && j.jobs ? j.jobs : Array.isArray(j) ? j : [])
+        .filter((x) => x && String(x.kind || "").startsWith("warmup_resume"))
+        .sort((a, b) => String(a.started_at || a.created_at || "").localeCompare(String(b.started_at || b.created_at || "")));
+      if (!jobs.length || !S || !S.A) return;
+      const errs = {};
+      jobs.forEach((job) => {
+        const c = job.counts || {};
+        const doms = c.domains_list || Object.keys(c.domain_errors || {});
+        doms.forEach((d) => {
+          const dl = String(d).toLowerCase();
+          if (job.status === "done") delete errs[dl];
+          else if (job.status === "failed" || job.status === "interrupted") {
+            errs[dl] = String((c.domain_errors || {})[d] || job.error || job.status).slice(0, 160);
+          }
+        });
+      });
+      if (Object.keys(errs).length) {
+        S.A.restoreErrors = Object.assign({}, errs, S.A.restoreErrors || {});
+        saveState(); paintPage();
+      }
+    }).catch(() => {});
+  }
 
   // Part B2: the least-intrusive glossary-discoverability nudge — pulse the
   // FIRST "?" marker on the page a few times on first load only (guarded by

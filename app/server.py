@@ -4372,6 +4372,11 @@ def _job_persist(job: dict):
     in-memory JOBS dict stays the fast path; app_jobs is the durability net that
     /api/jobs and the poll fall back to when memory is gone (post-restart)."""
     from datetime import datetime, timezone
+    if _deliv_mock_on() or job.get("mock"):
+        # A DELIV_MOCK dev boot shares the production app_jobs table — its
+        # synthetic jobs must never land in the activity feed the operator
+        # reads (a "Reactivate: restdue1.info" fixture leaked there 2026-07-25).
+        return
     row = {k: job.get(k) for k in _JOB_DB_FIELDS}
     row["updated_at"] = datetime.now(timezone.utc).isoformat()
     threading.Thread(
@@ -4528,10 +4533,17 @@ def _sweep_orphan_jobs(grace_s: int):
         if (not (mine or ancient)) or r["id"] in live_here:
             continue  # another instance's live-ish job, or genuinely running right here
         try:
+            # Per-kind copy: the verify wording ("already-checked emails are
+            # cached") read as nonsense on a warm-up job's row.
+            if str(r.get("kind") or "").startswith("warmup_"):
+                _int_msg = ("Interrupted by a server restart — it retries "
+                            "automatically; if the row still shows held, click "
+                            "the button again.")
+            else:
+                _int_msg = ("Interrupted by a server restart — click Resume to continue "
+                            "(already-checked emails are cached, so it picks up where it left off).")
             sb("PATCH", f"app_jobs?id=eq.{r['id']}",
-               {"status": "interrupted",
-                "error": "Interrupted by a server restart — click Resume to continue "
-                         "(already-checked emails are cached, so it picks up where it left off).",
+               {"status": "interrupted", "error": _int_msg,
                 "finished_at": _now_iso()})
         except Exception:  # noqa: BLE001 — one bad row must not stop the rest
             continue
@@ -4547,7 +4559,32 @@ def _maybe_auto_resume(r: dict):
     the manual Resume button as the fallback."""
     if not (_ON_RENDER and r.get("owner") == _SERVER_INSTANCE):
         return  # production instance only — dev boxes never re-enqueue
-    if r.get("kind") != "verify" or r.get("auto_resumed"):
+    if r.get("auto_resumed"):
+        return
+    # Warm-up pause/resume jobs auto-resubmit after a restart (tester panel
+    # 2026-07-25: deploy restarts stranded two warm-up actions the same day,
+    # each needing a manual re-click). Safe under the same CAS guard: the ops
+    # are idempotent (pause re-zeroes, resume re-applies saved caps) and the
+    # durable counts.domains_list makes the exact request reconstructible.
+    if str(r.get("kind") or "").startswith("warmup_"):
+        c = r.get("counts") if isinstance(r.get("counts"), dict) else {}
+        doms = c.get("domains_list") or []
+        op = c.get("op") or str(r.get("kind"))[len("warmup_"):]
+        if not doms or op not in ("pause", "resume"):
+            return  # older row without a durable domain list — manual retry only
+        try:
+            claimed = sb("PATCH",
+                         f"app_jobs?id=eq.{r['id']}&auto_resumed=eq.false",
+                         {"auto_resumed": True}, prefer="return=representation")
+            if not claimed:
+                return
+            body, _status = api_warmup_job({"op": op, "domains": doms})
+            print(f"[auto-resume] warmup job {r['id']} -> continuation "
+                  f"{(body or {}).get('job_id')}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[auto-resume] warmup resubmit failed for {r.get('id')}: {e}")
+        return
+    if r.get("kind") != "verify":
         return
     try:
         with _JOB_CREATE_LOCK:
@@ -5722,13 +5759,13 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
         if isinstance(j, dict) and j.get("error"):
             msg = str(j["error"])[:160]
             with JOBS_LOCK:
-                job["counts"] = {"domains": len(domains),
+                job["counts"] = {**(job.get("counts") or {}), "domains": len(domains),
                                  "domain_errors": {d: msg for d in domains}}
             _job_finished(job, "failed", str(j["error"])[:300])
             return
         key = "paused" if op == "pause" else "resumed"
         n = int((j or {}).get(key) or 0)
-        counts = {"domains": len(domains), key: n}
+        counts = {**(job.get("counts") or {}), "domains": len(domains), key: n}
         if skipped_md:
             counts["skipped_maildoso"] = skipped_md
         if isinstance(j, dict) and j.get("failed"):
@@ -5821,6 +5858,14 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
                    [{"domain": d, "first_rested_at": now_iso, "approx": False,
                      "last_seen_at": now_iso} for d in doms],
                    prefer="resolution=ignore-duplicates,return=minimal")
+                # True blast radius: the backend's `paused` only counts boxes it
+                # newly zeroed (a retried pause reported "6" for a 624-box hold,
+                # tester panel finding) — report every box now held as well.
+                held = sb_get_all("mailboxes?select=domain&domain=in.(%s)"
+                                  % ",".join(doms)) or []
+                counts["held_boxes"] = len(held)
+                with JOBS_LOCK:
+                    job["counts"] = counts
             except Exception:  # noqa: BLE001 — nightly sync + bundle sweep self-correct
                 pass
             _restore_plan_invalidate()
@@ -5833,7 +5878,7 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
     except Exception as e:  # noqa: BLE001 — the whole point is surfacing the real failure
         msg = str(e)[:160]
         with JOBS_LOCK:
-            job["counts"] = {"domains": len(domains),
+            job["counts"] = {**(job.get("counts") or {}), "domains": len(domains),
                              "domain_errors": {d: msg for d in domains}}
         _job_finished(job, "failed", str(e)[:300])
 
@@ -5849,6 +5894,13 @@ def api_warmup_job(p: dict):
     label = f"{verb}: " + ", ".join(domains[:3]) \
         + (f" +{len(domains) - 3} more" if len(domains) > 3 else "")
     job = _new_job("warmup_" + op, label, None)
+    with JOBS_LOCK:
+        # Durable domain list: lets the client rebuild sticky per-row failure
+        # tags after a reload/new session, and lets boot recovery re-enqueue a
+        # restart-killed warm-up job (counts is in _JOB_DB_FIELDS; label isn't
+        # parseable — it truncates at 3 domains).
+        job["counts"] = {"domains_list": domains[:100], "op": op}
+    _job_persist(job)
     _enqueue_job(_warmup_job_worker, job, (job, op, domains))
     return {"job_id": job["id"]}, 202
 
@@ -12134,6 +12186,10 @@ def _deliv_bundle_run_bg_inner():
         # from this map are UNKNOWN, not ghost-free — client keeps them.
         if census_fresh:
             out["liveZeroCap"] = zero
+            if not _deliv_mock_on():
+                # Freshness cue for any surface that wants to disclose the
+                # census age (mirror last_synced_at, nightly).
+                out["liveZeroCapAsOf"] = newest
     except Exception as e:  # noqa: BLE001
         out["errors"]["domainBoxes"] = str(e)[:200]
     # Due-back dates for every rested domain on display — ledger-derived in
@@ -12216,7 +12272,8 @@ def _deliv_bundle_run_bg_inner():
             # recorded under that error key; carry it on that signal only —
             # a merely-stale census (key absent, no error) must NOT be revived.
             for k, ek in (("domainBoxes", "domainBoxes"), ("restDue", "restDue"),
-                          ("liveZeroCap", "domainBoxes")):
+                          ("liveZeroCap", "domainBoxes"), ("liveZeroCapAsOf", "domainBoxes"),
+                          ("maildosoDomains", "domainBoxes")):
                 if ek in out["errors"] and k in prev and k not in out:
                     out[k] = prev[k]
     ok = bool(out["views"]) or bool(out["dh"])
