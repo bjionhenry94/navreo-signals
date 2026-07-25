@@ -12177,6 +12177,28 @@ def _deliv_bundle_run_bg():
 
 
 _INSTANTLY_BASE = "https://api.instantly.ai/api/v2"
+_APP_SECRETS_CACHE: dict = {}
+
+
+def _app_secret(name: str) -> str | None:
+    """Env-first secret with a Supabase `app_secrets` fallback (RLS on, zero
+    policies — service-role only). Exists because Render's env can't be edited
+    from here: a key added to the DB unblocks a feature without a dashboard
+    trip; the same-named env var still wins the moment it's set. 10-min cache."""
+    v = KEYS.get(name)
+    if v:
+        return v
+    hit = _APP_SECRETS_CACHE.get(name)
+    if hit and hit[1] > time.time() - 600:
+        return hit[0]
+    val = None
+    try:
+        rows = sb("GET", "app_secrets?key=eq.%s&select=value" % urllib.parse.quote(name))
+        val = (rows or [{}])[0].get("value") or None
+    except Exception:  # noqa: BLE001 — a flaky read must not take the feature down
+        val = hit[0] if hit else None
+    _APP_SECRETS_CACHE[name] = (val, time.time())
+    return val
 
 
 def _instantly_accounts():
@@ -12185,7 +12207,7 @@ def _instantly_accounts():
     'warmup off / external'). v2 API, Bearer key, /accounts paginated via
     next_starting_after. Raises when the key isn't configured so the bundle
     records a real error instead of silently painting 'all warming'."""
-    key = KEYS.get("INSTANTLY_API_KEY")
+    key = _app_secret("INSTANTLY_API_KEY")
     if not key:
         raise RuntimeError("INSTANTLY_API_KEY not configured on this host")
     items, after, pages = [], None, 0
@@ -15236,7 +15258,7 @@ class Handler(SimpleHTTPRequestHandler):
                       if "@" in str(x)]
             if not emails:
                 return self._json({"ok": False, "error": "no_emails"}, 400)
-            ikey = KEYS.get("INSTANTLY_API_KEY")
+            ikey = _app_secret("INSTANTLY_API_KEY")
             if not ikey:
                 return self._json({"ok": False, "error": "not_configured",
                                    "message": "INSTANTLY_API_KEY is not set on this host."}, 503)
