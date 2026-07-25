@@ -387,6 +387,10 @@
     // scope==="book") — moved here from the campaigns home. status: idle |
     // loading | ready | error; rows are the raw book insight rows.
     book: { status: "idle", rows: [], started: false },
+    // Fleet-wide signal velocity (GET /api/signals/daily) — new people found
+    // per day across every signal source, drawn as a line chart on the
+    // Overview (owner request 25 Jul 2026). status: idle | loading | ready | error.
+    signals: { status: "idle", data: null, started: false },
   };
   function isLive() { return DATA.mode === "live"; }
   const AUDIT_POLL_MS = 10000;         // GET /_audit poll interval while a run is in flight
@@ -2695,6 +2699,66 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       rows.map((r) => nvzCard(r, BOOK_KIND_LABEL[r.insight_key] || r.insight_key)).join("") +
       "</div></section>";
   }
+  /* -- Fleet-wide signal velocity (owner request 25 Jul 2026) ------------
+     GET /api/signals/daily → {days, all, series:[{id,name,counts}]} — new
+     people found per day across every signal source, last 30 days. Same
+     one-shot fetch-then-repaint shape as loadBook(); the SVG is the classic
+     per-campaign velocity chart, fleet-wide. */
+  function loadSignalsDaily() {
+    if (DATA.signals.started || !isLive()) return;
+    DATA.signals.started = true;
+    DATA.signals.status = "loading";
+    fetch("/api/signals/daily", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+      .then((j) => {
+        if (!j || !Array.isArray(j.days)) throw new Error("bad payload");
+        DATA.signals.data = j;
+        DATA.signals.status = "ready";
+        paintPage();
+      })
+      .catch(() => { DATA.signals.status = "error"; paintPage(); });
+  }
+  function renderSignalsChart() {
+    if (!isLive()) return "";
+    loadSignalsDaily();
+    const head = '<section class="dlv-book" aria-label="Signals found">' +
+      '<div class="section-label">Signals found · new people found per day, every signal source, last 30 days</div>';
+    if (DATA.signals.status === "loading" || DATA.signals.status === "idle")
+      return head + '<div class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Counting the last 30 days of pulls…</div></section>';
+    if (DATA.signals.status === "error")
+      return head + '<div class="dlv-empty">Couldn’t load the signal counts — refresh to retry.</div></section>';
+    const d = DATA.signals.data || {};
+    const days = d.days || [];
+    if (!days.length)
+      return head + '<div class="dlv-empty">No signal pulls in the last 30 days — the chart builds as the daily runs find people.</div></section>';
+    const palette = ["#E8590C", "#1971C2", "#2F9E44", "#7048E8", "#F08C00", "#0C8599", "#C2255C"];
+    const series = [{ name: "All", color: "var(--ink)", width: 2.5, vals: d.all || [] }]
+      .concat((d.series || []).map((s, i) => ({ name: s.name, color: palette[i % palette.length], width: 1.5, vals: s.counts || [] })));
+    const W = 940, H = 210, padL = 34, padR = 12, padT = 12, padB = 26;
+    const maxV = Math.max(1, ...(d.all || [1]));
+    const x = (i) => days.length === 1 ? (padL + (W - padL - padR) / 2) : padL + i * (W - padL - padR) / (days.length - 1);
+    const y = (v) => padT + (1 - v / maxV) * (H - padT - padB);
+    const grid = [0, 0.5, 1].map((f) => {
+      const v = maxV * f, yy = y(v);
+      return `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>` +
+        `<text x="${padL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-3)">${Math.round(v)}</text>`;
+    }).join("");
+    const drawLine = (sr) => {
+      if (sr.vals.length === 1) return `<circle cx="${x(0).toFixed(1)}" cy="${y(sr.vals[0] || 0).toFixed(1)}" r="4" fill="${sr.color}"/>`;
+      const pts = sr.vals.map((v, i) => `${x(i).toFixed(1)},${y(v || 0).toFixed(1)}`).join(" ");
+      return `<polyline fill="none" stroke="${sr.color}" stroke-width="${sr.width}" points="${pts}" stroke-linejoin="round" stroke-linecap="round"/>`;
+    };
+    const xlab = (i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="var(--ink-3)">${esc(days[i].slice(5))}</text>`;
+    const xticks = days.length === 1 ? xlab(0) : [xlab(0), xlab(days.length - 1)].join("");
+    const legend = series.map((sr) =>
+      `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:11px;color:var(--ink-2)">` +
+      `<span style="width:14px;height:0;border-top:${sr.width >= 2 ? "3" : "2"}px solid ${sr.color};display:inline-block"></span>` +
+      `${esc(String(sr.name).length > 40 ? String(sr.name).slice(0, 39) + "…" : sr.name)}</span>`).join("");
+    return head +
+      `<div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px">` +
+      `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${grid}${xticks}${series.map(drawLine).join("")}</svg>` +
+      `<div style="margin-top:8px;display:flex;flex-wrap:wrap;row-gap:4px">${legend}</div></div></section>`;
+  }
   // One-shot fetch of the cross-campaign "book" insight rows; repaints in place
   // once they land so the cards appear under the tabs without blocking boot.
   function loadBook() {
@@ -4769,6 +4833,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       renderVerdict(D),
       renderBanner(D),
       renderHealthHeader(D),
+      renderSignalsChart(),
       renderManagerPanel(D),
       `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
       renderHistoryFold(D),

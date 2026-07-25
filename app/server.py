@@ -2306,6 +2306,48 @@ def api_leads_batch(campaign_ids: str) -> list:
     return _LEADS_BATCH_SWR.get(",".join(wanted))
 
 
+def _compute_signals_daily() -> dict:
+    """Fleet-wide 'signal velocity': new people found per day across EVERY signal
+    source, last 30 days — the classic per-campaign chart, summed for the
+    deliverability page. One Supabase query over the window (source_id +
+    pulled_at only); names resolve from the cached draft docs. Top 6 sources get
+    their own series; the tail rolls into 'Other sources' so the legend stays
+    readable however many signals are live."""
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    rows = sb_get_all(f"signal_leads?select=source_id,pulled_at&pulled_at=gte.{since}")
+    if not isinstance(rows, list):
+        return {"_degraded": True, "days": [], "series": []}
+    names = {str(d.get("id")): (d.get("name") or "Source") for d in _cached_read_drafts()}
+    by_day: dict = {}
+    totals: dict = {}
+    for r in rows:
+        day = str(r.get("pulled_at") or "")[:10]
+        if not day:
+            continue
+        sid = str(r.get("source_id"))
+        bucket = by_day.setdefault(day, {})
+        bucket[sid] = bucket.get(sid, 0) + 1
+        totals[sid] = totals.get(sid, 0) + 1
+    days = sorted(by_day)
+    top = [sid for sid, _ in sorted(totals.items(), key=lambda kv: -kv[1])[:6]]
+    series = [{"id": sid, "name": names.get(sid, "Removed source"),
+               "counts": [by_day[d].get(sid, 0) for d in days]} for sid in top]
+    rest = [sid for sid in totals if sid not in top]
+    if rest:
+        series.append({"id": "__other", "name": f"Other sources ({len(rest)})",
+                       "counts": [sum(by_day[d].get(sid, 0) for sid in rest) for d in days]})
+    return {"days": days,
+            "all": [sum(by_day[d].values()) for d in days],
+            "series": series,
+            "asof": datetime.now(timezone.utc).isoformat()}
+
+
+_SIGNALS_DAILY_SWR = _SWRCache(_compute_signals_daily, 300,
+                               is_degraded=lambda p: bool(p.get("_degraded")),
+                               name="signals-daily")
+
+
 def sources_for_ui(drafts: list) -> list:
     """Draft sources with `total` overlaid to the ACCUMULATED signal_leads count
     per source (what the Leads tab reads), not just the last pull's local prospect
@@ -14378,6 +14420,13 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(api_leads_batch((q.get("campaign_ids") or [""])[0]))
+        if path == "/api/signals/daily":
+            # Deliverability page's fleet-wide signal-velocity chart (25 Jul 2026).
+            out = _SIGNALS_DAILY_SWR.get()
+            if out.get("_degraded"):
+                return self._json({"error": "supabase_unavailable",
+                                   "message": "Couldn't reach the database - try again."}, 503)
+            return self._json(out)
         if path == "/api/lead-counts":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)

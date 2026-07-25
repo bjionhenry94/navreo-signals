@@ -1210,6 +1210,31 @@
   .source-list-name { font-weight: 600; color: var(--fg); font-size: 0.9rem; }
   .source-list-meta { font-size: 0.78rem; color: var(--fg-subtle); white-space: nowrap; }
   .sources-signals-line { margin-top: 10px; font-size: 0.8rem; color: var(--fg-subtle); }
+  /* Signal-source rows (signal-sources-p2b ship, 25 Jul 2026): Live toggle +
+     View list + Find people again on the row; targeting, duplicate and the
+     per-source icebreaker behind the row's own expand. NO approve/reject and
+     NO remove here (user ruling — the list page is the review surface). */
+  .sig-row { display: block; }
+  .sig-row-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .sig-main { min-width: 0; flex: 1 1 auto; }
+  .sig-chip {
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em;
+    padding: 3px 8px; border-radius: 6px; text-transform: uppercase;
+    background: #FFE4D6; color: #C23D00;
+  }
+  .sig-tgl { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 0.76rem; font-weight: 600; color: var(--success); position: relative; }
+  .sig-tgl input { position: absolute; opacity: 0; }
+  .sig-tgl .sig-knob { width: 34px; height: 20px; border-radius: 999px; background: var(--border-strong); position: relative; transition: background 0.15s; }
+  .sig-tgl .sig-knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 0.15s; }
+  .sig-tgl input:checked + .sig-knob { background: var(--success); }
+  .sig-tgl input:checked + .sig-knob::after { left: 16px; }
+  .sig-primary { background: var(--nav-orange) !important; border-color: var(--nav-orange) !important; color: #fff !important; }
+  .sig-body { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; width: 100%; }
+  .sig-ice { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .sig-ice input[type="text"] {
+    flex: 1 1 240px; font-family: inherit; font-size: 0.82rem; padding: 9px 12px;
+    border: 1px solid var(--border-strong); border-radius: 9px; color: var(--fg-muted); background: var(--bg);
+  }
   .sources-empty {
     padding: 18px;
     text-align: center;
@@ -3100,6 +3125,7 @@
               '<span><b style="color:var(--fg)">' + fmtInt(pool.remaining) + "</b> still available</span></div>" +
               '<span class="source-list-meta" data-pool-note style="display:block;margin-top:6px">' + poolNoteHTML(pool) + "</span></div>";
           }
+          if (sigMech(s)) return sigRowHTML(c, s);
           var n = s.total != null ? s.total : ((s.prospects || []).length || null);
           var inner = '<span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
             '<span class="source-list-meta">' + (n != null ? "~" + fmtInt(n) + " people staged" : "Sized on the first pull") +
@@ -3113,8 +3139,154 @@
           var pool = poolOf(s);
           if (pool) paintPoolCard(c, pool);
         });
+        bindSigRows(c);
         maybeSourcesEmpty();
       });
+  }
+
+  /* ── Signal-source rows (signal-sources-p2b ship, 25 Jul 2026) ──────────
+     A signal source (hiring / engagement / followers / lookalike) manages
+     itself from the cockpit: Live toggle, View list, Find people again on the
+     row; targeting / duplicate / icebreaker behind the row's expand. All four
+     actions call the SAME endpoints the classic console uses — no new server
+     surface. Approve/reject and Remove stay OUT of the cockpit (user ruling:
+     the list page is the review surface; removal lives in the classic console). */
+  function sigMech(s) {
+    var m = String(s.mechanism || s.type || "").toLowerCase();
+    return (m === "hiring" || m === "engagement" || m === "followers" || m === "lookalike") ? m : "";
+  }
+  function sigAgo(iso) {
+    if (!iso) return "";
+    var ms = Date.now() - new Date(iso).getTime();
+    if (!(ms >= 0)) return "";
+    var mins = Math.round(ms / 60000);
+    if (mins < 60) return mins + " min ago";
+    var hrs = Math.round(mins / 60);
+    if (hrs < 48) return hrs + " h ago";
+    return Math.round(hrs / 24) + " days ago";
+  }
+  function sigToast(msg) {
+    var t = document.getElementById("sig-toast");
+    if (t) t.remove();
+    t = document.createElement("div");
+    t.id = "sig-toast";
+    t.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:60;" +
+      "background:#141414;color:#fff;border-radius:12px;padding:12px 18px;font-size:0.9rem;" +
+      "box-shadow:0 8px 28px rgba(0,0,0,.25);max-width:92vw;text-align:center";
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function () { t.remove(); }, 6000);
+  }
+  function sigPost(url, body) {
+    return fetch(url, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok || j.ok === false) throw new Error((j && j.message) || "Request failed");
+        return j;
+      });
+    });
+  }
+  function sigRehydrate(c) {
+    STATE.slimSourcesP = null; // sources changed server-side — force a fresh slim fetch
+    hydrateDraftSources(c);
+  }
+  function sigRowHTML(c, s) {
+    var mech = sigMech(s);
+    var live = s.active !== false;
+    var meta = s.last_pull
+      ? '<b style="color:var(--fg)">' + fmtInt(s.total || 0) + "</b> found &middot; last pulled " + esc(sigAgo(s.last_pull))
+      : (s.total ? "~" + fmtInt(s.total) + " expected on first pull" : "Sized on the first pull");
+    return '<div class="source-list-card sig-row" data-sig-row="' + esc(s.id) + '">' +
+      '<div class="sig-row-top">' +
+        '<div class="sig-main"><span class="source-list-name">' + esc(s.name || "Signal source") + '</span> ' +
+        '<span class="sig-chip">' + esc(mech) + '</span>' +
+        '<div class="source-list-meta" style="white-space:normal;margin-top:3px">' + meta + "</div></div>" +
+        '<label class="sig-tgl" title="On: this source keeps finding new people every day. Off: it pauses. The campaign itself keeps sending either way.">' +
+          '<input type="checkbox" data-sig-live="' + esc(s.id) + '"' + (live ? " checked" : "") + '><span class="sig-knob"></span>Live</label>' +
+        (s.list_id ? '<a class="action-link" href="/app/lists.html#' + esc(s.list_id) + '">View list</a>' : "") +
+        '<button type="button" class="action-link sig-primary" data-sig-pull="' + esc(s.id) + '">' +
+          (s.last_pull ? "Find people again" : "Find people now") + "</button>" +
+        '<button type="button" class="action-link" data-sig-more aria-label="More options">&#9662;</button>' +
+      "</div>" +
+      '<div class="sig-body" hidden>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+          '<a class="action-link" href="/app/unified.html#c:camp-sl-' + esc(c.id) + '">Edit targeting</a>' +
+          '<button type="button" class="action-link" data-sig-dup="' + esc(s.id) + '">Duplicate</button>' +
+        "</div>" +
+        '<div class="sig-ice"><span class="source-list-meta">Icebreaker &middot; first line of the email</span>' +
+          '<input type="text" data-sig-ice="' + esc(s.id) + '" value="' + esc(s.icebreaker || "") + '">' +
+          '<button type="button" class="action-link" data-sig-ice-save="' + esc(s.id) + '">Save</button></div>' +
+      "</div></div>";
+  }
+  function bindSigRows(c) {
+    var root = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-root');
+    if (!root || root._sigBound) return;
+    root._sigBound = true; // the container is re-created on every hydrate, so one binding per render
+    root.addEventListener("click", function (ev) {
+      var btn = ev.target.closest ? ev.target.closest("[data-sig-more],[data-sig-pull],[data-sig-dup],[data-sig-ice-save]") : null;
+      if (!btn) return;
+      var row = btn.closest("[data-sig-row]");
+      if (btn.hasAttribute("data-sig-more")) {
+        var body = row.querySelector(".sig-body");
+        body.hidden = !body.hidden;
+        btn.innerHTML = body.hidden ? "&#9662;" : "&#9652;";
+        return;
+      }
+      if (btn.hasAttribute("data-sig-pull")) {
+        var pid = btn.getAttribute("data-sig-pull");
+        btn.disabled = true;
+        btn.textContent = "Pulling…";
+        sigPost("/api/sources/pull", { id: pid }).then(function (j) {
+          sigToast(j && j.message ? j.message : "Pull finished — the numbers refresh in a moment");
+          sigRehydrate(c);
+        }).catch(function (e) {
+          btn.disabled = false;
+          btn.textContent = "Find people again";
+          sigToast(e.message || "Couldn't pull — try again");
+        });
+        return;
+      }
+      if (btn.hasAttribute("data-sig-dup")) {
+        btn.disabled = true;
+        sigPost("/api/sources/duplicate", { id: btn.getAttribute("data-sig-dup") }).then(function () {
+          sigToast("Source duplicated — same targeting, nothing pulled yet");
+          sigRehydrate(c);
+        }).catch(function (e) {
+          btn.disabled = false;
+          sigToast(e.message || "Couldn't duplicate — try again");
+        });
+        return;
+      }
+      if (btn.hasAttribute("data-sig-ice-save")) {
+        var iid = btn.getAttribute("data-sig-ice-save");
+        var inp = row.querySelector('[data-sig-ice="' + iid + '"]');
+        btn.disabled = true;
+        sigPost("/api/sources/update", { id: iid, icebreaker: inp.value }).then(function () {
+          btn.disabled = false;
+          sigToast("Icebreaker saved — used on this source's next pull");
+        }).catch(function (e) {
+          btn.disabled = false;
+          sigToast(e.message || "Couldn't save the icebreaker");
+        });
+      }
+    });
+    root.addEventListener("change", function (ev) {
+      var inp = ev.target;
+      if (!inp.hasAttribute || !inp.hasAttribute("data-sig-live")) return;
+      var on = inp.checked;
+      inp.disabled = true;
+      sigPost("/api/sources/update", { id: inp.getAttribute("data-sig-live"), active: on }).then(function () {
+        inp.disabled = false;
+        sigToast(on ? "Signal on — it keeps finding people in the background"
+          : "Signal off — nothing pulls until you turn it back on");
+      }).catch(function (e) {
+        inp.checked = !on; // revert — the server didn't take it
+        inp.disabled = false;
+        sigToast(e.message || "Couldn't update the signal");
+      });
+    });
   }
 
   /* One Sources section: the honest empty line only when NOTHING renders -
