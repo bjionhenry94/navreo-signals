@@ -3136,38 +3136,38 @@
     act.querySelector("[data-pool-add]").onclick = function (e) {
       e.preventDefault();
       var btn = this;
+      /* The click hands the strategist a ready-made Claude prompt (QA-gate
+         "Copy chat prompt" pattern): the wizard runs IN CLAUDE - it confirms
+         the amount and the credit spend, fires the same gated pull endpoint,
+         and reports back. First prompt line = session title (house convention),
+         with the campaign id glued to the name. */
+      var prompt = "Pull more \u00b7 " + (c.name || ("campaign " + c.id)) + " (campaign " + c.id + ")\n\n" +
+        "Run the pull-more wizard for source pool " + pool.id + " \u2014 campaign " + c.id + ". " +
+        "Right now: " + fmtInt(pool.pulled_ok) + " pulled, " + fmtInt(pool.remaining) +
+        " not yet pulled of " + fmtInt(pool.total_pool) + ". " +
+        "Walk me through choosing how many to add (presets 500 / 1,000 / 2,000), tell me the estimated " +
+        "email-verification credit spend BEFORE anything runs, then run the gated pull and report how many " +
+        "were added, failed verification, or dropped as collisions. /pull-more-wizard";
       var pop = document.createElement("div");
       pop.style.cssText = "position:absolute;z-index:30;background:#fff;border:1px solid var(--border-strong);" +
-        "border-radius:12px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.12);max-width:260px";
-      pop.innerHTML = '<div style="display:flex;gap:8px;margin-bottom:8px">' +
-        [500, 1000, 2000].map(function (n) {
-          return '<button class="action-state-btn" data-n="' + n + '">+' + fmtInt(n) + "</button>";
-        }).join("") + "</div>" +
-        '<div class="source-list-meta">Checks everyone first, then verifies emails - spends credits on unchecked addresses. Nothing sends.</div>';
+        "border-radius:12px;padding:14px;box-shadow:0 6px 24px rgba(0,0,0,.12);width:340px;max-width:92vw";
+      pop.innerHTML = '<div class="source-list-name" style="display:block;margin-bottom:6px">Add people with Claude</div>' +
+        '<textarea readonly style="width:100%;height:120px;font:12px/1.45 ui-monospace,monospace;border:1px solid var(--border-strong);border-radius:8px;padding:8px;resize:none;color:var(--fg-subtle)"></textarea>' +
+        '<button class="action-state-btn" data-copy style="background:#E8590C;color:#fff;border-color:transparent;width:100%;justify-content:center;margin-top:8px">Copy prompt</button>' +
+        '<div class="source-list-meta" style="display:block;margin-top:8px">Paste it into Claude \u2014 it confirms the amount and credit spend, runs the checked pull, and reports back here.</div>';
+      pop.querySelector("textarea").value = prompt;
       var r = btn.getBoundingClientRect();
-      pop.style.left = Math.max(10, r.right - 270) + "px";
+      pop.style.left = Math.max(10, r.right - 350) + "px";
       pop.style.top = (r.bottom + window.scrollY + 6) + "px";
       document.body.appendChild(pop);
-      pop.addEventListener("click", function (ev) {
-        var nb = ev.target.closest("[data-n]");
-        if (!nb) return;
-        pop.remove();
-        act.innerHTML = '<span class="source-list-meta">Starting&hellip;</span>';
-        fetch("/api/pool-pulls/pull", { method: "POST", body: JSON.stringify({ seg: pool.seg, size: +nb.dataset.n }) })
-          .then(function (res) { return res.json(); })
-          .then(function (j) {
-            if (!j.ok) {
-              card.querySelector("[data-pool-note]").textContent = j.message || "Couldn't start the pull.";
-              paintPoolCardIdleBtn(c, pool);
-              return;
-            }
-            poolCardPoll(c, pool.id);
-          })
-          .catch(function () {
-            card.querySelector("[data-pool-note]").textContent = "Couldn't reach the server - try again.";
-            paintPoolCardIdleBtn(c, pool);
-          });
-      });
+      pop.querySelector("[data-copy]").onclick = function () {
+        var ta = pop.querySelector("textarea");
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+        if (navigator.clipboard) navigator.clipboard.writeText(prompt).catch(function () {});
+        this.textContent = "Copied \u2014 paste into Claude";
+      };
       setTimeout(function () {
         document.addEventListener("click", function close(ev) {
           if (!pop.contains(ev.target) && ev.target !== btn) { pop.remove(); document.removeEventListener("click", close); }
