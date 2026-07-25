@@ -3083,14 +3083,21 @@
         document.getElementById("draft-sources-root").innerHTML = '<div class="source-list-cards">' + mine.map(function (s) {
           var pool = poolOf(s);
           if (pool) {
-            var unpulled = pool.remaining;
-            return '<div class="source-list-card" data-pool="' + esc(pool.id) + '" style="display:flex;align-items:center;gap:14px">' +
-              '<div style="flex:1;min-width:0"><span class="source-list-name" style="display:block">' + esc(s.name || "Source") + "</span>" +
-              '<span class="source-list-meta" style="display:block;margin-top:2px">' + fmtInt(pool.pulled_ok) + " pulled &middot; " + fmtInt(unpulled) +
-              " not yet pulled of " + fmtInt(pool.total_pool) +
-              (s.list_id ? ' &middot; <a class="action-link" href="/app/lists.html#' + esc(s.list_id) + '">View the list</a>' : "") + "</span>" +
-              '<span class="source-list-meta" data-pool-note style="display:block;margin-top:2px">' + poolNoteHTML(pool) + "</span></div>" +
-              '<div data-pool-act style="flex:0 0 auto"></div></div>';
+            /* V1 progress-bar card (glance-lab ruling, 25 Jul 2026): name + actions,
+               a slim pulled/available bar, labelled ends, honest last-add line. */
+            var pct = pool.total_pool ? Math.max(0.4, pool.pulled_ok / pool.total_pool * 100) : 0;
+            return '<div class="source-list-card" data-pool="' + esc(pool.id) + '" style="display:block">' +
+              '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">' +
+              '<span class="source-list-name" style="min-width:0">' + esc(s.name || "Source") + "</span>" +
+              '<div style="display:flex;align-items:center;gap:8px;flex:0 0 auto">' +
+              (s.list_id ? '<a class="action-link" href="/app/lists.html#' + esc(s.list_id) + '">View the list</a>' : "") +
+              '<span data-pool-act></span></div></div>' +
+              '<div style="height:8px;border-radius:4px;background:var(--border-strong);overflow:hidden;margin:10px 0 5px">' +
+              '<i style="display:block;height:100%;width:' + pct.toFixed(1) + '%;background:#E8590C"></i></div>' +
+              '<div class="source-list-meta" style="display:flex;justify-content:space-between;gap:10px">' +
+              '<span><b style="color:var(--fg)">' + fmtInt(pool.pulled_ok) + "</b> pulled</span>" +
+              '<span><b style="color:var(--fg)">' + fmtInt(pool.remaining) + "</b> still available</span></div>" +
+              '<span class="source-list-meta" data-pool-note style="display:block;margin-top:6px">' + poolNoteHTML(pool) + "</span></div>";
           }
           var n = s.total != null ? s.total : ((s.prospects || []).length || null);
           var inner = '<span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
@@ -3117,8 +3124,12 @@
       return st + pr;
     }
     var lb = pool.last_batch;
-    if (lb) return "Last add: " + fmtInt(lb.pushed) + " verified added &middot; " + fmtInt(lb.verify_failed) +
-                   " failed verification &middot; " + fmtInt(lb.live_dropped) + " dropped as collisions";
+    if (lb) {
+      if (!(lb.verify_failed || lb.live_dropped))
+        return '<span style="color:#2F9E44">\u2713</span> Last add: all ' + fmtInt(lb.pushed) + " passed the checks";
+      return "Last add: " + fmtInt(lb.pushed) + " verified added &middot; " + fmtInt(lb.verify_failed) +
+             " failed verification &middot; " + fmtInt(lb.live_dropped) + " dropped as collisions";
+    }
     return "";
   }
 
@@ -3275,14 +3286,14 @@
         } else {
           sr.innerHTML = '<div class="source-list-cards">' + srcs.map(function (s) {
             var dd = s.at ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(s.at)) : "";
-            var inner = '<span class="source-list-name">' + esc(s.list_name || "List") + "</span>" +
-              '<span class="source-list-meta">' + fmtInt(s.rows) + " people &middot; pushed to " + esc(s.platform ? s.platform.charAt(0).toUpperCase() + s.platform.slice(1) : "Smartlead") + " &middot; " + esc(dd) +
-              (s.list_id ? ' &middot; <span class="action-link">View the list</span>' : "") + "</span>";
-            /* the card deep-links to the list's own page in the tool when the
-               push recorded a list_id; old pushes without one stay plain */
-            return s.list_id
-              ? '<a class="source-list-card source-list-card--link" href="/app/lists.html#' + esc(s.list_id) + '">' + inner + "</a>"
-              : '<div class="source-list-card">' + inner + "</div>";
+            /* V1 pushed-state (glance-lab ruling): name + meta stacked left,
+               View-the-list pill right; no bar when there is no pool. */
+            return '<div class="source-list-card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">' +
+              '<div style="min-width:0"><span class="source-list-name" style="display:block">' + esc(s.list_name || "List") + "</span>" +
+              '<span class="source-list-meta"><b style="color:var(--fg)">' + fmtInt(s.rows) + "</b> people &middot; pushed to " +
+              esc(s.platform ? s.platform.charAt(0).toUpperCase() + s.platform.slice(1) : "Smartlead") + " &middot; " + esc(dd) + "</span></div>" +
+              (s.list_id ? '<a class="action-link" style="flex:0 0 auto" href="/app/lists.html#' + esc(s.list_id) + '">View the list</a>' : "") +
+              "</div>";
           }).join("") + "</div>";
         }
       }
