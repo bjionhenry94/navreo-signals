@@ -2318,7 +2318,15 @@ def _compute_signals_daily() -> dict:
     rows = sb_get_all(f"signal_leads?select=source_id,pulled_at&pulled_at=gte.{since}")
     if not isinstance(rows, list):
         return {"_degraded": True, "days": [], "series": []}
-    names = {str(d.get("id")): (d.get("name") or "Source") for d in _cached_read_drafts()}
+    # SIGNAL sources only (hiring/engagement/followers/lookalike). signal_leads
+    # also records one-off list pulls (e.g. recontact batches) whose 3k-row
+    # spikes drown the daily signal lines — those aren't "signals found", so
+    # they stay out of this chart.
+    sig_mechs = {"hiring", "engagement", "followers", "lookalike"}
+    drafts = _cached_read_drafts()
+    allowed = {str(d.get("id")) for d in drafts
+               if str(d.get("mechanism") or d.get("type") or "").lower() in sig_mechs}
+    names = {str(d.get("id")): (d.get("name") or "Source") for d in drafts}
     by_day: dict = {}
     totals: dict = {}
     for r in rows:
@@ -2326,6 +2334,8 @@ def _compute_signals_daily() -> dict:
         if not day:
             continue
         sid = str(r.get("source_id"))
+        if sid not in allowed:
+            continue
         bucket = by_day.setdefault(day, {})
         bucket[sid] = bucket.get(sid, 0) + 1
         totals[sid] = totals.get(sid, 0) + 1
