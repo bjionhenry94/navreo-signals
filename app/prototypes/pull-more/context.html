@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>In context · Pull-more UX lab</title>
+<!-- Each prototype shown INSIDE a faithful mock of the campaign page's Sources tab
+     (header, tabs, drafted-source card), so the judgement happens where the feature
+     will actually live. The prototype itself loads in an iframe - its own simulated
+     pull keeps working. Switch prototypes with the chips top-right. -->
+<style>
+  :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.5 "DM Sans",-apple-system,"Segoe UI",sans-serif; padding:36px 20px; display:flex; justify-content:center; }
+  .page { width:100%; max-width:860px; }
+  .switch { display:flex; gap:8px; justify-content:flex-end; margin-bottom:18px; flex-wrap:wrap; }
+  .sw { border:1px solid var(--line); background:var(--card); border-radius:999px; padding:6px 14px; font-size:0.82rem; cursor:pointer; }
+  .sw.sel { border-color:var(--orange); color:var(--orange); font-weight:600; }
+  .back { color:var(--sub); font-size:0.85rem; text-decoration:none; display:inline-block; margin-bottom:14px; }
+  h1 { font-family:"Acid Grotesk","DM Sans",sans-serif; font-size:1.7rem; letter-spacing:-0.02em; }
+  .csub { color:var(--sub); font-size:0.88rem; margin:2px 0 20px; }
+  .tabs { display:flex; gap:22px; border-bottom:1px solid var(--line); margin-bottom:22px; font-size:0.94rem; }
+  .tab { padding:10px 2px; color:var(--sub); }
+  .tab.on { color:var(--ink); font-weight:600; border-bottom:2px solid var(--orange); }
+  .label { font-size:0.72rem; letter-spacing:0.08em; color:var(--sub); text-transform:uppercase; margin-bottom:10px; }
+  .srccard { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; display:flex; justify-content:space-between; align-items:center; gap:14px; margin-bottom:14px; }
+  .srccard b { font-size:0.95rem; }
+  .srccard .meta { color:var(--sub); font-size:0.84rem; }
+  .viewbtn { border:1px solid var(--line); border-radius:999px; padding:8px 16px; font-size:0.85rem; background:var(--card); white-space:nowrap; }
+  .slot { border:1px dashed var(--orange); border-radius:14px; padding:6px; }
+  .slot iframe { width:100%; height:460px; border:0; border-radius:10px; background:var(--bg); }
+  .slotnote { text-align:center; color:var(--sub); font-size:0.75rem; padding:4px 0 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <a class="back" href="index.html">&larr; All prototypes</a>
+  <div class="switch" id="switch">
+    <button class="sw sel" data-p="p1">P1 chips</button>
+    <button class="sw" data-p="p2">P2 target</button>
+    <button class="sw" data-p="p3">P3 auto</button>
+    <button class="sw" data-p="p4">P4 list-row</button>
+    <button class="sw" data-p="p5">P5 sentence</button>
+  </div>
+  <h1>Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs — Claude Code [trial]</h1>
+  <div class="csub">Navreo &middot; campaign 3708724 &middot; Runs in Smartlead &middot; drafted</div>
+  <div class="tabs">
+    <span class="tab">Overview</span><span class="tab">Messaging</span>
+    <span class="tab">Leads (3,511)</span><span class="tab on">Sources</span>
+  </div>
+  <div class="label">Drafted sources</div>
+  <div class="srccard">
+    <div><b>Recontact 250k — A. SaaS &amp; Tech Sales Leaders / CEOs</b>
+      <div class="meta">~84,920 people staged &middot; drafted, nothing sends</div></div>
+    <span class="viewbtn">View the list</span>
+  </div>
+  <div class="label">Pull more (prototype in place)</div>
+  <div class="slot">
+    <iframe id="frame" src="p1.html" title="prototype"></iframe>
+    <div class="slotnote">The prototype runs live inside the page frame — pulls are simulated. P4 replaces the whole campaigns LIST, so imagine it one level up from this page.</div>
+  </div>
+</div>
+<script>
+document.getElementById("switch").addEventListener("click", function (e) {
+  var b = e.target.closest(".sw"); if (!b) return;
+  document.querySelectorAll(".sw").forEach(function (x) { x.classList.remove("sel"); });
+  b.classList.add("sel");
+  document.getElementById("frame").src = b.dataset.p + ".html";
+});
+</script>
+</body>
+</html>

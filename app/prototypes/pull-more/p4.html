@@ -32,7 +32,13 @@
 <div class="wrap">
   <h1>Campaigns</h1>
   <div class="sub">Add more people without leaving the list — one tap on the row.</div>
-  <div id="rows"></div>
+  <div id="rows">
+  <div class="row" data-idx="0"><div class="nm"><b>Recontact 250k — A. SaaS & Tech Sales Leaders / CEOs</b><span>3,517 in &middot; 81,034 left in the pool</span></div><button class="add">+ Add people</button></div>
+  <div class="row" data-idx="1"><div class="nm"><b>Recontact 250k — B. Industry Verticals</b><span>2,586 in &middot; 27,451 left in the pool</span></div><button class="add">+ Add people</button></div>
+  <div class="row" data-idx="2"><div class="nm"><b>Recontact 250k — C. SEO/GEO Agencies</b><span>3,525 in &middot; 5,876 left in the pool</span></div><button class="add">+ Add people</button></div>
+  <div class="row" data-idx="3"><div class="nm"><b>Recontact 250k — D. General B2B Sales Leaders</b><span>3,567 in &middot; 18,055 left in the pool</span></div><button class="add">+ Add people</button></div>
+  <div class="row" data-idx="4"><div class="nm"><b>Recontact 250k — E. Warm Followers</b><span>901 in &middot; 395 left in the pool</span></div><button class="add">+ Add people</button></div>
+  </div>
   <div class="note">Adds run the usual checks (no repeat contacts, emails verified — spends credits on unchecked addresses). You can keep working; the row updates itself. Drafted campaigns — nothing sends.</div>
 </div>
 <script>
@@ -43,13 +49,8 @@ var POOLS = [
   { nm: "Recontact 250k — D. General B2B Sales Leaders", have: 3567, left: 18055 },
   { nm: "Recontact 250k — E. Warm Followers", have: 901, left: 395 }
 ];
-var host = document.getElementById("rows");
-POOLS.forEach(function (p, idx) {
-  var row = document.createElement("div"); row.className = "row";
-  row.innerHTML = '<div class="nm"><b>' + p.nm + '</b><span>' + p.have.toLocaleString() +
-    ' in &middot; ' + p.left.toLocaleString() + ' left in the pool</span></div>' +
-    '<button class="add">+ Add people</button>';
-  host.appendChild(row);
+document.querySelectorAll("#rows .row").forEach(function (row) {
+  var p = POOLS[+row.dataset.idx];
   row.querySelector(".add").onclick = function (e) {
     var btn = this;
     var pop = document.createElement("div"); pop.className = "pop";
