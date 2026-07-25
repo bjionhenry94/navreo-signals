@@ -3051,8 +3051,9 @@
 
     /* sources */
     h.push('<div class="tab-panel" data-tab="sources"' + (tab !== "sources" ? " hidden" : "") + ">" +
-      '<div class="sources-section" id="draft-sources-section" hidden><div class="section-label">Drafted sources</div><div id="draft-sources-root"></div></div>' +
-      '<div class="sources-section"><div class="section-label">Sources</div><div id="sources-root"><p class="lw-loading">Loading push history&hellip;</p></div></div></div>');
+      '<div class="sources-section" id="draft-sources-section"><div class="section-label">Sources</div>' +
+      '<div id="draft-sources-root"></div><div id="sources-root"><p class="lw-loading">Loading&hellip;</p></div>' +
+      '<div id="sources-empty"></div></div></div>');
 
     h.push("</div></article>");
     return h.join("");
@@ -3075,8 +3076,8 @@
           return String(s.campaign_id) === "camp-sl-" + c.id;
         });
         var sec = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-section');
-        if (!sec || !mine.length) return;
-        sec.hidden = false;
+        if (!sec) return;
+        if (!mine.length) { maybeSourcesEmpty(); return; }
         function poolOf(s) {
           return pools.find(function (p) { return p.list_id === s.list_id && String(p.campaign_id) === String(c.id); }) || null;
         }
@@ -3112,7 +3113,20 @@
           var pool = poolOf(s);
           if (pool) paintPoolCard(c, pool);
         });
+        maybeSourcesEmpty();
       });
+  }
+
+  /* One Sources section: the honest empty line only when NOTHING renders -
+     neither pool-backed cards nor push-history cards. */
+  function maybeSourcesEmpty() {
+    var d = document.getElementById("draft-sources-root");
+    var s = document.getElementById("sources-root");
+    var e = document.getElementById("sources-empty");
+    if (!d || !s || !e) return;
+    var any = d.querySelector(".source-list-card") || s.querySelector(".source-list-card") || s.querySelector(".lw-loading");
+    e.innerHTML = any ? "" :
+      '<p class="sources-empty">No sources recorded for this campaign in the app. Honest empty state: leads were added before push tracking, or directly in Smartlead.</p>';
   }
 
   function poolNoteHTML(pool) {
@@ -3282,7 +3296,8 @@
       if (sr) {
         var srcs = d.sources || [];
         if (!srcs.length) {
-          sr.innerHTML = '<p class="sources-empty">No list pushes recorded for this campaign in the app. Honest empty state: leads were added before push tracking, or directly in Smartlead.</p>';
+          sr.innerHTML = "";
+          maybeSourcesEmpty();
         } else {
           sr.innerHTML = '<div class="source-list-cards">' + srcs.map(function (s) {
             var dd = s.at ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(s.at)) : "";
