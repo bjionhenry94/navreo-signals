@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P5 · One sentence — Pull more UX lab</title>
+<!-- Direction: the WHOLE task is one readable sentence and one button. Everything
+     else (pipeline, credits, history) folds behind Details. Deliberately removes:
+     every visible control except the sentence and the button. -->
+<style>
+  :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.5 "DM Sans",-apple-system,"Segoe UI",sans-serif; padding:48px 20px; display:flex; justify-content:center; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:32px 28px; width:100%; max-width:520px; }
+  .sentence { font-size:1.35rem; line-height:1.45; letter-spacing:-0.01em; margin-bottom:22px; }
+  .pick { display:inline-block; border:1px solid var(--line); border-radius:8px; padding:2px 10px; cursor:pointer; background:var(--bg); font:inherit; font-size:1.2rem; }
+  .pick:hover { border-color:var(--orange); }
+  .go { width:100%; border:0; border-radius:12px; background:var(--orange); color:#fff; font:inherit; font-weight:600; font-size:1.02rem; padding:15px 0; cursor:pointer; }
+  .status { min-height:24px; margin-top:14px; color:var(--sub); font-size:0.9rem; }
+  details { margin-top:20px; border-top:1px solid var(--line); padding-top:12px; color:var(--sub); font-size:0.84rem; }
+  summary { cursor:pointer; color:var(--ink); font-size:0.88rem; }
+  details p { margin-top:8px; }
+  .menu { position:absolute; background:var(--card); border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 24px rgba(0,0,0,.09); z-index:5; }
+  .menu div { padding:9px 22px; cursor:pointer; font-size:1.05rem; }
+  .menu div:hover { background:var(--bg); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="sentence">Add <button class="pick" id="pick">500</button> more verified people to this campaign.</div>
+  <button class="go" id="go">Add them</button>
+  <div class="status" id="status"></div>
+  <details>
+    <summary>What happens when I click?</summary>
+    <p>The tool takes the next people from this campaign's pool (81,034 left), removes anyone who already replied, unsubscribed, or is live in another campaign, verifies every unchecked email (this spends verification credits), and adds only the ones that pass. The campaign is drafted — nothing sends until launch.</p>
+    <p>Last time: 600 added, 0 failed, 0 skipped.</p>
+  </details>
+</div>
+<script>
+var n = 500;
+document.getElementById("pick").onclick = function (e) {
+  var m = document.createElement("div"); m.className = "menu";
+  [250, 500, 1000, 2000].forEach(function (v) {
+    var d = document.createElement("div"); d.textContent = v.toLocaleString();
+    d.onclick = function () { n = v; document.getElementById("pick").textContent = v.toLocaleString(); m.remove(); };
+    m.appendChild(d);
+  });
+  var r = this.getBoundingClientRect();
+  m.style.left = r.left + "px"; m.style.top = (r.bottom + window.scrollY + 4) + "px";
+  document.body.appendChild(m);
+  setTimeout(function () {
+    document.addEventListener("click", function close(ev) {
+      if (!m.contains(ev.target)) { m.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
+  e.stopPropagation();
+};
+document.getElementById("go").onclick = function () {
+  var go = this, st = document.getElementById("status");
+  go.disabled = true; go.style.opacity = 0.5;
+  var msgs = ["Removing anyone we shouldn't contact…", "Verifying email addresses…", "Adding the ones that pass…"];
+  var i = 0;
+  (function step() {
+    if (i < msgs.length) { st.textContent = msgs[i]; i++; setTimeout(step, 1700); return; }
+    var kept = Math.round(n * 0.93);
+    st.innerHTML = "<strong>" + kept.toLocaleString() + " people added.</strong> " + (n - kept).toLocaleString() + " didn't pass the checks — they were left out.";
+    go.disabled = false; go.style.opacity = 1; go.textContent = "Add more";
+  })();
+};
+</script>
+</body>
+</html>

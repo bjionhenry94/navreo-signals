@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P1 · Preset chips — Pull more UX lab</title>
+<!-- Direction: remove TYPING. The number decision becomes one tap on a preset chip.
+     Deliberately removes: the free number input, the meta sentence, the form layout. -->
+<style>
+  :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.5 "DM Sans",-apple-system,"Segoe UI",sans-serif; padding:48px 20px; display:flex; justify-content:center; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:28px; width:100%; max-width:520px; }
+  h1 { font-size:1.15rem; letter-spacing:-0.01em; margin-bottom:2px; }
+  .sub { color:var(--sub); font-size:0.88rem; margin-bottom:22px; }
+  .chips { display:flex; gap:10px; margin-bottom:18px; }
+  .chip { flex:1; border:1px solid var(--line); background:var(--bg); border-radius:12px; padding:16px 0; font-size:1.05rem; font-weight:600; text-align:center; cursor:pointer; transition:border-color .15s; }
+  .chip:hover { border-color:var(--ink); }
+  .chip.sel { border-color:var(--orange); background:#FDEFE7; }
+  .go { width:100%; border:0; border-radius:12px; background:var(--orange); color:#fff; font:inherit; font-weight:600; padding:14px 0; cursor:pointer; opacity:.35; pointer-events:none; transition:opacity .15s; }
+  .go.ready { opacity:1; pointer-events:auto; }
+  .status { min-height:44px; margin-top:16px; color:var(--sub); font-size:0.88rem; }
+  .bar { height:6px; border-radius:3px; background:var(--line); overflow:hidden; margin-top:8px; display:none; }
+  .bar i { display:block; height:100%; width:0; background:var(--orange); transition:width .5s; }
+  .done { color:var(--ink); }
+  .note { margin-top:20px; padding-top:14px; border-top:1px solid var(--line); color:var(--sub); font-size:0.8rem; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Pull more people into this campaign</h1>
+  <div class="sub">SaaS &amp; Tech Sales Leaders / CEOs &middot; 3,517 in &middot; 81,034 left in the pool</div>
+  <div class="chips" id="chips">
+    <div class="chip" data-n="500">500</div>
+    <div class="chip" data-n="1000">1,000</div>
+    <div class="chip" data-n="2000">2,000</div>
+  </div>
+  <button class="go" id="go">Pick an amount above</button>
+  <div class="status" id="status"></div>
+  <div class="bar" id="bar"><i id="fill"></i></div>
+  <div class="note">Every pull is checked first — no one who already replied, unsubscribed, or is in another live campaign gets added. Email verification spends credits on unchecked addresses. The campaign stays drafted; nothing sends.</div>
+</div>
+<script>
+var n = 0;
+document.getElementById("chips").addEventListener("click", function (e) {
+  var c = e.target.closest(".chip"); if (!c) return;
+  document.querySelectorAll(".chip").forEach(function (x) { x.classList.remove("sel"); });
+  c.classList.add("sel"); n = +c.dataset.n;
+  var go = document.getElementById("go");
+  go.classList.add("ready"); go.textContent = "Add " + c.textContent + " people";
+});
+document.getElementById("go").onclick = function () {
+  var go = this; go.classList.remove("ready"); go.textContent = "Working…";
+  var st = document.getElementById("status"), bar = document.getElementById("bar"), fill = document.getElementById("fill");
+  bar.style.display = "block";
+  var stages = [["Checking for people already contacted…", 20], ["Verifying email addresses…", 65], ["Adding verified people…", 92]];
+  var i = 0;
+  (function step() {
+    if (i < stages.length) { st.textContent = stages[i][0]; fill.style.width = stages[i][1] + "%"; i++; setTimeout(step, 1600); return; }
+    fill.style.width = "100%";
+    var kept = Math.round(n * 0.93), failed = n - kept - 4;
+    st.innerHTML = '<span class="done"><strong>' + kept.toLocaleString() + " people added.</strong> " + failed + " failed verification, 4 skipped (already in another campaign).</span>";
+    go.textContent = "Add more"; go.classList.add("ready");
+  })();
+};
+</script>
+</body>
+</html>

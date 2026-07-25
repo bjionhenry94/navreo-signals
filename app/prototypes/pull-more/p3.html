@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P3 · Keep it topped up — Pull more UX lab</title>
+<!-- Direction: remove the RETURN TRIP. One standing rule keeps the campaign fed weekly;
+     pulling stops being a task at all. Deliberately removes: remembering to come back. -->
+<style>
+  :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; --green:#2F9E44; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.5 "DM Sans",-apple-system,"Segoe UI",sans-serif; padding:48px 20px; display:flex; justify-content:center; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:28px; width:100%; max-width:520px; }
+  h1 { font-size:1.15rem; margin-bottom:2px; }
+  .sub { color:var(--sub); font-size:0.88rem; margin-bottom:22px; }
+  .rule { display:flex; align-items:center; justify-content:space-between; gap:14px; border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .rule .txt b { display:block; font-size:0.98rem; }
+  .rule .txt span { color:var(--sub); font-size:0.82rem; }
+  .switch { position:relative; width:52px; height:30px; flex:0 0 52px; border-radius:15px; background:var(--line); cursor:pointer; transition:background .2s; }
+  .switch i { position:absolute; top:3px; left:3px; width:24px; height:24px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); transition:left .2s; }
+  .switch.on { background:var(--green); }
+  .switch.on i { left:25px; }
+  .amount { display:flex; gap:8px; margin-top:14px; }
+  .a { flex:1; border:1px solid var(--line); background:var(--bg); border-radius:10px; padding:9px 0; text-align:center; font-size:0.9rem; cursor:pointer; }
+  .a.sel { border-color:var(--orange); background:#FDEFE7; font-weight:600; }
+  .meta { margin-top:16px; color:var(--sub); font-size:0.85rem; min-height:44px; }
+  .meta b { color:var(--ink); }
+  .now { margin-top:12px; border:0; border-radius:10px; background:var(--orange); color:#fff; font:inherit; font-size:0.9rem; font-weight:600; padding:11px 18px; cursor:pointer; display:block; }
+  .note { margin-top:20px; padding-top:14px; border-top:1px solid var(--line); color:var(--sub); font-size:0.8rem; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Keep this campaign topped up</h1>
+  <div class="sub">SaaS &amp; Tech Sales Leaders / CEOs &middot; 3,517 in &middot; 81,034 left in the pool</div>
+  <div class="rule">
+    <div class="txt"><b>Add fresh verified people every Monday</b>
+      <span id="ruleLine">Currently off — the campaign only grows when you pull by hand.</span></div>
+    <div class="switch" id="sw"><i></i></div>
+  </div>
+  <div class="amount" id="amount" style="display:none">
+    <div class="a" data-n="500">500 / week</div>
+    <div class="a sel" data-n="1000">1,000 / week</div>
+    <div class="a" data-n="2000">2,000 / week</div>
+  </div>
+  <div class="meta" id="meta"></div>
+  <div class="note">Each weekly top-up runs the same checks as a manual pull — no repeat contacts, emails verified first (spends verification credits, capped at your weekly amount). Turn it off any time. Drafted campaign — nothing sends.</div>
+</div>
+<script>
+var on = false, weekly = 1000;
+function paint() {
+  document.getElementById("amount").style.display = on ? "flex" : "none";
+  document.getElementById("ruleLine").textContent = on
+    ? "On — next top-up Monday 07:00, up to " + weekly.toLocaleString() + " verified people."
+    : "Currently off — the campaign only grows when you pull by hand.";
+  document.getElementById("meta").innerHTML = on
+    ? 'Last top-up: <b>Mon 21 Jul</b> — 934 added, 62 failed verification, 4 skipped as repeats. <button class="now" id="now">Add ' + weekly.toLocaleString() + ' now — don\'t wait for Monday</button>'
+    : "";
+  var n = document.getElementById("now");
+  if (n) n.onclick = runNow;
+}
+document.getElementById("sw").onclick = function () {
+  on = !on; this.classList.toggle("on", on); paint();
+};
+document.getElementById("amount").addEventListener("click", function (e) {
+  var a = e.target.closest(".a"); if (!a) return;
+  document.querySelectorAll(".a").forEach(function (x) { x.classList.remove("sel"); });
+  a.classList.add("sel"); weekly = +a.dataset.n; paint();
+});
+function runNow() {
+  var meta = document.getElementById("meta");
+  var msgs = ["Checking for people already contacted…", "Verifying email addresses…", "Adding verified people…"];
+  var i = 0;
+  (function step() {
+    if (i < msgs.length) { meta.textContent = msgs[i]; i++; setTimeout(step, 1600); return; }
+    var kept = Math.round(weekly * 0.93);
+    meta.innerHTML = "<b>" + kept.toLocaleString() + " people added just now.</b> Next automatic top-up: Monday 07:00.";
+  })();
+}
+paint();
+</script>
+</body>
+</html>

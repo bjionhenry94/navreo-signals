@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P2 · Top up to target — Pull more UX lab</title>
+<!-- Direction: think in DESTINATIONS, not batches. Pick where the campaign should end
+     up; the tool computes the batch. Deliberately removes: batch-size arithmetic. -->
+<style>
+  :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; --green:#2F9E44; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.5 "DM Sans",-apple-system,"Segoe UI",sans-serif; padding:48px 20px; display:flex; justify-content:center; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:28px; width:100%; max-width:520px; }
+  h1 { font-size:1.15rem; margin-bottom:2px; }
+  .sub { color:var(--sub); font-size:0.88rem; margin-bottom:20px; }
+  .track { height:14px; border-radius:7px; background:var(--line); position:relative; overflow:hidden; margin:6px 0 8px; }
+  .track .have { position:absolute; inset:0 auto 0 0; background:var(--green); width:41%; transition:width .5s; }
+  .track .adding { position:absolute; inset:0 auto 0 41%; background:var(--orange); width:0; transition:width .5s; }
+  .scale { display:flex; justify-content:space-between; color:var(--sub); font-size:0.78rem; margin-bottom:20px; }
+  .targets { display:flex; gap:10px; margin-bottom:18px; }
+  .t { flex:1; border:1px solid var(--line); background:var(--bg); border-radius:12px; padding:12px 0; text-align:center; cursor:pointer; }
+  .t:hover { border-color:var(--ink); }
+  .t.sel { border-color:var(--orange); background:#FDEFE7; }
+  .t b { display:block; font-size:1.02rem; }
+  .t span { color:var(--sub); font-size:0.76rem; }
+  .go { width:100%; border:0; border-radius:12px; background:var(--orange); color:#fff; font:inherit; font-weight:600; padding:14px 0; cursor:pointer; opacity:.35; pointer-events:none; }
+  .go.ready { opacity:1; pointer-events:auto; }
+  .status { min-height:24px; margin-top:14px; color:var(--sub); font-size:0.88rem; }
+  .note { margin-top:20px; padding-top:14px; border-top:1px solid var(--line); color:var(--sub); font-size:0.8rem; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Where should this campaign be?</h1>
+  <div class="sub">SaaS &amp; Tech Sales Leaders / CEOs &middot; <b id="have">3,517</b> people in now</div>
+  <div class="track"><div class="have" id="haveBar"></div><div class="adding" id="addBar"></div></div>
+  <div class="scale"><span>0</span><span id="scaleMax">8,500</span></div>
+  <div class="targets" id="targets">
+    <div class="t" data-n="5000"><b>5,000</b><span>+1,483</span></div>
+    <div class="t" data-n="6500"><b>6,500</b><span>+2,983</span></div>
+    <div class="t" data-n="8500"><b>8,500</b><span>+4,983</span></div>
+  </div>
+  <button class="go" id="go">Pick a target above</button>
+  <div class="status" id="status"></div>
+  <div class="note">The tool works out the batch, checks everyone against past replies and live campaigns, and verifies emails (spends credits on unchecked addresses) before adding. Drafted campaign — nothing sends.</div>
+</div>
+<script>
+var HAVE = 3517, target = 0;
+document.getElementById("targets").addEventListener("click", function (e) {
+  var t = e.target.closest(".t"); if (!t) return;
+  document.querySelectorAll(".t").forEach(function (x) { x.classList.remove("sel"); });
+  t.classList.add("sel"); target = +t.dataset.n;
+  var go = document.getElementById("go");
+  go.classList.add("ready");
+  go.textContent = "Top up to " + target.toLocaleString() + " (adds ~" + (target - HAVE).toLocaleString() + ")";
+});
+document.getElementById("go").onclick = function () {
+  var go = this; go.classList.remove("ready"); go.textContent = "Topping up…";
+  var addBar = document.getElementById("addBar"), st = document.getElementById("status");
+  var pctHave = HAVE / 8500 * 100, pctAdd = (target - HAVE) / 8500 * 100;
+  var msgs = ["Checking for people already contacted…", "Verifying email addresses…", "Adding verified people…"];
+  var i = 0;
+  (function step() {
+    if (i < msgs.length) {
+      st.textContent = msgs[i];
+      addBar.style.width = (pctAdd * (i + 1) / 3) + "%"; i++; setTimeout(step, 1700); return;
+    }
+    var added = Math.round((target - HAVE) * 0.93);
+    document.getElementById("haveBar").style.width = (pctHave + pctAdd * 0.93) + "%";
+    addBar.style.width = "0"; addBar.style.left = "0";
+    document.getElementById("have").textContent = (HAVE + added).toLocaleString();
+    st.innerHTML = "<strong>" + added.toLocaleString() + " added.</strong> " + (target - HAVE - added).toLocaleString() + " didn't pass verification — the campaign sits just under target, honestly.";
+    go.textContent = "Pick a new target";
+  })();
+};
+</script>
+</body>
+</html>

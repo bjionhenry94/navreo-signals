@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P4 · List-row quick action — Pull more UX lab</title>
+<!-- Direction: remove the PAGE VISIT. Pull straight from the campaigns list; a mini
+     progress chip lives on the row. Deliberately removes: navigation entirely. -->
+<style>
+  :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; --green:#2F9E44; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.5 "DM Sans",-apple-system,"Segoe UI",sans-serif; padding:48px 20px; display:flex; justify-content:center; }
+  .wrap { width:100%; max-width:640px; }
+  h1 { font-size:1.15rem; margin-bottom:2px; }
+  .sub { color:var(--sub); font-size:0.88rem; margin-bottom:18px; }
+  .row { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+  .row .nm { flex:1; min-width:0; }
+  .row .nm b { display:block; font-size:0.95rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .nm span { color:var(--sub); font-size:0.8rem; }
+  .add { flex:0 0 auto; border:1px solid var(--line); background:var(--bg); border-radius:10px; padding:8px 14px; font:inherit; font-size:0.85rem; cursor:pointer; white-space:nowrap; }
+  .add:hover { border-color:var(--orange); color:var(--orange); }
+  .pop { position:absolute; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; box-shadow:0 6px 24px rgba(0,0,0,.09); display:flex; gap:8px; z-index:5; }
+  .pop button { border:1px solid var(--line); background:var(--bg); border-radius:8px; padding:8px 14px; font:inherit; font-size:0.85rem; cursor:pointer; }
+  .pop button:hover { border-color:var(--orange); }
+  .chipprog { flex:0 0 auto; font-size:0.8rem; color:var(--sub); display:flex; align-items:center; gap:8px; }
+  .spin { width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--orange); border-radius:50%; animation:r 0.8s linear infinite; }
+  @keyframes r { to { transform:rotate(360deg); } }
+  .okmark { color:var(--green); font-weight:600; }
+  .note { margin-top:16px; color:var(--sub); font-size:0.8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Campaigns</h1>
+  <div class="sub">Add more people without leaving the list — one tap on the row.</div>
+  <div id="rows"></div>
+  <div class="note">Adds run the usual checks (no repeat contacts, emails verified — spends credits on unchecked addresses). You can keep working; the row updates itself. Drafted campaigns — nothing sends.</div>
+</div>
+<script>
+var POOLS = [
+  { nm: "Recontact 250k — A. SaaS & Tech Sales Leaders / CEOs", have: 3517, left: 81034 },
+  { nm: "Recontact 250k — B. Industry Verticals", have: 2586, left: 27451 },
+  { nm: "Recontact 250k — C. SEO/GEO Agencies", have: 3525, left: 5876 },
+  { nm: "Recontact 250k — D. General B2B Sales Leaders", have: 3567, left: 18055 },
+  { nm: "Recontact 250k — E. Warm Followers", have: 901, left: 395 }
+];
+var host = document.getElementById("rows");
+POOLS.forEach(function (p, idx) {
+  var row = document.createElement("div"); row.className = "row";
+  row.innerHTML = '<div class="nm"><b>' + p.nm + '</b><span>' + p.have.toLocaleString() +
+    ' in &middot; ' + p.left.toLocaleString() + ' left in the pool</span></div>' +
+    '<button class="add">+ Add people</button>';
+  host.appendChild(row);
+  row.querySelector(".add").onclick = function (e) {
+    var btn = this;
+    var pop = document.createElement("div"); pop.className = "pop";
+    [500, 1000, 2000].forEach(function (n) {
+      var b = document.createElement("button"); b.textContent = "+" + n.toLocaleString();
+      b.onclick = function () { pop.remove(); run(row, p, n); };
+      pop.appendChild(b);
+    });
+    var r = btn.getBoundingClientRect();
+    pop.style.left = Math.max(10, r.left - 60) + "px"; pop.style.top = (r.bottom + window.scrollY + 6) + "px";
+    document.body.appendChild(pop);
+    setTimeout(function () {
+      document.addEventListener("click", function close(ev) {
+        if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", close); }
+      });
+    }, 0);
+    e.stopPropagation();
+  };
+});
+function run(row, p, n) {
+  var btn = row.querySelector(".add");
+  var chip = document.createElement("div"); chip.className = "chipprog";
+  chip.innerHTML = '<div class="spin"></div><span>Checking…</span>';
+  btn.replaceWith(chip);
+  var msgs = ["Checking…", "Verifying…", "Adding…"];
+  var i = 0;
+  (function step() {
+    if (i < msgs.length) { chip.querySelector("span").textContent = msgs[i]; i++; setTimeout(step, 1500); return; }
+    var kept = Math.round(n * 0.93);
+    p.have += kept;
+    row.querySelector(".nm span").textContent = p.have.toLocaleString() + " in · " + (p.left - n).toLocaleString() + " left in the pool";
+    chip.innerHTML = '<span class="okmark">+' + kept.toLocaleString() + " added</span>";
+    setTimeout(function () {
+      var b = document.createElement("button"); b.className = "add"; b.textContent = "+ Add people";
+      chip.replaceWith(b); b.onclick = function () { alert("(prototype: reopen the picker)"); };
+    }, 3500);
+  })();
+}
+</script>
+</body>
+</html>

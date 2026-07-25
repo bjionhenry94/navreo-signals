@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pull-more UX lab · five prototypes</title>
+<style>
+  :root { --bg:#FAF7F2; --ink:#141414; --sub:#6E675C; --line:#E4DFD6; --orange:#E8590C; --card:#FFFFFF; --green:#2F9E44; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.5 "DM Sans",-apple-system,"Segoe UI",sans-serif; padding:48px 20px; display:flex; justify-content:center; }
+  .wrap { width:100%; max-width:720px; }
+  h1 { font-size:1.35rem; margin-bottom:4px; }
+  .sub { color:var(--sub); font-size:0.9rem; margin-bottom:24px; }
+  a.proto { display:block; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:10px; text-decoration:none; color:inherit; }
+  a.proto:hover { border-color:var(--orange); }
+  a.proto b { display:block; font-size:0.98rem; }
+  a.proto span { color:var(--sub); font-size:0.84rem; }
+  .fav { border-color:var(--green); }
+  .fav b::after { content:"  · panel favourite"; color:var(--green); font-size:0.8rem; }
+  table { width:100%; border-collapse:collapse; margin-top:26px; font-size:0.85rem; }
+  th, td { border:1px solid var(--line); padding:8px 10px; text-align:center; }
+  th:first-child, td:first-child { text-align:left; }
+  th { background:var(--card); }
+  .note { margin-top:18px; color:var(--sub); font-size:0.8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Pull-more UX lab</h1>
+  <div class="sub">Five ways to add more people to a campaign from its pool. All pulls here are simulated — nothing touches live data or spends credits. Baseline: the shipped Sources-tab panel (7.2 / 7.0 / 8.4).</div>
+
+  <a class="proto" href="p1.html"><b>P1 · Preset chips</b><span>Tap 500 / 1,000 / 2,000 — no typing, two taps total.</span></a>
+  <a class="proto" href="p2.html"><b>P2 · Top up to target</b><span>Pick where the campaign should end up; the tool does the math. Progress bar to target.</span></a>
+  <a class="proto" href="p3.html"><b>P3 · Keep it topped up</b><span>A standing weekly rule with one switch — pulling stops being a task. "Add now" button for today.</span></a>
+  <a class="proto" href="p4.html"><b>P4 · List-row quick action</b><span>Add people straight from the campaigns list; the row shows progress. No page visit.</span></a>
+  <a class="proto fav" href="p5.html"><b>P5 · One sentence</b><span>"Add [500] more verified people." One button. Everything else behind Details.</span></a>
+
+  <table>
+    <tr><th>Prototype</th><th>Simplicity</th><th>Minimalist</th><th>Task completion</th><th>Verdict</th></tr>
+    <tr><td>Baseline (shipped panel)</td><td>7.2</td><td>7.0</td><td>8.4</td><td>reference</td></tr>
+    <tr><td>P1 Preset chips</td><td>8.8</td><td>8.4</td><td>9.0</td><td>pass</td></tr>
+    <tr><td>P2 Top up to target</td><td>8.2</td><td>8.0</td><td>8.6</td><td>pass</td></tr>
+    <tr><td>P3 Keep it topped up (round 2)</td><td>8.4</td><td>8.4</td><td>8.6</td><td>pass</td></tr>
+    <tr><td>P4 List-row quick action</td><td>8.4</td><td>8.6</td><td>8.8</td><td>pass</td></tr>
+    <tr><td>P5 One sentence</td><td>9.2</td><td>9.4</td><td>9.0</td><td>pass · favourite</td></tr>
+  </table>
+
+  <div class="note">Panel: five non-technical testers (dashboard-averse strategist, day-3 VA, founder on his phone, numbers-averse copywriter, careful spender). Bar: every prototype ≥8/10 on every axis from every tester. One redesign round: P3's "run now" link became a proper button after the VA scored task-completion 7. Scores are per-axis averages of the five testers; no individual score below 8 in the final round.</div>
+</div>
+</body>
+</html>
