@@ -894,6 +894,7 @@
     display: flex; align-items: center; gap: 6px;
     font-size: 0.76rem; font-weight: 600; color: var(--success);
     margin-top: 3px; white-space: nowrap; /* short format is sized to the column - one line, never wraps */
+    overflow: hidden; text-overflow: ellipsis; /* only bites on very narrow windows - beats painting over the stats */
   }
   .sig-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex: 0 0 auto; animation: sigpulse 1.8s ease-out infinite; }
   @keyframes sigpulse {
