@@ -730,6 +730,21 @@ def smartlead(method: str, path: str, body: dict | None):
         if path == "/email-accounts/tags" and method == "GET":
             return list(_STATE["tags"])
 
+        # Single-account read — /api/warmup-live's per-mailbox GET. Mirrors the
+        # fleet row so the Re-enable modal's "read live" block works in the
+        # 7902 dev flow exactly like production.
+        if method == "GET" and path.startswith("/email-accounts/") \
+                and path.strip("/").split("/")[-1].isdigit():
+            aid = int(path.strip("/").split("/")[-1])
+            r = next((row for row in f.values() if row["email_account_id"] == aid), None)
+            if r is None:
+                raise urllib.error.HTTPError(f"mock://smartlead{path}", 404, "not found", {}, None)
+            return {"id": aid, "from_email": r["email"], "message_per_day": r.get("cap"),
+                    "warmup_details": {
+                        "status": "INACTIVE" if r.get("warmup_state") == "off" else "ACTIVE",
+                        "max_email_per_day": 20 if r.get("warmup_state") == "wrong" else 35,
+                        "reply_rate": 38, "warmup_reputation": 90}}
+
         if path == "/tags" and method == "POST":
             name = (body.get("name") or "").strip()
             existing = next((t for t in _STATE["tags"] if t["name"].lower() == name.lower()), None)
