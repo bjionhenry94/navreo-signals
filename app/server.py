@@ -6589,6 +6589,8 @@ def campaign_platform_leads(p: dict) -> dict:
             replied = row.get("lead_category_id") is not None
             out.append({"name": nm or (lead.get("email") or ""),
                         "email": lead.get("email") or "",
+                        "first_name": (lead.get("first_name") or "").strip(),
+                        "last_name": (lead.get("last_name") or "").strip(),
                         "company": lead.get("company_name") or "",
                         "title": lead.get("linkedin_bio") or lead.get("title") or "",
                         "status": status,
@@ -6613,6 +6615,41 @@ def campaign_platform_leads(p: dict) -> dict:
                         "linkedin": prof.get("profileUrl") or ""})
         return {"platform": "heyreach", "id": cid, "leads": out, "total": total, "offset": offset, "limit": limit}
     return {"error": "unknown platform", "leads": [], "total": None}
+
+
+def campaign_leads_export_csv(q: dict) -> tuple:
+    """GET /api/campaign-leads-csv — the campaign grid's Download button: page
+    the platform's own lead list to the end (100 a page, the same shaping as
+    campaign_platform_leads) and hand back ONE CSV of every lead, so the
+    50-row grid stays light while the full audience is one click away.
+    Same 3-tuple contract as api_lists_export_csv: ("error", status, body)
+    or ("csv", filename, body_bytes)."""
+    platform = ((q.get("platform") or ["smartlead"])[0] or "smartlead").lower()
+    cid = ((q.get("id") or [""])[0] or "").strip()
+    if not cid:
+        return "error", 400, {"ok": False, "message": "id is required"}
+    import csv, io
+    cols = ["email", "first_name", "last_name", "company", "title", "status", "replied"]
+    head = ["EMAIL", "FIRST_NAME", "LAST_NAME", "COMPANY_NAME", "TITLE", "STATUS", "REPLIED"]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(head)
+    offset, page_size, seen = 0, 100, 0
+    while True:
+        page = campaign_platform_leads({"platform": platform, "id": cid,
+                                        "offset": offset, "limit": page_size})
+        if page.get("error"):
+            return "error", 502, {"ok": False, "message": str(page["error"])[:300]}
+        rows = page.get("leads") or []
+        for lead in rows:
+            writer.writerow([("yes" if lead.get("replied") else "") if c == "replied"
+                             else (lead.get(c) or "") for c in cols])
+        seen += len(rows)
+        # short page = the end; 200k is a runaway guard, far above any campaign
+        if len(rows) < page_size or seen >= 200_000:
+            break
+        offset += page_size
+    return "csv", f"campaign-{cid}-leads.csv", buf.getvalue().encode("utf-8-sig")
 
 
 def campaigns_unified(p: dict) -> dict:
@@ -15003,6 +15040,22 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             kind, a, b = api_lists_export_csv(q)
+            if kind == "error":
+                return self._json(b, a)
+            filename, data = a, b
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(data)
+            return
+        if path == "/api/campaign-leads-csv":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            kind, a, b = campaign_leads_export_csv(q)
             if kind == "error":
                 return self._json(b, a)
             filename, data = a, b

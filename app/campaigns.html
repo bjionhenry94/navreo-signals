@@ -1988,6 +1988,116 @@
   }
   .cockpit .opt-smartlead:hover { color: var(--fg-muted); text-decoration: underline; }
   .cockpit .ext-ic { vertical-align: -1px; opacity: 0.85; }
+
+  /* ── Live-audience grid (leads hub): lists.html's datagrid, verbatim look,
+     scoped to the campaign page. Tokens are lists.html/navreo.css literals so
+     the two grids render identically without sharing a stylesheet. ── */
+  .cl-grid, .clg-popover {
+    --ink: #14110E; --ink-2: #3A332C; --ink-3: #6B6055;
+    --line: #ECECEA; --line-2: #DDDDDA;
+    --bg-sunken: #F7F7F6; --card: #FFFFFF; --cream: #F9F0E7;
+    --orange: #FF4D00; --orange-600: #DB4100; --orange-700: #A83100;
+    --gfocus: 0 0 0 3px rgba(255, 77, 0, 0.32);
+    --ctrl-h: 31px; --ctrl-radius: 8px;
+    --gfont-sans: "DM Sans", "Helvetica Neue", system-ui, sans-serif;
+    --gfont-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  }
+  .cl-grid .clg-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+  .cl-grid .btn, .clg-popover .btn {
+    border: 1px solid var(--line-2); background: transparent; color: var(--ink);
+    border-radius: 999px; padding: 8px 16px;
+    font: 500 13px var(--gfont-sans); letter-spacing: -0.005em;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  }
+  .cl-grid .btn:hover, .clg-popover .btn:hover { background: var(--bg-sunken); }
+  .cl-grid .btn:focus-visible, .clg-popover .btn:focus-visible { outline: none; box-shadow: var(--gfocus); }
+  .cl-grid .btn.primary, .clg-popover .btn.primary { background: var(--orange); border-color: var(--orange); color: var(--cream); }
+  .cl-grid .btn.primary:hover, .clg-popover .btn.primary:hover { background: var(--orange-600); }
+  .cl-grid .btn.sm, .clg-popover .btn.sm { padding: 5px 12px; font-size: 11.5px; }
+  .cl-grid .controlsrow .btn.sm, .cl-grid .searchwrap .searchinput, .cl-grid .numinput, .cl-grid .pagebtn {
+    height: var(--ctrl-h); box-sizing: border-box; border-radius: var(--ctrl-radius); font-size: 13px;
+  }
+  .cl-grid .controlsrow .btn.sm { padding: 0 13px; }
+  .cl-grid .controlsrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+  .cl-grid .searchwrap { position: relative; display: flex; align-items: center; }
+  .cl-grid .searchwrap .search-ic { position: absolute; left: 12px; color: var(--ink-3); display: inline-flex; pointer-events: none; }
+  .cl-grid .searchwrap .searchinput {
+    padding: 0 12px 0 30px; width: 240px;
+    border: 1px solid var(--line-2); font: 400 13px var(--gfont-sans); color: var(--ink); background: transparent;
+  }
+  .cl-grid .searchwrap .searchinput:focus { outline: none; box-shadow: var(--gfocus); }
+  .cl-grid .filterbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .cl-grid .filterbar .fchip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-sunken); border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; color: var(--ink-2); }
+  .cl-grid .filterbar .fchip button { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 999px; }
+  .cl-grid .filterbar .fchip button:hover { color: var(--ink); background: var(--line); }
+  .cl-grid .controlsrow .spacer { flex: 1; }
+  .cl-grid .numinput { border: 1px solid var(--line-2); padding: 0 10px; font: 500 13px var(--gfont-mono); width: 74px; color: var(--ink); background: transparent; }
+  .cl-grid .numinput:focus { outline: none; box-shadow: var(--gfocus); }
+  .cl-grid .pagefields { display: flex; align-items: center; gap: 6px; }
+  .cl-grid .pagefields label { font-size: 11px; color: var(--ink-3); font-weight: 500; white-space: nowrap; }
+  .cl-grid .pagefields .numinput { width: 62px; }
+  .cl-grid .pagecluster { display: flex; align-items: center; gap: 2px; }
+  .cl-grid .pagebtn {
+    background: none; border: 1px solid var(--line-2); width: var(--ctrl-h);
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--ink-2);
+  }
+  .cl-grid .pagebtn:hover { background: var(--bg-sunken); }
+  .cl-grid .pagebtn[disabled] { opacity: .4; cursor: not-allowed; }
+  .cl-grid .pagerangetext { font-size: 12px; color: var(--ink-3); padding: 5px 9px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cl-grid .gridwrap { position: relative; border: 1px solid var(--line); border-radius: 12px; overflow: auto; max-width: 100%; max-height: 68vh; }
+  .cl-grid table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; font-family: var(--gfont-sans); letter-spacing: -0.015em; line-height: 1.45; }
+  .cl-grid .datagrid th { position: sticky; top: 0; background: var(--bg-sunken); z-index: 5; text-align: left; padding: 0; border-bottom: 1px solid var(--line-2); }
+  .cl-grid .datagrid th .thwrap { display: flex; align-items: center; gap: 5px; padding: 8px 10px; cursor: pointer; user-select: none; white-space: nowrap; }
+  .cl-grid .datagrid th .thwrap:hover { background: var(--line); }
+  .cl-grid .datagrid th .thlbl { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
+  .cl-grid .datagrid th .sortarrow { display: inline-flex; align-items: center; color: var(--orange-700); opacity: 0; transition: opacity .12s; }
+  .cl-grid .datagrid th .thwrap:hover .sortarrow, .cl-grid .datagrid th .thwrap.sort-active .sortarrow { opacity: 1; }
+  .cl-grid .datagrid th .filt-btn { background: none; border: none; cursor: pointer; color: var(--ink-3); display: inline-flex; padding: 2px; border-radius: 5px; margin-left: auto; }
+  .cl-grid .datagrid th .filt-btn:hover { background: var(--line-2); color: var(--ink); }
+  .cl-grid .datagrid th .filt-btn.active { color: var(--orange-700); }
+  .cl-grid .datagrid th.chkcol, .cl-grid .datagrid td.chkcol { position: sticky; left: 0; background: var(--bg-sunken); text-align: center; padding: 6px 4px; width: 32px; z-index: 6; }
+  .cl-grid .datagrid td.chkcol { background: var(--card); z-index: 4; }
+  .cl-grid .datagrid tr:hover td.chkcol { background: var(--bg-sunken); }
+  .cl-grid .datagrid td.chkcol input, .cl-grid .datagrid th.chkcol input { cursor: pointer; }
+  .cl-grid .datagrid td.chkcol input { opacity: 0; }
+  .cl-grid .datagrid tr:hover td.chkcol input, .cl-grid .datagrid tr.row-selected td.chkcol input { opacity: 1; }
+  .cl-grid .datagrid th.gutter, .cl-grid .datagrid td.gutter { position: sticky; left: 32px; background: var(--bg-sunken); color: var(--ink-3); text-align: right; padding: 6px 10px; font-family: var(--gfont-mono); font-size: 11px; z-index: 4; }
+  .cl-grid .datagrid th.gutter { z-index: 6; }
+  .cl-grid .datagrid tr:hover td.gutter { background: var(--bg-sunken); }
+  .cl-grid .datagrid tr.row-selected td.gutter, .cl-grid .datagrid tr.row-selected td.chkcol { background: var(--cream); }
+  .cl-grid .datagrid tr.row-selected td { background: var(--cream); }
+  .cl-grid .datagrid td { padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+  .cl-grid .datagrid tr:hover td { background: var(--bg-sunken); }
+  .clg-popover { position: absolute; z-index: 60; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(20,17,14,.14); min-width: 200px; padding: 6px; font-family: var(--gfont-sans); }
+  .clg-popover.filtinput-pop { padding: 8px; }
+  .clg-popover.filtinput-pop input { width: 180px; border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; font-size: 12.5px; font-family: inherit; }
+  .clg-popover.filtinput-pop .row { display: flex; gap: 6px; margin-top: 8px; }
+  .clg-popover.colpop { max-height: 320px; overflow-y: auto; }
+  .clg-popover.colpop label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; border-radius: 7px; cursor: pointer; }
+  .clg-popover.colpop label:hover { background: var(--bg-sunken); }
+  .clg-popover.sortpop { width: 230px; padding: 10px; }
+  .clg-popover.sortpop .p-field { margin-bottom: 10px; }
+  .clg-popover.sortpop .p-field:last-child { margin-bottom: 0; }
+  .clg-popover.sortpop label { display: block; font-size: 11px; color: var(--ink-3); font-weight: 500; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .05em; }
+  .clg-popover.sortpop select { width: 100%; border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 9px; font-size: 12.5px; font-family: inherit; background: transparent; color: var(--ink); }
+  .clg-popover.sortpop .dirtoggle { display: flex; gap: 6px; }
+  .clg-popover.sortpop .dirtoggle button { flex: 1; border: 1px solid var(--line-2); background: transparent; border-radius: 7px; padding: 6px 0; font-size: 12.5px; cursor: pointer; color: var(--ink-2); }
+  .clg-popover.sortpop .dirtoggle button.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+  .clg-popover.sortpop .sortactions { display: flex; justify-content: space-between; margin-top: 12px; }
+
+  /* "Add more leads" prompt card */
+  .add-leads-card .al-prompt {
+    background: var(--sunken, #F7F7F6); border: 1px solid var(--border, #ECECEA); border-radius: 10px;
+    padding: 14px 16px; margin: 10px 0 12px; font-family: inherit; font-size: 0.85rem; line-height: 1.55;
+    color: var(--fg-muted); white-space: pre-wrap; word-break: break-word;
+  }
+  .add-leads-card .al-copy {
+    border: 1px solid var(--nav-orange); background: var(--nav-orange); color: #fff;
+    border-radius: 999px; padding: 8px 18px; font-size: 13px; font-weight: 700; font-family: inherit;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+  }
+  .add-leads-card .al-copy:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); }
+  .add-leads-card .al-copy.copied { background: #2F9E44; border-color: #2F9E44; }
 </style>
 
 <div class="app">
@@ -3041,11 +3151,6 @@
     var st = c.stats;
     var replyPct = pct(st.replied, st.sent, 2);
     var bouncePct = pct(st.bounced, st.sent, 1);
-    var badges = "";
-    c.others.forEach(function (r) {
-      var tg = (r.payload || {}).tag || "watch";
-      badges += '<span class="badge ' + (TAG_META[tg] || TAG_META.watch).badge + '">' + esc(KIND_LABEL[r.insight_key] || r.insight_key) + "</span>";
-    });
     var h = [];
     h.push('<article class="campaign-page" data-cid="' + esc(c.id) + '">');
     h.push('<a href="#/" class="back-link">&larr; Campaigns</a>');
@@ -3062,17 +3167,14 @@
     h.push('<div class="campaign-header-main">' + dial + '<div>' +
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
       '<p class="campaign-subtitle">Navreo &middot; campaign ' + esc(c.id) + "</p></div>" +
-      '<div class="campaign-header-right"><div class="verdict-badge-row">' +
-      '<span class="verdict-pill ' + c.pillClass + '">' + esc(c.pill) + "</span>" +
-      (badges ? '<span class="badge-strip">' + badges + "</span>" : "") + "</div>" +
+      '<div class="campaign-header-right">' +
       '<div class="campaign-run-row"><span class="campaign-run-status">Runs in Smartlead' + (c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "") + "</span>" +
       '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a>' +
       "</div></div></div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
       '<a href="#/c/' + esc(c.id) + '/messaging" class="campaign-tab' + (tab === "messaging" ? " is-active" : "") + '" data-tab="messaging">Messaging</a>' +
-      '<a href="#/c/' + esc(c.id) + '/leads" class="campaign-tab' + (tab === "leads" ? " is-active" : "") + '" data-tab="leads">Leads' + (st.leads != null ? ' <span class="tab-count tnum">(' + fmtInt(st.leads) + ")</span>" : "") + "</a>" +
-      '<a href="#/c/' + esc(c.id) + '/sources" class="campaign-tab' + (tab === "sources" ? " is-active" : "") + '" data-tab="sources">Sources</a></nav>');
+      '<a href="#/c/' + esc(c.id) + '/leads" class="campaign-tab' + (tab === "leads" ? " is-active" : "") + '" data-tab="leads">Leads' + (st.leads != null ? ' <span class="tab-count tnum">(' + fmtInt(st.leads) + ")</span>" : "") + "</a></nav>");
     h.push('<div class="campaign-page-body">');
 
     /* overview */
@@ -3133,16 +3235,23 @@
       '<div class="ov-card"><div class="card-title">The sequence</div><div id="sequence-root"><p class="card-subtitle">Loading&hellip;</p></div>' +
       '<p class="sample-footer">The live copy itself stays in Smartlead (the only safe place to edit it). <a class="action-link" href="' + esc(c.smartleadUrl.replace("/analytics", "/sequences")) + '" target="_blank" rel="noopener">Open the sequence in Smartlead</a></p></div></div>');
 
-    /* leads */
+    /* leads — the leads hub: status tiles, then the live-audience grid
+       (lists.html look, first GRID_CAP rows, Download = the full list), then
+       the Sources section (moved here when the Sources tab died), then the
+       "Add more leads" prompt card. */
     h.push('<div class="tab-panel" data-tab="leads"' + (tab !== "leads" ? " hidden" : "") + ">" +
       '<div class="ov-card"><div class="card-title">Everyone\'s status</div><div id="leads-tiles"><p class="lw-loading">Loading the contact record&hellip;</p></div></div>' +
-      '<div class="ov-card"><div class="card-title">Sample of the live audience</div><div id="leads-sample"><p class="lw-loading">Pulling a live sample from Smartlead&hellip;</p></div></div></div>');
-
-    /* sources */
-    h.push('<div class="tab-panel" data-tab="sources"' + (tab !== "sources" ? " hidden" : "") + ">" +
+      '<div class="ov-card cl-grid"><div class="clg-head"><div class="card-title" style="margin:0">Live audience</div>' +
+      '<button class="btn" id="clg-download" title="Download every lead in this campaign as CSV"><span class="dlicon"></span> Download</button></div>' +
+      '<div id="leads-grid"><p class="lw-loading">Pulling the live audience from Smartlead&hellip;</p></div></div>' +
       '<div class="sources-section" id="draft-sources-section"><div class="section-label">Sources</div>' +
       '<div id="draft-sources-root"></div><div id="sources-root"><p class="lw-loading">Loading&hellip;</p></div>' +
-      '<div id="sources-empty"></div></div></div>');
+      '<div id="sources-empty"></div></div>' +
+      '<div class="ov-card add-leads-card"><div class="card-title">Add more leads</div>' +
+      '<p class="card-subtitle">Copy this brief into Claude: it reads this campaign\'s history, targeting and reply/booking performance first, then brings back new lead ideas for this exact campaign.</p>' +
+      '<pre class="al-prompt" id="al-prompt">' + esc(addLeadsPrompt(c)) + "</pre>" +
+      '<button class="btn al-copy" id="al-copy">Copy prompt</button></div>' +
+      "</div>");
 
     h.push("</div></article>");
     return h.join("");
@@ -3496,7 +3605,7 @@
       if (lt && !((d.leads || {}).total)) {
         lt.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet: its leads were added before push tracking existed' +
           (c.stats.leads != null ? " (Smartlead itself holds " + fmtInt(c.stats.leads) + " leads)" : "") +
-          ". The live audience sample below is the platform truth.</p>";
+          ". The live audience grid below is the platform truth.</p>";
       } else if (lt) {
         var total = (d.leads || {}).total;
         var LBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
@@ -3736,27 +3845,304 @@
       (note ? '<p class="sample-footer">' + esc(note) + "</p>" : "");
   }
 
+  /* ── Live-audience grid (leads hub): lists.html's datagrid look on the
+     campaign page. ONE platform call capped at CLG_CAP rows — the grid never
+     grows past the cap; Download is the only door to the full list.
+     Search / Sort / Filter / columns work on the loaded rows. ── */
+  var CLG_CAP = 50;
+  var CLG_COLS = [
+    { k: "email", lbl: "EMAIL" },
+    { k: "first_name", lbl: "FIRST_NAME" },
+    { k: "last_name", lbl: "LAST_NAME" },
+    { k: "company", lbl: "COMPANY_NAME" },
+    { k: "status", lbl: "STATUS" },
+    { k: "replied", lbl: "REPLIED" }
+  ];
+  var clgSvg = {
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>',
+    filt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>',
+    filtTb: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>',
+    sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M8 20V4M8 4 4 8m4-4 4 4"/><path d="M16 4v16m0 0 4-4m-4 4-4-4"/></svg>',
+    left: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M15 6l-6 6 6 6"/></svg>',
+    right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M9 6l6 6-6 6"/></svg>',
+    caretUp: '<svg viewBox="0 0 24 24" width="9" height="9" fill="currentColor"><path d="M12 7l6 9H6z"/></svg>',
+    caretDown: '<svg viewBox="0 0 24 24" width="9" height="9" fill="currentColor"><path d="M6 8h12l-6 9z"/></svg>',
+    dl: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M8 3v9m0 0l-3.5-3.5M8 12l3.5-3.5"/></svg>'
+  };
+  var CLG = null; /* grid state for the open campaign page */
+
+  function clgVal(l, k) {
+    if (k === "replied") return l.replied ? "Yes" : "";
+    var v = l[k];
+    if ((k === "first_name" || k === "last_name") && v == null) {
+      /* rows from before the API carried the split name: best-effort split */
+      var parts = String(l.name || "").split(" ");
+      v = k === "first_name" ? parts[0] : parts.slice(1).join(" ");
+    }
+    return v == null ? "" : String(v);
+  }
+  function clgView() {
+    var rows = CLG.rows;
+    var q = (CLG.search || "").toLowerCase();
+    if (q) rows = rows.filter(function (l) {
+      return CLG_COLS.some(function (c) { return clgVal(l, c.k).toLowerCase().indexOf(q) !== -1; });
+    });
+    Object.keys(CLG.filters).forEach(function (k) {
+      var f = CLG.filters[k].toLowerCase();
+      rows = rows.filter(function (l) { return clgVal(l, k).toLowerCase().indexOf(f) !== -1; });
+    });
+    if (CLG.sort) {
+      var s = CLG.sort, dm = CLG.dir === "desc" ? -1 : 1;
+      rows = rows.slice().sort(function (a, b) {
+        var av = clgVal(a, s).toLowerCase(), bv = clgVal(b, s).toLowerCase();
+        return av < bv ? -dm : av > bv ? dm : 0;
+      });
+    }
+    return rows;
+  }
+  function clgRender() {
+    var root = document.getElementById("leads-grid");
+    if (!root || !CLG) return;
+    var view = clgView();
+    var filtered = CLG.search || Object.keys(CLG.filters).length;
+    var start = Math.max(1, Math.min(CLG.start, Math.max(1, view.length)));
+    var slice = view.slice(start - 1, start - 1 + CLG.per);
+    var chips = Object.keys(CLG.filters).map(function (k) {
+      var col = CLG_COLS.filter(function (c) { return c.k === k; })[0];
+      return '<span class="fchip">' + esc((col ? col.lbl : k) + ": " + CLG.filters[k]) +
+        '<button data-unfilter="' + esc(k) + '" title="Remove filter">&times;</button></span>';
+    }).join("");
+    var visCols = CLG_COLS.filter(function (c) { return CLG.visible[c.k]; });
+    var thead = '<thead><tr><th class="chkcol"><input type="checkbox" id="clg-selall" title="Select all visible rows"></th><th class="gutter">#</th>' +
+      visCols.map(function (c) {
+        return '<th><div class="thwrap' + (CLG.sort === c.k ? " sort-active" : "") + '" data-sortcol="' + esc(c.k) + '">' +
+          '<span class="thlbl">' + esc(c.lbl) + "</span>" +
+          '<span class="sortarrow">' + (CLG.sort === c.k && CLG.dir === "desc" ? clgSvg.caretDown : clgSvg.caretUp) + "</span>" +
+          '<button class="filt-btn' + (CLG.filters[c.k] ? " active" : "") + '" title="Filter" data-filtcol="' + esc(c.k) + '">' + clgSvg.filt + "</button>" +
+          "</div></th>";
+      }).join("") + "</tr></thead>";
+    var tbody = "<tbody>" + slice.map(function (l, i) {
+      var key = l.email || String(start - 1 + i);
+      var sel = !!CLG.selected[key];
+      return '<tr class="' + (sel ? "row-selected" : "") + '"><td class="chkcol"><input type="checkbox" class="clg-rowchk" data-key="' + esc(key) + '"' + (sel ? " checked" : "") + "></td>" +
+        '<td class="gutter">' + fmtInt(start + i) + "</td>" +
+        visCols.map(function (c) {
+          var v = clgVal(l, c.k);
+          return '<td title="' + esc(v) + '">' + esc(v) + "</td>";
+        }).join("") + "</tr>";
+    }).join("") + "</tbody>";
+    var from = view.length ? start : 0;
+    var to = view.length ? Math.min(view.length, start - 1 + slice.length) : 0;
+    var grand = CLG.total != null ? CLG.total : CLG.rows.length;
+    var rangeTxt = filtered
+      ? fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(view.length) + " matching"
+      : fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(grand);
+    root.innerHTML =
+      '<div class="controlsrow">' +
+      '<div class="searchwrap"><span class="search-ic">' + clgSvg.search + '</span><input class="searchinput" id="clg-search" placeholder="Search rows&hellip;" value="' + esc(CLG.search) + '"></div>' +
+      '<div class="filterbar">' + chips + "</div>" +
+      '<div class="spacer"></div>' +
+      '<button class="btn sm" id="clg-filterbtn" title="Filter rows">' + clgSvg.filtTb + " Filter</button>" +
+      '<button class="btn sm" id="clg-sortbtn" title="Sort rows">' + clgSvg.sort + " Sort</button>" +
+      '<button class="btn sm" id="clg-colbtn">columns</button>' +
+      '<div class="pagefields"><label for="clg-startrow">Start row</label><input type="number" min="1" class="numinput" id="clg-startrow" value="' + start + '" title="Jump to a row (1-indexed)">' +
+      '<label for="clg-rowsinput">Rows</label><input type="number" min="1" class="numinput" id="clg-rowsinput" value="' + CLG.per + '" title="Rows per page"></div>' +
+      '<div class="pagecluster"><button class="pagebtn" id="clg-prev" title="Previous page"' + (start <= 1 ? " disabled" : "") + ">" + clgSvg.left + "</button>" +
+      '<span class="pagerangetext">' + rangeTxt + "</span>" +
+      '<button class="pagebtn" id="clg-next" title="Next page"' + (start - 1 + CLG.per >= view.length ? " disabled" : "") + ">" + clgSvg.right + "</button></div></div>" +
+      '<div class="gridwrap"><table class="datagrid">' + thead + tbody + "</table></div>" +
+      '<p class="sample-footer">First ' + fmtInt(CLG.rows.length) + " of " + fmtInt(grand) + " leads, live from Smartlead &mdash; Download for the full list.</p>";
+    clgWire();
+  }
+  function clgClosePop() {
+    var p = document.querySelector(".clg-popover");
+    if (p) p.remove();
+    document.removeEventListener("click", clgDocClose);
+  }
+  function clgDocClose(e) {
+    var p = document.querySelector(".clg-popover");
+    if (p && !p.contains(e.target)) clgClosePop();
+  }
+  function clgPop(anchor, cls, html) {
+    clgClosePop();
+    var pop = document.createElement("div");
+    pop.className = "clg-popover " + cls;
+    pop.innerHTML = html;
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect();
+    pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+    pop.style.left = Math.max(8, window.scrollX + r.right - pop.offsetWidth) + "px";
+    setTimeout(function () { document.addEventListener("click", clgDocClose); }, 0);
+    return pop;
+  }
+  function clgWire() {
+    var root = document.getElementById("leads-grid");
+    if (!root) return;
+    var se = document.getElementById("clg-search");
+    se.oninput = function () {
+      CLG.search = se.value; CLG.start = 1;
+      clgRender();
+      var ne = document.getElementById("clg-search");
+      if (ne) { ne.focus(); ne.setSelectionRange(ne.value.length, ne.value.length); }
+    };
+    root.querySelectorAll("[data-sortcol]").forEach(function (th) {
+      th.addEventListener("click", function (e) {
+        if (e.target.closest("[data-filtcol]")) return;
+        var k = th.getAttribute("data-sortcol");
+        if (CLG.sort !== k) { CLG.sort = k; CLG.dir = "asc"; }
+        else if (CLG.dir === "asc") CLG.dir = "desc";
+        else { CLG.sort = ""; CLG.dir = "asc"; }
+        clgRender();
+      });
+    });
+    root.querySelectorAll("[data-filtcol]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var k = btn.getAttribute("data-filtcol");
+        var col = CLG_COLS.filter(function (c) { return c.k === k; })[0];
+        var pop = clgPop(btn, "filtinput-pop",
+          '<input id="clg-filtval" placeholder="' + esc((col ? col.lbl : k) + " contains…") + '" value="' + esc(CLG.filters[k] || "") + '">' +
+          '<div class="row"><button class="btn sm" id="clg-filtclear">Clear</button><button class="btn sm primary" id="clg-filtapply">Apply</button></div>');
+        var inp = pop.querySelector("#clg-filtval");
+        inp.focus();
+        var apply = function () {
+          var v = inp.value.trim();
+          if (v) CLG.filters[k] = v; else delete CLG.filters[k];
+          CLG.start = 1; clgClosePop(); clgRender();
+        };
+        pop.querySelector("#clg-filtapply").onclick = apply;
+        inp.onkeydown = function (ev) { if (ev.key === "Enter") apply(); };
+        pop.querySelector("#clg-filtclear").onclick = function () { delete CLG.filters[k]; CLG.start = 1; clgClosePop(); clgRender(); };
+      });
+    });
+    root.querySelectorAll("[data-unfilter]").forEach(function (b) {
+      b.addEventListener("click", function () { delete CLG.filters[b.getAttribute("data-unfilter")]; CLG.start = 1; clgRender(); });
+    });
+    document.getElementById("clg-filterbtn").onclick = function (e) {
+      e.stopPropagation();
+      var opts = CLG_COLS.map(function (c) { return '<option value="' + esc(c.k) + '">' + esc(c.lbl) + "</option>"; }).join("");
+      var pop = clgPop(e.currentTarget, "filtinput-pop",
+        '<select id="clg-fcol" style="width:100%;margin-bottom:6px;border:1px solid var(--line-2);border-radius:7px;padding:6px 9px;font-size:12.5px;font-family:inherit;background:transparent;color:var(--ink)">' + opts + "</select>" +
+        '<input id="clg-filtval" placeholder="Value contains&hellip;">' +
+        '<div class="row"><button class="btn sm primary" id="clg-filtapply" style="margin-left:auto">Apply</button></div>');
+      pop.querySelector("#clg-filtapply").onclick = function () {
+        var k = pop.querySelector("#clg-fcol").value, v = pop.querySelector("#clg-filtval").value.trim();
+        if (v) { CLG.filters[k] = v; CLG.start = 1; }
+        clgClosePop(); clgRender();
+      };
+    };
+    document.getElementById("clg-sortbtn").onclick = function (e) {
+      e.stopPropagation();
+      var opts = '<option value="">No sort</option>' + CLG_COLS.map(function (c) {
+        return '<option value="' + esc(c.k) + '"' + (CLG.sort === c.k ? " selected" : "") + ">" + esc(c.lbl) + "</option>";
+      }).join("");
+      var pop = clgPop(e.currentTarget, "sortpop",
+        '<div class="p-field"><label>Column</label><select id="clg-scol">' + opts + "</select></div>" +
+        '<div class="p-field"><label>Direction</label><div class="dirtoggle">' +
+        '<button type="button" id="clg-sasc" class="' + (CLG.dir !== "desc" ? "on" : "") + '">Asc</button>' +
+        '<button type="button" id="clg-sdesc" class="' + (CLG.dir === "desc" ? "on" : "") + '">Desc</button></div></div>' +
+        '<div class="sortactions"><button class="btn sm" id="clg-sclear">Clear sort</button><button class="btn sm primary" id="clg-sapply">Apply</button></div>');
+      var dir = CLG.dir === "desc" ? "desc" : "asc";
+      pop.querySelector("#clg-sasc").onclick = function () { dir = "asc"; this.classList.add("on"); pop.querySelector("#clg-sdesc").classList.remove("on"); };
+      pop.querySelector("#clg-sdesc").onclick = function () { dir = "desc"; this.classList.add("on"); pop.querySelector("#clg-sasc").classList.remove("on"); };
+      pop.querySelector("#clg-sapply").onclick = function () { CLG.sort = pop.querySelector("#clg-scol").value; CLG.dir = dir; clgClosePop(); clgRender(); };
+      pop.querySelector("#clg-sclear").onclick = function () { CLG.sort = ""; CLG.dir = "asc"; clgClosePop(); clgRender(); };
+    };
+    document.getElementById("clg-colbtn").onclick = function (e) {
+      e.stopPropagation();
+      var pop = clgPop(e.currentTarget, "colpop", CLG_COLS.map(function (c) {
+        return '<label><input type="checkbox" data-viscol="' + esc(c.k) + '"' + (CLG.visible[c.k] ? " checked" : "") + "> " + esc(c.lbl) + "</label>";
+      }).join(""));
+      pop.querySelectorAll("[data-viscol]").forEach(function (chk) {
+        chk.addEventListener("change", function () {
+          CLG.visible[chk.getAttribute("data-viscol")] = chk.checked;
+          clgRender();
+        });
+      });
+    };
+    document.getElementById("clg-startrow").onchange = function () {
+      CLG.start = Math.max(1, parseInt(this.value, 10) || 1); clgRender();
+    };
+    document.getElementById("clg-rowsinput").onchange = function () {
+      CLG.per = Math.max(1, parseInt(this.value, 10) || CLG_CAP); clgRender();
+    };
+    document.getElementById("clg-prev").onclick = function () { CLG.start = Math.max(1, CLG.start - CLG.per); clgRender(); };
+    document.getElementById("clg-next").onclick = function () { CLG.start = CLG.start + CLG.per; clgRender(); };
+    var sa = document.getElementById("clg-selall");
+    if (sa) sa.onchange = function () {
+      clgView().slice(CLG.start - 1, CLG.start - 1 + CLG.per).forEach(function (l, i) {
+        var key = l.email || String(CLG.start - 1 + i);
+        if (sa.checked) CLG.selected[key] = true; else delete CLG.selected[key];
+      });
+      clgRender();
+    };
+    root.querySelectorAll(".clg-rowchk").forEach(function (chk) {
+      chk.addEventListener("change", function () {
+        var k = chk.getAttribute("data-key");
+        if (chk.checked) CLG.selected[k] = true; else delete CLG.selected[k];
+        clgRender();
+      });
+    });
+  }
+
+  /* The "Add more leads" brief: campaign-aware, history-first, routed through
+     lilly-strategy and the upload gate. The text IS the interface — a
+     strategist pastes it into Claude and the chain fires. */
+  function addLeadsPrompt(c) {
+    return 'Add more leads to "' + c.name + '" (Smartlead campaign ' + c.id + "). " +
+      "First pull this campaign's full picture: targeting and ICP so far, every source list already pushed, " +
+      "and lead performance - who replied, who was positive, who booked (use lilly-optimiser + lilly-data). " +
+      "Then run lilly-strategy focused on THIS campaign: suggest new lead ideas that either top it up or " +
+      "justify a sibling launch, never re-pitching dead angles and netting every idea against contact_history + suppressions. " +
+      "When I approve an idea, pull the list and route the upload through /lilly-upload-gate into campaign " + c.id + " (or the new sibling).";
+  }
+  function clgCopyPrompt(c, btn) {
+    var txt = addLeadsPrompt(c);
+    var done = function () {
+      btn.textContent = "Copied ✓";
+      btn.classList.add("copied");
+      setTimeout(function () { btn.textContent = "Copy prompt"; btn.classList.remove("copied"); }, 2200);
+    };
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) { /* no clipboard: text stays selectable in the card */ }
+      ta.remove();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done, fallback);
+    } else fallback();
+  }
+
   function hydratePlatformLeads(c) {
     var id = c.id;
     var apply = function (pl) {
-      var root = document.getElementById("leads-sample");
+      var root = document.getElementById("leads-grid");
       if (!root) return;
       var leads = (pl || {}).leads || [];
       if (!leads.length) {
-        root.innerHTML = '<p class="card-subtitle">Could not pull the live audience sample from Smartlead right now.</p>';
+        root.innerHTML = '<p class="card-subtitle">Could not pull the live audience from Smartlead right now.</p>';
         return;
       }
-      root.innerHTML = '<div class="leads-table-wrap"><table class="leads-table">' +
-        "<thead><tr><th>Name</th><th>Company</th><th>Title</th><th>Status</th><th>Replied</th></tr></thead><tbody>" +
-        leads.slice(0, 15).map(function (l) {
-          return "<tr><td data-label=\"Name\">" + esc(l.name || "-") + "</td><td class=\"lt-company\" data-label=\"Company\">" + esc(l.company || "-") +
-            "</td><td data-label=\"Title\">" + esc(l.title || "-") + "</td><td data-label=\"Status\">" + esc(l.status || "-") +
-            "</td><td data-label=\"Replied\">" + (l.replied ? "Yes" : "-") + "</td></tr>";
-        }).join("") + "</tbody></table></div>" +
-        '<p class="sample-footer">First ' + Math.min(15, leads.length) + " of " + fmtInt(pl.total) + ", live from Smartlead right now.</p>";
+      var vis = {};
+      CLG_COLS.forEach(function (col) { vis[col.k] = true; });
+      CLG = { cid: id, rows: leads.slice(0, CLG_CAP), total: pl.total, search: "", filters: {}, sort: "", dir: "asc",
+              start: 1, per: CLG_CAP, visible: vis, selected: {} };
+      clgRender();
     };
+    var dl = document.getElementById("clg-download");
+    if (dl) {
+      var ic = dl.querySelector(".dlicon");
+      if (ic && !ic.innerHTML) ic.innerHTML = clgSvg.dl;
+      dl.onclick = function () {
+        window.location.assign("/api/campaign-leads-csv?platform=smartlead&id=" + encodeURIComponent(id));
+      };
+    }
+    var cp = document.getElementById("al-copy");
+    if (cp) cp.onclick = function () { clgCopyPrompt(c, cp); };
     if (STATE.platformLeads[id]) { apply(STATE.platformLeads[id]); return; }
-    getJSON("/api/campaign-platform-leads?platform=smartlead&id=" + encodeURIComponent(id) + "&offset=0&limit=15").then(function (pl) {
+    getJSON("/api/campaign-platform-leads?platform=smartlead&id=" + encodeURIComponent(id) + "&offset=0&limit=" + CLG_CAP).then(function (pl) {
       STATE.platformLeads[id] = pl; apply(pl);
     }).catch(function () { apply(null); });
   }
@@ -3851,6 +4237,9 @@
       return;
     }
     var id = m[1], tab = m[2] || "overview";
+    /* Sources folded into the Leads hub: the old tab's hash must land on
+       Leads, never bounce (hash law). */
+    if (tab === "sources") { window.location.replace("#/c/" + id + "/leads"); return; }
     var c = STATE.byId[id] || ghostRow(id);
     if (!c) {
       viewCamp.hidden = true; viewList.hidden = false;
