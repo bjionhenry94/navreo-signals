@@ -1081,6 +1081,35 @@
   .perf-label { font-size: 0.72rem; color: var(--fg-subtle); line-height: 1.4; }
   .perf-sub { font-size: 0.68rem; color: var(--fg-subtle); font-weight: 500; }
 
+  /* ── The campaign at a glance: merged status+performance (overview-merge P2,
+     results left / audience right). Bar fills are the validated warm ramp +
+     amber/red status pair; every segment also carries a labelled count. ── */
+  .ovm-split { display: grid; grid-template-columns: 1fr 1px 1fr; gap: 0 26px; align-items: start; margin-top: 14px; }
+  .ovm-vline { background: rgba(127,127,127,0.18); align-self: stretch; }
+  .ovm-panelh { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-subtle); margin-bottom: 2px; }
+  .perf-grid.ovm-tiles { grid-template-columns: 1fr 1fr; margin-top: 12px; }
+  .ovm-meter { margin-top: 16px; }
+  .ovm-meter-lab { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.78rem; color: var(--fg-muted); margin-bottom: 7px; }
+  .ovm-meter-lab b { color: var(--fg); font-weight: 700; }
+  .ovm-track { position: relative; height: 6px; border-radius: 999px; background: rgba(127,127,127,0.16); }
+  .ovm-fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 999px; background: var(--success, #2E7D5B); }
+  .ovm-fill.is-over { background: var(--warning, #8F6600); }
+  .ovm-tick { position: absolute; left: 75%; top: -4px; width: 2px; height: 14px; background: var(--fg-muted); border-radius: 1px; }
+  .ovm-scale { position: relative; height: 15px; font-size: 0.68rem; color: var(--fg-subtle); margin-top: 3px; }
+  .ovm-scale span:first-child { position: absolute; left: 0; }
+  .ovm-scale .ovm-cap { position: absolute; left: 75%; transform: translateX(-50%); }
+  .ovm-total { margin: 10px 0 12px; display: flex; align-items: baseline; gap: 8px; }
+  .ovm-total-num { font-family: var(--font-display); font-weight: 400; font-size: 1.7rem; letter-spacing: -0.02em; color: var(--fg); }
+  .ovm-total-lab { font-size: 0.78rem; color: var(--fg-muted); }
+  .ovm-srow { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .ovm-slab { flex: 0 0 118px; font-size: 0.78rem; color: var(--fg-muted); }
+  .ovm-strk { flex: 1; height: 11px; border-radius: 4px; background: rgba(127,127,127,0.12); overflow: hidden; }
+  .ovm-sfill { display: block; height: 100%; border-radius: 4px; }
+  .ovm-sn { flex: 0 0 52px; text-align: right; font-size: 0.78rem; font-weight: 700; color: var(--fg); }
+  .ovm-spc { flex: 0 0 40px; text-align: right; font-size: 0.7rem; color: var(--fg-subtle); }
+  .bar-chip--ok { background: var(--success-bg, rgba(46,125,91,0.14)); color: var(--success, #2E7D5B); }
+  @media (max-width: 900px) { .ovm-split { grid-template-columns: 1fr; gap: 18px; } .ovm-vline { display: none; } }
+
   .whole-picture-grid {
     display: grid;
     grid-template-columns: minmax(0,1.35fr) minmax(0,1fr);
@@ -1953,6 +1982,7 @@
      Replaced the old full-breakdown dump (every finding + 8-col table). */
   .cockpit .why-empty { margin: 8px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
   .cockpit .why-verdict { margin: 10px 0 0; font-size: 0.84rem; font-weight: 700; color: var(--fg); line-height: 1.4; }
+  .cockpit .why-prose { margin: 8px 0 0; font-size: 0.8rem; color: var(--fg-muted); line-height: 1.5; }
   .cockpit .why-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .cockpit .why-chip {
     display: inline-flex; align-items: baseline; gap: 5px; padding: 4px 10px;
@@ -1971,6 +2001,7 @@
   .cockpit .why-bar-row.wv-cut .why-bar-fill { background: var(--danger); opacity: 0.5; }
   .cockpit .why-bar-count { color: var(--fg-subtle); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
   .cockpit .why-bar-count b { color: var(--fg); }
+  .cockpit .why-bar-row.wv-inactive { opacity: 0.5; }
   .cockpit .why-bars-caption { margin: 6px 0 0; font-size: 0.72rem; color: var(--fg-subtle); }
   .cockpit .opt-why { margin-top: 10px; }
   .cockpit .opt-why summary { cursor: pointer; font-size: 0.75rem; font-weight: 700; color: var(--nav-orange-600); list-style: none; }
@@ -2926,18 +2957,51 @@
     /* "Why?" expander — the reasoning behind the recommendation, from the
        payload the crunch already ships (headline reason + the numbers). */
     var st2 = p.stats || {};
-    var whyBits = [];
-    if (p.bold) whyBits.push(esc(p.bold));
-    if (st2.sent != null) whyBits.push(fmtInt(st2.sent) + " emails sent" + (st2.leads ? " to " + fmtInt(st2.leads) + " leads" : "") + (st2.completion != null ? " &middot; " + st2.completion + "% of the list worked" : ""));
-    if (st2.reply_rate != null) whyBits.push(st2.reply_rate + "% reply rate" + (st2.pos != null ? " &middot; " + fmtInt(st2.pos) + " positive " + (st2.pos === 1 ? "reply" : "replies") : ""));
-    if (st2.ratio && st2.pos > 0) whyBits.push("1 positive per " + fmtInt(st2.ratio) + " sends, healthy is under 1,500");
-    if (st2.meetings) whyBits.push(fmtInt(st2.meetings) + " meeting" + (st2.meetings === 1 ? "" : "s") + " booked");
-    if (p.note) whyBits.push(esc(p.note));
-    /* Always rendered: the quick numbers show instantly, and the full
-       breakdown (the old Optimisations tab's story — priority, prose,
-       strikethrough variant table) lazy-loads into .why-full on first open. */
-    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '" data-why-ik="' + esc(r.insight_key || "") + '"><summary>Why?</summary>' +
-      (whyBits.length ? '<ul class="opt-why-body">' + whyBits.map(function (w) { return "<li>" + w + "</li>"; }).join("") + "</ul>" : "") +
+    /* Why? digest, one source of truth: everything visible on open comes
+       from the card's OWN payload (p.note + p.stats), so the receipts can
+       never argue with the headline. The lazy .why-full fetch only ever adds
+       per-variant bars from the optimiser split data. */
+    var noteSents = (p.note || "").match(/[^.!?]+[.!?]?/g) || [];
+    /* whole sentences only: a takeaway cut mid-clause reads worse than a
+       slightly long one. Up to 24 words verbatim; past that, cut at the last
+       comma inside the first 15 words, ellipsis as a last resort. */
+    var vWords = (noteSents[0] || "").trim().split(/\s+/).filter(Boolean);
+    var verdictTxt;
+    if (vWords.length <= 24) verdictTxt = vWords.join(" ");
+    else {
+      var head15 = vWords.slice(0, 15).join(" ");
+      var ci = head15.lastIndexOf(",");
+      verdictTxt = ci > 20 ? head15.slice(0, ci) : head15 + "\u2026";
+    }
+    var noteRest = noteSents.slice(1).join(" ").trim();
+    /* chips carry the numbers THIS kind of call is decided on */
+    var whyChips = [];
+    var chip = function (label, val, cls) { if (val != null && val !== "") whyChips.push('<span class="why-chip' + (cls || "") + '">' + label + " <b>" + val + "</b></span>"); };
+    var whyKind = r.insight_key || "";
+    if (whyKind === "lifecycle") {
+      if (st2.leads != null) chip("Leads", fmtInt(st2.leads));
+      if (st2.sent != null) chip("Sent", fmtInt(st2.sent));
+      if (st2.completion != null) chip("List worked", st2.completion + "%");
+      if (st2.meetings) chip("Meetings", fmtInt(st2.meetings), " why-chip--good");
+    } else if (whyKind === "list-audit") {
+      if (st2.sent != null) chip("Sent", fmtInt(st2.sent));
+      if (st2.reply_rate != null && st2.sent != null) chip("Replies", fmtInt(Math.round(st2.sent * st2.reply_rate / 100)));
+      if (st2.reply_rate != null) chip("Reply rate", st2.reply_rate + "%", st2.reply_rate < 1.5 ? " why-chip--bad" : "");
+      if (st2.pos != null) chip("Positives", fmtInt(st2.pos), st2.pos === 0 ? " why-chip--bad" : "");
+      if (st2.ratio && st2.pos > 0) chip("Sent/pos", fmtInt(Math.round(st2.ratio)), st2.ratio > 1500 ? " why-chip--bad" : " why-chip--good");
+    } else {
+      if (st2.sent != null) chip("Sent", fmtInt(st2.sent));
+      if (st2.pos != null) chip("Positives", fmtInt(st2.pos), st2.pos === 0 ? " why-chip--bad" : "");
+      if (st2.ratio && st2.pos > 0) chip("Sent/pos", fmtInt(Math.round(st2.ratio)), st2.ratio > 1500 ? " why-chip--bad" : " why-chip--good");
+      if (st2.reply_rate != null) chip("Reply rate", st2.reply_rate + "%");
+      if (st2.meetings) chip("Meetings", fmtInt(st2.meetings), " why-chip--good");
+    }
+    var whyProse = noteRest ? esc(noteRest)
+      : (st2.sent != null ? fmtInt(st2.sent) + " emails sent" + (st2.leads ? " to " + fmtInt(st2.leads) + " leads" : "") + (st2.completion != null ? " &middot; " + st2.completion + "% of the list worked" : "") : "");
+    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '" data-why-ik="' + esc(r.insight_key || "") + '" data-why-v="' + (verdictTxt ? "1" : "") + '"><summary>Why?</summary>' +
+      (verdictTxt ? '<p class="why-verdict">' + esc(verdictTxt) + "</p>" : "") +
+      (whyChips.length ? '<div class="why-chips">' + whyChips.join("") + "</div>" : "") +
+      (whyProse ? '<p class="why-prose">' + whyProse + "</p>" : "") +
       '<div class="why-full"></div></details>';
     return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
       '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
@@ -3147,6 +3211,21 @@
   }
 
   /* ---------- campaign page ---------- */
+  function ovmMeterHTML(c, st) {
+    /* Sends-per-positive as a headroom meter: 0..2,000 scale, tick at the
+       1,500 house line. Only the stated benchmark carries judgment. */
+    if (!c.ratio) return "";
+    var r = Math.round(c.ratio);
+    var frac = Math.max(0, Math.min(1, r / 2000));
+    var healthy = r < 1500;
+    return '<div class="ovm-meter"><div class="ovm-meter-lab">' +
+      '<span>Sends per positive &mdash; <b class="tnum">' + fmtInt(r) + "</b> (" + fmtInt(st.sent) + " &divide; " + fmtInt(st.positives) + ")</span>" +
+      (healthy ? '<span class="bar-chip bar-chip--ok">healthy &middot; line is 1,500</span>'
+               : '<span class="bar-chip bar-chip--warning">over the 1,500 line</span>') + "</div>" +
+      '<div class="ovm-track"><div class="ovm-fill' + (healthy ? "" : " is-over") + '" style="width:' + (frac * 100).toFixed(1) + '%"></div><div class="ovm-tick"></div></div>' +
+      '<div class="ovm-scale"><span>0</span><span class="ovm-cap">1,500 line</span></div></div>';
+  }
+
   function campaignPageHTML(c, tab) {
     var st = c.stats;
     var replyPct = pct(st.replied, st.sent, 2);
@@ -3179,26 +3258,29 @@
 
     /* overview */
     h.push('<div class="tab-panel" data-tab="overview"' + (tab !== "overview" ? " hidden" : "") + ">");
-    /* Live performance leads the tab: the live numbers are what a strategist opens
-       the page for, so they sit above the written-up picture. */
-    h.push('<div class="ov-card"><div class="card-title">Live performance</div>' +
+    /* The glance leads the tab: Live performance + Everyone's status merged into
+       one two-panel section (overview-merge P2, results left / audience right).
+       Left paints synchronously from the sync stats; the right panel hydrates
+       from the same campaign-detail payload as the Leads tab's status card. */
+    h.push('<div class="ov-card"><div class="card-title">The campaign at a glance</div>' +
       '<p class="card-subtitle">Campaign-to-date (positives = Smartlead\'s interested mark). ' +
       (c.stats.source === "crunch"
         ? "From the morning-crunch snapshot: the Smartlead sync is refilling right now."
         : "From the daily Smartlead sync, synced " + esc(localStamp(STATE.insights.stats_updated_at)) + ".") + "</p>" +
-      '<div class="perf-grid">' +
-      '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.leads) + '</span><span class="perf-label">Leads</span></div>' +
-      '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.sent) + '</span><span class="perf-label">Emails sent</span></div>' +
+      '<div class="ovm-split">' +
+      '<div><div class="ovm-panelh">Results so far</div>' +
+      '<div class="perf-grid ovm-tiles">' +
+      '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.sent) + '</span><span class="perf-label">Emails sent' + (st.bounced != null ? ' <span class="perf-sub tnum">(' + fmtInt(st.bounced) + " bounced" + (bouncePct != null ? " &middot; " + bouncePct + "%" : "") + ")</span>" : "") + "</span></div>" +
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.replied) + '</span><span class="perf-label">Replies' + (replyPct != null ? ' <span class="perf-sub tnum">(' + replyPct + "%)</span>" : "") + "</span>" + ((replyPct != null && parseFloat(replyPct) < 1) ? '<span class="bar-chip bar-chip--warning">under the 1% floor</span>' : "") + "</div>" +
       '<div class="perf-tile"><span class="perf-num tnum' + (st.positives === 0 ? " is-bad" : "") + '">' + fmtInt(st.positives) + '</span><span class="perf-label">Positive replies</span></div>' +
-      '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.bounced) + '</span><span class="perf-label">Bounced' + (bouncePct != null ? ' <span class="perf-sub tnum">(' + bouncePct + "%)</span>" : "") + "</span></div>" +
       '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="perf-label">Meetings</span></div>' +
-      "</div>" +
-      (c.ratio ? '<p class="lw-src-note">Sends per positive: 1 per ' + fmtInt(c.ratio) + " (" + fmtInt(st.sent) + " &divide; " + fmtInt(st.positives) + "). Under 1,500 is healthy.</p>" : "") +
-      "</div>");
+      "</div>" + ovmMeterHTML(c, st) + "</div>" +
+      '<div class="ovm-vline"></div>' +
+      '<div><div class="ovm-panelh">Who we\'re working</div><div id="ovm-status"><p class="lw-loading">Loading the contact record&hellip;</p></div></div>' +
+      "</div></div>");
     h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
     if (c.teaser) h.push('<p class="wp-headline">' + esc(c.teaser) + "</p>");
-    if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The Live performance card above is campaign lifetime: a different counter, not a contradiction.</p>");
+    if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The glance numbers above are campaign lifetime: a different counter, not a contradiction.</p>");
     if (c.drifted) h.push('<p class="footnote-line">Written at the morning crunch; the numbers above come from the newer Smartlead sync and have moved since.</p>');
     if (c.others.length) {
       h.push('<div class="campaign-widget-grid">');
@@ -3216,7 +3298,7 @@
     var acts = c.insights.filter(function (r) { return (r.payload || {}).act; });
     if (acts.length) {
       h.push('<div class="ov-card"><div class="card-title">Suggested actions</div>' +
-        (c.drifted ? '<p class="card-subtitle">Written at the morning crunch; any counts quoted here are that snapshot. The Live performance card above holds the newer sync.</p>' : "") +
+        (c.drifted ? '<p class="card-subtitle">Written at the morning crunch; any counts quoted here are that snapshot. The glance card above holds the newer sync.</p>' : "") +
         '<div class="actions-section">');
       acts.forEach(function (r, i) {
         h.push(actionCardHTML(c, r, i));
@@ -3623,6 +3705,35 @@
             : "") + "</p>";
         lt.innerHTML = tiles;
       }
+      /* overview glance: audience panel (same payload as the leads tiles) */
+      var ov = document.getElementById("ovm-status");
+      if (ov && !((d.leads || {}).total)) {
+        ov.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet' +
+          (c.stats.leads != null ? " &mdash; Smartlead itself holds " + fmtInt(c.stats.leads) + " leads" : "") +
+          ". The Leads tab shows the live platform audience.</p>";
+      } else if (ov) {
+        var oTotal = (d.leads || {}).total;
+        var OLBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
+        var OCLR = { STARTED: "#E3C9A8", INPROGRESS: "#B08D62", COMPLETED: "#59422C", PAUSED: "#DFA000", BLOCKED: "#C2371F" };
+        var oRows = (d.lead_statuses || []).slice().sort(function (a, b) { return (b.n || 0) - (a.n || 0); });
+        var omax = oRows.length ? (oRows[0].n || 0) : 0;
+        var oh = '<p class="ovm-total"><span class="ovm-total-num tnum">' + fmtInt(oTotal) + '</span><span class="ovm-total-lab">in the contact record</span></p>';
+        oRows.forEach(function (s) {
+          var w = omax ? Math.max(1.5, 100 * (s.n || 0) / omax) : 0;
+          var p = oTotal ? Math.round(1000 * (s.n || 0) / oTotal) / 10 : null;
+          oh += '<div class="ovm-srow"><span class="ovm-slab">' + esc(OLBL[s.k] || s.k) + "</span>" +
+            '<span class="ovm-strk"><span class="ovm-sfill" style="width:' + w.toFixed(1) + "%;background:" + (OCLR[s.k] || "#B7B2AA") + '"></span></span>' +
+            '<span class="ovm-sn tnum">' + fmtInt(s.n) + '</span><span class="ovm-spc tnum">' + (p != null ? p + "%" : "") + "</span></div>";
+        });
+        var ofoot = oRows.reduce(function (a, s) { return a + (s.n || 0); }, 0);
+        oh += '<p class="status-note">' + (ofoot === oTotal
+          ? "The statuses foot exactly to the " + fmtInt(oTotal) + " leads in the contact record."
+          : "Statuses cover " + fmtInt(ofoot) + " of " + fmtInt(oTotal) + " contact-record rows.") +
+          (c.stats.leads != null && c.stats.leads !== oTotal
+            ? " Smartlead's own lead count is " + fmtInt(c.stats.leads) + ": a different counter (platform audience vs contact record), not a contradiction."
+            : "") + "</p>";
+        ov.innerHTML = oh;
+      }
       /* sources */
       var sr = document.getElementById("sources-root");
       if (sr) {
@@ -3675,6 +3786,8 @@
         if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
         var lt = document.getElementById("leads-tiles");
         if (lt) lt.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. Retry from the browser, nothing is cached wrong.</p>';
+        var ovErr = document.getElementById("ovm-status");
+        if (ovErr) ovErr.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. The results on the left are live from the sync.</p>';
       });
     };
     fetchIt(false);
@@ -4521,12 +4634,15 @@
         var box = d.querySelector(".why-full");
         if (!box || box.getAttribute("data-loaded")) return;
         box.setAttribute("data-loaded", "1");
-        box.innerHTML = '<p class="why-empty">Loading the receipts&hellip;</p>';
         var cardEl = d.closest(".action-card");
-        var cardText = cardEl ? (cardEl.querySelector(".action-how") || {}).textContent + " " + ((cardEl.querySelector(".action-payoff") || {}).textContent || "") : "";
-        var ik = d.getAttribute("data-why-ik") || "";
+        /* headline half \u0001 note half: email tokens only bind from the head */
+        var grab = function (sels) {
+          var t = ""; sels.forEach(function (sel) { var el = cardEl && cardEl.querySelector(sel); if (el) t += " " + el.textContent; });
+          return t;
+        };
+        var cardText = grab([".action-how", ".action-payoff"]) + "\u0001" + grab([".why-verdict", ".why-prose"]);
         whyBreakdownFetch(d.getAttribute("data-why-cid")).then(function (rows) {
-          box.innerHTML = whyDigestHTML(Array.isArray(rows) ? rows : null, ik, cardText || "");
+          box.innerHTML = whyDigestHTML(Array.isArray(rows) ? rows : null, d.getAttribute("data-why-v") === "1", cardText || "");
         });
       });
     });
@@ -4578,142 +4694,118 @@
      else on the campaign stays out of this card's Why? (that was the old
      dump-everything bug). recommended_action and all_clear never render:
      the paste block already lives behind "Copy prompt for Claude". */
-  var WHY_KIND_FINDINGS = {
-    "lifecycle": ["lifecycle"],
-    "list-audit": ["low_reply_flag"],
-    "copy": ["variant_call", "distribution_flag"],
-    "verdict": ["needs_optimisation", "performing", "whole_offer", "variant_call"]
-  };
-  function whyRowType(n) {
-    return /^whole offer failing/i.test(n.title || "") ? "whole_offer" : (n.finding_type || "");
-  }
   function whyCardTokens(cardText) {
     /* Variant letters and email numbers the card's own text names, e.g.
-       "Scrap Email 2's name-drop close" or "Run Var E and Var F wider". */
-    var t = cardText || "", m, vars = {}, emails = {};
+       "Scrap Email 2's name-drop close" or "Run Var E and Var F wider".
+       Email numbers count only from the headline half (before the \\u0001
+       separator) - a note saying "every positive came from Email 1" must not
+       drag the whole other step's variants into a card about Email 2. Letters
+       count from everywhere, so comparison variants the note names get bars. */
+    var parts = (cardText || "").split("\u0001");
+    var head = parts[0] || "", m, vars = {}, emails = {};
     var reV = /\bVar(?:iant)?\s+([A-Z])\b/g, reE = /\bEmail\s+(\d+)\b/g;
-    while ((m = reV.exec(t))) vars[m[1]] = 1;
-    while ((m = reE.exec(t))) emails[m[1]] = 1;
+    while ((m = reV.exec(cardText || ""))) vars[m[1]] = 1;
+    while ((m = reE.exec(head))) emails[m[1]] = 1;
     return { vars: vars, emails: emails, anyVar: Object.keys(vars).length > 0, anyEmail: Object.keys(emails).length > 0 };
-  }
-  function whyMatchRows(rows, ik, cardText) {
-    var kinds = WHY_KIND_FINDINGS[ik] || [];
-    if (!rows || !rows.length || !kinds.length) return [];
-    var tok = whyCardTokens(cardText);
-    return rows.filter(function (n) {
-      var ft = n.finding_type || "", title = n.title || "";
-      var wholeOffer = whyRowType(n) === "whole_offer";
-      if (ft === "recommended_action" || ft === "all_clear") return false;
-      if (wholeOffer) return kinds.indexOf("whole_offer") !== -1;
-      if (kinds.indexOf(ft) === -1) return false;
-      if (ft === "variant_call" || ft === "distribution_flag") {
-        /* trim variant rows to the ones the card actually names */
-        var mv = title.match(/Var\s+([A-Z])/), me = title.match(/Email\s+(\d+)/);
-        if (tok.anyVar && mv) return !!tok.vars[mv[1]];
-        if (tok.anyEmail && me && !mv) return !!tok.emails[me[1]];
-        if (tok.anyVar || tok.anyEmail) return !mv && !me;
-      }
-      return true;
-    });
-  }
-  function whyVerdictLine(n) {
-    /* One bolded takeaway, 15 words max: the finding + its sharpest clause. */
-    var base = (n.impact_reason || n.suggested_action || n.detail || "").replace(/~\s*/g, "");
-    var clause = base.split(/[.;](?=\s|$)|\s[-–]\s/)[0] || "";
-    var words = ((n.title || "") + ": " + clause).trim().split(/\s+/);
-    return esc(words.slice(0, 15).join(" ")) + (words.length > 15 ? "&hellip;" : "");
-  }
-  function whyChipsHTML(n) {
-    var ch = [];
-    var add = function (label, val, cls) { if (val != null && val !== "") ch.push('<span class="why-chip' + (cls || "") + '">' + label + " <b>" + val + "</b></span>"); };
-    add("Sent", n.sent != null ? fmtInt(n.sent) : null);
-    add("Positives", n.positive != null ? fmtInt(n.positive) : null, n.positive === 0 ? " why-chip--bad" : "");
-    if (n.sent_pos_ratio != null && n.positive > 0) add("Sent/pos", fmtInt(Math.round(n.sent_pos_ratio)), n.sent_pos_ratio > 1500 ? " why-chip--bad" : " why-chip--good");
-    add("Reply rate", n.reply_rate != null ? n.reply_rate + "%" : null);
-    add("List worked", n.completion_pct != null ? Math.round(n.completion_pct) + "%" : null);
-    if (n.meetings) add("Meetings", fmtInt(n.meetings), " why-chip--good");
-    return ch.length ? '<div class="why-chips">' + ch.join("") + "</div>" : "";
   }
   function whyHarvestVariants(rows, tok) {
     /* The per-variant numbers live in whatever row carries a variants array
        (usually the recommended_action split table - harvested for data only,
        its paste-block text never renders). Trimmed to the variants or email
        step the card itself names. */
-    var seen = {}, vs = [];
+    var seen = {}, vs = [], all = [];
     (rows || []).forEach(function (n) {
       (n.variants || []).forEach(function (v) {
         var key = String(v.email) + "-" + String(v.variant);
         if (seen[key] || !(v.sent > 0)) return;
+        seen[key] = 1; all.push(v);
         var named = (tok.anyVar && tok.vars[String(v.variant)]) || (!tok.anyVar && tok.anyEmail && tok.emails[String(v.email)]);
-        if (!named) return;
-        seen[key] = 1; vs.push(v);
+        if (named) vs.push(v);
       });
     });
-    if (tok.anyVar && !tok.anyEmail) {
-      /* bare letters ("Var B and Var D") are ambiguous across email steps:
-         keep the earliest email step that carries every named letter, else
-         the earliest with any match */
+    if (tok.anyVar) {
+      /* variant letters repeat across email steps ("Var B" exists on Email 1
+         and Email 2): resolve to ONE step - a step the card names that holds
+         every named letter, else the earliest step that does, else the
+         earliest with any match */
       var emails = []; vs.forEach(function (v) { if (emails.indexOf(v.email) === -1) emails.push(v.email); });
       emails.sort(function (a, b) { return a - b; });
       var want = Object.keys(tok.vars), pick = null;
-      emails.forEach(function (e) {
-        if (pick != null) return;
+      var holdsAll = function (e) {
         var have = vs.filter(function (v) { return v.email === e; }).map(function (v) { return String(v.variant); });
-        if (want.every(function (w) { return have.indexOf(w) !== -1; })) pick = e;
-      });
+        return want.every(function (w) { return have.indexOf(w) !== -1; });
+      };
+      emails.forEach(function (e) { if (pick == null && tok.emails[String(e)] && holdsAll(e)) pick = e; });
+      emails.forEach(function (e) { if (pick == null && holdsAll(e)) pick = e; });
       if (pick == null) pick = emails[0];
       vs = vs.filter(function (v) { return v.email === pick; });
     }
-    vs.sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
+    /* winners first: best per-positive ratio at the top, zero-positive last */
+    var perPos = function (v) { return v.positives > 0 ? (v.sent || 0) / v.positives : Infinity; };
+    vs.sort(function (a, b) { return perPos(a) - perPos(b) || (b.sent || 0) - (a.sent || 0); });
+    vs = vs.slice(0, 5);
+    if (!tok.anyVar && tok.anyEmail) {
+      /* one aggregate contrast bar per OTHER email step, so a claim like
+         "every positive came from Email 1" is glance-checkable */
+      var sums = {};
+      all.forEach(function (v) {
+        if (tok.emails[String(v.email)]) return;
+        var s = sums[v.email] || (sums[v.email] = { email: v.email, variant: null, agg: true, sent: 0, positives: 0, flags: [] });
+        s.sent += v.sent || 0; s.positives += v.positives || 0;
+      });
+      Object.keys(sums).sort().forEach(function (e) { if (vs.length < 6) vs.push(sums[e]); });
+    }
     return vs.slice(0, 6);
   }
-  function whyBarsHTML(vs) {
+  function whyBarsHTML(vs, showCut) {
     if (!vs.length) return "";
     var max = Math.max.apply(null, vs.map(function (v) { return v.sent || 0; }).concat([1]));
+    var anyOff = false;
     var h = ['<div class="why-bars">'];
     vs.forEach(function (v) {
-      var cut = (v.flags || []).indexOf("failing") !== -1;
-      h.push('<div class="why-bar-row' + (cut ? " wv-cut" : "") + '">' +
-        '<span class="why-bar-label' + (cut ? " wv-cut" : "") + '">E' + esc(String(v.email)) + (v.variant != null ? " Var " + esc(String(v.variant)) : "") + "</span>" +
+      var flags = v.flags || [];
+      var cut = showCut && !v.agg && flags.indexOf("failing") !== -1;
+      var off = flags.indexOf("disabled") !== -1 || flags.indexOf("zero_distribution") !== -1;
+      if (off) anyOff = true;
+      var label = v.agg ? "E" + esc(String(v.email)) + " overall"
+        : "E" + esc(String(v.email)) + (v.variant != null ? " Var " + esc(String(v.variant)) : "") + (off ? " (off)" : "");
+      h.push('<div class="why-bar-row' + (cut ? " wv-cut" : "") + (off ? " wv-inactive" : "") + '">' +
+        '<span class="why-bar-label' + (cut ? " wv-cut" : "") + '">' + label + "</span>" +
         '<span class="why-bar-track"><span class="why-bar-fill" style="width:' + Math.max(2, Math.round((v.sent || 0) / max * 100)) + '%"></span></span>' +
-        '<span class="why-bar-count"><b>' + fmtInt(v.positives) + "</b> pos / " + fmtInt(v.sent) + "</span>");
+        '<span class="why-bar-count"><b>' + fmtInt(v.positives) + "</b> pos / " + fmtInt(v.sent) +
+        (v.positives > 0 ? " &middot; 1 per " + fmtInt(Math.round((v.sent || 0) / v.positives)) : "") + "</span>");
       h.push("</div>");
     });
-    h.push("</div>", '<p class="why-bars-caption">Bar = sends. Red = replace this variant.</p>');
+    h.push("</div>", '<p class="why-bars-caption">Bar = sends.' +
+      (showCut ? " Red = replace this variant." : "") + (anyOff ? " Greyed = switched off." : "") + "</p>");
     return h.join("");
   }
-  function whyVariantVerdict(vs) {
-    /* Fallback verdict when no campaign row matches but the card names a
-       variant/email whose numbers we hold. */
+  function whyVariantVerdict(vs, showCut) {
+    /* Fallback verdict when the card has no note but names a variant/email
+       whose numbers we hold. Aggregate contrast bars stay out of the sums. */
+    var named = vs.filter(function (v) { return !v.agg; });
+    if (!named.length) named = vs;
     var label;
-    if (vs.length === 1) {
-      label = "Email " + vs[0].email + (vs[0].variant != null ? " Var " + vs[0].variant : "");
+    if (named.length === 1) {
+      label = "Email " + named[0].email + (named[0].variant != null ? " Var " + named[0].variant : "");
     } else {
-      var em = vs[0].email, same = vs.every(function (v) { return v.email === em; });
-      label = same ? "Email " + em + " Var " + vs.map(function (v) { return v.variant; }).join(" + ") : "The variants shown";
+      var em = named[0].email, same = named.every(function (v) { return v.email === em; });
+      label = same ? "Email " + em + " Var " + named.map(function (v) { return v.variant; }).join(" + ") : "The variants shown";
     }
-    var sent = 0, pos = 0; vs.forEach(function (v) { sent += v.sent || 0; pos += v.positives || 0; });
+    var sent = 0, pos = 0; named.forEach(function (v) { sent += v.sent || 0; pos += v.positives || 0; });
     var line = label + ": " + fmtInt(sent) + " sent, " + fmtInt(pos) + " positive" + (pos === 1 ? "" : "s");
-    if (vs.every(function (v) { return (v.flags || []).indexOf("failing") !== -1; })) line += ", flagged for replacement";
+    if (showCut && named.every(function (v) { return (v.flags || []).indexOf("failing") !== -1; })) line += ", flagged for replacement";
     return esc(line + ".");
   }
-  function whyDigestHTML(rows, ik, cardText) {
-    var matched = whyMatchRows(rows, ik, cardText);
+  function whyDigestHTML(rows, hasVerdict, cardText) {
+    /* Lazy layer = per-variant bars only, and only when the card itself
+       names a variant or email step. Everything textual on the expander is
+       already rendered from the card's own payload (one source of truth). */
     var tok = whyCardTokens(cardText);
-    /* bars only when the card itself names a variant or email step */
     var vs = (tok.anyVar || tok.anyEmail) ? whyHarvestVariants(rows, tok) : [];
-    if (!matched.length && !vs.length) return '<p class="why-empty">No further findings behind this one.</p>';
-    if (!matched.length) return '<p class="why-verdict">' + whyVariantVerdict(vs) + "</p>" + whyBarsHTML(vs);
-    /* verdict line comes from the kind's primary row type (e.g. the campaign
-       verdict, not a variant call the card merely names), then by priority */
-    var kinds = WHY_KIND_FINDINGS[ik] || [];
-    var rank = { High: 0, Medium: 1, Low: 2 };
-    matched.sort(function (a, b) {
-      var t = kinds.indexOf(whyRowType(a)) - kinds.indexOf(whyRowType(b));
-      return t || (rank[a.priority] != null ? rank[a.priority] : 3) - (rank[b.priority] != null ? rank[b.priority] : 3);
-    });
-    var top = matched[0];
-    return '<p class="why-verdict">' + whyVerdictLine(top) + "</p>" + whyChipsHTML(top) + whyBarsHTML(vs);
+    var showCut = /\b(scrap|replace|kill|retire|drop|cut|swap|remove)\b/i.test(cardText || "");
+    if (!vs.length) return hasVerdict ? "" : '<p class="why-empty">No further findings behind this one.</p>';
+    return (hasVerdict ? "" : '<p class="why-verdict">' + whyVariantVerdict(vs, showCut) + "</p>") + whyBarsHTML(vs, showCut);
   }
 
   /* Populate a row's inline "Review N" panel from the campaign's in-memory
