@@ -22,12 +22,14 @@
 .stats-inline b.amber { color: #6B4A00; }
 .stats-inline .sep { color: var(--line-2); }
 
-/* ── One compact header row: title + inline stats + primary action ────── */
+/* ── One compact header row: title + inline stats + last-checked note.
+   No manual check button - every page load runs the reply check itself
+   (see init), so refreshing the page IS the check (owner ask 2026-07-26). ── */
 .setter-head-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; }
 .sh-title { font-family: var(--font-sans); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; margin: 0; }
 .setter-head-row .sh-spacer { flex: 1; }
 
-/* ── Toolbar row: filters + test toggle + Agents/Settings/Try it + master switch pill ── */
+/* ── Toolbar row: filters + test toggle + settings gear (agents drawer) + master switch pill ── */
 .setter-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
 .setter-toolbar .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .client-filter-sel {
@@ -40,19 +42,34 @@
 .setter-toolbar .tb-spacer { flex: 1; }
 .setter-toolbar .tb-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .autopilot-pill { cursor: pointer; border: none; font: 500 11px var(--font-sans); }
+/* Icon-only toolbar button (the gear that opens Agents & settings) - same
+   36px rounded-square idiom as .lp-panel-toggle in the detail bar. */
+.btn.icon-btn { width: 36px; height: 36px; padding: 0; justify-content: center; border-radius: 10px; color: var(--ink-2); }
+.btn.icon-btn svg { width: 16px; height: 16px; }
 
 /* ── Three-pane inbox shell: list | conversation | fixed lead-info sidebar ── */
 .inbox-shell {
   display: flex; border: 1px solid var(--line); border-radius: var(--radius);
   overflow: hidden; min-height: 460px;
-  /* JS (sizeInboxShell) pins the shell's bottom edge to the viewport with
-     the same gutter as the page's side padding - one viewport, one scroll
-     per column. The calc is only the pre-JS fallback. */
+  /* 641-1200px sizing only; desktop height comes from the flex column below,
+     phones from their own media blocks. */
   height: calc(100vh - 220px);
 }
 /* Page-scoped: the shell IS the page bottom, so the .main bottom padding
    shrinks from 80px to the same side gutter the shell aligns to. */
 .main { padding-bottom: clamp(24px, 3vw, 48px); }
+/* One viewport, one scroll per pane: .main is a viewport-high column and the
+   shell fills exactly what the header rows leave over. Pure CSS so the height
+   tracks browser resizes live - the old JS pin (sizeInboxShell) re-measured
+   only on resize events, which a background tab can miss entirely, so a
+   window resized on another tab came back to a stale, too-short inbox with
+   dead space under it (owner report 2026-07-26). Below ~380px of room the
+   shell stops shrinking and the page scrolls instead. */
+@media (min-width: 1201px) {
+  .main { height: 100vh; display: flex; flex-direction: column; }
+  .main > * { flex: 0 0 auto; }
+  .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 380px; }
+}
 .inbox-left { width: 340px; flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .il-search input {
@@ -224,11 +241,10 @@
    Reached from the Slack "Respond in the Appointment Setter" link on a phone. */
 @media (max-width: 640px) {
   .main { padding: 14px 14px 0; }
-  /* Calmer header: title + a compact "check" affordance */
+  /* Calmer header: just title + stats */
   .setter-head-row { gap: 8px 10px; margin-bottom: 8px; }
   .sh-title { font-size: 20px; }
   .stats-inline { width: 100%; order: 3; }
-  #checkNowBtn { padding: 8px 12px; font-size: 12.5px; }
 
   /* Status lenses = one horizontal scroll strip of touch pills */
   .setter-toolbar { gap: 8px; margin-bottom: 8px; }
@@ -624,7 +640,6 @@
       <div class="stats-inline" id="statsInline"><span class="muted"><span class="btnspin"></span> Loading…</span></div>
       <div class="sh-spacer"></div>
       <span class="small muted" id="lastCheckedNote"></span>
-      <button class="btn primary" id="checkNowBtn" type="button">Check for new replies</button>
     </div>
 
     <div id="errBanner" class="err-banner" style="display:none"></div>
@@ -636,8 +651,8 @@
       </label>
       <div class="tb-spacer"></div>
       <div class="tb-actions">
-        <span class="pill autopilot-pill" id="autopilotPill" title="Open the Agents drawer"></span>
-        <button class="btn" id="openAgentsBtn" type="button">Agents</button>
+        <span class="pill autopilot-pill" id="autopilotPill" title="Open agents &amp; settings"></span>
+        <button class="btn icon-btn" id="openAgentsBtn" type="button" title="Agents &amp; settings" aria-label="Agents and settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
       </div>
     </div>
 
@@ -674,7 +689,7 @@
 <div id="agentsDrawerOverlay" class="slideover-overlay">
   <div class="slideover">
     <div class="slideover-h">
-      <h3>Setter agents</h3>
+      <h3>Agents &amp; settings</h3>
       <button class="slideover-close" id="agentsDrawerClose" type="button" aria-label="Close">&times;</button>
     </div>
     <div class="slideover-body">
@@ -773,18 +788,9 @@ function renderLastChecked() {
   // pulledAgo returns markup (a titled <span>) - render it, don't quote it
   el.innerHTML = LAST_CHECKED ? `Last checked ${pulledAgo(LAST_CHECKED)}` : "";
 }
-/* One viewport, one scroll per pane: pin the shell's bottom edge to the
-   viewport with the same gutter as the page's side padding. Below 1200px the
-   responsive queries own the heights - clear the inline style there. */
-function sizeInboxShell() {
-  const shell = document.getElementById("inboxShell");
-  if (!shell) return;
-  if (window.innerWidth <= 1200) { shell.style.height = ""; return; }
-  const gutter = Math.min(Math.max(window.innerWidth * 0.03, 24), 48);
-  const top = shell.getBoundingClientRect().top + window.scrollY;
-  shell.style.height = Math.max(460, window.innerHeight - top - gutter) + "px";
-}
-window.addEventListener("resize", sizeInboxShell);
+/* One viewport, one scroll per pane: pure CSS now (the desktop flex column
+   in the styles above) - the shell height tracks resizes and banner shifts
+   with no JS re-measuring to go stale. */
 let AGENTS = [];
 let CAMPAIGNS = [];
 let SETTINGS = {};
@@ -1101,7 +1107,6 @@ async function fetchJson(url, opts) {
   }
 }
 function showError(msg) {
-  setTimeout(sizeInboxShell, 0); // banner shifts the shell down - re-pin
   const el = document.getElementById("errBanner");
   el.textContent = msg;
   el.style.display = "block";
@@ -1924,9 +1929,14 @@ function backToInbox() {
    its feedback input), the follow-up gate panel directly UNDER Approve,
    then the learning block last - everything below the text box.
    Sent/auto_sent retro actions stay in the label row, unchanged. */
-// Remembered hidden/shown state of the WHOLE lead-details column (null =
-// decide from viewport on first render: shown on desktop, hidden on phones).
+// Remembered hidden/shown state of the WHOLE lead-details column. Sticky
+// across visits and new tabs (owner ask 2026-07-26): explicit toggles are
+// saved to localStorage. Until the user has ever toggled it the default is
+// decided from the viewport on first render (shown on desktop, hidden on
+// phones) and NOT saved, so a phone visit never hides the desktop sidebar.
+const PANEL_HIDDEN_KEY = "setterLeadPanelHidden";
 let PANEL_HIDDEN = null;
+try { const v = localStorage.getItem(PANEL_HIDDEN_KEY); if (v !== null) PANEL_HIDDEN = v === "1"; } catch { /* ignore */ }
 // Show/hide the entire lead column by toggling .lead-hidden on the shell (the
 // column is a flex member, so this pushes/expands the conversation rather than
 // overlapping it), and reflect the state on the top-bar toggle button.
@@ -2084,6 +2094,7 @@ function renderDetail(row) {
   const panelToggleBtn = document.getElementById("panelToggleBtn");
   if (panelToggleBtn) panelToggleBtn.addEventListener("click", () => {
     PANEL_HIDDEN = !PANEL_HIDDEN;
+    try { localStorage.setItem(PANEL_HIDDEN_KEY, PANEL_HIDDEN ? "1" : "0"); } catch { /* ignore */ }
     applyLeadPanelHidden();
   });
   applyLeadPanelHidden();
@@ -3642,13 +3653,13 @@ async function doSubsequence(chk) {
   protoNote(checked ? "Pushed to Smartlead subsequence" : "Saved");
 }
 
-/* ── "Check for new replies" (owner report 2026-07-25) ───────────────────
+/* ── Reply check (owner report 2026-07-25; header button removed 2026-07-26)
    The sweep is a background thread that can run for a minute or more (up to
-   15 replies, each a classify + draft round trip). The button used to reload
-   the queue on a fixed 2.5s timer, so it reported "Checked for new replies"
-   while the sweep was still working and the new reply appeared only on some
-   later, unrelated reload. It now WAITS for the sweep to finish (the server
-   stamps setter_poll_done when it does) and reports what it actually found. */
+   15 replies, each a classify + draft round trip). Every page load kicks one
+   automatically (see init) - refreshing the page IS the manual check, so the
+   old "Check for new replies" header button is gone. These helpers WAIT for
+   the sweep to finish (the server stamps setter_poll_done when it does) and
+   report what it actually found, rather than reloading on a blind timer. */
 async function pollStamp() {
   const res = await fetchJson("/api/setter/poll/status");
   return (res.ok && res.data && res.data.last_done) || null;
@@ -3674,22 +3685,6 @@ function pollResultNote(done) {
   if (!n) return "No new replies";
   return n === 1 ? "1 new reply" : `${n} new replies`;
 }
-document.getElementById("checkNowBtn").addEventListener("click", async () => {
-  const btn = document.getElementById("checkNowBtn");
-  const restore = busyBtn(btn, "Checking…");
-  if (!restore) return;
-  const before = await pollStamp();
-  const res = await fetchJson("/api/setter/poll", { method: "POST" });
-  if (!res.ok) { restore(); showError("Couldn't check for new replies: " + res.error); return; }
-  if (res.data && res.data.busy) protoNote("Already checking, hang on…");
-  clearError();
-  const done = await waitForPollDone(before, 90000);
-  await loadQueue();
-  sizeInboxShell();
-  restore();
-  protoNote(pollResultNote(done));
-});
-
 document.getElementById("showTestChk").addEventListener("change", () => { inboxPage = 1; renderQueue(); renderKpis(); });
 document.getElementById("inboxSearch").addEventListener("input", (e) => {
   inboxSearchQuery = e.target.value || "";
@@ -4397,17 +4392,18 @@ document.addEventListener("click", (e) => {
   const kickP = fetchJson("/api/setter/poll", { method: "POST" });
   await loadAgentsAndCampaigns();
   await loadQueue(queueP);
-  sizeInboxShell();
   kickP.then(async (kick) => {
     if (kick && kick.ok) {
-      // Same wait-for-the-sweep rule as the button (owner report 2026-07-25):
-      // the old 2.5s timer reloaded long before the sweep had intaken
-      // anything, so a reply that arrived just before you opened the page
-      // stayed invisible until some later reload.
+      // Same wait-for-the-sweep rule as the old header button (owner report
+      // 2026-07-25): the old 2.5s timer reloaded long before the sweep had
+      // intaken anything, so a reply that arrived just before you opened the
+      // page stayed invisible until some later reload. With the button gone
+      // (owner ask 2026-07-26) this load-time sweep is the ONLY check the
+      // page runs, so it also reports what it found - refresh = check.
       protoNote("Checking for new replies…");
-      await waitForPollDone(await bootStampP, 90000);
+      const done = await waitForPollDone(await bootStampP, 90000);
       await loadQueue();
-      sizeInboxShell();
+      protoNote(pollResultNote(done));
     }
   });
 })();
