@@ -2125,8 +2125,15 @@
   .sources-note { font-size: 0.8rem; color: var(--fg-subtle); line-height: 1.55; margin: -2px 0 12px; }
   .sources-note:empty { display: none; }
 
+  /* the Repliers quick-cohort chip: dirtoggle-on treatment when active */
+  .cl-grid .clg-quick.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+
   /* "Add more leads" prompt card */
   .add-leads-card .al-note { margin: 10px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
+  .add-leads-card .al-copied { margin: 10px 0 0; font-size: 0.8rem; font-weight: 600; color: #2F9E44; }
+  .add-leads-card .alr-title { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-subtle); margin: 16px 0 6px; }
+  .add-leads-card .alr-line { margin: 3px 0; font-size: 0.8rem; color: var(--fg-muted); }
+  .add-leads-card .alr-empty { margin: 3px 0; font-size: 0.78rem; color: var(--fg-subtle); }
   .add-leads-card .al-prompt {
     background: var(--sunken, #F7F7F6); border: 1px solid var(--border, #ECECEA); border-radius: 10px;
     padding: 14px 16px; margin: 10px 0 12px; font-family: inherit; font-size: 0.85rem; line-height: 1.55;
@@ -3344,7 +3351,9 @@
       '<p class="card-subtitle">Copy this brief, then paste it into a Claude chat (Claude Code &mdash; where campaign ops run). Claude reads this campaign\'s history, targeting and reply/booking performance first, then brings back scored lead ideas to top this campaign up &mdash; or a sibling-campaign brief &mdash; every idea already netted against people we\'ve contacted.</p>' +
       '<pre class="al-prompt" id="al-prompt">' + esc(addLeadsPrompt(c)) + "</pre>" +
       '<button class="btn al-copy" id="al-copy">Copy prompt</button>' +
-      '<p class="al-note">Ideas come back in minutes as a review page &mdash; nothing sends without the upload gate.</p></div>' +
+      '<p class="al-copied" id="al-copied" hidden></p>' +
+      '<p class="al-note">Ideas come back in minutes on the <a class="action-link" href="https://claude.ai/code/artifact/5d6e5fdd-69d8-48f2-be8e-bec57da7b51f" target="_blank" rel="noopener">strategy-wizard review page</a> &mdash; nothing sends without the upload gate.</p>' +
+      '<div class="al-runs" id="al-runs"></div></div>' +
       "</div>");
 
     h.push("</div></article>");
@@ -3703,7 +3712,7 @@
       } else if (lt) {
         var total = (d.leads || {}).total;
         var LBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
-        var tiles = '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">In the contact record</span></div>';
+        var tiles = '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">Ever loaded (the contact record)</span></div>';
         (d.lead_statuses || []).forEach(function (s) {
           tiles += '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(s.n) + '</span><span class="perf-label">' + esc(LBL[s.k] || s.k) + "</span></div>";
         });
@@ -4025,7 +4034,7 @@
     return v == null ? "" : String(v);
   }
   function clgView() {
-    var rows = CLG.rows;
+    var rows = CLG.mode === "repliers" ? (CLG.cohortRows || []) : CLG.rows;
     var q = (CLG.search || "").toLowerCase();
     if (q) rows = rows.filter(function (l) {
       return CLG_COLS.some(function (c) { return clgVal(l, c.k).toLowerCase().indexOf(q) !== -1; });
@@ -4064,25 +4073,31 @@
           '<button class="filt-btn' + (CLG.filters[c.k] ? " active" : "") + '" title="Filter" data-filtcol="' + esc(c.k) + '">' + clgSvg.filt + "</button>" +
           "</div></th>";
       }).join("") + "</tr></thead>";
+    var coh = CLG.mode === "repliers";
     var tbody = "<tbody>" + slice.map(function (l, i) {
       var key = l.email || String(start - 1 + i);
       var sel = !!CLG.selected[key];
       return '<tr class="' + (sel ? "row-selected" : "") + '"><td class="chkcol"><input type="checkbox" class="clg-rowchk" data-key="' + esc(key) + '"' + (sel ? " checked" : "") + "></td>" +
         '<td class="gutter">' + fmtInt(start + i) + "</td>" +
         visCols.map(function (c) {
-          var v = clgVal(l, c.k);
+          var v = (coh && c.k === "replied") ? (l.category || "Yes") : clgVal(l, c.k);
           return '<td title="' + esc(v) + '">' + esc(v) + "</td>";
         }).join("") + "</tr>";
     }).join("") + "</tbody>";
     var from = view.length ? start : 0;
     var to = view.length ? Math.min(view.length, start - 1 + slice.length) : 0;
-    var grand = CLG.total != null ? CLG.total : CLG.rows.length;
-    var rangeTxt = filtered
-      ? fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(view.length) + " matching the " + fmtInt(CLG.rows.length) + " loaded"
-      : fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(grand);
+    var base = coh ? (CLG.cohortRows || []).length : CLG.rows.length;
+    var grand = coh ? (CLG.cohortTotal != null ? CLG.cohortTotal : base)
+                    : (CLG.total != null ? CLG.total : CLG.rows.length);
+    var rangeTxt;
+    if (!view.length && filtered) rangeTxt = "&mdash;";
+    else if (filtered) rangeTxt = fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(view.length) + " matching the " + fmtInt(base) + (coh ? " repliers" : " loaded");
+    else rangeTxt = fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(grand) + (coh ? " repliers" : "");
     root.innerHTML =
       '<div class="controlsrow">' +
       '<div class="searchwrap"><span class="search-ic">' + clgSvg.search + '</span><input class="searchinput" id="clg-search" placeholder="Search rows&hellip;" value="' + esc(CLG.search) + '"></div>' +
+      '<button class="btn sm clg-quick' + (coh ? " on" : "") + '" id="clg-repliers" title="Everyone who replied, across the whole campaign">' +
+      (CLG.cohortLoading ? "Checking&hellip;" : "Repliers" + (CLG.cohortTotal != null ? ' <span class="tnum">(' + fmtInt(CLG.cohortTotal) + ")</span>" : "")) + "</button>" +
       '<div class="filterbar">' + chips + "</div>" +
       '<div class="spacer"></div>' +
       '<button class="btn sm" id="clg-filterbtn" title="Filter rows">' + clgSvg.filtTb + " Filter</button>" +
@@ -4095,9 +4110,31 @@
       '<button class="pagebtn" id="clg-next" title="Next page"' + (start - 1 + CLG.per >= view.length ? " disabled" : "") + ">" + clgSvg.right + "</button></div></div>" +
       '<div class="gridwrap"><table class="datagrid">' + thead + tbody + "</table></div>" +
       '<div id="clg-lookup"></div>' +
-      '<p class="sample-footer">First ' + fmtInt(CLG.rows.length) + " of " + fmtInt(grand) + " leads, live from Smartlead &mdash; Download for the full list.</p>";
+      (coh
+        ? '<p class="sample-footer">All ' + fmtInt(grand) + " repliers across the whole campaign, live from Smartlead, with the reply category in the REPLIED column. They're in the CSV download too.</p>"
+        : '<p class="sample-footer">First ' + fmtInt(CLG.rows.length) + " of " + fmtInt(grand) + " leads, live from Smartlead &mdash; Download for the full list.</p>");
     clgWire();
     clgRenderLookup();
+  }
+
+  /* "Repliers" quick cohort: the one dataset-wide question asked on every
+     campaign, answered across ALL leads (per-category Smartlead filter,
+     unioned server-side) — the grid still never renders more than a page. */
+  function clgToggleRepliers() {
+    if (!CLG || CLG.cohortLoading) return;
+    if (CLG.mode === "repliers") { CLG.mode = null; CLG.start = 1; clgRender(); return; }
+    if (CLG.cohortRows) { CLG.mode = "repliers"; CLG.start = 1; clgRender(); return; }
+    CLG.cohortLoading = true;
+    clgRender();
+    getJSON("/api/campaign-repliers?platform=smartlead&id=" + encodeURIComponent(CLG.cid))
+      .then(function (r) {
+        CLG.cohortLoading = false;
+        CLG.cohortRows = (r && r.leads) || [];
+        CLG.cohortTotal = r && r.total != null ? r.total : CLG.cohortRows.length;
+        CLG.mode = "repliers"; CLG.start = 1;
+        clgRender();
+      })
+      .catch(function () { CLG.cohortLoading = false; clgRender(); });
   }
 
   /* Whole-campaign lookup: a search that misses the loaded 50 must never read
@@ -4256,8 +4293,11 @@
       CLG.start = Math.max(1, parseInt(this.value, 10) || 1); clgRender();
     };
     document.getElementById("clg-rowsinput").onchange = function () {
-      CLG.per = Math.max(1, parseInt(this.value, 10) || CLG_CAP); clgRender();
+      /* the page-weight law: the grid never renders more than CLG_CAP rows */
+      CLG.per = Math.min(CLG_CAP, Math.max(1, parseInt(this.value, 10) || CLG_CAP)); clgRender();
     };
+    var rp = document.getElementById("clg-repliers");
+    if (rp) rp.onclick = clgToggleRepliers;
     document.getElementById("clg-prev").onclick = function () { CLG.start = Math.max(1, CLG.start - CLG.per); clgRender(); };
     document.getElementById("clg-next").onclick = function () { CLG.start = CLG.start + CLG.per; clgRender(); };
     var sa = document.getElementById("clg-selall");
@@ -4294,6 +4334,13 @@
       btn.textContent = "Copied ✓";
       btn.classList.add("copied");
       setTimeout(function () { btn.textContent = "Copy prompt"; btn.classList.remove("copied"); }, 2200);
+      var ack = document.getElementById("al-copied");
+      if (ack) {
+        var hh = new Date();
+        ack.textContent = "Brief copied at " + String(hh.getHours()).padStart(2, "0") + ":" + String(hh.getMinutes()).padStart(2, "0") +
+          " — paste it into Claude Code. When the run lands, its add-run appears in the history below.";
+        ack.hidden = false;
+      }
     };
     var fallback = function () {
       var ta = document.createElement("textarea");
@@ -4320,9 +4367,35 @@
       var vis = {};
       CLG_COLS.forEach(function (col) { vis[col.k] = true; });
       CLG = { cid: id, rows: leads.slice(0, CLG_CAP), total: pl.total, search: "", filters: {}, sort: "", dir: "asc",
-              start: 1, per: CLG_CAP, visible: vis, selected: {}, lookups: {}, lookT: null };
+              start: 1, per: CLG_CAP, visible: vis, selected: {}, lookups: {}, lookT: null,
+              mode: null, cohortRows: null, cohortTotal: null, cohortLoading: false };
       clgRender();
     };
+    /* gated add-run history: the on-page trace of what the Add card's brief
+       eventually did (upload-gate audit rows, newest first) */
+    var runsEl = document.getElementById("al-runs");
+    if (runsEl) {
+      var paintRuns = function (d) {
+        var runs = (d || {}).runs || [];
+        var head = '<div class="alr-title">Add-run history</div>';
+        if (!runs.length) {
+          runsEl.innerHTML = head + '<p class="alr-empty">No gated add-runs recorded for this campaign yet — the first one will appear here.</p>';
+          return;
+        }
+        runsEl.innerHTML = head + runs.map(function (r) {
+          var dd = r.at ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(r.at)) : "";
+          return '<p class="alr-line"><b>' + esc(dd) + "</b> &middot; " + esc(r.source || "run") + ": " +
+            fmtInt(r.rows_in || 0) + " in &rarr; <b>" + fmtInt(r.uploaded || 0) + " uploaded</b>" +
+            (r.verdict ? " &middot; " + esc(r.verdict) : "") + "</p>";
+        }).join("");
+      };
+      if (STATE.addRuns && STATE.addRuns[id]) paintRuns(STATE.addRuns[id]);
+      else getJSON("/api/campaign-add-runs?id=" + encodeURIComponent(id)).then(function (d) {
+        STATE.addRuns = STATE.addRuns || {};
+        STATE.addRuns[id] = d;
+        paintRuns(d);
+      }).catch(function () { paintRuns(null); });
+    }
     var dl = document.getElementById("clg-download");
     if (dl) {
       var ic = dl.querySelector(".dlicon");

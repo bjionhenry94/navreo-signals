@@ -6702,6 +6702,85 @@ def _campaign_source_email_map(cid) -> dict:
     return out
 
 
+_SL_CATEGORIES: dict = {}
+
+
+def _smartlead_categories(key: str) -> dict:
+    """id -> name for Smartlead's reply categories (stable per account; cached
+    for the process lifetime)."""
+    global _SL_CATEGORIES
+    if _SL_CATEGORIES:
+        return _SL_CATEGORIES
+    try:
+        cats = _smartlead_get_retry(f"{SMARTLEAD_BASE}/leads/fetch-categories?api_key={key}")
+        if isinstance(cats, list):
+            _SL_CATEGORIES = {int(c["id"]): (c.get("name") or "").strip() for c in cats if c.get("id") is not None}
+    except Exception:  # noqa: BLE001
+        pass
+    return _SL_CATEGORIES
+
+
+def campaign_repliers(q: dict) -> dict:
+    """GET /api/campaign-repliers — the whole campaign's repliers, dataset-wide
+    (not the grid's loaded 50): unions Smartlead's per-category lead filter
+    across every reply category, so 'show me everyone who replied' is a click,
+    each row carrying WHICH category the reply landed in."""
+    cid = ((q.get("id") or [""])[0] or "").strip()
+    if not cid:
+        return {"error": "id is required", "leads": [], "total": 0}
+    key = ws_key_for_campaign(cid)
+    cats = _smartlead_categories(key) or {i: f"Category {i}" for i in range(1, 11)}
+    out, counts = [], []
+    for cat_id, cat_name in sorted(cats.items()):
+        offset, n_cat = 0, 0
+        while True:
+            url = (f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={key}"
+                   f"&offset={offset}&limit=100&lead_category_id={cat_id}")
+            page = _smartlead_get_retry(url)
+            if not isinstance(page, dict):
+                break
+            rows = page.get("data") or []
+            for row in rows:
+                lead = row.get("lead") or {}
+                out.append({
+                    "email": lead.get("email") or "",
+                    "first_name": (lead.get("first_name") or "").strip(),
+                    "last_name": (lead.get("last_name") or "").strip(),
+                    "name": " ".join(x for x in [(lead.get("first_name") or "").strip(),
+                                                 (lead.get("last_name") or "").strip()] if x),
+                    "company": lead.get("company_name") or "",
+                    "title": lead.get("linkedin_bio") or lead.get("title") or "",
+                    "status": (row.get("status") or "").strip().upper(),
+                    "replied": True,
+                    "category": cat_name,
+                })
+            n_cat += len(rows)
+            if len(rows) < 100 or len(out) >= 5000:
+                break
+            offset += 100
+        if n_cat:
+            counts.append({"category": cat_name, "n": n_cat})
+    return {"platform": "smartlead", "id": cid, "leads": out, "total": len(out),
+            "categories": counts}
+
+
+def campaign_add_runs(q: dict) -> dict:
+    """GET /api/campaign-add-runs — the campaign's gated add-run history from
+    list_upload_qa_runs, newest first: the on-page trace of when leads were
+    last added, how many survived the gate, and under which source."""
+    cid = ((q.get("id") or [""])[0] or "").strip()
+    if not cid:
+        return {"error": "id is required", "runs": []}
+    rows = sb("GET", f"list_upload_qa_runs?campaign_id=eq.{cid}"
+                     "&select=id,run_at,campaign_name,list_source,rows_in,rows_uploaded,verdict"
+                     "&order=run_at.desc&limit=5")
+    if not isinstance(rows, list):
+        return {"runs": [], "degraded": True}
+    return {"runs": [{"at": r.get("run_at"), "source": r.get("list_source") or r.get("campaign_name") or "",
+                      "rows_in": r.get("rows_in"), "uploaded": r.get("rows_uploaded"),
+                      "verdict": r.get("verdict") or ""} for r in rows]}
+
+
 def campaign_lead_lookup(q: dict) -> dict:
     """GET /api/campaign-lead-lookup — 'did we email this person on THIS
     campaign?' answered against the whole campaign, not the grid's loaded 50:
@@ -15130,6 +15209,14 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(campaign_lead_lookup(q))
+        if path == "/api/campaign-repliers":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(campaign_repliers(q))
+        if path == "/api/campaign-add-runs":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(campaign_add_runs(q))
         if path == "/api/campaign-leads-csv":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
