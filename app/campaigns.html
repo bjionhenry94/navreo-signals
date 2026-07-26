@@ -4229,8 +4229,8 @@
   }
   function whyVerdictLine(n) {
     /* One bolded takeaway, 15 words max: the finding + its sharpest clause. */
-    var base = (n.impact_reason || n.suggested_action || n.detail || "").replace(/^~\s*/, "");
-    var clause = base.split(/[.;]|\s[-–]\s/)[0] || "";
+    var base = (n.impact_reason || n.suggested_action || n.detail || "").replace(/~\s*/g, "");
+    var clause = base.split(/[.;](?=\s|$)|\s[-–]\s/)[0] || "";
     var words = ((n.title || "") + ": " + clause).trim().split(/\s+/);
     return esc(words.slice(0, 15).join(" ")) + (words.length > 15 ? "&hellip;" : "");
   }
@@ -4245,26 +4245,47 @@
     if (n.meetings) add("Meetings", fmtInt(n.meetings), " why-chip--good");
     return ch.length ? '<div class="why-chips">' + ch.join("") + "</div>" : "";
   }
-  function whyBarsHTML(matched, cardText) {
-    /* Sent bars with positive counts for the variants the card names. */
-    var tok = whyCardTokens(cardText), seen = {}, vs = [];
-    matched.forEach(function (n) {
+  function whyHarvestVariants(rows, tok) {
+    /* The per-variant numbers live in whatever row carries a variants array
+       (usually the recommended_action split table - harvested for data only,
+       its paste-block text never renders). Trimmed to the variants or email
+       step the card itself names. */
+    var seen = {}, vs = [];
+    (rows || []).forEach(function (n) {
       (n.variants || []).forEach(function (v) {
         var key = String(v.email) + "-" + String(v.variant);
-        if (seen[key]) return;
+        if (seen[key] || !(v.sent > 0)) return;
         var named = (tok.anyVar && tok.vars[String(v.variant)]) || (!tok.anyVar && tok.anyEmail && tok.emails[String(v.email)]);
-        if ((tok.anyVar || tok.anyEmail) && !named) return;
+        if (!named) return;
         seen[key] = 1; vs.push(v);
       });
     });
+    if (tok.anyVar && !tok.anyEmail) {
+      /* bare letters ("Var B and Var D") are ambiguous across email steps:
+         keep the earliest email step that carries every named letter, else
+         the earliest with any match */
+      var emails = []; vs.forEach(function (v) { if (emails.indexOf(v.email) === -1) emails.push(v.email); });
+      emails.sort(function (a, b) { return a - b; });
+      var want = Object.keys(tok.vars), pick = null;
+      emails.forEach(function (e) {
+        if (pick != null) return;
+        var have = vs.filter(function (v) { return v.email === e; }).map(function (v) { return String(v.variant); });
+        if (want.every(function (w) { return have.indexOf(w) !== -1; })) pick = e;
+      });
+      if (pick == null) pick = emails[0];
+      vs = vs.filter(function (v) { return v.email === pick; });
+    }
+    vs.sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
+    return vs.slice(0, 6);
+  }
+  function whyBarsHTML(vs) {
     if (!vs.length) return "";
-    vs = vs.slice(0, 6);
     var max = Math.max.apply(null, vs.map(function (v) { return v.sent || 0; }).concat([1]));
     var h = ['<div class="why-bars">'];
     vs.forEach(function (v) {
       var cut = (v.flags || []).indexOf("failing") !== -1;
       h.push('<div class="why-bar-row' + (cut ? " wv-cut" : "") + '">' +
-        '<span class="why-bar-label' + (cut ? " wv-cut" : "") + '">E' + esc(String(v.email)) + " Var " + esc(String(v.variant)) + "</span>" +
+        '<span class="why-bar-label' + (cut ? " wv-cut" : "") + '">E' + esc(String(v.email)) + (v.variant != null ? " Var " + esc(String(v.variant)) : "") + "</span>" +
         '<span class="why-bar-track"><span class="why-bar-fill" style="width:' + Math.max(2, Math.round((v.sent || 0) / max * 100)) + '%"></span></span>' +
         '<span class="why-bar-count"><b>' + fmtInt(v.positives) + "</b> pos / " + fmtInt(v.sent) + "</span>");
       h.push("</div>");
@@ -4272,9 +4293,28 @@
     h.push("</div>", '<p class="why-bars-caption">Bar = sends. Red = replace this variant.</p>');
     return h.join("");
   }
+  function whyVariantVerdict(vs) {
+    /* Fallback verdict when no campaign row matches but the card names a
+       variant/email whose numbers we hold. */
+    var label;
+    if (vs.length === 1) {
+      label = "Email " + vs[0].email + (vs[0].variant != null ? " Var " + vs[0].variant : "");
+    } else {
+      var em = vs[0].email, same = vs.every(function (v) { return v.email === em; });
+      label = same ? "Email " + em + " Var " + vs.map(function (v) { return v.variant; }).join(" + ") : "The variants shown";
+    }
+    var sent = 0, pos = 0; vs.forEach(function (v) { sent += v.sent || 0; pos += v.positives || 0; });
+    var line = label + ": " + fmtInt(sent) + " sent, " + fmtInt(pos) + " positive" + (pos === 1 ? "" : "s");
+    if (vs.every(function (v) { return (v.flags || []).indexOf("failing") !== -1; })) line += ", flagged for replacement";
+    return esc(line + ".");
+  }
   function whyDigestHTML(rows, ik, cardText) {
     var matched = whyMatchRows(rows, ik, cardText);
-    if (!matched.length) return '<p class="why-empty">No further findings behind this one.</p>';
+    var tok = whyCardTokens(cardText);
+    /* bars only when the card itself names a variant or email step */
+    var vs = (tok.anyVar || tok.anyEmail) ? whyHarvestVariants(rows, tok) : [];
+    if (!matched.length && !vs.length) return '<p class="why-empty">No further findings behind this one.</p>';
+    if (!matched.length) return '<p class="why-verdict">' + whyVariantVerdict(vs) + "</p>" + whyBarsHTML(vs);
     /* verdict line comes from the kind's primary row type (e.g. the campaign
        verdict, not a variant call the card merely names), then by priority */
     var kinds = WHY_KIND_FINDINGS[ik] || [];
@@ -4284,7 +4324,7 @@
       return t || (rank[a.priority] != null ? rank[a.priority] : 3) - (rank[b.priority] != null ? rank[b.priority] : 3);
     });
     var top = matched[0];
-    return '<p class="why-verdict">' + whyVerdictLine(top) + "</p>" + whyChipsHTML(top) + whyBarsHTML(matched, cardText);
+    return '<p class="why-verdict">' + whyVerdictLine(top) + "</p>" + whyChipsHTML(top) + whyBarsHTML(vs);
   }
 
   /* Populate a row's inline "Review N" panel from the campaign's in-memory
