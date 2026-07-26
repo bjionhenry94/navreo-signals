@@ -3330,13 +3330,13 @@
       '<div class="ov-card"><div class="card-title">The sequence</div><div id="sequence-root"><p class="card-subtitle">Loading&hellip;</p></div>' +
       '<p class="sample-footer">The live copy itself stays in Smartlead (the only safe place to edit it). <a class="action-link" href="' + esc(c.smartleadUrl.replace("/analytics", "/sequences")) + '" target="_blank" rel="noopener">Open the sequence in Smartlead</a></p></div></div>');
 
-    /* leads — the leads hub: status tiles, then the live-audience grid
-       (lists.html look, first GRID_CAP rows, Download = the full list), then
-       the Sources section (moved here when the Sources tab died), closed by
-       the add tile — "the next source goes here" (P2 ruling, 27 Jul 2026:
-       one button, brief copies silently, no visible prompt). */
+    /* leads — the leads hub: the live-audience grid (lists.html look, first
+       GRID_CAP rows, Download = the full list), then the Sources section
+       (moved here when the Sources tab died), closed by the add tile — "the
+       next source goes here" (P2 ruling, 27 Jul 2026: one button, brief
+       copies silently, no visible prompt). The status breakdown lives in the
+       Overview glance now (removed here 27 Jul 2026, Bjion). */
     h.push('<div class="tab-panel" data-tab="leads"' + (tab !== "leads" ? " hidden" : "") + ">" +
-      '<div class="ov-card"><div class="card-title">Everyone\'s status</div><div id="leads-tiles"><p class="lw-loading">Loading the contact record&hellip;</p></div></div>' +
       '<div class="ov-card cl-grid"><div class="clg-head"><div class="card-title" style="margin:0">Live audience</div>' +
       '<button class="btn" id="clg-download" title="Download every lead in this campaign as CSV — includes which source list each lead came from"><span class="dlicon"></span> Download</button></div>' +
       '<div id="leads-grid"><p class="lw-loading">Pulling the live audience from Smartlead&hellip;</p></div></div>' +
@@ -3693,30 +3693,7 @@
         }).join("");
         rc.hidden = false;
       }
-      /* leads tiles */
-      var lt = document.getElementById("leads-tiles");
-      if (lt && !((d.leads || {}).total)) {
-        lt.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet: its leads were added before push tracking existed' +
-          (c.stats.leads != null ? " (Smartlead itself holds " + fmtInt(c.stats.leads) + " leads)" : "") +
-          ". The live audience grid below is the platform truth.</p>";
-      } else if (lt) {
-        var total = (d.leads || {}).total;
-        var LBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
-        var tiles = '<div class="perf-grid"><div class="perf-tile"><span class="perf-num tnum">' + fmtInt(total) + '</span><span class="perf-label">Ever loaded (the contact record)</span></div>';
-        (d.lead_statuses || []).forEach(function (s) {
-          tiles += '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(s.n) + '</span><span class="perf-label">' + esc(LBL[s.k] || s.k) + "</span></div>";
-        });
-        tiles += "</div>";
-        var foot = (d.lead_statuses || []).reduce(function (a, s) { return a + (s.n || 0); }, 0);
-        tiles += '<p class="status-note">' + (foot === total
-          ? "The status tiles foot exactly to the " + fmtInt(total) + " leads in the contact record."
-          : "Status tiles cover " + fmtInt(foot) + " of " + fmtInt(total) + " contact-record rows.") +
-          (c.stats.leads != null && c.stats.leads !== total
-            ? " Smartlead's own lead count is " + fmtInt(c.stats.leads) + ": a different counter (platform audience vs contact record), not a contradiction."
-            : "") + "</p>";
-        lt.innerHTML = tiles;
-      }
-      /* overview glance: audience panel (same payload as the leads tiles) */
+      /* overview glance: audience panel (from the campaign-detail payload) */
       var ov = document.getElementById("ovm-status");
       if (ov && !((d.leads || {}).total)) {
         ov.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet' +
@@ -3795,8 +3772,6 @@
         apply(d);
       }).catch(function () {
         if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
-        var lt = document.getElementById("leads-tiles");
-        if (lt) lt.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. Retry from the browser, nothing is cached wrong.</p>';
         var ovErr = document.getElementById("ovm-status");
         if (ovErr) ovErr.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. The results on the left are live from the sync.</p>';
       });
