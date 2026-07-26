@@ -3115,7 +3115,6 @@
     /* leads */
     h.push('<div class="tab-panel" data-tab="leads"' + (tab !== "leads" ? " hidden" : "") + ">" +
       '<div class="ov-card"><div class="card-title">Everyone\'s status</div><div id="leads-tiles"><p class="lw-loading">Loading the contact record&hellip;</p></div></div>' +
-      '<div class="ov-card"><div class="card-title">Replies by category</div><div id="replies-mix"></div></div>' +
       '<div class="ov-card"><div class="card-title">Sample of the live audience</div><div id="leads-sample"><p class="lw-loading">Pulling a live sample from Smartlead&hellip;</p></div></div></div>');
 
     /* sources */
@@ -3493,19 +3492,6 @@
             ? " Smartlead's own lead count is " + fmtInt(c.stats.leads) + ": a different counter (platform audience vs contact record), not a contradiction."
             : "") + "</p>";
         lt.innerHTML = tiles;
-      }
-      /* replies mix */
-      var rm = document.getElementById("replies-mix");
-      if (rm) {
-        var reps = d.replies || [];
-        if (!reps.length) {
-          rm.innerHTML = '<p class="card-subtitle">No replies captured in the archive for this campaign yet.</p>';
-        } else {
-          var tot = reps.reduce(function (a, r) { return a + (r.n || 0); }, 0);
-          rm.innerHTML = '<div class="leads-table-wrap"><table class="leads-table"><thead><tr><th>Category</th><th>Count</th></tr></thead><tbody>' +
-            reps.map(function (r) { return "<tr><td data-label=\"Category\">" + esc(r.k) + '</td><td class="tnum" data-label="Count">' + fmtInt(r.n) + "</td></tr>"; }).join("") +
-            "</tbody></table></div><p class=\"sample-footer\">" + fmtInt(tot) + " archived replies, from the reply archive (30-day categoriser window plus history): a different counter than Smartlead's lifetime replies column, not a contradiction.</p>";
-        }
       }
       /* sources */
       var sr = document.getElementById("sources-root");
