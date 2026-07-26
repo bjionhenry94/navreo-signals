@@ -506,9 +506,14 @@
     text-transform: uppercase; color: var(--fg-subtle);
   }
   .status-select {
+    /* fixed width so Client and Status render identical pills — a long client
+       name no longer stretches the Client picker across the bar; the closed
+       state ellipsizes, the open menu still shows full names */
+    width: 172px;
     padding: 8px 30px 8px 13px; border-radius: var(--r-pill);
     border: 1px solid var(--border-strong); background: var(--bg-elevated);
     color: var(--fg); font-size: 0.82rem; font-weight: 600; font-family: inherit;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     cursor: pointer; -webkit-appearance: none; appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6055' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 11px center;
@@ -1393,6 +1398,8 @@
     .filter-bar { flex-direction: column; align-items: stretch; }
     .filter-chips { flex-wrap: wrap; overflow-x: visible; }
     .search-wrap { flex-basis: auto; }
+    .status-picker { justify-content: space-between; }
+    .status-select { width: 100%; max-width: 240px; }
     .perf-grid { grid-template-columns: repeat(2,1fr); }
     .campaign-header-main { flex-direction: column; align-items: flex-start; }
     .campaign-header-right { align-items: flex-start; }
@@ -1931,11 +1938,6 @@
   .cockpit .review-badge:hover { background: var(--nav-orange); color: #fff; box-shadow: 0 2px 10px rgba(255,77,0,0.28); }
   .cockpit .review-badge:focus-visible { outline: 2px solid var(--nav-orange); outline-offset: 2px; }
   .cockpit .review-badge { justify-self: start; }
-  .cockpit .review-badge--clear {
-    background: transparent; color: var(--fg-subtle); border-color: var(--border);
-    cursor: default; font-weight: 600;
-  }
-  .cockpit .review-badge--clear:hover { background: transparent; color: var(--fg-subtle); box-shadow: none; }
   .cockpit .review-badge b { font-variant-numeric: tabular-nums; }
   .cockpit .review-badge .caret { transition: transform .2s; flex: 0 0 auto; }
   .cockpit .review-badge[aria-expanded="true"] { background: var(--nav-orange); color: #fff; }
@@ -1946,20 +1948,30 @@
   .cockpit .row-optim .action-num { display: none; }
   .cockpit .action-card .copy-prompt { background: var(--nav-orange); border-color: var(--nav-orange); color: #fff; font-weight: 700; }
   .cockpit .action-card .copy-prompt:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); color: #fff; }
-  /* full Why? breakdown (the old Optimisations tab's story, inline) */
-  .cockpit .why-block { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
-  .cockpit .why-block-title { margin: 0 0 4px; font-weight: 700; font-size: 0.85rem; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .cockpit .why-block-detail { margin: 0; font-size: 0.82rem; color: var(--fg-muted); line-height: 1.5; }
-  .cockpit .why-block-impact { margin: 4px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
+  /* Why? digest — the receipts behind THIS card only: one bold verdict line,
+     stat chips, then sent/positive mini bars for the variants the card names.
+     Replaced the old full-breakdown dump (every finding + 8-col table). */
   .cockpit .why-empty { margin: 8px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
-  .cockpit .why-var-wrap { overflow-x: auto; margin-top: 10px; }
-  .cockpit .why-var-table { border-collapse: collapse; width: 100%; font-size: 0.78rem; }
-  .cockpit .why-var-table th { text-align: left; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-subtle); padding: 6px 8px; border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
-  .cockpit .why-var-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  .cockpit .why-var-table td.wv-angle { min-width: 220px; color: var(--fg-muted); }
-  .cockpit .why-var-table tr.wv-struck td { text-decoration: line-through; color: var(--danger); text-decoration-color: var(--danger); }
-  .cockpit .why-var-table tr.wv-inactive td { color: var(--fg-subtle); }
-  .cockpit .why-legend { margin: 8px 0 0; font-size: 0.72rem; color: var(--fg-subtle); }
+  .cockpit .why-verdict { margin: 10px 0 0; font-size: 0.84rem; font-weight: 700; color: var(--fg); line-height: 1.4; }
+  .cockpit .why-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .cockpit .why-chip {
+    display: inline-flex; align-items: baseline; gap: 5px; padding: 4px 10px;
+    border: 1px solid var(--border); border-radius: var(--r-pill);
+    background: var(--sunken); font-size: 0.74rem; color: var(--fg-subtle); white-space: nowrap;
+  }
+  .cockpit .why-chip b { font-size: 0.82rem; color: var(--fg); font-variant-numeric: tabular-nums; }
+  .cockpit .why-chip--bad b { color: var(--danger); }
+  .cockpit .why-chip--good b { color: var(--ok, #1a7f37); }
+  .cockpit .why-bars { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .cockpit .why-bar-row { display: grid; grid-template-columns: 74px 1fr 92px; gap: 8px; align-items: center; font-size: 0.74rem; }
+  .cockpit .why-bar-label { font-weight: 700; color: var(--fg-muted); white-space: nowrap; }
+  .cockpit .why-bar-label.wv-cut { color: var(--danger); text-decoration: line-through; }
+  .cockpit .why-bar-track { height: 10px; border-radius: 5px; background: var(--sunken); overflow: hidden; }
+  .cockpit .why-bar-fill { height: 100%; border-radius: 5px; background: var(--nav-orange); opacity: 0.85; min-width: 2px; }
+  .cockpit .why-bar-row.wv-cut .why-bar-fill { background: var(--danger); opacity: 0.5; }
+  .cockpit .why-bar-count { color: var(--fg-subtle); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+  .cockpit .why-bar-count b { color: var(--fg); }
+  .cockpit .why-bars-caption { margin: 6px 0 0; font-size: 0.72rem; color: var(--fg-subtle); }
   .cockpit .opt-why { margin-top: 10px; }
   .cockpit .opt-why summary { cursor: pointer; font-size: 0.75rem; font-weight: 700; color: var(--nav-orange-600); list-style: none; }
   .cockpit .opt-why summary::-webkit-details-marker { display: none; }
@@ -1976,7 +1988,6 @@
   }
   .cockpit .opt-smartlead:hover { color: var(--fg-muted); text-decoration: underline; }
   .cockpit .ext-ic { vertical-align: -1px; opacity: 0.85; }
-  .cockpit .copy-prompt .ext-ic { margin-left: 3px; }
 </style>
 
 <div class="app">
@@ -2422,8 +2433,8 @@
       '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>' +
       '<div class="perfx-toggle" role="group" aria-label="Window">' +
       '<button type="button" data-days="7">7d</button>' +
-      '<button type="button" data-days="30" class="is-active">30d</button>' +
-      '<button type="button" data-days="90">90d</button></div></div>' +
+      '<button type="button" data-days="14">14d</button>' +
+      '<button type="button" data-days="30" class="is-active">30d</button></div></div>' +
       '<div class="perfx-grid" id="perfx-grid"></div></div>');
 
     /* "Across the book" moved to the Fleet health audit (deliverability) page,
@@ -2464,7 +2475,8 @@
       }).join("") +
       "</div></div>");
 
-    h.push('<p class="section-caption" id="search-count" hidden></p>');
+    /* the visible "N campaigns shown" caption is gone (owner ruling: clutter);
+       the sr-only live region below still announces the count for screen readers */
     h.push('<div class="sr-only" role="status" aria-live="polite" id="rows-live-region"></div>');
     h.push('<div class="rows-empty-state" id="rows-empty-state" hidden><p id="rows-empty-text">No campaigns match that filter in this view.</p><button type="button" id="clear-filters-btn">Clear filters</button></div>');
 
@@ -2553,7 +2565,11 @@
       return true;
     });
     var preset = PRESETS[v.preset] || PRESETS.all;
-    var flat = (v.preset !== "all") || (v.status !== "all");
+    /* "All Priorities" always shows the tiered triage sections (needs a
+       decision → watch → fine), even with a status filter on — the status
+       pick narrows the rows, it doesn't flatten the grouping. Only the
+       metric-sort presets render flat. */
+    var flat = (v.preset !== "all");
     var h = [];
     if (v.preset !== "all" && preset.key) {
       visible = visible.slice().sort(function (a, b) {
@@ -2587,17 +2603,20 @@
         ? "No " + (STATUS_LABEL[v.status] || v.status) + " campaigns" + (q ? " match that search" : " right now") + "."
         : (q ? "No campaigns match that search in this view." : "No campaigns in this view.");
     }
-    var scLine = document.getElementById("search-count");
-    if (scLine) {
-      if (q || v.status !== "all") {
-        var lbl = (v.status !== "all") ? (STATUS_LABEL[v.status] || v.status) + " " : "";
-        scLine.textContent = visible.length + " " + lbl + "campaign" + (visible.length === 1 ? "" : "s") + " shown";
-        scLine.hidden = false;
-      } else { scLine.hidden = true; }
-    }
     var live = document.getElementById("rows-live-region");
     if (live) live.textContent = visible.length + " campaign" + (visible.length === 1 ? "" : "s") + " shown" +
       (v.preset !== "all" ? ", " + (PRESETS[v.preset] || {}).label : "");
+  }
+
+  /* "7mins ago" freshness stamp for the live meta line; degrades to hours/days
+     so a stale tab never claims minute-fresh data */
+  function checkedAgo(iso) {
+    var mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (mins < 1) return "moments ago";
+    if (mins < 60) return mins + (mins === 1 ? "min" : "mins") + " ago";
+    var hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + "h ago";
+    return Math.round(hrs / 24) + "d ago";
   }
 
   /* Live-check meta line + per-status counts */
@@ -2616,7 +2635,9 @@
       if (refresh) refresh.hidden = false;
     } else if (STATE.liveCheckedAt) {
       if (dot) dot.className = "live-dot is-ok";
-      txt.textContent = "Live from Smartlead · checked " + localStamp(STATE.liveCheckedAt);
+      /* trailing "·" belongs to the text so the line reads
+         "Live · Data from 7mins ago · Refresh" with the button after it */
+      txt.textContent = "Live · Data from " + checkedAgo(STATE.liveCheckedAt) + " ·";
       if (refresh) refresh.hidden = false;
     } else {
       if (dot) dot.className = "live-dot";
@@ -2682,6 +2703,11 @@
         renderLiveMeta();
       });
   }
+  /* keep the "Xmins ago" stamp ticking without a reload; renderLiveMeta is a
+     no-op off the list view, so this is safe to run unconditionally */
+  setInterval(function () {
+    if (STATE.liveCheckedAt && !STATE.liveLoading) renderLiveMeta();
+  }, 60000);
 
   /* Subtitle status bit: LIVE status + completion% when the live check has
      landed, else the cached scorecard status. A live chip carries a dot. */
@@ -2723,15 +2749,9 @@
     var replyPct = pct(st.replied, st.sent, 2);
     var bouncePct = pct(st.bounced, st.sent, 1);
     var search = (c.name + " " + c.pill + " " + c.tier).toLowerCase();
-    var badges = "";
-    var seen = {};
-    c.others.forEach(function (r) {
-      var lbl = KIND_LABEL[r.insight_key] || r.insight_key;
-      if (seen[lbl]) return; seen[lbl] = 1;
-      var tg = (r.payload || {}).tag || "watch";
-      var cls = (TAG_META[tg] || TAG_META.watch).badge;
-      badges += '<span class="badge ' + cls + '">' + esc(lbl) + "</span>";
-    });
+    /* Insight-kind badges ("copy", "list audit", …) used to render in the
+       card's corner; owner ruling 26 Jul 2026: the Review panel is the only
+       surface for optimisation changes, so the row carries no tag pills. */
     /* "Review N" badge: N = optimiser actions for this campaign, already in
        memory on c.insights (no fetch). Clicking it expands the inline optim
        panel (a sibling of the row link, so its own clicks never navigate);
@@ -2739,7 +2759,9 @@
     var nOpt = campaignActs(c).length;
     var reviewBadge = nOpt > 0
       ? '<span class="review-badge" role="button" tabindex="0" data-review="' + esc(c.id) + '" aria-controls="optim-c' + esc(c.id) + '" aria-expanded="false" aria-label="Review ' + nOpt + ' optimisation' + (nOpt === 1 ? "" : "s") + ' for this campaign">Review <b class="tnum">' + nOpt + "</b>" + REVIEW_CARET + "</span>"
-      : '<span class="review-badge review-badge--clear" aria-hidden="true">All clear</span>';
+      /* nothing to review → no pill at all (owner ruling: "All clear" was
+         noise). Empty span keeps the grid column so the chevron stays put. */
+      : '<span aria-hidden="true"></span>';
     return '<div class="campaign-row" id="row-c' + esc(c.id) + '" data-tier="' + c.tier + '" data-search="' + esc(search) + '">' +
       '<a class="row-summary" href="#/c/' + esc(c.id) + '" aria-label="' + esc(c.name) + ". " + esc(c.pill) + '. Open the campaign page.">' +
       '<span class="ring-wrap">' +
@@ -2758,7 +2780,6 @@
       reviewBadge +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
       rowSignalBit(c) +
-      (badges ? '<span class="badge-strip">' + badges + "</span>" : "") +
       "</a>" +
       '<div class="row-optim" id="optim-c' + esc(c.id) + '" hidden></div>' +
       "</div>";
@@ -2805,7 +2826,7 @@
     /* Always rendered: the quick numbers show instantly, and the full
        breakdown (the old Optimisations tab's story — priority, prose,
        strikethrough variant table) lazy-loads into .why-full on first open. */
-    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '"><summary>Why?</summary>' +
+    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '" data-why-ik="' + esc(r.insight_key || "") + '"><summary>Why?</summary>' +
       (whyBits.length ? '<ul class="opt-why-body">' + whyBits.map(function (w) { return "<li>" + w + "</li>"; }).join("") + "</ul>" : "") +
       '<div class="why-full"></div></details>';
     return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
@@ -2817,7 +2838,7 @@
       (p.bold ? '<p class="action-payoff">' + esc(p.bold) + "</p>" : "") +
       whyHTML +
       '<div class="action-buttons">' +
-      '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Fix inside of Claude ' + EXT_ICON + "</button>" +
+      '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Copy prompt for Claude</button>' +
       '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
       '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
       '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
@@ -2842,7 +2863,7 @@
     return any;
   }
   function loadPerf(attempt) {
-    getJSON("/api/perf-daily?days=90").then(function (p) {
+    getJSON("/api/perf-daily?days=30").then(function (p) {
       if (!perfHasData(p)) {
         /* the endpoint returns null series when a read fails: retry once, then
            keep the card hidden rather than draw an empty (never fake) chart */
@@ -4033,22 +4054,76 @@
       cb();
     });
   }
+  /* Shared toast for the cockpit's copy actions. */
+  function cockpitToast(msg) {
+    var t = document.getElementById("cockpit-toast");
+    if (t) t.remove();
+    t = document.createElement("div");
+    t.id = "cockpit-toast";
+    t.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:60;" +
+      "background:#141414;color:#fff;border-radius:12px;padding:12px 18px;font-size:0.9rem;" +
+      "box-shadow:0 8px 28px rgba(0,0,0,.25);max-width:92vw;text-align:center";
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function () { t.remove(); }, 6000);
+  }
+
   function wireActionCards(root) {
-    /* "Fix inside of Claude" — opens the Claude DESKTOP app (claude:// deep
-       link), prompt pre-filled; deliberately no web fallback. stopPropagation
-       so a card living inside a row link never navigates. */
+    /* "Copy prompt for Claude" — puts the prompt on the clipboard so it can be
+       pasted into a NEW Claude chat. Deliberately does not navigate: both
+       previous attempts (claude:// desktop deep link, then claude.ai/new?q=)
+       depended on the app being registered or on a query param surviving a
+       multi-KB prompt, and silently did nothing when either failed. A copy
+       always works and leaves the strategist in control of where it lands.
+       stopPropagation so a card living inside a row link never navigates. */
     root.querySelectorAll(".copy-prompt").forEach(function (b) {
       if (b.getAttribute("data-fix-bound")) return;
       b.setAttribute("data-fix-bound", "1");
       b.addEventListener("click", function (e) {
         e.preventDefault(); e.stopPropagation();
         var txt = b.getAttribute("data-prompt") || "";
-        try { window.location.href = "claude://new?q=" + encodeURIComponent(txt); } catch (_e) {}
+        if (!txt) return;
+        var old = b.textContent;
+        function copied() {
+          b.textContent = "Copied ✓";
+          b.classList.add("is-copied");
+          setTimeout(function () { b.textContent = old; b.classList.remove("is-copied"); }, 2500);
+          cockpitToast("Prompt copied — paste it into a new Claude chat.");
+        }
+        /* Fallback for non-secure contexts / browsers without the async
+           clipboard API: show the text selected so Cmd+C still works. */
+        function fallbackPopover() {
+          var pop = document.createElement("div");
+          pop.style.cssText = "position:absolute;z-index:60;background:var(--bg-elevated,#fff);" +
+            "border:1px solid var(--border-strong);border-radius:12px;padding:14px;" +
+            "box-shadow:0 6px 24px rgba(0,0,0,.12);width:340px;max-width:92vw";
+          pop.innerHTML = '<div style="font-weight:600;margin-bottom:6px">Copy this, paste into a new Claude chat</div>' +
+            '<textarea readonly style="width:100%;height:120px;font:12px/1.45 ui-monospace,monospace;' +
+            'border:1px solid var(--border-strong);border-radius:8px;padding:8px;resize:none"></textarea>';
+          pop.querySelector("textarea").value = txt;
+          var r = b.getBoundingClientRect();
+          pop.style.left = Math.max(10, r.right - 350) + "px";
+          pop.style.top = (r.bottom + window.scrollY + 6) + "px";
+          document.body.appendChild(pop);
+          pop.querySelector("textarea").select();
+          setTimeout(function () {
+            document.addEventListener("click", function close(ev) {
+              if (!pop.contains(ev.target) && ev.target !== b) {
+                pop.remove(); document.removeEventListener("click", close);
+              }
+            });
+          }, 0);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(copied).catch(fallbackPopover);
+        } else {
+          fallbackPopover();
+        }
       });
     });
-    /* Why? full breakdown — the old Optimisations tab's per-campaign story
-       (priority + prose + strikethrough variant table), lazy-fetched on the
-       FIRST open of a card's Why?, one request per campaign, cached. */
+    /* Why? digest — the receipts behind THIS card only, lazy-fetched on the
+       FIRST open of a card's Why?. Still one request per campaign (WHY_CACHE);
+       the per-card scoping is a client-side filter on the shared rows. */
     root.querySelectorAll(".opt-why[data-why-cid]").forEach(function (d) {
       if (d.getAttribute("data-why-bound")) return;
       d.setAttribute("data-why-bound", "1");
@@ -4057,9 +4132,12 @@
         var box = d.querySelector(".why-full");
         if (!box || box.getAttribute("data-loaded")) return;
         box.setAttribute("data-loaded", "1");
-        box.innerHTML = '<p class="why-empty">Loading the full breakdown&hellip;</p>';
+        box.innerHTML = '<p class="why-empty">Loading the receipts&hellip;</p>';
+        var cardEl = d.closest(".action-card");
+        var cardText = cardEl ? (cardEl.querySelector(".action-how") || {}).textContent + " " + ((cardEl.querySelector(".action-payoff") || {}).textContent || "") : "";
+        var ik = d.getAttribute("data-why-ik") || "";
         whyBreakdownFetch(d.getAttribute("data-why-cid")).then(function (rows) {
-          box.innerHTML = whyBreakdownHTML(Array.isArray(rows) ? rows : null);
+          box.innerHTML = whyDigestHTML(Array.isArray(rows) ? rows : null, ik, cardText || "");
         });
       });
     });
@@ -4107,36 +4185,106 @@
     }
     return WHY_CACHE[cid];
   }
-  function whyVariantsTable(vs) {
-    if (!vs || !vs.length) return "";
-    var h = ['<div class="why-var-wrap"><table class="why-var-table"><thead><tr>' +
-      "<th>Email</th><th>Variant</th><th>Split</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Meetings</th><th>Angle</th></tr></thead><tbody>"];
-    vs.forEach(function (v) {
-      var flags = v.flags || [];
-      var cls = flags.indexOf("failing") !== -1 ? ' class="wv-struck"'
-        : (flags.indexOf("disabled") !== -1 || flags.indexOf("zero_distribution") !== -1) ? ' class="wv-inactive"' : "";
-      h.push("<tr" + cls + "><td>Email " + esc(String(v.email)) + "</td><td>" + esc(String(v.variant)) + '</td><td class="tnum">' +
-        (v.distribution_pct != null ? v.distribution_pct + "%" : "-") + '</td><td class="tnum">' + fmtInt(v.sent) +
-        '</td><td class="tnum">' + fmtInt(v.replies) + '</td><td class="tnum">' + fmtInt(v.positives) +
-        '</td><td class="tnum">' + fmtInt(v.meetings) + '</td><td class="wv-angle">' + esc(v.angle || "") + "</td></tr>");
+  /* Which optimiser_notifications rows belong to which card kind. Everything
+     else on the campaign stays out of this card's Why? (that was the old
+     dump-everything bug). recommended_action and all_clear never render:
+     the paste block already lives behind "Copy prompt for Claude". */
+  var WHY_KIND_FINDINGS = {
+    "lifecycle": ["lifecycle"],
+    "list-audit": ["low_reply_flag"],
+    "copy": ["variant_call", "distribution_flag"],
+    "verdict": ["needs_optimisation", "performing", "whole_offer", "variant_call"]
+  };
+  function whyRowType(n) {
+    return /^whole offer failing/i.test(n.title || "") ? "whole_offer" : (n.finding_type || "");
+  }
+  function whyCardTokens(cardText) {
+    /* Variant letters and email numbers the card's own text names, e.g.
+       "Scrap Email 2's name-drop close" or "Run Var E and Var F wider". */
+    var t = cardText || "", m, vars = {}, emails = {};
+    var reV = /\bVar(?:iant)?\s+([A-Z])\b/g, reE = /\bEmail\s+(\d+)\b/g;
+    while ((m = reV.exec(t))) vars[m[1]] = 1;
+    while ((m = reE.exec(t))) emails[m[1]] = 1;
+    return { vars: vars, emails: emails, anyVar: Object.keys(vars).length > 0, anyEmail: Object.keys(emails).length > 0 };
+  }
+  function whyMatchRows(rows, ik, cardText) {
+    var kinds = WHY_KIND_FINDINGS[ik] || [];
+    if (!rows || !rows.length || !kinds.length) return [];
+    var tok = whyCardTokens(cardText);
+    return rows.filter(function (n) {
+      var ft = n.finding_type || "", title = n.title || "";
+      var wholeOffer = whyRowType(n) === "whole_offer";
+      if (ft === "recommended_action" || ft === "all_clear") return false;
+      if (wholeOffer) return kinds.indexOf("whole_offer") !== -1;
+      if (kinds.indexOf(ft) === -1) return false;
+      if (ft === "variant_call" || ft === "distribution_flag") {
+        /* trim variant rows to the ones the card actually names */
+        var mv = title.match(/Var\s+([A-Z])/), me = title.match(/Email\s+(\d+)/);
+        if (tok.anyVar && mv) return !!tok.vars[mv[1]];
+        if (tok.anyEmail && me && !mv) return !!tok.emails[me[1]];
+        if (tok.anyVar || tok.anyEmail) return !mv && !me;
+      }
+      return true;
     });
-    h.push("</tbody></table></div>" +
-      '<p class="why-legend"><s>Struck through</s> = our recommendation to get rid of that variant. Split shows what is actually live right now.</p>');
+  }
+  function whyVerdictLine(n) {
+    /* One bolded takeaway, 15 words max: the finding + its sharpest clause. */
+    var base = (n.impact_reason || n.suggested_action || n.detail || "").replace(/^~\s*/, "");
+    var clause = base.split(/[.;]|\s[-–]\s/)[0] || "";
+    var words = ((n.title || "") + ": " + clause).trim().split(/\s+/);
+    return esc(words.slice(0, 15).join(" ")) + (words.length > 15 ? "&hellip;" : "");
+  }
+  function whyChipsHTML(n) {
+    var ch = [];
+    var add = function (label, val, cls) { if (val != null && val !== "") ch.push('<span class="why-chip' + (cls || "") + '">' + label + " <b>" + val + "</b></span>"); };
+    add("Sent", n.sent != null ? fmtInt(n.sent) : null);
+    add("Positives", n.positive != null ? fmtInt(n.positive) : null, n.positive === 0 ? " why-chip--bad" : "");
+    if (n.sent_pos_ratio != null && n.positive > 0) add("Sent/pos", fmtInt(Math.round(n.sent_pos_ratio)), n.sent_pos_ratio > 1500 ? " why-chip--bad" : " why-chip--good");
+    add("Reply rate", n.reply_rate != null ? n.reply_rate + "%" : null);
+    add("List worked", n.completion_pct != null ? Math.round(n.completion_pct) + "%" : null);
+    if (n.meetings) add("Meetings", fmtInt(n.meetings), " why-chip--good");
+    return ch.length ? '<div class="why-chips">' + ch.join("") + "</div>" : "";
+  }
+  function whyBarsHTML(matched, cardText) {
+    /* Sent bars with positive counts for the variants the card names. */
+    var tok = whyCardTokens(cardText), seen = {}, vs = [];
+    matched.forEach(function (n) {
+      (n.variants || []).forEach(function (v) {
+        var key = String(v.email) + "-" + String(v.variant);
+        if (seen[key]) return;
+        var named = (tok.anyVar && tok.vars[String(v.variant)]) || (!tok.anyVar && tok.anyEmail && tok.emails[String(v.email)]);
+        if ((tok.anyVar || tok.anyEmail) && !named) return;
+        seen[key] = 1; vs.push(v);
+      });
+    });
+    if (!vs.length) return "";
+    vs = vs.slice(0, 6);
+    var max = Math.max.apply(null, vs.map(function (v) { return v.sent || 0; }).concat([1]));
+    var h = ['<div class="why-bars">'];
+    vs.forEach(function (v) {
+      var cut = (v.flags || []).indexOf("failing") !== -1;
+      h.push('<div class="why-bar-row' + (cut ? " wv-cut" : "") + '">' +
+        '<span class="why-bar-label' + (cut ? " wv-cut" : "") + '">E' + esc(String(v.email)) + " Var " + esc(String(v.variant)) + "</span>" +
+        '<span class="why-bar-track"><span class="why-bar-fill" style="width:' + Math.max(2, Math.round((v.sent || 0) / max * 100)) + '%"></span></span>' +
+        '<span class="why-bar-count"><b>' + fmtInt(v.positives) + "</b> pos / " + fmtInt(v.sent) + "</span>");
+      h.push("</div>");
+    });
+    h.push("</div>", '<p class="why-bars-caption">Bar = sends. Red = replace this variant.</p>');
     return h.join("");
   }
-  function whyBreakdownHTML(rows) {
-    if (!rows || !rows.length) return '<p class="why-empty">No open optimiser findings for this campaign beyond the numbers above.</p>';
-    var h = [];
-    rows.forEach(function (n) {
-      var pr = n.priority || "";
-      var b = pr === "High" ? "badge--red" : pr === "Medium" ? "badge--amber" : "badge--neutral";
-      h.push('<div class="why-block">' +
-        '<p class="why-block-title">' + (pr ? '<span class="badge ' + b + '">' + esc(pr) + "</span> " : "") + esc(n.title || n.suggested_action || "") + "</p>" +
-        (n.detail ? '<p class="why-block-detail">' + esc(n.detail) + "</p>" : "") +
-        (n.impact_reason ? '<p class="why-block-impact">' + esc(n.impact_reason) + "</p>" : "") +
-        whyVariantsTable(n.variants) + "</div>");
+  function whyDigestHTML(rows, ik, cardText) {
+    var matched = whyMatchRows(rows, ik, cardText);
+    if (!matched.length) return '<p class="why-empty">No further findings behind this one.</p>';
+    /* verdict line comes from the kind's primary row type (e.g. the campaign
+       verdict, not a variant call the card merely names), then by priority */
+    var kinds = WHY_KIND_FINDINGS[ik] || [];
+    var rank = { High: 0, Medium: 1, Low: 2 };
+    matched.sort(function (a, b) {
+      var t = kinds.indexOf(whyRowType(a)) - kinds.indexOf(whyRowType(b));
+      return t || (rank[a.priority] != null ? rank[a.priority] : 3) - (rank[b.priority] != null ? rank[b.priority] : 3);
     });
-    return h.join("");
+    var top = matched[0];
+    return '<p class="why-verdict">' + whyVerdictLine(top) + "</p>" + whyChipsHTML(top) + whyBarsHTML(matched, cardText);
   }
 
   /* Populate a row's inline "Review N" panel from the campaign's in-memory
