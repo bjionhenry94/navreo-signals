@@ -2116,7 +2116,17 @@
   .clg-popover.sortpop .dirtoggle button.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
   .clg-popover.sortpop .sortactions { display: flex; justify-content: space-between; margin-top: 12px; }
 
+  /* honest scope + whole-campaign lookup lines under the grid */
+  .cl-grid .clg-lookline { margin: 8px 2px 0; font-size: 0.82rem; color: var(--fg-muted, #3A332C); line-height: 1.5; }
+  .cl-grid .clg-yes { color: #2F9E44; font-weight: 700; }
+  .cl-grid .clg-no { color: #C2371F; font-weight: 700; }
+
+  /* sources arithmetic note */
+  .sources-note { font-size: 0.8rem; color: var(--fg-subtle); line-height: 1.55; margin: -2px 0 12px; }
+  .sources-note:empty { display: none; }
+
   /* "Add more leads" prompt card */
+  .add-leads-card .al-note { margin: 10px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
   .add-leads-card .al-prompt {
     background: var(--sunken, #F7F7F6); border: 1px solid var(--border, #ECECEA); border-radius: 10px;
     padding: 14px 16px; margin: 10px 0 12px; font-family: inherit; font-size: 0.85rem; line-height: 1.55;
@@ -3324,15 +3334,17 @@
     h.push('<div class="tab-panel" data-tab="leads"' + (tab !== "leads" ? " hidden" : "") + ">" +
       '<div class="ov-card"><div class="card-title">Everyone\'s status</div><div id="leads-tiles"><p class="lw-loading">Loading the contact record&hellip;</p></div></div>' +
       '<div class="ov-card cl-grid"><div class="clg-head"><div class="card-title" style="margin:0">Live audience</div>' +
-      '<button class="btn" id="clg-download" title="Download every lead in this campaign as CSV"><span class="dlicon"></span> Download</button></div>' +
+      '<button class="btn" id="clg-download" title="Download every lead in this campaign as CSV — includes which source list each lead came from"><span class="dlicon"></span> Download</button></div>' +
       '<div id="leads-grid"><p class="lw-loading">Pulling the live audience from Smartlead&hellip;</p></div></div>' +
       '<div class="sources-section" id="draft-sources-section"><div class="section-label">Sources</div>' +
+      '<p class="sources-note" id="sources-note"></p>' +
       '<div id="draft-sources-root"></div><div id="sources-root"><p class="lw-loading">Loading&hellip;</p></div>' +
       '<div id="sources-empty"></div></div>' +
       '<div class="ov-card add-leads-card"><div class="card-title">Add more leads</div>' +
-      '<p class="card-subtitle">Copy this brief into Claude: it reads this campaign\'s history, targeting and reply/booking performance first, then brings back new lead ideas for this exact campaign.</p>' +
+      '<p class="card-subtitle">Copy this brief, then paste it into a Claude chat (Claude Code &mdash; where campaign ops run). Claude reads this campaign\'s history, targeting and reply/booking performance first, then brings back scored lead ideas to top this campaign up &mdash; or a sibling-campaign brief &mdash; every idea already netted against people we\'ve contacted.</p>' +
       '<pre class="al-prompt" id="al-prompt">' + esc(addLeadsPrompt(c)) + "</pre>" +
-      '<button class="btn al-copy" id="al-copy">Copy prompt</button></div>' +
+      '<button class="btn al-copy" id="al-copy">Copy prompt</button>' +
+      '<p class="al-note">Ideas come back in minutes as a review page &mdash; nothing sends without the upload gate.</p></div>' +
       "</div>");
 
     h.push("</div></article>");
@@ -3738,6 +3750,24 @@
       var sr = document.getElementById("sources-root");
       if (sr) {
         var srcs = d.sources || [];
+        /* the pushed-vs-live arithmetic, walked instead of asserted: overlapping
+           lists + per-push suppression/dupe netting is why the card totals can
+           exceed the campaign's own count. */
+        var noteEl = document.getElementById("sources-note");
+        if (noteEl) {
+          if (!srcs.length) noteEl.innerHTML = "";
+          else {
+            var pushedSum = srcs.reduce(function (a, s) { return a + (s.rows || 0); }, 0);
+            var liveN = c.stats.leads;
+            var noteBits = [];
+            if (liveN != null && pushedSum > liveN) {
+              noteBits.push("These lists overlap, and every push nets out suppressions and duplicates before upload &mdash; that's why the pushed totals (" +
+                fmtInt(pushedSum) + ") exceed the " + fmtInt(liveN) + " who actually landed in the campaign.");
+            }
+            noteBits.push("Open a list to see every original row, or push its people to another campaign from there (Reuse in campaign&hellip;). The CSV download above carries a SOURCE_LIST column tying each lead back to its list.");
+            noteEl.innerHTML = noteBits.join(" ");
+          }
+        }
         if (!srcs.length) {
           sr.innerHTML = "";
           maybeSourcesEmpty();
@@ -4048,7 +4078,7 @@
     var to = view.length ? Math.min(view.length, start - 1 + slice.length) : 0;
     var grand = CLG.total != null ? CLG.total : CLG.rows.length;
     var rangeTxt = filtered
-      ? fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(view.length) + " matching"
+      ? fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(view.length) + " matching the " + fmtInt(CLG.rows.length) + " loaded"
       : fmtInt(from) + "&ndash;" + fmtInt(to) + " of " + fmtInt(grand);
     root.innerHTML =
       '<div class="controlsrow">' +
@@ -4064,8 +4094,55 @@
       '<span class="pagerangetext">' + rangeTxt + "</span>" +
       '<button class="pagebtn" id="clg-next" title="Next page"' + (start - 1 + CLG.per >= view.length ? " disabled" : "") + ">" + clgSvg.right + "</button></div></div>" +
       '<div class="gridwrap"><table class="datagrid">' + thead + tbody + "</table></div>" +
+      '<div id="clg-lookup"></div>' +
       '<p class="sample-footer">First ' + fmtInt(CLG.rows.length) + " of " + fmtInt(grand) + " leads, live from Smartlead &mdash; Download for the full list.</p>";
     clgWire();
+    clgRenderLookup();
+  }
+
+  /* Whole-campaign lookup: a search that misses the loaded 50 must never read
+     as "not in the campaign". Full-email queries are checked against ALL the
+     campaign's leads server-side; anything else gets an honest scope line. */
+  function clgMaybeLookup() {
+    if (!CLG) return;
+    var q = (CLG.search || "").trim().toLowerCase();
+    if (!q || q.indexOf("@") === -1 || q.indexOf("@") === q.length - 1) return;
+    if (clgView().length) return;
+    if (CLG.lookups[q]) { clgRenderLookup(); return; }
+    CLG.lookups[q] = "pending";
+    clgRenderLookup();
+    getJSON("/api/campaign-lead-lookup?platform=smartlead&id=" + encodeURIComponent(CLG.cid) + "&email=" + encodeURIComponent(q))
+      .then(function (r) { CLG.lookups[q] = r || { found: false }; clgRenderLookup(); })
+      .catch(function () { delete CLG.lookups[q]; clgRenderLookup(); });
+  }
+  function clgRenderLookup() {
+    var el = document.getElementById("clg-lookup");
+    if (!el || !CLG) return;
+    var q = (CLG.search || "").trim().toLowerCase();
+    if (!q || clgView().length) { el.innerHTML = ""; return; }
+    var isEmail = q.indexOf("@") > 0 && q.indexOf("@") < q.length - 1;
+    if (!isEmail) {
+      el.innerHTML = '<p class="clg-lookline">No matches in the ' + fmtInt(CLG.rows.length) +
+        ' loaded rows. For a specific person, search their full email &mdash; the whole campaign gets checked automatically.</p>';
+      return;
+    }
+    var r = CLG.lookups[q];
+    if (r === "pending" || !r) {
+      el.innerHTML = '<p class="clg-lookline">No matches in the ' + fmtInt(CLG.rows.length) +
+        " loaded &mdash; checking all " + fmtInt(CLG.total != null ? CLG.total : 0) + " in the campaign&hellip;</p>";
+      return;
+    }
+    var others = (r.others || []).map(function (o) { return o.name; }).filter(Boolean).slice(0, 3).join(", ");
+    if (r.found && r.in_campaign) {
+      el.innerHTML = '<p class="clg-lookline"><span class="clg-yes">&#10003;</span> <b>' + esc(r.email) + "</b> IS in this campaign" +
+        (r.name || r.company ? " &mdash; " + esc([r.name, r.company].filter(Boolean).join(", ")) : "") +
+        (others ? ". Also in: " + esc(others) + "." : ".") + "</p>";
+    } else if (r.found) {
+      el.innerHTML = '<p class="clg-lookline"><span class="clg-no">&#10007;</span> <b>' + esc(r.email) + "</b> is NOT in this campaign" +
+        (others ? " &mdash; but is in: " + esc(others) + "." : " (exists in Smartlead, other campaigns).") + "</p>";
+    } else {
+      el.innerHTML = '<p class="clg-lookline"><span class="clg-no">&#10007;</span> <b>' + esc(r.email) + "</b> is not in this campaign &mdash; no Smartlead record for this address at all.</p>";
+    }
   }
   function clgClosePop() {
     var p = document.querySelector(".clg-popover");
@@ -4097,6 +4174,8 @@
       clgRender();
       var ne = document.getElementById("clg-search");
       if (ne) { ne.focus(); ne.setSelectionRange(ne.value.length, ne.value.length); }
+      clearTimeout(CLG.lookT);
+      CLG.lookT = setTimeout(clgMaybeLookup, 600);
     };
     root.querySelectorAll("[data-sortcol]").forEach(function (th) {
       th.addEventListener("click", function (e) {
@@ -4241,7 +4320,7 @@
       var vis = {};
       CLG_COLS.forEach(function (col) { vis[col.k] = true; });
       CLG = { cid: id, rows: leads.slice(0, CLG_CAP), total: pl.total, search: "", filters: {}, sort: "", dir: "asc",
-              start: 1, per: CLG_CAP, visible: vis, selected: {} };
+              start: 1, per: CLG_CAP, visible: vis, selected: {}, lookups: {}, lookT: null };
       clgRender();
     };
     var dl = document.getElementById("clg-download");

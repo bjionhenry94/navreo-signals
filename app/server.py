@@ -6629,8 +6629,9 @@ def campaign_leads_export_csv(q: dict) -> tuple:
     if not cid:
         return "error", 400, {"ok": False, "message": "id is required"}
     import csv, io
+    src_map = _campaign_source_email_map(cid)
     cols = ["email", "first_name", "last_name", "company", "title", "status", "replied"]
-    head = ["EMAIL", "FIRST_NAME", "LAST_NAME", "COMPANY_NAME", "TITLE", "STATUS", "REPLIED"]
+    head = ["EMAIL", "FIRST_NAME", "LAST_NAME", "COMPANY_NAME", "TITLE", "STATUS", "REPLIED", "SOURCE_LIST"]
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(head)
@@ -6642,14 +6643,87 @@ def campaign_leads_export_csv(q: dict) -> tuple:
             return "error", 502, {"ok": False, "message": str(page["error"])[:300]}
         rows = page.get("leads") or []
         for lead in rows:
-            writer.writerow([("yes" if lead.get("replied") else "") if c == "replied"
-                             else (lead.get(c) or "") for c in cols])
+            out_row = [("yes" if lead.get("replied") else "") if c == "replied"
+                       else (lead.get(c) or "") for c in cols]
+            out_row.append(src_map.get((lead.get("email") or "").strip().lower(), ""))
+            writer.writerow(out_row)
         seen += len(rows)
         # short page = the end; 200k is a runaway guard, far above any campaign
         if len(rows) < page_size or seen >= 200_000:
             break
         offset += page_size
     return "csv", f"campaign-{cid}-leads.csv", buf.getvalue().encode("utf-8-sig")
+
+
+def _campaign_source_email_map(cid) -> dict:
+    """email(lower) -> '; '-joined source-list names, from the campaign's
+    push-history sources (cockpit detail RPC) joined against each list's rows.
+    Row-level provenance for the CSV export — a lead pushed by two overlapping
+    recontact lists shows both names. Best-effort: any failure degrades to an
+    empty map (the export must never break on the join)."""
+    out: dict = {}
+    try:
+        d = _COCKPIT_DETAIL_SWR.get(str(cid))
+        srcs = (d or {}).get("sources") or []
+        for s in srcs:
+            lid = s.get("list_id")
+            name = s.get("list_name") or "List"
+            if not lid:
+                continue
+            offset, page_size = 0, 2000
+            while True:
+                page = sb("POST", "rpc/api_list_rows_page", {
+                    "p_list_id": lid, "p_offset": offset, "p_limit": page_size,
+                    "p_search": "", "p_sort": "", "p_dir": "", "p_filters": {},
+                })
+                if isinstance(page, list):
+                    page = page[0] if page else None
+                if not isinstance(page, dict):
+                    break
+                batch = page.get("rows") or []
+                for row in batch:
+                    data = row.get("data") or {}
+                    em = ""
+                    for k, v in data.items():
+                        if str(k).strip().lower() == "email":
+                            em = str(v or "").strip().lower()
+                            break
+                    if em:
+                        cur = out.get(em)
+                        if cur is None:
+                            out[em] = name
+                        elif name not in cur.split("; "):
+                            out[em] = cur + "; " + name
+                if len(batch) < page_size:
+                    break
+                offset += page_size
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
+def campaign_lead_lookup(q: dict) -> dict:
+    """GET /api/campaign-lead-lookup — 'did we email this person on THIS
+    campaign?' answered against the whole campaign, not the grid's loaded 50:
+    Smartlead's global lead-by-email, then the lead's campaign memberships.
+    Kills the false 'no results' a 50-row client search would give."""
+    cid = ((q.get("id") or [""])[0] or "").strip()
+    email = ((q.get("email") or [""])[0] or "").strip().lower()
+    if not cid or not email or "@" not in email:
+        return {"error": "id and a full email are required", "found": False}
+    from urllib.parse import quote
+    key = ws_key_for_campaign(cid)
+    lead = _smartlead_get_retry(f"{SMARTLEAD_BASE}/leads/?api_key={key}&email={quote(email)}")
+    if not isinstance(lead, dict) or not lead.get("id"):
+        return {"found": False, "in_campaign": False, "email": email}
+    camps = _smartlead_get_retry(f"{SMARTLEAD_BASE}/leads/{lead['id']}/campaigns?api_key={key}")
+    camps = camps if isinstance(camps, list) else []
+    in_campaign = any(str(c.get("id")) == str(cid) for c in camps)
+    others = [{"id": c.get("id"), "name": (c.get("name") or "").strip(), "status": c.get("status")}
+              for c in camps if str(c.get("id")) != str(cid)][:5]
+    nm = " ".join(x for x in [(lead.get("first_name") or "").strip(), (lead.get("last_name") or "").strip()] if x)
+    return {"found": True, "in_campaign": in_campaign, "email": email,
+            "name": nm, "company": lead.get("company_name") or "", "others": others}
 
 
 def campaigns_unified(p: dict) -> dict:
@@ -15052,6 +15126,10 @@ class Handler(SimpleHTTPRequestHandler):
             if self.command != "HEAD":
                 self.wfile.write(data)
             return
+        if path == "/api/campaign-lead-lookup":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(campaign_lead_lookup(q))
         if path == "/api/campaign-leads-csv":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
