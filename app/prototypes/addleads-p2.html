@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Add leads · P2 — The add tile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --orange: #FF4D00; --orange-600: #DB4100; --orange-700: #A83100; --orange-100: #FFE4D6;
+    --ink: #14110E; --ink-2: #3A332C; --ink-3: #6B6055;
+    --cream: #F9F0E7; --bg-sunken: #F7F7F6; --card: #FFFFFF;
+    --line: #ECECEA; --line-2: #DDDDDA;
+    --font-sans: "DM Sans", "Helvetica Neue", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); background: #fff; color: var(--ink); line-height: 1.45; letter-spacing: -0.015em; -webkit-font-smoothing: antialiased; padding: 40px 24px 80px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  .proto-tag { display: inline-flex; align-items: center; gap: 8px; background: var(--orange-100); color: var(--orange-700); font-size: 12px; font-weight: 700; border-radius: 999px; padding: 5px 14px; margin-bottom: 22px; }
+  .proto-sub { font-size: 13px; color: var(--ink-3); margin: -14px 0 22px 2px; }
+
+  .ov-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px 24px; margin-bottom: 22px; }
+  .clg-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+  .card-title { font-size: 1.05rem; font-weight: 600; }
+  .btn { border: 1px solid var(--line-2); background: transparent; color: var(--ink); border-radius: 999px; padding: 8px 16px; font: 500 13px var(--font-sans); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .btn:hover { background: var(--bg-sunken); }
+
+  table.minigrid { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+  .minigrid th { background: var(--bg-sunken); text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--line-2); }
+  .minigrid td { padding: 7px 10px; border-bottom: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .minigrid td.g { color: var(--ink-3); font-family: var(--font-mono); font-size: 11px; text-align: right; width: 30px; }
+  .foot { font-size: 0.8rem; color: var(--ink-3); margin-top: 10px; }
+
+  .section-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); display: block; margin: 4px 0 12px; }
+  .source-list-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 20px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .source-list-name { font-weight: 600; display: block; }
+  .source-list-meta { font-size: 0.82rem; color: var(--ink-3); }
+  .source-list-meta b { color: var(--ink); }
+  .action-link { border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 15px; font-size: 12.5px; font-weight: 600; color: var(--ink); text-decoration: none; white-space: nowrap; }
+  .action-link:hover { background: var(--bg-sunken); }
+
+  /* the add tile: "the next source goes here" */
+  .add-tile {
+    width: 100%; border: 1.5px dashed var(--line-2); border-radius: 14px; background: transparent;
+    padding: 18px 20px; font: 700 14px var(--font-sans); color: var(--ink-3); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 9px; transition: all .15s;
+  }
+  .add-tile:hover { border-color: var(--orange); color: var(--orange-700); background: #FFF8F4; }
+  .add-tile .plus { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: var(--orange); color: #fff; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; transition: transform .15s; }
+  .add-tile:hover .plus { transform: scale(1.08); }
+  .add-tile.copied { border-style: solid; border-color: #2F9E44; color: #195C3F; background: #E2F1E9; }
+  .add-tile.copied .plus { background: #2F9E44; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="proto-tag">P2 · The add tile</div>
+  <p class="proto-sub">A dashed ghost row after the last source card — the visual grammar of "the next source goes here." One click copies the brief silently and the tile flips to a green confirmation. Quietest of the three; discovered exactly when you're looking at what the campaign already has.</p>
+
+  <div class="ov-card">
+    <div class="clg-head"><div class="card-title">Live audience</div><button class="btn"><span>&#8595;</span> Download</button></div>
+    <table class="minigrid">
+      <tr><th></th><th>Email</th><th>First_name</th><th>Last_name</th><th>Company_name</th><th>Status</th><th>Replied</th></tr>
+      <tr><td class="g">1</td><td>a.alzaiem@almarwan.com</td><td>Ata</td><td>Al Zaiem</td><td>Al Marwan Heavy Machinery</td><td>STARTED</td><td></td></tr>
+      <tr><td class="g">2</td><td>a.albader@nutrinatrading.com</td><td>Ali</td><td>ALBADER</td><td>Nutrina Trading</td><td>STARTED</td><td></td></tr>
+      <tr><td class="g">3</td><td>a.anagnostakis@vican.gr</td><td>Antonis</td><td>Anagnostakis</td><td>Vican Greek Healthcare</td><td>STARTED</td><td></td></tr>
+      <tr><td class="g">4</td><td>a.arevalo@bindiiberica.com</td><td>Adrian</td><td>Arévalo Barrabés</td><td>Importacion Congelados Premium</td><td>INPROGRESS</td><td></td></tr>
+      <tr><td class="g">5</td><td>a.benrubi@benrubi.gr</td><td>Aliki</td><td>Benrubi</td><td>Benrubi</td><td>STARTED</td><td></td></tr>
+    </table>
+    <p class="foot">First 50 of 15,824 leads, live from Smartlead — Download for the full list.</p>
+  </div>
+
+  <span class="section-label">Sources</span>
+
+  <div class="source-list-card">
+    <div><span class="source-list-name">Wholesale No-Reply Recontact</span>
+    <span class="source-list-meta"><b>3,933</b> people · pushed to Smartlead · 25 Jun</span></div>
+    <a class="action-link" href="#">View the list</a>
+  </div>
+  <div class="source-list-card">
+    <div><span class="source-list-name">Manufacturer No-Reply Recontact</span>
+    <span class="source-list-meta"><b>2,607</b> people · pushed to Smartlead · 25 Jun</span></div>
+    <a class="action-link" href="#">View the list</a>
+  </div>
+  <div class="source-list-card">
+    <div><span class="source-list-name">Distributor No-Reply Recontact</span>
+    <span class="source-list-meta"><b>15,289</b> people · pushed to Smartlead · 17 Jun</span></div>
+    <a class="action-link" href="#">View the list</a>
+  </div>
+
+  <button class="add-tile" id="add-btn"><span class="plus">＋</span> Add more leads</button>
+</div>
+<script>
+  var PROMPT = 'Add more leads to "Navreo | Distributors [June]" (Smartlead campaign 3507283). First pull this campaign\'s full picture: targeting and ICP so far, every source list already pushed, and lead performance - who replied, who was positive, who booked (use lilly-optimiser + lilly-data). Then run lilly-strategy focused on THIS campaign: suggest new lead ideas that either top it up or justify a sibling launch, never re-pitching dead angles and netting every idea against contact_history + suppressions. When I approve an idea, pull the list and route the upload through /lilly-upload-gate into campaign 3507283 (or the new sibling).';
+  var btn = document.getElementById("add-btn");
+  btn.onclick = function () {
+    var done = function () {
+      btn.innerHTML = '<span class="plus">✓</span> Brief copied — paste into Claude Code';
+      btn.classList.add("copied");
+      setTimeout(function () { btn.innerHTML = '<span class="plus">＋</span> Add more leads'; btn.classList.remove("copied"); }, 2600);
+    };
+    var fb = function () {
+      var t = document.createElement("textarea"); t.value = PROMPT; t.style.cssText = "position:fixed;opacity:0";
+      document.body.appendChild(t); t.select();
+      try { document.execCommand("copy"); done(); } catch (e) {}
+      t.remove();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(PROMPT).then(done, fb); else fb();
+  };
+</script>
+</body>
+</html>

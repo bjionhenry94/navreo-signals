@@ -2121,10 +2121,6 @@
   .cl-grid .clg-yes { color: #2F9E44; font-weight: 700; }
   .cl-grid .clg-no { color: #C2371F; font-weight: 700; }
 
-  /* sources arithmetic note */
-  .sources-note { font-size: 0.8rem; color: var(--fg-subtle); line-height: 1.55; margin: -2px 0 12px; }
-  .sources-note:empty { display: none; }
-
   /* the Repliers quick-cohort chip: dirtoggle-on treatment when active */
   .cl-grid .clg-quick.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
 
@@ -3344,7 +3340,6 @@
       '<button class="btn" id="clg-download" title="Download every lead in this campaign as CSV — includes which source list each lead came from"><span class="dlicon"></span> Download</button></div>' +
       '<div id="leads-grid"><p class="lw-loading">Pulling the live audience from Smartlead&hellip;</p></div></div>' +
       '<div class="sources-section" id="draft-sources-section"><div class="section-label">Sources</div>' +
-      '<p class="sources-note" id="sources-note"></p>' +
       '<div id="draft-sources-root"></div><div id="sources-root"><p class="lw-loading">Loading&hellip;</p></div>' +
       '<div id="sources-empty"></div></div>' +
       '<div class="ov-card add-leads-card"><div class="card-title">Add more leads</div>' +
@@ -3759,24 +3754,6 @@
       var sr = document.getElementById("sources-root");
       if (sr) {
         var srcs = d.sources || [];
-        /* the pushed-vs-live arithmetic, walked instead of asserted: overlapping
-           lists + per-push suppression/dupe netting is why the card totals can
-           exceed the campaign's own count. */
-        var noteEl = document.getElementById("sources-note");
-        if (noteEl) {
-          if (!srcs.length) noteEl.innerHTML = "";
-          else {
-            var pushedSum = srcs.reduce(function (a, s) { return a + (s.rows || 0); }, 0);
-            var liveN = c.stats.leads;
-            var noteBits = [];
-            if (liveN != null && pushedSum > liveN) {
-              noteBits.push("These lists overlap, and every push nets out suppressions and duplicates before upload &mdash; that's why the pushed totals (" +
-                fmtInt(pushedSum) + ") exceed the " + fmtInt(liveN) + " who actually landed in the campaign.");
-            }
-            noteBits.push("Open a list to see every original row, or push its people to another campaign from there (Reuse in campaign&hellip;). The CSV download above carries a SOURCE_LIST column tying each lead back to its list.");
-            noteEl.innerHTML = noteBits.join(" ");
-          }
-        }
         if (!srcs.length) {
           sr.innerHTML = "";
           maybeSourcesEmpty();
