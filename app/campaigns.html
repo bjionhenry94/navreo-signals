@@ -2124,24 +2124,24 @@
   /* the Repliers quick-cohort chip: dirtoggle-on treatment when active */
   .cl-grid .clg-quick.on { background: var(--ink); border-color: var(--ink); color: var(--cream); }
 
-  /* "Add more leads" prompt card */
-  .add-leads-card .al-note { margin: 10px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
-  .add-leads-card .al-copied { margin: 10px 0 0; font-size: 0.8rem; font-weight: 600; color: #2F9E44; }
-  .add-leads-card .alr-title { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-subtle); margin: 16px 0 6px; }
-  .add-leads-card .alr-line { margin: 3px 0; font-size: 0.8rem; color: var(--fg-muted); }
-  .add-leads-card .alr-empty { margin: 3px 0; font-size: 0.78rem; color: var(--fg-subtle); }
-  .add-leads-card .al-prompt {
-    background: var(--sunken, #F7F7F6); border: 1px solid var(--border, #ECECEA); border-radius: 10px;
-    padding: 14px 16px; margin: 10px 0 12px; font-family: inherit; font-size: 0.85rem; line-height: 1.55;
-    color: var(--fg-muted); white-space: pre-wrap; word-break: break-word;
+  /* "Add more leads" tile (P2): a dashed ghost row after the last source —
+     the next source goes here. Click copies the brief silently and the tile
+     confirms in place; no card, no visible prompt. */
+  .add-tile {
+    width: 100%; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: transparent;
+    padding: 18px 20px; font-family: inherit; font-size: 14px; font-weight: 700; color: var(--fg-subtle);
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 9px;
+    margin-top: 12px; transition: border-color .15s, color .15s, background .15s;
   }
-  .add-leads-card .al-copy {
-    border: 1px solid var(--nav-orange); background: var(--nav-orange); color: #fff;
-    border-radius: 999px; padding: 8px 18px; font-size: 13px; font-weight: 700; font-family: inherit;
-    cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+  .add-tile:hover { border-color: var(--nav-orange); color: var(--nav-orange-600); background: #FFF8F4; }
+  .add-tile .plus {
+    display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: var(--nav-orange);
+    color: #fff; align-items: center; justify-content: center; font-size: 15px; font-weight: 700;
+    transition: transform .15s; flex: 0 0 auto;
   }
-  .add-leads-card .al-copy:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); }
-  .add-leads-card .al-copy.copied { background: #2F9E44; border-color: #2F9E44; }
+  .add-tile:hover .plus { transform: scale(1.08); }
+  .add-tile.copied { border-style: solid; border-color: #2F9E44; color: #195C3F; background: #E2F1E9; }
+  .add-tile.copied .plus { background: #2F9E44; }
 </style>
 
 <div class="app">
@@ -3332,8 +3332,9 @@
 
     /* leads — the leads hub: status tiles, then the live-audience grid
        (lists.html look, first GRID_CAP rows, Download = the full list), then
-       the Sources section (moved here when the Sources tab died), then the
-       "Add more leads" prompt card. */
+       the Sources section (moved here when the Sources tab died), closed by
+       the add tile — "the next source goes here" (P2 ruling, 27 Jul 2026:
+       one button, brief copies silently, no visible prompt). */
     h.push('<div class="tab-panel" data-tab="leads"' + (tab !== "leads" ? " hidden" : "") + ">" +
       '<div class="ov-card"><div class="card-title">Everyone\'s status</div><div id="leads-tiles"><p class="lw-loading">Loading the contact record&hellip;</p></div></div>' +
       '<div class="ov-card cl-grid"><div class="clg-head"><div class="card-title" style="margin:0">Live audience</div>' +
@@ -3341,14 +3342,8 @@
       '<div id="leads-grid"><p class="lw-loading">Pulling the live audience from Smartlead&hellip;</p></div></div>' +
       '<div class="sources-section" id="draft-sources-section"><div class="section-label">Sources</div>' +
       '<div id="draft-sources-root"></div><div id="sources-root"><p class="lw-loading">Loading&hellip;</p></div>' +
-      '<div id="sources-empty"></div></div>' +
-      '<div class="ov-card add-leads-card"><div class="card-title">Add more leads</div>' +
-      '<p class="card-subtitle">Copy this brief, then paste it into a Claude chat (Claude Code &mdash; where campaign ops run). Claude reads this campaign\'s history, targeting and reply/booking performance first, then brings back scored lead ideas to top this campaign up &mdash; or a sibling-campaign brief &mdash; every idea already netted against people we\'ve contacted.</p>' +
-      '<pre class="al-prompt" id="al-prompt">' + esc(addLeadsPrompt(c)) + "</pre>" +
-      '<button class="btn al-copy" id="al-copy">Copy prompt</button>' +
-      '<p class="al-copied" id="al-copied" hidden></p>' +
-      '<p class="al-note">Ideas come back in minutes on the <a class="action-link" href="https://claude.ai/code/artifact/5d6e5fdd-69d8-48f2-be8e-bec57da7b51f" target="_blank" rel="noopener">strategy-wizard review page</a> &mdash; nothing sends without the upload gate.</p>' +
-      '<div class="al-runs" id="al-runs"></div></div>' +
+      '<div id="sources-empty"></div>' +
+      '<button class="add-tile" id="al-add" title="Copies the add-more-leads brief for this campaign — paste it into Claude Code"><span class="plus">＋</span> Add more leads</button></div>' +
       "</div>");
 
     h.push("</div></article>");
@@ -4308,16 +4303,12 @@
   function clgCopyPrompt(c, btn) {
     var txt = addLeadsPrompt(c);
     var done = function () {
-      btn.textContent = "Copied ✓";
+      btn.innerHTML = '<span class="plus">✓</span> Brief copied — paste into Claude Code';
       btn.classList.add("copied");
-      setTimeout(function () { btn.textContent = "Copy prompt"; btn.classList.remove("copied"); }, 2200);
-      var ack = document.getElementById("al-copied");
-      if (ack) {
-        var hh = new Date();
-        ack.textContent = "Brief copied at " + String(hh.getHours()).padStart(2, "0") + ":" + String(hh.getMinutes()).padStart(2, "0") +
-          " — paste it into Claude Code. When the run lands, its add-run appears in the history below.";
-        ack.hidden = false;
-      }
+      setTimeout(function () {
+        btn.innerHTML = '<span class="plus">＋</span> Add more leads';
+        btn.classList.remove("copied");
+      }, 2600);
     };
     var fallback = function () {
       var ta = document.createElement("textarea");
@@ -4348,31 +4339,6 @@
               mode: null, cohortRows: null, cohortTotal: null, cohortLoading: false };
       clgRender();
     };
-    /* gated add-run history: the on-page trace of what the Add card's brief
-       eventually did (upload-gate audit rows, newest first) */
-    var runsEl = document.getElementById("al-runs");
-    if (runsEl) {
-      var paintRuns = function (d) {
-        var runs = (d || {}).runs || [];
-        var head = '<div class="alr-title">Add-run history</div>';
-        if (!runs.length) {
-          runsEl.innerHTML = head + '<p class="alr-empty">No gated add-runs recorded for this campaign yet — the first one will appear here.</p>';
-          return;
-        }
-        runsEl.innerHTML = head + runs.map(function (r) {
-          var dd = r.at ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(r.at)) : "";
-          return '<p class="alr-line"><b>' + esc(dd) + "</b> &middot; " + esc(r.source || "run") + ": " +
-            fmtInt(r.rows_in || 0) + " in &rarr; <b>" + fmtInt(r.uploaded || 0) + " uploaded</b>" +
-            (r.verdict ? " &middot; " + esc(r.verdict) : "") + "</p>";
-        }).join("");
-      };
-      if (STATE.addRuns && STATE.addRuns[id]) paintRuns(STATE.addRuns[id]);
-      else getJSON("/api/campaign-add-runs?id=" + encodeURIComponent(id)).then(function (d) {
-        STATE.addRuns = STATE.addRuns || {};
-        STATE.addRuns[id] = d;
-        paintRuns(d);
-      }).catch(function () { paintRuns(null); });
-    }
     var dl = document.getElementById("clg-download");
     if (dl) {
       var ic = dl.querySelector(".dlicon");
@@ -4381,7 +4347,7 @@
         window.location.assign("/api/campaign-leads-csv?platform=smartlead&id=" + encodeURIComponent(id));
       };
     }
-    var cp = document.getElementById("al-copy");
+    var cp = document.getElementById("al-add");
     if (cp) cp.onclick = function () { clgCopyPrompt(c, cp); };
     if (STATE.platformLeads[id]) { apply(STATE.platformLeads[id]); return; }
     getJSON("/api/campaign-platform-leads?platform=smartlead&id=" + encodeURIComponent(id) + "&offset=0&limit=" + CLG_CAP).then(function (pl) {
