@@ -7717,6 +7717,239 @@ _COLLECTIVE_30D_SWR = _SWRCache(_collective_30d, 300,
                                 name="collective-30d")
 
 
+# ── Analytics hub (app/deliverability.html) ────────────────────────────────
+# One read-only aggregate behind the hub's client-splittable widgets: daily
+# replies/interested/meetings per client, replies-by-send-weekday, setter
+# answer speed, meetings by calendar month, and the campaign→client map.
+# Fleet sent/bounce stay on /api/deliverability-trends (no client dimension
+# exists for them anywhere). SQL lives in app/migrations/analytics_hub_v1.sql.
+def _analytics_hub_cached(days) -> dict:
+    try:
+        n = max(7, min(30, int(days or 30)))
+    except (TypeError, ValueError):
+        n = 30
+    r = sb("POST", "rpc/analytics_hub_v1", {"p_days": n})
+    if isinstance(r, list):
+        r = r[0] if r else None
+    if isinstance(r, dict) and "analytics_hub_v1" in r:
+        r = r.get("analytics_hub_v1")
+    if not isinstance(r, dict) or not r.get("days"):
+        return {"error": "Supabase read failed"}
+    return r
+
+
+_ANALYTICS_HUB_SWR = _SWRKeyedCache(
+    _analytics_hub_cached, 600,
+    is_degraded=lambda p: not isinstance(p, dict) or bool(p.get("error")),
+    name="analytics-hub")
+
+
+# ── Analytics hub book insights (messaging league + who-replies) ────────────
+# The hub's "Opening lines" and "Who actually replies?" cards render two
+# book-scope campaign_insights rows. They are MECHANICAL data aggregations
+# (Smartlead variant counters + the reply archive — counts, not judgment), so
+# the daily cron generates them and the page never depends on someone
+# remembering to run anything. Lilly-optimiser cockpit runs may supersede them
+# with sharper act lines — same contract either way: fingerprint reuse under
+# 24h, supersede-not-stack, 7-day expiry, one live row per scope+key.
+_AH_POSITIVE_CATS = ("Interested", "Call Booked", "Meeting Request", "Information Request")
+_AH_INSIGHTS_LOCK = threading.Lock()
+
+
+def _ah_title_bucket(title: str) -> str:
+    t = (title or "").strip().lower()
+    if not t:
+        return "Unknown"
+    if re.search(r"founder|ceo|chief exec|owner|president|managing director", t):
+        return "Founders and CEOs"
+    if re.search(r"sales|revenue|cro|business development|commercial|account manager|account exec", t):
+        return "Sales leaders"
+    if re.search(r"marketing|growth|brand|cmo", t):
+        return "Marketing"
+    if re.search(r"operations|operating|coo", t):
+        return "Operations"
+    return "Other"
+
+
+def _ah_subject_label(subject: str) -> str:
+    """A sendable subject → a short display label: merge variables, trim."""
+    s = re.sub(r"\{\{[^}]*\}\}", "…", subject or "").strip()
+    s = re.sub(r"\s+", " ", s)
+    return (s[:44] + "…") if len(s) > 46 else s
+
+
+def _analytics_hub_insights_refresh(force: bool = False) -> dict:
+    """Generate/refresh the two hub insights into campaign_insights."""
+    with _AH_INSIGHTS_LOCK:
+        return _ah_insights_refresh_inner(force)
+
+
+def _ah_insights_refresh_inner(force: bool) -> dict:
+    import hashlib
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rep = sb("GET", f"replies?replied_at=gte.{since}"
+                    "&select=smartlead_campaign_id,email,category&limit=20000")
+    if not isinstance(rep, list):
+        return {"ok": False, "error": "replies read failed"}
+    by_camp: dict = {}
+    pos_by_camp: dict = {}
+    pos_pairs = []
+    for r in rep:
+        cid = str(r.get("smartlead_campaign_id") or "")
+        if not cid:
+            continue
+        by_camp[cid] = by_camp.get(cid, 0) + 1
+        if (r.get("category") or "") in _AH_POSITIVE_CATS:
+            pos_by_camp[cid] = pos_by_camp.get(cid, 0) + 1
+            pos_pairs.append((cid, (r.get("email") or "").strip().lower()))
+    fp = hashlib.md5(json.dumps(
+        [sorted(by_camp.items()), sorted(pos_by_camp.items())], sort_keys=True
+    ).encode()).hexdigest()
+    live = sb("GET", "campaign_insights?scope=eq.book"
+                     "&insight_key=in.(messaging,who-replies)&status=eq.live"
+                     "&select=id,insight_key,data_fingerprint,generated_at")
+    live = live if isinstance(live, list) else []
+    if not force and len({r.get("insight_key") for r in live}) == 2:
+        fresh = all(
+            r.get("data_fingerprint") == fp and
+            (now - datetime.fromisoformat(str(r.get("generated_at")).replace("Z", "+00:00"))).total_seconds() < 86400
+            for r in live)
+        if fresh:
+            return {"ok": True, "reused": True, "fingerprint": fp}
+
+    src_note = ("smartlead variant counters plus the supabase reply archive, "
+                "last 30 days to " + now.strftime("%Y-%m-%d"))
+
+    # 1 · Opening lines league — step-1 variants of the top reply campaigns
+    lines_agg: dict = {}
+    top_msg = sorted(by_camp.items(), key=lambda kv: -kv[1])[:8]
+    for cid, _n in top_msg:
+        try:
+            msg = _cockpit_messaging(cid)
+            copy = _cockpit_sequence_copy(cid)
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(msg, dict) or msg.get("degraded"):
+            continue
+        subj = {}
+        if isinstance(copy, dict):
+            for st in (copy.get("steps") or []):
+                if st.get("step") == 1:
+                    for v in (st.get("variants") or []):
+                        subj[v.get("label") or "?"] = v.get("subject") or ""
+        for v in (msg.get("versions") or []):
+            if v.get("step") != 1 or v.get("inline") or (v.get("sent") or 0) < 500:
+                continue
+            label = _ah_subject_label(subj.get(v.get("label") or "?", ""))
+            if not label:
+                continue  # no subject text — a bare "Variant H" row tells a founder nothing
+            a = lines_agg.setdefault(label, {"sent": 0, "replies": 0})
+            a["sent"] += v.get("sent") or 0
+            a["replies"] += v.get("replies") or 0
+    lines = [[k, round(a["replies"] / a["sent"] * 100, 1), a["sent"]]
+             for k, a in lines_agg.items() if a["sent"] >= 800]
+    lines.sort(key=lambda l: -l[1])
+    lines = lines[:4]
+    messaging_payload = None
+    if len(lines) >= 2:
+        win, lose = lines[0], lines[-1]
+        messaging_payload = {
+            "kind": "messaging", "tag": "fine", "client": "All", "owner": "Lilly",
+            "bold": f"“{win[0]}” wins at {win[1]}% across {win[2]:,} sends.",
+            "act": (f"Open new campaigns with “{win[0]}” ({win[1]}% of {win[2]:,}); "
+                    f"retire “{lose[0]}” at {lose[1]}%."),
+            "note": ("Step-1 subject lines across the book's most-answered campaigns, "
+                     "reply rate per line since each sequence's relaunch."),
+            "stats": {"lines": lines},
+            "source": src_note,
+        }
+
+    # 2 · Who replies — titles of the last 30 days' positive repliers
+    title_map: dict = {}
+    top_pos = sorted(pos_by_camp.items(), key=lambda kv: -kv[1])[:8]
+    for cid, _n in top_pos:
+        try:
+            key = ws_key_for_campaign(cid)
+            cats = _smartlead_categories(key) or {}
+            pos_ids = [i for i, nm in cats.items() if nm in _AH_POSITIVE_CATS]
+            for cat_id in pos_ids:
+                offset = 0
+                while offset < 300:
+                    url = (f"{SMARTLEAD_BASE}/campaigns/{cid}/leads?api_key={key}"
+                           f"&offset={offset}&limit=100&lead_category_id={cat_id}")
+                    page = _smartlead_get_retry(url)
+                    rows = (page.get("data") or []) if isinstance(page, dict) else []
+                    for row in rows:
+                        lead = row.get("lead") or {}
+                        em = (lead.get("email") or "").strip().lower()
+                        if em and em not in title_map:
+                            title_map[em] = lead.get("linkedin_bio") or lead.get("title") or ""
+                    if len(rows) < 100:
+                        break
+                    offset += 100
+        except Exception:  # noqa: BLE001
+            continue
+    # Smartlead rarely carries titles — fill the gaps from the central data
+    # layer (people first, then signal_leads) before bucketing.
+    missing = sorted({em for _c, em in pos_pairs if em and not (title_map.get(em) or "").strip()})
+    for i in range(0, len(missing), 100):
+        batch = ",".join('"' + m + '"' for m in missing[i:i + 100])
+        for table, col in (("people", "title"), ("signal_leads", "title")):
+            rows = sb("GET", f"{table}?email=in.({urllib.parse.quote(batch)})&select=email,{col}")
+            for r in (rows if isinstance(rows, list) else []):
+                em = (r.get("email") or "").strip().lower()
+                if em and (r.get(col) or "").strip() and not (title_map.get(em) or "").strip():
+                    title_map[em] = r.get(col)
+    buckets: dict = {}
+    seen_pairs = set()
+    for cid, em in pos_pairs:
+        if (cid, em) in seen_pairs:
+            continue
+        seen_pairs.add((cid, em))
+        b = _ah_title_bucket(title_map.get(em, ""))
+        buckets[b] = buckets.get(b, 0) + 1
+    n_pos = len(seen_pairs)
+    named = n_pos - buckets.get("Unknown", 0)
+    blist = sorted(buckets.items(), key=lambda kv: -kv[1])
+    blist = [b for b in blist if b[0] != "Unknown"] + [b for b in blist if b[0] == "Unknown"]
+    who_payload = None
+    if n_pos > 0:
+        top_named = next((b for b in blist if b[0] not in ("Unknown", "Other")), None)
+        low = named < max(10, n_pos * 0.4)  # too few known titles to chart honestly
+        who_payload = {
+            "kind": "who-replies", "tag": "fine", "client": "All", "owner": "Lilly",
+            "bold": (f"{top_named[0]} answer most — {top_named[1]} of the last {n_pos} interested."
+                     if (top_named and not low) else f"{n_pos} interested replies in the last 30 days."),
+            "act": (f"Aim new lists at {top_named[0].lower()} — {top_named[1]} of {n_pos} interested replies."
+                    if (top_named and not low) else "Add job titles to lead lists so this panel can name your buyers."),
+            "note": "Job titles of everyone who replied Interested / Information Request / Meeting Request / Call Booked in the last 30 days.",
+            "stats": {"n": n_pos, "named": named, "low_coverage": low,
+                      "buckets": [[k, v] for k, v in blist]},
+            "source": src_note,
+        }
+
+    written = []
+    expires = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for ikey, payload in (("messaging", messaging_payload), ("who-replies", who_payload)):
+        if not payload:
+            continue
+        sb("PATCH", f"campaign_insights?scope=eq.book&insight_key=eq.{ikey}&status=eq.live",
+           {"status": "superseded", "superseded_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")})
+        sb("POST", "campaign_insights", {
+            "scope": "book", "insight_key": ikey, "payload": payload,
+            "data_fingerprint": fp, "generated_by": "cron-analytics-hub",
+            "status": "live", "expires_at": expires})
+        written.append(ikey)
+    try:
+        _COCKPIT_INSIGHTS_SWR.ts = 0  # the hub reads /api/cockpit/insights — serve fresh rows now
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "reused": False, "written": written, "fingerprint": fp,
+            "lines": len(lines), "who_n": n_pos}
+
+
 # ── tier1-live-ship Step 2: campaign detail insights, hiring-signal campaign
 # ideas, and recontact. Hard rules baked into every function below:
 #   - nothing here activates a campaign or sends anything (drafts + QA-gate only)
@@ -11666,6 +11899,12 @@ def _cron_pull_bg():
         # the pull writes leads/sources — invalidate the UI read caches NOW
         # (at completion), not at kick time when nothing had changed yet
         _clear_ui_caches()
+    try:
+        # analytics hub book insights ride the same daily tick — fingerprint
+        # cache inside makes the 3-hourly extra calls a cheap no-op
+        _analytics_hub_insights_refresh()
+    except Exception as e:  # noqa: BLE001
+        print(f"[analytics-hub] insight refresh failed: {e}", file=sys.stderr)
 
 
 # ── HeyReach daily snapshot (pg_cron → pg_net → POST /api/cron/heyreach-sync) ─
@@ -14925,6 +15164,12 @@ class Handler(SimpleHTTPRequestHandler):
             # Homepage strip's LAST-30-DAYS top line (sent/reply/positives/meetings/
             # signals) — one cheap DB round-trip via rpc/collective_30d, SWR-cached.
             return self._json(_COLLECTIVE_30D_SWR.get())
+        if path == "/api/analytics-hub":
+            # Analytics hub page: client-splittable daily series + weekday +
+            # setter speed + monthly meetings, one round trip (analytics_hub_v1).
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(_ANALYTICS_HUB_SWR.get((q.get("days") or ["30"])[0]))
         if path == "/api/cockpit/insights":
             # Cockpit render layer: what Claude wrote on the morning crunch
             # (live unexpired campaign_insights) + the graded track record.
@@ -15721,6 +15966,20 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, payload)
             body, status = api_restore_live(payload)
             return self._json(body, status)
+        if path == "/api/analytics-hub/refresh-insights":
+            # Regenerate the hub's book insights (messaging league +
+            # who-replies). Used by lilly-optimiser cockpit runs; the daily
+            # cron calls the same function with the fingerprint cache on.
+            # Body {"force": false} exercises the cached path explicitly.
+            try:
+                body = json.loads((self._post_body or b"{}").decode() or "{}")
+            except Exception:  # noqa: BLE001
+                body = {}
+            try:
+                res = _analytics_hub_insights_refresh(force=body.get("force", True) is not False)
+            except Exception as e:  # noqa: BLE001
+                return self._json({"ok": False, "error": str(e)[:300]}, 500)
+            return self._json(res, 200 if res.get("ok") else 502)
         if path == "/api/restore-dismiss":
             # "Mark added" on a detected-resting queue row: bookkeeping only —
             # hides the row (ledger.dismissed); nothing in Smartlead changes.

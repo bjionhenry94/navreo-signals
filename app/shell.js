@@ -20,7 +20,7 @@ const NAV = [
   ["index.html", "dashboard", "Dashboard"],
   ["campaigns.html", "campaigns", "Campaigns"],
   ["lists.html", "lists", "Lists"],
-  ["deliverability.html", "deliverability", "Deliverability"],
+  ["deliverability.html", "deliverability", "Analytics"],
   ["setter.html", "setter", "Setter"],
 ];
 

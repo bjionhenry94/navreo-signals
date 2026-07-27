@@ -3,23 +3,1265 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deliverability · Navreo</title>
+<title>Analytics · Navreo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="navreo.css">
+
+<!-- ── Analytics hub styles — ported from the chosen P3 "Funnel" prototype
+     (app/prototypes/analytics-hub-p3.html), scoped under .ah so the embedded
+     deliverability engine's own styles (navreo.css + injectStyles) are
+     untouched. ── -->
+<style>
+.ah{max-width:1240px}
+.ah .num{font-variant-numeric:tabular-nums}
+.ah .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:8px 0 24px}
+.ah h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
+.ah .verdict{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
+.ah .pagehead-right{display:flex;flex-direction:column;align-items:flex-end;gap:11px}
+.ah .dateline{text-align:right;font-size:13px;color:var(--ink-3);line-height:1.6}
+.ah .dateline b{font-weight:600;color:var(--ink-2)}
+.ah .chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.ah .chip{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;padding:7px 14px;border:1px solid var(--line-2);border-radius:999px;background:var(--card);color:var(--ink-2);cursor:pointer}
+.ah .chip:hover{border-color:var(--ink-3)}
+.ah .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+
+.ah .hero{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 28px 18px}
+.ah .hero .subline{margin-top:4px}
+.ah .hero .take{margin-top:12px}
+.ah .card-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.ah .kicker{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+
+.ah .seg{display:inline-flex;gap:3px;flex-shrink:0}
+.ah .seg button{font:600 11px/1 var(--font-sans);color:var(--ink-3);background:transparent;border:0;padding:4px 9px;border-radius:999px;cursor:pointer;letter-spacing:.01em}
+.ah .seg button:hover{color:var(--ink)}
+.ah .seg button.on{background:var(--bg-sunken);color:var(--ink)}
+
+.ah .lchips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 6px}
+.ah .lchip{display:inline-flex;align-items:center;gap:7px;font:500 12px var(--font-sans);color:var(--ink);background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:6px 12px;cursor:pointer}
+.ah .lchip:hover{border-color:var(--ink-3)}
+.ah .lchip .sw{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.ah .lchip b{font-weight:700}
+.ah .lchip:not(.on){color:var(--ink-3)}
+.ah .lchip:not(.on) .sw{filter:grayscale(1);opacity:.45}
+.ah .lchip.off{opacity:.38;cursor:default;pointer-events:none}
+.ah svg.trend{display:block;width:100%;height:auto;cursor:crosshair}
+.ah .trend text{font-family:var(--font-sans)}
+.ah .trendwrap{position:relative}
+.ah .charttip{position:absolute;top:0;left:0;pointer-events:none;background:var(--card);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;font-size:11.5px;line-height:1.6;color:var(--ink-2);white-space:nowrap;z-index:5}
+.ah .charttip b{display:block;font-size:11px;color:var(--ink);margin-bottom:2px}
+.ah .charttip .row{display:flex;align-items:center;gap:6px}
+.ah .charttip .row i{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.ah .charttip .row .v{margin-left:auto;font-weight:600;color:var(--ink);padding-left:12px;font-variant-numeric:tabular-nums}
+
+.ah svg.funnel{display:block;width:100%;height:auto}
+.ah .funnel text{font-family:var(--font-sans)}
+.ah .fnum{font-family:var(--font-display);font-size:26px;letter-spacing:-0.03em;fill:var(--ink);font-variant-numeric:tabular-nums}
+.ah .fslab{fill:var(--ink);transition:y .45s ease,height .45s ease}
+.ah a.fstage{cursor:pointer;text-decoration:none}
+.ah a.fstage:hover .fslab{fill:var(--ink-2)}
+.ah a.fstage:hover .fnum{fill:var(--ink-2)}
+.ah .fribbon{fill:var(--cream-50);stroke:var(--line-2);stroke-width:1}
+.ah .fribbon.leak{fill:var(--orange-100);stroke:var(--orange)}
+.ah .frate{font-size:11.5px;fill:var(--ink-3)}
+.ah .frate.leak{fill:var(--orange-700);font-weight:600}
+.ah .fpill-r{fill:var(--orange)}
+.ah .fpill-t{font-size:10px;font-weight:700;letter-spacing:.08em;fill:var(--cream)}
+.ah .fleakline{stroke:var(--orange);stroke-width:1}
+.ah .fnum,.ah .frate{transition:opacity .17s ease}
+.ah .funnel.swap .fnum,.ah .funnel.swap .frate{opacity:0}
+
+.ah .hero-flow{display:grid;grid-template-columns:264px 1fr;gap:8px 28px;align-items:center}
+.ah .fuelcard{grid-row:1/3;align-self:center;display:block;text-decoration:none;background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:10px;padding:16px 18px}
+.ah .fuelcard:hover{border-color:var(--amber)}
+.ah .fuel-kick{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--amber)}
+.ah .fuel-num{font-family:var(--font-display);font-size:38px;line-height:1.15;letter-spacing:-0.03em;color:var(--ink);margin-top:5px}
+.ah .fuel-sub{font-size:12.5px;color:var(--ink-2);margin-top:2px}
+.ah .fuel-sub b{font-weight:700;color:var(--amber)}
+.ah .fuel-meter{height:6px;border-radius:3px;background:rgba(255,255,255,.72);margin:12px 0 9px;overflow:hidden}
+.ah .fuel-meter i{display:block;height:100%;border-radius:3px;background:var(--amber);transition:width .45s ease}
+.ah .fuel-out{font-size:12px;font-weight:600;color:var(--amber)}
+
+.ah .stagestrip{grid-column:2;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);padding-top:12px}
+.ah .stagecell{text-align:center;text-decoration:none;padding:2px 8px}
+.ah .scname{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
+.ah .scstat{margin-top:5px;font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:6px}
+.ah .stagecell:hover .scstat{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.ah .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.ah .dot.amber{background:var(--amber)} .ah .dot.green{background:var(--green)}
+.ah .dot.red{background:var(--red)} .ah .dot.mute{background:var(--brown-300)}
+
+.ah .leakbar{margin-top:16px;background:var(--orange-100);border-radius:10px;padding:13px 18px;display:flex;align-items:center;gap:24px}
+.ah .leakbar .lk-left{flex:1;min-width:0}
+.ah .leak-head{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--orange-700)}
+.ah .leak-body{margin-top:3px;font-size:13px;color:var(--ink-2)}
+.ah .leak-fix{font-size:14px;font-weight:700;color:var(--orange-700);white-space:nowrap}
+
+.ah .lanes{position:relative;margin-top:34px;display:flex;flex-direction:column;gap:36px}
+.ah .lane{position:relative;padding-left:58px;scroll-margin-top:24px}
+.ah .lane::before{content:"";position:absolute;left:14px;top:32px;bottom:-36px;width:1px;background:var(--line-2)}
+.ah .lane:last-child::before{display:none}
+.ah .node{position:absolute;left:1px;top:0;width:27px;height:27px;border-radius:50%;background:var(--card);border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:var(--ink-2)}
+.ah .lane:target .node{border-color:var(--orange);color:var(--orange-600)}
+.ah .lane-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px}
+.ah .lane-q{font-size:19px;font-weight:600;letter-spacing:-0.01em}
+.ah .lane-tag{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+
+.ah .cards{display:grid;gap:14px}
+.ah .c3{grid-template-columns:repeat(3,1fr)}
+.ah .c23{grid-template-columns:2fr 3fr}
+.ah .c32{grid-template-columns:3fr 2fr}
+.ah .acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.ah .card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.ah .bignum{font-size:34px;font-weight:600;line-height:1;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
+.ah .bignum.warn{color:var(--amber)}
+.ah .bignum small{font-size:15px;font-weight:500;letter-spacing:0;color:var(--ink-3)}
+.ah .subline{font-size:12.5px;color:var(--ink-3)}
+.ah .take{margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:13px;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:baseline}
+.ah .take .arr{color:var(--brown-400);font-weight:400;flex-shrink:0}
+.ah .take.side{margin:0;padding:0;border:0}
+.ah .fleetnote{font-size:11px;color:var(--ink-3);margin:0 0 6px}
+
+.ah .apill{display:inline-flex;align-items:center;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;letter-spacing:.02em}
+.ah .apill.green{background:var(--green-bg);color:var(--green)}
+.ah .apill.amber{background:var(--amber-bg);color:var(--amber)}
+.ah .apill.red{background:var(--red-bg);color:var(--red)}
+.ah .apill.mute{background:var(--bg-sunken);color:var(--ink-3)}
+
+.ah .brows{display:flex;flex-direction:column;gap:9px}
+.ah .brow{display:grid;grid-template-columns:118px 1fr 42px;align-items:center;gap:10px;font-size:12.5px}
+.ah .brow .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .brow .lbl.strong{font-weight:600;color:var(--ink)}
+.ah .brow .val{text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.ah .fill.orange{background:var(--orange)}
+
+.ah .split{display:flex;gap:2px;height:12px}
+.ah .split .g{background:var(--green);border-radius:4px 2px 2px 4px;transition:flex-grow .35s ease}
+.ah .split .r{background:var(--red);border-radius:2px 4px 4px 2px;transition:flex-grow .35s ease}
+.ah .splitlbl{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-3);margin-top:6px}
+.ah .splitlbl b{font-weight:600;color:var(--ink)}
+
+.ah .rank{display:flex;flex-direction:column}
+.ah .rrow{display:grid;grid-template-columns:20px minmax(250px,286px) 1fr 46px 62px 58px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.ah .rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.ah .rrow .idx{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.ah .rname{font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;min-width:0}
+.ah .rname .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .rsub{font-size:11px;color:var(--ink-3);font-weight:400;margin-top:1px}
+.ah .rrate,.ah .rint,.ah .rmtg{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .rint,.ah .rmtg{color:var(--ink-2)}
+.ah .rrate.bad{color:var(--red)}
+.ah .rbar{height:8px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.ah .rbar.bad{background:var(--red)}
+
+.ah .dying{margin-top:4px;background:var(--red-bg);border-radius:9px;padding:11px 14px;display:flex;align-items:center;gap:16px}
+.ah .dying .dcol{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.ah .dying .dtxt{font-size:12.5px;color:var(--ink-2)}
+.ah .dying .dfixrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ah .dying .dfix{font-size:13px;font-weight:700;color:var(--red)}
+.ah .dying a.btn{background:var(--card);flex-shrink:0;text-decoration:none}
+
+.ah .orows{display:flex;flex-direction:column;gap:13px;flex:1;justify-content:space-evenly}
+.ah .orow .otop{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;margin-bottom:5px}
+.ah .orow .oq{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .orow .oq.win{font-weight:600;color:var(--ink)}
+.ah .orow .ov{font-weight:600;font-variant-numeric:tabular-nums}
+.ah .orow .ov.bad{color:var(--red)}
+
+.ah .meet{flex-direction:row;align-items:center;gap:36px}
+.ah .meet .mleft{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.ah .mcompare{display:flex;gap:22px;align-items:flex-end}
+.ah .mcol{display:flex;flex-direction:column;align-items:center;gap:6px}
+.ah .mcol .mv{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .mcol .mb{width:46px;border-radius:4px;transition:height .35s ease}
+.ah .mcol .mb.past{background:var(--brown-300)}
+.ah .mcol .mb.now{background:var(--ink)}
+.ah .mcol .ml{font-size:11px;color:var(--ink-3)}
+.ah .meet .take.side{max-width:300px;margin-left:auto}
+
+.ah .databar{display:none;font-size:12px;color:var(--ink-2);background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:9px;padding:8px 14px;margin-bottom:14px}
+.ah .databar.show{display:flex;align-items:center;gap:12px}
+.ah .databar button{margin-left:auto}
+
+#dlv-embed-slot{margin-top:14px}
+
+@media (max-width:1280px){
+  .ah .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 58px 54px}
+  .ah .brow{grid-template-columns:104px 1fr 42px}
+  .ah .hero-flow{grid-template-columns:240px 1fr}
+}
+@media (max-width:980px){
+  .ah .c3,.ah .c23,.ah .c32{grid-template-columns:1fr}
+  .ah .hero-flow{grid-template-columns:1fr}
+  .ah .fuelcard{grid-row:auto}
+  .ah .stagestrip{grid-column:1}
+}
+</style>
 </head>
 <body>
 <div class="app">
   <div id="rail"></div>
-  <main class="main" id="main"></main>
+  <main class="main" id="main">
+  <div class="ah">
+
+  <div class="databar" id="ah-databar"><span id="ah-databar-msg">Live data unavailable.</span><button class="btn sm" id="ah-retry">Retry</button></div>
+
+  <!-- ══ page header — slim verdict line + client filter ══ -->
+  <header class="pagehead">
+    <div>
+      <h1>Analytics</h1>
+      <div class="verdict" id="ah-verdict">&nbsp;</div>
+    </div>
+    <div class="pagehead-right">
+      <div class="dateline"><b id="ah-date">&nbsp;</b><br><span id="ah-fresh">&nbsp;</span></div>
+      <div class="chips" id="ah-chips" role="group" aria-label="Client filter"></div>
+    </div>
+  </header>
+
+  <!-- ══ HERO — your month, day by day ══ -->
+  <section class="hero" aria-label="Your month, day by day">
+    <div class="card-head">
+      <span class="kicker">Your month · day by day</span>
+      <div class="seg" role="group" aria-label="Date range" data-seg="trend">
+        <button data-range="7" aria-pressed="false">7d</button>
+        <button data-range="14" aria-pressed="false">14d</button>
+        <button class="on" data-range="30" aria-pressed="true">30d</button>
+      </div>
+    </div>
+    <div class="lchips" id="ah-lchips" role="group" aria-label="Show or hide lines"></div>
+    <div class="trendwrap">
+      <svg class="trend" id="trend-svg" viewBox="0 0 1120 264" role="img" aria-label="Daily counts"></svg>
+      <div class="charttip" id="trend-tip" hidden></div>
+    </div>
+    <div class="subline" id="trend-sub">Every line is a count per day.</div>
+    <div class="take"><span class="arr">→</span><span id="trend-take">&nbsp;</span></div>
+  </section>
+
+  <!-- ══ LANES — six questions ══ -->
+  <div class="lanes">
+
+    <!-- ── 1 · WHERE CAN WE IMPROVE THE MOST? — the funnel ── -->
+    <section class="lane" id="lane-improve" aria-label="Where can we improve the most lane">
+      <span class="node num">1</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Where can we improve the most?</h2>
+        <span class="lane-tag num">Your pipeline · all time</span>
+      </div>
+      <div class="hero">
+        <div class="hero-flow">
+
+          <a class="fuelcard" href="#lane-leads">
+            <span class="fuel-kick">Fuel · leads still to work</span>
+            <div class="fuel-num num" id="fuel-n">–</div>
+            <div class="fuel-sub num" id="fuel-sub">&nbsp;</div>
+            <div class="fuel-meter" id="fuel-meter"><i id="fuel-fill" style="width:0%"></i></div>
+            <div class="fuel-out num" id="fuel-out">&nbsp;</div>
+          </a>
+
+          <svg class="funnel" id="funnel" viewBox="0 0 880 282" role="img" aria-label="Pipeline">
+            <path class="fribbon" id="fr1" d=""/>
+            <path class="fribbon" id="fr2" d=""/>
+            <path class="fribbon" id="fr3" d=""/>
+            <a class="fstage" href="#lane-sent">
+              <title>Emails sent — jump to its lane</title>
+              <rect class="fslab" id="fs1" x="74" y="54" width="72" height="192" rx="4"/>
+              <text class="fnum num" id="fn1" x="110" y="42" text-anchor="middle">–</text>
+            </a>
+            <a class="fstage" href="#lane-replies">
+              <title>Replies — jump to its lane</title>
+              <rect class="fslab" id="fs2" x="294" y="122" width="72" height="56" rx="4"/>
+              <text class="fnum num" id="fn2" x="330" y="110" text-anchor="middle">–</text>
+            </a>
+            <a class="fstage" href="#lane-interested">
+              <title>Interested replies — jump to its lane</title>
+              <rect class="fslab" id="fs3" x="514" y="134" width="72" height="32" rx="4"/>
+              <text class="fnum num" id="fn3" x="550" y="122" text-anchor="middle">–</text>
+            </a>
+            <a class="fstage" href="#lane-meetings">
+              <title>Meetings booked — jump to its lane</title>
+              <rect class="fslab" id="fs4" x="734" y="142" width="72" height="16" rx="4"/>
+              <text class="fnum num" id="fn4" x="770" y="130" text-anchor="middle">–</text>
+            </a>
+            <text class="frate num" id="fc0" x="110" y="268" text-anchor="middle"></text>
+            <text class="frate num" id="fc1" x="220" y="234" text-anchor="middle"></text>
+            <text class="frate num" id="fc2" x="440" y="194" text-anchor="middle"></text>
+            <text class="frate num" id="fc3" x="660" y="184" text-anchor="middle"></text>
+            <g id="leak-pill">
+              <rect class="fpill-r" id="lp-r" x="606" y="78" width="108" height="22" rx="11"/>
+              <text class="fpill-t" id="lp-t" x="660" y="93" text-anchor="middle">BIGGEST LEAK</text>
+              <line class="fleakline" id="lp-l" x1="660" y1="104" x2="660" y2="130"/>
+            </g>
+          </svg>
+
+          <nav class="stagestrip" aria-label="Pipeline stages">
+            <a class="stagecell" href="#lane-sent">
+              <div class="scname">Emails sent</div>
+              <div class="scstat"><span class="dot mute" id="ssd1"></span><span id="sss1">–</span></div>
+            </a>
+            <a class="stagecell" href="#lane-replies">
+              <div class="scname">Replies</div>
+              <div class="scstat"><span class="dot mute" id="ssd2"></span><span id="sss2">–</span></div>
+            </a>
+            <a class="stagecell" href="#lane-interested">
+              <div class="scname">Interested</div>
+              <div class="scstat"><span class="dot mute" id="ssd3"></span><span id="sss3">–</span></div>
+            </a>
+            <a class="stagecell" href="#lane-meetings">
+              <div class="scname">Meetings</div>
+              <div class="scstat"><span class="dot mute" id="ssd4"></span><span id="sss4">–</span></div>
+            </a>
+          </nav>
+        </div>
+
+        <div class="leakbar" id="leakbar" style="display:none">
+          <div class="lk-left">
+            <div class="leak-head" id="leak-head">Biggest leak</div>
+            <div class="leak-body num" id="leak-body"></div>
+          </div>
+          <div class="leak-fix" id="leak-fix"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 2 · FUEL — FRESH LEADS ── -->
+    <section class="lane" id="lane-leads" aria-label="Fresh leads lane">
+      <span class="node num">2</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Do you have enough leads?</h2>
+        <span class="lane-tag num">Fuel · leads still to work · <span id="tag-leads">–</span></span>
+      </div>
+      <div class="cards c3">
+
+        <div class="acard">
+          <div class="card-kick" id="run-kick">Days of leads left</div>
+          <div class="bignum warn num" id="run-big">–</div>
+          <div class="subline num" id="run-sub">&nbsp;</div>
+          <svg viewBox="0 0 380 120" width="100%" role="img" id="run-svg" aria-label="Lead runway">
+            <line x1="12" y1="96" x2="368" y2="96" stroke="var(--line)" stroke-width="1"/>
+            <polygon id="run-poly" points="12,96 12,96 12,96" fill="var(--amber-bg)"/>
+            <line id="run-line" x1="12" y1="96" x2="12" y2="96" stroke="var(--amber)" stroke-width="2"/>
+            <circle id="run-dot" cx="12" cy="96" r="3.5" fill="var(--amber)"/>
+            <text x="12" y="12" font-size="11" fill="var(--ink-3)" id="run-t0"></text>
+            <text id="run-t1" x="330" y="112" font-size="11" font-weight="600" fill="var(--amber)" text-anchor="middle"></text>
+          </svg>
+          <div class="take"><span class="arr">→</span><span id="run-take">&nbsp;</span></div>
+        </div>
+
+        <div class="acard">
+          <div class="card-kick">New people found this month <span style="text-transform:none;letter-spacing:0;font-weight:500">· whole fleet</span></div>
+          <div class="bignum num" id="sig-big">–</div>
+          <div class="brows" id="sig-rows"></div>
+          <div class="take"><span class="arr">→</span><span id="sig-take">&nbsp;</span></div>
+        </div>
+
+        <div class="acard">
+          <div class="card-kick">New campaigns this month</div>
+          <div class="bignum num" id="nc-big">–</div>
+          <div class="subline" id="nc-live">&nbsp;</div>
+          <div class="subline" id="nc-latest">&nbsp;</div>
+          <div class="take"><span class="arr">→</span><span id="nc-take">&nbsp;</span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── 3 · EMAILS SENT + THE DELIVERABILITY TOOLSET ── -->
+    <section class="lane" id="lane-sent" aria-label="Emails sent lane">
+      <span class="node num">3</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Are your emails landing?</h2>
+        <span class="lane-tag num">Whole fleet · Emails sent · <span id="tag-sent">–</span></span>
+      </div>
+      <div class="cards c23">
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">Where your emails end up</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="landing">
+              <button class="on" data-range="1" aria-pressed="true">24h</button>
+              <button data-range="7" aria-pressed="false">7d</button>
+              <button data-range="30" aria-pressed="false">30d</button>
+            </div>
+          </div>
+          <div class="bignum num" id="land-big">–</div>
+          <div>
+            <div class="split"><div class="g" id="land-g" style="flex:97"></div><div class="r" id="land-r" style="flex:3"></div></div>
+            <div class="splitlbl num"><span><b id="land-lg">–</b> in the inbox</span><span id="land-lr">–</span></div>
+          </div>
+          <div class="subline num" id="land-sent">&nbsp;</div>
+          <div class="subline num" id="land-inbox">&nbsp;</div>
+          <div class="take"><span class="arr">→</span><span id="land-take">&nbsp;</span></div>
+        </div>
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">Replies by the day we sent</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="week">
+              <button data-range="7" aria-pressed="false">7d</button>
+              <button data-range="14" aria-pressed="false">14d</button>
+              <button class="on" data-range="30" aria-pressed="true">30d</button>
+            </div>
+          </div>
+          <svg viewBox="0 0 620 170" width="100%" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
+          <div class="subline" id="week-sub">&nbsp;</div>
+          <div class="take"><span class="arr">→</span><span id="week-take">&nbsp;</span></div>
+        </div>
+
+      </div>
+
+      <!-- The deliverability engine mounts here — Today's to-do first, then the
+           inbox & domain manager (verbatim production code), blacklist and
+           batch sub-tabs, history and fleet details. -->
+      <div style="margin-top:14px">
+        <div class="fleetnote">Whole sending fleet — all clients.</div>
+        <div id="dlv-embed-slot"></div>
+      </div>
+    </section>
+
+    <!-- ── 4 · REPLIES ── -->
+    <section class="lane" id="lane-replies" aria-label="Replies lane">
+      <span class="node num">4</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Which campaigns — and which messages — are winning?</h2>
+        <span class="lane-tag num">Pipeline · Replies · <span id="tag-replies">–</span></span>
+      </div>
+      <div class="cards c32">
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">Campaigns, best to worst <span style="text-transform:none;letter-spacing:0;font-weight:500">· all time</span></div>
+          </div>
+          <div class="rank num">
+            <div id="rank-rows"></div>
+            <div class="dying" id="dying" style="display:none">
+              <div class="dcol">
+                <span class="dtxt num" id="dying-txt"></span>
+                <div class="dfixrow">
+                  <span class="dfix" id="dying-fix"></span>
+                  <a class="btn sm" id="dying-link" href="#">Open campaign</a>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="take"><span class="arr">→</span><span id="rank-take">&nbsp;</span></div>
+        </div>
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">Opening lines — what gets replies</div>
+          </div>
+          <div class="orows num" id="open-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
+          <div class="take" id="open-take-row" style="display:none"><span class="arr">→</span><span id="open-take"></span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── 5 · INTERESTED ── -->
+    <section class="lane" id="lane-interested" aria-label="Interested lane">
+      <span class="node num">5</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Who actually replies?</h2>
+        <span class="lane-tag num">Pipeline · Interested · <span id="tag-int">–</span></span>
+      </div>
+      <div class="cards c23">
+        <div class="acard">
+          <div class="card-kick">Job type <span style="text-transform:none;letter-spacing:0;font-weight:500">· of <span id="who-n">–</span> interested</span></div>
+          <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
+          <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
+        </div>
+        <div class="acard">
+          <div class="card-kick">Waiting for an answer <span id="wait-scope" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
+          <div class="bignum num" id="wait-big">–</div>
+          <div class="subline" id="wait-sub">&nbsp;</div>
+          <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 6 · MEETINGS ── -->
+    <section class="lane" id="lane-meetings" aria-label="Meetings lane">
+      <span class="node num">6</span>
+      <div class="lane-head">
+        <h2 class="lane-q">How many meetings did it book?</h2>
+        <span class="lane-tag num">Pipeline · Meetings · <span id="tag-meet">–</span></span>
+      </div>
+      <div class="cards">
+        <div class="acard meet">
+          <div class="mleft">
+            <div class="card-kick" id="meet-kick">Meetings booked this month</div>
+            <div class="bignum num" id="meet-big">–</div>
+            <span class="apill mute num" id="meet-pill">&nbsp;</span>
+            <div class="subline num" id="meet-src">&nbsp;</div>
+          </div>
+          <div class="mcompare num">
+            <div class="mcol"><span class="mv" id="meet-mv1">–</span><div class="mb past" id="meet-mb1" style="height:8px"></div><span class="ml" id="meet-ml1">last month</span></div>
+            <div class="mcol"><span class="mv" id="meet-mv2">–</span><div class="mb now" id="meet-mb2" style="height:8px"></div><span class="ml" id="meet-ml2">this month</span></div>
+          </div>
+          <div class="take side"><span class="arr">→</span><span id="meet-take">&nbsp;</span></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  </div>
+  </main>
 </div>
+
 <script src="shell.js"></script>
 <script src="restore-reconcile.js"></script>
+<script>window.DLV_EMBED = true;</script>
 <script src="deliverability-tab.js"></script>
 <script>
   document.getElementById("rail").outerHTML = renderRail("deliverability");
   if (window.renderDeliverability) window.renderDeliverability();
+</script>
+
+<script>
+(function () {
+"use strict";
+/* ── Analytics hub — every number on this page is live. Sources:
+   /api/analytics-hub (rpc analytics_hub_v1) · /api/deliverability-trends ·
+   /api/campaign-scorecard · /api/cockpit/insights · /api/campaigns-unified ·
+   /api/signals/daily · /api/sources · /api/deliverability/_audit.
+   Client chips re-slice everything client-side except the fleet-wide bits
+   (hero Sent/Bounces, landing, signals, and the embedded engine below). ── */
+var $ = function (id) { return document.getElementById(id); };
+var escq = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+var fmtN = function (n) { return (n == null || isNaN(n)) ? "–" : Math.round(n).toLocaleString("en-GB"); };
+var getOrd = function (d) { return d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th"; };
+
+function j(url) {
+  return fetch(url, { credentials: "same-origin" }).then(function (r) {
+    if (r.status === 401) { location.href = "/app/login.html?next=" + encodeURIComponent(location.pathname); throw new Error("auth"); }
+    if (!r.ok) throw new Error(url + " " + r.status);
+    return r.json();
+  });
+}
+
+var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null;
+var HUBCACHE = {};           // days -> analytics-hub payload (weekday presets)
+// Sent and Bounces default OFF: their scale flattens Replies/Interested/
+// Meetings (the lines a founder reads); the landing card owns the bounce
+// story and both stay one chip-tap away.
+var state = { client: "All", trend: 30, landing: 1, week: 30,
+              on: { sent: false, replies: true, interested: true, meetings: true, bounces: false } };
+
+function ckey() { return state.client === "All" ? "__all" : state.client; }
+function clientOfName(name, ws) {
+  ws = (ws || "navreo").toLowerCase();
+  if (ws === "asteri") return "Asteri";
+  if (ws === "krg") return "KRG";
+  var n = (name || "").toLowerCase();
+  if (n.indexOf("amplif") >= 0) return "Amplifyy";
+  if (n.indexOf("arnic") >= 0) return "Arnic";
+  if (n.indexOf("qwintiq") >= 0) return "Qwintiq";
+  return "Navreo";
+}
+function campClient(id, c) {
+  if (HUB && HUB.campaign_clients && HUB.campaign_clients[id]) return HUB.campaign_clients[id];
+  return clientOfName(c && c.name, c && c.workspace);
+}
+function scoreRows() {   // [{id, ...scorecard row}] for the selected client
+  var out = [];
+  if (!SCORE || !SCORE.campaigns) return out;
+  Object.keys(SCORE.campaigns).forEach(function (id) {
+    var c = SCORE.campaigns[id];
+    if (state.client !== "All" && campClient(id, c) !== state.client) return;
+    out.push(Object.assign({ id: id }, c));
+  });
+  return out;
+}
+function bookRow(kind) {  // live book-scope insight payload by kind/key
+  if (!INS || !INS.insights) return null;
+  for (var i = 0; i < INS.insights.length; i++) {
+    var r = INS.insights[i];
+    if (r.scope === "book" && (r.insight_key === kind || (r.payload && r.payload.kind === kind))) return r.payload;
+  }
+  return null;
+}
+
+/* ── hero trend graph ── */
+var COL = { sent: "#1971C2", replies: "#7048E8", interested: "#2F9E44", meetings: "#E8590C", bounces: "#E03131" };
+var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounces" };
+var ORDER = ["sent", "replies", "interested", "meetings", "bounces"];
+var GEO = { ymax: 60, n: 30, off: 0 };
+var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
+function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
+
+function fleetSeries() {  // {sent[], bounces[]} aligned to HUB.days, from trends
+  var out = { sent: [], bounces: [] };
+  if (!HUB) return out;
+  var map = {};
+  if (TRENDS && TRENDS.series && TRENDS.series.days) {
+    TRENDS.series.days.forEach(function (d, i) {
+      var s = TRENDS.series.sent[i] || 0;
+      var bp = TRENDS.series.bounce_pct[i];
+      map[d] = { s: s, b: (bp == null ? 0 : Math.round(s * bp / 100)) };
+    });
+  }
+  HUB.days.forEach(function (d) {
+    var m = map[d];
+    out.sent.push(m ? m.s : 0);
+    out.bounces.push(m ? m.b : 0);
+  });
+  return out;
+}
+function seriesFor(k) {   // full 30-day array for series k under current client
+  if (!HUB) return [];
+  if (k === "sent" || k === "bounces") return fleetSeries()[k];
+  var s = HUB.series && HUB.series[ckey()];
+  return (s && s[k === "interested" ? "interested" : k]) || [];
+}
+function slice(a) { return a.slice(Math.max(0, a.length - state.trend)); }
+
+function renderChips() {
+  var names = ["All"].concat((HUB && HUB.clients) || []);
+  $("ah-chips").innerHTML = names.map(function (c) {
+    return '<button class="chip' + (state.client === c ? " on" : "") + '" data-client="' + escq(c) + '" aria-pressed="' + (state.client === c) + '">' + (c === "All" ? "All clients" : escq(c)) + "</button>";
+  }).join("");
+}
+function renderLegend() {
+  var fleetOnly = state.client !== "All";
+  $("ah-lchips").innerHTML = ORDER.map(function (k) {
+    var off = fleetOnly && (k === "sent" || k === "bounces");
+    var tot = off ? null : slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0);
+    return '<button class="lchip' + (state.on[k] && !off ? " on" : "") + (off ? " off" : "") + '" data-s="' + k + '" aria-pressed="' + (state.on[k] && !off) + '">' +
+      '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">' + (off ? "whole fleet" : fmtN(tot)) + "</b></button>";
+  }).join("");
+}
+function renderTrend() {
+  renderLegend();
+  var days = HUB ? slice(HUB.days) : [];
+  var n = days.length;
+  if (!n) { return; }
+  var fleetOnly = state.client !== "All";
+  var vis = ORDER.filter(function (k) { return state.on[k] && !(fleetOnly && (k === "sent" || k === "bounces")); });
+  var data = {};
+  vis.forEach(function (k) { data[k] = slice(seriesFor(k)); });
+  var L = 40, R = 88, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
+  var max = 1;
+  vis.forEach(function (k) { data[k].forEach(function (v) { if (v > max) max = v; }); });
+  var ladder = [12, 20, 30, 40, 60, 80, 120, 160, 240, 320, 480, 640, 900, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800, 19200, 25600, 40000];
+  var ymax = ladder[ladder.length - 1];
+  for (var i = 0; i < ladder.length; i++) { if (ladder[i] >= max) { ymax = ladder[i]; break; } }
+  GEO = { ymax: ymax, n: n, off: (HUB.days.length - n) };
+  function X(ii) { return n === 1 ? L : L + ii * pw / (n - 1); }
+  function Y(v) { return T + (1 - v / ymax) * ph; }
+  var s = "";
+  for (i = 0; i <= 4; i++) {
+    var gv = ymax * i / 4, gy = Y(gv);
+    s += '<line x1="' + L + '" y1="' + gy.toFixed(1) + '" x2="' + (W - R) + '" y2="' + gy.toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
+    s += '<text x="' + (L - 7) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">' + fmtN(gv) + "</text>";
+  }
+  var ticks = (n <= 7) ? [0, 2, 4, n - 1] : (n <= 14 ? [0, 4, 9, n - 1] : [0, 10, 17, 24, n - 1]);
+  ticks.forEach(function (t) {
+    s += '<text x="' + X(t).toFixed(1) + '" y="' + (H - 8) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">' + dlabel(days[t]) + "</text>";
+  });
+  var ends = [];
+  vis.forEach(function (k) {
+    var pts = "";
+    data[k].forEach(function (v, ii) { pts += (ii ? " " : "") + X(ii).toFixed(1) + "," + Y(v || 0).toFixed(1); });
+    s += '<polyline points="' + pts + '" fill="none" stroke="' + COL[k] + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    ends.push({ k: k, x: X(n - 1), y: Y(data[k][n - 1] || 0) });
+  });
+  ends.sort(function (a, b) { return a.y - b.y; });
+  var pos = ends.map(function (e) { return e.y; });
+  for (i = 1; i < pos.length; i++) { if (pos[i] < pos[i - 1] + 13) pos[i] = pos[i - 1] + 13; }
+  var over = (pos.length ? pos[pos.length - 1] : 0) - (H - B - 2);
+  if (over > 0) {
+    for (i = 0; i < pos.length; i++) pos[i] -= over;
+    for (i = pos.length - 2; i >= 0; i--) { if (pos[i] > pos[i + 1] - 13) pos[i] = pos[i + 1] - 13; }
+  }
+  ends.forEach(function (e, ii) {
+    s += '<circle cx="' + e.x.toFixed(1) + '" cy="' + e.y.toFixed(1) + '" r="3" fill="' + COL[e.k] + '"/>';
+    s += '<text x="' + (e.x + 8).toFixed(1) + '" y="' + (pos[ii] + 3.5).toFixed(1) + '" font-size="10.5" font-weight="600" fill="' + COL[e.k] + '">' + NAME[e.k] + "</text>";
+  });
+  $("trend-svg").innerHTML = s;
+  var f = fleetSeries();
+  var sentTot = slice(f.sent).reduce(function (a, b) { return a + b; }, 0);
+  var bTot = slice(f.bounces).reduce(function (a, b) { return a + b; }, 0);
+  $("trend-sub").textContent = "Every line is a count per day" +
+    (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
+  var rep = slice(seriesFor("replies")), mtg = slice(seriesFor("meetings"));
+  $("trend-take").textContent = takeLine(rep, mtg);
+  hideTip();
+}
+function halfSum(a, back) { var t = 0; for (var i = Math.max(0, a.length - back); i < a.length; i++) t += a[i] || 0; return t; }
+function takeLine(rep, mtg) {
+  var r1 = halfSum(rep, 7), r0 = halfSum(rep, 14) - r1;
+  var m1 = halfSum(mtg, 7), m0 = halfSum(mtg, 14) - m1;
+  var mPh = m1 > m0 ? "Meetings are climbing" : (m1 < m0 ? "Meetings dipped this week" : "Meetings are steady");
+  var rPh = r1 > r0 * 1.15 ? "replies are up" : (r1 < r0 * 0.85 ? "replies slowed" : "replies are steady");
+  return mPh + " — " + rPh + " this week.";
+}
+function hideTip() {
+  var g = document.getElementById("tr-hov");
+  if (g) g.parentNode.removeChild(g);
+  $("trend-tip").hidden = true;
+}
+function trendMove(ev) {
+  if (!HUB) return;
+  var svg = $("trend-svg"), r = svg.getBoundingClientRect();
+  if (!r.width) return;
+  var days = slice(HUB.days), n = days.length;
+  if (!n) return;
+  var L = 40, Rp = 88, T = 12, B = 26, pw = 1120 - L - Rp, ph = 264 - T - B;
+  var sx = (ev.clientX - r.left) * 1120 / r.width;
+  var idx = Math.round((sx - L) / pw * (n - 1));
+  if (idx < 0) idx = 0; if (idx > n - 1) idx = n - 1;
+  var X = n === 1 ? L : L + idx * pw / (n - 1);
+  var fleetOnly = state.client !== "All";
+  var html = '<line x1="' + X.toFixed(1) + '" y1="' + T + '" x2="' + X.toFixed(1) + '" y2="' + (T + ph) + '" stroke="var(--line-2)" stroke-width="1"/>';
+  var rows = "";
+  ORDER.forEach(function (k) {
+    if (!state.on[k] || (fleetOnly && (k === "sent" || k === "bounces"))) return;
+    var v = slice(seriesFor(k))[idx] || 0;
+    var Y = T + (1 - v / GEO.ymax) * ph;
+    html += '<circle cx="' + X.toFixed(1) + '" cy="' + Y.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
+    rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] + '<span class="v num">' + fmtN(v) + "</span></div>";
+  });
+  var old = document.getElementById("tr-hov");
+  if (old) old.parentNode.removeChild(old);
+  svg.insertAdjacentHTML("beforeend", '<g id="tr-hov">' + html + "</g>");
+  var tip = $("trend-tip");
+  tip.innerHTML = "<b>" + dfull(days[idx]) + "</b>" + rows;
+  tip.hidden = false;
+  var wrap = svg.parentNode, ww = wrap.offsetWidth, px = X * r.width / 1120;
+  var left = px + 16;
+  if (left + tip.offsetWidth > ww - 4) left = px - 16 - tip.offsetWidth;
+  if (left < 4) left = 4;
+  var top = (ev.clientY - r.top) - tip.offsetHeight / 2;
+  if (top < 0) top = 0;
+  var maxTop = r.height - tip.offsetHeight;
+  if (maxTop > 0 && top > maxTop) top = maxTop;
+  tip.style.left = left.toFixed(0) + "px";
+  tip.style.top = top.toFixed(0) + "px";
+}
+
+/* ── funnel + leak (lifetime, per client, from the scorecard) ── */
+var MID = 150;
+function ribbon(x0, x1, t0, b0, t1, b1) {
+  var a = x0 + 69, b = x0 + 85;
+  return "M" + x0 + "," + t0 + " C" + a + "," + t0 + " " + b + "," + t1 + " " + x1 + "," + t1 +
+         " L" + x1 + "," + b1 + " C" + b + "," + b1 + " " + a + "," + b0 + " " + x0 + "," + b0 + " Z";
+}
+function funnelSums() {
+  var v = { sent: 0, rep: 0, pos: 0, mtg: 0, total: 0, completed: 0, active: 0, leadsLeft: 0 };
+  scoreRows().forEach(function (c) {
+    v.sent += c.sent || 0; v.rep += c.replied || 0; v.pos += c.positives || 0; v.mtg += c.meetings || 0;
+    v.total += c.total || 0; v.completed += c.completed || 0;
+    if (c.status === "ACTIVE") { v.active++; v.leadsLeft += Math.max(0, (c.total || 0) - (c.completed || 0)); }
+  });
+  return v;
+}
+function plain1in(n) { return n >= 2 ? "1 in " + fmtN(n) : "most"; }
+function renderFunnel() {
+  var v = funnelSums();
+  var nums = [v.sent, v.rep, v.pos, v.mtg];
+  var h = [192, 12, 12, 12], i;
+  for (i = 1; i < 4; i++) {
+    h[i] = v.sent > 0 && nums[i] > 0 ? Math.max(12, Math.round(192 * Math.pow(nums[i] / v.sent, 0.42))) : 12;
+  }
+  var y = [];
+  for (i = 0; i < 4; i++) y[i] = MID - h[i] / 2;
+  for (i = 0; i < 4; i++) {
+    var sl = $("fs" + (i + 1));
+    sl.setAttribute("y", y[i]); sl.setAttribute("height", h[i]);
+    var t = $("fn" + (i + 1));
+    t.setAttribute("y", y[i] - 12); t.textContent = fmtN(nums[i]);
+  }
+  $("fr1").setAttribute("d", ribbon(143, 297, y[0], y[0] + h[0], y[1], y[1] + h[1]));
+  $("fr2").setAttribute("d", ribbon(363, 517, y[1], y[1] + h[1], y[2], y[2] + h[2]));
+  $("fr3").setAttribute("d", ribbon(583, 737, y[2], y[2] + h[2], y[3], y[3] + h[3]));
+  var r1 = v.sent ? v.rep / v.sent : 0, r2 = v.rep ? v.pos / v.rep : 0, r3 = v.pos ? v.mtg / v.pos : 0;
+  var epl = v.completed > 0 ? Math.round(v.sent / v.completed) : null;
+  $("fc0").textContent = epl ? "each lead gets about " + epl + " emails" : "";
+  $("fc1").textContent = v.sent ? (Math.round(r1 * 1000) / 10) + " in 100 reply" : "";
+  $("fc2").textContent = v.pos ? "about " + plain1in(Math.round(1 / (r2 || 1))) + " replies is interested" : "";
+  $("fc3").textContent = v.mtg ? plain1in(Math.round(1 / (r3 || 1))) + " interested becomes a meeting" : "";
+  // the leak: worst stage relative to a healthy book (1.2 in 100 reply,
+  // 15% of replies interested, 25% of interested booked)
+  var exp = [0.012, 0.15, 0.25], ratios = [r1, r2, r3], leak = 0, worst = Infinity;
+  for (i = 0; i < 3; i++) {
+    if (!nums[i]) continue;
+    var q = ratios[i] / exp[i];
+    if (q < worst) { worst = q; leak = i; }
+  }
+  ["fr1", "fr2", "fr3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === leak); });
+  ["fc1", "fc2", "fc3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === leak); });
+  var cx = [220, 440, 660][leak];
+  $("lp-r").setAttribute("x", cx - 54); $("lp-t").setAttribute("x", cx);
+  $("lp-l").setAttribute("x1", cx); $("lp-l").setAttribute("x2", cx);
+  $("funnel").setAttribute("aria-label", "Pipeline, all time: " + fmtN(v.sent) + " emails sent, " + fmtN(v.rep) +
+    " replies, " + fmtN(v.pos) + " interested, " + fmtN(v.mtg) + " meetings.");
+  renderLeakbar(leak, v);
+  renderStrip(v);
+  renderTags(v);
+  return v;
+}
+function fmtMins(m) {
+  if (m == null) return "–";
+  var h = Math.floor(m / 60), mm = m % 60;
+  return h > 0 ? h + " h " + mm + " m" : mm + " m";
+}
+function renderLeakbar(leak, v) {
+  var lat = HUB && HUB.latency && HUB.latency[ckey()];
+  var bar = $("leakbar"), head = $("leak-head"), body = $("leak-body"), fix = $("leak-fix");
+  if (leak === 2 && lat && lat.n > 0) {
+    head.textContent = "Biggest leak — slow answers";
+    body.textContent = "Interested replies get answered in " + fmtMins(lat.avg_mins) + " on average — only " +
+      Math.round((lat.fast_share || 0) * 100) + " in 100 get an answer within the hour.";
+    fix.textContent = "Answer within the hour to book more.";
+  } else if (leak === 0) {
+    head.textContent = "Biggest leak — replies";
+    body.textContent = (Math.round((v.sent ? v.rep / v.sent : 0) * 1000) / 10) + " in 100 people reply. The message or the list needs work.";
+    fix.textContent = "Refresh the weakest campaigns below.";
+  } else if (leak === 1) {
+    head.textContent = "Biggest leak — interest";
+    body.textContent = "Only " + plain1in(Math.round(1 / ((v.rep ? v.pos / v.rep : 0) || 1))) +
+      " replies is a real yes — the wrong people are answering.";
+    fix.textContent = "Audit the lead lists — biggest campaigns first.";
+  } else {
+    bar.style.display = "none"; return;
+  }
+  bar.style.display = "";
+}
+function renderStrip(v) {
+  // 1 · do emails land (7d bounce)
+  var land = landStats(7);
+  set("ssd1", "sss1", land ? (land.pct >= 95 ? "green" : land.pct >= 90 ? "amber" : "red") : "mute",
+      land ? land.pct + " of 100 land this week" : "–");
+  // 2 · campaigns that stopped working (optimiser decision verdicts)
+  var dead = decisionRows().length;
+  set("ssd2", "sss2", dead > 0 ? "red" : "green",
+      dead > 0 ? dead + (dead === 1 ? " campaign stopped working" : " campaigns stopped working") : "campaigns steady");
+  // 3 · positives waiting for an answer (book weekly stats)
+  var wk = bookRow("weekly");
+  var waiting = wk && wk.stats && wk.stats.waiting;
+  set("ssd3", "sss3", waiting > 0 ? "amber" : "mute",
+      waiting > 0 ? fmtN(waiting) + " waiting for an answer" : fmtN(v.pos) + " interested so far");
+  // 4 · meetings vs last month
+  var mm = HUB && HUB.meetings_monthly && HUB.meetings_monthly[ckey()];
+  if (mm) {
+    var d = (mm.this || 0) - (mm.prev || 0);
+    var MSHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    set("ssd4", "sss4", d > 0 ? "green" : d < 0 ? "amber" : "mute",
+        fmtN(mm.this) + " in " + MSHORT[new Date().getMonth()] + " · " + (d > 0 ? "up " + d : d < 0 ? "down " + (-d) : "level"));
+  } else set("ssd4", "sss4", "mute", "–");
+}
+function set(dotId, txtId, cls, txt) { $(dotId).className = "dot " + cls; $(txtId).textContent = txt; }
+function renderTags(v) {
+  $("tag-leads").textContent = fmtN(v.leadsLeft);
+  $("tag-sent").textContent = fmtN(v.sent);
+  $("tag-replies").textContent = fmtN(v.rep);
+  $("tag-int").textContent = fmtN(v.pos);
+  $("tag-meet").textContent = fmtN(v.mtg);
+}
+function decisionRows() {
+  var out = [];
+  if (!INS || !INS.insights) return out;
+  INS.insights.forEach(function (r) {
+    if (r.scope === "book" || !r.payload || r.payload.tag !== "decision") return;
+    if (state.client !== "All") {
+      var cl = HUB && HUB.campaign_clients && HUB.campaign_clients[r.scope];
+      if (cl && cl !== state.client) return;
+      if (!cl && SCORE && SCORE.campaigns && SCORE.campaigns[r.scope] &&
+          campClient(r.scope, SCORE.campaigns[r.scope]) !== state.client) return;
+    }
+    out.push(r);
+  });
+  return out;
+}
+
+/* ── lane 2: runway + signals + new campaigns ── */
+function weekdayAvgSent(daysBack) {
+  if (!TRENDS || !TRENDS.series) return null;
+  var d = TRENDS.series.days, s = TRENDS.series.sent, tot = 0, n = 0;
+  for (var i = Math.max(0, d.length - daysBack); i < d.length; i++) {
+    var dow = new Date(d[i] + "T12:00:00Z").getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    tot += s[i] || 0; n++;
+  }
+  return n ? tot / n : null;
+}
+function renderRunway(v) {
+  var isAll = state.client === "All";
+  $("fuel-n").textContent = fmtN(v.leadsLeft);
+  var sentDay = weekdayAvgSent(14);
+  var epl = v.completed > 0 ? v.sent / v.completed : null;
+  var burn = (isAll && sentDay && epl) ? sentDay / epl : null;
+  var days = burn && burn > 0 ? Math.floor(v.leadsLeft / burn) : null;
+  var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
+  var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
+  if (days != null) {
+    $("fuel-sub").innerHTML = '<b>' + fmtN(days) + ' days</b> of leads left · about ' + fmtN(burn) + ' leads used a day';
+    $("fuel-meter").style.display = "";
+    $("fuel-fill").style.width = Math.max(3, Math.min(100, Math.round(days / 45 * 100))) + "%";
+    $("fuel-out").textContent = days <= 30 ? "Out around " + outTxt + " — add a fresh list before then" : "Enough for the next month";
+    $("run-kick").textContent = "Days of leads left";
+    $("run-big").innerHTML = fmtN(days) + "<small> days</small>";
+    $("run-big").className = "bignum num" + (days <= 21 ? " warn" : "");
+    $("run-sub").textContent = fmtN(v.leadsLeft) + " leads still to work · about " + fmtN(burn) + " used a day";
+    $("run-svg").style.display = "";
+    var x = 12 + Math.min(1, days / 45) * 318;
+    $("run-poly").setAttribute("points", "12,20 " + x.toFixed(0) + ",96 12,96");
+    $("run-line").setAttribute("x2", x.toFixed(0));
+    $("run-dot").setAttribute("cx", x.toFixed(0));
+    $("run-t0").textContent = "today · " + fmtN(v.leadsLeft) + " left";
+    $("run-t1").textContent = outTxt + " · 0 left";
+    $("run-t1").setAttribute("x", Math.min(330, Math.max(60, x)).toFixed(0));
+    $("run-take").textContent = days <= 30 ? "Add a fresh list before " + outTxt + "." : "Lead supply is healthy.";
+    $("run-svg").setAttribute("aria-label", "Your leads run out around " + outTxt);
+  } else {
+    $("fuel-sub").textContent = "across " + v.active + " running campaign" + (v.active === 1 ? "" : "s");
+    $("fuel-meter").style.display = "none";
+    $("fuel-out").textContent = "";
+    $("run-kick").textContent = "Leads still to work";
+    $("run-big").innerHTML = fmtN(v.leadsLeft);
+    $("run-big").className = "bignum num";
+    $("run-sub").textContent = "in " + state.client + "'s running campaigns";
+    $("run-svg").style.display = "none";
+    $("run-take").textContent = v.leadsLeft > 0 ? "Plenty queued for " + state.client + "." : "No leads queued — add a list.";
+  }
+}
+function renderSignals() {
+  if (!SIG || !SIG.all) { $("sig-big").textContent = "–"; return; }
+  var total = SIG.all.reduce(function (a, b) { return a + (b || 0); }, 0);
+  $("sig-big").textContent = fmtN(total);
+  var mech = {};
+  var srcMech = {};
+  var srcArr = Array.isArray(SRC) ? SRC : ((SRC && SRC.sources) || []);
+  srcArr.forEach(function (s) { srcMech[s.id] = s.mechanism || "other"; });
+  (SIG.series || []).forEach(function (se) {
+    var m = srcMech[se.id] || "other";
+    var n = (se.counts || []).reduce(function (a, b) { return a + (b || 0); }, 0);
+    mech[m] = (mech[m] || 0) + n;
+  });
+  var label = { hiring: "Hiring", engagement: "Engagement", news: "News", recontact: "Recontact", other: "Other" };
+  var rows = Object.keys(mech).map(function (m) { return [label[m] || m, mech[m]]; })
+    .filter(function (r) { return r[1] > 0; })
+    .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 4);
+  var max = rows.length ? rows[0][1] : 1;
+  $("sig-rows").innerHTML = rows.map(function (r) {
+    return '<div class="brow"><span class="lbl">' + escq(r[0]) + '</span><div class="fill" style="width:' +
+      Math.max(4, Math.round(r[1] / max * 100)) + '%"></div><span class="val num">' + fmtN(r[1]) + "</span></div>";
+  }).join("");
+  $("sig-take").textContent = total > 0 ? "New people keep arriving — turn them into campaigns." : "No new signals this month.";
+}
+function renderNC() {
+  if (!UNI || !UNI.rows) { $("nc-big").textContent = "–"; return; }
+  var cut = Date.now() - 30 * 864e5;
+  var added = 0, live = 0, latest = null;
+  UNI.rows.forEach(function (r) {
+    // auto-created follow-up campaigns (Interested Reply / Meeting Request
+    // subsequences) are plumbing, not new outreach — keep them out of counts
+    if (/^(interested reply|meeting request)/i.test(r.name || "")) return;
+    var cl = clientOfName(r.name, r.workspace);
+    if (state.client !== "All" && cl !== state.client) return;
+    if (String(r.status || "").toUpperCase() === "ACTIVE") live++;
+    var t = r.created_at ? Date.parse(r.created_at) : null;
+    if (t && t >= cut) {
+      added++;
+      if (!latest || t > latest.t) latest = { t: t, name: r.name };
+    }
+  });
+  $("nc-big").innerHTML = fmtN(added) + "<small> added</small>";
+  $("nc-live").textContent = fmtN(live) + " live right now";
+  $("nc-latest").textContent = latest ? "Latest: “" + latest.name + "”" : "";
+  $("nc-take").textContent = added > 0 ? "Fresh campaigns keep the pipeline fed — keep them coming." : "Nothing new this month — launch one.";
+}
+
+/* ── lane 3: landing + weekday ── */
+function landStats(daysBack) {
+  if (!TRENDS || !TRENDS.series || !TRENDS.series.days.length) return null;
+  var d = TRENDS.series.days, sArr = TRENDS.series.sent, bArr = TRENDS.series.bounce_pct;
+  var idxs = [];
+  for (var i = d.length - 1; i >= 0 && idxs.length < daysBack; i--) {
+    if (daysBack === 1) { if ((sArr[i] || 0) > 0) { idxs.push(i); break; } }
+    else idxs.push(i);
+  }
+  var sent = 0, bounced = 0;
+  idxs.forEach(function (ii) {
+    var s = sArr[ii] || 0;
+    sent += s;
+    if (bArr[ii] != null) bounced += s * bArr[ii] / 100;
+  });
+  if (!sent) return null;
+  var pct = Math.max(0, Math.min(100, Math.round(100 - bounced / sent * 100)));
+  return { pct: pct, sent: sent, lastDay: d[idxs[0]] };
+}
+function renderLanding() {
+  var st = landStats(state.landing);
+  if (!st) {
+    $("land-big").textContent = "–"; $("land-sent").textContent = "No sends in this window."; return;
+  }
+  $("land-big").innerHTML = st.pct + "<small> of 100 land</small>";
+  $("land-g").style.flex = String(st.pct);
+  $("land-r").style.flex = String(Math.max(1, 100 - st.pct));
+  $("land-lg").textContent = st.pct + " land";
+  $("land-lr").textContent = (100 - st.pct) + " bounce or vanish";
+  $("land-sent").textContent = fmtN(st.sent) + " sent " + (state.landing === 1 ? "on " + dlabel(st.lastDay) + " (latest sending day)" : "in the last " + state.landing + " days");
+  var blob = AUDIT && AUDIT.blob;
+  if (blob && blob.inboxes) {
+    var bad = (blob.smtp || 0) + (blob.imap || 0) + (blob.blockedReal || 0);
+    var resting = blob.warmupResting || (blob.domainHealth && blob.domainHealth.resting && Object.keys(blob.domainHealth.resting).length) || 0;
+    $("land-inbox").textContent = fmtN(Math.max(0, blob.inboxes - bad)) + " of " + fmtN(blob.inboxes) + " inboxes healthy · " +
+      fmtN(resting) + " domain" + (resting === 1 ? "" : "s") + " resting";
+  } else $("land-inbox").textContent = "";
+  $("land-take").textContent = st.pct >= 95 ? "Healthy — keep the to-do list below at zero." : "Bounces are eating sends — work the to-do list below.";
+}
+function renderWeek() {
+  var payload = HUBCACHE[state.week] || HUB;
+  var wk = payload && payload.weekday && payload.weekday[ckey()];
+  if (!wk) { $("week-svg").innerHTML = ""; $("week-sub").textContent = "No replies in this window."; $("week-take").textContent = ""; return; }
+  var vals = [wk[0], wk[1], wk[2], wk[3], wk[4], (wk[5] || 0) + (wk[6] || 0)];
+  var names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat+Sun"];
+  var max = Math.max.apply(null, vals.concat([1]));
+  var best = vals.indexOf(Math.max.apply(null, vals));
+  var Xs = [48, 144, 240, 336, 432, 528];
+  var s = '<line x1="24" y1="134" x2="596" y2="134" stroke="var(--line)" stroke-width="1"/>';
+  vals.forEach(function (v, i) {
+    var h = Math.max(3, Math.round(v / max * 100)), y = 134 - h;
+    s += '<rect x="' + Xs[i] + '" y="' + y + '" width="44" height="' + h + '" rx="' + (h < 8 ? 3 : 4) + '" fill="' + (i === best ? "var(--orange)" : "var(--ink)") + '"/>';
+    s += '<text x="' + (Xs[i] + 22) + '" y="' + (y - 8) + '" font-size="' + (i === best ? 12 : 11) + '"' +
+      (i === best ? ' font-weight="600" fill="var(--ink)"' : ' fill="var(--ink-3)"') + ' text-anchor="middle" class="num">' + fmtN(v) + "</text>";
+    s += '<text x="' + (Xs[i] + 22) + '" y="152" font-size="' + (i === 5 ? 10 : 11) + '"' +
+      (i === best ? ' font-weight="600" fill="var(--ink-2)"' : ' fill="var(--ink-3)"') + ' text-anchor="middle">' + names[i] + "</text>";
+  });
+  $("week-svg").innerHTML = s;
+  $("week-svg").setAttribute("aria-label", names[best] + " sends get the most replies");
+  var weekdayVals = vals.slice(0, 5).slice().sort(function (a, b) { return a - b; });
+  var median = weekdayVals[2] || 1;
+  var quiet = vals.indexOf(Math.min.apply(null, vals.slice(0, 5)));
+  $("week-sub").textContent = names[quiet] + " is the quiet day.";
+  $("week-take").textContent = vals[best] >= median * 1.8
+    ? names[best] + " gets about double the replies — send your best stuff " + names[best] + "."
+    : (vals[best] >= median * 1.2
+      ? names[best] + " gets the most replies — send more on " + names[best] + "."
+      : "Replies spread evenly — every weekday works.");
+}
+
+/* ── lane 4: ranking + dying + openers ── */
+function renderRank() {
+  // running campaigns answer "what's winning" — finished ones only appear
+  // when a client has nothing live
+  var rows = scoreRows().filter(function (c) { return (c.sent || 0) >= 500 && c.status === "ACTIVE"; });
+  if (!rows.length) rows = scoreRows().filter(function (c) { return (c.sent || 0) >= 500; });
+  rows.sort(function (a, b) { return (b.replied / b.sent) - (a.replied / a.sent); });
+  var top = rows.slice(0, 8);
+  var maxRate = top.length ? top[0].replied / top[0].sent : 1;
+  var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Interested</span><span style="text-align:right">Meetings</span></div>';
+  top.forEach(function (c, i) {
+    var rate = c.sent ? c.replied / c.sent : 0;
+    var w = Math.max(2, Math.round(rate / (maxRate || 1) * 100));
+    var bad = rate < 0.01;
+    s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
+      '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
+      (i === 0 && rate >= 0.02 && c.sent >= 2000 ? '<span class="apill green">Best</span>' : "") +
+      (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
+      '</div><div class="rsub">' + fmtN(c.sent) + " sent · " + fmtN(c.replied) + " replies</div></div>" +
+      '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
+      '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
+      '<span class="rint">' + fmtN(c.positives) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span></div>";
+  });
+  $("rank-rows").innerHTML = s || '<div class="subline">No campaigns with 500+ sends yet.</div>';
+  $("rank-take").textContent = top.length ? "Launch more campaigns like “" + shortName(top[0].name) + "”." : "";
+  renderDying();
+}
+function shortName(n) { n = String(n || ""); return n.length > 44 ? n.slice(0, 42) + "…" : n; }
+function renderDying() {
+  var rows = decisionRows();
+  if (!rows.length) { $("dying").style.display = "none"; return; }
+  rows.sort(function (a, b) {
+    var sa = (a.payload.stats && a.payload.stats.sent) || 0, sb2 = (b.payload.stats && b.payload.stats.sent) || 0;
+    return sb2 - sa;
+  });
+  var r = rows[0], p = r.payload;
+  $("dying-txt").textContent = "“" + shortName(p.campaign_name || r.scope) + "” — " + (p.bold || "");
+  $("dying-fix").textContent = p.act || "This campaign stopped working.";
+  $("dying-link").href = "campaigns.html#/c/" + encodeURIComponent(r.scope);
+  $("dying").style.display = "";
+}
+function renderOpeners() {
+  var p = bookRow("messaging");
+  if (!p || !p.stats || !p.stats.lines || !p.stats.lines.length) return;   // keep the placeholder
+  var lines = p.stats.lines.slice(0, 4);
+  var max = Math.max.apply(null, lines.map(function (l) { return parseFloat(l[1]) || 0; }).concat([0.1]));
+  $("open-rows").innerHTML = lines.map(function (l, i) {
+    var v = parseFloat(l[1]) || 0;
+    var bad = i === lines.length - 1 && lines.length > 2 && v < max * 0.55;
+    return '<div class="orow"><div class="otop"><span class="oq' + (i === 0 ? " win" : "") + '">“' + escq(l[0]) + '”</span>' +
+      '<span class="ov' + (bad ? " bad" : "") + '">' + v + "%</span></div>" +
+      '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(v / max * 100)) + '%"></div></div>';
+  }).join("");
+  if (p.act) { $("open-take").textContent = p.act; $("open-take-row").style.display = ""; }
+}
+
+/* ── lane 5: who replies + waiting ── */
+function renderWho() {
+  var p = bookRow("who-replies");
+  if (p && p.stats && p.stats.low_coverage) {
+    // fewer than 4 in 10 repliers have a known job title — a chart would lie
+    $("who-n").textContent = fmtN(p.stats.n);
+    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data yet.</div>';
+    if (p.act) { $("who-take").textContent = p.act; $("who-take-row").style.display = ""; }
+  } else if (p && p.stats && p.stats.buckets && p.stats.buckets.length) {
+    var b = p.stats.buckets.slice(0, 5);
+    var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
+    $("who-n").textContent = fmtN(p.stats.n);
+    $("who-rows").innerHTML = b.map(function (x, i) {
+      return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
+        '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
+        '<span class="val num">' + fmtN(x[1]) + "</span></div>";
+    }).join("");
+    if (p.act) { $("who-take").textContent = p.act; $("who-take-row").style.display = ""; }
+  }
+  var wk = bookRow("weekly");
+  var st = wk && wk.stats;
+  $("wait-scope").textContent = state.client === "All" ? "" : "· whole fleet";
+  if (st && st.waiting != null) {
+    $("wait-big").textContent = fmtN(st.waiting);
+    $("wait-sub").textContent = "interested people with no answer yet · " + fmtN(st.answered || 0) + " answered";
+    $("wait-take").textContent = st.waiting > 0 ? "Answer these first — they already said yes." : "All answered — nice.";
+  } else {
+    $("wait-big").textContent = "–"; $("wait-sub").textContent = ""; $("wait-take").textContent = "";
+  }
+}
+
+/* ── lane 6: meetings ── */
+function renderMeet() {
+  var mm = HUB && HUB.meetings_monthly && HUB.meetings_monthly[ckey()];
+  if (!mm) return;
+  var t = mm.this || 0, pv = mm.prev || 0, d = t - pv;
+  var now = new Date();
+  var MFULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  var thisM = MFULL[now.getMonth()], prevM = MFULL[(now.getMonth() + 11) % 12];
+  $("meet-kick").textContent = "Meetings booked in " + thisM;
+  $("meet-ml1").textContent = prevM + " to the " + now.getDate() + getOrd(now.getDate());
+  $("meet-ml2").textContent = thisM + " so far";
+  $("meet-big").textContent = fmtN(t);
+  var pill = $("meet-pill");
+  pill.textContent = d > 0 ? "up " + d + " on " + prevM : d < 0 ? "down " + (-d) + " on " + prevM : "level with " + prevM;
+  pill.className = "apill num " + (d > 0 ? "green" : d < 0 ? "amber" : "mute");
+  $("meet-src").textContent = mm.top_campaign ? fmtN(mm.top_n) + " came from “" + shortName(mm.top_campaign) + "”" : "";
+  var max = Math.max(t, pv, 1);
+  $("meet-mv1").textContent = fmtN(pv);
+  $("meet-mb1").style.height = Math.max(6, Math.round(pv / max * 84)) + "px";
+  $("meet-mv2").textContent = fmtN(t);
+  $("meet-mb2").style.height = Math.max(6, Math.round(t / max * 84)) + "px";
+  var lat = HUB.latency && HUB.latency[ckey()];
+  $("meet-take").textContent = d >= 0
+    ? (lat && lat.avg_mins > 60 ? "Answer faster to push it higher." : "Keep doing what works.")
+    : "Down on last month — check the leak above.";
+}
+
+/* ── header ── */
+function renderHead() {
+  var now = new Date();
+  var DAYSFULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  $("ah-date").textContent = DAYSFULL[now.getDay()] + " " + now.getDate() + " " + MONTHS[now.getMonth()];
+  if (HUB && HUB.asof) {
+    var mins = Math.max(0, Math.round((Date.now() - Date.parse(HUB.asof)) / 60000));
+    $("ah-fresh").textContent = mins < 2 ? "updated just now" : "updated " + (mins < 90 ? mins + " minutes ago" : Math.round(mins / 60) + " hours ago");
+  }
+  var wk = bookRow("weekly") || bookRow("book-shape");
+  $("ah-verdict").textContent = (wk && wk.bold) || "";
+}
+
+/* ── render-all + wiring ── */
+function renderAll() {
+  renderChips();
+  renderHead();
+  renderTrend();
+  var v = renderFunnel();
+  renderRunway(v);
+  renderSignals();
+  renderNC();
+  renderLanding();
+  renderWeek();
+  renderRank();
+  renderOpeners();
+  renderWho();
+  renderMeet();
+}
+$("ah-chips").addEventListener("click", function (e) {
+  var b = e.target.closest(".chip");
+  if (!b) return;
+  var c = b.getAttribute("data-client");
+  if (state.client === c) return;
+  state.client = c;
+  var svg = $("funnel");
+  svg.classList.add("swap");
+  setTimeout(function () { svg.classList.remove("swap"); }, 250);
+  renderAll();
+});
+document.querySelectorAll(".ah .seg").forEach(function (seg) {
+  seg.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b) return;
+    seg.querySelectorAll("button").forEach(function (x) {
+      x.classList.toggle("on", x === b);
+      x.setAttribute("aria-pressed", x === b ? "true" : "false");
+    });
+    var n = parseInt(b.getAttribute("data-range"), 10);
+    var kind = seg.getAttribute("data-seg");
+    if (kind === "trend") { state.trend = n; renderTrend(); }
+    else if (kind === "landing") { state.landing = n; renderLanding(); }
+    else if (kind === "week") {
+      state.week = n;
+      if (HUBCACHE[n]) renderWeek();
+      else j("/api/analytics-hub?days=" + n).then(function (p) { HUBCACHE[n] = p; renderWeek(); }).catch(function () { renderWeek(); });
+    }
+  });
+});
+$("ah-lchips").addEventListener("click", function (e) {
+  var b = e.target.closest(".lchip");
+  if (!b || b.classList.contains("off")) return;
+  var k = b.getAttribute("data-s");
+  state.on[k] = !state.on[k];
+  renderTrend();
+});
+$("trend-svg").addEventListener("mousemove", trendMove);
+$("trend-svg").addEventListener("mouseleave", hideTip);
+$("ah-retry").addEventListener("click", boot);
+
+function boot() {
+  $("ah-databar").classList.remove("show");
+  Promise.allSettled([
+    j("/api/analytics-hub?days=30"),
+    j("/api/deliverability-trends?days=30"),
+    j("/api/campaign-scorecard"),
+    j("/api/cockpit/insights"),
+    j("/api/campaigns-unified"),
+    j("/api/signals/daily"),
+    j("/api/sources?slim=1"),
+    j("/api/deliverability/_audit"),
+  ]).then(function (rs) {
+    HUB = rs[0].status === "fulfilled" && !rs[0].value.error ? rs[0].value : null;
+    if (HUB) HUBCACHE[30] = HUB;
+    TRENDS = rs[1].status === "fulfilled" ? rs[1].value : null;
+    SCORE = rs[2].status === "fulfilled" ? rs[2].value : null;
+    INS = rs[3].status === "fulfilled" ? rs[3].value : null;
+    UNI = rs[4].status === "fulfilled" ? rs[4].value : null;
+    SIG = rs[5].status === "fulfilled" && !rs[5].value.error ? rs[5].value : null;
+    SRC = rs[6].status === "fulfilled" ? rs[6].value : null;
+    AUDIT = rs[7].status === "fulfilled" ? rs[7].value : null;
+    if (!HUB && !SCORE) {
+      $("ah-databar-msg").textContent = "Live data unavailable right now.";
+      $("ah-databar").classList.add("show");
+    }
+    renderAll();
+  });
+}
+renderChips();
+renderHead();
+boot();
+})();
 </script>
 </body>
 </html>

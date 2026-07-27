@@ -2167,7 +2167,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         if (liveMissing("signature")) return null; // not measured by the live audit — claim nothing
         const n = D.signatureCount;
         if (!n) return { key: "signatures", level: "note", count: 0, resolved: true, text: "No signature issues — every mailbox has a matching signature." };
-        return { key: "signatures", level: "note", count: n, text: n + " mailbox(es) missing a signature or with a name mismatch (" + S.A.signature.missing.length + " missing · " + S.A.signature.mismatch.length + " mismatch).", action: "Apply a signature to every OAuth mailbox missing one, or fix the mismatch.", sigCsv: true };
+        return { key: "signatures", level: "note", count: n, text: n + " mailbox(es) missing a signature or with a name mismatch (" + S.A.signature.missing.length + " missing · " + S.A.signature.mismatch.length + " mismatch).", action: "Apply a signature to every connected email account missing one, or fix the mismatch.", sigCsv: true };
       }
       case "new-unprocessed": {
         if (liveMissing("lifecycle")) return null; // not measured by the live audit — claim nothing
@@ -2183,7 +2183,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         { const _dr = isLive() ? dormantRows() : null; if (_dr && _dr.length) return null; }
         const n = S.A.warmupConfig.notWarming.length, w = S.A.warmupConfig.wrongSettings.length;
         if (!n && !w) return { key: "warmup-notwarming", level: "note", count: 0, resolved: true, text: "No warmup-configuration issues — every mailbox is warming correctly." };
-        const bits = []; if (n) bits.push(n + " mailbox(es) with warmup off"); if (w) bits.push(w + " with wrong settings");
+        const bits = []; if (n) bits.push(n + " mailbox(es) with their recovery warm-up switched off"); if (w) bits.push(w + " with wrong settings");
         return { key: "warmup-notwarming", level: "note", count: n || w, text: bits.join(" · ") + ".", action: n ? "Enable warmup on all of them with the fleet's standard settings." : "Review and correct their warmup settings.", wcCsv: true };
       }
       // ("reminder-due" removed 2026-07-20): this legacy card counted the audit
@@ -2330,7 +2330,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (D.flaggedTotal > 0) {
       if (D.flaggedActionable > 0) {
         raw.push({ key: "warmup-rotation", level: "yellow", count: D.flaggedActionable, _openManager: true,
-          text: D.flaggedActionable + " domain(s) sending with a reply rate under " + S.A.domainHealth.cutoff + "% — they should go into warm-up.",
+          text: D.flaggedActionable + " domain(s) are sending but almost nobody replies (under " + S.A.domainHealth.cutoff + " in 100) — give them a rest so replies recover.",
           action: "Open the inbox & domain manager below and move the flagged domains to warm-up (or reactivate any that recovered)." });
       } else {
         raw.push({ key: "warmup-rotation", level: "yellow", count: 0, resolved: true, text: D.flaggedTotal + " flagged domain(s) have all been moved to warm-up." });
@@ -2356,11 +2356,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // restoreReconcileNow()), so the card count and the list can never disagree.
     if (dueDoms.length || upcoming.length) {
       const bits = [];
-      if (dueDoms.length) bits.push(dueDoms.length + " domain(s) due back from warm-up rest now (" + dueDoms.slice(0, 3).join(", ") + (dueDoms.length > 3 ? ", …" : "") + ")");
+      if (dueDoms.length) bits.push(dueDoms.length + " domain(s) rested and ready to send again (" + dueDoms.slice(0, 3).join(", ") + (dueDoms.length > 3 ? ", …" : "") + ")");
       if (upcoming.length) {
         const ums = upcoming.map(_dueMs).filter((t) => t != null);
         const soonest = ums.length ? new Date(Math.min.apply(null, ums)) : null;
-        bits.push(upcoming.length + " still resting, due back later" + (soonest ? " (earliest " + soonest.toISOString().slice(0, 10) + ": " + upcoming.slice(0, 3).join(", ") + (upcoming.length > 3 ? ", …" : "") + ")" : ""));
+        bits.push(upcoming.length + " still on a rest break" + (soonest ? " (first back " + soonest.toISOString().slice(0, 10) + ": " + upcoming.slice(0, 3).join(", ") + (upcoming.length > 3 ? ", …" : "") + ")" : ""));
       }
       if (blDue.length) bits.push(blDue.length + " of them still blacklisted — restoring resumes sending from a listed domain (" + blDue.slice(0, 3).join(", ") + (blDue.length > 3 ? ", …" : "") + ")");
       const actionLines = [];
@@ -2368,7 +2368,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       else if (upcoming.length) actionLines.push("Reminder only — they'll flag as due when ready. Restore early from the In warm-up view if you need the capacity back now.");
       if (blDue.length) actionLines.push("Blacklisted domains restore too — check the Blacklisted domains tab first if you'd rather delist them.");
       raw.push({ key: "restore-due", level: dueDoms.length ? "yellow" : "note", count: dueDoms.length || upcoming.length, _openManager: true, _mgrFlow: "inwarmup",
-        short: "domains resting in warm-up",
+        short: "domains on a rest break",
         text: bits.join(" · ") + ".",
         actionLines: actionLines,
         action: actionLines[0] || "",
@@ -2390,14 +2390,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const smtpImap = Number(A2.smtp || 0) + Number(A2.imap || 0);
       const auth = Number(A2.spfMiss || 0) + Number(A2.dkimMiss || 0) + Number(A2.dmarcMiss || 0);
       const blocked = (D.blockedReal != null) ? D.blockedReal : Number(A2.blockedReal || 0);
-      if (smtpImap) bits.push(smtpImap + " SMTP/IMAP");
-      if (auth) bits.push(auth + " missing auth records");
-      if (blocked) bits.push(blocked + " blocked");
-      if ((A2.blacklistRows || []).length) bits.push(A2.blacklistRows.length + " blacklisted");
+      if (smtpImap) bits.push(smtpImap + " can't send or receive");
+      if (auth) bits.push(auth + " missing security records");
+      if (blocked) bits.push(blocked + " blocked by a provider");
+      if ((A2.blacklistRows || []).length) bits.push(A2.blacklistRows.length + " on a spam blocklist");
       raw.push({ key: "inbox-issues", level: "yellow", count: issuesN, _openFleetTech: true,
         short: "inbox issues on the fleet",
         text: issuesN + " inbox issue(s) on the fleet" + (bits.length ? " — " + bits.join(" · ") : "") + ".",
-        action: "The detail cards were marked done but the counts haven't dropped — undo them from the Actioned fold below, or review Fleet details → Technical details." });
+        action: "Items were marked done but the numbers haven't dropped — undo them below, or check Fleet details." });
     }
 
     const ord = { red: 0, yellow: 1, note: 2 };
@@ -2543,7 +2543,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     return `
     <div class="pagehead">
       <div>
-        <h1>Fleet health audit.</h1>
+        ${window.DLV_EMBED ? "<h2>Fleet health &amp; to-do</h2>" : "<h1>Fleet health audit.</h1>"}
       </div>
       <div class="dlv-actions">
         <button class="btn sm" data-act="copy-claude" title="Copies a text summary you can paste to an AI assistant or teammate.">Copy for Claude</button>
@@ -3578,7 +3578,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!_verifyFoldInCard) html += renderIgnoredVerifyFold(false);
     _verifyFoldInCard = false;
     if (D.goodChips.length) {
-      html += `<div class="dlv-good-row">${D.goodChips.map((g) => `<span class="dlv-good-chip">✓ ${esc(g)}</span>`).join("")}</div>`;
+      // Analytics-hub embed: the chip wall reads as IT jargon to a founder
+      // (panel 2026-07-27, all five flagged it) — one plain chip, details on
+      // hover and in the Technical fold below.
+      html += window.DLV_EMBED && D.goodChips.length > 1
+        ? `<div class="dlv-good-row"><span class="dlv-good-chip" title="${esc(D.goodChips.join(" · "))}">✓ ${D.goodChips.length} technical checks passing — nothing to do</span></div>`
+        : `<div class="dlv-good-row">${D.goodChips.map((g) => `<span class="dlv-good-chip">✓ ${esc(g)}</span>`).join("")}</div>`;
     }
     if (D.doneTodo.length) {
       // Defect 3: needs an id so the undo toast's hint (and anything else)
@@ -4031,7 +4036,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // The count line names the exact verdict maths — floor %, min-sent gate,
     // window — so the number that produced the flags is never hidden away.
     const { minSent } = dhCutoffMin();
-    if (cnt) cnt.textContent = rows.length + " below the " + cutoff + "% floor · min " + minSent + " sent · last " + (UI.mgr.windowDays || 7) + " days" + (D.restingCount ? " · " + D.restingCount + " resting or recovering fleet-wide (audit's own clock — the In warm-up tab counts domains, not boxes)" : "") + mgrFreshNote();
+    if (cnt) cnt.textContent = rows.length + " below the " + cutoff + "% floor · min " + minSent + " sent · last " + (UI.mgr.windowDays || 7) + " days" + (D.restingCount ? " · " + D.restingCount + " resting or recovering fleet-wide" + (window.DLV_EMBED ? "" : " (audit's own clock — the In warm-up tab counts domains, not boxes)") : "") + mgrFreshNote();
     const bulk = $id("dlv-mgr-bulk");
     if (bulk) {
       let b = "";
@@ -4841,15 +4846,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (dlvSubtab === "blacklist") panel = renderBlacklistPanel(D);
     else if (dlvSubtab === "batch") panel = renderBatchPanel();
     else panel = renderOverviewPanel(D);
+    const embed = !!window.DLV_EMBED; // analytics hub renders the book insights in its own lanes
     root.innerHTML = [
       renderDataBanner(),
       renderHeaderTabs(),
       renderSubtabBar(),
-      renderBook(), // "Across the book" cards, moved here — sits just under the tabs
+      embed ? "" : renderBook(), // "Across the book" cards, moved here — sits just under the tabs
       panel,
-      renderFooter(),
+      embed ? "" : renderFooter(),
     ].join("");
-    loadBook(); // one-shot; repaints in place when the book rows land
+    if (!embed) loadBook(); // one-shot; repaints in place when the book rows land
     root.querySelectorAll("details.dlv-fold[id]").forEach((d) => { if (foldState[d.id] != null) d.open = foldState[d.id]; });
     paintManagerRows(); // no-ops safely (guarded on $id("dlv-mgr-body")) unless the manager panel is in the DOM
     scheduleStubTimers(); // fix #1: (re)arm the mark-done stubs' collapse timers
@@ -4865,6 +4871,19 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // under the KPI header), today's to-do (incl. the Actioned fold), recent
   // actions, Fleet details (collapsed by default at the bottom).
   function renderOverviewPanel(D) {
+    if (window.DLV_EMBED) {
+      // Analytics-hub embed: the hub's lanes already answer verdict / KPIs /
+      // signals / book — only the working sections paint here, to-do first.
+      // The manager is the operator's toolbox, so it folds shut by default
+      // (panel 2026-07-27: "a plumbing manual in the middle of my sales
+      // page") — the table inside is verbatim production markup, untouched.
+      return [
+        `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
+        `<details class="dlv-fold" id="dlv-fold-manager-embed"><summary>Inbox &amp; domain manager — warm up · restore · reconnect</summary><div class="dlv-fold-body">${renderManagerPanel(D)}</div></details>`,
+        renderHistoryFold(D),
+        renderFleetDetailsFold(D),
+      ].join("");
+    }
     return [
       renderCoach(),
       renderVerdict(D),
@@ -7296,6 +7315,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // and a smooth scroll (or a deferred rAF one) gets silently dropped when a
     // background repaint lands mid-animation or the tab is throttled, leaving
     // the user parked at the top with no idea the click worked.
+    const wrap = $id("dlv-fold-manager-embed"); // analytics-hub embed: manager sits in a collapsed fold
+    if (wrap) wrap.open = true;
     const el = $id("dlv-fold-manager");
     if (el) { el.scrollIntoView({ block: "start" }); flashEl(el); }
   }
@@ -7936,7 +7957,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     wireEvents();
     if (!S) loadState();
     loadSubtab(); // restore the sub-tab the owner was on (sessionStorage "dlv_subtab")
-    const main = document.getElementById("main");
+    // Analytics-hub embed: when the page provides #dlv-embed-slot, the engine
+    // mounts there (below the hub's lanes) instead of owning <main>.
+    const main = document.getElementById("dlv-embed-slot") || document.getElementById("main");
     if (!main) return false;
     main.innerHTML = '<div id="dlv-root" class="dlv"></div>';
     paintPage();
