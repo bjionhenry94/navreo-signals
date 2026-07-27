@@ -547,7 +547,7 @@ var HUBCACHE = {};           // days -> analytics-hub payload (weekday presets)
 // Meetings (the lines a founder reads); the landing card owns the bounce
 // story and both stay one chip-tap away.
 var state = { client: "All", trend: 30, landing: 1, week: 30,
-              on: { sent: false, replies: true, interested: true, meetings: true, bounces: false } };
+              on: { sent: false, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 
 function ckey() { return state.client === "All" ? "__all" : state.client; }
 function clientOfName(name, ws) {
@@ -584,38 +584,49 @@ function bookRow(kind) {  // live book-scope insight payload by kind/key
 }
 
 /* ── hero trend graph ── */
-var COL = { sent: "#1971C2", replies: "#7048E8", interested: "#2F9E44", meetings: "#E8590C", bounces: "#E03131" };
-var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounces" };
-var ORDER = ["sent", "replies", "interested", "meetings", "bounces"];
+var COL = { sent: "#1971C2", replies: "#7048E8", interested: "#2F9E44", meetings: "#E8590C", bounces: "#E03131", rate: "#0B7285" };
+var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounces", rate: "Reply rate" };
+var ORDER = ["sent", "replies", "interested", "meetings", "bounces", "rate"];
+var FLEET_ONLY = { sent: 1, bounces: 1, rate: 1 };   // no per-client sent exists anywhere → no per-client rate either
 var GEO = { ymax: 60, n: 30, off: 0 };
 var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 
-function fleetSeries() {  // {sent[], bounces[]} aligned to HUB.days, from trends
-  var out = { sent: [], bounces: [] };
+function fleetSeries() {  // {sent[], bounces[], rate[]} aligned to HUB.days, from trends
+  var out = { sent: [], bounces: [], rate: [] };
   if (!HUB) return out;
   var map = {};
   if (TRENDS && TRENDS.series && TRENDS.series.days) {
     TRENDS.series.days.forEach(function (d, i) {
       var s = TRENDS.series.sent[i] || 0;
       var bp = TRENDS.series.bounce_pct[i];
-      map[d] = { s: s, b: (bp == null ? 0 : Math.round(s * bp / 100)) };
+      var rp = TRENDS.series.reply_pct[i];
+      // same rule as perf_daily's RATE_MIN_SENT: a 16-send day at 3 replies is
+      // not a 19% reply rate — suppress the rate on days under 1,000 sends
+      map[d] = { s: s, b: (bp == null ? 0 : Math.round(s * bp / 100)), r: (rp == null || s < 1000 ? null : rp) };
     });
   }
   HUB.days.forEach(function (d) {
     var m = map[d];
     out.sent.push(m ? m.s : 0);
     out.bounces.push(m ? m.b : 0);
+    out.rate.push(m ? m.r : null);   // null = no sends that day → gap, not zero
   });
   return out;
 }
 function seriesFor(k) {   // full 30-day array for series k under current client
   if (!HUB) return [];
-  if (k === "sent" || k === "bounces") return fleetSeries()[k];
+  if (FLEET_ONLY[k]) return fleetSeries()[k];
   var s = HUB.series && HUB.series[ckey()];
   return (s && s[k === "interested" ? "interested" : k]) || [];
+}
+function rateAvg() {      // window-weighted fleet reply rate, % 1dp
+  var f = fleetSeries();
+  var sent = slice(f.sent), rate = slice(f.rate), S = 0, R = 0;
+  sent.forEach(function (s, i) { if (rate[i] != null) { S += s; R += s * rate[i] / 100; } });
+  return S > 0 ? Math.round(R / S * 1000) / 10 : null;
 }
 function slice(a) { return a.slice(Math.max(0, a.length - state.trend)); }
 
@@ -628,10 +639,13 @@ function renderChips() {
 function renderLegend() {
   var fleetOnly = state.client !== "All";
   $("ah-lchips").innerHTML = ORDER.map(function (k) {
-    var off = fleetOnly && (k === "sent" || k === "bounces");
-    var tot = off ? null : slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0);
+    var off = fleetOnly && FLEET_ONLY[k];
+    var val;
+    if (off) val = "whole fleet";
+    else if (k === "rate") { var ra = rateAvg(); val = ra == null ? "–" : ra + "%"; }
+    else val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
     return '<button class="lchip' + (state.on[k] && !off ? " on" : "") + (off ? " off" : "") + '" data-s="' + k + '" aria-pressed="' + (state.on[k] && !off) + '">' +
-      '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">' + (off ? "whole fleet" : fmtN(tot)) + "</b></button>";
+      '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">' + val + "</b></button>";
   }).join("");
 }
 function renderTrend() {
@@ -640,23 +654,37 @@ function renderTrend() {
   var n = days.length;
   if (!n) { return; }
   var fleetOnly = state.client !== "All";
-  var vis = ORDER.filter(function (k) { return state.on[k] && !(fleetOnly && (k === "sent" || k === "bounces")); });
+  var vis = ORDER.filter(function (k) { return state.on[k] && !(fleetOnly && FLEET_ONLY[k]); });
   var data = {};
   vis.forEach(function (k) { data[k] = slice(seriesFor(k)); });
-  var L = 40, R = 88, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
+  var hasRate = vis.indexOf("rate") >= 0;
+  var L = 40, R = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
   var max = 1;
-  vis.forEach(function (k) { data[k].forEach(function (v) { if (v > max) max = v; }); });
+  vis.forEach(function (k) { if (k === "rate") return; data[k].forEach(function (v) { if (v > max) max = v; }); });
   var ladder = [12, 20, 30, 40, 60, 80, 120, 160, 240, 320, 480, 640, 900, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800, 19200, 25600, 40000];
   var ymax = ladder[ladder.length - 1];
   for (var i = 0; i < ladder.length; i++) { if (ladder[i] >= max) { ymax = ladder[i]; break; } }
-  GEO = { ymax: ymax, n: n, off: (HUB.days.length - n) };
+  // reply-rate rides its own right-hand % axis
+  var rmax = 1;
+  if (hasRate) {
+    var rladder = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20], rmx = 0;
+    data.rate.forEach(function (v) { if (v != null && v > rmx) rmx = v; });
+    rmax = rladder[rladder.length - 1];
+    for (i = 0; i < rladder.length; i++) { if (rladder[i] >= rmx) { rmax = rladder[i]; break; } }
+  }
+  GEO = { ymax: ymax, rmax: rmax, n: n, off: (HUB.days.length - n) };
   function X(ii) { return n === 1 ? L : L + ii * pw / (n - 1); }
   function Y(v) { return T + (1 - v / ymax) * ph; }
+  function YR(v) { return T + (1 - v / rmax) * ph; }
   var s = "";
   for (i = 0; i <= 4; i++) {
     var gv = ymax * i / 4, gy = Y(gv);
     s += '<line x1="' + L + '" y1="' + gy.toFixed(1) + '" x2="' + (W - R) + '" y2="' + gy.toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
     s += '<text x="' + (L - 7) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">' + fmtN(gv) + "</text>";
+    if (hasRate) {
+      var rv = rmax * i / 4;
+      s += '<text x="' + (W - 8) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="' + COL.rate + '" text-anchor="end" class="num">' + (rmax < 4 ? rv.toFixed(1) : Math.round(rv)) + "%</text>";
+    }
   }
   var ticks = (n <= 7) ? [0, 2, 4, n - 1] : (n <= 14 ? [0, 4, 9, n - 1] : [0, 10, 17, 24, n - 1]);
   ticks.forEach(function (t) {
@@ -664,6 +692,21 @@ function renderTrend() {
   });
   var ends = [];
   vis.forEach(function (k) {
+    if (k === "rate") {
+      // dashed, right-axis, with gaps on no-send days
+      var seg = "", lastY = null;
+      data.rate.forEach(function (v, ii) {
+        if (v == null) {
+          if (seg) { s += '<polyline points="' + seg + '" fill="none" stroke="' + COL.rate + '" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>'; seg = ""; }
+          return;
+        }
+        lastY = YR(v);
+        seg += (seg ? " " : "") + X(ii).toFixed(1) + "," + lastY.toFixed(1);
+      });
+      if (seg) s += '<polyline points="' + seg + '" fill="none" stroke="' + COL.rate + '" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>';
+      if (lastY != null) ends.push({ k: k, x: X(n - 1), y: lastY });
+      return;
+    }
     var pts = "";
     data[k].forEach(function (v, ii) { pts += (ii ? " " : "") + X(ii).toFixed(1) + "," + Y(v || 0).toFixed(1); });
     s += '<polyline points="' + pts + '" fill="none" stroke="' + COL[k] + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
@@ -710,7 +753,7 @@ function trendMove(ev) {
   if (!r.width) return;
   var days = slice(HUB.days), n = days.length;
   if (!n) return;
-  var L = 40, Rp = 88, T = 12, B = 26, pw = 1120 - L - Rp, ph = 264 - T - B;
+  var L = 40, Rp = 132, T = 12, B = 26, pw = 1120 - L - Rp, ph = 264 - T - B;
   var sx = (ev.clientX - r.left) * 1120 / r.width;
   var idx = Math.round((sx - L) / pw * (n - 1));
   if (idx < 0) idx = 0; if (idx > n - 1) idx = n - 1;
@@ -719,8 +762,16 @@ function trendMove(ev) {
   var html = '<line x1="' + X.toFixed(1) + '" y1="' + T + '" x2="' + X.toFixed(1) + '" y2="' + (T + ph) + '" stroke="var(--line-2)" stroke-width="1"/>';
   var rows = "";
   ORDER.forEach(function (k) {
-    if (!state.on[k] || (fleetOnly && (k === "sent" || k === "bounces"))) return;
-    var v = slice(seriesFor(k))[idx] || 0;
+    if (!state.on[k] || (fleetOnly && FLEET_ONLY[k])) return;
+    var v = slice(seriesFor(k))[idx];
+    if (k === "rate") {
+      if (v == null) return;   // no sends that day — the line has a gap here
+      var Yr = T + (1 - v / (GEO.rmax || 1)) * ph;
+      html += '<circle cx="' + X.toFixed(1) + '" cy="' + Yr.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
+      rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] + '<span class="v num">' + v + "%</span></div>";
+      return;
+    }
+    v = v || 0;
     var Y = T + (1 - v / GEO.ymax) * ph;
     html += '<circle cx="' + X.toFixed(1) + '" cy="' + Y.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
     rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] + '<span class="v num">' + fmtN(v) + "</span></div>";
