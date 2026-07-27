@@ -2588,25 +2588,65 @@
     }
   }
 
-  /* Client a campaign belongs to. There is no client field — it lives in the
-     name, so we strip any Recontact/Reconnect prefix and take the leading token
-     before the first delimiter (| – / or a spaced hyphen). Names like
-     "Reconnect 2.0: Amplifyy - ..." → "Amplifyy", "Navreo | Distributors" →
-     "Navreo", "Arnic – Sales Leaders" → "Arnic". */
+  /* Client a campaign belongs to. There is no client field on the campaign, so
+     we match the name against a KNOWN-CLIENT keyword table, first match wins.
+     Mirrors CLIENT_KEYWORDS in app/build_notifications.py (the same table that
+     stamps optimiser_notifications.client), extended with the other clients
+     that actually appear in the book.
+
+     It used to split the name on the first delimiter and call the leading
+     token a client. That turned every unusual campaign name into its own
+     "client": 68 options, one per campaign shape, with Navreo alone split 9
+     ways ("Navreo 3PL", "Re-Contact: Navreo", "[2025-List] Navreo" ...) and
+     reply categories ("Meeting Request", "Interested Reply") sitting in the
+     list as if they were customers. Anything unmatched is "Other", never a
+     new entry. */
+  var CLIENT_KEYWORDS = [
+    ["arnic", "Arnic"],
+    ["amplifyy", "Amplifyy"],
+    ["olivia duncan", "Olivia Duncan"],
+    ["pestco", "PestCo"],
+    ["valsoft", "Valsoft"],
+    ["corporate development", "Valsoft"],
+    ["byteplus", "BytePlus"],
+    ["bytedance", "BytePlus"],
+    ["pushgroup", "Push Group"],
+    ["push group", "Push Group"],
+    ["wordbank", "Wordbank"],
+    ["wantmoreleads", "WantMoreLeads"],
+    ["qwintiq", "Qwintiq"],
+    ["thunderbird", "ThunderBird"],
+    ["studio one", "Studio One"],
+    ["grow.repeat", "Grow.Repeat"],
+    ["twodev", "TwoDev"],
+    ["adello", "Adello"],
+    ["quick funds", "Quick Funds"],
+    ["alpine", "Navreo (secondary)"],
+    ["property management", "Navreo (secondary)"],
+    ["navreo", "Navreo"]
+  ];
+  var CLIENT_OTHER = "Other";
   function clientOf(c) {
-    var n = String(c.name || "").replace(/^\s*(new\s+)?(recontact|reconnect)\b[^:]*:\s*/i, "");
-    n = n.split(/\s*\|\s*|\s*–\s*|\s+-\s+|\s*\/\s*/)[0].trim();
-    if (!n) n = String(c.name || "").trim().split(/\s+/)[0] || "Other";
-    return n;
+    var n = String(c.name || "").toLowerCase();
+    for (var i = 0; i < CLIENT_KEYWORDS.length; i++) {
+      if (n.indexOf(CLIENT_KEYWORDS[i][0]) !== -1) return CLIENT_KEYWORDS[i][1];
+    }
+    return CLIENT_OTHER;
   }
 
   /* ---------- list view ---------- */
   function renderList() {
     var root = document.getElementById("list-root");
     var cs = STATE.campaigns;
+    /* real clients A-Z, with the "Other" catch-all pinned last so it never
+       sits in the middle of the list pretending to be a customer */
     var clientList = cs.map(function (c) { return c.client; })
       .filter(function (v, i, a) { return v && a.indexOf(v) === i; })
-      .sort(function (a, b) { return a.localeCompare(b); });
+      .sort(function (a, b) {
+        if (a === CLIENT_OTHER) return 1;
+        if (b === CLIENT_OTHER) return -1;
+        return a.localeCompare(b);
+      });
     var nDecide = cs.filter(function (c) { return c.tier === "decision"; }).length;
     var nWatch = cs.filter(function (c) { return c.tier === "watch"; }).length;
     var nFine = cs.filter(function (c) { return c.tier === "fine"; }).length;
