@@ -3515,9 +3515,16 @@
             /* V1 progress-bar card (glance-lab ruling, 25 Jul 2026): name + actions,
                a slim pulled/available bar, labelled ends, honest last-add line. */
             var pct = pool.total_pool ? Math.max(0.4, pool.pulled_ok / pool.total_pool * 100) : 0;
+            /* A pool-backed source is still whatever kind it is: a fixed list
+               says so here too, or the bar reads as a signal filling up. The
+               "still available" people are the ones already bought — the pool
+               tops up from the banked list, it never finds anyone new. */
+            var fx = isFixedList(s);
             return '<div class="source-list-card" data-pool="' + esc(pool.id) + '" style="display:block">' +
               '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">' +
-              '<span class="source-list-name" style="min-width:0">' + esc(s.name || "Source") + "</span>" +
+              '<span style="min-width:0"><span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
+              (fx ? ' <span class="sig-chip sig-chip--fixed" title="A one-off list: these people were pulled once on a set of filters. It is not a signal - nothing new arrives tomorrow, and nothing runs in the background.">Fixed list</span>' : "") +
+              "</span>" +
               '<div style="display:flex;align-items:center;gap:8px;flex:0 0 auto">' +
               (s.list_id ? '<a class="action-link" href="/app/lists.html#' + esc(s.list_id) + '">View the list</a>' : "") +
               '<span data-pool-act></span></div></div>' +
@@ -3526,6 +3533,7 @@
               '<div class="source-list-meta" style="display:flex;justify-content:space-between;gap:10px">' +
               '<span><b style="color:var(--fg)">' + fmtInt(pool.pulled_ok) + "</b> pulled</span>" +
               '<span><b style="color:var(--fg)">' + fmtInt(pool.remaining) + "</b> still available</span></div>" +
+              (fx ? '<span class="source-list-meta" style="display:block;margin-top:6px">One-off list &middot; the people still available were bought in the same pull; nothing new arrives.</span>' : "") +
               '<span class="source-list-meta" data-pool-note style="display:block;margin-top:6px">' + poolNoteHTML(pool) + "</span></div>";
           }
           if (isFixedList(s)) return fixedRowHTML(c, s);
