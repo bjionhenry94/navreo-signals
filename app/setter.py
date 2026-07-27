@@ -1782,6 +1782,21 @@ def _load_agents() -> list:
 def _load_agent(agent_id):
     if not agent_id:
         return None
+    # Targeted read. This used to call _load_agents(), which pulls EVERY agent
+    # doc - multi-KB instruction blobs, one of them 15KB - and then picked one
+    # out client-side. On the regenerate path that was 2.6s median (5.5s
+    # worst) spent before a model call even started, measured live 2026-07-28.
+    # Falls back to the full scan if the row id and the doc id ever disagree,
+    # so an agent can't go missing on a schema quirk.
+    if _SB:
+        try:
+            rows = _SB("GET", f"{AGENTS_TABLE}?id=eq.{quote(str(agent_id))}&select=id,doc")
+            if isinstance(rows, list) and rows:
+                doc = rows[0].get("doc") or {}
+                if doc.get("id") == agent_id:
+                    return doc
+        except Exception:  # noqa: BLE001
+            pass
     for a in _load_agents():
         if a.get("id") == agent_id:
             return a
@@ -6151,8 +6166,10 @@ def _redraft_sync(payload):
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
+        _stage("load_row", _t)
+        _t = _time.time()
         agent = _load_agent(row.get("agent_id")) or {}
-        _stage("load", _t)
+        _stage("load_agent", _t)
         feedback_text = str(payload.get("feedback") or "").strip()
         # Persistent learning layer (owner ruling 2026-07-14): only when the
         # caller explicitly opts in with scope="remember" does this feedback
