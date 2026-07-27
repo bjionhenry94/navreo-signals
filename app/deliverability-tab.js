@@ -2233,7 +2233,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         if (zeroEnforce) lines.push("DMARC not enforcing on any domain (all " + S.A.none + " at p=none) — spoofed mail from your domains lands normally.");
         return { key: "auth-records", level: "yellow", count: n + (zeroEnforce ? 1 : 0), short: zeroEnforce && !n ? "DMARC not enforcing anywhere" : "domains missing SPF/DKIM/DMARC",
           text: lines.join(" "),
-          action: "Add the missing DNS record(s) on each domain — see Fleet details → Technical details for the per-record counts.",
+          action: "Add the missing DNS record(s) on each domain." + (window.DLV_EMBED ? "" : " See Fleet details → Technical details for the per-record counts."),
           _openFleetTech: true };
       }
       // ("sending-deviation" — mailboxes over/under their batch baseline — was
@@ -2384,7 +2384,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const ISSUE_CARD_KEYS = ["blocked-real", "smtp-imap", "auth-records", "blacklist"];
     const issuesN = issuesTotal(D);
     const issueCardActive = raw.some((it) => ISSUE_CARD_KEYS.indexOf(it.key) !== -1 && !it.resolved && !isAcked(it));
-    if (issuesN > 0 && !issueCardActive) {
+    // The analytics-hub embed drops this reconciliation summary: it existed only
+    // to explain the "Inbox issues" KPI tile (owner 2026-07-11), and that tile —
+    // plus the "undo below" / "Fleet details" it points to — is gone from the
+    // embed (owner 2026-07-27). The real issue cards still surface on their own.
+    if (!window.DLV_EMBED && issuesN > 0 && !issueCardActive) {
       const A2 = S.A;
       const bits = [];
       const smtpImap = Number(A2.smtp || 0) + Number(A2.imap || 0);
@@ -3526,7 +3530,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // "Caps by reply rate" button), and open-fleetdetails-tech composes the
     // generic openFold() twice (outer Fleet-details fold, then the nested
     // Technical-details fold it now lives inside) rather than inventing anything new.
-    if (it._openFleetTech) btns.push(`<button class="btn sm" data-act="open-fleetdetails-tech">Fleet details → Technical ↓</button>`);
+    if (it._openFleetTech && !window.DLV_EMBED) btns.push(`<button class="btn sm" data-act="open-fleetdetails-tech">Fleet details → Technical ↓</button>`);
     if (it._openCaps) btns.push(`<button class="btn sm" data-act="open-caps-preview">Caps by reply rate…</button>`);
     if (it._openBatch) btns.push(`<button class="btn sm" data-act="open-batch">Performance by batch ↓</button>`);
     if (it.key) btns.push(`<button class="btn sm" data-act="mark-done" data-key="${it.key}" data-count="${it.count || 0}" title="Mark done">✓ Mark done</button>`);
@@ -3567,7 +3571,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // (this is exactly the "last item vanished into All clear" moment).
       const stubs = D.doneTodo.map(stubOf).join("");
       if (stubs) html += `<div class="dlv-actions-list" style="margin-bottom:12px">${stubs}</div>`;
-      html += `<div class="dlv-all-clear"><div class="big">✓ All clear</div><div class="sub">${(D.doneTodo.length || D.resolvedTodo.length) ? "Everything flagged today has been handled." : "Nothing needs action today — the numbers above are for reference."}</div></div>`;
+      html += `<div class="dlv-all-clear"><div class="big">✓ All clear</div><div class="sub">${(D.doneTodo.length || D.resolvedTodo.length) ? "Everything flagged today has been handled." : (window.DLV_EMBED ? "Nothing needs action today." : "Nothing needs action today — the numbers above are for reference.")}</div></div>`;
     }
     // (Owner request 2026-07-11: the "Auto-resolved today" row of anonymous
     // "✓ handled" chips is gone — the good-chips row below already says what's
@@ -3575,17 +3579,15 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Standalone "Ignored & recently verified" fold when no active verify
     // card carried it (see renderIgnoredVerifyFold) — verify records and
     // Remove-bad stay one click away even after everything is verified.
-    if (!_verifyFoldInCard) html += renderIgnoredVerifyFold(false);
+    if (!window.DLV_EMBED && !_verifyFoldInCard) html += renderIgnoredVerifyFold(false);
     _verifyFoldInCard = false;
-    if (D.goodChips.length) {
-      // Analytics-hub embed: the chip wall reads as IT jargon to a founder
-      // (panel 2026-07-27, all five flagged it) — one plain chip, details on
-      // hover and in the Technical fold below.
-      html += window.DLV_EMBED && D.goodChips.length > 1
-        ? `<div class="dlv-good-row"><span class="dlv-good-chip" title="${esc(D.goodChips.join(" · "))}">✓ ${D.goodChips.length} technical checks passing — nothing to do</span></div>`
-        : `<div class="dlv-good-row">${D.goodChips.map((g) => `<span class="dlv-good-chip">✓ ${esc(g)}</span>`).join("")}</div>`;
+    if (!window.DLV_EMBED && D.goodChips.length) {
+      // Non-embed only: the "N technical checks passing" chips. The analytics-hub
+      // embed drops them entirely (owner 2026-07-27) — a founder reads them as IT
+      // jargon, and the to-do already says what needs doing.
+      html += `<div class="dlv-good-row">${D.goodChips.map((g) => `<span class="dlv-good-chip">✓ ${esc(g)}</span>`).join("")}</div>`;
     }
-    if (D.doneTodo.length) {
+    if (!window.DLV_EMBED && D.doneTodo.length) {
       // Defect 3: needs an id so the undo toast's hint (and anything else)
       // can actually openFold()/scroll to this specific fold — it had none
       // before, so any attempt to target it directly was a silent no-op.
@@ -4872,18 +4874,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // actions, Fleet details (collapsed by default at the bottom).
   function renderOverviewPanel(D) {
     if (window.DLV_EMBED) {
-      // Analytics-hub embed: the hub's lanes already answer verdict / KPIs /
-      // signals / book — only the working sections paint here, to-do first.
-      // The Inbox & domain manager is returned to the "Are your emails landing?"
-      // lane OPEN by default (owner request 2026-07-27: an earlier same-day
-      // panel folded it shut and Bjion read that as "removed" — he wants it
-      // visible here). Still a <details> so it can be collapsed; the table
-      // inside is verbatim production markup, untouched.
+      // Analytics-hub embed (owner request 2026-07-27, Bjion): strip this lane
+      // to just the two things that need action — Today's to-do, then the Inbox
+      // & domain manager INLINE (no fold, no duplicate header). Everything else
+      // that used to render here (the KPI / Fleet-details tiles, Recent actions,
+      // the Actioned / Ignored-&-verified / technical-checks meta-rows) is gone:
+      // every actionable signal those tiles carried already surfaces as a to-do
+      // card (recomputeTodos), so nothing actionable is lost. The hub's own
+      // lanes answer verdict / KPIs / signals / book.
       return [
         `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
-        `<details class="dlv-fold" id="dlv-fold-manager-embed" open><summary>Inbox &amp; domain manager — warm up · restore · reconnect</summary><div class="dlv-fold-body">${renderManagerPanel(D)}</div></details>`,
-        renderHistoryFold(D),
-        renderFleetDetailsFold(D),
+        renderManagerPanel(D),
       ].join("");
     }
     return [
@@ -7316,9 +7317,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Instant, synchronous jump — paintPage() builds the panel synchronously,
     // and a smooth scroll (or a deferred rAF one) gets silently dropped when a
     // background repaint lands mid-animation or the tab is throttled, leaving
-    // the user parked at the top with no idea the click worked.
-    const wrap = $id("dlv-fold-manager-embed"); // analytics-hub embed: manager sits in a collapsed fold
-    if (wrap) wrap.open = true;
+    // the user parked at the top with no idea the click worked. The manager now
+    // renders inline (no embed fold), so just scroll to and flash the panel.
     const el = $id("dlv-fold-manager");
     if (el) { el.scrollIntoView({ block: "start" }); flashEl(el); }
   }
