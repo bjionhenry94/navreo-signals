@@ -76,6 +76,53 @@ GRADING_ID = "__grading__"
 SMARTLEAD_BASE = "https://server.smartlead.ai/api/v1"
 OPENAI_MODEL = "gpt-5-mini"
 
+# ── one OpenAI round trip, with a deadline and a retry ──────────────────────
+# Every model call used to be a bare _HTTP on http_json's 60s default with
+# nothing to catch a slow one. A urllib read timeout stringifies to exactly
+# "The read operation timed out", which is what the reviewer saw over the
+# Regenerate button (owner report 2026-07-28) - one slow call killed the whole
+# regenerate. Now: a tighter per-call deadline, and ONE retry when (and only
+# when) the failure was a timeout or transport blip. An HTTP error from OpenAI
+# is not retried - it fails the same way twice and just doubles the wait.
+#
+# reasoning_effort is the single biggest wall-clock lever on gpt-5-mini.
+# Measured 2026-07-28 on the real prompts: classify 15.8s -> 2.9s, draft
+# 43.6s -> 4.6s, purely from dropping hidden reasoning tokens (1024 -> 0 and
+# 3328 -> 0). The VISIBLE output is the same size either way (~320 tokens), so
+# this buys latency, not brevity.
+OPENAI_TIMEOUT = float(os.environ.get("OPENAI_TIMEOUT", "45"))
+OPENAI_EFFORT = os.environ.get("OPENAI_EFFORT", "minimal")
+
+
+def _is_transient(e) -> bool:
+    """A timeout or connection blip - worth exactly one retry."""
+    txt = (str(e) + " " + str(getattr(e, "reason", ""))).lower()
+    return (isinstance(e, TimeoutError)
+            or "timed out" in txt or "timeout" in txt
+            or "connection reset" in txt or "connection aborted" in txt
+            or "remote end closed" in txt)
+
+
+def _openai(body: dict, key: str, *, timeout: float = None, retries: int = 1):
+    """POST to chat/completions. Adds the effort/verbosity knobs unless the
+    caller already set them. Raises on a non-transient failure."""
+    body = dict(body)
+    body.setdefault("reasoning_effort", OPENAI_EFFORT)
+    body.setdefault("verbosity", "low")
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            return _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                         {"Authorization": f"Bearer {key}"}, body,
+                         OPENAI_TIMEOUT if timeout is None else timeout)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if attempt >= retries or not _is_transient(e):
+                raise
+            print(f"[setter] openai {type(e).__name__} ({str(e)[:60]}), retry "
+                  f"{attempt + 1}/{retries}", file=sys.stderr)
+    raise last
+
 # Only these Smartlead/Make categories may enter setter_queue (ruling
 # 2026-07-14) - everything else (Call Booked, Contact Forward, Contact In
 # Future, all negatives, uncategorised) stays out of both intake paths.
@@ -1100,13 +1147,11 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
     if (owner_hints or "").strip():
         payload["owner_corrections"] = owner_hints.strip()[:2000]
     user = json.dumps(payload)
-    r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
-             {"Authorization": f"Bearer {key}"},
-             {"model": OPENAI_MODEL,
-              "messages": [{"role": "system", "content": CLASSIFY_SYSTEM},
-                          {"role": "user", "content": user}],
-              "response_format": {"type": "json_schema", "json_schema": {
-                  "name": "setter_classification", "strict": True, "schema": CLASSIFY_SCHEMA}}})
+    r = _openai({"model": OPENAI_MODEL,
+                 "messages": [{"role": "system", "content": CLASSIFY_SYSTEM},
+                             {"role": "user", "content": user}],
+                 "response_format": {"type": "json_schema", "json_schema": {
+                     "name": "setter_classification", "strict": True, "schema": CLASSIFY_SCHEMA}}}, key)
     if not isinstance(r, dict):
         raise RuntimeError("OpenAI: empty response")
     if r.get("error"):
@@ -1234,13 +1279,11 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         # the root cause of "it keeps repeating the same mistakes".
         payload["reviewer_feedback"] = regen_feedback.strip()[:REVIEWER_FEEDBACK_CAP]
     user = json.dumps(payload)
-    r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
-             {"Authorization": f"Bearer {key}"},
-             {"model": OPENAI_MODEL,
-              "messages": [{"role": "system", "content": DRAFT_SYSTEM},
-                          {"role": "user", "content": user}],
-              "response_format": {"type": "json_schema", "json_schema": {
-                  "name": "setter_draft", "strict": True, "schema": DRAFT_SCHEMA}}})
+    r = _openai({"model": OPENAI_MODEL,
+                 "messages": [{"role": "system", "content": DRAFT_SYSTEM},
+                             {"role": "user", "content": user}],
+                 "response_format": {"type": "json_schema", "json_schema": {
+                     "name": "setter_draft", "strict": True, "schema": DRAFT_SCHEMA}}}, key)
     if not isinstance(r, dict):
         raise RuntimeError("OpenAI: empty response")
     if r.get("error"):
@@ -1310,13 +1353,11 @@ def proofread_draft(html: str):
         key = _KEYS.get("OPENAI_API_KEY")
         if not key:
             return original, False
-        r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
-                 {"Authorization": f"Bearer {key}"},
-                 {"model": OPENAI_MODEL,
-                  "messages": [{"role": "system", "content": PROOFREAD_SYSTEM},
-                              {"role": "user", "content": json.dumps({"html": original})}],
-                  "response_format": {"type": "json_schema", "json_schema": {
-                      "name": "setter_proofread", "strict": True, "schema": PROOFREAD_SCHEMA}}})
+        r = _openai({"model": OPENAI_MODEL,
+                     "messages": [{"role": "system", "content": PROOFREAD_SYSTEM},
+                                 {"role": "user", "content": json.dumps({"html": original})}],
+                     "response_format": {"type": "json_schema", "json_schema": {
+                         "name": "setter_proofread", "strict": True, "schema": PROOFREAD_SCHEMA}}}, key)
         if not isinstance(r, dict) or r.get("error"):
             return original, False
         data = json.loads(r["choices"][0]["message"]["content"])
@@ -6093,16 +6134,25 @@ def route_queue_redraft(payload):
 
 
 def _redraft_sync(payload):
+    # Per-stage wall clock, surfaced in the job body so a slow regenerate can
+    # be attributed without guessing (which call is it THIS time?). Cheap:
+    # a handful of _time.time() reads on a path that costs seconds.
+    stages, _t_start = {}, _time.time()
+
+    def _stage(name, since):
+        stages[name] = int((_time.time() - since) * 1000)
     try:
         payload = payload or {}
         qid = payload.get("id")
         if not qid:
             return 400, {"error": "id is required"}
+        _t = _time.time()
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
         agent = _load_agent(row.get("agent_id")) or {}
+        _stage("load", _t)
         feedback_text = str(payload.get("feedback") or "").strip()
         # Persistent learning layer (owner ruling 2026-07-14): only when the
         # caller explicitly opts in with scope="remember" does this feedback
@@ -6146,6 +6196,7 @@ def _redraft_sync(payload):
             company_location = ", ".join([v for v in (comp_hints.get("country"), comp_hints.get("state"),
                                                       comp_hints.get("city")) if v])
             mem_hints = _prefix_latest_rules(_latest_owner_rules(agent), _agent_memory_digest(agent))
+            _t = _time.time()
             try:
                 classification = classify({"subject": row.get("reply_subject"), "body": body_text,
                                            "last_outbound": last_outbound,
@@ -6160,6 +6211,7 @@ def _redraft_sync(payload):
                     tz, tz_confident = resolve_timezone(hints, classification)
             except Exception:  # noqa: BLE001 - classify outage: the draft still runs, just without intent routing
                 classification = {}
+            _stage("classify", _t)
         now = _dt.datetime.now(_dt.timezone.utc)
         eff_settings = dict(settings)
         eff_settings["_agent"] = agent
@@ -6233,17 +6285,21 @@ def _redraft_sync(payload):
                             if isinstance(m, dict) and str(m.get("type") or "").upper() != "SENT")
         call_ask = "required" if time_plan else call_ask_for(
             classification, redraft_body_text, thread_text, first_touch=inbound_turns <= 1)
+        _t = _time.time()
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
              "first_outbound": row.get("first_outbound") or "",
              "thread_text": thread_text, "call_ask": call_ask},
             agent, classification, slots, slot_status, sender_first=_sender_first_for(agent),
             regen_feedback=combined_feedback)
+        _stage("draft", _t)
         draft_html = d.get("html")
         if draft_html:
             # Second sweep (owner brief 2026-07-14): proofread before this
             # regenerated draft is saved.
+            _t = _time.time()
             draft_html, _proofread_changed = proofread_draft(draft_html)
+            _stage("proofread", _t)
         # Re-stamped, not preserved: the baseline for an Approve-time diff is
         # the LATEST thing the agent wrote, not its first attempt. Edits the
         # reviewer makes after this regenerate are measured against this draft.
@@ -6307,7 +6363,10 @@ def _redraft_sync(payload):
             patch["draft_subject"], patch["draft_body"] = None, None
             patch["original_draft_body"] = None
             patch["status"] = "no_action"
+        _t = _time.time()
         _apply_patch(row, patch)
+        _stage("save", _t)
+        _stage("total", _t_start)
         # Transient, response-only (setter_queue schema-freeze: never a new
         # column): the drafter's can't-comply explanation for the TYPED
         # feedback, surfaced only when the reviewer actually typed some.
@@ -6317,9 +6376,10 @@ def _redraft_sync(payload):
         note = (d.get("feedback_note") or "") if feedback_text else ""
         if slot_note:
             note = (slot_note + " " + note).strip()
-        return 200, {"row": {**row, **patch}, "feedback_note": note}
+        return 200, {"row": {**row, **patch}, "feedback_note": note, "stages": stages}
     except Exception as e:  # noqa: BLE001
-        return 500, {"error": str(e)[:300]}
+        _stage("total", _t_start)
+        return 500, {"error": str(e)[:300], "stages": stages}
 
 
 def route_test_inject(payload):

@@ -113,7 +113,7 @@ class FakeHTTP:
         self.fail = fail
         self.posts = []
 
-    def __call__(self, method, url, headers=None, body=None):
+    def __call__(self, method, url, headers=None, body=None, timeout=60):
         if self.fail:
             raise OSError("hook down")
         self.posts.append((url, body))

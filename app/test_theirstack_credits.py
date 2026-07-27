@@ -43,7 +43,7 @@ class Recorder:
         self.pages = list(pages)
         self.bodies = []
 
-    def __call__(self, method, url, headers, body=None):
+    def __call__(self, method, url, headers, body=None, timeout=60):
         self.bodies.append(body)
         return {"data": self.pages.pop(0) if self.pages else [],
                 "metadata": {"total_results": 999}}

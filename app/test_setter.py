@@ -405,7 +405,7 @@ class FakeHTTP:
         self.category_writes = []
         self.category_write_error = None
 
-    def __call__(self, method, url, headers, body=None):
+    def __call__(self, method, url, headers, body=None, timeout=60):
         self.calls.append((method, url))
         if "api.openai.com" in url:
             schema = (((body or {}).get("response_format") or {}).get("json_schema") or {}).get("name")
@@ -2492,7 +2492,7 @@ def test_unresolved_reconcile_smartlead_error_fails_open():
     class _BoomOnLeads:
         def __init__(self, wrapped):
             self._w = wrapped
-        def __call__(self, method, url, headers, body=None):
+        def __call__(self, method, url, headers, body=None, timeout=60):
             if re.search(r"/campaigns/[^/?]+/leads", url):
                 raise OSError("smartlead unreachable")
             return self._w(method, url, headers, body)
