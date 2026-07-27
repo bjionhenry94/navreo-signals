@@ -13506,7 +13506,7 @@ AUTH_COOKIE = "navreo_session"
 AUTH_SESSION_DAYS = 30
 
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
-                    "/app/offer.html", "/app/setter-train.html", "/app/shell.js"}
+                    "/app/offer.html", "/app/setter-train.html", "/app/shell.js", "/app/roi-calculator.html"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
