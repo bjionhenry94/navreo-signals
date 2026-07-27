@@ -30,19 +30,21 @@
   @media (max-width: 540px) { .grid { grid-template-columns: 1fr; } }
   .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); margin-bottom: 12px; }
   .ctrl { margin-bottom: 16px; }
-  .ctrl .lab { display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 6px; }
-  .ctrl .lab b { font-variant-numeric: tabular-nums; }
+  .ctrl .lab { display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 6px; gap: 10px; }
+  .ctrl .lab b { font-variant-numeric: tabular-nums; white-space: nowrap; }
   input[type=range] { width: 100%; accent-color: var(--orange); }
-  .fixed {
+  .price {
     background: var(--cream-50); border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 10px 12px; font-size: 13px; color: var(--ink-2); margin-bottom: 16px; line-height: 1.45;
+    padding: 12px; margin-bottom: 16px;
   }
-  .fixed b { color: var(--ink); }
+  .price .n { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .price .n span { font-size: 14px; font-weight: 500; color: var(--ink-3); }
+  .price .d { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
   .out { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-  .row { display: flex; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .row { display: flex; justify-content: space-between; padding: 9px 14px; border-bottom: 1px solid var(--line); font-size: 13.5px; gap: 10px; }
   .row:last-child { border-bottom: none; }
-  .row b { font-variant-numeric: tabular-nums; }
-  .rev { background: var(--green-bg); border-top: 1px solid var(--green-line); }
+  .row b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .rev { background: var(--green-bg); border-top: 1px solid var(--green-line); align-items: center; }
   .rev .n { color: var(--green); font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .rev .l { font-weight: 600; }
   .note { font-size: 11.5px; color: var(--ink-3); line-height: 1.5; margin-top: 14px; }
@@ -56,19 +58,34 @@
 </head>
 <body>
   <div class="calc">
-    <h1>What would 30 qualified leads be worth to you?</h1>
-    <p class="sub">Our offer: <b>30 qualified leads for your company in 90 days across email and LinkedIn, every one a decision maker you approved replying wanting to talk, and if we miss 30 you don't pay.</b> Set your own numbers below — we don't guess them for you.</p>
+    <h1>What does that volume actually return?</h1>
+    <p class="sub">Our offer: <b>send 1,000 cold emails a day, fully managed, for $597/month</b> — everything included, zero additional costs. Set your own numbers below; we don't guess them for you.</p>
     <div class="grid">
       <div class="panel">
         <h2>Your numbers</h2>
-        <div class="fixed">Qualified leads: <b>30 in 90 days</b> — fixed by the offer. Each one is a decision maker you approved, replying wanting to talk.</div>
-        <div class="ctrl">
-          <div class="lab"><span>Of those 30, how many become meetings?</span><b id="bookV">50%</b></div>
-          <input type="range" id="book" min="10" max="100" step="5" value="50">
+        <div class="price">
+          <div class="n" id="priceV">$597<span>/month</span></div>
+          <div class="d"><b id="volV">1,000</b> cold emails a day, fully managed</div>
         </div>
         <div class="ctrl">
-          <div class="lab"><span>Your close rate from meetings</span><b id="closeV">20%</b></div>
-          <input type="range" id="close" min="5" max="50" step="1" value="20">
+          <div class="lab"><span>Daily sending volume</span><b id="volLab">1,000/day</b></div>
+          <input type="range" id="vol" min="0" max="4" step="1" value="0">
+        </div>
+        <div class="ctrl">
+          <div class="lab"><span>Reply rate</span><b id="replyV">2.0%</b></div>
+          <input type="range" id="reply" min="5" max="50" step="1" value="20">
+        </div>
+        <div class="ctrl">
+          <div class="lab"><span>Of replies, share that are positive</span><b id="posV">30%</b></div>
+          <input type="range" id="pos" min="5" max="60" step="1" value="30">
+        </div>
+        <div class="ctrl">
+          <div class="lab"><span>Positive replies that become meetings</span><b id="bookV">40%</b></div>
+          <input type="range" id="book" min="10" max="100" step="5" value="40">
+        </div>
+        <div class="ctrl">
+          <div class="lab"><span>Your close rate from meetings</span><b id="closeV">15%</b></div>
+          <input type="range" id="close" min="5" max="50" step="1" value="15">
         </div>
         <div class="ctrl">
           <div class="lab"><span>Average client value (LTV)</span><b id="ltvV">$5,000</b></div>
@@ -76,34 +93,62 @@
         </div>
       </div>
       <div class="panel">
-        <h2>Projected results (90 days)</h2>
+        <h2>Projected results (per month)</h2>
         <div class="out">
-          <div class="row"><span>Qualified leads, replying wanting to talk</span><b>30</b></div>
-          <div class="row"><span>Meetings on your calendar</span><b id="meetings">15</b></div>
-          <div class="row"><span>New clients closed</span><b id="deals">3</b></div>
-          <div class="row rev"><span class="l">Projected revenue</span><span class="n" id="rev">$15,000</span></div>
+          <div class="row"><span>Cold emails sent</span><b id="sent">22,000</b></div>
+          <div class="row"><span>Replies</span><b id="replies">440</b></div>
+          <div class="row"><span>Positive replies</span><b id="positives">132</b></div>
+          <div class="row"><span>Meetings on your calendar</span><b id="meetings">52</b></div>
+          <div class="row"><span>New clients closed</span><b id="deals">7</b></div>
+          <div class="row"><span>What it costs</span><b id="cost">$597</b></div>
+          <div class="row rev"><span class="l">Projected revenue</span><span class="n" id="rev">$35,000</span></div>
         </div>
-        <p class="note">The 30 leads are guaranteed by the offer — miss 30 and you don't pay. The sliders are yours: we don't project your booking rate, close rate or deal size for you. For context, from our own live campaigns (June–July 2026): 14,225 prospects contacted, 2.1% replied, 30% of replies were positive.</p>
+        <p class="note">Sending days: 22 a month — a working-days assumption, not a measurement. Every rate above is yours to set: we don't project your reply rate, booking rate, close rate or deal size for you. For context, from our own live campaigns (June–July 2026): 14,225 prospects contacted, 2.1% replied, 30% of replies were positive. Price is $597/month per 1,000 a day, everything included.</p>
       </div>
     </div>
     <a class="cta" href="https://calendly.com/bjion-henry" target="_blank" rel="noopener">Book a call</a>
-    <p class="cta-sub">30 qualified leads in 90 days, or you don't pay.</p>
+    <p class="cta-sub">$597 a month. 1,000 cold emails a day, fully managed.</p>
   </div>
 <script>
   var $ = function (id) { return document.getElementById(id); };
-  function fmt(n) { return '$' + Math.round(n).toLocaleString('en-US'); }
+  var VOLUMES = [1000, 2000, 3000, 5000, 10000];
+  var PRICES  = [597, 1194, 1791, 2985, 5970];
+  var SENDING_DAYS = 22;
+  function num(n) { return Math.round(n).toLocaleString('en-US'); }
+  function money(n) { return '$' + num(n); }
   function calc() {
-    var book = +$('book').value, close = +$('close').value, ltv = +$('ltv').value;
+    var i = +$('vol').value;
+    var volume = VOLUMES[i], price = PRICES[i];
+    var reply = +$('reply').value / 10;
+    var pos = +$('pos').value, book = +$('book').value;
+    var close = +$('close').value, ltv = +$('ltv').value;
+
+    $('volLab').textContent = num(volume) + '/day';
+    $('volV').textContent = num(volume);
+    $('priceV').innerHTML = money(price) + '<span>/month</span>';
+    $('replyV').textContent = reply.toFixed(1) + '%';
+    $('posV').textContent = pos + '%';
     $('bookV').textContent = book + '%';
     $('closeV').textContent = close + '%';
-    $('ltvV').textContent = fmt(ltv);
-    var meetings = Math.floor(30 * book / 100);
-    var deals = Math.floor(meetings * close / 100);
-    $('meetings').textContent = meetings;
-    $('deals').textContent = deals;
-    $('rev').textContent = fmt(deals * ltv);
+    $('ltvV').textContent = money(ltv);
+
+    var sent = volume * SENDING_DAYS;
+    var replies = sent * reply / 100;
+    var positives = replies * pos / 100;
+    var meetings = positives * book / 100;
+    var deals = meetings * close / 100;
+
+    $('sent').textContent = num(sent);
+    $('replies').textContent = num(replies);
+    $('positives').textContent = num(positives);
+    $('meetings').textContent = num(meetings);
+    $('deals').textContent = num(Math.floor(deals));
+    $('cost').textContent = money(price);
+    $('rev').textContent = money(Math.floor(deals) * ltv);
   }
-  ['book', 'close', 'ltv'].forEach(function (id) { $(id).addEventListener('input', calc); });
+  ['vol', 'reply', 'pos', 'book', 'close', 'ltv'].forEach(function (id) {
+    $(id).addEventListener('input', calc);
+  });
   calc();
 </script>
 </body>
