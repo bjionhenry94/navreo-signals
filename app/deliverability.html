@@ -114,6 +114,23 @@
 .ah .c32{grid-template-columns:3fr 2fr}
 .ah .acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
 .ah .card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+
+/* ── bounce card ── red/amber/green here mean one thing only: where you sit
+   against the 2% limit. At or over it is red — the older <2 green / <3 amber
+   banding painted six days over the limit the colour of caution. */
+.ah .bounce .bnc-hero{font-family:var(--font-display);font-size:42px;line-height:1.05;letter-spacing:-0.03em}
+.ah .bounce .bnc-chart{position:relative;height:52px;margin-top:2px}
+.ah .bounce .bnc-chart svg{display:block;width:100%;height:100%}
+.ah .bounce .bnc-limlab{position:absolute;left:0;font-size:10px;color:var(--ink-3);
+                        background:var(--card);padding-right:4px;transform:translateY(-50%)}
+.ah .bounce .bnc-rows{display:flex;flex-direction:column}
+.ah .bounce .bnc-row{display:grid;grid-template-columns:1fr auto 52px;gap:10px;align-items:baseline;
+                     padding:7px 0;border-top:1px solid var(--line)}
+.ah .bounce .bnc-name{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ah .bounce .bnc-small{font-size:10.5px;color:var(--brown-400);font-weight:400}
+.ah .bounce .bnc-came{font-size:11.5px;color:var(--ink-3)}
+.ah .bounce .bnc-pct{font-size:14px;font-weight:600;text-align:right}
+.ah .bounce .bnc-g{color:var(--green)} .ah .bounce .bnc-a{color:var(--amber)} .ah .bounce .bnc-r{color:var(--red)}
 .ah .bignum{font-size:34px;font-weight:600;line-height:1;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
 .ah .bignum.warn{color:var(--amber)}
 .ah .bignum small{font-size:15px;font-weight:500;letter-spacing:0;color:var(--ink-3)}
@@ -390,6 +407,35 @@
           <div class="take"><span class="arr">→</span><span id="week-take">&nbsp;</span></div>
         </div>
 
+        <!-- Bounce rate — today's number, the trend against the 2% limit, and
+             who the returned mail is coming from. Fleet-wide trend (bounce_pct
+             is fleet-only in the data layer); the list narrows with the client
+             chips. -->
+        <div class="acard bounce">
+          <div class="card-head">
+            <div class="card-kick">Emails that came back</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="bounce">
+              <button data-range="7" aria-pressed="false">7d</button>
+              <button data-range="14" aria-pressed="false">14d</button>
+              <button class="on" data-range="30" aria-pressed="true">30d</button>
+            </div>
+          </div>
+
+          <div class="bnc-hero num" id="bnc-big">–</div>
+
+          <div class="bnc-chart">
+            <svg id="bnc-svg" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <span class="bnc-limlab" id="bnc-limlab">2% limit</span>
+          </div>
+
+          <div>
+            <div class="card-kick" style="margin-bottom:2px" id="bnc-kick">Where it comes from</div>
+            <div class="bnc-rows num" id="bnc-rows"></div>
+          </div>
+
+          <div class="take"><span class="arr">→</span><span id="bnc-take">&nbsp;</span></div>
+        </div>
+
       </div>
 
       <!-- The deliverability engine mounts here — Today's to-do first, then the
@@ -527,7 +573,7 @@ var HUBCACHE = {};           // days -> analytics-hub payload (weekday presets)
 // Sent and Bounces default OFF: their scale flattens Replies/Interested/
 // Meetings (the lines a founder reads); the landing card owns the bounce
 // story and both stay one chip-tap away.
-var state = { client: "All", trend: 30, week: 30,
+var state = { client: "All", trend: 30, week: 30, bounce: 30,
               on: { sent: false, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 
 function ckey() { return state.client === "All" ? "__all" : state.client; }
@@ -1186,6 +1232,168 @@ function renderHead() {
 }
 
 /* ── render-all + wiring ── */
+/* ── bounce card ────────────────────────────────────────────────────────
+   Today's number is the hero: the window average can sit under 2% while every
+   recent day is over it, and providers throttle on today, not on the month.
+   Trend is fleet-wide (bounce_pct has no per-client split in the data layer);
+   the list below follows the client chips.
+   NOTE: campaign bounced/sent from the scorecard is LIFETIME cumulative —
+   there is no per-campaign daily series — so the list does not move with the
+   7/14/30 toggle. See prototypes/bounce-rate-BACKEND-SPEC.md.                */
+var BNC_LIMIT = 2.0;
+var BNC_MIN_SENT = 500;   // below this a list is flagged as a small sample
+
+function bncBand(p) {
+  if (p == null) return "g";
+  return p >= BNC_LIMIT ? "r" : (p >= BNC_LIMIT * 0.75 ? "a" : "g");
+}
+function bncCol(b) {
+  return b === "r" ? "var(--red)" : (b === "a" ? "var(--amber)" : "var(--green)");
+}
+
+// Rows for the card: clients when viewing everything, campaigns when a single
+// client is selected.
+//
+// ACTIVE only. The scorecard holds all 583 campaigns ever run, and the worst
+// lifetime rates belong to campaigns that finished months ago — telling someone
+// to pause a finished campaign is not an instruction they can follow.
+//
+// A list needs BNC_MIN_SENT before it may set a rate. Small lists are still
+// included and flagged, but never headline: 12 bounces on a 43-send INSEAD test
+// is 27.9% of nothing, and it outranks a real 13.5% fire on 1,538 sends.
+function bncCampaigns() {
+  var out = [];
+  if (!SCORE || !SCORE.campaigns) return out;
+  Object.keys(SCORE.campaigns).forEach(function (id) {
+    var c = SCORE.campaigns[id];
+    if (String(c.status || "").toUpperCase() !== "ACTIVE") return;
+    var sent = +c.sent || 0, bounced = +c.bounced || 0;
+    if (!sent) return;
+    var cl = campClient(id, c);
+    if (state.client !== "All" && cl !== state.client) return;
+    out.push({ id: id, client: cl, name: c.name || ("Campaign " + id),
+               sent: sent, bounced: bounced, pct: bounced / sent * 100,
+               small: sent < BNC_MIN_SENT });
+  });
+  return out;
+}
+
+// worst list that carries enough volume to mean anything; falls back to a small
+// one only when that is all a client has, and says so
+function bncWorst(bad) {
+  var solid = bad.filter(function (c) { return !c.small; })
+                 .sort(function (a, b) { return b.pct - a.pct; });
+  if (solid.length) return solid[0];
+  return bad.slice().sort(function (a, b) { return b.pct - a.pct; })[0];
+}
+
+function bncRows() {
+  var camps = bncCampaigns();
+  var bad = camps.filter(function (c) { return c.pct >= BNC_LIMIT; });
+
+  if (state.client !== "All") {
+    return bad.filter(function (c) { return !c.small; })
+              .sort(function (a, b) { return b.bounced - a.bounced; })
+              .map(function (c) {
+                return { label: shortName(c.name), bounced: c.bounced,
+                         pct: c.pct, small: false, names: [c.name] };
+              });
+  }
+
+  var g = {};
+  camps.forEach(function (c) {
+    g[c.client] = g[c.client] || { label: c.client, bounced: 0, bad: [] };
+    if (c.pct >= BNC_LIMIT) { g[c.client].bad.push(c); g[c.client].bounced += c.bounced; }
+  });
+  return Object.keys(g).map(function (k) { return g[k]; })
+    .filter(function (r) { return r.bad.length; })
+    .map(function (r) {
+      var worst = bncWorst(r.bad);
+      r.pct = worst.pct; r.small = !!worst.small;
+      // name the lists worth naming — biggest contributors first
+      var named = r.bad.filter(function (c) { return !c.small; });
+      if (!named.length) named = r.bad;
+      r.names = named.sort(function (a, b) { return b.bounced - a.bounced; })
+                     .map(function (c) { return c.name; });
+      return r;
+    })
+    .sort(function (a, b) { return b.bounced - a.bounced; });
+}
+
+function renderBounce() {
+  var s = TRENDS && TRENDS.series;
+  var big = $("bnc-big");
+  if (!s || !s.days || !s.days.length) {
+    big.textContent = "–"; big.className = "bnc-hero num";
+    $("bnc-rows").innerHTML = '<div class="subline" style="padding-top:8px">Waiting on live data.</div>';
+    $("bnc-take").textContent = "";
+    return;
+  }
+  var n = state.bounce, days = s.days.slice(-n), bp = (s.bounce_pct || []).slice(-n);
+
+  var today = null;
+  for (var i = bp.length - 1; i >= 0; i--) if (bp[i] != null) { today = bp[i]; break; }
+  var b = bncBand(today);
+  big.textContent = today == null ? "–" : today.toFixed(2) + "%";
+  big.className = "bnc-hero num bnc-" + b;
+
+  // sparkline: only the trailing run at/over the limit is coloured, so weeks
+  // that were genuinely fine are not retro-painted by today
+  var pts = [];
+  for (var k = 0; k < bp.length; k++) if (bp[k] != null) pts.push(k);
+  var svg = $("bnc-svg");
+  if (pts.length < 2) { svg.innerHTML = ""; $("bnc-limlab").style.display = "none"; }
+  else {
+    $("bnc-limlab").style.display = "";
+    var vals = pts.map(function (i2) { return bp[i2]; });
+    var lo = Math.min(Math.min.apply(null, vals), BNC_LIMIT);
+    var hi = Math.max(Math.max.apply(null, vals), BNC_LIMIT);
+    var pad = Math.max((hi - lo) * 0.20, 0.10);
+    lo = Math.max(0, lo - pad); hi = hi + pad;
+    var den = (days.length - 1) || 1;
+    var X = function (i2) { return i2 / den * 100; };
+    var Y = function (v) { return 100 - (v - lo) / (hi - lo) * 100; };
+    var path = function (arr) {
+      return arr.map(function (i2, j2) {
+        return (j2 ? "L" : "M") + X(i2).toFixed(2) + " " + Y(bp[i2]).toFixed(2);
+      }).join(" ");
+    };
+    var cut = pts.length;
+    while (cut > 0 && bp[pts[cut - 1]] >= BNC_LIMIT) cut--;
+    var over = pts.slice(Math.max(0, cut - 1));
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.innerHTML =
+      '<line x1="0" y1="' + Y(BNC_LIMIT).toFixed(2) + '" x2="100" y2="' + Y(BNC_LIMIT).toFixed(2) +
+        '" stroke="var(--brown-300)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>' +
+      '<path d="' + path(pts) + '" fill="none" stroke="var(--brown-400)" stroke-width="1.75" ' +
+        'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>' +
+      (cut < pts.length
+        ? '<path d="' + path(over) + '" fill="none" stroke="' + bncCol(b) + '" stroke-width="2.25" ' +
+          'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
+        : "");
+    $("bnc-limlab").style.top = Y(BNC_LIMIT).toFixed(1) + "%";
+  }
+
+  var rows = bncRows();
+  $("bnc-kick").textContent = state.client === "All" ? "Where it comes from" : "Which lists";
+  $("bnc-rows").innerHTML = rows.length
+    ? rows.slice(0, 3).map(function (r) {
+        return '<div class="bnc-row">' +
+          '<span class="bnc-name">' + r.label +
+            (r.small ? ' <span class="bnc-small">small list — treat as a hint</span>' : '') + '</span>' +
+          '<span class="bnc-came">' + r.bounced.toLocaleString("en-US") + ' came back</span>' +
+          '<span class="bnc-pct bnc-' + bncBand(r.pct) + '">' + r.pct.toFixed(1) + '%</span>' +
+        '</div>';
+      }).join("")
+    : '<div class="subline" style="padding-top:8px">Every list is under 2%.</div>';
+
+  $("bnc-take").textContent = rows.length
+    ? (state.client === "All" ? "Call " + rows[0].label + " — pause " : "Pause ") +
+      rows[0].names.slice(0, 2).map(shortName).join(" and ") +
+      ", get those addresses re-checked, then switch them back on."
+    : "Nothing over 2% — keep sending.";
+}
+
 function renderAll() {
   renderChips();
   renderHead();
@@ -1195,6 +1403,7 @@ function renderAll() {
   renderSignals();
   renderNC();
   renderWeek();
+  renderBounce();
   renderRank();
   renderOpeners();
   renderWho();
@@ -1222,6 +1431,7 @@ document.querySelectorAll(".ah .seg").forEach(function (seg) {
     var n = parseInt(b.getAttribute("data-range"), 10);
     var kind = seg.getAttribute("data-seg");
     if (kind === "trend") { state.trend = n; renderTrend(); }
+    else if (kind === "bounce") { state.bounce = n; renderBounce(); }
     else if (kind === "week") {
       state.week = n;
       if (HUBCACHE[n]) renderWeek();
