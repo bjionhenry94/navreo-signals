@@ -395,6 +395,7 @@
     justify-content: space-between;
     gap: 16px;
     flex-wrap: wrap;
+    position: relative; /* anchors the Filters popover */
   }
   .filter-chips {
     display: flex;
@@ -520,6 +521,45 @@
   }
   .status-select:hover { border-color: var(--nav-ink-3); }
   .status-select:disabled { opacity: 0.45; cursor: default; }
+  /* F5 bar: "Sort by:" pill (prefix quiet, value bold) + Filters disclosure */
+  .sortby-pill {
+    display: inline-flex; align-items: center;
+    padding-left: 14px; border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong); background: var(--bg-elevated);
+    font-size: 0.84rem; cursor: pointer;
+  }
+  .sortby-pill:hover { border-color: var(--nav-ink-3); }
+  .sortby-pre { color: var(--fg-subtle); font-weight: 500; white-space: nowrap; }
+  .sortby-select {
+    border: none; background-color: transparent; font-family: inherit;
+    font-size: 0.84rem; font-weight: 700; color: var(--fg);
+    padding: 9px 28px 9px 6px; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6055' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center;
+  }
+  .sortby-select:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--r-pill); }
+  .filters-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 16px; border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong); background: var(--bg-elevated);
+    color: var(--fg-muted); font-size: 0.84rem; font-weight: 600;
+    font-family: inherit; cursor: pointer;
+  }
+  .filters-btn:hover, .filters-btn[aria-expanded="true"] { border-color: var(--nav-ink-3); }
+  .filters-btn svg { width: 14px; height: 14px; color: var(--fg-subtle); }
+  .filters-tag { background: var(--sunken); border-radius: 999px; padding: 1px 8px; font-size: 0.74rem; font-weight: 600; color: var(--fg-muted); }
+  .filters-pop {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong);
+    border-radius: var(--r-lg); box-shadow: 0 10px 30px rgba(20,17,14,0.12);
+    padding: 14px 16px; display: flex; gap: 12px;
+  }
+  .filters-pop[hidden] { display: none; }
+  .filters-field .status-picker-label { display: block; margin-bottom: 6px; }
+  @media (max-width: 640px) {
+    .filters-pop { position: static; width: 100%; flex-wrap: wrap; box-shadow: none; }
+  }
   .view-bar { margin-top: 12px; }
   .view-chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .view-note {
@@ -2526,7 +2566,7 @@
      sort collapse into one row. "all" keeps the priority-grouped triage view
      (needs a decision → watch → fine); the rest are flat metric sorts. */
   var PRESETS = {
-    all:       { label: "All Priorities", note: "Everything by priority: needs a decision, then watch, then fine." },
+    all:       { label: "Most urgent", note: "Everything by priority: needs a decision, then watch, then fine." },
     meetings:  { label: "Most meetings",     key: "meetings",  note: "Every campaign, best meeting-getters on top." },
     positives: { label: "Most positives",    key: "positives", note: "Every campaign, most positive replies on top." },
     efficient: { label: "Most efficient",    key: "sendsmtg", asc: true, note: "Fewest emails needed per meeting booked." },
@@ -2591,19 +2631,33 @@
        just under its tabs — owner request. The book rows are still fetched into
        STATE.book (harmless) but no longer rendered here. */
 
-    /* filter bar — search + live status (checked against Smartlead, not the cache) */
+    /* filter bar — one row: search · "Sort by" pill (the old view chips folded
+       into a single dropdown) · Filters button holding Client + Status behind
+       one tap, with a tag on the button so a non-default filter is never
+       invisible (F5 "on demand" treatment, Bjion pick 2026-07-27) */
     h.push('<nav class="filter-bar" aria-label="Filter campaigns">' +
       '<div class="search-wrap"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
       '<input type="search" class="search-input" id="cockpit-search" placeholder="Search a campaign or client&hellip;" aria-label="Search campaigns"></div>' +
       '<span class="filter-bar-spacer"></span>' +
-      '<label class="status-picker"><span class="status-picker-label">Client</span>' +
+      '<label class="sortby-pill"><span class="sortby-pre">Sort by:</span>' +
+      '<select class="sortby-select" id="view-select" aria-label="Sort campaigns">' +
+      PRESET_ORDER.map(function (k) {
+        var p = PRESETS[k];
+        return '<option value="' + k + '"' + (STATE.view.preset === k ? " selected" : "") + ">" + esc(p.label) + "</option>";
+      }).join("") +
+      '</select></label>' +
+      '<button type="button" class="filters-btn" id="filters-btn" aria-expanded="false" aria-controls="filters-pop">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="17" x2="14" y2="17"/></svg>' +
+      'Filters<span class="filters-tag" id="filters-tag" hidden></span></button>' +
+      '<div class="filters-pop" id="filters-pop" hidden>' +
+      '<div class="filters-field"><span class="status-picker-label">Client</span>' +
       '<select class="status-select" id="client-select" aria-label="Filter by client">' +
       '<option value="all">All clients</option>' +
       clientList.map(function (cl) {
         return '<option value="' + esc(cl) + '"' + (STATE.view.client === cl ? " selected" : "") + ">" + esc(cl) + "</option>";
       }).join("") +
-      '</select></label>' +
-      '<label class="status-picker"><span class="status-picker-label">Status</span>' +
+      '</select></div>' +
+      '<div class="filters-field"><span class="status-picker-label">Status</span>' +
       '<select class="status-select" id="status-select" aria-label="Filter by live campaign status">' +
       /* bound to STATE.view.status so the opening pick (active) shows selected */
       [["all", "All statuses"], ["active", "Active"], ["paused", "Paused"],
@@ -2612,18 +2666,7 @@
           return '<option value="' + o[0] + '"' +
             (STATE.view.status === o[0] ? " selected" : "") + ">" + o[1] + "</option>";
         }).join("") +
-      '</select></label></nav>');
-
-    /* view bar — ready-made views: each one filters AND sorts in one tap */
-    h.push('<div class="live-bar view-bar" id="live-bar">' +
-      '<div class="view-chips" id="view-chips" role="group" aria-label="Choose a view">' +
-      PRESET_ORDER.map(function (k) {
-        var p = PRESETS[k];
-        var on = k === "all";
-        return '<button type="button" class="filter-chip view-chip' + (on ? " is-active" : "") +
-          '" data-preset="' + k + '" aria-pressed="' + on + '" title="' + esc(p.note) + '">' + esc(p.label) + "</button>";
-      }).join("") +
-      "</div></div>");
+      '</select></div></div></nav>');
 
     /* the visible "N campaigns shown" caption is gone (owner ruling: clutter);
        the sr-only live region below still announces the count for screen readers */
@@ -4484,29 +4527,54 @@
   function attachListHandlers() {
     var root = document.getElementById("list-root");
     var viewNote = document.getElementById("view-note");
-    /* ready-made views — each chip filters + sorts in one tap */
-    root.querySelectorAll(".view-chip").forEach(function (b) {
-      b.addEventListener("click", function () {
-        root.querySelectorAll(".view-chip").forEach(function (x) { x.classList.remove("is-active"); x.setAttribute("aria-pressed", "false"); });
-        b.classList.add("is-active"); b.setAttribute("aria-pressed", "true");
-        var k = b.getAttribute("data-preset");
-        STATE.view.preset = k;
-        if (viewNote) viewNote.textContent = (PRESETS[k] || {}).note || "";
-        renderRows();
-      });
+    /* "Sort by" dropdown — the old view chips as one select; still filters + sorts in one pick */
+    var viewSel = document.getElementById("view-select");
+    if (viewSel) viewSel.addEventListener("change", function () {
+      STATE.view.preset = viewSel.value;
+      if (viewNote) viewNote.textContent = (PRESETS[viewSel.value] || {}).note || "";
+      renderRows();
     });
+    /* Filters button tag: a non-default Client/Status must stay visible while collapsed */
+    function syncFiltersTag() {
+      var tag = document.getElementById("filters-tag");
+      if (!tag) return;
+      var LBL = { active: "Active", paused: "Paused", completed: "Completed", archived: "Archived", drafted: "Draft" };
+      var parts = [];
+      if (STATE.view.client !== "all") parts.push(STATE.view.client);
+      if (STATE.view.status !== "all") parts.push(LBL[STATE.view.status] || STATE.view.status);
+      tag.textContent = parts.join(" · ");
+      tag.hidden = !parts.length;
+    }
+    /* Filters popover: one tap open, any outside click closes */
+    var filtersBtn = document.getElementById("filters-btn");
+    var filtersPop = document.getElementById("filters-pop");
+    if (filtersBtn && filtersPop) {
+      filtersBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var open = filtersPop.hidden;
+        filtersPop.hidden = !open;
+        filtersBtn.setAttribute("aria-expanded", String(open));
+      });
+      filtersPop.addEventListener("click", function (e) { e.stopPropagation(); });
+      document.addEventListener("click", function () {
+        if (!filtersPop.hidden) { filtersPop.hidden = true; filtersBtn.setAttribute("aria-expanded", "false"); }
+      });
+    }
     /* client dropdown */
     var clientSel = document.getElementById("client-select");
     if (clientSel) clientSel.addEventListener("change", function () {
       STATE.view.client = clientSel.value;
+      syncFiltersTag();
       renderRows();
     });
     /* live status dropdown */
     var statusSel = document.getElementById("status-select");
     if (statusSel) statusSel.addEventListener("change", function () {
       STATE.view.status = statusSel.value;
+      syncFiltersTag();
       renderRows();
     });
+    syncFiltersTag(); /* opening state: status defaults to Active, so the tag shows it */
     /* live refresh */
     var refreshBtn = document.getElementById("live-refresh-btn");
     if (refreshBtn) refreshBtn.addEventListener("click", function () {
@@ -4523,8 +4591,9 @@
       STATE.view.q = ""; STATE.view.tier = "all"; STATE.view.status = "all"; STATE.view.preset = "all"; STATE.view.client = "all";
       var sel = document.getElementById("status-select"); if (sel) sel.value = "all";
       var csel = document.getElementById("client-select"); if (csel) csel.value = "all";
-      root.querySelectorAll(".view-chip").forEach(function (x) { var a = x.getAttribute("data-preset") === "all"; x.classList.toggle("is-active", a); x.setAttribute("aria-pressed", a.toString()); });
+      if (viewSel) viewSel.value = "all";
       if (viewNote) viewNote.textContent = (PRESETS.all || {}).note || "";
+      syncFiltersTag();
       renderRows();
     });
     /* Inline "Review N" optimiser panels. Delegated on the rows container (which
