@@ -10,7 +10,7 @@ function ic8(name, cls = "") {
 const ICONS = {
   campaigns: ic8("send", "lg"),
   lists: ic8("user.svg", "lg"),
-  deliverability: ic8("chart", "lg"),
+  deliverability: ic8("analytics.svg", "lg"),
   setter: ic8("reply", "lg"),
   settings: ic8("settings.svg", "lg"),
 };
