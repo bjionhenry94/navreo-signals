@@ -1913,6 +1913,55 @@ def strategy_map_result(job: str) -> dict:
     return j["result"]
 
 
+# ------------------------------------------------------------------ strategy wizard (live board)
+# The lilly-strategy walkthrough lives at /app/strategy.html and reads its run
+# from these two routes: the chat session POSTs a full run.json, the page polls
+# the GET (Bjion ruling 2026-07-27: the board moved off claude.ai artifacts and
+# onto the tool - you talk in chat, targeting changes show up in the UI).
+# Storage piggybacks the campaign_insights JSON rows (scope='strategy',
+# insight_key='wizard_run') so no new table is needed.
+_STRATEGY_ENGINE_FIELDS = ("vector", "probe", "netting", "pull_spec")
+
+
+def strategy_run_get() -> dict:
+    rows = sb("GET", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_run"
+                     "&status=eq.live&select=payload,generated_at"
+                     "&order=generated_at.desc&limit=1") or []
+    if not rows:
+        return {"run": None, "updated": None}
+    run = rows[0].get("payload") or {}
+    # engine-only fields (provider filters, probe provenance) never reach the page
+    for idea in run.get("ideas") or []:
+        for f in _STRATEGY_ENGINE_FIELDS:
+            idea.pop(f, None)
+    return {"run": run, "updated": rows[0].get("generated_at")}
+
+
+def strategy_run_post(p: dict) -> dict:
+    if not isinstance(p, dict) or not isinstance(p.get("ideas"), list) or not p["ideas"]:
+        return {"ok": False, "message": "run needs a non-empty ideas list"}
+    import hashlib
+    now = _dtmod.datetime.utcnow().isoformat() + "Z"
+    fp = hashlib.sha256(json.dumps(p, sort_keys=True, default=str).encode()).hexdigest()[:32]
+    sb("PATCH", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_run&status=eq.live",
+       {"status": "superseded", "superseded_at": now})
+    ins = sb("POST", "campaign_insights", {
+        "scope": "strategy", "insight_key": "wizard_run", "payload": p,
+        "data_fingerprint": fp,  # NOT NULL on this table
+        # the table defaults expires_at to +7 days for cockpit insights; the
+        # strategy board must not silently die in a week
+        "expires_at": "2036-01-01T00:00:00Z",
+        "generated_by": str(p.get("generated_by") or "chat"), "status": "live"},
+        prefer="return=representation")
+    # http_json returns PostgREST 4xx error BODIES as truthy dicts - only a
+    # representation row with generated_at counts as a successful write
+    row = ins[0] if isinstance(ins, list) and ins else None
+    if not row or not row.get("generated_at"):
+        msg = ins.get("message") if isinstance(ins, dict) else None
+        return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
+    return {"ok": True, "updated": row["generated_at"]}
+
+
 def suggest_location(p: dict) -> dict:
     """Free Prospeo location autocomplete — normalizes free-typed geos."""
     q = (p.get("q") or "").strip()
@@ -15080,6 +15129,8 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(strategy_map_result((q.get("job") or [""])[0]))
+        if path == "/api/strategy/run":  # live wizard board (strategy.html polls this)
+            return self._json(strategy_run_get())
         if path == "/api/engagement-verdicts":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -15557,6 +15608,15 @@ class Handler(SimpleHTTPRequestHandler):
             return self._qa_gate_post(path)
         if path not in _AUTH_PUBLIC_POST and not self._gate(path):
             return
+        if path == "/api/strategy/run":
+            # chat pushes a full lilly-strategy run.json; the wizard page's
+            # poll picks it up within ~5s (see strategy_run_post above)
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            out = strategy_run_post(p)
+            return self._json(out, 200 if out.get("ok") else 400)
         if path == "/api/cockpit/assignments":
             # Team-shared "Assign to me" / Completed / Dismissed on a cockpit
             # suggested action. Body: {action_key, campaign_id, insight_key,
