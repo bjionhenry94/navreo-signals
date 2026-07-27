@@ -378,25 +378,6 @@
 
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">Where your emails end up</div>
-            <div class="seg" role="group" aria-label="Date range" data-seg="landing">
-              <button class="on" data-range="1" aria-pressed="true">24h</button>
-              <button data-range="7" aria-pressed="false">7d</button>
-              <button data-range="30" aria-pressed="false">30d</button>
-            </div>
-          </div>
-          <div class="bignum num" id="land-big">–</div>
-          <div>
-            <div class="split"><div class="g" id="land-g" style="flex:97"></div><div class="r" id="land-r" style="flex:3"></div></div>
-            <div class="splitlbl num"><span><b id="land-lg">–</b> in the inbox</span><span id="land-lr">–</span></div>
-          </div>
-          <div class="subline num" id="land-sent">&nbsp;</div>
-          <div class="subline num" id="land-inbox">&nbsp;</div>
-          <div class="take"><span class="arr">→</span><span id="land-take">&nbsp;</span></div>
-        </div>
-
-        <div class="acard">
-          <div class="card-head">
             <div class="card-kick">Replies by the day we sent</div>
             <div class="seg" role="group" aria-label="Date range" data-seg="week">
               <button data-range="7" aria-pressed="false">7d</button>
@@ -546,7 +527,7 @@ var HUBCACHE = {};           // days -> analytics-hub payload (weekday presets)
 // Sent and Bounces default OFF: their scale flattens Replies/Interested/
 // Meetings (the lines a founder reads); the landing card owns the bounce
 // story and both stay one chip-tap away.
-var state = { client: "All", trend: 30, landing: 1, week: 30,
+var state = { client: "All", trend: 30, week: 30,
               on: { sent: false, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 
 function ckey() { return state.client === "All" ? "__all" : state.client; }
@@ -1046,26 +1027,6 @@ function landStats(daysBack) {
   var pct = Math.max(0, Math.min(100, Math.round(100 - bounced / sent * 100)));
   return { pct: pct, sent: sent, lastDay: d[idxs[0]] };
 }
-function renderLanding() {
-  var st = landStats(state.landing);
-  if (!st) {
-    $("land-big").textContent = "–"; $("land-sent").textContent = "No sends in this window."; return;
-  }
-  $("land-big").innerHTML = st.pct + "<small> of 100 land</small>";
-  $("land-g").style.flex = String(st.pct);
-  $("land-r").style.flex = String(Math.max(1, 100 - st.pct));
-  $("land-lg").textContent = st.pct + " land";
-  $("land-lr").textContent = (100 - st.pct) + " bounce or vanish";
-  $("land-sent").textContent = fmtN(st.sent) + " sent " + (state.landing === 1 ? "on " + dlabel(st.lastDay) + " (latest sending day)" : "in the last " + state.landing + " days");
-  var blob = AUDIT && AUDIT.blob;
-  if (blob && blob.inboxes) {
-    var bad = (blob.smtp || 0) + (blob.imap || 0) + (blob.blockedReal || 0);
-    var resting = blob.warmupResting || (blob.domainHealth && blob.domainHealth.resting && Object.keys(blob.domainHealth.resting).length) || 0;
-    $("land-inbox").textContent = fmtN(Math.max(0, blob.inboxes - bad)) + " of " + fmtN(blob.inboxes) + " inboxes healthy · " +
-      fmtN(resting) + " domain" + (resting === 1 ? "" : "s") + " resting";
-  } else $("land-inbox").textContent = "";
-  $("land-take").textContent = st.pct >= 95 ? "Healthy — keep the to-do list below at zero." : "Bounces are eating sends — work the to-do list below.";
-}
 function renderWeek() {
   var payload = HUBCACHE[state.week] || HUB;
   var wk = payload && payload.weekday && payload.weekday[ckey()];
@@ -1233,7 +1194,6 @@ function renderAll() {
   renderRunway(v);
   renderSignals();
   renderNC();
-  renderLanding();
   renderWeek();
   renderRank();
   renderOpeners();
@@ -1262,7 +1222,6 @@ document.querySelectorAll(".ah .seg").forEach(function (seg) {
     var n = parseInt(b.getAttribute("data-range"), 10);
     var kind = seg.getAttribute("data-seg");
     if (kind === "trend") { state.trend = n; renderTrend(); }
-    else if (kind === "landing") { state.landing = n; renderLanding(); }
     else if (kind === "week") {
       state.week = n;
       if (HUBCACHE[n]) renderWeek();

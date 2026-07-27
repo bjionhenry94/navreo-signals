@@ -4874,12 +4874,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (window.DLV_EMBED) {
       // Analytics-hub embed: the hub's lanes already answer verdict / KPIs /
       // signals / book — only the working sections paint here, to-do first.
-      // The manager is the operator's toolbox, so it folds shut by default
-      // (panel 2026-07-27: "a plumbing manual in the middle of my sales
-      // page") — the table inside is verbatim production markup, untouched.
+      // The Inbox & domain manager is returned to the "Are your emails landing?"
+      // lane OPEN by default (owner request 2026-07-27: an earlier same-day
+      // panel folded it shut and Bjion read that as "removed" — he wants it
+      // visible here). Still a <details> so it can be collapsed; the table
+      // inside is verbatim production markup, untouched.
       return [
         `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
-        `<details class="dlv-fold" id="dlv-fold-manager-embed"><summary>Inbox &amp; domain manager — warm up · restore · reconnect</summary><div class="dlv-fold-body">${renderManagerPanel(D)}</div></details>`,
+        `<details class="dlv-fold" id="dlv-fold-manager-embed" open><summary>Inbox &amp; domain manager — warm up · restore · reconnect</summary><div class="dlv-fold-body">${renderManagerPanel(D)}</div></details>`,
         renderHistoryFold(D),
         renderFleetDetailsFold(D),
       ].join("");
