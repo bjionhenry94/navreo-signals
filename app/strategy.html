@@ -3907,6 +3907,14 @@ renderAll();
 })();
 </script>
 
+<!-- ============================================================== -->
+<!-- LAUNCH-LAB WINNER MERGE (L3 "Launch runway") - Bjion pick 2026-07-27.
+     Shared layer: session-fresh shelf, chip targeting editor (remove/add/
+     generate, live recount, who-group counts), sendable-only variantsFor,
+     Back on every screen, runBuild revisit skip. L3 layer: per-card
+     Who-Words-Opener-Go runway with tap-to-jump, minimal preview.
+     Overrides are assignment-form on purpose; base renderers are captured
+     in LAB.base first. Backup: wizard-template.pre-l3-merge.bak -->
 <style id="lab-style">
 .lab-back{position:sticky;top:0;z-index:5;align-self:flex-start;margin:0 0 10px;border:1px solid var(--line-2);
   background:var(--raised);color:var(--ink-2);border-radius:999px;padding:5px 14px 5px 10px;font:inherit;
@@ -3940,10 +3948,16 @@ renderAll();
 .l1-fact.open{-webkit-line-clamp:unset}
 .l1-fact b{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-right:6px}
 
-#live-boot{position:fixed;inset:0;z-index:2000;background:var(--cream);display:flex;
-  align-items:center;justify-content:center;text-align:center;padding:24px}
-#live-boot p{max-width:420px;font-size:15px;line-height:1.6;color:var(--ink-2);margin:0}
-#live-boot.gone{display:none}
+.idea-mini .im-bar-track{display:none}
+.runway{display:flex;gap:4px;margin:8px 0 2px;align-items:center}
+.rw-stop{flex:1;display:flex;flex-direction:column;gap:3px;align-items:center;border:none;background:none;
+  cursor:pointer;padding:2px 0;font:inherit}
+.rw-stop[disabled]{cursor:default;opacity:.35}
+.rw-seg{width:100%;height:4px;border-radius:2px;background:var(--sunken);border:1px solid var(--card-line)}
+.rw-stop.done .rw-seg{background:var(--ink);border-color:var(--ink)}
+.rw-stop.now .rw-seg{background:var(--orange);border-color:var(--orange)}
+.rw-lbl{font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.rw-stop.done .rw-lbl,.rw-stop.now .rw-lbl{color:var(--ink-2)}
 </style>
 <script>
 // capture base renderers before any lab override (assignment-form overrides follow)
@@ -4170,6 +4184,11 @@ runBuild = function(idea, s, phaseKey){
 
 // ---- shared renderTargeting: the chip editor IS the who-gate --------------
 renderTargeting = function(idea, s){
+  // ideas with no targeting data (other clients' runs, older boards) keep the
+  // base free-text who-gate instead of an empty chip editor
+  if (!(idea.targeting && idea.targeting.roles && idea.targeting.roles.length) && !LAB.data[idea.id]) {
+    return LAB.base.renderTargeting(idea, s);
+  }
   const el = document.createElement("div");
   LAB.ensureChips(idea, s);
   el.innerHTML = `
@@ -4255,6 +4274,46 @@ IDEAS.forEach(i => { LAB.origSplit[i.id] = [i.freeFromRecords || 0, i.newPeople 
 renderAll();
 
 </script>
+<script>
+LAB.sharedList = renderList;
+LAB.aCount = function(idea){ return stagesFor(idea).filter(st=>st.phase==="A").length; };
+renderIntro = LAB.minimalIntro;
+renderList = function(){
+  LAB.sharedList();
+  const cards = Array.from(listEl.querySelectorAll(".idea-mini")).filter(c=>!c.classList.contains("validation-mini"));
+  cards.forEach((card, ix) => {
+    const idea = IDEAS[ix]; if (!idea) return;
+    const s = cardState[idea.id];
+    const done = { who: s.phase>=3, words: s.phase>=5 || (s.phase===4 && s.copyPackPage===2), opener: s.phase>=5, go: s.phase===7 };
+    const now = s.phase===2?"who" : (s.phase===4&&s.copyPackPage!==2)?"words" : s.phase===4?"opener" : s.phase===6?"go" : null;
+    const can = { who: true, words: s.stagesDone>=LAB.aCount(idea), opener: s.stagesDone>=LAB.aCount(idea), go: s.phase>=6 };
+    const strip = document.createElement("div");
+    strip.className = "runway";
+    strip.innerHTML = [["who","Who"],["words","Words"],["opener","Opener"],["go","Go"]].map(x=>
+      `<button type="button" class="rw-stop${done[x[0]]?" done":""}${now===x[0]?" now":""}" data-stop="${x[0]}"
+        ${can[x[0]]?"":"disabled"} aria-label="${x[1]}"><span class="rw-seg"></span><span class="rw-lbl">${x[1]}</span></button>`).join("");
+    strip.querySelectorAll(".rw-stop:not([disabled])").forEach(b=>b.addEventListener("click",(e)=>{
+      e.stopPropagation();
+      activeId = idea.id;
+      const st = b.dataset.stop;
+      if (st==="who") s.phase = 2;
+      else if (st==="words"){ s.phase = 4; s.copyPackPage = 1; }
+      else if (st==="opener"){ s.phase = 4; s.copyPackPage = 2; }
+      else if (st==="go") s.phase = s.phase===7 ? 7 : 6;
+      renderAll();
+    }));
+    card.appendChild(strip);
+  });
+};
+renderAll();
+</script>
+
+<style id="live-style">
+#live-boot{position:fixed;inset:0;z-index:2000;background:var(--cream);display:flex;
+  align-items:center;justify-content:center;text-align:center;padding:24px}
+#live-boot p{max-width:420px;font-size:15px;line-height:1.6;color:var(--ink-2);margin:0}
+#live-boot.gone{display:none}
+</style>
 <script>
 // ---- LIVE module: the board is server-fed and chat-driven ------------------
 // Chat POSTs a run to /api/strategy/run; this page polls the GET every 5s and
