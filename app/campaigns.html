@@ -2197,6 +2197,21 @@
   </div>
 
   <div id="view-list">
+    <!-- The four fleet graphs live in the static HTML (they used to be built
+         inside renderList, so they could not paint until insights + scorecard
+         had both landed AND 114 rows had rendered). Now they paint on the
+         first frame from the localStorage replay and repaint when the live
+         read lands. -->
+    <div class="perfx-card" id="perfx-card" hidden>
+      <div class="perfx-head"><span class="perfx-title">Performance, whole fleet</span>
+        <div class="live-meta live-meta--perf" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>
+          <button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>
+        <div class="perfx-toggle" role="group" aria-label="Window">
+          <button type="button" data-days="7">7d</button>
+          <button type="button" data-days="14">14d</button>
+          <button type="button" data-days="30" class="is-active">30d</button></div></div>
+      <div class="perfx-grid" id="perfx-grid"></div>
+    </div>
     <div class="lw-loading" id="list-loading">Loading the book from the live cache&hellip;</div>
     <div id="list-root" hidden></div>
   </div>
@@ -2428,6 +2443,13 @@
   /* ---------- boot ---------- */
   function boot() {
     document.getElementById("lw-error").hidden = true;
+    /* Graphs first, and off the critical path: replay the last good payload so
+       they are on screen immediately, and start their live read NOW rather
+       than after insights + scorecard resolve and the list renders. They do
+       not depend on either, so they never had a reason to queue behind them. */
+    var cached = perfCacheRead();
+    if (cached) paintPerf(cached);
+    loadPerf(0);
     Promise.all([
       getJSON("/api/cockpit/insights"),
       getJSON("/api/campaign-scorecard")
@@ -2449,7 +2471,6 @@
       document.getElementById("list-loading").hidden = true;
       document.getElementById("list-root").hidden = false;
       route();
-      loadPerf(0);
       loadLiveStatus();
     }).catch(function (e) {
       if (String(e.message) === "auth") return;
@@ -2656,16 +2677,8 @@
     var h = [];
     h.push('<h1 class="sr-only">Campaigns</h1>');
 
-    /* perf chart card */
-    h.push('<div class="perfx-card" id="perfx-card" hidden>' +
-      '<div class="perfx-head"><span class="perfx-title">Performance, whole fleet</span>' +
-      '<div class="live-meta live-meta--perf" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>' +
-      '<button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>' +
-      '<div class="perfx-toggle" role="group" aria-label="Window">' +
-      '<button type="button" data-days="7">7d</button>' +
-      '<button type="button" data-days="14">14d</button>' +
-      '<button type="button" data-days="30" class="is-active">30d</button></div></div>' +
-      '<div class="perfx-grid" id="perfx-grid"></div></div>');
+    /* the perf chart card is static markup in #view-list now (it must paint
+       before this list does), so nothing to push here. */
 
     /* "Across the book" moved to the Fleet health audit (deliverability) page,
        just under its tabs — owner request. The book rows are still fetched into
@@ -3137,17 +3150,45 @@
     });
     return any;
   }
+  /* Last good payload, replayed on the next visit so the graphs are on screen
+     in the first frame instead of after two network round trips. The cache is
+     only ever a head start: the live read fires in parallel on every load and
+     overwrites whatever was replayed, so nothing here can go stale on screen
+     for longer than one request. Anything older than PERF_TTL_MS is dropped
+     rather than shown. */
+  var PERF_CACHE_KEY = "navreo.perf.v1";
+  var PERF_TTL_MS = 24 * 3600 * 1000;
+  function perfCacheRead() {
+    try {
+      var o = JSON.parse(localStorage.getItem(PERF_CACHE_KEY) || "null");
+      if (!o || !o.at || (Date.now() - o.at) > PERF_TTL_MS) return null;
+      return perfHasData(o.p) ? o.p : null;
+    } catch (e) { return null; }
+  }
+  function perfCacheWrite(p) {
+    try { localStorage.setItem(PERF_CACHE_KEY, JSON.stringify({ at: Date.now(), p: p })); } catch (e) {}
+  }
+  /* whichever window the user is on, so a repaint never snaps them back to 30d */
+  function perfDays() {
+    var on = document.querySelector(".perfx-toggle button.is-active");
+    return on ? parseInt(on.getAttribute("data-days"), 10) : 30;
+  }
+  function paintPerf(p) {
+    STATE.perf = p;
+    drawPerf(perfDays());
+    attachPerfToggle();
+  }
   function loadPerf(attempt) {
     getJSON("/api/perf-daily?days=30").then(function (p) {
       if (!perfHasData(p)) {
         /* the endpoint returns null series when a read fails: retry once, then
-           keep the card hidden rather than draw an empty (never fake) chart */
+           keep whatever the replay drew rather than blank it (never fake, but
+           never throw away real numbers we already have) */
         if (attempt < 2) setTimeout(function () { loadPerf(attempt + 1); }, 2500);
         return;
       }
-      STATE.perf = p;
-      drawPerf(30);
-      attachPerfToggle();
+      perfCacheWrite(p);
+      paintPerf(p);
     }).catch(function () {
       if (attempt < 2) setTimeout(function () { loadPerf(attempt + 1); }, 2500);
     });
@@ -3156,10 +3197,15 @@
     var card = document.getElementById("perfx-card");
     if (card && perfHasData(STATE.perf)) card.hidden = false;
   }
+  var perfToggleBound = false;
   function attachPerfToggle() {
     var card = document.getElementById("perfx-card");
     if (!card) return;
     applyPerfVisibility();
+    /* the card is static now, so it is painted twice (replay, then live) —
+       bind the window buttons once or every repaint stacks another listener */
+    if (perfToggleBound) return;
+    perfToggleBound = true;
     card.querySelectorAll(".perfx-toggle button").forEach(function (b) {
       b.addEventListener("click", function () {
         card.querySelectorAll(".perfx-toggle button").forEach(function (x) { x.classList.remove("is-active"); });

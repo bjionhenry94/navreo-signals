@@ -14540,12 +14540,19 @@ class Handler(SimpleHTTPRequestHandler):
     # conditional requests fall through to SimpleHTTPRequestHandler untouched.
     _GZIP_EXT = {".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".map", ".txt"}
 
-    # Subresources that are safe to ETag/304 (never HTML — page navigations must
-    # always revalidate the no-cache/must-revalidate way; see end_headers()).
-    # This is JS/CSS/fonts/icons — the "static subresources" step 2 targets.
+    # Everything safe to ETag/304 — JS/CSS/fonts/icons AND html.
     # mtime+size is a cheap, good-enough fingerprint (no need to hash file
     # contents): any real edit changes at least one of the two.
-    _ETAG_EXT = {".js", ".mjs", ".css", ".svg", ".map",
+    # HTML used to be excluded here to guarantee page navigations always
+    # revalidate. It still does: an ETag does not skip revalidation, because
+    # end_headers() keeps sending no-cache/must-revalidate, so the browser asks
+    # the server on EVERY navigation exactly as before. The only thing that
+    # changes is the cost of the answer when nothing moved — a ~150 byte 304
+    # instead of re-sending the whole page (campaigns.html is 110KB gzipped,
+    # and it was being re-downloaded on every single load because there was no
+    # validator to answer with). A deploy changes mtime, which busts the tag.
+    _ETAG_EXT = {".html", ".htm",
+                 ".js", ".mjs", ".css", ".svg", ".map",
                  ".png", ".jpg", ".jpeg", ".gif", ".ico",
                  ".woff", ".woff2", ".ttf", ".eot"}
 
