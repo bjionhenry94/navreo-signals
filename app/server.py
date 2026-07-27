@@ -1928,13 +1928,47 @@ def strategy_run_get() -> dict:
                      "&status=eq.live&select=payload,generated_at"
                      "&order=generated_at.desc&limit=1") or []
     if not rows:
-        return {"run": None, "updated": None}
+        return {"run": None, "updated": None, "focus": None}
     run = rows[0].get("payload") or {}
     # engine-only fields (provider filters, probe provenance) never reach the page
     for idea in run.get("ideas") or []:
         for f in _STRATEGY_ENGINE_FIELDS:
             idea.pop(f, None)
-    return {"run": run, "updated": rows[0].get("generated_at")}
+    # chat-mirror focus (chat-mirror-lab, 2026-07-27): where chat is working
+    # right now, so the page can follow the conversation. One poll carries both.
+    frow = sb("GET", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_focus"
+                     "&status=eq.live&select=payload,generated_at"
+                     "&order=generated_at.desc&limit=1") or []
+    focus = None
+    if frow and isinstance(frow[0].get("payload"), dict):
+        focus = dict(frow[0]["payload"])
+        focus["ts"] = frow[0].get("generated_at")
+    return {"run": run, "updated": rows[0].get("generated_at"), "focus": focus}
+
+
+_STRATEGY_FOCUS_VIEWS = ("board", "targeting", "emails", "opener", "checks", "building", "signoff")
+
+
+def strategy_focus_post(p: dict) -> dict:
+    """Chat's 'I am working HERE' signal - the page follows it (chat-mirror-lab)."""
+    if not isinstance(p, dict) or p.get("view") not in _STRATEGY_FOCUS_VIEWS:
+        return {"ok": False, "message": f"view must be one of {', '.join(_STRATEGY_FOCUS_VIEWS)}"}
+    import hashlib
+    doc = {"ideaId": p.get("ideaId"), "view": p["view"], "note": str(p.get("note") or "")[:120]}
+    now = _dtmod.datetime.utcnow().isoformat() + "Z"
+    fp = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:32]
+    sb("PATCH", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_focus&status=eq.live",
+       {"status": "superseded", "superseded_at": now})
+    ins = sb("POST", "campaign_insights", {
+        "scope": "strategy", "insight_key": "wizard_focus", "payload": doc,
+        "data_fingerprint": fp, "expires_at": "2036-01-01T00:00:00Z",
+        "generated_by": "chat", "status": "live"},
+        prefer="return=representation")
+    row = ins[0] if isinstance(ins, list) and ins else None
+    if not row or not row.get("generated_at"):
+        msg = ins.get("message") if isinstance(ins, dict) else None
+        return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
+    return {"ok": True, "ts": row["generated_at"]}
 
 
 def strategy_run_post(p: dict) -> dict:
@@ -15616,6 +15650,15 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             out = strategy_run_post(p)
+            return self._json(out, 200 if out.get("ok") else 400)
+        if path == "/api/strategy/focus":
+            # chat's follow-me signal: {ideaId, view, note} - the open board
+            # navigates to this surface on its next poll (chat-mirror-lab)
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            out = strategy_focus_post(p)
             return self._json(out, 200 if out.get("ok") else 400)
         if path == "/api/cockpit/assignments":
             # Team-shared "Assign to me" / Completed / Dismissed on a cockpit
