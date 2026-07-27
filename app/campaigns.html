@@ -1982,16 +1982,12 @@
      Replaced the old full-breakdown dump (every finding + 8-col table). */
   .cockpit .why-empty { margin: 8px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
   .cockpit .why-verdict { margin: 10px 0 0; font-size: 0.84rem; font-weight: 700; color: var(--fg); line-height: 1.4; }
-  .cockpit .why-prose { margin: 8px 0 0; font-size: 0.8rem; color: var(--fg-muted); line-height: 1.5; }
-  .cockpit .why-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .cockpit .why-chip {
-    display: inline-flex; align-items: baseline; gap: 5px; padding: 4px 10px;
-    border: 1px solid var(--border); border-radius: var(--r-pill);
-    background: var(--sunken); font-size: 0.74rem; color: var(--fg-subtle); white-space: nowrap;
-  }
-  .cockpit .why-chip b { font-size: 0.82rem; color: var(--fg); font-variant-numeric: tabular-nums; }
-  .cockpit .why-chip--bad b { color: var(--danger); }
-  .cockpit .why-chip--good b { color: var(--ok, #1a7f37); }
+  .cockpit .why-hero { display: flex; align-items: center; gap: 14px; margin: 10px 0 4px; }
+  .cockpit .why-hero-n { font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; color: var(--fg); font-variant-numeric: tabular-nums; }
+  .cockpit .why-hero-n.why-hero--bad { color: var(--danger); }
+  .cockpit .why-hero-n.why-hero--good { color: var(--ok, #1a7f37); }
+  .cockpit .why-hero-cap { font-size: 0.84rem; color: var(--fg-muted); line-height: 1.45; max-width: 430px; }
+  .cockpit .why-move { margin: 10px 0 0; font-size: 0.84rem; font-weight: 700; color: var(--nav-orange-600); }
   .cockpit .why-bars { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
   .cockpit .why-bar-row { display: grid; grid-template-columns: 74px 1fr 92px; gap: 8px; align-items: center; font-size: 0.74rem; }
   .cockpit .why-bar-label { font-weight: 700; color: var(--fg-muted); white-space: nowrap; }
@@ -2974,7 +2970,7 @@
        from the card's OWN payload (p.note + p.stats), so the receipts can
        never argue with the headline. The lazy .why-full fetch only ever adds
        per-variant bars from the optimiser split data. */
-    var noteSents = (p.note || "").match(/[^.!?]+[.!?]?/g) || [];
+    var noteSents = (p.note || "").split(/(?<=[.!?])\s+/).filter(Boolean);
     /* whole sentences only: a takeaway cut mid-clause reads worse than a
        slightly long one. Up to 24 words verbatim; past that, cut at the last
        comma inside the first 15 words, ellipsis as a last resort. */
@@ -2986,36 +2982,45 @@
       var ci = head15.lastIndexOf(",");
       verdictTxt = ci > 20 ? head15.slice(0, ci) : head15 + "\u2026";
     }
-    var noteRest = noteSents.slice(1).join(" ").trim();
-    /* chips carry the numbers THIS kind of call is decided on */
-    var whyChips = [];
-    var chip = function (label, val, cls) { if (val != null && val !== "") whyChips.push('<span class="why-chip' + (cls || "") + '">' + label + " <b>" + val + "</b></span>"); };
+    /* P2 "One big number" (Bjion's pick, 27 Jul 2026): ONE hero number that
+       carries the argument, the author's takeaway as its caption, per-variant
+       proof bars lazy-loaded between, and one orange move line. The hero is
+       DERIVED per card kind so it never just re-prints the headline figure. */
     var whyKind = r.insight_key || "";
-    if (whyKind === "lifecycle") {
-      if (st2.leads != null) chip("Leads", fmtInt(st2.leads));
-      if (st2.sent != null) chip("Sent", fmtInt(st2.sent));
-      if (st2.completion != null) chip("List worked", st2.completion + "%");
-      if (st2.meetings) chip("Meetings", fmtInt(st2.meetings), " why-chip--good");
-    } else if (whyKind === "list-audit") {
-      if (st2.sent != null) chip("Sent", fmtInt(st2.sent));
-      if (st2.reply_rate != null && st2.sent != null) chip("Replies", fmtInt(Math.round(st2.sent * st2.reply_rate / 100)));
-      if (st2.reply_rate != null) chip("Reply rate", st2.reply_rate + "%", st2.reply_rate < 1.5 ? " why-chip--bad" : "");
-      if (st2.pos != null) chip("Positives", fmtInt(st2.pos), st2.pos === 0 ? " why-chip--bad" : "");
-      if (st2.ratio && st2.pos > 0) chip("Sent/pos", fmtInt(Math.round(st2.ratio)), st2.ratio > 1500 ? " why-chip--bad" : " why-chip--good");
-    } else {
-      if (st2.sent != null) chip("Sent", fmtInt(st2.sent));
-      if (st2.pos != null) chip("Positives", fmtInt(st2.pos), st2.pos === 0 ? " why-chip--bad" : "");
-      if (st2.ratio && st2.pos > 0) chip("Sent/pos", fmtInt(Math.round(st2.ratio)), st2.ratio > 1500 ? " why-chip--bad" : " why-chip--good");
-      if (st2.reply_rate != null) chip("Reply rate", st2.reply_rate + "%");
-      if (st2.meetings) chip("Meetings", fmtInt(st2.meetings), " why-chip--good");
+    var hero = null, heroCls = "", heroUnit = "";
+    if (whyKind === "lifecycle" && st2.completion != null) {
+      hero = Math.round(st2.completion) + "%";
+      heroCls = st2.completion >= 90 ? " why-hero--bad" : " why-hero--good";
+      heroUnit = "of the list is sent.";
+    } else if (whyKind === "list-audit" && st2.reply_rate != null) {
+      hero = st2.reply_rate + "%";
+      heroCls = st2.reply_rate < 1.5 ? " why-hero--bad" : " why-hero--good";
+      heroUnit = "of people reply. Healthy is 1.5% or more.";
+    } else if (st2.pos === 0 && st2.sent) {
+      hero = "0"; heroCls = " why-hero--bad";
+      heroUnit = "said yes, from " + fmtInt(st2.sent) + " emails.";
+    } else if (/([\d,]+)\s+sends and (no|zero) positives/i.test((p.act || "") + " " + (p.bold || ""))) {
+      /* a kill call about one piece: hero is THAT piece's zero, not the
+         campaign ratio (a green campaign number under a scrap call reads
+         as the receipts arguing with the headline) */
+      var zm = ((p.act || "") + " " + (p.bold || "")).match(/([\d,]+)\s+sends and (?:no|zero) positives/i);
+      hero = "0"; heroCls = " why-hero--bad";
+      heroUnit = "said yes, from its " + zm[1] + " sends.";
+    } else if (st2.ratio && st2.pos > 0) {
+      hero = fmtInt(Math.round(st2.ratio));
+      heroCls = st2.ratio > 1500 ? " why-hero--bad" : " why-hero--good";
+      heroUnit = "emails for each yes. Healthy is under 1,500.";
     }
-    var whyProse = noteRest ? esc(noteRest)
-      : (st2.sent != null ? fmtInt(st2.sent) + " emails sent" + (st2.leads ? " to " + fmtInt(st2.leads) + " leads" : "") + (st2.completion != null ? " &middot; " + st2.completion + "% of the list worked" : "") : "");
-    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '" data-why-ik="' + esc(r.insight_key || "") + '" data-why-v="' + (verdictTxt ? "1" : "") + '"><summary>Why?</summary>' +
-      (verdictTxt ? '<p class="why-verdict">' + esc(verdictTxt) + "</p>" : "") +
-      (whyChips.length ? '<div class="why-chips">' + whyChips.join("") + "</div>" : "") +
-      (whyProse ? '<p class="why-prose">' + whyProse + "</p>" : "") +
-      '<div class="why-full"></div></details>';
+    var heroCap = (heroUnit + " " + (verdictTxt || "")).trim();
+    /* the move line restates the card's own call as a short imperative */
+    var moveTxt = (p.act || "").split(/[,.:]/)[0].trim().split(/\s+/).slice(0, 9).join(" ");
+    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '" data-why-ik="' + esc(r.insight_key || "") + '" data-why-v="' + ((hero || verdictTxt) ? "1" : "") + '"><summary>Why?</summary>' +
+      (hero
+        ? '<div class="why-hero"><span class="why-hero-n' + heroCls + '">' + esc(hero) + '</span><span class="why-hero-cap">' + esc(heroCap) + "</span></div>"
+        : (verdictTxt ? '<p class="why-verdict">' + esc(verdictTxt) + "</p>" : "")) +
+      '<div class="why-full"></div>' +
+      (moveTxt ? '<p class="why-move">&#8594; ' + esc(moveTxt) + ".</p>" : "") +
+      "</details>";
     return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
       '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
       '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span>" +
@@ -4710,7 +4715,7 @@
           var t = ""; sels.forEach(function (sel) { var el = cardEl && cardEl.querySelector(sel); if (el) t += " " + el.textContent; });
           return t;
         };
-        var cardText = grab([".action-how", ".action-payoff"]) + "\u0001" + grab([".why-verdict", ".why-prose"]);
+        var cardText = grab([".action-how", ".action-payoff"]) + "\u0001" + grab([".why-verdict", ".why-hero-cap"]);
         whyBreakdownFetch(d.getAttribute("data-why-cid")).then(function (rows) {
           box.innerHTML = whyDigestHTML(Array.isArray(rows) ? rows : null, d.getAttribute("data-why-v") === "1", cardText || "");
         });
