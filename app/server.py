@@ -14989,12 +14989,8 @@ class Handler(SimpleHTTPRequestHandler):
             if self.command != "HEAD":
                 self.wfile.write(html_out)
             return
-        if path == "/api/insights":  # Today homepage: daily insight feed (generated on first request, cached per day)
-            import insights_engine
-            payload = insights_engine.api_insights(sb)
-            if payload:
-                return self._json(payload)
-            return self._json({"error": "insights_unavailable"}, 503)
+        # /api/insights removed 2026-07-27 with the Today homepage — Campaigns
+        # is the homepage; the analytics hub owns cross-campaign insights.
         if path == "/api/cron/last-run":  # observability: latest scheduled batch-pull summary
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)

@@ -57,7 +57,7 @@
 <script>
   // where to land after login — same-origin paths only (no open redirect)
   const raw = new URLSearchParams(location.search).get("next") || "";
-  const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/app/index.html";
+  const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/app/campaigns.html";
 
   // already signed in? go straight through
   fetch("/api/auth/me").then(r => r.json())

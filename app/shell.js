@@ -8,7 +8,6 @@ function ic8(name, cls = "") {
 }
 
 const ICONS = {
-  dashboard: ic8("home", "lg"),
   campaigns: ic8("send", "lg"),
   lists: ic8("user.svg", "lg"),
   deliverability: ic8("chart", "lg"),
@@ -17,7 +16,6 @@ const ICONS = {
 };
 
 const NAV = [
-  ["index.html", "dashboard", "Dashboard"],
   ["campaigns.html", "campaigns", "Campaigns"],
   ["lists.html", "lists", "Lists"],
   ["deliverability.html", "deliverability", "Analytics"],
@@ -29,7 +27,7 @@ function renderRail(active) {
     `<a class="nav-i ${key === active ? "on" : ""}" href="${href}" title="${label}">${ICONS[key]}</a>`
   ).join("");
   return `<nav class="rail">
-    <a class="logo" href="index.html" title="Navreo">n</a>
+    <a class="logo" href="campaigns.html" title="Navreo">n</a>
     ${items}
     <div class="spacer"></div>
     <a class="nav-i ${active === "settings" ? "on" : ""}" href="settings.html" title="Settings">${ICONS.settings}</a>
