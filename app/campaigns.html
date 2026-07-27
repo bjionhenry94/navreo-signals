@@ -1314,6 +1314,9 @@
     padding: 3px 8px; border-radius: 6px; text-transform: uppercase;
     background: #FFE4D6; color: #C23D00;
   }
+  /* A fixed list is not a signal — the orange signal chip would read as one.
+     Neutral, theme-aware, deliberately quiet. */
+  .sig-chip--fixed { background: var(--border-strong); color: var(--fg-subtle); }
   .sig-tgl { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 0.76rem; font-weight: 600; color: var(--success); position: relative; }
   .sig-tgl input { position: absolute; opacity: 0; }
   .sig-tgl .sig-knob { width: 34px; height: 20px; border-radius: 999px; background: var(--border-strong); position: relative; transition: background 0.15s; }
@@ -3525,6 +3528,7 @@
               '<span><b style="color:var(--fg)">' + fmtInt(pool.remaining) + "</b> still available</span></div>" +
               '<span class="source-list-meta" data-pool-note style="display:block;margin-top:6px">' + poolNoteHTML(pool) + "</span></div>";
           }
+          if (isFixedList(s)) return fixedRowHTML(c, s);
           if (sigMech(s)) return sigRowHTML(c, s);
           var n = s.total != null ? s.total : ((s.prospects || []).length || null);
           var inner = '<span class="source-list-name">' + esc(s.name || "Source") + "</span>" +
@@ -3554,6 +3558,38 @@
   function sigMech(s) {
     var m = String(s.mechanism || s.type || "").toLowerCase();
     return (m === "hiring" || m === "engagement" || m === "followers" || m === "lookalike") ? m : "";
+  }
+  /* ── Fixed lists (doc.type "fixed_list", 27 Jul 2026) ───────────────────
+     A one-off pull: a finite set of people bought once on a set of filters.
+     Nothing new arrives tomorrow, so it gets a neutral badge instead of the
+     orange signal chip, NO Live toggle (there is nothing to keep running),
+     and "Find people again" only when the doc actually carries the filters
+     to pull it again with (params.repull). Three fixed lists shipped as type
+     "hiring" on 27 Jul 2026 and rendered with a HIRING badge + an armed Live
+     toggle — Bjion: a fixed list must never be dressed up as a signal. */
+  function isFixedList(s) {
+    return String(s.mechanism || s.type || "").toLowerCase() === "fixed_list";
+  }
+  function fixedRepull(s) {
+    var r = (s.params || {}).repull;
+    return (r && typeof r === "object" && Object.keys(r).length) ? r : null;
+  }
+  function fixedRowHTML(c, s) {
+    var n = s.total != null ? s.total : ((s.prospects || []).length || null);
+    var meta = (n != null ? '<b style="color:var(--fg)">' + fmtInt(n) + "</b> people" : "Size not recorded") +
+      " &middot; pulled once" + (s.last_pull ? " " + esc(sigAgo(s.last_pull)) : "") +
+      " &middot; doesn't refresh";
+    return '<div class="source-list-card sig-row" data-sig-row="' + esc(s.id) + '">' +
+      '<div class="sig-row-top">' +
+        '<div class="sig-main"><span class="source-list-name">' + esc(s.name || "Fixed list") + "</span> " +
+        '<span class="sig-chip sig-chip--fixed" title="A one-off list: these people were pulled once on a set of filters. It is not a signal - nothing new arrives tomorrow, and nothing runs in the background.">Fixed list</span>' +
+        '<div class="source-list-meta" style="white-space:normal;margin-top:3px">' + meta + "</div></div>" +
+        (s.list_id ? '<a class="action-link" href="/app/lists.html#' + esc(s.list_id) + '">View list</a>' : "") +
+        (fixedRepull(s)
+          ? '<button type="button" class="action-link sig-primary" data-sig-pull="' + esc(s.id) + '"' +
+            ' title="Pulls again with the exact filters saved on this list">Find people again</button>'
+          : "") +
+      "</div></div>";
   }
   function sigAgo(iso) {
     if (!iso) return "";

@@ -2389,6 +2389,53 @@ def api_leads_batch(campaign_ids: str) -> list:
     return _LEADS_BATCH_SWR.get(",".join(wanted))
 
 
+# ── Source kinds: signal vs fixed list ──────────────────────────────────────
+# A SIGNAL keeps finding new people on its own — something happened out there
+# (a role opened, someone engaged, a profile gained a follower) and the source
+# goes back every day to catch the next one. Live toggle, daily pull, "find
+# people again": all of that only means something when a live trigger sits
+# behind the source.
+#
+# A FIXED LIST is the other thing entirely: a finite set of people pulled once
+# from a provider on a set of filters. It does not refresh, it does not refill,
+# and nothing new arrives tomorrow. Before 27 Jul 2026 the model had no word
+# for it, so three one-off Prospeo pulls were registered as "hiring" — HIRING
+# badge, Live toggle, "Find people again" armed, none of it true (Bjion:
+# a fixed list must never be dressed as a signal). `fixed_list` is that word.
+#
+# A fixed list is re-pullable ONLY when `doc.params.repull` carries the filter
+# spec to pull it again with. No spec = nothing to re-run, and every surface
+# that offers a re-pull must stay silent rather than arm a button that would
+# fire an unfiltered provider query.
+SIGNAL_MECHS = {"hiring", "engagement", "followers", "lookalike"}
+FIXED_LIST_MECH = "fixed_list"
+
+
+def source_mech(src: dict) -> str:
+    """Canonical lowercase kind of a source doc ('' when it carries none)."""
+    return str((src or {}).get("mechanism") or (src or {}).get("type") or "").lower()
+
+
+def is_signal_source(src: dict) -> bool:
+    return source_mech(src) in SIGNAL_MECHS
+
+
+def is_fixed_list(src: dict) -> bool:
+    return source_mech(src) == FIXED_LIST_MECH
+
+
+def fixed_list_repull_spec(src: dict) -> dict | None:
+    """The saved provider filter spec a fixed list can be pulled again with, or
+    None. Only a non-empty dict counts — prose notes about how the list was
+    built are a record, not a re-runnable spec."""
+    spec = ((src or {}).get("params") or {}).get("repull")
+    return spec if isinstance(spec, dict) and spec else None
+
+
+def fixed_list_repullable(src: dict) -> bool:
+    return is_fixed_list(src) and fixed_list_repull_spec(src) is not None
+
+
 def _compute_signals_daily() -> dict:
     """Fleet-wide 'signal velocity': new people found per day across EVERY signal
     source, last 30 days — the classic per-campaign chart, summed for the
@@ -2401,14 +2448,12 @@ def _compute_signals_daily() -> dict:
     rows = sb_get_all(f"signal_leads?select=source_id,pulled_at&pulled_at=gte.{since}")
     if not isinstance(rows, list):
         return {"_degraded": True, "days": [], "series": []}
-    # SIGNAL sources only (hiring/engagement/followers/lookalike). signal_leads
-    # also records one-off list pulls (e.g. recontact batches) whose 3k-row
-    # spikes drown the daily signal lines — those aren't "signals found", so
-    # they stay out of this chart.
-    sig_mechs = {"hiring", "engagement", "followers", "lookalike"}
+    # SIGNAL sources only (see SIGNAL_MECHS). signal_leads also records one-off
+    # list pulls (recontact batches, fixed lists) whose 3k-row spikes drown the
+    # daily signal lines — those aren't "signals found", so they stay out of
+    # this chart.
     drafts = _cached_read_drafts()
-    allowed = {str(d.get("id")) for d in drafts
-               if str(d.get("mechanism") or d.get("type") or "").lower() in sig_mechs}
+    allowed = {str(d.get("id")) for d in drafts if is_signal_source(d)}
     names = {str(d.get("id")): (d.get("name") or "Source") for d in drafts}
     by_day: dict = {}
     totals: dict = {}
@@ -2441,7 +2486,7 @@ def _compute_signals_daily() -> dict:
                 week_by_src[sid] = week_by_src.get(sid, 0) + n
     campaigns: dict = {}
     for d in drafts:
-        if str(d.get("mechanism") or d.get("type") or "").lower() not in sig_mechs:
+        if not is_signal_source(d):
             continue
         cid = str(d.get("campaign_id") or "")
         if not cid.startswith("camp-sl-"):
@@ -4340,6 +4385,11 @@ def save_draft(p: dict) -> dict:
         return {"ok": False, "message": "A hiring source needs decision-maker roles (who we email at these companies)."}
     if (p.get("type") or p.get("mechanism")) == "hiring":
         p["icebreaker"] = ensure_hiring_vars(p.get("icebreaker"))  # {{company}} + {{job_title}} always survive
+    if is_fixed_list(p):
+        # A one-off list has nothing to keep running: `active` is meaningless on
+        # it, and leaving it true would have every "is this signal live?" check
+        # counting a finished list as a running one.
+        p["active"] = False
     drafts = read_drafts(strict=True)
     # ids must NEVER be reused: Supabase rows (signals, signal_leads) are keyed
     # by source_id and outlive removed drafts — len()+1 recycled ids and
@@ -11495,6 +11545,19 @@ def pull_source(p: dict) -> dict:
     src = next((d for d in drafts if d.get("id") == p.get("id")), None)
     if not src:
         return {"ok": False, "message": "Source not found"}
+    repull = None
+    if is_fixed_list(src):
+        # A fixed list has no live trigger behind it. Without a saved re-pull
+        # spec the generic provider path below would fall back to a broad
+        # seniority query and buy people this list never described — so refuse
+        # rather than invent a pull. With a spec, re-run exactly that; the spec
+        # stays under params.repull (never flattened into params itself, so the
+        # record of how the list was built survives the re-pull).
+        repull = fixed_list_repull_spec(src)
+        if not repull:
+            return {"ok": False, "message":
+                    "This is a fixed list — a one-off pull with no saved filters, so there's "
+                    "nothing to find again. Pull a new list and add it as its own source."}
     if (src.get("mechanism") or src.get("type")) == "hiring":
         r = pull_hiring_source(src, drafts)
         _ensure_source_list(src)  # keep the People-page mirror list in step
@@ -11503,12 +11566,13 @@ def pull_source(p: dict) -> dict:
         r = pull_engagement_source(src, drafts)
         _ensure_source_list(src)
         return r
-    cfg = {**(src.get("config") or {}), **(src.get("params") or {})}
+    prm = {**(src.get("params") or {}), **(repull or {})}
+    cfg = {**(src.get("config") or {}), **prm}
     titles = src.get("titles") or (cfg.get("titles").split(",") if isinstance(cfg.get("titles"), str) else cfg.get("titles")) or []
     titles = [x.strip() for x in titles if str(x).strip()]
 
     filters: dict = {}
-    titles = expand_titles((src.get("params") or {}).get("dm_titles") or titles)
+    titles = expand_titles(prm.get("dm_titles") or titles)
     if titles:
         filters["person_job_title"] = {"include": titles, "include_partial_match": True}
     else:
@@ -11905,9 +11969,14 @@ def cron_pull_all():
 
     campaigns = {str(c.get("id")): c for c in read_json_list(CAMPAIGN_DRAFTS)
                  if not c.get("deleted_at")}
+    # A fixed list is not a signal: nothing new arrives tomorrow, so the daily
+    # run leaves it alone entirely. Only one carrying a saved re-pull spec
+    # (params.repull) is even eligible, and never on the daily tick — it's a
+    # deliberate, paid re-pull the user asks for on the row.
     _active = [d for d in read_drafts()
                if d.get("active", True) and not d.get("deleted_at")
-               and str(d.get("campaign_id")) in campaigns]
+               and str(d.get("campaign_id")) in campaigns
+               and not is_fixed_list(d)]
     # fairness: least-recently-pulled first (never-pulled = "" sorts first), so a
     # source deferred or timed-out last tick jumps to the front of the next tick
     # instead of being perpetually starved at the tail of a fixed order.

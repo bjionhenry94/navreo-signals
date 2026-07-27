@@ -2501,10 +2501,13 @@ function computeChecks(d) {
   const nSrc = sig.length + listRefs.length + stubs.length;
   checks.push([nSrc ? "pass" : "fail", "Something feeds it",
     nSrc ? `${nSrc} source${nSrc === 1 ? "" : "s"} attached` : "No sources — add a signal or a list first"]);
-  if (sig.length) {
-    const on = sig.filter((x) => x.active !== false).length;
+  // fixed lists are one-off pulls, not signals: there is nothing to switch on,
+  // so counting them here would report a finished list as a dead signal.
+  const liveSig = sig.filter((x) => String(x.mechanism || x.type || "").toLowerCase() !== "fixed_list");
+  if (liveSig.length) {
+    const on = liveSig.filter((x) => x.active !== false).length;
     checks.push([on ? "pass" : "warn", "Signals on",
-      on ? `${on} of ${sig.length} signal${sig.length === 1 ? "" : "s"} live` : "Every signal is switched off — nothing new will be found"]);
+      on ? `${on} of ${liveSig.length} signal${liveSig.length === 1 ? "" : "s"} live` : "Every signal is switched off — nothing new will be found"]);
   }
   const people = campPeopleFound(d);
   checks.push([people ? "pass" : "warn", "People to contact",
