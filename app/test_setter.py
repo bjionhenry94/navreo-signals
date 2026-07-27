@@ -157,6 +157,11 @@ class FakeSB:
             inner = op_value[3:].strip("()")
             opts = [o.strip('"') for o in inner.split(",") if o != ""]
             return str(value) in opts
+        if op_value.startswith("lt."):
+            # Modelled for real (unlike gte. below): the stranded-claim reaper
+            # relies on `updated_at=lt.<cutoff>` to leave an IN-FLIGHT claim
+            # alone, and a filter that always matched would hide that bug.
+            return value is not None and str(value) < op_value[3:]
         if op_value.startswith("gt."):
             return str(value) > op_value[3:]
         if op_value.startswith("gte."):
@@ -214,7 +219,7 @@ class FakeSB:
 
     def _queue_row_matches(self, row, params):
         for key in ("id", "workspace", "smartlead_campaign_id", "lead_email", "message_id", "status",
-                    "is_test", "agent_id"):
+                    "is_test", "agent_id", "updated_at"):
             if key in params and not self._match_eq(row.get(key), params[key]):
                 return False
         return True
@@ -1376,8 +1381,117 @@ def test_poll_never_raises_on_bad_agent_config():
     summary = setter.run_poll()
     check("poll: no agents configured -> returns empty summary without raising",
          summary == {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0,
-                    "errors": 0, "agentless": 0, "uncategorised": 0, "auto_resolved": 0},
+                    "errors": 0, "agentless": 0, "uncategorised": 0, "auto_resolved": 0,
+                    "redriven": 0},
          summary)
+
+
+def _stranded_claim(sb, *, qid, cid, email, updated_at, status="new"):
+    """A queue row exactly as _process_reply_inner leaves it when the tick that
+    claimed it dies before finishing: claimed fields only, no draft, no
+    decision (owner report 2026-07-28, row 1218)."""
+    sb.queue.append({
+        "id": qid, "workspace": "navreo", "smartlead_campaign_id": cid, "agent_id": "agent-redrive01",
+        "lead_email": email, "lead_first_name": "Jen", "lead_last_name": "G",
+        "company_domain": "example.com", "message_id": f"mid-{qid}", "source_message_id": f"mid-{qid}",
+        "reply_subject": "Re: hi", "reply_body": "yes please send it over",
+        "replied_at": "2026-07-10T00:00:00+00:00", "category": "Information Request",
+        "thread": [], "classification": None, "draft_subject": None, "draft_body": None,
+        "decision": None, "decision_reason": None, "status": status, "is_test": False,
+        "created_at": updated_at, "updated_at": updated_at,
+    })
+
+
+def _redrive_setter():
+    sb, http = fresh_setter()
+    http.classify_fn = lambda _b: {
+        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+        "confidence": 0.5, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+        "wants": "wants info", "rationale": "",
+    }
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Sam"}
+    # Hydration must succeed or the pipeline stops at "Couldn't find the reply
+    # in the Smartlead thread" and the row looks draft-less for a reason that
+    # has nothing to do with the re-drive.
+    http.message_history = [
+        {"type": "SENT", "time": "2026-07-09T09:00:00+00:00", "subject": "hi",
+         "email_body": "our pitch", "from_name": "Bjion Henry"},
+        {"type": "REPLY", "time": "2026-07-10T00:00:00+00:00", "subject": "Re: hi",
+         "email_body": "yes please send it over", "message_id": "mid-1218", "stats_id": "st-1218"},
+    ]
+    agent = {"id": "agent-redrive01", "mode": "autopilot", "enabled": True, "campaign_ids": [810],
+             "allowed_intents": ["send_resource"], "pricing_notes": "", "confidence_threshold": 0.0}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    return sb, http
+
+
+def test_run_poll_redrives_stranded_claim():
+    """The bug behind "this person isn't showing in the setter": a row claimed
+    at status "new" by a tick that then died is invisible in every pill and
+    run_poll's already-queued check never retries it."""
+    sb, _http = _redrive_setter()
+    _stranded_claim(sb, qid=1218, cid=810, email="jennifer@example.com",
+                    updated_at="2026-07-10T00:00:00+00:00")
+
+    summary = setter.run_poll()
+
+    row = next((r for r in sb.queue if r.get("id") == 1218), {})
+    check("redrive: the stranded row was re-driven", summary.get("redriven") == 1, summary)
+    check("redrive: no longer stuck at status new", row.get("status") != "new", row)
+    check("redrive: it lands somewhere the UI actually shows",
+         row.get("status") in ("needs_review", "no_action", "sent"), row)
+    check("redrive: it now carries a draft the reviewer can act on",
+         bool(row.get("draft_body")), row)
+    check("redrive: adopted the SAME row - no duplicate was inserted",
+         len([r for r in sb.queue if r.get("lead_email") == "jennifer@example.com"]) == 1, sb.queue)
+
+
+def test_run_poll_redrive_never_auto_sends():
+    """SEND-SAFETY: the agent above is in autopilot with a zero confidence
+    threshold, so the normal pipeline would auto-send. A reaper running
+    unattended over rows that may be days old must never do that."""
+    sb, http = _redrive_setter()
+    _stranded_claim(sb, qid=1219, cid=810, email="oldreply@example.com",
+                    updated_at="2026-07-10T00:00:00+00:00")
+
+    setter.run_poll()
+
+    row = next((r for r in sb.queue if r.get("id") == 1219), {})
+    check("redrive: never auto-sends", row.get("status") != "auto_sent", row)
+    check("redrive: nothing was sent to Smartlead",
+         not any(c[0] == "POST" and "reply" in str(c[1]).lower() for c in http.calls), http.calls)
+
+
+def test_run_poll_redrive_leaves_an_in_flight_claim_alone():
+    """A claim younger than the cutoff is a tick still working - reaping it
+    would process the same reply twice, which is what the claim exists to
+    prevent."""
+    sb, _http = _redrive_setter()
+    fresh = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    _stranded_claim(sb, qid=1220, cid=810, email="inflight@example.com", updated_at=fresh)
+
+    summary = setter.run_poll()
+
+    row = next((r for r in sb.queue if r.get("id") == 1220), {})
+    check("redrive: an in-flight claim is not reaped", summary.get("redriven") == 0, summary)
+    check("redrive: the in-flight row is untouched", row.get("status") == "new", row)
+
+
+def test_run_poll_redrive_forces_visibility_when_the_pipeline_cant_draft():
+    """No agent on the campaign means nothing to classify or draft with. The
+    row must still stop being invisible - that is the whole point."""
+    sb, _http = fresh_setter()   # no agents at all
+    _stranded_claim(sb, qid=1221, cid=999, email="noagent@example.com",
+                    updated_at="2026-07-10T00:00:00+00:00")
+
+    summary = setter.run_poll()
+
+    row = next((r for r in sb.queue if r.get("id") == 1221), {})
+    check("redrive: an agentless husk is still rescued", summary.get("redriven") == 1, summary)
+    check("redrive: forced into needs_review so a pill shows it",
+         row.get("status") == "needs_review", row)
+    check("redrive: the reviewer is told why it is here",
+         "never finished" in (row.get("decision_reason") or ""), row)
 
 
 def test_run_poll_assigned_at_filter():
@@ -8830,6 +8944,10 @@ if __name__ == "__main__":
     test_env_dry_run_send_never_hits_network()
     test_poll_batching_cap()
     test_poll_never_raises_on_bad_agent_config()
+    test_run_poll_redrives_stranded_claim()
+    test_run_poll_redrive_never_auto_sends()
+    test_run_poll_redrive_leaves_an_in_flight_claim_alone()
+    test_run_poll_redrive_forces_visibility_when_the_pipeline_cant_draft()
     test_run_poll_assigned_at_filter()
     test_subsequence_reply_inherits_parent_campaign_agent()
     test_subsequence_reply_inherits_parent_assigned_at_gate()

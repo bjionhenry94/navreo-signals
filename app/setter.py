@@ -2861,8 +2861,14 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     email = (reply.get("email") or "").strip().lower()
     message_id = str(reply.get("message_id") or "")
     is_test = bool(reply.get("is_test"))
+    # Re-drive of a stranded claim (see _redrive_stranded_claims): the queue
+    # row ALREADY exists - it is the husk of a tick that died between the
+    # claim and the finish - so the existing-row short-circuit below would
+    # hand back the same invisible row forever. Adopt its id instead of
+    # claiming a new one and let _finalize_row PATCH the result in place.
+    redrive_id = reply.get("_redrive_id")
 
-    if not is_test:
+    if not is_test and redrive_id is None:
         existing = _existing_row(workspace, campaign_id, email, message_id)
         if existing:
             return existing
@@ -2890,7 +2896,10 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     # same reply (the Smartlead webhook and the cron poll); the unique key +
     # ignore-duplicates insert makes exactly one claimant win, so a reply can
     # never be classified twice or, worse, auto-sent twice.
-    if not is_test and _SB:
+    if redrive_id is not None:
+        row["id"] = redrive_id
+        reply["_claimed_id"] = redrive_id   # crash handler marks THIS row errored
+    elif not is_test and _SB:
         try:
             claim = {k: row[k] for k in (
                 "workspace", "smartlead_campaign_id", "agent_id", "lead_email", "lead_first_name",
@@ -3941,6 +3950,102 @@ def _sweep_uncategorised(agents, settings, since_iso: str, summary: dict) -> Non
         print(f"[setter] uncategorised sweep failed: {e}", file=sys.stderr)
 
 
+# A claim only means "in flight" for the seconds a pipeline run takes; past
+# this it means the run died. Generous enough that a live tick is never reaped
+# out from under itself.
+_REDRIVE_AFTER_SECS = 15 * 60
+_REDRIVE_CAP = 10                  # per tick, so a backlog can't run away
+
+
+def _redrive_stranded_claims(agents: list, settings: dict, summary: dict) -> None:
+    """Rescues queue rows stranded in status "new".
+
+    Owner report 2026-07-28 (jennifer@globalsponsorhub.com, queue row 1218):
+    the reply was in setter_queue but appeared in NO pill in the setter. Root
+    cause is the intake claim in _process_reply_inner: it inserts the row at
+    status "new" BEFORE the slow work (hydrate -> classify -> draft), on
+    purpose, so the webhook and the poll can't process the same reply twice.
+    If the worker then dies between the claim and the finish - Render restart,
+    tick killed mid-flight, OOM - nothing patches the row. The evidence for
+    1218: the 14:35 poll tick logged its start and NEVER logged setter_poll_done,
+    and the row's updated_at still equals its created_at.
+
+    A row left at "new" is invisible twice over:
+      * FILTER_PILLS in setter.html has needs_review / sent / auto_sent /
+        dismissed / All - "new" only ever shows under All, with no draft;
+      * run_poll's `if _existing_row(...): continue` sees the husk as already
+        queued, so the reply is never retried - and after 48h it drops out of
+        the poll window entirely. 17 rows had accumulated this way.
+
+    So the reaper re-drives them THROUGH the real pipeline (via _redrive_id,
+    which adopts the existing row instead of claiming a new one), and if that
+    still doesn't move the status, force-flips it to needs_review so it can
+    never be invisible again. Never raises.
+
+    SEND-SAFETY GATE (non-negotiable, same rule as _self_heal_campaigns): this
+    runs unattended on a cron tick over rows that may be days old, so every
+    pipeline call uses a draft_only snapshot. A reaper must never auto-send.
+    """
+    if not _SB:
+        return
+    cutoff = (_dt.datetime.now(_dt.timezone.utc)
+              - _dt.timedelta(seconds=_REDRIVE_AFTER_SECS)).isoformat()
+    try:
+        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.new"
+                          f"&updated_at=lt.{quote(cutoff, safe='')}"
+                          f"&order=created_at.desc&limit={_REDRIVE_CAP}&select=*")
+    except Exception as e:  # noqa: BLE001
+        summary["errors"] += 1
+        print(f"[setter] redrive: stranded GET failed: {e}", file=sys.stderr)
+        return
+    if not isinstance(rows, list) or not rows:
+        return
+    for row in rows:
+        if not isinstance(row, dict) or row.get("id") is None:
+            continue
+        qid = row["id"]
+        cid = row.get("smartlead_campaign_id")
+        email = (row.get("lead_email") or "").strip().lower()
+        mid = str(row.get("message_id") or row.get("source_message_id") or "")
+        try:
+            reply = {
+                "workspace": row.get("workspace") or WORKSPACE, "campaign_id": cid,
+                "email": email, "first_name": row.get("lead_first_name"),
+                "last_name": row.get("lead_last_name"), "company_domain": row.get("company_domain"),
+                "subject": row.get("reply_subject"), "body": row.get("reply_body") or "",
+                "replied_at": row.get("replied_at"), "message_id": mid,
+                "category": row.get("category"), "is_test": False,
+                "_redrive_id": qid,
+            }
+            agent = _agent_for_campaign(cid, require_enabled=True, agents=agents)
+            if agent:
+                out = process_reply(reply, {**agent, "mode": "draft_only"}, settings)
+            else:
+                # No brain for this campaign - nothing to classify or draft
+                # with. _intake_agentless inserts rather than adopts, so let
+                # the force-flip below make the husk visible for manual review
+                # instead (same end state, minus the duplicate row).
+                out = None
+            status = (out or {}).get("status")
+            if status in (None, "new"):
+                _apply_patch(row, {
+                    "status": "needs_review", "decision": "review",
+                    "decision_reason": ("Held for review: this reply was picked up but its "
+                                        "processing never finished, so it had no draft."),
+                    "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                })
+                status = "needs_review"
+            summary["redriven"] = summary.get("redriven", 0) + 1
+            if status == "needs_review":
+                summary["needs_review"] += 1
+            elif status == "no_action":
+                summary["no_action"] += 1
+            print(f"[setter] redrive: row {qid} ({email}/{cid}) -> {status}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 - one bad husk must never stop the rest
+            summary["errors"] += 1
+            print(f"[setter] redrive: row {qid} failed: {e}", file=sys.stderr)
+
+
 def run_poll() -> dict:
     """Sweeps recent core-four `replies` rows across EVERY campaign in the
     workspace (owner ruling 2026-07-14: a positive must reach the queue even
@@ -3948,12 +4053,16 @@ def run_poll() -> dict:
     queued, and runs process_reply (agented) or the agentless intake
     (unassigned) on up to 15 per tick. Never raises."""
     summary = {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0,
-               "errors": 0, "agentless": 0, "uncategorised": 0, "auto_resolved": 0}
+               "errors": 0, "agentless": 0, "uncategorised": 0, "auto_resolved": 0, "redriven": 0}
     try:
         if not _SB:
             return summary
         agents = _load_agents()
         settings = _load_settings()
+        # Rescue anything a previous tick claimed but never finished, BEFORE
+        # the fresh sweep - a stranded claim is invisible in the setter and
+        # the sweep's already-queued check will never retry it on its own.
+        _redrive_stranded_claims(agents, settings, summary)
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=48)).isoformat()
         # quote(): `since` ends in "+00:00" and sb() sends the query string
         # raw, so an unencoded "+" reaches PostgREST as a space - the timestamp
@@ -4078,7 +4187,8 @@ def run_poll() -> dict:
     # so the post-poll reload (the UI's delayed loadQueue) reads fresh counts
     # and rows (perf pass 2026-07-16). A no-change sweep keeps caches warm.
     if summary.get("queued") or summary.get("needs_review") or summary.get("auto_sent") \
-            or summary.get("no_action") or summary.get("uncategorised") or summary.get("auto_resolved"):
+            or summary.get("no_action") or summary.get("uncategorised") or summary.get("auto_resolved") \
+            or summary.get("redriven"):
         _bust_read_caches()
     return summary
 
