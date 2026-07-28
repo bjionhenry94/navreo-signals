@@ -42,6 +42,9 @@
 .ah .rangeseg button{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;color:var(--ink-2);background:transparent;border:0;padding:6px 13px;border-radius:999px;cursor:pointer}
 .ah .rangeseg button:hover{color:var(--ink)}
 .ah .rangeseg button.on{background:var(--ink);color:#fff}
+.ah .wkndtog{font:600 11.5px/1 var(--font-sans);color:var(--ink-3);background:var(--bg-sunken);border:1px solid transparent;padding:6px 12px;border-radius:999px;cursor:pointer;white-space:nowrap}
+.ah .wkndtog:hover{color:var(--ink)}
+.ah .wkndtog.on{background:var(--ink);color:#fff}
 .ah .seg{display:inline-flex;gap:3px;flex-shrink:0}
 .ah .seg button{font:600 11px/1 var(--font-sans);color:var(--ink-3);background:transparent;border:0;padding:4px 9px;border-radius:999px;cursor:pointer;letter-spacing:.01em}
 .ah .seg button:hover{color:var(--ink)}
@@ -272,6 +275,7 @@
   <section class="hero" aria-label="Your month, day by day">
     <div class="card-head">
       <span class="kicker" id="hero-kick">Day by day · last 30 days</span>
+      <button class="wkndtog" id="ah-weekend" type="button" aria-pressed="false" title="Weekends are near-zero sending days">Hide weekends</button>
     </div>
     <div class="lchips" id="ah-lchips" role="group" aria-label="Show or hide lines"></div>
     <div class="trendwrap">
@@ -603,15 +607,26 @@ var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null,
 // TWO page dimensions and only two: state.client + state.range (7/14/30 —
 // never all-time). Every widget below reads both. The pair survives a reload
 // via localStorage (losing your filters on refresh was round-1 friction).
-var state = { client: "All", range: 30,
-              on: { sent: false, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
+// sent defaults ON now — it renders as faint BARS (its own scale), so it no
+// longer flattens the reply/meeting lines the way the old sent LINE did, and
+// per-day sent is the thing Bjion most wants to see (2026-07-28).
+// hideWeekends: drop Sat/Sun from the day-by-day chart (weekends are ~0 sends
+// and flatten the weekday rhythm).
+var state = { client: "All", range: 30, hideWeekends: false,
+              on: { sent: true, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 try {
   var _saved = JSON.parse(localStorage.getItem("ah_filters") || "{}");
   if ([7, 14, 30].indexOf(_saved.range) >= 0) state.range = _saved.range;
   if (typeof _saved.client === "string" && _saved.client) state.client = _saved.client;
+  if (typeof _saved.hideWeekends === "boolean") state.hideWeekends = _saved.hideWeekends;
+  if (_saved.on && typeof _saved.on.sent === "boolean") state.on.sent = _saved.on.sent;
 } catch (e) { /* fresh defaults */ }
 function saveFilters() {
-  try { localStorage.setItem("ah_filters", JSON.stringify({ client: state.client, range: state.range })); } catch (e) { /* private mode */ }
+  try {
+    localStorage.setItem("ah_filters", JSON.stringify({
+      client: state.client, range: state.range,
+      hideWeekends: state.hideWeekends, on: { sent: state.on.sent } }));
+  } catch (e) { /* private mode */ }
 }
 
 function ckey() { return state.client === "All" ? "__all" : state.client; }
@@ -698,6 +713,34 @@ function cwFor(client) {  // {sent,replied,bounced} for a client over state.rang
 }
 // a day under this many sends has no readable rate — scaled to scope
 function rateMinSent() { return state.client === "All" ? 1000 : 100; }
+// Per-day SENT for the current client, full 30-day array (renderTrend slices).
+// Exact for clients that own a Smartlead workspace (All/Asteri/KRG/Grout);
+// for clients that SHARE the Navreo workspace (Navreo/Amplifyy/Arnic) there is
+// no daily line, so split the Navreo-workspace daily series by this client's
+// share of the window total — the window total stays exact, only the daily
+// SHAPE is estimated (Bjion: per-day sent per client is super important).
+function sentDailyFull() {
+  if (!CW || !CW.series) return null;
+  var key = state.client === "All" ? "__all" : state.client;
+  var s = CW.series[key];
+  if (s && s.sent) return s.sent;
+  var wsS = CW.series["__navreo_ws"];
+  var cw = cwFor(state.client);
+  if (wsS && wsS.sent && cw && cw.sent > 0) {
+    var wsWin = wsS.sent.slice(Math.max(0, wsS.sent.length - state.range))
+                        .reduce(function (a, b) { return a + (b || 0); }, 0);
+    if (wsWin > 0) {
+      var share = cw.sent / wsWin;
+      return wsS.sent.map(function (v) { return Math.round((v || 0) * share); });
+    }
+  }
+  return null;
+}
+function sentDailyEstimated() {
+  // true when the daily shape is an apportioned estimate (shared-workspace client)
+  var key = state.client === "All" ? "__all" : state.client;
+  return !!(CW && CW.series && !(CW.series[key] && CW.series[key].sent) && sentDailyFull());
+}
 function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none exists
   var s = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
   if (!s) return null;
@@ -822,9 +865,12 @@ function renderLegend() {
   var cw = cwFor(state.client);
   $("ah-lchips").innerHTML = ORDER.map(function (k) {
     var hasLine = seriesFor(k) != null;
+    // Sent is bars now and works for every client (exact or estimated split),
+    // so its chip is a normal toggle, never greyed to "total only".
+    if (k === "sent") hasLine = sentDailyFull() != null;
     var val = null;
     if (k === "rate") { var ra = rateAvg(); val = ra == null ? "–" : ra + "%"; }
-    else if (k === "sent" && cw) val = fmtN(cw.sent);
+    else if (k === "sent") val = cw ? fmtN(cw.sent) : "–";
     else if (k === "bounces" && cw) val = fmtN(cw.bounced);
     else if (hasLine) val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
     else val = "–";
@@ -841,26 +887,46 @@ function renderLegend() {
       (realTotal ? '<span class="totpill">total</span>' : "") + "</button>";
   }).join("");
 }
+// indices (into the sliced window) to KEEP — all of them, or weekdays only
+// when Hide weekends is on. Shared by renderTrend and the hover.
+function chartKeep(windowDays) {
+  if (!state.hideWeekends) return windowDays.map(function (_, i) { return i; });
+  var keep = [];
+  windowDays.forEach(function (d, i) {
+    var dow = new Date(d + "T12:00:00Z").getUTCDay();
+    if (dow !== 0 && dow !== 6) keep.push(i);
+  });
+  return keep;
+}
 function renderTrend() {
   renderLegend();
   $("hero-kick").textContent = "Day by day · " + rangeLabel() +
     (state.client === "All" ? "" : " · " + state.client);
-  var days = HUB ? slice(HUB.days) : [];
-  var n = days.length;
-  if (!n) {
+  var allDays = HUB ? slice(HUB.days) : [];
+  if (!allDays.length) {
     // hub still loading — say so instead of leaving a silent empty frame
     $("trend-svg").innerHTML = '<text x="560" y="132" text-anchor="middle" font-size="13" fill="var(--ink-3)">Loading your ' + rangeLabel() + "…</text>";
     $("trend-sub").textContent = "Fetching live data…";
     $("trend-take").textContent = "";
     return;
   }
-  var vis = ORDER.filter(function (k) { return state.on[k] && seriesFor(k) != null; });
+  // Weekend filter: drop Sat/Sun from the plotted chart when the toggle is on.
+  var keep = chartKeep(allDays);
+  var days = keep.map(function (i) { return allDays[i]; });
+  var n = days.length;
+  if (!n) { $("trend-svg").innerHTML = ""; $("trend-sub").textContent = "No weekdays in this window."; $("trend-take").textContent = ""; return; }
+  function pick(full) { return keep.map(function (i) { return full[i]; }); }
+  // Sent renders as BARS (own scale), so it's OUT of the line set — that's why
+  // turning it on no longer flattens the reply/interest/meeting lines.
+  var lineVis = ORDER.filter(function (k) { return k !== "sent" && state.on[k] && seriesFor(k) != null; });
   var data = {};
-  vis.forEach(function (k) { data[k] = slice(seriesFor(k)); });
-  var hasRate = vis.indexOf("rate") >= 0;
+  lineVis.forEach(function (k) { data[k] = pick(slice(seriesFor(k))); });
+  var sentFull = state.on.sent ? sentDailyFull() : null;
+  var sentBars = sentFull ? pick(slice(sentFull)) : null;
+  var hasRate = lineVis.indexOf("rate") >= 0;
   var L = 40, R = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
   var max = 1;
-  vis.forEach(function (k) { if (k === "rate") return; data[k].forEach(function (v) { if (v > max) max = v; }); });
+  lineVis.forEach(function (k) { if (k === "rate") return; data[k].forEach(function (v) { if (v > max) max = v; }); });
   var ladder = [12, 20, 30, 40, 60, 80, 120, 160, 240, 320, 480, 640, 900, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800, 19200, 25600, 40000];
   var ymax = ladder[ladder.length - 1];
   for (var i = 0; i < ladder.length; i++) { if (ladder[i] >= max) { ymax = ladder[i]; break; } }
@@ -872,11 +938,25 @@ function renderTrend() {
     rmax = rladder[rladder.length - 1];
     for (i = 0; i < rladder.length; i++) { if (rladder[i] >= rmx) { rmax = rladder[i]; break; } }
   }
-  GEO = { ymax: ymax, rmax: rmax, n: n, off: (HUB.days.length - n) };
+  // Sent bars ride their own scale (own peak), independent of the line axis.
+  var sentMax = 1;
+  if (sentBars) sentBars.forEach(function (v) { if (v > sentMax) sentMax = v; });
+  GEO = { ymax: ymax, rmax: rmax, n: n, off: (HUB.days.length - n), keep: keep, sentMax: sentMax };
   function X(ii) { return n === 1 ? L : L + ii * pw / (n - 1); }
   function Y(v) { return T + (1 - v / ymax) * ph; }
   function YR(v) { return T + (1 - v / rmax) * ph; }
   var s = "";
+  // faint SENT bars first, so every line paints on top of them
+  if (sentBars) {
+    var bw = n > 1 ? Math.max(3, Math.min(24, pw / (n - 1) * 0.55)) : 40;
+    sentBars.forEach(function (v, ii) {
+      if (!v) return;
+      var bh = (v / sentMax) * ph, bx = X(ii) - bw / 2, by = T + ph - bh;
+      s += '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) +
+        '" height="' + bh.toFixed(1) + '" fill="' + COL.sent + '" opacity="0.13" rx="1.5"/>';
+    });
+    s += '<text x="' + (L + 2) + '" y="' + (T + 10) + '" font-size="10" fill="' + COL.sent + '" opacity="0.75">bars: emails sent/day · peak ' + fmtN(sentMax) + '</text>';
+  }
   for (i = 0; i <= 4; i++) {
     var gv = ymax * i / 4, gy = Y(gv);
     s += '<line x1="' + L + '" y1="' + gy.toFixed(1) + '" x2="' + (W - R) + '" y2="' + gy.toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
@@ -891,7 +971,7 @@ function renderTrend() {
     s += '<text x="' + X(t).toFixed(1) + '" y="' + (H - 8) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">' + dlabel(days[t]) + "</text>";
   });
   var ends = [];
-  vis.forEach(function (k) {
+  lineVis.forEach(function (k) {
     if (k === "rate") {
       // dashed, right-axis, with gaps on no-send days
       var seg = "", lastY = null;
@@ -928,8 +1008,13 @@ function renderTrend() {
   var cw = cwFor(state.client);
   var sentTot = cw ? cw.sent : slice(fleetSeries().sent).reduce(function (a, b) { return a + b; }, 0);
   var bTot = cw ? cw.bounced : slice(fleetSeries().bounces).reduce(function (a, b) { return a + b; }, 0);
-  var sub = "Every line is a count per day" +
+  var sub = (state.on.sent && sentFull ? "Faint bars are emails sent each day; lines are counts per day"
+                                       : "Every line is a count per day") +
     (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
+  if (state.on.sent && sentFull && sentDailyEstimated()) {
+    sub += " " + escq(state.client) + " shares the Navreo fleet, so its daily bars are an estimated split of the fleet's daily sending (its window total is exact).";
+  }
+  if (state.hideWeekends) sub += " Weekends hidden.";
   sub += priorComparison();
   // close the ledger: the all-clients total includes campaigns archived since
   // they sent, which belong to no chip (9,081 unattributed sends confused
@@ -986,18 +1071,35 @@ function trendMove(ev) {
   if (!HUB) return;
   var svg = $("trend-svg"), r = svg.getBoundingClientRect();
   if (!r.width) return;
-  var days = slice(HUB.days), n = days.length;
+  var allD = slice(HUB.days);
+  if (!allD.length) return;
+  var keep = chartKeep(allD);
+  var days = keep.map(function (i) { return allD[i]; });
+  var n = days.length;
   if (!n) return;
   var L = 40, Rp = 132, T = 12, B = 26, pw = 1120 - L - Rp, ph = 264 - T - B;
   var sx = (ev.clientX - r.left) * 1120 / r.width;
   var idx = Math.round((sx - L) / pw * (n - 1));
   if (idx < 0) idx = 0; if (idx > n - 1) idx = n - 1;
+  var oi = keep[idx];   // original index into the full (unfiltered) window arrays
   var X = n === 1 ? L : L + idx * pw / (n - 1);
   var html = '<line x1="' + X.toFixed(1) + '" y1="' + T + '" x2="' + X.toFixed(1) + '" y2="' + (T + ph) + '" stroke="var(--line-2)" stroke-width="1"/>';
   var rows = "";
+  // Sent first — always show the day's sent count (the thing Bjion most wants),
+  // with a marker at the top of that day's bar.
+  if (state.on.sent) {
+    var sf = sentDailyFull();
+    if (sf) {
+      var sv = slice(sf)[oi] || 0;
+      var sby = T + ph - (sv / (GEO.sentMax || 1)) * ph;
+      html += '<circle cx="' + X.toFixed(1) + '" cy="' + sby.toFixed(1) + '" r="3" fill="' + COL.sent + '" stroke="#fff" stroke-width="1.5"/>';
+      rows += '<div class="row"><i style="background:' + COL.sent + '"></i>Sent<span class="v num">' + fmtN(sv) + "</span></div>";
+    }
+  }
   ORDER.forEach(function (k) {
+    if (k === "sent") return;   // shown above (bars)
     if (!state.on[k] || seriesFor(k) == null) return;
-    var v = slice(seriesFor(k))[idx];
+    var v = slice(seriesFor(k))[oi];
     if (k === "rate") {
       if (v == null) return;   // no sends that day — the line has a gap here
       var Yr = T + (1 - v / (GEO.rmax || 1)) * ph;
@@ -1248,9 +1350,16 @@ function weekdayAvgSent(daysBack) {
 function renderRunway(v) {
   var isAll = state.client === "All";
   $("fuel-n").textContent = fmtN(v.leadsLeft);
-  var sentDay = weekdayAvgSent(14);
+  // Per-client daily send rate (Bjion 2026-07-28: "works for all clients but
+  // not individual"). Fleet keeps its tested weekday average; a client's rate
+  // comes from ITS window sent ÷ the weekdays in the window — the sweep has
+  // per-client window sent for every client, so days-left now works per client.
+  var cwR = cwFor(state.client);
+  var wkdaysInWin = Math.max(1, Math.round(state.range * 5 / 7));
+  var sentDay = isAll ? weekdayAvgSent(14)
+                      : (cwR && cwR.sent ? cwR.sent / wkdaysInWin : null);
   var epl = v.completed > 0 ? v.sentLT / v.completed : null;   // lifetime — burn is a sequence property, not a window one
-  var burn = (isAll && sentDay && epl) ? sentDay / epl : null;
+  var burn = (sentDay && epl) ? sentDay / epl : null;
   var days = burn && burn > 0 ? Math.floor(v.leadsLeft / burn) : null;
   var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
   var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
@@ -2019,8 +2128,25 @@ $("ah-lchips").addEventListener("click", function (e) {
   if (!b || b.classList.contains("off") || b.classList.contains("tot")) return;
   var k = b.getAttribute("data-s");
   state.on[k] = !state.on[k];
+  if (k === "sent") saveFilters();   // sent bars default-on preference is persisted
   renderTrend();
 });
+// Hide-weekends toggle for the day-by-day chart
+(function () {
+  var wt = $("ah-weekend");
+  function sync() {
+    wt.classList.toggle("on", state.hideWeekends);
+    wt.setAttribute("aria-pressed", state.hideWeekends ? "true" : "false");
+    wt.textContent = state.hideWeekends ? "Show weekends" : "Hide weekends";
+  }
+  wt.addEventListener("click", function () {
+    state.hideWeekends = !state.hideWeekends;
+    saveFilters();
+    sync();
+    renderTrend();
+  });
+  sync();
+})();
 $("trend-svg").addEventListener("mousemove", trendMove);
 $("trend-svg").addEventListener("mouseleave", hideTip);
 $("ah-retry").addEventListener("click", boot);

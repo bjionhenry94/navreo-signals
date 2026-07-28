@@ -13805,6 +13805,12 @@ def _client_win_build():
     for ws, s in series.items():
         if ws != "navreo":  # navreo's own line rides the __all sum, as before
             out_series[_client_win_label(ws, None)] = s
+    # Navreo-workspace daily series exposed under a reserved key so the page can
+    # split it across the clients that SHARE that workspace (Navreo, Amplifyy,
+    # Arnic) proportionally — they have no daily line of their own, only window
+    # totals, and Bjion needs per-day sent per client (2026-07-28).
+    if "navreo" in series:
+        out_series["__navreo_ws"] = series["navreo"]
     if series:
         agg = {k: [0] * 30 for k in ("sent", "replied", "bounced")}
         for s in series.values():
