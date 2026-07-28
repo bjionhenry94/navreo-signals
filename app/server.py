@@ -7942,15 +7942,52 @@ def _ah_title_bucket(title: str) -> str:
     t = (title or "").strip().lower()
     if not t:
         return "Unknown"
-    if re.search(r"founder|ceo|chief exec|owner|president|managing director", t):
+    if re.search(r"founder|ceo|chief exec|owner|president|proprietor", t):
         return "Founders and CEOs"
+    if re.search(r"managing director|\bmd\b|manging director", t):
+        return "Managing Directors"
     if re.search(r"sales|revenue|cro|business development|commercial|account manager|account exec", t):
         return "Sales leaders"
-    if re.search(r"marketing|growth|brand|cmo", t):
-        return "Marketing"
-    if re.search(r"operations|operating|coo", t):
+    if re.search(r"marketing|growth|demand|brand|cmo", t):
+        return "Marketing and Growth"
+    if re.search(r"\bcto\b|\bcfo\b|\bcoo\b|\bcpo\b|chief ", t):
+        return "Other C-level"
+    if re.search(r"\bvp\b|vice president|head of|director|partner", t):
+        return "VPs and Directors"
+    if re.search(r"operations|operating", t):
         return "Operations"
+    if re.search(r"manager|lead\b", t):
+        return "Managers"
     return "Other"
+
+
+def _ah_size_bucket(employee_range, employee_count) -> str | None:
+    """Company headcount → one of five size bands, from companies.employee_range
+    (e.g. '11-50') or the raw employee_count."""
+    n = None
+    r = (str(employee_range or "")).strip()
+    m = re.search(r"(\d[\d,]*)", r.replace(",", ""))
+    if m:
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            n = None
+    if n is None and employee_count not in (None, ""):
+        try:
+            n = int(float(employee_count))
+        except (ValueError, TypeError):
+            n = None
+    if n is None:
+        return None
+    if n <= 10:
+        return "1–10"
+    if n <= 50:
+        return "11–50"
+    if n <= 200:
+        return "51–200"
+    if n <= 1000:
+        return "201–1,000"
+    return "1,000+"
 
 
 def _ah_subject_label(subject: str) -> str:
@@ -8115,13 +8152,17 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
                     offset += 100
         except Exception:  # noqa: BLE001
             continue
-    # Smartlead rarely carries titles — fill the gaps from the central data
-    # layer (people first, then signal_leads) before bucketing.
+    # Smartlead rarely carries titles — fill the gaps from every title source in
+    # the database: people, signal_leads, and the recontact batches (r250k_*).
     missing = sorted({em for _c, em in pos_pairs if em and not (title_map.get(em) or "").strip()})
     for i in range(0, len(missing), 100):
         batch = ",".join('"' + m + '"' for m in missing[i:i + 100])
-        for table, col in (("people", "title"), ("signal_leads", "title")):
-            rows = sb("GET", f"{table}?email=in.({urllib.parse.quote(batch)})&select=email,{col}")
+        for table, col in (("people", "title"), ("signal_leads", "title"),
+                           ("r250k_agrade", "title"), ("r250k_batch", "title")):
+            try:
+                rows = sb("GET", f"{table}?email=in.({urllib.parse.quote(batch)})&select=email,{col}")
+            except Exception:  # noqa: BLE001 — a missing table never kills the insight
+                rows = None
             for r in (rows if isinstance(rows, list) else []):
                 em = (r.get("email") or "").strip().lower()
                 if em and (r.get(col) or "").strip() and not (title_map.get(em) or "").strip():
@@ -8138,19 +8179,75 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     named = n_pos - buckets.get("Unknown", 0)
     blist = sorted(buckets.items(), key=lambda kv: -kv[1])
     blist = [b for b in blist if b[0] != "Unknown"] + [b for b in blist if b[0] == "Unknown"]
+
+    # Company size of the repliers — join their email domain to companies.
+    dom_of = {em: em.split("@", 1)[1].lower() for _c, em in pos_pairs if em and "@" in em}
+    size_of: dict = {}
+    domains = sorted(set(dom_of.values()))
+    for i in range(0, len(domains), 100):
+        batch = ",".join('"' + d + '"' for d in domains[i:i + 100])
+        try:
+            rows = sb("GET", f"companies?domain=in.({urllib.parse.quote(batch)})"
+                              "&select=domain,employee_range,employee_count")
+        except Exception:  # noqa: BLE001
+            rows = None
+        for r in (rows if isinstance(rows, list) else []):
+            sb_ = _ah_size_bucket(r.get("employee_range"), r.get("employee_count"))
+            if sb_:
+                size_of[(r.get("domain") or "").lower()] = sb_
+    size_buckets: dict = {}
+    seen_sz = set()
+    for cid, em in pos_pairs:
+        if (cid, em) in seen_sz:
+            continue
+        seen_sz.add((cid, em))
+        b = size_of.get(dom_of.get(em))
+        if b:
+            size_buckets[b] = size_buckets.get(b, 0) + 1
+    _SIZE_ORDER = ["1–10", "11–50", "51–200", "201–1,000", "1,000+"]
+    slist = [[k, size_buckets[k]] for k in _SIZE_ORDER if k in size_buckets]
+    size_named = sum(size_buckets.values())
+
+    # Response speed to interested replies (setter answer time) — benchmark 15 min.
+    speed = None
+    try:
+        since = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = sb("GET", "setter_queue?select=sent_at,replied_at&status=in.(sent,auto_sent)"
+                         "&is_test=eq.false&sent_at=not.is.null&replied_at=not.is.null"
+                         f"&sent_at=gte.{since}&limit=3000")
+        mins = []
+        for r in (rows if isinstance(rows, list) else []):
+            try:
+                st = datetime.fromisoformat(str(r["sent_at"]).replace("Z", "+00:00"))
+                rp = datetime.fromisoformat(str(r["replied_at"]).replace("Z", "+00:00"))
+                mm = (st - rp).total_seconds() / 60.0
+                if mm > 0:
+                    mins.append(mm)
+            except Exception:  # noqa: BLE001
+                continue
+        if mins:
+            mins.sort()
+            speed = {"n": len(mins), "avg_mins": round(sum(mins) / len(mins)),
+                     "median_mins": round(mins[len(mins) // 2]),
+                     "under15_share": round(sum(1 for m in mins if m <= 15) / len(mins), 2)}
+    except Exception as e:  # noqa: BLE001
+        print(f"[analytics-hub] response-speed calc failed: {e}", file=sys.stderr)
+
     who_payload = None
     if n_pos > 0:
         top_named = next((b for b in blist if b[0] not in ("Unknown", "Other")), None)
-        low = named < max(10, n_pos * 0.4)  # too few known titles to chart honestly
+        low = named < 8  # show the mix whenever we have a handful of titles ("even roughly")
         who_payload = {
             "kind": "who-replies", "tag": "fine", "client": "All", "owner": "Lilly",
-            "bold": (f"{top_named[0]} answer most — {top_named[1]} of the last {n_pos} interested."
+            "bold": (f"{top_named[0]} answer most — {top_named[1]} of the {named} interested with a known title."
                      if (top_named and not low) else f"{n_pos} interested replies in the last 30 days."),
-            "act": (f"Aim new lists at {top_named[0].lower()} — {top_named[1]} of {n_pos} interested replies."
-                    if (top_named and not low) else "Add job titles to lead lists so this panel can name your buyers."),
-            "note": "Job titles of everyone who replied Interested / Information Request / Meeting Request / Call Booked in the last 30 days.",
+            "act": (f"Aim new lists at {top_named[0].lower()} — most of your real yeses."
+                    if (top_named and not low) else "Enrich lead lists with job titles so this panel can name your buyers."),
+            "note": "Job titles + company size of everyone who replied Interested / Information Request / Meeting Request / Call Booked in the last 30 days, from the database.",
             "stats": {"n": n_pos, "named": named, "low_coverage": low,
-                      "buckets": [[k, v] for k, v in blist]},
+                      "buckets": [[k, v] for k, v in blist],
+                      "sizes": slist, "size_named": size_named},
+            "speed": speed,
             "source": src_note,
         }
 

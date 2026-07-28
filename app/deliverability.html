@@ -502,12 +502,13 @@
       </div>
       <div class="cards c23">
         <div class="acard">
-          <div class="card-kick">Job type <span style="text-transform:none;letter-spacing:0;font-weight:500">· sample of <span id="who-n">–</span> interested repliers with a known title · whole book</span></div>
+          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title · whole book</span></div>
           <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
+          <div class="subline" id="who-size" style="margin-top:8px">&nbsp;</div>
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
         </div>
         <div class="acard">
-          <div class="card-kick">Waiting for an answer <span id="wait-scope" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
+          <div class="card-kick">How fast we answer <span id="wait-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· interested replies · benchmark 15 min</span></div>
           <div class="bignum num" id="wait-big">–</div>
           <div class="subline" id="wait-sub">&nbsp;</div>
           <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
@@ -1822,31 +1823,46 @@ function renderOffer() {
 /* ── lane 5: who replies + waiting ── */
 function renderWho() {
   var p = bookRow("who-replies");
-  if (p && p.stats && p.stats.low_coverage) {
-    // fewer than 4 in 10 repliers have a known job title — a chart would lie
-    $("who-n").textContent = fmtN(p.stats.n);
-    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data yet.</div>';
-    if (p.act) { $("who-take").textContent = p.act; $("who-take-row").style.display = ""; }
-  } else if (p && p.stats && p.stats.buckets && p.stats.buckets.length) {
-    var b = p.stats.buckets.slice(0, 5);
+  var named = (p && p.stats && p.stats.named) || 0;
+  // ── left box: who's replying (role mix + company size), from the database ──
+  var roleRows = (p && p.stats && p.stats.buckets) ? p.stats.buckets.filter(function (x) { return x[0] !== "Unknown"; }) : [];
+  if (named >= 3 && roleRows.length) {
+    var b = roleRows.slice(0, 6);
     var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
-    $("who-n").textContent = fmtN(p.stats.n);
+    $("who-n").textContent = fmtN(named);
     $("who-rows").innerHTML = b.map(function (x, i) {
       return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
         '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
         '<span class="val num">' + fmtN(x[1]) + "</span></div>";
     }).join("");
+    // company size line
+    var sizes = (p.stats.sizes || []);
+    if (sizes.length) {
+      var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
+      $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
+        sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
+    } else $("who-size").textContent = "Company size: not enough on file yet.";
     if (p.act) { $("who-take").textContent = p.act; $("who-take-row").style.display = ""; }
-  }
-  var wk = bookRow("weekly");
-  var st = wk && wk.stats;
-  $("wait-scope").textContent = state.client === "All" ? "" : "· whole book, not just " + state.client;
-  if (st && st.waiting != null) {
-    $("wait-big").textContent = fmtN(st.waiting);
-    $("wait-sub").textContent = "interested people with no answer yet · " + fmtN(st.answered || 0) + " answered";
-    $("wait-take").textContent = st.waiting > 0 ? "Answer these first — they already said yes." : "All answered — nice.";
   } else {
-    $("wait-big").textContent = "–"; $("wait-sub").textContent = ""; $("wait-take").textContent = "";
+    $("who-n").textContent = fmtN((p && p.stats && p.stats.n) || 0);
+    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data yet — enrich the lead lists.</div>';
+    $("who-size").textContent = "";
+    if (p && p.act) { $("who-take").textContent = p.act; $("who-take-row").style.display = ""; }
+  }
+  // ── right box: how fast we answer interested replies (benchmark 15 min) ──
+  var sp = p && p.speed;
+  $("wait-scope").textContent = "· interested replies · benchmark 15 min";
+  if (sp && sp.n > 0) {
+    var med = sp.median_mins, pct = Math.round((sp.under15_share || 0) * 100);
+    $("wait-big").textContent = fmtMins(med);
+    $("wait-big").className = "bignum num" + (med > 15 ? " warn" : "");
+    $("wait-sub").textContent = "median answer time · " + pct + " in 100 answered under 15 min · " +
+      fmtN(sp.n) + " answered";
+    $("wait-take").textContent = med <= 15
+      ? "Under the 15-minute benchmark — keep it up."
+      : "Over the 15-minute benchmark — answer faster to book more.";
+  } else {
+    $("wait-big").textContent = "–"; $("wait-sub").textContent = "No answered replies to time yet."; $("wait-take").textContent = "";
   }
 }
 
