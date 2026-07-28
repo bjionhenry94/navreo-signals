@@ -13725,14 +13725,27 @@ def _client_win_label(workspace, name) -> str:
 
 
 def _client_win_restore():
-    if _CLIENT_WIN["data"] is None and _CLIENT_WIN_FILE.exists():
+    """Warm-boot restore. Supabase first (survives deploys — Render's disk
+    doesn't, and every deploy left the page in its all-time fallback for the
+    ~8-minute rebuild, seen live by Bjion 2026-07-28), local file second."""
+    if _CLIENT_WIN["data"] is not None:
+        return
+    snap = None
+    try:
+        rows = sb("GET", "deliverability_audit_cache?id=eq.client_windows&select=blob")
+        if rows and isinstance(rows[0].get("blob"), dict) and rows[0]["blob"].get("windows"):
+            snap = rows[0]["blob"]
+    except Exception as e:  # noqa: BLE001
+        print(f"[client-win] supabase restore failed: {e}", file=sys.stderr)
+    if snap is None and _CLIENT_WIN_FILE.exists():
         try:
             snap = json.loads(_CLIENT_WIN_FILE.read_text())
-            with _CLIENT_WIN_LOCK:
-                if _CLIENT_WIN["data"] is None:
-                    _CLIENT_WIN.update(data=snap, ts=0.0)  # ts 0 → refresh kicks
         except Exception as e:  # noqa: BLE001 — a bad snapshot is just a cold cache
-            print(f"[client-win] snapshot restore failed: {e}", file=sys.stderr)
+            print(f"[client-win] file restore failed: {e}", file=sys.stderr)
+    if snap is not None:
+        with _CLIENT_WIN_LOCK:
+            if _CLIENT_WIN["data"] is None:
+                _CLIENT_WIN.update(data=snap, ts=0.0)  # ts 0 → refresh kicks
 
 
 def _client_win_build():
@@ -13885,6 +13898,13 @@ def _client_win_run_bg():
         return
     with _CLIENT_WIN_LOCK:
         _CLIENT_WIN.update(data=data, ts=time.time(), running=False, error=None)
+    try:
+        sb("POST", "deliverability_audit_cache?on_conflict=id",
+           {"id": "client_windows", "blob": data,
+            "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001 — persistence is best-effort
+        print(f"[client-win] supabase persist failed: {e}", file=sys.stderr)
     try:
         _CLIENT_WIN_FILE.parent.mkdir(parents=True, exist_ok=True)
         _CLIENT_WIN_FILE.write_text(json.dumps(data))

@@ -1024,7 +1024,8 @@ function renderFunnel() {
   $("fr1").setAttribute("d", ribbon(143, 297, y[0], y[0] + h[0], y[1], y[1] + h[1]));
   $("fr2").setAttribute("d", ribbon(363, 517, y[1], y[1] + h[1], y[2], y[2] + h[2]));
   $("fr3").setAttribute("d", ribbon(583, 737, y[2], y[2] + h[2], y[3], y[3] + h[3]));
-  $("tag-pipeline").textContent = "Your pipeline · " + (v.win ? rangeLabel() : "all time");
+  $("tag-pipeline").textContent = "Your pipeline · " +
+    (v.win ? rangeLabel() : "all time — the " + rangeLabel() + " view is warming up, ~2 min");
   var r1 = v.sent ? v.rep / v.sent : 0, r2 = v.rep ? v.pos / v.rep : 0, r3 = v.pos ? v.mtg / v.pos : 0;
   // "each lead gets ~N emails" is a lifetime property of the sequences — it
   // has no meaning inside a 7/14/30 window, so it only shows in fallback mode
@@ -1454,7 +1455,7 @@ function renderRank() {
   if (!rowsLT.length) rowsLT = scoreRows().filter(function (c) { return (c.sent || 0) >= 500; });
   rowsLT.sort(function (a, b) { return (b.replied / b.sent) - (a.replied / a.sent); });
   var topLT = rowsLT.slice(0, 8);
-  $("rank-scope").textContent = "· all time";
+  $("rank-scope").textContent = "· all time — the " + rangeLabel() + " view is warming up";
   var maxRateLT = topLT.length ? topLT[0].replied / topLT[0].sent : 1;
   var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Interested</span><span style="text-align:right">Meetings</span></div>';
   topLT.forEach(function (c, i) {
