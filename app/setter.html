@@ -1254,7 +1254,10 @@ function refreshOpenDetail() {
    load and re-fetched after every tray/detail action and every send. */
 async function loadUnresolvedTray() {
   const res = await fetchJson("/api/setter/subsequence/unresolved");
-  unresolvedRows = (res.ok && res.data && Array.isArray(res.data.rows)) ? res.data.rows : [];
+  // A FAILED fetch keeps the last good rows instead of zeroing them - the
+  // zero made the next successful fetch read as "new sends arrived" and pop
+  // the tray open out of nowhere (same keep-last-good rule as loadQueue).
+  if (res.ok && res.data && Array.isArray(res.data.rows)) unresolvedRows = res.data.rows;
   renderUnresolvedTray();
 }
 function unresolvedAgeHours(r) {
