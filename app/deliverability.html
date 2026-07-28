@@ -769,8 +769,13 @@ function renderChips() {
   // client-windows sweep, and the scorecard — so one cold/failed call can
   // never leave the page with just "All clients" (seen live after the
   // 2026-07-28 redeploy, when the hub RPC was still waking up).
+  // dedup case-INSENSITIVELY: the scorecard fallback title-cases a workspace
+  // slug ("Krg") before CW.ws_labels arrives with the canonical "KRG", and an
+  // exact-string dedup rendered BOTH as separate chips (seen live 2026-07-28).
+  // Sources are added canonical-first (hub → CW → scorecard) so the first
+  // casing wins.
   var seen = {}, names = [];
-  function add(c) { if (c && c !== "__all" && !seen[c]) { seen[c] = 1; names.push(c); } }
+  function add(c) { if (c && c !== "__all" && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
   ((HUB && HUB.clients) || []).forEach(add);
   if (CW && CW.windows && CW.windows["30"]) Object.keys(CW.windows["30"]).forEach(add);
   if (SCORE && SCORE.campaigns) {
