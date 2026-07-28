@@ -1909,43 +1909,55 @@ function loadHub() {
     if (++_hubPolls <= 10) setTimeout(loadHub, 15000);
   }).catch(function () { if (++_hubPolls <= 10) setTimeout(loadHub, 15000); });
 }
+// Incremental boot: paint each section the instant its OWN endpoint lands,
+// instead of waiting on the slowest of nine (the analytics-hub RPC and the
+// campaign-scorecard read can each take 30-70s when Supabase is busy, and the
+// old Promise.allSettled held the ENTIRE page hostage to them). The shell and
+// every fast read (trends / campaigns-unified / audit ~0.4s) now paint in well
+// under a second; the heavy sections fill in when they arrive, exactly like the
+// client-windows poller already did. renderAll() is a full re-render from the
+// module globals, so calling it repeatedly is safe and idempotent — a debounce
+// coalesces the burst of near-simultaneous resolutions into one paint.
+var _renderT = 0;
+function scheduleRender() {
+  if (_renderT) return;
+  _renderT = setTimeout(function () { _renderT = 0; renderAll(); }, 16);
+}
 function boot() {
   $("ah-databar").classList.remove("show");
-  Promise.allSettled([
-    j("/api/analytics-hub?days=30"),
-    j("/api/deliverability-trends?days=30"),
-    j("/api/campaign-scorecard"),
-    j("/api/cockpit/insights"),
-    j("/api/campaigns-unified"),
-    j("/api/signals/daily"),
-    j("/api/sources?slim=1"),
-    j("/api/deliverability/_audit"),
-    j("/api/client-windows"),
-  ]).then(function (rs) {
-    HUB = rs[0].status === "fulfilled" && !rs[0].value.error ? rs[0].value : null;
+  var criticalLeft = 2;  // HUB + SCORE — the two that gate the "unavailable" note
+  function criticalSettled() {
+    if (--criticalLeft > 0) return;
+    if (!HUB && !SCORE) {
+      $("ah-databar-msg").textContent = "Live data unavailable right now.";
+      $("ah-databar").classList.add("show");
+    }
+  }
+  j("/api/analytics-hub?days=30").then(function (d) {
+    HUB = d && !d.error ? d : null;
     // a restored client that no longer exists must not ghost-filter the page
     if (HUB && state.client !== "All" && (HUB.clients || []).indexOf(state.client) < 0) {
       state.client = "All";
       saveFilters();
       updateLens();
     }
-    TRENDS = rs[1].status === "fulfilled" ? rs[1].value : null;
-    SCORE = rs[2].status === "fulfilled" ? rs[2].value : null;
-    INS = rs[3].status === "fulfilled" ? rs[3].value : null;
-    UNI = rs[4].status === "fulfilled" ? rs[4].value : null;
-    SIG = rs[5].status === "fulfilled" && !rs[5].value.error ? rs[5].value : null;
-    SRC = rs[6].status === "fulfilled" ? rs[6].value : null;
-    AUDIT = rs[7].status === "fulfilled" ? rs[7].value : null;
-    var cwv = rs[8].status === "fulfilled" ? rs[8].value : null;
-    if (cwv && !cwv.building && cwv.windows) CW = cwv;
-    else setTimeout(loadCW, 20000);
     if (!HUB) setTimeout(loadHub, 15000);
-    if (!HUB && !SCORE) {
-      $("ah-databar-msg").textContent = "Live data unavailable right now.";
-      $("ah-databar").classList.add("show");
-    }
-    renderAll();
-  });
+  }, function () { HUB = null; setTimeout(loadHub, 15000); })
+    .then(function () { criticalSettled(); scheduleRender(); });
+  j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
+    .then(function () { criticalSettled(); scheduleRender(); });
+  j("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; scheduleRender(); }, function () {});
+  j("/api/cockpit/insights").then(function (d) { INS = d; scheduleRender(); }, function () {});
+  j("/api/campaigns-unified").then(function (d) { UNI = d; scheduleRender(); }, function () {});
+  j("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
+  j("/api/sources?slim=1").then(function (d) { SRC = d; scheduleRender(); }, function () {});
+  j("/api/deliverability/_audit").then(function (d) { AUDIT = d; scheduleRender(); }, function () {});
+  j("/api/client-windows").then(function (d) {
+    if (d && !d.building && d.windows) { CW = d; scheduleRender(); }
+    else setTimeout(loadCW, 20000);
+  }, function () { setTimeout(loadCW, 20000); });
+  // First paint immediately from the fallback globals — never blocked on a fetch.
+  renderAll();
 }
 renderChips();
 renderHead();
