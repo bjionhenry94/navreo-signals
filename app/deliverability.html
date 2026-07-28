@@ -448,7 +448,13 @@
            batch sub-tabs, history and fleet details. -->
       <div style="margin-top:14px">
         <div class="fleetnote" id="dlv-lens-note">Whole sending fleet — all clients. (Mailbox health is about today, so the date range doesn't apply here.)</div>
-        <div id="dlv-embed-slot"></div>
+        <!-- On a client view the engine room folds shut: it is whole-fleet ops
+             plumbing either way, and repeating it full-length under every chip
+             buried the per-client story (round-2 testers). -->
+        <details id="dlv-embed-fold" open>
+          <summary id="dlv-embed-summary" style="cursor:pointer;font:600 12.5px/1.4 var(--font-sans);color:var(--ink-2);padding:6px 0">Engine room — mailbox &amp; domain health for the ops team (whole fleet)</summary>
+          <div id="dlv-embed-slot"></div>
+        </details>
       </div>
     </section>
 
@@ -505,7 +511,7 @@
       </div>
       <div class="cards c23">
         <div class="acard">
-          <div class="card-kick">Job type <span style="text-transform:none;letter-spacing:0;font-weight:500">· of <span id="who-n">–</span> interested · whole book</span></div>
+          <div class="card-kick">Job type <span style="text-transform:none;letter-spacing:0;font-weight:500">· sample of <span id="who-n">–</span> interested repliers with a known title · whole book</span></div>
           <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
         </div>
@@ -723,6 +729,34 @@ function rateAvg() {      // ONE reply rate: repliesShown ÷ sentShown — the s
 }
 function slice(a) { return a.slice(Math.max(0, a.length - state.range)); }
 function rangeLabel() { return "last " + state.range + " days"; }
+function priorComparison() {
+  // "how does this window compare to the one before it" in one sentence —
+  // round 2's founder had to memorise the 30d chips to compare against 7d.
+  // Only exact numbers: prior-7 sent = 14d − 7d; prior-14 sent needs a daily
+  // series; replies always have a 30-day series. 30d has no prior window.
+  if (state.range === 30 || !CW || !CW.windows) return "";
+  var kk = state.client === "All" ? "__all" : state.client;
+  var cur = cwFor(state.client);
+  if (!cur) return "";
+  var prevSent = null;
+  if (state.range === 7) {
+    var w14 = CW.windows["14"] && CW.windows["14"][kk];
+    if (w14) prevSent = w14.sent - cur.sent;
+  } else if (state.range === 14) {
+    var ser = CW.series && CW.series[kk];
+    if (ser) prevSent = ser.sent.slice(-28, -14).reduce(function (a, b) { return a + (b || 0); }, 0);
+  }
+  var repArr = seriesFor("replies");
+  var repCur = null, repPrev = null;
+  if (repArr && repArr.length >= state.range * 2) {
+    repCur = slice(repArr).reduce(function (a, b) { return a + (b || 0); }, 0);
+    repPrev = repArr.slice(-state.range * 2, -state.range).reduce(function (a, b) { return a + (b || 0); }, 0);
+  }
+  var bits = [];
+  if (prevSent != null && prevSent >= 0) bits.push("sent " + fmtN(cur.sent) + " (was " + fmtN(prevSent) + ")");
+  if (repCur != null) bits.push("replies " + fmtN(repCur) + " (was " + fmtN(repPrev) + ")");
+  return bits.length ? " Vs the " + state.range + " days before: " + bits.join(" · ") + "." : "";
+}
 
 function renderChips() {
   var names = ["All"].concat((HUB && HUB.clients) || []);
@@ -829,8 +863,25 @@ function renderTrend() {
   var cw = cwFor(state.client);
   var sentTot = cw ? cw.sent : slice(fleetSeries().sent).reduce(function (a, b) { return a + b; }, 0);
   var bTot = cw ? cw.bounced : slice(fleetSeries().bounces).reduce(function (a, b) { return a + b; }, 0);
-  $("trend-sub").textContent = "Every line is a count per day" +
+  var sub = "Every line is a count per day" +
     (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
+  sub += priorComparison();
+  // close the ledger: the all-clients total includes campaigns archived since
+  // they sent, which belong to no chip (9,081 unattributed sends confused
+  // round 2's CRO) — and greyed chips get their explanation in plain sight
+  if (state.client === "All" && CW && CW.windows) {
+    var wAll = CW.windows[String(state.range)] || {};
+    var clientSum = 0;
+    Object.keys(wAll).forEach(function (k) { if (k !== "__all") clientSum += wAll[k].sent || 0; });
+    var orphan = (wAll.__all ? wAll.__all.sent : 0) - clientSum;
+    if (orphan > Math.max(50, sentTot * 0.002)) {
+      sub += " Includes " + fmtN(orphan) + " sent by campaigns since archived — they sit under no client chip.";
+    }
+  }
+  if (cw && seriesFor("sent") == null) {
+    sub += " " + escq(state.client) + "'s totals here are exact; day-by-day lines exist for the whole book, Asteri and KRG.";
+  }
+  $("trend-sub").textContent = sub;
   var rep = slice(seriesFor("replies")), mtg = slice(seriesFor("meetings"));
   $("trend-take").textContent = takeLine(rep, mtg);
   hideTip();
@@ -838,14 +889,16 @@ function renderTrend() {
 function halfSum(a, back) { var t = 0; for (var i = Math.max(0, a.length - back); i < a.length; i++) t += a[i] || 0; return t; }
 function takeLine(rep, mtg) {
   // a trend sentence over a handful of replies is noise dressed as insight
-  // (the "replies are up" verdict over 2 Asteri replies, 2026-07-28 testers)
+  // (the "replies are up" verdict over 2 Asteri replies, 2026-07-28 testers);
+  // and the sentence carries its own numbers + window, so it can't read as a
+  // contradiction of the calendar-month meetings card lower down
   var rTot = rep.reduce(function (a, b) { return a + (b || 0); }, 0);
   if (rTot < 10) return "Small numbers in this view — read the counts, not the trend.";
   var r1 = halfSum(rep, 7), r0 = halfSum(rep, 14) - r1;
   var m1 = halfSum(mtg, 7), m0 = halfSum(mtg, 14) - m1;
-  var mPh = m1 > m0 ? "Meetings are climbing" : (m1 < m0 ? "Meetings dipped this week" : "Meetings are steady");
-  var rPh = r1 > r0 * 1.15 ? "replies are up" : (r1 < r0 * 0.85 ? "replies slowed" : "replies are steady");
-  return mPh + " — " + rPh + " this week.";
+  var rPh = r1 > r0 * 1.15 ? "up on" : (r1 < r0 * 0.85 ? "down on" : "level with");
+  return "This week: " + fmtN(m1) + " meeting" + (m1 === 1 ? "" : "s") + " (" + fmtN(m0) +
+    " last week) · " + fmtN(r1) + " replies, " + rPh + " last week's " + fmtN(r0) + ".";
 }
 function hideTip() {
   var g = document.getElementById("tr-hov");
@@ -1025,11 +1078,18 @@ function renderStrip(v) {
   var dead = decisionRows().length;
   set("ssd2", "sss2", dead > 0 ? "red" : "green",
       dead > 0 ? dead + (dead === 1 ? " campaign stopped working" : " campaigns stopped working") : "campaigns steady");
-  // 3 · positives waiting for an answer (book weekly stats)
+  // 3 · positives waiting for an answer (book weekly stats). The whole-book
+  // waiting count next to a client's own zero read as a contradiction — on a
+  // client view this tile shows THAT client's interested count instead.
   var wk = bookRow("weekly");
   var waiting = wk && wk.stats && wk.stats.waiting;
-  set("ssd3", "sss3", waiting > 0 ? "amber" : "mute",
-      waiting > 0 ? fmtN(waiting) + " waiting for an answer" : fmtN(v.pos) + " interested so far");
+  if (state.client !== "All") {
+    set("ssd3", "sss3", v.pos > 0 ? "green" : "mute",
+        fmtN(v.pos) + " interested · " + rangeLabel());
+  } else {
+    set("ssd3", "sss3", waiting > 0 ? "amber" : "mute",
+        waiting > 0 ? fmtN(waiting) + " waiting for an answer" : fmtN(v.pos) + " interested so far");
+  }
   // 4 · meetings vs last month
   var mm = HUB && HUB.meetings_monthly && HUB.meetings_monthly[ckey()];
   if (mm) {
@@ -1273,26 +1333,37 @@ function renderWeek() {
 
   var cwc = cwFor(state.client);
   if (d.scope === "fleet" && state.client !== "All" && cwc && cwc.sent > 0) {
-    // shared-workspace client: their real window rate, fleet line for shape
-    $("week-sub").textContent = state.client + ": " + (Math.round(cwc.replied / cwc.sent * 1000) / 10) +
-      "% over the " + rangeLabel() + " · the line shows the whole fleet day by day.";
+    // shared-workspace client: their real window rate — same maths as the
+    // legend chip (rateAvg), so the two can never disagree — fleet line for shape
+    var wra = rateAvg();
+    $("week-sub").textContent = state.client + ": " + (wra == null ? "–" : wra + "%") +
+      " over the " + rangeLabel() + " · the line shows the whole fleet day by day.";
   } else {
-    $("week-sub").textContent = avg == null ? "" :
+    // rateAvg(), not the send-weighted daily mean: the daily mean drops
+    // sub-minimum days and drifted a decimal from the legend chip (round 2)
+    var pooled = rateAvg();
+    $("week-sub").textContent = pooled == null ? "" :
       (d.scope === "fleet" || d.scope === "all" ? "" : d.scope + ": ") +
-      "Averaging " + avg.toFixed(1) + "% over the " + rangeLabel() + ".";
+      "Averaging " + pooled + "% over the " + rangeLabel() + ".";
   }
 
   // first half vs second half of the window — the direction that matters
   var half = Math.ceil(pts.length / 2);
   var mean = function (arr) { return arr.reduce(function (a, b) { return a + b; }, 0) / (arr.length || 1); };
   var a0 = mean(vals.slice(0, half)), a1 = mean(vals.slice(half));
-  $("week-take").textContent = repliesShown() < 10
-    ? "Not enough replies in this window to call a trend."
-    : (a1 >= a0 * 1.15
-      ? "Reply rate is climbing — keep the current messaging running."
-      : (a1 <= a0 * 0.85
-        ? "Reply rate is sliding — refresh the copy on your biggest senders."
-        : "Reply rate is holding steady — nothing to fix here."));
+  // never praise the messaging while this very section's bounce card is over
+  // the 2% limit — "keep going" above a breach read as a contradiction
+  var cwB = cwFor(state.client);
+  var overLimit = cwB && cwB.sent > 0 && (cwB.bounced / cwB.sent * 100) >= BNC_LIMIT;
+  $("week-take").textContent = overLimit
+    ? "Replies aside — bounces are over the 2% limit. Fix the landing problem on the right first."
+    : (repliesShown() < 10
+      ? "Not enough replies in this window to call a trend."
+      : (a1 >= a0 * 1.15
+        ? "Reply rate is climbing — keep the current messaging running."
+        : (a1 <= a0 * 0.85
+          ? "Reply rate is sliding — refresh the copy on your biggest senders."
+          : "Reply rate is holding steady — nothing to fix here.")));
 }
 
 /* ── lane 4: ranking + dying + the offer ── */
@@ -1321,9 +1392,12 @@ function renderRank() {
       var rate = c.sent ? c.replied / c.sent : 0;
       var w = Math.max(2, Math.round(rate / (maxRate || 1) * 100));
       var bad = rate < 0.01;
+      var scLT = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
+      var noYes = scLT && (scLT.sent || 0) >= 2000 && !(scLT.positives || 0);
       s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
         '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
-        (i === 0 && rate >= 0.02 && c.sent >= minSent * 4 ? '<span class="apill green">Best</span>' : "") +
+        (i === 0 && rate >= 0.02 && c.sent >= minSent * 4 && !noYes ? '<span class="apill green">Best</span>' : "") +
+        (noYes ? '<span class="apill mute" title="Lots of replies, but none has been a real yes yet">replies, no yes yet</span>' : "") +
         (!c.active ? '<span class="apill mute">finished</span>' : "") +
         '</div><div class="rsub">' + escq(c.client) + " · " + rangeLabel() + "</div></div>" +
         '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
@@ -1338,8 +1412,13 @@ function renderRank() {
     decisionRows().forEach(function (r) { deadIds[r.scope] = 1; });
     var bad = {};
     win.forEach(function (r) { if (r.sent >= 300 && r.bounced / r.sent >= 0.02) bad[r.id] = 1; });
-    var pick = top.filter(function (c) { return !deadIds[c.id] && !bad[c.id] && (c.replied / c.sent) >= 0.01; })[0];
-    $("rank-take").textContent = pick ? "Launch more campaigns like “" + shortName(pick.name) + "”." : "";
+    var pick = top.filter(function (c) {
+      var sc2 = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
+      var noYes2 = sc2 && (sc2.sent || 0) >= 2000 && !(sc2.positives || 0);
+      return !deadIds[c.id] && !bad[c.id] && !noYes2 && (c.replied / c.sent) >= 0.01;
+    })[0];
+    $("rank-take").textContent = pick ? "Launch more campaigns like “" + shortName(pick.name) + "”."
+      : (top.length ? "No clear winner in this window — see the flags above." : "");
     renderDying();
     return;
   }
@@ -1473,9 +1552,11 @@ function renderMeet() {
   $("meet-mv2").textContent = fmtN(t);
   $("meet-mb2").style.height = Math.max(6, Math.round(t / max * 84)) + "px";
   var lat = HUB.latency && HUB.latency[ckey()];
-  $("meet-take").textContent = d >= 0
-    ? (lat && lat.avg_mins > 60 ? "Answer faster to push it higher." : "Keep doing what works.")
-    : "Down on last month — check the leak above.";
+  $("meet-take").textContent = (t === 0 && pv === 0)
+    ? "No meetings booked yet" + (state.client === "All" ? "" : " for " + state.client) + " — fix the biggest leak above first."
+    : (d >= 0
+      ? (lat && lat.avg_mins > 60 ? "Answer faster to push it higher." : "Keep doing what works.")
+      : "Down on last month — check the leak above.");
 }
 
 /* ── header ── */
@@ -1678,12 +1759,19 @@ function renderBounce() {
       }).join("")
     : '<div class="subline" style="padding-top:8px">Every list is under 2%.</div>';
 
-  $("bnc-take").textContent = rows.length
-    ? "Pause " + rows[0].label +
+  // the take names the row with the MOST returns; when a smaller list bounces
+  // far harder, name it too — round 2 caught a 13.4% row going unmentioned
+  // while the take talked about a 3.3% one
+  var takeTxt = "Nothing over 2% — keep sending.";
+  if (rows.length) {
+    takeTxt = "Pause " + rows[0].label +
       (state.client === "All" && rows[0].client && rows[0].label.indexOf(rows[0].client) < 0
         ? " (" + rows[0].client + ")" : "") +
-      ", get those addresses re-checked, then switch them back on."
-    : "Nothing over 2% — keep sending.";
+      ", get those addresses re-checked, then switch them back on.";
+    var hotter = rows.slice(1, 3).filter(function (r) { return r.pct >= rows[0].pct + 1; })[0];
+    if (hotter) takeTxt += " " + hotter.label + " bounces even harder (" + hotter.pct.toFixed(1) + "%) — same treatment.";
+  }
+  $("bnc-take").textContent = takeTxt;
 }
 
 function renderAll() {
@@ -1714,11 +1802,15 @@ function updateLens() {
     // The manager's health tiles and to-dos always cover the whole fleet and
     // it keeps its own working window — say exactly that, never more (round 1
     // caught the old banner promising a client-only manager it didn't deliver)
-    var tail = " The health tiles and to-dos below always cover the whole sending fleet, and the manager keeps its own working window — mailbox health is about today, not the page's date range.";
+    var tail = " Health tiles and to-dos always cover the whole fleet; the manager keeps its own window (mailbox health is about today).";
     if (c === "All") note.textContent = "Whole sending fleet — all clients." + tail;
-    else if (WS_CLIENTS[c]) note.textContent = c + "'s campaigns send from their own workspace; rows in the mailbox and domain tables are filtered to " + c + "." + tail;
-    else note.textContent = c + " sends from the shared Navreo fleet — these mailboxes serve several clients, " + c + " included." + tail;
+    else if (WS_CLIENTS[c]) note.textContent = c + " sends from their own workspace — the mailbox and domain tables filter to " + c + "." + tail;
+    else note.textContent = c + " sends from the shared Navreo fleet." + tail;
   }
+  // Engine room open on the whole-book view (the manager stays inline by
+  // ruling), folded on client views so the per-client story stays short
+  var fold = $("dlv-embed-fold");
+  if (fold) fold.open = (c === "All");
   try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) { /* older engines just skip the repaint */ }
 }
 $("ah-chips").addEventListener("click", function (e) {
