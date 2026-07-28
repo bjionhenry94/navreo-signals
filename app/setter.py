@@ -92,6 +92,12 @@ OPENAI_MODEL = "gpt-5-mini"
 # this buys latency, not brevity.
 OPENAI_TIMEOUT = float(os.environ.get("OPENAI_TIMEOUT", "45"))
 OPENAI_EFFORT = os.environ.get("OPENAI_EFFORT", "minimal")
+# The proofread pass is the one guard-railed model call (URL/digit/length
+# checks, falls back to the ORIGINAL draft on any failure), which makes it the
+# one safe place for the fastest tier. Measured 2026-07-28 on the real prompt:
+# same fixes out of gpt-5-nano, ~20-40% less wall clock than gpt-5-mini - and
+# proofread was the single longest stage of a regenerate (7.4s of 16.6s).
+PROOFREAD_MODEL = os.environ.get("SETTER_PROOFREAD_MODEL", "gpt-5-nano")
 
 
 def _is_transient(e) -> bool:
@@ -1449,7 +1455,7 @@ def proofread_draft(html: str, sender_first: str = ""):
         key = _KEYS.get("OPENAI_API_KEY")
         if not key:
             return original, False
-        r = _openai({"model": OPENAI_MODEL,
+        r = _openai({"model": PROOFREAD_MODEL,
                      "messages": [{"role": "system", "content": PROOFREAD_SYSTEM},
                                  {"role": "user", "content": json.dumps({"html": original})}],
                      "response_format": {"type": "json_schema", "json_schema": {
@@ -1747,6 +1753,16 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
 
 # ── Calendly ─────────────────────────────────────────────────────────────────
 
+# One availability lookup costs 4+ serial Calendly round trips (users/me,
+# event_types, chunked available_times) before the draft model even runs -
+# roughly a second of every regenerate. The slots are already minutes stale by
+# the time a reviewer reads the draft, so a 60s in-process cache changes
+# nothing observable; it only stops paying the same round trips again on a
+# regenerate-after-regenerate. Keyed per token+event so agents never mix.
+_CAL_AVAIL_CACHE = {}
+_CAL_AVAIL_TTL = 60.0
+
+
 def get_calendly_availability(agent: dict, settings: dict, now_utc):
     """Returns (slot_status, avail_iso_list, error). slot_status in
     {ok, not_configured, none_available, error}. Caches the resolved Calendly
@@ -1756,6 +1772,13 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
     token = settings.get("calendly_token")
     if not token:
         return "not_configured", [], ""
+    cache_key = (token[-16:], agent.get("calendly_event_url") or "")
+    hit = _CAL_AVAIL_CACHE.get(cache_key)
+    if hit and hit[0] > _time.time():
+        if hit[2] and not settings.get("_calendly_user_uri"):
+            settings["_calendly_user_uri"] = hit[2]
+        status, avail, err = hit[1]
+        return status, list(avail), err
     try:
         user_uri = settings.get("_calendly_user_uri")
         headers = {"Authorization": f"Bearer {token}"}
@@ -1810,9 +1833,11 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
             cursor = chunk_end
         if chunk_errors and not avail:
             return "error", [], f"Calendly availability lookup failed: {chunk_errors[0]}"
-        if not avail:
-            return "none_available", [], ""
-        return "ok", avail, ""
+        # Only real answers are cached - errors keep retrying at full price.
+        result = ("none_available", [], "") if not avail else ("ok", avail, "")
+        _CAL_AVAIL_CACHE[cache_key] = (_time.time() + _CAL_AVAIL_TTL, result,
+                                       settings.get("_calendly_user_uri"))
+        return result[0], list(result[1]), result[2]
     except Exception as e:  # noqa: BLE001 - Calendly outage must degrade to review, never kill the run
         return "error", [], f"Couldn't load Calendly availability ({type(e).__name__})."
 
@@ -6023,6 +6048,36 @@ def route_queue_action(payload):
         action = payload.get("action")
         if not qid or not action:
             return 400, {"error": "id and action are required"}
+        if action == "send" and payload.get("async"):
+            # Send-as-a-job (owner report 2026-07-28: "Couldn't send the reply:
+            # Request failed (502)"). Same disease the redraft had: a send that
+            # must re-hydrate a missing email_stats_id pages Smartlead inline
+            # and the one open request can outlive the gateway, which answers
+            # 502 while the mail often still goes out - the worst possible
+            # ambiguity for a reviewer. The wrapper returns 202 + job_id
+            # immediately and runs the EXACT same branch below in a worker;
+            # clients poll the shared job-status route. Jobs share the redraft
+            # store on purpose - one GC, one lock, one status route, and a job
+            # lost to a restart resolves the same way (re-read the row, whose
+            # status was patched before the job finished). Without "async" the
+            # behaviour is byte-for-byte unchanged.
+            inner = {k: v for k, v in payload.items() if k != "async"}
+            job_id = uuid.uuid4().hex[:16]
+
+            def _send_job_worker():
+                try:
+                    status, body = route_queue_action(inner)
+                except Exception as e:  # noqa: BLE001 - a worker must never die silently
+                    status, body = 500, {"error": str(e)[:300]}
+                with _REDRAFT_JOBS_LOCK:
+                    _REDRAFT_JOBS[job_id] = {"state": "done" if status == 200 else "error",
+                                             "status": status, "body": body, "at": _time.time()}
+            with _REDRAFT_JOBS_LOCK:
+                _redraft_jobs_gc()
+                _REDRAFT_JOBS[job_id] = {"state": "running", "at": _time.time()}
+            threading.Thread(target=_send_job_worker, daemon=True,
+                             name="setter-send").start()
+            return 202, {"job_id": job_id, "state": "running"}
         if action == "dismiss":
             # One round-trip (perf ruling 2026-07-16): the old GET-then-PATCH
             # cost two sequential Supabase calls over keep-alive-less urllib.

@@ -834,8 +834,13 @@ let unresolvedRows = [];
 /* P3 tray behaviour: auto-expanded whenever the count is above zero
    (collapsible by clicking the header, but a NEW unresolved send re-expands
    it so nothing piles up unseen). */
-let trayOpen = true;
-let _lastTrayCount = 0;
+/* Collapsed on every load (owner report 2026-07-28: "every time I reload the
+   page it opens the Send Follow-Up section"). The badge still shows the
+   count; only a NEW unresolved send arriving DURING the session re-expands
+   it - the first render after a reload never does (_lastTrayCount starts as
+   null and adopts the first count silently). */
+let trayOpen = false;
+let _lastTrayCount = null;
 
 /* Client-side mirror of setter.py's _extract_urls: every distinct http(s)
    URL in text (an href attribute value and a bare URL in prose both match
@@ -1181,8 +1186,17 @@ async function loadQueue(prefetch) {
     renderLastChecked();
     clearError();
   } else {
-    showError("Couldn't load the queue: " + res.error);
-    QUEUE_ROWS = []; KPIS = {};
+    // KEEP the last good rows (owner report 2026-07-28: a 502 window used to
+    // blank every conversation - the error reload wiped QUEUE_ROWS and
+    // repainted an empty list). Stale-but-real beats empty: the banner tells
+    // the truth and the next successful load replaces the data wholesale.
+    // A pill switch that cleared the list first falls back to the hydrated
+    // corpus, so even mid-outage the conversations stay on screen.
+    if (!QUEUE_ROWS.length && _allRowsLoaded && ALL_ROWS.length) {
+      QUEUE_ROWS = clientPillRows(ALL_ROWS, currentStatus);
+    }
+    showError("Couldn't refresh the queue: " + res.error +
+      (QUEUE_ROWS.length ? " - showing the last loaded conversations." : ""));
   }
   if (!_allRowsLoaded) ALL_ROWS = QUEUE_ROWS;  // provisional corpus until hydrate lands
   renderKpis();
@@ -1299,8 +1313,10 @@ function renderUnresolvedTray() {
     return;
   }
   // A NEW unresolved send re-expands a collapsed tray (P3 behaviour) so
-  // bare sends can't pile up unseen behind a folded header.
-  if (n > _lastTrayCount) trayOpen = true;
+  // bare sends can't pile up unseen behind a folded header - but only a send
+  // that happened THIS session: the first render after a page load adopts
+  // the standing count without opening (owner report 2026-07-28).
+  if (_lastTrayCount !== null && n > _lastTrayCount) trayOpen = true;
   _lastTrayCount = n;
   tray.style.display = "";
   tray.classList.toggle("open", trayOpen);
@@ -1983,6 +1999,20 @@ function renderDetail(row) {
     if (panelEl) { panelEl.style.display = "none"; panelEl.innerHTML = ""; }
     return;
   }
+  // Scroll-stable repaint (owner report 2026-07-28: "as the conversation
+  // history loads, it pushes around the UI"). renderDetail swaps the pane's
+  // HTML wholesale, which zeroes its scroll - so the fresh-thread refresh,
+  // the post-send reload and every background repaint yanked the view to the
+  // top. On a SAME-ROW repaint, anchor on the current message and keep the
+  // reader's distance to it identical across the swap: history arriving
+  // ABOVE the viewport grows the pane without moving what's on screen.
+  const _sameRow = String(_lastScrolledRowId) === String(row.id);
+  let _anchorDelta = null, _keepScrollTop = null;
+  if (_sameRow) {
+    _keepScrollTop = el.scrollTop;
+    const prevCur = el.querySelector(".thread-msg.current");
+    if (prevCur) _anchorDelta = prevCur.getBoundingClientRect().top - el.getBoundingClientRect().top;
+  }
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
 
   // A genuine processing error is surfaced right away (distinct from the
@@ -2117,6 +2147,17 @@ function renderDetail(row) {
     applyLeadPanelHidden();
   });
   applyLeadPanelHidden();
+  // Restore the reader's place BEFORE wiring (wireDetailEvents only centres
+  // brand-new rows; same-row repaints land exactly where the reader was).
+  if (_sameRow) {
+    const cur = el.querySelector(".thread-msg.current");
+    if (_anchorDelta !== null && cur) {
+      el.scrollTop = Math.max(0, el.scrollTop +
+        (cur.getBoundingClientRect().top - el.getBoundingClientRect().top) - _anchorDelta);
+    } else if (_keepScrollTop !== null) {
+      el.scrollTop = _keepScrollTop;
+    }
+  }
   wireDetailEvents(el, row);
   wireLeadPanelEvents(panelEl, row);
   // Wire the category control in BOTH the sticky bar (inside el) and the
@@ -3352,13 +3393,13 @@ async function doSend(btn) {
       ? { choice: "push", sub_sequence_id: gateSel.subSequenceId || undefined }
       : { choice: "none" };
   }
-  const res = await fetchJson("/api/setter/queue/action", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  const res = await runSendJob(payload, (secs) => {
+    btn.textContent = secs < 8 ? "Sending…" : `Sending… ${secs}s`;
   });
   restore();
-  // The server always answers 200 here; a send that failed is reported as
-  // {ok:false} in the BODY, not by HTTP status. Honour res.data.ok so a failed
-  // send surfaces the real error instead of a false "Reply sent" toast.
+  // A send that failed is reported as {ok:false} in the BODY, not by HTTP
+  // status. Honour res.data.ok so a failed send surfaces the real error
+  // instead of a false "Reply sent" toast.
   const sendFailed = !res.ok || (res.data && res.data.ok === false);
   if (sendFailed) {
     const msg = (res.data && res.data.row && res.data.row.error) || res.error || "the send did not go through";
@@ -3483,10 +3524,12 @@ async function runRedraftJob(payload, onTick) {
   // Poll immediately, then back off. The old loop slept 2000ms BEFORE its
   // first check, so no regenerate could ever read faster than ~2s however
   // fast the server got - a hard floor sitting right on top of the 3s bar.
-  const BACKOFF = [0, 250, 250, 500, 500, 1000];
+  // Tail capped at 750ms (was 2000): with a ~10s job, a 2s poll gap paid up
+  // to 2 idle seconds AFTER the server had already finished - pure overhang.
+  const BACKOFF = [0, 250, 250, 500, 500, 750];
   let ticks = 0;
   while (Date.now() < deadline) {
-    await sleep(ticks < BACKOFF.length ? BACKOFF[ticks] : 2000);
+    await sleep(ticks < BACKOFF.length ? BACKOFF[ticks] : 750);
     ticks++;
     if (onTick) onTick(Math.round((Date.now() - started) / 1000));
     const st = await fetchJson(`/api/setter/queue/redraft/status?job=${encodeURIComponent(jobId)}`);
@@ -3503,6 +3546,47 @@ async function runRedraftJob(payload, onTick) {
     return { ok: true, data: st.data };         // done
   }
   return { ok: false, error: "this is taking longer than usual - the draft may still land, give it a moment and reload" };
+}
+
+/* Send through the same job pattern (owner report 2026-07-28: "Couldn't send
+   the reply: Request failed (502)"). The POST returns 202 + job_id in
+   milliseconds, so no send ever sits on the gateway's limit; the status poll
+   shares the redraft job route. Every failure path ends at the ROW as the
+   source of truth - if the mail actually left before a blip, this reports
+   sent instead of tempting a double-send with a false error. */
+async function runSendJob(payload, onTick) {
+  const started = Date.now();
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, async: true }),
+  });
+  if (res.ok && !(res.data && res.data.job_id)) return res;  // old server: answered synchronously
+  if (res.ok && res.data && res.data.job_id) {
+    const jobId = res.data.job_id;
+    const deadline = Date.now() + 120000;
+    const BACKOFF = [250, 250, 500, 500, 750];
+    let ticks = 0;
+    while (Date.now() < deadline) {
+      await sleep(ticks < BACKOFF.length ? BACKOFF[ticks] : 750);
+      ticks++;
+      if (onTick) onTick(Math.round((Date.now() - started) / 1000));
+      const st = await fetchJson(`/api/setter/queue/redraft/status?job=${encodeURIComponent(jobId)}`);
+      if (!st.ok) continue;                 // a network blip must not kill the wait
+      const state = st.data && st.data.state;
+      if (state === "running") continue;
+      if (state === "unknown") break;       // server restarted mid-job - ask the row
+      if (state === "error") return { ok: false, data: st.data, error: (st.data && st.data.error) || "the send did not go through" };
+      return { ok: true, data: st.data };   // done (st.data.ok may still be false - caller honours it)
+    }
+  }
+  // START call failed, job vanished, or we timed out: read the row itself.
+  const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`);
+  const row = rowRes.ok && rowRes.data && rowRes.data.row;
+  if (row && (row.status === "sent" || row.status === "auto_sent")) {
+    return { ok: true, data: { ok: true, row } };
+  }
+  return { ok: false, error: (row && row.error) || res.error ||
+    "the send did not go through - your reply is still here, nothing was lost" };
 }
 
 async function doRedraft(btn, feedback, scope) {
