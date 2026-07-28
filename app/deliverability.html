@@ -554,7 +554,26 @@
 <script src="deliverability-tab.js"></script>
 <script>
   document.getElementById("rail").outerHTML = renderRail("deliverability");
-  if (window.renderDeliverability) window.renderDeliverability();
+  // Defer the embedded engine-room manager (deliverability-tab.js) until the
+  // analytics hub — the primary content of this page — has painted. Mounting it
+  // synchronously fired ~8 of its own endpoints (jobs, _bundle, reminders,
+  // mailbox-settings-audit, trends, signals, cockpit) that contended with the
+  // hub's boot for the browser's 6-connection pool and the main thread, so the
+  // numbers people come here to read landed late. The manager lives inside a
+  // <details> fold ("Engine room"), so nothing above the fold needs it on load.
+  // Mount on the first of: browser idle, the fold being opened, or a 2.5s cap.
+  (function () {
+    var mounted = false;
+    function mountEngine() {
+      if (mounted) return;
+      mounted = true;
+      if (window.renderDeliverability) window.renderDeliverability();
+    }
+    var fold = document.getElementById("dlv-embed-fold");
+    if (fold) fold.addEventListener("toggle", function () { if (fold.open) mountEngine(); });
+    if (window.requestIdleCallback) requestIdleCallback(mountEngine, { timeout: 2500 });
+    else setTimeout(mountEngine, 400);
+  })();
 </script>
 
 <script>
@@ -1673,15 +1692,21 @@ function renderRank() {
       return r.sent >= minSent && (state.client === "All" || r.client === state.client);
     }).map(function (r) {
       var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
+      // positives/meetings are lifetime per campaign (no per-window split
+      // exists) — same basis as the cost columns
       return { id: r.id, client: r.client, name: r.name || (sc && sc.name) || ("Campaign " + r.id),
                sent: r.sent, replied: r.replied,
+               pos: (sc && sc.positives) || 0, mtg: (sc && sc.meetings) || 0,
                active: !!(sc && String(sc.status || "").toUpperCase() === "ACTIVE") };
     });
-    rows.sort(function (a, b) { return (b.replied / b.sent) - (a.replied / a.sent); });
+    // rank meetings first, then positives, then reply rate (Bjion 2026-07-29)
+    rows.sort(function (a, b) {
+      return (b.mtg - a.mtg) || (b.pos - a.pos) || ((b.replied / b.sent) - (a.replied / a.sent));
+    });
     var top = rows.slice(0, 8);
     $("rank-scope").textContent = "· " + rangeLabel();
-    var maxRate = top.length ? (top[0].replied / top[0].sent) : 1;
-    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Sent</span><span style="text-align:right">Replies</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+    var maxRate = 0; top.forEach(function (c) { var rt = c.sent ? c.replied / c.sent : 0; if (rt > maxRate) maxRate = rt; });
+    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
     top.forEach(function (c, i) {
       var rate = c.sent ? c.replied / c.sent : 0;
       var w = Math.max(2, Math.round(rate / (maxRate || 1) * 100));
@@ -1691,13 +1716,13 @@ function renderRank() {
       var cost = campCost(c.id);
       s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
         '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
-        (i === 0 && rate >= 0.02 && c.sent >= minSent * 4 && !noYes ? '<span class="apill green">Best</span>' : "") +
+        (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
         (noYes ? '<span class="apill mute" title="Lots of replies, but none has been a real yes yet">replies, no yes yet</span>' : "") +
         (!c.active ? '<span class="apill mute">finished</span>' : "") +
         '</div><div class="rsub">' + escq(c.client) + " · " + rangeLabel() + "</div></div>" +
         '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
         '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
-        '<span class="rint">' + fmtN(c.sent) + '</span><span class="rmtg">' + fmtN(c.replied) + "</span>" +
+        '<span class="rint">' + fmtN(c.pos) + '</span><span class="rmtg">' + fmtN(c.mtg) + "</span>" +
         '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
         '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
     });
@@ -1710,9 +1735,7 @@ function renderRank() {
     var bad = {};
     win.forEach(function (r) { if (r.sent >= 300 && r.bounced / r.sent >= 0.02) bad[r.id] = 1; });
     var pick = top.filter(function (c) {
-      var sc2 = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
-      var noYes2 = sc2 && (sc2.sent || 0) >= 2000 && !(sc2.positives || 0);
-      return !deadIds[c.id] && !bad[c.id] && !noYes2 && (c.replied / c.sent) >= 0.01;
+      return !deadIds[c.id] && !bad[c.id] && (c.mtg > 0 || c.pos > 0);
     })[0];
     $("rank-take").textContent = pick ? "Launch more campaigns like “" + shortName(pick.name) + "”."
       : (top.length ? "No clear winner in this window — see the flags above." : "");
@@ -1722,11 +1745,15 @@ function renderRank() {
   // lifetime fallback (sweep still building)
   var rowsLT = scoreRows().filter(function (c) { return (c.sent || 0) >= 500 && c.status === "ACTIVE"; });
   if (!rowsLT.length) rowsLT = scoreRows().filter(function (c) { return (c.sent || 0) >= 500; });
-  rowsLT.sort(function (a, b) { return (b.replied / b.sent) - (a.replied / a.sent); });
+  // rank meetings first, then positives, then reply rate (Bjion 2026-07-29)
+  rowsLT.sort(function (a, b) {
+    return ((b.meetings || 0) - (a.meetings || 0)) || ((b.positives || 0) - (a.positives || 0)) ||
+           ((b.replied / b.sent) - (a.replied / a.sent));
+  });
   var topLT = rowsLT.slice(0, 8);
   $("rank-scope").textContent = "· all time — the " + rangeLabel() + " view is warming up";
-  var maxRateLT = topLT.length ? topLT[0].replied / topLT[0].sent : 1;
-  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Sent</span><span style="text-align:right">Replies</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+  var maxRateLT = 0; topLT.forEach(function (c) { var rt = c.sent ? c.replied / c.sent : 0; if (rt > maxRateLT) maxRateLT = rt; });
+  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
   topLT.forEach(function (c, i) {
     var rate = c.sent ? c.replied / c.sent : 0;
     var w = Math.max(2, Math.round(rate / (maxRateLT || 1) * 100));
@@ -1734,12 +1761,12 @@ function renderRank() {
     var cost = campCost(c.id);
     sLT += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
       '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
-      (i === 0 && rate >= 0.02 && c.sent >= 2000 ? '<span class="apill green">Best</span>' : "") +
+      (i === 0 && (c.meetings || 0) > 0 ? '<span class="apill green">Best</span>' : "") +
       (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
       '</div><div class="rsub">' + escq(campClient(c.id, c)) + " · all time</div></div>" +
       '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
       '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
-      '<span class="rint">' + fmtN(c.sent) + '</span><span class="rmtg">' + fmtN(c.replied) + "</span>" +
+      '<span class="rint">' + fmtN(c.positives || 0) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span>" +
       '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
       '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
   });
