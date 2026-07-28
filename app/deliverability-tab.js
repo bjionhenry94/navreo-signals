@@ -3705,6 +3705,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // breaks on a number-vs-string or sample-vs-live id mismatch.
   function mgrRowKey(r) { return String(r.id != null ? r.id : r.email); }
 
+  // Client-workspace rows (bundle federation 2026-07-28): mirror-derived and
+  // MONITOR-ONLY — caps and warm-up for those fleets are managed in their own
+  // workspace (asteri hand-sets caps by owner ruling), so no manager action
+  // may act on them from here. Applies to dh window rows too.
+  function isClientRow(r) { return !!(r && r.workspace && r.workspace !== "navreo"); }
+
   // Mailbox rows for a mailbox-backed flow. Live rows come from the server's
   // bundle cache (null while it's still loading — the painter shows a
   // skeleton); sample mode derives them from the mock roster as before.
@@ -3811,7 +3817,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function mgrRowSelectable(r) {
     // Instantly rows are excluded too: the bulk Re-enable acts on SMARTLEAD
     // warm-up — Instantly boxes have their own per-row/per-domain button.
-    return !(UI.mgr.flow === "notwarming" && (r.maildoso || r.instantly));
+    // Client-workspace rows are never selectable: monitor-only.
+    return !isClientRow(r) && !(UI.mgr.flow === "notwarming" && (r.maildoso || r.instantly));
   }
 
   // Ledger-backed due-back dates ({domain: due_ms}) — the ONLY trustworthy
@@ -4040,9 +4047,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const { minSent } = dhCutoffMin();
     if (cnt) cnt.textContent = rows.length + " below the " + cutoff + "% floor · min " + minSent + " sent · last " + (UI.mgr.windowDays || 7) + " days" + (D.restingCount ? " · " + D.restingCount + " resting or recovering fleet-wide" + (window.DLV_EMBED ? "" : " (audit's own clock — the In warm-up tab counts domains, not boxes)") : "") + mgrFreshNote();
     const bulk = $id("dlv-mgr-bulk");
+    // Client-workspace domains render for monitoring but are excluded from the
+    // bulk action (and its count) — mirrors the same filter in domainBulkFlagged.
+    const bulkable = rows.filter((d) => !isClientRow(d));
     if (bulk) {
       let b = "";
-      if (rows.length > 1) b += `<button class="btn sm" data-act="domain-bulk-flagged">Warm up all (${rows.length})</button>`;
+      if (bulkable.length > 1) b += `<button class="btn sm" data-act="domain-bulk-flagged">Warm up all (${bulkable.length})</button>`;
       if (recovered.length) b += `<button class="btn sm" style="background:var(--green);color:#fff;border-color:var(--green)" data-act="domain-reactivate-recovered">Reactivate recovered (${recovered.length})</button>`;
       bulk.innerHTML = b;
     }
@@ -4061,6 +4071,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const pill = isRec(d) ? `<span class="dlv-tag ok" title="Reply rate recovered — reactivate">✓ recovered ${rr} (${restN} mbx)</span>` : `<span class="dlv-tag inactive" title="Send cap set to 0 — warmup is still running">sends paused (${restN})</span>${blDueChip(due)}`;
         action = pill + ` <button class="btn sm" data-act="domain-reactivate" data-domain="${esc(d.domain)}">Reactivate</button>`;
       } else action = `<button class="btn sm" data-act="domain-warmup" data-domain="${esc(d.domain)}"${boxN ? ` title="Rests all ${boxN} mailboxes on ${esc(d.domain)}"` : ""}>Warm up domain</button>`;
+      if (isClientRow(d)) action = `<span class="dlv-mb-dom" title="Client workspace — read nightly from its own Smartlead mirror; caps and warm-up stay managed there">monitor only · ${esc(d.workspace)}</span>`;
       return `<tr><td><div class="dlv-mb-email">${esc(d.domain)}${boxN ? ` <span class="dlv-mb-dom">· ${boxN} mbx</span>` : ""}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
         <td style="text-align:right">${d.sent}</td>
         <td style="text-align:right">${d.lead}</td>
@@ -4198,18 +4209,21 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const allSel = selKeys.length > 0 && selKeys.every((k) => UI.mgr.sel.has(k));
       const ck = selectable ? `<td class="ck">${selKeys.length ? `<input type="checkbox" ${allSel ? "checked" : ""} data-act="mgr-dom-select" data-domain="${esc(dom)}" title="Select all ${selKeys.length} mailboxes on ${esc(dom)}">` : ""}</td>` : "";
       const maildoso = rows.some((r) => r.maildoso);
+      const cliWs = (rows.find(isClientRow) || {}).workspace;
+      const cliNote = cliWs ? `<span class="dlv-mb-dom" title="Client workspace — read nightly from its own Smartlead mirror; caps and warm-up stay managed there">monitor only · ${esc(cliWs)}</span>` : "";
       // Header count from the full-fleet census when it knows the domain —
       // the view rows truncate at 2,000, so rows.length under-counts big
       // domains ("· 5 mbx" beside "sends paused (52)", tester panel finding).
       const _domBoxes = (isLive() && ((bundleData() || {}).domainBoxes || {})[String(dom).toLowerCase()]) || rows.filter((r) => !r._censusOnly).length || rows.length;
-      const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${_domBoxes} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}${rows.some((r) => r.instantly) ? ` <span class="dlv-tag md" title="These boxes live in the Instantly workspace">Instantly</span>` : ""}</div></td>`;
+      const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${_domBoxes} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}${rows.some((r) => r.instantly) ? ` <span class="dlv-tag md" title="These boxes live in the Instantly workspace">Instantly</span>` : ""}${cliWs ? ` <span class="dlv-tag md" title="Client workspace — synced nightly from its own Smartlead">${esc(cliWs)}</span>` : ""}</div></td>`;
       let mid = "", action = "";
       if (flow === "notwarming") {
         const batches = [...new Set(rows.flatMap((r) => r.tags || []))].slice(0, 3);
         const instGrp = rows.some((r) => r.instantly);
         const instBlk = rows.some((r) => r.instBlocked);
         mid = `<td><div class="dlv-mb-dom">${batches.join(" · ")}</div></td><td><span class="dlv-tag ${instBlk ? "blocked" : "inactive"}">${instBlk ? "warm-up blocked" : "warmup off"}</span>${instGrp ? ` <span class="dlv-mb-dom" title="${instBlk ? "Instantly refuses to warm these boxes — its enable job skips them; fix inside Instantly (receiving/connection or support)" : "This fleet warms on Instantly — warm-up there is OFF, which is a real gap"}">on Instantly — ${instBlk ? "re-enable refused, fix in Instantly" : "should be warming"}</span>` : maildoso ? ` <span class="dlv-mb-dom">external — by design</span>` : ""}</td>`;
-        action = instGrp ? `<button class="btn sm" data-act="inst-warmup-domain" data-domain="${esc(dom)}" title="Switch warm-up back on in Instantly for every listed box on ${esc(dom)} (idempotent, reversible)">Re-enable on Instantly</button>`
+        action = cliWs ? cliNote
+          : instGrp ? `<button class="btn sm" data-act="inst-warmup-domain" data-domain="${esc(dom)}" title="Switch warm-up back on in Instantly for every listed box on ${esc(dom)} (idempotent, reversible)">Re-enable on Instantly</button>`
           : maildoso ? `<span class="dlv-mb-dom">no action</span>` : `<button class="btn sm" data-act="open-warmup-fix">Re-enable…</button>`;
       } else if (flow === "inwarmup") {
         // ── ONE status vocabulary (inbox-status-truth-ui, 2026-07-23) ──
@@ -4282,11 +4296,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // correctly in BOTH live (bundle-backed) and local modes — S.A.inboxRows
         // is empty in live mode, so the handler can't re-derive it there.
         const stAttr = (led && led > Date.now()) ? ` data-due="${led}"` : "";
-        action = `${actNote}<button class="btn sm ${isDueNow ? "primary" : ""}" data-act="domain-reactivate" data-domain="${esc(dom)}"${stAttr} title="${restoreTip}">Restore</button>`;
+        action = cliWs ? cliNote
+          : `${actNote}<button class="btn sm ${isDueNow ? "primary" : ""}" data-act="domain-reactivate" data-domain="${esc(dom)}"${stAttr} title="${restoreTip}">Restore</button>`;
       } else { // reconnect
         const reasons = [...new Set(rows.map((r) => r.reason_category || "conn fail"))].slice(0, 2);
         mid = `<td><span class="dlv-tag blocked">${esc(reasons.join(" · "))}</span></td>`;
-        action = `<button class="btn sm" data-act="mgr-dom-reconnect" data-domain="${esc(dom)}">Reconnect all</button>`;
+        action = cliWs ? cliNote
+          : `<button class="btn sm" data-act="mgr-dom-reconnect" data-domain="${esc(dom)}">Reconnect all</button>`;
       }
       const domRow = `<tr class="dlv-dom-row">${ck}${name}${mid}<td style="text-align:right">${action}</td></tr>`;
       if (!open) return domRow;
@@ -4296,7 +4312,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         let smid = "", sact = "";
         if (flow === "notwarming") {
           smid = `<td><div class="dlv-mb-dom">${(r.tags || []).slice(0, 2).join(" · ")}</div></td><td><span class="dlv-mb-dom">${esc(r.warmup_status || "INACTIVE")}${r.instantly && r.score != null ? ` · score ${r.score}` : ""}</span></td>`;
-          sact = r.instantly ? `<button class="btn sm" data-act="inst-warmup-one" data-email="${esc(r.email)}">Re-enable (Instantly)</button>`
+          sact = isClientRow(r) ? ""
+            : r.instantly ? `<button class="btn sm" data-act="inst-warmup-one" data-email="${esc(r.email)}">Re-enable (Instantly)</button>`
             : r.maildoso ? "" : `<button class="btn sm" data-act="reenable-one" data-id="${esc(key)}">Re-enable</button>`;
         } else if (flow === "inwarmup") {
           // Per-box status mirrors the domain vocabulary: a box is HELD when its
@@ -4317,7 +4334,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           sact = "";
         } else {
           smid = `<td><div class="dlv-mb-reason" title="${esc(r.reason)}">${glossify(r.reason || r.reason_category || "")}</div></td>`;
-          sact = `<button class="btn sm" data-act="reconnect-one" data-id="${esc(key)}">Reconnect</button>`;
+          sact = isClientRow(r) ? "" : `<button class="btn sm" data-act="reconnect-one" data-id="${esc(key)}">Reconnect</button>`;
         }
         return `<tr class="dlv-sub-row" id="dlv-mb-${esc(key)}">${sck}<td><div class="dlv-mb-email dlv-sub-email">${esc(r.email)}</div></td>${smid}<td style="text-align:right">${sact}</td></tr>`;
       }).join("");
@@ -6782,6 +6799,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     let _fr = floorRows(D) || [];
     const _q = (UI.mgr.search || "").trim().toLowerCase();
     if (_q) _fr = _fr.filter((d) => d.domain.toLowerCase().includes(_q));
+    _fr = _fr.filter((d) => !isClientRow(d)); // client-workspace domains: monitor-only, never rested from here
     const domains = _fr.map((d) => d.domain);
     if (!domains.length) { toast("No flagged domains", "err"); return; }
     const _list = domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "");

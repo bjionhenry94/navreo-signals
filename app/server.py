@@ -13092,6 +13092,9 @@ def _deliv_merge_client_ws(out):
         ws = r.get("workspace")
         cap = r.get("message_per_day")
         tags = r.get("tags") if isinstance(r.get("tags"), list) else []
+        # Mirror tags are Smartlead tag OBJECTS ({name, color, …}) — the view
+        # rows the UI renders carry plain strings.
+        tags = [t for t in ((t.get("name") if isinstance(t, dict) else str(t)) for t in tags) if t]
         row = {"id": "ws-%s-%s" % (ws, r.get("smartlead_id")),
                "email": (r.get("email") or "").lower(),
                "domain": (r.get("domain") or "").lower(),
