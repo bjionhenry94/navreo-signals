@@ -1754,11 +1754,14 @@ function bncRows() {
   var bad = bncCampaigns().filter(function (c) { return c.pct >= BNC_LIMIT; });
   var solid = bad.filter(function (c) { return !c.small; });
   if (solid.length) bad = solid;
-  return bad.sort(function (a, b) { return b.bounced - a.bounced; })
+  // Sort by RATE, not count: a 3.2% campaign burns the domain harder than a
+  // 2.2% one that merely sent more (Priya, 2026-07-28). `active` rides along so
+  // the take-line never tells you to "pause" a finished campaign.
+  return bad.sort(function (a, b) { return b.pct - a.pct; })
             .map(function (c) {
               return { label: shortName(c.name), client: c.client,
                        bounced: c.bounced, pct: c.pct, small: !!c.small,
-                       names: [c.name] };
+                       active: !c.finished, names: [c.name] };
             });
 }
 
@@ -1867,6 +1870,7 @@ function renderBounce() {
           '<span class="bnc-name">' + r.label +
             (state.client === "All" && r.client && r.label.indexOf(r.client) < 0
               ? ' <span class="bnc-small">' + r.client + '</span>' : '') +
+            (!r.active ? ' <span class="bnc-small">finished</span>' : '') +
             (r.small ? ' <span class="bnc-small">small list — treat as a hint</span>' : '') + '</span>' +
           '<span class="bnc-came">' + r.bounced.toLocaleString("en-US") + ' came back</span>' +
           '<span class="bnc-pct bnc-' + bncBand(r.pct) + '">' + r.pct.toFixed(1) + '%</span>' +
@@ -1874,17 +1878,26 @@ function renderBounce() {
       }).join("")
     : '<div class="subline" style="padding-top:8px">Every list is under 2%.</div>';
 
-  // the take names the row with the MOST returns; when a smaller list bounces
-  // far harder, name it too — round 2 caught a 13.4% row going unmentioned
-  // while the take talked about a 3.3% one
+  // "Pause" only makes sense for a campaign that is still sending — target the
+  // worst-rate ACTIVE list; a finished campaign is already stopped, so it gets
+  // a re-check instruction instead (Priya, 2026-07-28).
+  var clientTag = function (r) {
+    return (state.client === "All" && r.client && r.label.indexOf(r.client) < 0) ? " (" + r.client + ")" : "";
+  };
   var takeTxt = "Nothing over 2% — keep sending.";
   if (rows.length) {
-    takeTxt = "Pause " + rows[0].label +
-      (state.client === "All" && rows[0].client && rows[0].label.indexOf(rows[0].client) < 0
-        ? " (" + rows[0].client + ")" : "") +
-      ", get those addresses re-checked, then switch them back on.";
-    var hotter = rows.slice(1, 3).filter(function (r) { return r.pct >= rows[0].pct + 1; })[0];
-    if (hotter) takeTxt += " " + hotter.label + " bounces even harder (" + hotter.pct.toFixed(1) + "%) — same treatment.";
+    var live = rows.filter(function (r) { return r.active; });
+    if (live.length) {
+      takeTxt = "Pause " + live[0].label + clientTag(live[0]) +
+        " (" + live[0].pct.toFixed(1) + "%), get those addresses re-checked, then switch it back on.";
+      var hotter = live.slice(1, 3).filter(function (r) { return r.pct >= live[0].pct + 1; })[0];
+      if (hotter) takeTxt += " " + hotter.label + " bounces even harder (" + hotter.pct.toFixed(1) + "%) — same treatment.";
+    } else {
+      // every over-limit list is finished — nothing to pause, but re-check
+      // before those addresses get reused
+      takeTxt = rows[0].label + clientTag(rows[0]) + " bounced " + rows[0].pct.toFixed(1) +
+        "% but has already finished — re-check its addresses before reusing that list.";
+    }
   }
   $("bnc-take").textContent = takeTxt;
 }
