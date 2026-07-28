@@ -8273,6 +8273,7 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
         if (r.get("sent") or 0) < 500:
             continue
         per_client_top.setdefault(_client_win_label(r.get("workspace"), r.get("name")), []).append(r)
+    lead_set = set(lead_ids)
     cand_ids = list(lead_ids)
     seen_ids = set(lead_ids)
     for cl, rws in per_client_top.items():
@@ -8289,7 +8290,14 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
         if not row or (row.get("sent") or 0) < 500:
             continue
         try:
-            bucket = _ah_offer_bucket(_COCKPIT_SEQCOPY_SWR.get(cid))
+            # the SWR cache is empty right after a deploy → a forced refresh got
+            # 0 offers. Block-fetch the copy for the core reply-volume leaders so
+            # the All (+navreo) tables always build; client-extras stay cache-only
+            # (opportunistic) to keep the run bounded (Bjion 2026-07-29).
+            copy = _COCKPIT_SEQCOPY_SWR.get(cid)
+            if copy is None and str(cid) in lead_set:
+                copy = _cockpit_sequence_copy(cid)
+            bucket = _ah_offer_bucket(copy)
         except Exception:  # noqa: BLE001 — one unreadable sequence never kills the insight
             continue
         if not bucket:
