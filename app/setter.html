@@ -3597,6 +3597,11 @@ async function doRedraft(btn, feedback, scope) {
   if (!restore) return;
   const id = btn.getAttribute("data-id");
   const payload = { id: Number(id) };
+  // Agent hint: lets the server load the agent doc in parallel with the row
+  // (it re-verifies against the row before trusting it).
+  const hintRow = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
+                  ALL_ROWS.find((r) => String(r.id) === String(id));
+  if (hintRow && hintRow.agent_id) payload.agent_hint = hintRow.agent_id;
   if (feedback) payload.feedback = feedback;
   // scope: "remember" persists this feedback into the agent's own memory, so
   // every future draft applies it too - not just this one regeneration.
@@ -3653,7 +3658,10 @@ async function doDraftAnyway(btn) {
   const id = btn.getAttribute("data-id");
   // Same background job as Regenerate - this is the very path that 502'd,
   // since a row with no draft has no stored classification either.
-  const res = await runRedraftJob({ id: Number(id) }, (secs) => {
+  const hintRow2 = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
+                   ALL_ROWS.find((r) => String(r.id) === String(id));
+  const res = await runRedraftJob(hintRow2 && hintRow2.agent_id
+      ? { id: Number(id), agent_hint: hintRow2.agent_id } : { id: Number(id) }, (secs) => {
     btn.textContent = secs < 10 ? "Drafting…" : `Drafting… ${secs}s`;
   });
   restore();

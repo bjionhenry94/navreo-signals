@@ -13047,6 +13047,136 @@ def _instantly_accounts():
     return items
 
 
+def _deliv_client_ws_provider(host):
+    h = str(host or "").lower()
+    if "gmail" in h or "google" in h:
+        return "Google"
+    if "outlook" in h or "office" in h or "azure" in h:
+        return "Outlook"
+    if "maildoso" in h:
+        return "Maildoso"
+    return "SMTP"
+
+
+def _deliv_merge_client_ws(out):
+    """Client-workspace federation (inbox-manager-all-workspaces, 2026-07-28):
+    the audit backend only sees Navreo's Smartlead, so client workspaces could
+    never reach the manager's views/windows however green their ingestion was.
+    Append mirror-derived rows (Supabase `mailboxes` + `mailbox_stats_daily`,
+    workspace-stamped by the nightly sweep) into the already-built views and
+    dh windows. Additive and idempotent: every appended row carries
+    `workspace`, prior stamped rows are stripped first (the carry-forward can
+    resurrect them), and this runs AFTER the ledger/ghost paths so those only
+    ever see backend rows. A stale (>48h) or unreadable mirror raises — the
+    caller records the error and Navreo data ships untouched."""
+    from datetime import date, datetime, timedelta, timezone
+    # Strip first, unconditionally, so a workspace disabled since the last
+    # bundle drains instead of riding the carry-forward forever.
+    for p in list((out.get("views") or {}).values()) + list((out.get("dh") or {}).values()):
+        if isinstance(p, dict) and isinstance(p.get("rows"), list):
+            p["rows"] = [r for r in p["rows"] if not (isinstance(r, dict) and r.get("workspace"))]
+    ws_ids = [w.get("id") for w in ws_enabled()
+              if w.get("id") and w.get("id") != "navreo"]
+    if not ws_ids:
+        return
+    ws_in = ",".join(ws_ids)
+    boxes = sb_get_all(
+        "mailboxes?select=smartlead_id,email,domain,workspace,tags,message_per_day,"
+        "warmup_enabled,warmup_status,blocked_reason,smtp_ok,imap_ok,smtp_host,"
+        "last_synced_at&workspace=in.(%s)" % ws_in) or []
+    newest = max((str(r.get("last_synced_at") or "") for r in boxes), default="")
+    if not boxes or newest < (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat():
+        raise RuntimeError("client mirror stale or empty (newest=%s)" % (newest or "none"))
+    view_rows = {v: [] for v in _DELIV_BUNDLE_VIEWS}
+    for r in boxes:
+        ws = r.get("workspace")
+        cap = r.get("message_per_day")
+        tags = r.get("tags") if isinstance(r.get("tags"), list) else []
+        row = {"id": "ws-%s-%s" % (ws, r.get("smartlead_id")),
+               "email": (r.get("email") or "").lower(),
+               "domain": (r.get("domain") or "").lower(),
+               "provider": _deliv_client_ws_provider(r.get("smtp_host")),
+               "cap": cap, "maildoso": False, "tags": [ws] + tags[:2],
+               "warmup_status": r.get("warmup_status"), "reason": "",
+               "reason_category": "", "reconnectable": False, "eligible": False,
+               "rested": False, "restedAt": None, "kind": "", "workspace": ws}
+        # Same vocabulary the backend views use (mirrored in mock_deliv):
+        # connection failure > warm-up off > held (cap 0); a healthy sending
+        # box belongs in no manager view. blocked_reason is NOT a view of its
+        # own here — the mirror's copy is mostly stale bounce text (361 of 572
+        # sat on warmup-ACTIVE boxes, checked 2026-07-28) — it rides along as
+        # the row's reason instead.
+        if r.get("smtp_ok") is False or r.get("imap_ok") is False:
+            row.update(kind="reconnect", reason="SMTP/IMAP connection failed",
+                       reason_category="conn fail")
+            view_rows["reconnect"].append(row)
+        elif not r.get("warmup_enabled"):
+            row.update(kind="warmupoff",
+                       reason=str(r.get("blocked_reason") or "")[:160])
+            view_rows["warmupoff"].append(row)
+        elif not cap:
+            row["kind"] = "ok"
+            view_rows["inwarmup"].append(row)
+    for v, rows in view_rows.items():
+        if rows:
+            p = out.setdefault("views", {}).setdefault(v, {"rows": []})
+            p.setdefault("rows", []).extend(rows)
+    # Domain-health windows: the mirror's rolling-30d counters ARE the 30-day
+    # window; 7/14 come from the delta between the latest snapshot and the
+    # snapshot at the window boundary (earliest in range when history is
+    # younger than the window). Per-box deltas clamp at 0 — a rolling counter
+    # shrinks when old sends age out of its own 30d tail.
+    today = date.today()
+    since = (today - timedelta(days=max(_DELIV_BUNDLE_WINDOWS) + 1)).isoformat()
+    stats = sb_get_all(
+        "mailbox_stats_daily?select=smartlead_id,workspace,stat_date,sent_30d,"
+        "replies_30d,bounces_30d,positive_replies_30d&workspace=in.(%s)&stat_date=gte.%s"
+        % (ws_in, since)) or []
+    # Keyed by (workspace, id): Smartlead account ids are per-account counters
+    # and can collide across client workspaces.
+    dom_of = {(r.get("workspace"), r.get("smartlead_id")):
+              ((r.get("domain") or "").lower(), r.get("workspace")) for r in boxes}
+    hist = {}
+    for s in stats:
+        hist.setdefault((s.get("workspace"), s.get("smartlead_id")), []).append(s)
+    for h in hist.values():
+        h.sort(key=lambda s: str(s.get("stat_date")))
+    for days in _DELIV_BUNDLE_WINDOWS:
+        bound = (today - timedelta(days=days)).isoformat()
+        agg = {}
+        for sid, h in hist.items():
+            dom, ws = dom_of.get(sid, ("", None))
+            if not dom or not h:
+                continue
+            latest = h[-1]
+            base = None if days >= 30 else next(
+                (s for s in h if str(s.get("stat_date")) >= bound), None)
+            def delta(col):
+                cur = latest.get(col) or 0
+                return cur if base is None else max(0, cur - (base.get(col) or 0))
+            a = agg.setdefault(dom, {"sent": 0, "replied": 0, "bounced": 0,
+                                     "positive": 0, "ws": ws})
+            a["sent"] += delta("sent_30d")
+            a["replied"] += delta("replies_30d")
+            a["bounced"] += delta("bounces_30d")
+            a["positive"] += delta("positive_replies_30d")
+        rows = []
+        for dom, a in sorted(agg.items()):
+            sent = a["sent"]
+            if not sent and not a["replied"]:
+                continue
+            pct = lambda n: round(n * 100.0 / sent, 2) if sent else 0
+            rows.append({"domain": dom, "sent": sent, "lead": 0,
+                         "replied": a["replied"], "bounced": a["bounced"],
+                         "positive": a["positive"], "reply_rate": pct(a["replied"]),
+                         "bounce_rate": pct(a["bounced"]),
+                         "positive_rate": pct(a["positive"]), "batches": [a["ws"]],
+                         "maildoso": False, "flag": "", "workspace": a["ws"]})
+        if rows:
+            w = out.setdefault("dh", {}).setdefault(str(days), {"rows": []})
+            w.setdefault("rows", []).extend(rows)
+
+
 def _deliv_bundle_run_bg_inner():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
@@ -13242,6 +13372,14 @@ def _deliv_bundle_run_bg_inner():
                           ("maildosoDomains", "domainBoxes"), ("instantly", "instantly")):
                 if ek in out["errors"] and k in prev and k not in out:
                     out[k] = prev[k]
+    # Client-workspace rows LAST: after the ledger/ghost paths (which must
+    # only see backend rows) and after the carry-forward (which may have
+    # resurrected a previous merge — the helper strips those before adding).
+    if not _deliv_mock_on():
+        try:
+            _deliv_merge_client_ws(out)
+        except Exception as e:  # noqa: BLE001 — client merge failing must never void Navreo's bundle
+            out["errors"]["clientWs"] = str(e)[:200]
     ok = bool(out["views"]) or bool(out["dh"])
     err = json.dumps(out["errors"])[:300] if out["errors"] else None
     with _DELIV_BUNDLE_LOCK:
@@ -15309,7 +15447,11 @@ class Handler(SimpleHTTPRequestHandler):
         body = json.dumps(obj).encode()
         gz = self._accepts_gzip() and len(body) >= 512  # tiny payloads: framing overhead isn't worth it
         if gz:
-            body = gzip.compress(body, 6)
+            # Level 6 on a multi-MB body costs seconds of CPU per request
+            # (measured 2026-07-28: the 6.4MB setter hydrate served SLOWER
+            # gzipped, 3.6s, than plain, 1.2s). Level 1 compresses JSON nearly
+            # as well at a fraction of the cost - past ~256KB, speed wins.
+            body = gzip.compress(body, 1 if len(body) > 262144 else 6)
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")

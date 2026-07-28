@@ -6351,6 +6351,22 @@ def _redraft_sync(payload):
         _settings_th = threading.Thread(target=_settings_worker, daemon=True,
                                         name="setter-settings")
         _settings_th.start()
+        # The client already knows the row's agent (it rendered the row), so it
+        # sends agent_hint and the agent doc loads in parallel with the row
+        # instead of after it. The hint is only TRUSTED when the loaded row
+        # confirms it - a stale/wrong hint falls back to the serial load.
+        agent_hint = str(payload.get("agent_hint") or "") or None
+        _agent_box = {}
+        _agent_th = None
+        if agent_hint:
+            def _agent_worker():
+                try:
+                    _agent_box["v"] = _load_agent(agent_hint)
+                except Exception:  # noqa: BLE001
+                    _agent_box["v"] = None
+            _agent_th = threading.Thread(target=_agent_worker, daemon=True,
+                                         name="setter-agent-hint")
+            _agent_th.start()
         _t = _time.time()
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
@@ -6358,7 +6374,11 @@ def _redraft_sync(payload):
             return 404, {"error": "Queue row not found."}
         _stage("load_row", _t)
         _t = _time.time()
-        agent = _load_agent(row.get("agent_id")) or {}
+        if _agent_th and str(row.get("agent_id") or "") == agent_hint:
+            _agent_th.join(timeout=10)
+            agent = _agent_box.get("v") or {}
+        else:
+            agent = _load_agent(row.get("agent_id")) or {}
         _stage("load_agent", _t)
         feedback_text = str(payload.get("feedback") or "").strip()
         # Persistent learning layer (owner ruling 2026-07-14): only when the
