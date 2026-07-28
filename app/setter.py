@@ -1366,8 +1366,48 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     # meaningful on a feedback redraft - blank it everywhere else.
     feedback_note = (str(data.get("feedback_note") or "").strip()
                      if payload.get("reviewer_feedback") else "")
+    html_body = demarkdown_links(html_body)
     html_body = enforce_signoff(html_body, sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
+
+
+# Markdown link, tolerant of the shapes the drafter actually emits: the label
+# may wrap lines, and the url may sit in the same parens as trailing text.
+# The label and the "(url)" can be separated by whitespace or block markup -
+# the drafter wraps long links onto their own line, sometimes with a <br> or
+# a </div><div> between (seen live 2026-07-28).
+_MD_LINK_RE = re.compile(
+    r"\[([^\[\]]{1,200}?)\]\s*(?:<br\s*/?>|</div>\s*<div>|</p>\s*<p>|\s)*\(\s*(https?://[^\s()<>]+)\s*\)",
+    re.S | re.I)
+# Bare autolinks: <https://...> - a browser eats these as an unknown tag.
+_MD_AUTOLINK_RE = re.compile(r"<(https?://[^\s<>\"]+)>")
+
+
+def demarkdown_links(html: str) -> str:
+    """Turn any markdown link the drafter emitted into a real anchor (owner
+    report 2026-07-28: "[a bit about how we work](https://drive.google...)"
+    reached the composer as literal text, with the raw URL on show, twice in
+    the same email). DRAFT_SYSTEM forbids markdown and the model still does
+    it - this is the deterministic guard that makes the rule true, the same
+    way enforce_signoff does for the sign-off.
+
+    Only ever converts a COMPLETE [label](http...) pair, so ordinary square
+    brackets and ordinary parentheses are untouched. Never raises."""
+    try:
+        if not html or ("[" not in html and "<http" not in html):
+            return html
+        # Don't touch anything already inside an anchor's markup.
+        def _anchor(m):
+            label = re.sub(r"\s+", " ", m.group(1)).strip()
+            url = m.group(2).rstrip(".,;:")
+            if not label:
+                label = url
+            return f'<a href="{url}">{label}</a>'
+        out = _MD_LINK_RE.sub(_anchor, html)
+        out = _MD_AUTOLINK_RE.sub(lambda m: f'<a href="{m.group(1)}">{m.group(1)}</a>', out)
+        return out
+    except Exception:  # noqa: BLE001 - a cosmetic guard must never fail a draft
+        return html
 
 
 # A closing word is not a name - never overwrite one of these with SenderFirst.
@@ -1484,6 +1524,7 @@ def proofread_draft(html: str, sender_first: str = ""):
         # "Bjion" came back as "Bjorn" AFTER draft_reply had already been
         # made canonical). Re-apply the guard here, so it is the LAST thing
         # that touches the html on every call site.
+        result = demarkdown_links(result)
         result = enforce_signoff(result, sender_first)
         return result, result != original
     except Exception:  # noqa: BLE001 - a proofread outage must degrade to the original draft, never crash
