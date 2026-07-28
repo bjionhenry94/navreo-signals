@@ -5342,7 +5342,7 @@ def route_subsequence_unresolved(_params):
         # with intermittent total failure, which is what made the tray vanish.
         cols = ("id,lead_email,lead_first_name,lead_last_name,company_domain,reply_body,"
                 "sent_at,smartlead_campaign_id,subsequence_decision,added_to_subsequence,"
-                "category,message_id")
+                "category,message_id,source_message_id,workspace,agent_id")
         rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(sent,auto_sent)"
                           f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select={cols}")
         if not isinstance(rows, list):
@@ -5398,6 +5398,18 @@ def route_subsequence_unresolved(_params):
                     "reply_snippet": clean_body(r.get("reply_body") or "")[:200],
                     "sent_at": r.get("sent_at"), "smartlead_campaign_id": r.get("smartlead_campaign_id"),
                     "subsequence_decision": decision,
+                    # Identity the client needs so an action on a tray-opened
+                    # row survives a re-intake id swap (owner bug 2026-07-28:
+                    # Buthaina's follow-up "didn't send", and "Queue row not
+                    # found" on dismiss - the provisional row carried no
+                    # message_id, so the id-miss fallback had nothing to
+                    # re-resolve on). agent_id lets the provisional sidebar
+                    # stop claiming "no agent assigned".
+                    "message_id": r.get("message_id"),
+                    "source_message_id": r.get("source_message_id"),
+                    "workspace": r.get("workspace"), "agent_id": r.get("agent_id"),
+                    "lead_first_name": r.get("lead_first_name"),
+                    "lead_last_name": r.get("lead_last_name"),
                 }))
         candidates.sort(key=lambda c: c[1].get("sent_at") or "", reverse=True)
         candidates = candidates[:50]
@@ -6316,10 +6328,26 @@ def route_queue_action(payload):
             # return=representation makes the PATCH itself the existence check.
             updated = _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{qid}",
                           {"status": "dismissed"}, "return=representation") if _SB else None
-            if not (isinstance(updated, list) and updated):
-                return 404, {"error": "Queue row not found."}
-            _bust_read_caches()
-            return 200, {"ok": True, "status": "dismissed"}
+            if isinstance(updated, list) and updated:
+                _bust_read_caches()
+                return 200, {"ok": True, "status": "dismissed"}
+            # The id missed - re-intake may have swapped it (owner bug
+            # 2026-07-28: "Couldn't dismiss: Queue row not found" on a
+            # tray-opened row). Re-resolve on the reply's identity, exactly
+            # like every other action below, before giving up.
+            ident = payload.get("identity")
+            if isinstance(ident, dict):
+                row = _existing_row(ident.get("workspace") or WORKSPACE,
+                                    ident.get("smartlead_campaign_id"),
+                                    str(ident.get("lead_email") or "").strip().lower(),
+                                    str(ident.get("message_id") or ""))
+                if row and row.get("id") is not None:
+                    re_up = _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{row['id']}",
+                                {"status": "dismissed"}, "return=representation") if _SB else None
+                    if isinstance(re_up, list) and re_up:
+                        _bust_read_caches()
+                        return 200, {"ok": True, "status": "dismissed"}
+            return 404, {"error": "Queue row not found."}
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:

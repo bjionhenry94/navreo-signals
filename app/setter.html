@@ -1359,13 +1359,18 @@ async function openUnresolvedRow(id) {
   // anchor-stable repaint keeps the fold-in from moving anything.
   const t = unresolvedRows.find((r) => String(r.id) === String(id));
   if (t) {
-    const nameParts = String(t.lead_name || "").split(" ");
     ALL_ROWS.push({
       id: t.id, lead_email: t.lead_email,
-      lead_first_name: nameParts[0] || "", lead_last_name: nameParts.slice(1).join(" "),
+      lead_first_name: t.lead_first_name || String(t.lead_name || "").split(" ")[0] || "",
+      lead_last_name: t.lead_last_name || "",
       company_domain: t.company_domain, smartlead_campaign_id: t.smartlead_campaign_id,
       status: "sent", sent_at: t.sent_at, reply_body: t.reply_snippet || "",
       subsequence_decision: t.subsequence_decision, thread: null,
+      // Full identity so an action survives a re-intake id swap, and the
+      // sidebar stops falsely saying "no agent assigned" (owner bug
+      // 2026-07-28: Buthaina's follow-up didn't send from a tray-opened row).
+      agent_id: t.agent_id || null, workspace: t.workspace,
+      message_id: t.message_id, source_message_id: t.source_message_id,
     });
     selectRow(id);
   }
@@ -1379,8 +1384,14 @@ async function openUnresolvedRow(id) {
   const idx = ALL_ROWS.findIndex((r) => String(r.id) === String(id));
   if (idx >= 0) Object.assign(ALL_ROWS[idx], row); else ALL_ROWS.push(row);
   const merged = idx >= 0 ? ALL_ROWS[idx] : ALL_ROWS[ALL_ROWS.length - 1];
-  if (String(selectedRowId) === String(id)) renderDetail(merged);
-  else if (!t) selectRow(id);
+  // Don't yank the pane out from under a reviewer who has already started
+  // typing a follow-up on the provisional shell - the full row is now merged
+  // into the same object, so the next natural repaint uses it. Repaint only
+  // when nothing is being typed (renderDetail's isTypingIn guard alone isn't
+  // enough here because this is a full re-render, not a background refresh).
+  if (String(selectedRowId) === String(id)) {
+    if (!isTypingIn(id)) renderDetail(merged);
+  } else if (!t) selectRow(id);
 }
 /* One shared write path for the retro decision, used by the banner rows AND
    the detail view's own buttons: patch the local copies, refresh whichever
@@ -1401,10 +1412,25 @@ function applyRetroDecision(id, patch) {
    more than one subsequence answers 400 with the candidate list - the
    caller's showPicker renders a small picker from it and retries with the
    chosen sub_sequence_id. */
+/* Identity for a tray row, so a write action survives a re-intake id swap
+   (the same rescue Approve/Send use). The tray feed now carries these
+   fields; ROW_IDENTITY is the fallback for a row already opened in the pane. */
+function trayIdentity(id) {
+  const t = (unresolvedRows || []).find((r) => String(r.id) === String(id));
+  if (t && (t.message_id || t.source_message_id)) {
+    return {
+      workspace: t.workspace, smartlead_campaign_id: t.smartlead_campaign_id,
+      lead_email: t.lead_email, message_id: t.source_message_id || t.message_id,
+    };
+  }
+  return ROW_IDENTITY[id] || null;
+}
 async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
   const restore = busyBtn(btn, "Adding…");
   if (!restore) return;
   const payload = { id: id, action: "subsequence", checked: true };
+  const ident = trayIdentity(id);
+  if (ident) payload.identity = ident;
   if (subSequenceId) payload.sub_sequence_id = subSequenceId;
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -1426,9 +1452,12 @@ async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
 async function retroFollowupNone(id, btn) {
   const restore = busyBtn(btn, "Saving…");
   if (!restore) return;
+  const nPayload = { id: id, action: "subsequence_none" };
+  const nIdent = trayIdentity(id);
+  if (nIdent) nPayload.identity = nIdent;
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: id, action: "subsequence_none" }),
+    body: JSON.stringify(nPayload),
   });
   restore();
   if (!res.ok) {
@@ -1452,9 +1481,12 @@ async function retroFollowupDismiss(id, btn) {
   const wasIn = unresolvedRows.some((r) => String(r.id) === String(id));
   unresolvedRows = unresolvedRows.filter((r) => String(r.id) !== String(id));
   renderUnresolvedTray();
+  const dPayload = { id: id, action: "subsequence_dismiss" };
+  const dIdent = trayIdentity(id);
+  if (dIdent) dPayload.identity = dIdent;
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: id, action: "subsequence_dismiss" }),
+    body: JSON.stringify(dPayload),
   });
   restore();
   if (!res.ok) {
@@ -3888,8 +3920,14 @@ async function doDismiss(btn) {
   if (prevStatus === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
   renderKpis(); renderQueueFilters(); renderQueue();
   protoNote("Dismissed");
+  // Identity rides along so a re-intake id swap can't 404 the dismiss (owner
+  // bug 2026-07-28: "Couldn't dismiss: Queue row not found" on a tray-opened
+  // row). rememberIdentity was filled when the pane rendered.
+  if (row) rememberIdentity(row);
+  const dismissPayload = { id: Number(id), action: "dismiss" };
+  if (ROW_IDENTITY[id]) dismissPayload.identity = ROW_IDENTITY[id];
   const res = await fetchJson("/api/setter/queue/action", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id), action: "dismiss" }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dismissPayload),
   });
   btn.disabled = false;
   if (!res.ok) {
