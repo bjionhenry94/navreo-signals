@@ -152,6 +152,14 @@
 .ah .brow .lbl.strong{font-weight:600;color:var(--ink)}
 .ah .brow .val{text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
 .ah .brow .val.bad{color:var(--red)}
+.ah .ocol{display:grid;grid-template-columns:1fr 92px 92px;align-items:center;gap:10px;font-size:12.5px;padding:4px 0}
+.ah .ocol + .ocol{border-top:1px solid var(--line)}
+.ah .ocol .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .ocol .lbl.strong{font-weight:600;color:var(--ink)}
+.ah .ocol .val{text-align:right;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .ocol .val.win{color:var(--orange)}
+.ah .ocol.ohead{font-size:10.5px;letter-spacing:.02em;text-transform:uppercase;color:var(--ink-3);border:0;padding-bottom:2px}
+.ah .ocol.ohead span{text-align:right;font-weight:500}
 .ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
 .ah .fill.orange{background:var(--orange)}
 
@@ -208,6 +216,7 @@
 @media (max-width:1280px){
   .ah .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 58px 54px}
   .ah .brow{grid-template-columns:104px 1fr 42px}
+  .ah .ocol{grid-template-columns:1fr 74px 74px;gap:8px}
   .ah .hero-flow{grid-template-columns:240px 1fr}
 }
 @media (max-width:980px){
@@ -1083,18 +1092,23 @@ function renderOffer() {
     return;
   }
   var offers = p.stats.offers.slice(0, 5);
-  var max = Math.max.apply(null, offers.map(function (o) { return parseFloat(o[1]) || 0; }).concat([0.1]));
-  box.innerHTML = offers.map(function (o, i) {
-    var v = parseFloat(o[1]) || 0;
-    // last place only reads as a loser when it is actually far behind
-    var bad = i === offers.length - 1 && offers.length > 2 && v < max * 0.55;
-    return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(o[0]) + "</span>" +
-      '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(v / max * 100)) + '%"></div>' +
-      '<span class="val num' + (bad ? " bad" : "") + '">' + v + "%</span></div>";
+  // Two costs per offer: emails to buy one positive reply, emails to buy one
+  // meeting. Lower is better, so the winner is the SMALLEST number — the
+  // opposite reading to every rate on this page, hence the column headers.
+  var s = '<div class="ocol ohead"><span></span><span>Per positive</span><span>Per meeting</span></div>';
+  s += offers.map(function (o, i) {
+    var pos = o[4], mt = o[5];
+    return '<div class="ocol"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(o[0]) + "</span>" +
+      '<span class="val num' + (i === 0 ? " win" : "") + '">' + (pos ? fmtN(pos) : "–") + "</span>" +
+      '<span class="val num' + (i === 0 && mt ? " win" : "") + '">' + (mt ? fmtN(mt) : "–") + "</span></div>";
   }).join("");
+  box.innerHTML = s;
   var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
   var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
-  $("offer-sub").textContent = "Across " + fmtN(camps) + " campaigns and " + fmtN(sends) + " emails.";
+  var nomeet = offers.filter(function (o) { return !o[5]; }).length;
+  $("offer-sub").textContent = "Emails it costs to buy one. Across " + fmtN(camps) +
+    " campaigns and " + fmtN(sends) + " emails." +
+    (nomeet ? " “–” means no meetings booked off that offer yet." : "");
   if (p.act) { $("offer-take").textContent = p.act; $("offer-take-row").style.display = ""; }
 }
 

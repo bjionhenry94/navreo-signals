@@ -8105,17 +8105,26 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             "source": src_note,
         }
 
-    # 3 · What is the offer — the ask in the copy, scored by reply rate
+    # 3 · What is the offer — the ask in the copy, priced in emails
     # No table stores a campaign's offer, so it is read off the live sequence
-    # copy and the campaign's whole-life sent/replied (campaign_scorecard, the
-    # same numbers every other surface quotes) is credited to that bucket.
+    # copy and the campaign's whole-life sent/positives/meetings (
+    # campaign_scorecard + the reply archive, the same numbers every other
+    # surface quotes) is credited to that bucket. The headline is COST, not
+    # rate: how many emails this offer costs to buy one positive reply and one
+    # meeting — the two numbers a founder actually plans against.
     offer_agg: dict = {}
     cand = [cid for cid, _n in sorted(by_camp.items(), key=lambda kv: -kv[1])[:20]]
     sc_rows = []
     if cand:
         sc_rows = sb("GET", "campaign_scorecard?smartlead_campaign_id=in.(" +
-                     ",".join(cand) + ")&select=smartlead_campaign_id,name,sent,replied")
+                     ",".join(cand) + ")&select=smartlead_campaign_id,name,sent,replied,positives")
     sc = {str(r.get("smartlead_campaign_id")): r for r in (sc_rows if isinstance(sc_rows, list) else [])}
+    # Meetings are per-campaign distinct booked leads. The archive only carries
+    # the navreo workspace, so a client-workspace campaign contributes sends
+    # with no meetings — that would quietly inflate every group's cost per
+    # meeting, so those campaigns are excluded from the meetings column only.
+    meet = _reply_archive_meetings(cand) or {}
+    meet_covered = set(meet.keys())
     for cid in cand:
         row = sc.get(str(cid))
         if not row or (row.get("sent") or 0) < 500:
@@ -8126,23 +8135,42 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             continue
         if not bucket:
             continue
-        a = offer_agg.setdefault(bucket, {"sent": 0, "replies": 0, "camps": []})
+        a = offer_agg.setdefault(bucket, {"sent": 0, "replies": 0, "pos": 0,
+                                          "meet": 0, "meet_sent": 0, "camps": []})
         a["sent"] += row.get("sent") or 0
         a["replies"] += row.get("replied") or 0
+        a["pos"] += row.get("positives") or 0
         a["camps"].append(row.get("name") or str(cid))
-    offers = [[k, round(a["replies"] / a["sent"] * 100, 1), a["sent"], len(a["camps"])]
-              for k, a in offer_agg.items() if a["sent"] >= 2000]
-    offers.sort(key=lambda o: -o[1])
+        if str(cid) in meet_covered:
+            a["meet"] += meet.get(str(cid)) or 0
+            a["meet_sent"] += row.get("sent") or 0
+
+    def _per(sent, n):
+        return round(sent / n) if (n and sent) else None
+
+    offers = []
+    for k, a in offer_agg.items():
+        if a["sent"] < 2000:
+            continue
+        offers.append([k, round(a["replies"] / a["sent"] * 100, 1), a["sent"], len(a["camps"]),
+                       _per(a["sent"], a["pos"]), _per(a["meet_sent"], a["meet"]),
+                       a["pos"], a["meet"]])
+    # cheapest positive first; a group with no positives at all sorts last
+    offers.sort(key=lambda o: (o[4] is None, o[4] or 0))
     offer_payload = None
     if len(offers) >= 2:
         win, lose = offers[0], offers[-1]
+        cost = (f"{win[4]:,} emails per positive reply" if win[4]
+                else f"{win[1]}% reply rate")
         offer_payload = {
             "kind": "offer", "tag": "fine", "client": "All", "owner": "Lilly",
-            "bold": f"{win[0]} pulls {win[1]}% across {win[2]:,} sends.",
-            "act": (f"Make {win[0].lower()} the ask on new campaigns ({win[1]}%); "
-                    f"stop leading with {lose[0].lower()} at {lose[1]}%."),
-            "note": ("What each campaign actually asks for, read off its live sequence copy. "
-                     "Reply rate is each group's whole-life sent and replied, not the last 30 days."),
+            "bold": f"{win[0]} is the cheapest ask — {cost}.",
+            "act": (f"Make {win[0].lower()} the ask on new campaigns ({cost}); "
+                    f"stop leading with {lose[0].lower()}" +
+                    (f" at {lose[4]:,} emails a positive." if lose[4] else ".")),
+            "note": ("What each campaign actually asks for, read off its live sequence copy, "
+                     "priced in emails per positive reply and per meeting. Whole-life numbers, "
+                     "not the last 30 days; meetings count only campaigns in the reply archive."),
             "stats": {"offers": offers},
             "source": src_note,
         }
