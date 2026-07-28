@@ -13687,6 +13687,197 @@ def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
     return data, 200
 
 
+# ── Client windows: per-client sent/replies/bounces for 7/14/30 days ────────
+# The analytics hub's date+client filters need SENT split by client and window,
+# and no store has it (sent_messages archives repliers only; day-wise stats are
+# per-workspace). Built here from Smartlead itself: one analytics-by-date call
+# per candidate campaign per window, aggregated to the client label the page
+# already uses (workspace when not navreo, else name keyword — mirrors
+# analytics_hub_v1's cmap). Per-workspace day-wise series ride along so Asteri/
+# KRG (and the all-clients sum) get true daily sent/bounce/rate lines.
+# Slow to build (~2-4 min for ~300 campaigns), so: SWR cache, background build,
+# serve stale forever, and a disk snapshot for instant warm boots.
+_CLIENT_WIN_FILE = APP_DIR / "data" / "client_windows.json"
+_CLIENT_WIN = {"data": None, "ts": 0.0, "running": False, "error": None}
+_CLIENT_WIN_LOCK = threading.Lock()
+_CLIENT_WIN_TTL_S = 7200
+_CLIENT_WIN_WINDOWS = (30, 14, 7)
+
+
+def _client_win_label(workspace, name) -> str:
+    ws = (workspace or "navreo").lower()
+    if ws == "asteri":
+        return "Asteri"
+    if ws == "krg":
+        return "KRG"
+    n = (name or "").lower()
+    if "amplif" in n:
+        return "Amplifyy"
+    if "arnic" in n:
+        return "Arnic"
+    if "qwintiq" in n:
+        return "Qwintiq"
+    return "Navreo"
+
+
+def _client_win_restore():
+    if _CLIENT_WIN["data"] is None and _CLIENT_WIN_FILE.exists():
+        try:
+            snap = json.loads(_CLIENT_WIN_FILE.read_text())
+            with _CLIENT_WIN_LOCK:
+                if _CLIENT_WIN["data"] is None:
+                    _CLIENT_WIN.update(data=snap, ts=0.0)  # ts 0 → refresh kicks
+        except Exception as e:  # noqa: BLE001 — a bad snapshot is just a cold cache
+            print(f"[client-win] snapshot restore failed: {e}", file=sys.stderr)
+
+
+def _client_win_build():
+    """The sweep. Candidates: every non-ARCHIVED/DRAFTED campaign that is
+    ACTIVE/PAUSED/STOPPED now, plus COMPLETED ones with a reply in the last
+    40 days (a finished campaign that sent in-window almost always has one —
+    the rare silent finisher is accepted and documented). 30d first; campaigns
+    with zero 30d sends skip the 14/7 calls."""
+    t0 = time.time()
+    end = _dtmod.date.today()
+    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status") or []
+    recent_reply = set()
+    try:
+        cut = (_dtmod.datetime.utcnow() - _dtmod.timedelta(days=40)).isoformat()
+        for r in (sb_get_all(f"replies?select=smartlead_campaign_id&replied_at=gte.{cut}") or []):
+            recent_reply.add(str(r.get("smartlead_campaign_id")))
+    except Exception as e:  # noqa: BLE001
+        print(f"[client-win] recent-replies read failed: {e}", file=sys.stderr)
+    cands = []
+    for r in rows:
+        st = str(r.get("status") or "").upper()
+        cid = str(r.get("smartlead_campaign_id"))
+        if st in ("ACTIVE", "PAUSED", "STOPPED") or (st == "COMPLETED" and cid in recent_reply):
+            cands.append((cid, r.get("workspace"), r.get("name")))
+    # per-workspace day-wise series (exact daily lines for Asteri/KRG + the sum)
+    series = {}
+    ws_names = {"navreo": "Navreo-ws", "asteri": "Asteri", "krg": "KRG"}
+    start30 = end - _dtmod.timedelta(days=29)
+    days_out = [(start30 + _dtmod.timedelta(days=i)).isoformat() for i in range(30)]
+    months = {m: i + 1 for i, m in enumerate(
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+    for ws in ("navreo", "asteri", "krg"):
+        try:
+            key = ws_key(ws)
+            if not key:
+                continue
+            url = (f"{SMARTLEAD_BASE}/analytics/day-wise-overall-stats?api_key={key}"
+                   f"&start_date={start30.isoformat()}&end_date={end.isoformat()}")
+            raw = ((http_json("GET", url, {}, timeout=30) or {}).get("data") or {}).get("day_wise_stats") or []
+            by_dm = {}
+            for r in raw:
+                try:
+                    d, mon = str(r.get("date", "")).split()
+                    by_dm[(int(d), months.get(mon[:3], 0))] = r.get("email_engagement_metrics") or {}
+                except (ValueError, AttributeError):
+                    continue
+            sent, rep, bnc = [], [], []
+            for iso in days_out:
+                dt = _dtmod.date.fromisoformat(iso)
+                m = by_dm.get((dt.day, dt.month)) or {}
+                sent.append(int(m.get("sent") or 0))
+                rep.append(int(m.get("replied") or 0))
+                bnc.append(int(m.get("bounced") or 0))
+            series[ws] = {"sent": sent, "replied": rep, "bounced": bnc}
+        except Exception as e:  # noqa: BLE001 — one workspace failing must not void the rest
+            print(f"[client-win] day-wise {ws} failed: {e}", file=sys.stderr)
+    out_series = {}
+    if "asteri" in series:
+        out_series["Asteri"] = series["asteri"]
+    if "krg" in series:
+        out_series["KRG"] = series["krg"]
+    if series:
+        agg = {k: [0] * 30 for k in ("sent", "replied", "bounced")}
+        for s in series.values():
+            for k in agg:
+                for i, v in enumerate(s[k]):
+                    agg[k][i] += v
+        out_series["__all"] = agg
+    # the campaign sweep
+    windows = {str(w): {} for w in _CLIENT_WIN_WINDOWS}
+    campaigns = {str(w): [] for w in _CLIENT_WIN_WINDOWS}
+    active_30 = set()
+    calls = 0
+    for w in _CLIENT_WIN_WINDOWS:
+        start = (end - _dtmod.timedelta(days=w - 1)).isoformat()
+        for cid, ws, name in cands:
+            if w != 30 and cid not in active_30:
+                continue
+            try:
+                d = _smartlead_json("GET", f"/campaigns/{cid}/analytics-by-date"
+                                          f"?start_date={start}&end_date={end.isoformat()}",
+                                   timeout=30, attempts=3)
+                calls += 1
+            except Exception:  # noqa: BLE001 — a missing campaign is a zero, not a failure
+                continue
+            s = int(float(d.get("sent_count") or 0)) if isinstance(d, dict) else 0
+            r = int(float(d.get("reply_count") or 0)) if isinstance(d, dict) else 0
+            b = int(float(d.get("bounce_count") or 0)) if isinstance(d, dict) else 0
+            if w == 30 and s > 0:
+                active_30.add(cid)
+            if s <= 0 and r <= 0:
+                continue
+            cl = _client_win_label(ws, name)
+            agg = windows[str(w)].setdefault(cl, {"sent": 0, "replied": 0, "bounced": 0})
+            agg["sent"] += s
+            agg["replied"] += r
+            agg["bounced"] += b
+            campaigns[str(w)].append({"id": cid, "client": cl, "name": name,
+                                      "sent": s, "replied": r, "bounced": b})
+            time.sleep(0.12)  # stay well under the shared 200/min Smartlead cap
+        # window totals across every client
+        tot = {"sent": 0, "replied": 0, "bounced": 0}
+        for v in windows[str(w)].values():
+            for k in tot:
+                tot[k] += v[k]
+        windows[str(w)]["__all"] = tot
+    data = {"days": days_out, "series": out_series, "windows": windows,
+            "campaigns": campaigns,
+            "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
+    print(f"[client-win] built: {len(cands)} candidates, {calls} calls, "
+          f"{int(time.time() - t0)}s", flush=True)
+    return data
+
+
+def _client_win_run_bg():
+    try:
+        data = _client_win_build()
+    except Exception as e:  # noqa: BLE001
+        with _CLIENT_WIN_LOCK:
+            _CLIENT_WIN.update(running=False, error=str(e)[:200])
+        print(f"[client-win] build failed: {e}", file=sys.stderr)
+        return
+    with _CLIENT_WIN_LOCK:
+        _CLIENT_WIN.update(data=data, ts=time.time(), running=False, error=None)
+    try:
+        _CLIENT_WIN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CLIENT_WIN_FILE.write_text(json.dumps(data))
+    except Exception as e:  # noqa: BLE001 — disk snapshot is best-effort
+        print(f"[client-win] snapshot write failed: {e}", file=sys.stderr)
+
+
+def client_windows_get() -> tuple[dict, int]:
+    """Serve the cache (stale allowed — the page shows asof), kicking a
+    background rebuild whenever it's past TTL. First-ever call returns
+    {building:true} and the page polls."""
+    _client_win_restore()
+    kick = False
+    with _CLIENT_WIN_LOCK:
+        ent, ts, running = _CLIENT_WIN["data"], _CLIENT_WIN["ts"], _CLIENT_WIN["running"]
+        if not running and (ent is None or (time.time() - ts) >= _CLIENT_WIN_TTL_S):
+            _CLIENT_WIN["running"] = True
+            kick = True
+    if kick:
+        threading.Thread(target=_client_win_run_bg, daemon=True).start()
+    if ent is None:
+        return {"building": True, "error": _CLIENT_WIN["error"]}, 200
+    return ent, 200
+
+
 # ── Fleet daily stats: the permanent day-by-day record in Supabase ──────────
 # Sent / replies / reply-rate / positives per calendar day, straight from
 # Smartlead's OWN day-wise analytics (same source as the deliverability tab), so
@@ -16511,6 +16702,9 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 days = 30
             body, status = deliv_trends_get(days)
+            return self._json(body, status)
+        if path == "/api/client-windows":
+            body, status = client_windows_get()
             return self._json(body, status)
         if path == "/api/restore-plan":
             body, status = api_restore_plan()

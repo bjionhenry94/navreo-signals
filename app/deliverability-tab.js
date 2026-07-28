@@ -419,6 +419,93 @@
       })
       .catch(() => { DATA.trends.status = "error"; paintPage(); });
   }
+
+  /* Recommended-settings audit (GET /api/mailbox-settings-audit) — which live
+     mailboxes deviate from the house standard for their provider (Google vs
+     Outlook/Entra warm-up + outbound settings). READ-ONLY: the card this feeds
+     is a flag, never a fix button — changing a mailbox's settings stays a
+     deliberate action taken in Smartlead.
+     The server serves a cached blob and refreshes in the background, so an
+     empty blob with running:true means "still checking", NOT "all clear" —
+     buildTodoItem returns null in that state rather than a resolved card. */
+  // Short human labels for the audit's rule keys (used in the card's
+  // "most common" line and the CSV).
+  const SETTINGS_RULE_LABELS = {
+    warmup_per_day: "warm-up emails/day",
+    warmup_reply_rate_pct: "warm-up reply rate",
+    warmup_days_before_campaigns: "sending before 14 days of warm-up",
+    outbound_per_day: "outbound emails/inbox/day",
+    outbound_min_gap_mins: "gap between emails",
+    domain_outbound_per_day: "outbound/domain/day total",
+  };
+  const SETTINGS = { status: "idle", data: null, policy: null, running: false, ageSec: null, polls: 0 };
+
+  /* The recommended settings themselves, rendered from the server's policy
+     table (never hard-coded here — one source of truth, so the card can't
+     quote a standard the audit isn't scoring against). Shown as a fold on the
+     card so anyone reading a deviation can see what it deviates FROM. */
+  function settingsPolicyFold() {
+    const p = SETTINGS.policy;
+    if (!p || !p.providers) return "";
+    const rows = [];
+    Object.keys(p.providers).forEach((k) => {
+      const pr = p.providers[k];
+      // Units come from the rule, and the "(minimum)"/"(maximum)" qualifier is
+      // dropped when the label already says it — "Minimum gap: 60 (minimum)".
+      const line = (r, unit) => {
+        if (!r) return "";
+        const q = r.compare === "min" ? "minimum" : r.compare === "max" ? "maximum" : "";
+        const qual = (q && !new RegExp(q, "i").test(r.label)) ? " (" + q + ")" : "";
+        return r.label + ": " + r.value + (unit || "") + qual;
+      };
+      const bits = [line(pr.warmup.per_day), line(pr.warmup.reply_rate_pct, "%"),
+        line(pr.warmup.min_days_before_campaigns, " days"), line(pr.outbound.per_day),
+        line(pr.outbound.min_gap_mins, " mins"), line(pr.outbound.max_domain_per_day)];
+      rows.push([pr.label, bits.filter(Boolean).join("\n")]);
+    });
+    const other = p.platform_warmup_reply_rate || {};
+    const plat = Object.keys(other).map((k) => {
+      const v = other[k];
+      const rr = v && v.microsoft != null ? v.microsoft + "%" : (v && v.note) ? v.note : "—";
+      return k + ": " + rr;
+    }).join("\n");
+    if (plat) rows.push(["Outlook/Entra warm-up reply rate by platform", plat]);
+    const unaud = p.unaudited_types || {};
+    const un = Object.keys(unaud).map((k) => k + ": " + unaud[k]).join("\n");
+    if (un) rows.push(["Not audited", un]);
+    const body = rows.map((b, i) => `<div class="det-block"${i ? ' style="margin-top:12px"' : ""}><div class="h">${esc(b[0])}</div><div class="mono" style="white-space:pre-line">${esc(b[1])}</div></div>`).join("");
+    return `<details class="disclose" style="margin-top:10px"><summary>Show the recommended settings${p.version ? " (v" + esc(p.version) + ")" : ""}</summary><div class="dc">${body}</div></details>`;
+  }
+  const SETTINGS_POLL_MS = 15000;
+  const SETTINGS_POLL_MAX = 20;   // ~5 min — a cold fleet sweep is ~90s
+  function loadSettingsAudit() {
+    if (SETTINGS.status === "loading") return;
+    // Not live YET: the first paint runs before the live probe resolves, so
+    // this must stay "idle" (retry on the next paint) — parking it in "error"
+    // would silence the card for the rest of the session.
+    if (!isLive()) return;
+    if (SETTINGS.status === "ready" && !SETTINGS.running) return;
+    SETTINGS.status = "loading";
+    fetch("/api/mailbox-settings-audit")
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((j) => {
+        SETTINGS.data = (j && j.audit) || null;
+        SETTINGS.policy = (j && j.policy) || null;   // the recommended settings themselves
+        SETTINGS.running = !!(j && j.running);
+        SETTINGS.ageSec = (j && j.ageSec != null) ? j.ageSec : null;
+        SETTINGS.status = "ready";
+        // A sweep in flight with no blob yet: poll until it lands (capped).
+        if (SETTINGS.running && SETTINGS.polls < SETTINGS_POLL_MAX) {
+          SETTINGS.polls += 1;
+          setTimeout(() => { SETTINGS.status = "idle"; loadSettingsAudit(); }, SETTINGS_POLL_MS);
+        } else {
+          SETTINGS.running = false;
+        }
+        paintPage();
+      })
+      .catch(() => { SETTINGS.status = "error"; SETTINGS.running = false; paintPage(); });
+  }
+
   // Typed fetch error so callers can distinguish 503 (backend unconfigured)
   // from 502 (upstream error) from a raw network/timeout failure.
   // kind ∈ "unconfigured" | "upstream" | "network" | "http".
@@ -2057,6 +2144,27 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       S.A.warmupConfig.notWarming.map((r) => ({ email: r.email, domain: r.domain, issue: "not warming", detail: r.reason })),
       S.A.warmupConfig.wrongSettings.map((r) => ({ email: r.email, domain: r.domain, issue: "wrong settings", detail: r.issue })),
     )),
+    // Recommended-settings deviations — one row per mailbox per broken rule,
+    // so a VA can sort by rule or by domain. Empty (header only) when the
+    // sweep hasn't landed; the card never opens the view in that state.
+    "mailbox-settings": () => toCSV(
+      ["domain", "email", "provider", "setting", "recommended", "actual", "note"],
+      ((SETTINGS.data || {}).mailboxes || []).reduce((acc, m) => acc.concat(
+        (m.issues || []).map((i) => ({
+          domain: m.domain, email: m.email, provider: m.provider,
+          setting: SETTINGS_RULE_LABELS[i.key] || i.label || i.key,
+          recommended: i.expected + (i.compare === "min" ? " (minimum)" : i.compare === "max" ? " (maximum)" : ""),
+          actual: i.actual == null ? "(not set)" : i.actual,
+          note: i.note || "",
+        }))), [])),
+    "mailbox-settings-domains": () => toCSV(
+      ["domain", "provider", "mailboxes", "mailboxes_deviating", "outbound_per_day_total", "over_domain_cap", "rules"],
+      ((SETTINGS.data || {}).domains || []).map((d) => ({
+        domain: d.domain, provider: d.provider, mailboxes: d.mailboxes,
+        mailboxes_deviating: d.deviating, outbound_per_day_total: d.outbound_per_day,
+        over_domain_cap: d.domain_issue ? "YES" : "",
+        rules: Object.keys(d.rules || {}).map((k) => SETTINGS_RULE_LABELS[k] || k).join(" · "),
+      }))),
     "batch-stats": () => toCSV(["batch", "mailboxes", "domains", "sending", "warmup", "dead", "blocked", "blacklisted", "sent", "reply_rate", "bounce_rate", "positive_rate"], S.A.batchStats),
     "domain-health": () => toCSV(["domain", "sent", "leads_contacted", "replied", "reply_rate_pct", "positive_replied", "bounce_rate_pct", "action"], S.A.domainHealth.rows.map((d) => ({ domain: d.domain, sent: d.sent, leads_contacted: d.lead, replied: d.replied, reply_rate_pct: d.reply_rate, positive_replied: d.positive, bounce_rate_pct: d.bounce_rate, action: dhFlag(d, dhCutoffMin().minSent, dhCutoffMin().cutoff) === "warmup" ? "MOVE TO WARMUP" : "keep active" }))),
     "domain-health-warmup": () => toCSV(["domain", "sent", "leads_contacted", "replied", "reply_rate_pct", "positive_replied", "bounce_rate_pct", "action"], S.A.domainHealth.rows.filter((d) => dhFlag(d, dhCutoffMin().minSent, dhCutoffMin().cutoff) === "warmup").map((d) => ({ domain: d.domain, sent: d.sent, leads_contacted: d.lead, replied: d.replied, reply_rate_pct: d.reply_rate, positive_replied: d.positive, bounce_rate_pct: d.bounce_rate, action: "MOVE TO WARMUP" }))),
@@ -2072,6 +2180,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     retired: "Retired domains",
     signature: "Signature issues",
     "warmup-config": "Warmup config issues",
+    "mailbox-settings": "Mailboxes off the recommended settings",
+    "mailbox-settings-domains": "Domains off the recommended settings",
     "batch-stats": "Performance by batch",
     "domain-health": "Domain health — full table",
     "domain-health-warmup": "Domains to warm up",
@@ -2202,6 +2312,46 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         if (!n) return { key: "retired-domains", level: "note", count: 0, resolved: true, text: "No fully-dead retired domains right now." };
         return { key: "retired-domains", level: "note", count: n, text: n + " fully-dead domain(s) with every mailbox retired.", action: "Remove these from Smartlead — they're not recoverable.", retiredCsv: true };
       }
+      // Owner ruling 2026-07-28: the house recommended settings per provider
+      // (Google vs Outlook/Entra warm-up + outbound) now live in the platform,
+      // and any mailbox drifting off them is FLAGGED here. Deliberately a flag
+      // only — no fix button on this card: re-setting a live mailbox's caps is
+      // a decision, not a click. Counts domains, not mailboxes, because this is
+      // the domain section's list and settings drift is a per-domain batch fact.
+      case "provider-settings": {
+        if (!isLive()) return null;                       // sample data makes no fleet claims
+        loadSettingsAudit();
+        if (SETTINGS.status === "error") return null;     // couldn't check — claim nothing
+        const a = SETTINGS.data;
+        if (!a) return null;                              // still sweeping — not "all clear"
+        const t = a.totals || {};
+        const doms = Array.isArray(a.domains) ? a.domains : [];
+        if (!doms.length) {
+          return { key: "provider-settings", level: "note", count: 0, resolved: true,
+            text: "Every audited mailbox matches the recommended settings for its provider (" + (t.mailboxes_audited || 0) + " checked)." };
+        }
+        // Name the two or three rules doing most of the damage — "312 domains
+        // deviate" with no cause is not actionable at a glance.
+        const byRule = {};
+        Object.keys(a.byProvider || {}).forEach((p) => {
+          const r = (a.byProvider[p] || {}).byRule || {};
+          Object.keys(r).forEach((k) => { byRule[k] = (byRule[k] || 0) + r[k]; });
+        });
+        const top = Object.keys(byRule).sort((x, y) => byRule[y] - byRule[x]).slice(0, 3)
+          .map((k) => byRule[k] + " × " + (SETTINGS_RULE_LABELS[k] || k));
+        const overCap = doms.filter((d) => d.domain_issue).length;
+        return { key: "provider-settings", level: "note", count: doms.length,
+          short: "domains off the recommended provider settings",
+          text: doms.length + " of " + (t.domains_audited || 0) + " domain(s) have mailboxes set differently from the recommendation for their provider — "
+            + (t.mailboxes_deviating || 0) + " of " + (t.mailboxes_audited || 0) + " mailbox(es)."
+            + (overCap ? " " + overCap + " domain(s) also exceed the 100 outbound emails/domain/day total." : ""),
+          actionLines: [
+            "Most common: " + (top.join(" · ") || "—") + ".",
+            "Flag only — nothing has been changed. Review the list, then adjust in Smartlead if you agree.",
+          ],
+          action: "Review the deviations and adjust in Smartlead if you agree — nothing here changes a mailbox.",
+          settingsCsv: true };
+      }
       // Task B: three exception classes that used to only ever surface inside
       // the (now-folded) Fleet-tiles technical-details grid — never as an
       // actionable to-do row. Same buildTodoItem() shape as the classes above
@@ -2321,7 +2471,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
 
   function recomputeTodos(D) {
-    const kinds = ["dormant-noreminder", "blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "retired-domains", "smtp-imap", "auth-records", "trend-drift"];
+    const kinds = ["dormant-noreminder", "blacklist", "blocked", "verify", "signatures", "new-unprocessed", "warmup-notwarming", "retired-domains", "smtp-imap", "auth-records", "trend-drift", "provider-settings"];
     let raw = kinds.map((k) => buildTodoItem(k, D)).filter(Boolean);
 
     // Dynamic: domains flagged for warm-up rotation that aren't resting yet.
@@ -3494,6 +3644,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (it.newCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="new-mailboxes">View new/untagged</a></div>`);
     if (it.retiredCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="retired">View retired domains</a></div>`);
     if (it.wcCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="warmup-config">View warmup-config issues</a></div>`);
+    if (it.settingsCsv) extraBits.push(`<div style="margin-top:6px"><a class="dlv-dl" data-act="view-data" data-file="mailbox-settings-domains">View the domains</a> · <a class="dlv-dl" data-act="view-data" data-file="mailbox-settings">View every mailbox + setting</a></div>${settingsPolicyFold()}`);
+    // The standard is worth showing even on the all-clear card — it's the
+    // reference table, not just an explanation of a problem.
+    if (it.key === "provider-settings" && it.resolved) extraBits.push(settingsPolicyFold());
     const btns = [];
     if (it.hypertide) {
       btns.push(`<button class="btn sm" data-act="draft-email">Draft email</button>`);
@@ -3712,6 +3866,17 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // helper now only drives the workspace tag on domain rows.
   function isClientRow(r) { return !!(r && r.workspace && r.workspace !== "navreo"); }
 
+  // Page-level client lens (deliverability.html chips): Asteri/KRG map 1:1 to
+  // a workspace, so their rows filter exactly; every other client sends from
+  // the shared Navreo fleet, so those chips show the shared fleet (the page
+  // labels it). Set via window.DLV_CLIENT_LENS + a "dlv-client-lens" event.
+  function dlvApplyClientLens(rows) {
+    const L = window.DLV_CLIENT_LENS;
+    if (!L || !L.client || L.client === "All" || !Array.isArray(rows)) return rows;
+    if (L.ws) return rows.filter((r) => (r.workspace || "") === L.ws);
+    return rows.filter((r) => !isClientRow(r));
+  }
+
   // Mailbox rows for a mailbox-backed flow. Live rows come from the server's
   // bundle cache (null while it's still loading — the painter shows a
   // skeleton); sample mode derives them from the mock roster as before.
@@ -3804,7 +3969,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function mgrVisibleMailboxRows(opts) {
     let rows = rowsForFlow(UI.mgr.flow);
     if (rows == null) return null;
-    rows = rows.slice();
+    rows = dlvApplyClientLens(rows.slice());
     const q = (opts && opts.ignoreSearch) ? "" : (UI.mgr.search || "").trim().toLowerCase();
     if (q) rows = rows.filter((r) => (r.email || "").toLowerCase().includes(q) || (r.domain || "").toLowerCase().includes(q));
     return rows;
@@ -4038,6 +4203,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
       return;
     }
+    rows = dlvApplyClientLens(rows);
     const q = (UI.mgr.search || "").trim().toLowerCase();
     if (q) rows = rows.filter((d) => d.domain.toLowerCase().includes(q));
     const recovered = D.recovered;
@@ -4831,6 +4997,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     }
     return "";
   }
+
+  window.addEventListener("dlv-client-lens", function () {
+    try { paintPage(); } catch (e) { /* lens repaint is best-effort */ }
+  });
 
   function paintPage() {
     const root = $id("dlv-root");
