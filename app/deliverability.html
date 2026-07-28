@@ -91,11 +91,13 @@
 .ah .funnel.swap .fnum,.ah .funnel.swap .frate{opacity:0}
 
 .ah .hero-flow{display:block}
-
+/* stage labels align under the funnel's four stages (x≈0.125/0.375/0.625/0.875
+   of the 880-wide viewBox = the centres of four equal columns) */
+.ah .stagestrip{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);padding-top:12px;max-width:920px;margin:8px auto 0}
 .ah .stagecell{text-align:center;text-decoration:none;padding:2px 8px}
 .ah .scname{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
 .ah .scstat{margin-top:5px;font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:6px}
-.ah .stagecell:hover .scstat{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.ah .stagecell:hover .scname{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
 .ah .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .ah .dot.amber{background:var(--amber)} .ah .dot.green{background:var(--green)}
 .ah .dot.red{background:var(--red)} .ah .dot.mute{background:var(--brown-300)}
@@ -328,6 +330,14 @@
             </g>
           </svg>
 
+          <!-- stage labels only (the dot sub-stats were removed per the PDF,
+               but the column labels stay so the funnel reads left-to-right) -->
+          <nav class="stagestrip" aria-label="Pipeline stages">
+            <a class="stagecell" href="#lane-sent"><div class="scname">Emails sent</div></a>
+            <a class="stagecell" href="#lane-replies"><div class="scname">Replies</div></a>
+            <a class="stagecell" href="#lane-interested"><div class="scname">Interested</div></a>
+            <a class="stagecell" href="#lane-meetings"><div class="scname">Meetings</div></a>
+          </nav>
         </div>
 
         <div class="leakbar" id="leakbar" style="display:none">
