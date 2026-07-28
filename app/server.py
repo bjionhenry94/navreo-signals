@@ -13732,11 +13732,12 @@ def _client_win_restore():
 
 
 def _client_win_build():
-    """The sweep. Candidates: every non-ARCHIVED/DRAFTED campaign that is
-    ACTIVE/PAUSED/STOPPED now, plus COMPLETED ones with a reply in the last
-    40 days (a finished campaign that sent in-window almost always has one —
-    the rare silent finisher is accepted and documented). 30d first; campaigns
-    with zero 30d sends skip the 14/7 calls."""
+    """The sweep. Candidates: every ACTIVE/PAUSED/STOPPED/COMPLETED campaign —
+    COMPLETED must be swept unconditionally because finished campaigns keep
+    sending follow-up steps inside the window (the 2026-07-28 truth check
+    caught 12 completed Asteri campaigns holding 14% of its 14d sends).
+    ARCHIVED/DRAFTED don't send. 30d first; campaigns with zero 30d sends
+    skip the 14/7 calls."""
     t0 = time.time()
     end = _dtmod.date.today()
     rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status") or []
@@ -13744,18 +13745,11 @@ def _client_win_build():
         # 1,000+ campaigns exist; an empty read is a transient outage, and
         # building a zero blob from it would cache a lie for 2 hours
         raise RuntimeError("campaign_scorecard read returned no rows")
-    recent_reply = set()
-    try:
-        cut = (_dtmod.datetime.utcnow() - _dtmod.timedelta(days=40)).isoformat()
-        for r in (sb_get_all(f"replies?select=smartlead_campaign_id&replied_at=gte.{cut}") or []):
-            recent_reply.add(str(r.get("smartlead_campaign_id")))
-    except Exception as e:  # noqa: BLE001
-        print(f"[client-win] recent-replies read failed: {e}", file=sys.stderr)
     cands = []
     for r in rows:
         st = str(r.get("status") or "").upper()
         cid = str(r.get("smartlead_campaign_id"))
-        if st in ("ACTIVE", "PAUSED", "STOPPED") or (st == "COMPLETED" and cid in recent_reply):
+        if st in ("ACTIVE", "PAUSED", "STOPPED", "COMPLETED"):
             cands.append((cid, r.get("workspace"), r.get("name")))
     # per-workspace day-wise series (exact daily lines for Asteri/KRG + the sum)
     series = {}
@@ -13855,8 +13849,7 @@ def _client_win_build():
     data = {"days": days_out, "series": out_series, "windows": windows,
             "campaigns": campaigns,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
-            "_debug": {"candidates": len(cands), "calls": calls,
-                       "recent_reply": len(recent_reply), "errors": errs,
+            "_debug": {"candidates": len(cands), "calls": calls, "errors": errs,
                        "sample": sample, "secs": int(time.time() - t0)}}
     print(f"[client-win] built: {len(cands)} candidates, {calls} calls, "
           f"errs={errs[:2]} {int(time.time() - t0)}s", flush=True)
