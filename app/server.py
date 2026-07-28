@@ -13833,19 +13833,29 @@ def _client_win_build():
             campaigns[str(w)].append({"id": cid, "client": cl, "name": name,
                                       "sent": s, "replied": r, "bounced": b})
             time.sleep(0.12)  # stay well under the shared 200/min Smartlead cap
-        # window totals across every client
+        # window totals across every client. When the day-wise series exists,
+        # __all comes from IT instead of the client sum: workspace telemetry
+        # also counts campaigns archived or deleted since they sent (~1-2% on
+        # a 7d window, seen 2026-07-28), and the hero line is drawn from the
+        # same series — total and line must never disagree.
         tot = {"sent": 0, "replied": 0, "bounced": 0}
         for v in windows[str(w)].values():
             for k in tot:
                 tot[k] += v[k]
-        windows[str(w)]["__all"] = tot
+        agg_all = out_series.get("__all")
+        if agg_all and sum(agg_all["sent"][-w:]) >= tot["sent"]:
+            windows[str(w)]["__all"] = {"sent": sum(agg_all["sent"][-w:]),
+                                        "replied": sum(agg_all["replied"][-w:]),
+                                        "bounced": sum(agg_all["bounced"][-w:])}
+        else:
+            windows[str(w)]["__all"] = tot
     if calls == 0:
         raise RuntimeError(f"no analytics-by-date call succeeded ({len(cands)} candidates; first errors: {errs[:2]})")
     if out_series.get("__all") and sum(out_series["__all"]["sent"][-30:]) > 0 \
-            and windows["30"]["__all"]["sent"] == 0:
-        # the fleet sent tens of thousands this month — a zero sweep is a fault,
-        # not a fact, and must never be cached or persisted
-        raise RuntimeError(f"sweep total is zero against a non-zero fleet (errors: {errs[:2]})")
+            and not campaigns["30"]:
+        # the fleet sent tens of thousands this month — a sweep with zero
+        # campaign rows is a fault, not a fact; never cache or persist it
+        raise RuntimeError(f"sweep found no sending campaigns against a non-zero fleet (errors: {errs[:2]})")
     data = {"days": days_out, "series": out_series, "windows": windows,
             "campaigns": campaigns,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
