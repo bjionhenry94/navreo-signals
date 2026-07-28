@@ -50,6 +50,7 @@
 .ah .lchip b{font-weight:700}
 .ah .lchip:not(.on){color:var(--ink-3)}
 .ah .lchip:not(.on) .sw{filter:grayscale(1);opacity:.45}
+.ah .lchip.off{cursor:default;opacity:.78}
 .ah .lchip.off{opacity:.38;cursor:default;pointer-events:none}
 .ah svg.trend{display:block;width:100%;height:auto;cursor:crosshair}
 .ah .trend text{font-family:var(--font-sans)}
@@ -485,7 +486,7 @@
              did: same question shape, one level up — the ask beats the wording. -->
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">What is the offer?</div>
+            <div class="card-kick">What is the offer? <span style="text-transform:none;letter-spacing:0;font-weight:500">· whole book</span></div>
           </div>
           <div id="offer-rows"><div class="subline">Reading the offer off each campaign's copy…</div></div>
           <div class="subline" id="offer-sub">&nbsp;</div>
@@ -504,7 +505,7 @@
       </div>
       <div class="cards c23">
         <div class="acard">
-          <div class="card-kick">Job type <span style="text-transform:none;letter-spacing:0;font-weight:500">· of <span id="who-n">–</span> interested</span></div>
+          <div class="card-kick">Job type <span style="text-transform:none;letter-spacing:0;font-weight:500">· of <span id="who-n">–</span> interested · whole book</span></div>
           <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
         </div>
@@ -582,9 +583,18 @@ var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null,
 // Meetings (the lines a founder reads); the landing card owns the bounce
 // story and both stay one chip-tap away.
 // TWO page dimensions and only two: state.client + state.range (7/14/30 —
-// never all-time). Every widget below reads both.
+// never all-time). Every widget below reads both. The pair survives a reload
+// via localStorage (losing your filters on refresh was round-1 friction).
 var state = { client: "All", range: 30,
               on: { sent: false, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
+try {
+  var _saved = JSON.parse(localStorage.getItem("ah_filters") || "{}");
+  if ([7, 14, 30].indexOf(_saved.range) >= 0) state.range = _saved.range;
+  if (typeof _saved.client === "string" && _saved.client) state.client = _saved.client;
+} catch (e) { /* fresh defaults */ }
+function saveFilters() {
+  try { localStorage.setItem("ah_filters", JSON.stringify({ client: state.client, range: state.range })); } catch (e) { /* private mode */ }
+}
 
 function ckey() { return state.client === "All" ? "__all" : state.client; }
 function clientOfName(name, ws) {
@@ -686,16 +696,30 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     // "All" falls back to the fleet trends while client-windows still builds
     return state.client === "All" ? fleetSeries()[k] : null;
   }
+  if (k === "replies") {
+    // Replies: workspace telemetry when the client HAS a workspace (Asteri,
+    // KRG, All) — the archive misses client-workspace replies (38 vs 116 on
+    // Asteri, caught by the 2026-07-28 testers). Navreo-ws clients keep the
+    // archive, which is complete for them.
+    var ws = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
+    if (ws && ws.replied) return ws.replied;
+  }
   var s = HUB.series && HUB.series[ckey()];
   return (s && s[k === "interested" ? "interested" : k]) || [];
 }
-function rateAvg() {      // reply rate over the selected client + window, % 1dp
+function repliesShown() { // THE reply count every widget shows for this view
+  var r = seriesFor("replies");
+  return r ? slice(r).reduce(function (a, b) { return a + (b || 0); }, 0) : 0;
+}
+function sentShown() {    // THE sent count every widget shows for this view
   var cw = cwFor(state.client);
-  if (cw && cw.sent > 0) return Math.round(cw.replied / cw.sent * 1000) / 10;
-  var f = fleetSeries();
-  var sent = slice(f.sent), rate = slice(f.rate), S = 0, R = 0;
-  sent.forEach(function (s, i) { if (rate[i] != null) { S += s; R += s * rate[i] / 100; } });
-  return S > 0 ? Math.round(R / S * 1000) / 10 : null;
+  if (cw) return cw.sent;
+  return slice(fleetSeries().sent).reduce(function (a, b) { return a + b; }, 0);
+}
+function rateAvg() {      // ONE reply rate: repliesShown ÷ sentShown — the same
+  var S = sentShown();    // two numbers the legend and the funnel display, so
+  if (!S) return null;    // the chip and "X in 100 reply" can never disagree
+  return Math.round(repliesShown() / S * 1000) / 10;
 }
 function slice(a) { return a.slice(Math.max(0, a.length - state.range)); }
 function rangeLabel() { return "last " + state.range + " days"; }
@@ -813,6 +837,10 @@ function renderTrend() {
 }
 function halfSum(a, back) { var t = 0; for (var i = Math.max(0, a.length - back); i < a.length; i++) t += a[i] || 0; return t; }
 function takeLine(rep, mtg) {
+  // a trend sentence over a handful of replies is noise dressed as insight
+  // (the "replies are up" verdict over 2 Asteri replies, 2026-07-28 testers)
+  var rTot = rep.reduce(function (a, b) { return a + (b || 0); }, 0);
+  if (rTot < 10) return "Small numbers in this view — read the counts, not the trend.";
   var r1 = halfSum(rep, 7), r0 = halfSum(rep, 14) - r1;
   var m1 = halfSum(mtg, 7), m0 = halfSum(mtg, 14) - m1;
   var mPh = m1 > m0 ? "Meetings are climbing" : (m1 < m0 ? "Meetings dipped this week" : "Meetings are steady");
@@ -893,11 +921,10 @@ function funnelSums() {
     v.win = true;
     var sum = function (a) { return slice(a || []).reduce(function (x, y) { return x + (y || 0); }, 0); };
     var s = HUB && HUB.series && HUB.series[ckey()];
-    v.sent = cw.sent;
-    // replies from the SAME series the hero graph draws, so the funnel and
-    // the graph never disagree about the same window (Smartlead's window
-    // reply_count can lag/lead the archive by a few)
-    v.rep = s && s.replies ? sum(s.replies) : cw.replied;
+    // sent + replies through the same helpers the hero legend uses, so the
+    // funnel and the graph can never disagree about the same window
+    v.sent = sentShown();
+    v.rep = repliesShown();
     v.pos = sum(s && s.interested);
     v.mtg = sum(s && s.meetings);
   } else {
@@ -974,8 +1001,10 @@ function renderLeakbar(leak, v) {
     fix.textContent = "Refresh the weakest campaigns below.";
   } else if (leak === 1) {
     head.textContent = "Biggest leak — interest";
-    body.textContent = "Only " + plain1in(Math.round(1 / ((v.rep ? v.pos / v.rep : 0) || 1))) +
-      " replies is a real yes — the wrong people are answering.";
+    body.textContent = v.pos === 0
+      ? "None of the " + fmtN(v.rep) + " replies in this window was a real yes — the wrong people are answering."
+      : "Only " + plain1in(Math.round(1 / ((v.rep ? v.pos / v.rep : 0) || 1))) +
+        " replies is a real yes — the wrong people are answering.";
     fix.textContent = "Audit the lead lists — biggest campaigns first.";
   } else {
     bar.style.display = "none"; return;
@@ -983,10 +1012,15 @@ function renderLeakbar(leak, v) {
   bar.style.display = "";
 }
 function renderStrip(v) {
-  // 1 · do emails land (bounce over the selected range)
-  var land = landStats(state.range);
-  set("ssd1", "sss1", land ? (land.pct >= 95 ? "green" : land.pct >= 90 ? "amber" : "red") : "mute",
-      land ? land.pct + " of 100 land · " + rangeLabel() : "–");
+  // 1 · do emails land — the SELECTED CLIENT's bounce over the selected
+  // range (the fleet number under a client chip contradicted the chart's
+  // per-client caption on the same screen — 2026-07-28 testers)
+  var landPct = null;
+  var cwL = cwFor(state.client);
+  if (cwL && cwL.sent > 0) landPct = Math.max(0, Math.min(100, Math.round(100 - cwL.bounced / cwL.sent * 100)));
+  else { var land = landStats(state.range); if (land) landPct = land.pct; }
+  set("ssd1", "sss1", landPct != null ? (landPct >= 95 ? "green" : landPct >= 90 ? "amber" : "red") : "mute",
+      landPct != null ? landPct + " of 100 land · " + rangeLabel() : "–");
   // 2 · campaigns that stopped working (optimiser decision verdicts)
   var dead = decisionRows().length;
   set("ssd2", "sss2", dead > 0 ? "red" : "green",
@@ -1252,11 +1286,13 @@ function renderWeek() {
   var half = Math.ceil(pts.length / 2);
   var mean = function (arr) { return arr.reduce(function (a, b) { return a + b; }, 0) / (arr.length || 1); };
   var a0 = mean(vals.slice(0, half)), a1 = mean(vals.slice(half));
-  $("week-take").textContent = a1 >= a0 * 1.15
-    ? "Reply rate is climbing — keep the current messaging running."
-    : (a1 <= a0 * 0.85
-      ? "Reply rate is sliding — refresh the copy on your biggest senders."
-      : "Reply rate is holding steady — nothing to fix here.");
+  $("week-take").textContent = repliesShown() < 10
+    ? "Not enough replies in this window to call a trend."
+    : (a1 >= a0 * 1.15
+      ? "Reply rate is climbing — keep the current messaging running."
+      : (a1 <= a0 * 0.85
+        ? "Reply rate is sliding — refresh the copy on your biggest senders."
+        : "Reply rate is holding steady — nothing to fix here."));
 }
 
 /* ── lane 4: ranking + dying + the offer ── */
@@ -1289,14 +1325,21 @@ function renderRank() {
         '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
         (i === 0 && rate >= 0.02 && c.sent >= minSent * 4 ? '<span class="apill green">Best</span>' : "") +
         (!c.active ? '<span class="apill mute">finished</span>' : "") +
-        '</div><div class="rsub">' + (state.client === "All" ? escq(c.client) : rangeLabel()) + "</div></div>" +
+        '</div><div class="rsub">' + escq(c.client) + " · " + rangeLabel() + "</div></div>" +
         '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
         '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
         '<span class="rint">' + fmtN(c.sent) + '</span><span class="rmtg">' + fmtN(c.replied) + "</span></div>";
     });
     $("rank-rows").innerHTML = top.length ? s
       : '<div class="subline">No campaign sent ' + fmtN(minSent) + "+ emails in the " + rangeLabel() + " for this view.</div>";
-    $("rank-take").textContent = top.length ? "Launch more campaigns like “" + shortName(top[0].name) + "”." : "";
+    // never crown a campaign the page itself is telling you to pause or
+    // retire — the "launch more like X" / "pause X" clash killed tester trust
+    var deadIds = {};
+    decisionRows().forEach(function (r) { deadIds[r.scope] = 1; });
+    var bad = {};
+    win.forEach(function (r) { if (r.sent >= 300 && r.bounced / r.sent >= 0.02) bad[r.id] = 1; });
+    var pick = top.filter(function (c) { return !deadIds[c.id] && !bad[c.id] && (c.replied / c.sent) >= 0.01; })[0];
+    $("rank-take").textContent = pick ? "Launch more campaigns like “" + shortName(pick.name) + "”." : "";
     renderDying();
     return;
   }
@@ -1322,10 +1365,16 @@ function renderRank() {
       '<span class="rint">' + fmtN(c.positives) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span></div>";
   });
   $("rank-rows").innerHTML = topLT.length ? sLT : '<div class="subline">No campaigns with 500+ sends yet.</div>';
-  $("rank-take").textContent = topLT.length ? "Launch more campaigns like “" + shortName(topLT[0].name) + "”." : "";
+  var deadLT = {};
+  decisionRows().forEach(function (r) { deadLT[r.scope] = 1; });
+  var pickLT = topLT.filter(function (c) { return !deadLT[c.id]; })[0];
+  $("rank-take").textContent = pickLT ? "Launch more campaigns like “" + shortName(pickLT.name) + "”." : "";
   renderDying();
 }
-function shortName(n) { n = String(n || ""); return n.length > 44 ? n.slice(0, 42) + "…" : n; }
+// 64, not 44: two different "Reconnect 2.0: Amplifyy - …" campaigns truncated
+// to the same string, so a kill-order and a praise line looked like the same
+// campaign (2026-07-28 testers)
+function shortName(n) { n = String(n || ""); return n.length > 64 ? n.slice(0, 62) + "…" : n; }
 function renderDying() {
   var rows = decisionRows();
   if (!rows.length) { $("dying").style.display = "none"; return; }
@@ -1364,7 +1413,7 @@ function renderOffer() {
   var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
   var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
   var nomeet = offers.filter(function (o) { return !o[5]; }).length;
-  $("offer-sub").textContent = "Emails it costs to buy one. Across " + fmtN(camps) +
+  $("offer-sub").textContent = "Whole book, every campaign — emails it costs to buy one. Across " + fmtN(camps) +
     " campaigns and " + fmtN(sends) + " emails." +
     (nomeet ? " “–” means no meetings booked off that offer yet." : "");
   if (p.act) { $("offer-take").textContent = p.act; $("offer-take-row").style.display = ""; }
@@ -1390,7 +1439,7 @@ function renderWho() {
   }
   var wk = bookRow("weekly");
   var st = wk && wk.stats;
-  $("wait-scope").textContent = state.client === "All" ? "" : "· whole fleet";
+  $("wait-scope").textContent = state.client === "All" ? "" : "· whole book, not just " + state.client;
   if (st && st.waiting != null) {
     $("wait-big").textContent = fmtN(st.waiting);
     $("wait-sub").textContent = "interested people with no answer yet · " + fmtN(st.answered || 0) + " answered";
@@ -1402,13 +1451,15 @@ function renderWho() {
 
 /* ── lane 6: meetings ── */
 function renderMeet() {
-  var mm = HUB && HUB.meetings_monthly && HUB.meetings_monthly[ckey()];
-  if (!mm) return;
+  // A client with no key gets explicit zeros — an early return here left the
+  // PREVIOUS client's numbers on screen (Asteri showing Amplifyy's July,
+  // caught by the 2026-07-28 testers)
+  var mm = (HUB && HUB.meetings_monthly && HUB.meetings_monthly[ckey()]) || { "this": 0, prev: 0 };
   var t = mm.this || 0, pv = mm.prev || 0, d = t - pv;
   var now = new Date();
   var MFULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   var thisM = MFULL[now.getMonth()], prevM = MFULL[(now.getMonth() + 11) % 12];
-  $("meet-kick").textContent = "Meetings booked in " + thisM;
+  $("meet-kick").textContent = "Meetings booked in " + thisM + (state.client === "All" ? "" : " · " + state.client);
   $("meet-ml1").textContent = prevM + " to the " + now.getDate() + getOrd(now.getDate());
   $("meet-ml2").textContent = thisM + " so far";
   $("meet-big").textContent = fmtN(t);
@@ -1436,8 +1487,21 @@ function renderHead() {
     var mins = Math.max(0, Math.round((Date.now() - Date.parse(HUB.asof)) / 60000));
     $("ah-fresh").textContent = mins < 2 ? "updated just now" : "updated " + (mins < 90 ? mins + " minutes ago" : Math.round(mins / 60) + " hours ago");
   }
-  var wk = bookRow("weekly") || bookRow("book-shape");
-  $("ah-verdict").textContent = (wk && wk.bold) || "";
+  // The verdict follows the client chip — the fleet's "70 positives this
+  // week" reading as a client's own number was round-1 friction for every
+  // tester. Client verdicts come from that client's interested series.
+  if (state.client === "All") {
+    var wk = bookRow("weekly") || bookRow("book-shape");
+    $("ah-verdict").textContent = (wk && wk.bold) || "";
+  } else {
+    var s = HUB && HUB.series && HUB.series[ckey()];
+    var pos = (s && s.interested) || [];
+    var p1 = halfSum(pos, 7), p0 = halfSum(pos, 14) - p1;
+    $("ah-verdict").textContent = pos.length
+      ? state.client + ": " + fmtN(p1) + " positive" + (p1 === 1 ? "" : "s") +
+        " this week against " + fmtN(p0) + " last week."
+      : "";
+  }
 }
 
 /* ── render-all + wiring ── */
@@ -1540,18 +1604,26 @@ function renderBounce() {
     return;
   }
 
+  // ONE headline basis for every view — the window average — so clients stay
+  // comparable chip to chip (round 1 quietly compared "latest day" against
+  // "window average"). Latest day rides the scope line when a daily line exists.
   var today = null;
   for (var i = bp.length - 1; i >= 0; i--) if (bp[i] != null) { today = bp[i]; break; }
-  // shared-workspace client (no daily line): headline is their true window
-  // average instead of a fleet "today" that isn't theirs
+  var avgPct = null;
+  if (cwc && cwc.sent > 0) avgPct = Math.round(cwc.bounced * 10000 / cwc.sent) / 100;
+  else if (s && s.days && s.days.length) {
+    var sl = (TRENDS.series.sent || []).slice(-state.range), S = 0, B = 0;
+    sl.forEach(function (v, ii) { S += v || 0; if (bp[ii] != null) B += (v || 0) * bp[ii] / 100; });
+    if (S > 0) avgPct = Math.round(B * 10000 / S) / 100;
+  }
   var winMode = !cs && state.client !== "All" && cwc && cwc.sent > 0;
-  if (winMode) { today = Math.round(cwc.bounced * 10000 / cwc.sent) / 100; days = []; bp = []; }
-  var b = bncBand(today);
-  big.textContent = today == null ? "–" : today.toFixed(2) + "%";
+  if (winMode) { days = []; bp = []; }
+  var b = bncBand(avgPct);
+  big.textContent = avgPct == null ? "–" : avgPct.toFixed(2) + "%";
   big.className = "bnc-hero num bnc-" + b;
-  $("bnc-scope").textContent = today == null ? "" :
-    (winMode ? state.client + " · average over the " + rangeLabel()
-             : "latest day" + (state.client === "All" ? "" : " · " + state.client));
+  $("bnc-scope").textContent = avgPct == null ? "" :
+    (state.client === "All" ? "All clients" : state.client) + " · average over the " + rangeLabel() +
+    (today != null && !winMode ? " · latest day " + today.toFixed(2) + "%" : "");
 
   // sparkline: only the trailing run at/over the limit is coloured, so weeks
   // that were genuinely fine are not retro-painted by today
@@ -1639,9 +1711,13 @@ function updateLens() {
   window.DLV_CLIENT_LENS = { client: c, ws: WS_CLIENTS[c] || null };
   var note = $("dlv-lens-note");
   if (note) {
-    if (c === "All") note.textContent = "Whole sending fleet — all clients. (Mailbox health is about today, so the date range doesn't apply here.)";
-    else if (WS_CLIENTS[c]) note.textContent = c + "'s own workspace — only their mailboxes and domains below. (Mailbox health is about today, so the date range doesn't apply here.)";
-    else note.textContent = c + " sends from the shared Navreo fleet — the mailboxes below serve several clients, " + c + " included. (Mailbox health is about today, so the date range doesn't apply here.)";
+    // The manager's health tiles and to-dos always cover the whole fleet and
+    // it keeps its own working window — say exactly that, never more (round 1
+    // caught the old banner promising a client-only manager it didn't deliver)
+    var tail = " The health tiles and to-dos below always cover the whole sending fleet, and the manager keeps its own working window — mailbox health is about today, not the page's date range.";
+    if (c === "All") note.textContent = "Whole sending fleet — all clients." + tail;
+    else if (WS_CLIENTS[c]) note.textContent = c + "'s campaigns send from their own workspace; rows in the mailbox and domain tables are filtered to " + c + "." + tail;
+    else note.textContent = c + " sends from the shared Navreo fleet — these mailboxes serve several clients, " + c + " included." + tail;
   }
   try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) { /* older engines just skip the repaint */ }
 }
@@ -1651,6 +1727,7 @@ $("ah-chips").addEventListener("click", function (e) {
   var c = b.getAttribute("data-client");
   if (state.client === c) return;
   state.client = c;
+  saveFilters();
   var svg = $("funnel");
   svg.classList.add("swap");
   setTimeout(function () { svg.classList.remove("swap"); }, 250);
@@ -1668,8 +1745,17 @@ $("ah-range").addEventListener("click", function (e) {
     x.setAttribute("aria-pressed", x === b ? "true" : "false");
   });
   state.range = n;
+  saveFilters();
   renderAll();
 });
+// reflect a restored range in the seg (30 is the static default)
+(function () {
+  $("ah-range").querySelectorAll("button").forEach(function (x) {
+    var on = parseInt(x.getAttribute("data-range"), 10) === state.range;
+    x.classList.toggle("on", on);
+    x.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+})();
 $("ah-lchips").addEventListener("click", function (e) {
   var b = e.target.closest(".lchip");
   if (!b || b.classList.contains("off")) return;
@@ -1705,6 +1791,12 @@ function boot() {
     j("/api/client-windows"),
   ]).then(function (rs) {
     HUB = rs[0].status === "fulfilled" && !rs[0].value.error ? rs[0].value : null;
+    // a restored client that no longer exists must not ghost-filter the page
+    if (HUB && state.client !== "All" && (HUB.clients || []).indexOf(state.client) < 0) {
+      state.client = "All";
+      saveFilters();
+      updateLens();
+    }
     TRENDS = rs[1].status === "fulfilled" ? rs[1].value : null;
     SCORE = rs[2].status === "fulfilled" ? rs[2].value : null;
     INS = rs[3].status === "fulfilled" ? rs[3].value : null;
