@@ -13740,6 +13740,10 @@ def _client_win_build():
     t0 = time.time()
     end = _dtmod.date.today()
     rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status") or []
+    if not rows:
+        # 1,000+ campaigns exist; an empty read is a transient outage, and
+        # building a zero blob from it would cache a lie for 2 hours
+        raise RuntimeError("campaign_scorecard read returned no rows")
     recent_reply = set()
     try:
         cut = (_dtmod.datetime.utcnow() - _dtmod.timedelta(days=40)).isoformat()
@@ -13802,6 +13806,8 @@ def _client_win_build():
     campaigns = {str(w): [] for w in _CLIENT_WIN_WINDOWS}
     active_30 = set()
     calls = 0
+    errs = []
+    sample = None
     for w in _CLIENT_WIN_WINDOWS:
         start = (end - _dtmod.timedelta(days=w - 1)).isoformat()
         for cid, ws, name in cands:
@@ -13812,7 +13818,11 @@ def _client_win_build():
                                           f"?start_date={start}&end_date={end.isoformat()}",
                                    timeout=30, attempts=3)
                 calls += 1
-            except Exception:  # noqa: BLE001 — a missing campaign is a zero, not a failure
+                if sample is None and isinstance(d, dict):
+                    sample = {k: d.get(k) for k in ("id", "sent_count", "reply_count", "bounce_count")}
+            except Exception as e:  # noqa: BLE001 — a missing campaign is a zero, not a failure
+                if len(errs) < 5:
+                    errs.append(f"{cid}: {type(e).__name__}: {str(e)[:120]}")
                 continue
             s = int(float(d.get("sent_count") or 0)) if isinstance(d, dict) else 0
             r = int(float(d.get("reply_count") or 0)) if isinstance(d, dict) else 0
@@ -13835,11 +13845,21 @@ def _client_win_build():
             for k in tot:
                 tot[k] += v[k]
         windows[str(w)]["__all"] = tot
+    if calls == 0:
+        raise RuntimeError(f"no analytics-by-date call succeeded ({len(cands)} candidates; first errors: {errs[:2]})")
+    if out_series.get("__all") and sum(out_series["__all"]["sent"][-30:]) > 0 \
+            and windows["30"]["__all"]["sent"] == 0:
+        # the fleet sent tens of thousands this month — a zero sweep is a fault,
+        # not a fact, and must never be cached or persisted
+        raise RuntimeError(f"sweep total is zero against a non-zero fleet (errors: {errs[:2]})")
     data = {"days": days_out, "series": out_series, "windows": windows,
             "campaigns": campaigns,
-            "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
+            "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
+            "_debug": {"candidates": len(cands), "calls": calls,
+                       "recent_reply": len(recent_reply), "errors": errs,
+                       "sample": sample, "secs": int(time.time() - t0)}}
     print(f"[client-win] built: {len(cands)} candidates, {calls} calls, "
-          f"{int(time.time() - t0)}s", flush=True)
+          f"errs={errs[:2]} {int(time.time() - t0)}s", flush=True)
     return data
 
 
@@ -13860,15 +13880,15 @@ def _client_win_run_bg():
         print(f"[client-win] snapshot write failed: {e}", file=sys.stderr)
 
 
-def client_windows_get() -> tuple[dict, int]:
+def client_windows_get(force: bool = False) -> tuple[dict, int]:
     """Serve the cache (stale allowed — the page shows asof), kicking a
-    background rebuild whenever it's past TTL. First-ever call returns
-    {building:true} and the page polls."""
+    background rebuild whenever it's past TTL (or ?refresh=1 forces one).
+    First-ever call returns {building:true} and the page polls."""
     _client_win_restore()
     kick = False
     with _CLIENT_WIN_LOCK:
         ent, ts, running = _CLIENT_WIN["data"], _CLIENT_WIN["ts"], _CLIENT_WIN["running"]
-        if not running and (ent is None or (time.time() - ts) >= _CLIENT_WIN_TTL_S):
+        if not running and (force or ent is None or (time.time() - ts) >= _CLIENT_WIN_TTL_S):
             _CLIENT_WIN["running"] = True
             kick = True
     if kick:
@@ -16704,7 +16724,10 @@ class Handler(SimpleHTTPRequestHandler):
             body, status = deliv_trends_get(days)
             return self._json(body, status)
         if path == "/api/client-windows":
-            body, status = client_windows_get()
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
+            body, status = client_windows_get(force=force)
             return self._json(body, status)
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
