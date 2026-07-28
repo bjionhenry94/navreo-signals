@@ -33,7 +33,11 @@
 .ah .card-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
 .ah .kicker{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
 
-.ah .filterrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.ah .filterbar{position:sticky;top:0;z-index:30;background:var(--bg);padding:10px 0;margin:0 0 6px}
+.ah .filterbar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--line);opacity:0;transition:opacity .15s}
+.ah .filterbar.stuck::after{opacity:1}
+.ah .filterrow{display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.ah .filterrow .chips{justify-content:flex-start}
 .ah .rangeseg{display:inline-flex;gap:3px;background:var(--bg-sunken);border-radius:999px;padding:3px;flex-shrink:0}
 .ah .rangeseg button{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;color:var(--ink-2);background:transparent;border:0;padding:6px 13px;border-radius:999px;cursor:pointer}
 .ah .rangeseg button:hover{color:var(--ink)}
@@ -238,7 +242,7 @@
 
   <div class="databar" id="ah-databar"><span id="ah-databar-msg">Live data unavailable.</span><button class="btn sm" id="ah-retry">Retry</button></div>
 
-  <!-- ══ page header — slim verdict line + client filter ══ -->
+  <!-- ══ page header — slim verdict line ══ -->
   <header class="pagehead">
     <div>
       <h1>Analytics</h1>
@@ -246,18 +250,23 @@
     </div>
     <div class="pagehead-right">
       <div class="dateline"><b id="ah-date">&nbsp;</b><br><span id="ah-fresh">&nbsp;</span></div>
-      <!-- THE two page dimensions: who (client) and when (7/14/30 days).
-           One range, one client, every widget below follows both. -->
-      <div class="filterrow">
-        <div class="chips" id="ah-chips" role="group" aria-label="Client filter"></div>
-        <div class="rangeseg" id="ah-range" role="group" aria-label="Date range">
-          <button data-range="7" aria-pressed="false">7 days</button>
-          <button data-range="14" aria-pressed="false">14 days</button>
-          <button class="on" data-range="30" aria-pressed="true">30 days</button>
-        </div>
-      </div>
     </div>
   </header>
+
+  <!-- THE two page dimensions: who (client) and when (7/14/30 days). Sticky so
+       re-filtering never means scrolling back to the top (the whole point of
+       the page is easy filtering — 2026-07-28 tester). One range, one client,
+       every widget below follows both. -->
+  <div class="filterbar" id="ah-filterbar">
+    <div class="filterrow">
+      <div class="chips" id="ah-chips" role="group" aria-label="Client filter"></div>
+      <div class="rangeseg" id="ah-range" role="group" aria-label="Date range">
+        <button data-range="7" aria-pressed="false">7 days</button>
+        <button data-range="14" aria-pressed="false">14 days</button>
+        <button class="on" data-range="30" aria-pressed="true">30 days</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ══ HERO — your month, day by day ══ -->
   <section class="hero" aria-label="Your month, day by day">
@@ -2014,6 +2023,26 @@ function boot() {
   // First paint immediately from the fallback globals — never blocked on a fetch.
   renderAll();
 }
+// sticky filter bar: show a hairline only once it's actually pinned. Works
+// whether the window or an ancestor is the scroll container — we just watch the
+// bar's own viewport top.
+(function () {
+  var bar = $("ah-filterbar");
+  if (!bar) return;
+  var tick = false;
+  function onScroll() {
+    if (tick) return;
+    tick = true;
+    requestAnimationFrame(function () {
+      tick = false;
+      bar.classList.toggle("stuck", bar.getBoundingClientRect().top <= 1);
+    });
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  var m = document.getElementById("main");
+  if (m) m.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+})();
 renderChips();
 renderHead();
 updateLens();
