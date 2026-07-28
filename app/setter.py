@@ -2070,12 +2070,26 @@ def _agent_for_campaign(campaign_id, require_enabled: bool = True, agents=None):
     agents = agents if agents is not None else _load_agents()
 
     def _match(want):
-        for a in agents:
-            if require_enabled and not a.get("enabled", True):
-                continue
-            if want in [str(c) for c in (a.get("campaign_ids") or [])]:
-                return a
-        return None
+        claimers = [a for a in agents
+                    if (not require_enabled or a.get("enabled", True))
+                    and want in [str(c) for c in (a.get("campaign_ids") or [])]]
+        if not claimers:
+            return None
+        if len(claimers) > 1:
+            # Should be impossible (route_agents_save strips doubles), but if
+            # bad data sneaks in, the EARLIEST claim keeps the campaign - an
+            # accidental later attach must not steal a client's threads (owner
+            # bug 2026-07-28: 3642625 sat in both the Amplifyy and Navreo
+            # agents' lists and list order decided who drafted - a Navreo
+            # demo pitch went out on an Amplifyy thread). Shouted to the log,
+            # never silently roulette'd.
+            def _claim_at(a):
+                return str(((a.get("campaign_assigned_at") or {}).get(want)) or "9999")
+            claimers.sort(key=lambda a: (_claim_at(a), str(a.get("id"))))
+            print(f"[setter] WARNING campaign {want} claimed by "
+                  f"{[a.get('id') for a in claimers]} - using {claimers[0].get('id')}",
+                  file=sys.stderr)
+        return claimers[0]
 
     direct = _match(str(campaign_id))
     if direct:
@@ -2102,6 +2116,13 @@ def _save_agent(doc: dict) -> dict:
     doc.setdefault("mode", "draft_only")
     doc.setdefault("enabled", True)
     doc.setdefault("campaign_ids", [])
+    # One id shape everywhere: strings, de-duplicated, order kept. The
+    # int/str mix is exactly how the same campaign hid in two agents' lists
+    # at once (owner bug 2026-07-28: '3642625' in one doc, 3642625 in
+    # another - set intersection saw nothing).
+    _seen_cids = set()
+    doc["campaign_ids"] = [s for s in (str(c) for c in (doc.get("campaign_ids") or []))
+                           if not (s in _seen_cids or _seen_cids.add(s))]
     doc.setdefault("allowed_intents", [])
     doc.setdefault("confidence_threshold", 0.9)
     doc.setdefault("instructions", "")
@@ -4760,6 +4781,28 @@ def route_agents_save(payload):
         prev_cids = {str(c) for c in ((_load_agent(doc.get("id")) or {}).get("campaign_ids") or [])} \
             if doc.get("id") else set()
         saved = _save_agent(doc)
+        # One campaign, one agent (owner bug 2026-07-28: campaign 3642625 sat
+        # in BOTH the Amplifyy and Navreo agents' lists, and whichever agent
+        # the loader listed first drafted its replies - a Navreo demo pitch
+        # landed on an Amplifyy thread). Saving an agent TAKES ownership of
+        # its campaigns: the same ids are stripped from every other agent.
+        # The human just made this assignment on purpose, so the new claim
+        # wins; the sweep is a repair and must never block the save.
+        try:
+            mine = {str(c) for c in (saved.get("campaign_ids") or [])}
+            if mine:
+                for other in _load_agents():
+                    if str(other.get("id")) == str(saved.get("id")):
+                        continue
+                    theirs = [str(c) for c in (other.get("campaign_ids") or [])]
+                    kept_ids = [c for c in theirs if c not in mine]
+                    if len(kept_ids) != len(theirs):
+                        _save_agent({"id": other["id"], "name": other.get("name"),
+                                     "campaign_ids": kept_ids})
+                        print(f"[setter] agent {saved.get('id')} took campaign(s) "
+                              f"{sorted(mine & set(theirs))} from {other.get('id')}", file=sys.stderr)
+        except Exception:  # noqa: BLE001
+            pass
         webhooks = ensure_webhooks(saved)
         # Self-heal (owner ruling 2026-07-15): every campaign id newly
         # attached in this save gets its 7-day backlog swept in the
