@@ -781,12 +781,32 @@ function renderChips() {
   if (SCORE && SCORE.campaigns) {
     Object.keys(SCORE.campaigns).forEach(function (id) { add(campClient(id, SCORE.campaigns[id])); });
   }
+  // stable order: biggest sender first when the sweep is in (meaningful and
+  // deterministic), else alphabetical — so chips don't reshuffle between the
+  // incremental-boot paints as sources arrive (2026-07-28 tester)
+  var vol = (CW && CW.windows && CW.windows["30"]) || {};
+  names.sort(function (a, b) {
+    var va = (vol[a] && vol[a].sent) || 0, vb = (vol[b] && vol[b].sent) || 0;
+    if (va !== vb) return vb - va;
+    return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+  });
   names = ["All"].concat(names);
   $("ah-chips").innerHTML = names.map(function (c) {
     return '<button class="chip' + (state.client === c ? " on" : "") + '" data-client="' + escq(c) + '" aria-pressed="' + (state.client === c) + '">' + (c === "All" ? "All clients" : escq(c)) + "</button>";
   }).join("");
 }
 function renderLegend() {
+  // Until the hub lands, replies/interested/meetings are UNKNOWN, not zero —
+  // rendering "0" and "Reply rate 0%" next to a populated headline looked
+  // broken for the ~20s incremental boot (2026-07-28 tester). Show a resting
+  // dash so the legend reads as "loading", never as real zeros.
+  if (!HUB) {
+    $("ah-lchips").innerHTML = ORDER.map(function (k) {
+      return '<button class="lchip off" data-s="' + k + '" aria-pressed="false" disabled>' +
+        '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">…</b></button>';
+    }).join("");
+    return;
+  }
   var cw = cwFor(state.client);
   $("ah-lchips").innerHTML = ORDER.map(function (k) {
     var hasLine = seriesFor(k) != null;
@@ -810,7 +830,13 @@ function renderTrend() {
     (state.client === "All" ? "" : " · " + state.client);
   var days = HUB ? slice(HUB.days) : [];
   var n = days.length;
-  if (!n) { return; }
+  if (!n) {
+    // hub still loading — say so instead of leaving a silent empty frame
+    $("trend-svg").innerHTML = '<text x="560" y="132" text-anchor="middle" font-size="13" fill="var(--ink-3)">Loading your ' + rangeLabel() + "…</text>";
+    $("trend-sub").textContent = "Fetching live data…";
+    $("trend-take").textContent = "";
+    return;
+  }
   var vis = ORDER.filter(function (k) { return state.on[k] && seriesFor(k) != null; });
   var data = {};
   vis.forEach(function (k) { data[k] = slice(seriesFor(k)); });
@@ -918,11 +944,14 @@ function takeLine(rep, mtg) {
   // contradiction of the calendar-month meetings card lower down
   var rTot = halfSum(rep, 14);
   if (rTot < 10) return "Small numbers in this view — read the counts, not the trend.";
+  // Always a latest-7-days momentum read (independent of the chart's window,
+  // which can be 7/14/30) — labelled "Latest 7 days" so it never reads as a
+  // bug when it sits under a 30-day chart (2026-07-28 tester).
   var r1 = halfSum(rep, 7), r0 = halfSum(rep, 14) - r1;
   var m1 = halfSum(mtg, 7), m0 = halfSum(mtg, 14) - m1;
   var rPh = r1 > r0 * 1.15 ? "up on" : (r1 < r0 * 0.85 ? "down on" : "level with");
-  return "This week: " + fmtN(m1) + " meeting" + (m1 === 1 ? "" : "s") + " (" + fmtN(m0) +
-    " last week) · " + fmtN(r1) + " replies, " + rPh + " last week's " + fmtN(r0) + ".";
+  return "Latest 7 days: " + fmtN(m1) + " meeting" + (m1 === 1 ? "" : "s") + " (" + fmtN(m0) +
+    " the 7 before) · " + fmtN(r1) + " replies, " + rPh + " the prior " + fmtN(r0) + ".";
 }
 function hideTip() {
   var g = document.getElementById("tr-hov");
