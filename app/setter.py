@@ -98,6 +98,11 @@ OPENAI_EFFORT = os.environ.get("OPENAI_EFFORT", "minimal")
 # same fixes out of gpt-5-nano, ~20-40% less wall clock than gpt-5-mini - and
 # proofread was the single longest stage of a regenerate (7.4s of 16.6s).
 PROOFREAD_MODEL = os.environ.get("SETTER_PROOFREAD_MODEL", "gpt-5-nano")
+# Priority processing (measured 2026-07-28 on a draft-shaped call: 2.5s ->
+# 1.4s). Costs more per token, but every setter call is a few hundred tokens
+# of gpt-5-mini/nano - cents a day for a reviewer no longer watching a
+# spinner. Set SETTER_OPENAI_TIER=default to revert without a deploy.
+OPENAI_TIER = os.environ.get("SETTER_OPENAI_TIER", "priority")
 
 
 def _is_transient(e) -> bool:
@@ -115,6 +120,7 @@ def _openai(body: dict, key: str, *, timeout: float = None, retries: int = 1):
     body = dict(body)
     body.setdefault("reasoning_effort", OPENAI_EFFORT)
     body.setdefault("verbosity", "low")
+    body.setdefault("service_tier", OPENAI_TIER)
     last = None
     for attempt in range(retries + 1):
         try:
@@ -6332,6 +6338,19 @@ def _redraft_sync(payload):
         qid = payload.get("id")
         if not qid:
             return 400, {"error": "id is required"}
+        # Settings are independent of the row - fetch them in parallel with
+        # the row+agent loads instead of paying a third serial Supabase round
+        # trip (~300-600ms of a path with a hard 10s bar).
+        _settings_box = {}
+
+        def _settings_worker():
+            try:
+                _settings_box["v"] = _load_settings()
+            except Exception:  # noqa: BLE001 - same degrade-to-empty the serial path had
+                _settings_box["v"] = {}
+        _settings_th = threading.Thread(target=_settings_worker, daemon=True,
+                                        name="setter-settings")
+        _settings_th.start()
         _t = _time.time()
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
@@ -6353,7 +6372,8 @@ def _redraft_sync(payload):
         if payload.get("scope") == "remember" and feedback_text and agent.get("id"):
             merge_correction_into_instructions(agent, feedback_text, source=str(qid))
             agent = _load_agent(agent.get("id")) or agent
-        settings = _load_settings()
+        _settings_th.join(timeout=10)
+        settings = _settings_box.get("v") or {}
         classification = row.get("classification") or {}
         tz = row.get("timezone")
         # A stored timezone was already vetted at intake; only a fresh
