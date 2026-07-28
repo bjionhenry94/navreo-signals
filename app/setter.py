@@ -1594,9 +1594,27 @@ def _thread_sender_first(campaign_id, thread) -> str:
         if not last_email:
             last_email = str(m.get("from_email") or "").strip().lower()
     if last_email:
-        nm = _campaign_sender_map(campaign_id).get(last_email, "")
+        mp = _campaign_sender_map(campaign_id)
+        nm = mp.get(last_email, "")
         if nm:
             return nm.split()[0]
+        # The exact mailbox often ROTATES OUT of the campaign (spam-pulled
+        # boxes get removed, verified live 2026-07-28: 7 of 10 queue rows'
+        # senders were no longer in their campaign's account list), but the
+        # local part still names the persona: kevindormer_k@... is Kevin
+        # Dormer. Match it against the campaign's known sender personas -
+        # longest compact name first so a short name can't shadow a longer
+        # one. Only ever resolves to a name the campaign actually sends as.
+        local = re.sub(r"[^a-z]", "", last_email.split("@", 1)[0].lower())
+        if local:
+            for full in sorted({v for v in mp.values() if v}, key=len, reverse=True):
+                parts = full.split()
+                compact = re.sub(r"[^a-z]", "", full.lower())
+                first = re.sub(r"[^a-z]", "", parts[0].lower()) if parts else ""
+                if compact and (local.startswith(compact) or compact in local):
+                    return parts[0]
+                if first and len(first) >= 4 and local.startswith(first):
+                    return parts[0]
     return ""
 
 
