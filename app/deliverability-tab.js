@@ -4852,6 +4852,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     root.innerHTML = [
       renderDataBanner(),
       renderHeaderTabs(),
+      // Owner request 2026-07-28: the Inbox & domain manager is page-level, not
+      // an Overview section — it sits directly under the "Fleet health & to-do"
+      // header and ABOVE the Overview / Blacklisted domains / Performance by
+      // batch sub-tab bar, so it stays put whichever tab is open.
+      renderManagerPanel(D),
       renderSubtabBar(),
       embed ? "" : renderBook(), // "Across the book" cards, moved here — sits just under the tabs
       panel,
@@ -4884,7 +4889,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // lanes answer verdict / KPIs / signals / book.
       return [
         `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
-        renderManagerPanel(D),
       ].join("");
     }
     return [
@@ -4893,7 +4897,6 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       renderBanner(D),
       renderHealthHeader(D),
       renderSignalsChart(),
-      renderManagerPanel(D),
       `<div id="dlv-todo-anchor">${renderTodo(D)}</div>`,
       renderHistoryFold(D),
       renderFleetDetailsFold(D),
