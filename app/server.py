@@ -13721,6 +13721,8 @@ def _client_win_label(workspace, name) -> str:
         return "Arnic"
     if "qwintiq" in n:
         return "Qwintiq"
+    if "thunderbird" in n:   # ThunderBird is its own client (Bjion 2026-07-28)
+        return "ThunderBird"
     return "Navreo"
 
 
@@ -14098,6 +14100,7 @@ _RESTORE_FORECAST_DAYS = 14
 
 _RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags carry it)
     ("amplif", "Amplifyy"), ("arnic", "Arnic"), ("qwintiq", "Qwintiq"),
+    ("thunderbird", "ThunderBird"),
     ("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
     ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang"),
     ("navreo", "Navreo"),

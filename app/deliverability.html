@@ -623,11 +623,18 @@ function clientOfName(name, ws) {
   if (n.indexOf("amplif") >= 0) return "Amplifyy";
   if (n.indexOf("arnic") >= 0) return "Arnic";
   if (n.indexOf("qwintiq") >= 0) return "Qwintiq";
+  if (n.indexOf("thunderbird") >= 0) return "ThunderBird";   // its own client
   return "Navreo";
 }
 function campClient(id, c) {
+  // A deterministic NAME keyword (thunderbird/amplif/arnic/qwintiq) or a client
+  // workspace wins over HUB.campaign_clients — the hub's SQL cmap may not know a
+  // newly-split client (e.g. ThunderBird) until its migration is applied, and
+  // the keyword is unambiguous either way.
+  var byName = clientOfName(c && c.name, c && c.workspace);
+  if (byName !== "Navreo") return byName;
   if (HUB && HUB.campaign_clients && HUB.campaign_clients[id]) return HUB.campaign_clients[id];
-  return clientOfName(c && c.name, c && c.workspace);
+  return byName;
 }
 function scoreRows() {   // [{id, ...scorecard row}] for the selected client
   var out = [];
@@ -770,7 +777,14 @@ function seriesFor(k) {   // full 30-day array for series k under current client
 }
 function repliesShown() { // THE reply count every widget shows for this view
   var r = seriesFor("replies");
-  return r ? slice(r).reduce(function (a, b) { return a + (b || 0); }, 0) : 0;
+  var sum = r ? slice(r).reduce(function (a, b) { return a + (b || 0); }, 0) : 0;
+  // a keyword client not yet in the hub series (e.g. ThunderBird before its
+  // migration) has no daily reply line — use its exact client-windows total
+  if (sum === 0 && state.client !== "All") {
+    var cw = cwFor(state.client);
+    if (cw && cw.replied) return cw.replied;
+  }
+  return sum;
 }
 function sentShown() {    // THE sent count every widget shows for this view
   var cw = cwFor(state.client);

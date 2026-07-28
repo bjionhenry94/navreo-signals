@@ -40,9 +40,10 @@ cmap as (
     case
       when lower(coalesce(workspace,'navreo')) = 'asteri' then 'Asteri'
       when lower(coalesce(workspace,'navreo')) = 'krg'    then 'KRG'
-      when name ilike '%amplif%'  then 'Amplifyy'
-      when name ilike '%arnic%'   then 'Arnic'
-      when name ilike '%qwintiq%' then 'Qwintiq'
+      when name ilike '%amplif%'      then 'Amplifyy'
+      when name ilike '%arnic%'       then 'Arnic'
+      when name ilike '%qwintiq%'     then 'Qwintiq'
+      when name ilike '%thunderbird%' then 'ThunderBird'
       else 'Navreo'
     end as client,
     coalesce(total,0) as total, coalesce(completed,0) as completed
