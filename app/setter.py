@@ -864,6 +864,17 @@ def lint_draft(html: str, ctx: dict):
             return False, "The draft contains a link that isn't in the instructions."
     if ctx.get("needs_resource_link") and not (set(draft_urls) & instruction_urls):
         return False, "The draft is missing the resource link from the instructions."
+    # A resource send that links ONLY the booking link is not a resource send
+    # (owner report 2026-07-28: "Here is the resource I put together." went
+    # out with the calendar as its only anchor, so the lead got no resource).
+    # The booking link lives in the instructions too, so the check above is
+    # satisfied by it - require a NON-booking instruction URL as well, but
+    # only when the agent HAS one, so an agent whose instructions carry
+    # nothing but a calendar link is unaffected.
+    if ctx.get("needs_resource_link") and booking:
+        resource_urls = instruction_urls - {_norm_url(booking)}
+        if resource_urls and not (set(draft_urls) & resource_urls):
+            return False, "The draft offers a resource but links only the booking link."
     if ctx.get("slot_status") == "ok":
         for link in (ctx.get("slot_links") or []):
             if link and link not in text:
@@ -1194,6 +1205,7 @@ CALL ASK, NO TIMES AVAILABLE ANYWHERE (fallback ladder step TWO - slot_status is
 <div>Hi Priya,</div><br><div>Would love to find a time that works for you.</div><br><div>When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>.</div><br><div>Bjion</div>
 
 Rules:
+- WHERE A CALL TIME MAY COME FROM (read this before proposing any day or clock time). There are exactly two sources of a time: the slots you were given, and only while slot_status is "ok"; or a literal list of dates or times written out in the instructions as data (for example an auto-updated "Current Available Times" block). Nothing else is a source. In particular, a rule in the instructions that tells you HOW to write or choose a time is a FORMAT, not availability: a template ("Weekday, Dth Month at H:MM AM/PM EDT"), an example time shown to illustrate that template, a placeholder like [first specific time], a timezone rule, or an instruction to "take the slots from real availability on our calendar" all describe how to render a time you already have, and never mean that you have one. So when slot_status is anything but "ok" AND the instructions hold no literal list of times, you have NO times at all: ask for the lead's availability by the fallback ladder below, and do not name a weekday, a date, or a clock time anywhere in the draft. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions. This rule outranks the agent's instructions and any example in them: instructions written on the assumption that two call times exist do not authorise you to manufacture one when they don't. In particular, when the instructions mandate a fixed reply TEMPLATE that contains a time placeholder ("[first specific time]", "[second specific time]", or similar) and you have no time to put in it, you must NOT fill that placeholder with a time you worked out yourself, and you must NOT leave the placeholder in the draft. Instead keep every other block of that template exactly as the instructions demand, and swap the single line holding the placeholders for the availability ask from the fallback ladder below. Filling a template's time placeholder from a calendar you cannot see is inventing a time, no matter how firmly the template says to keep its blocks as written.
 - Every draft must be built from short <div> paragraphs separated by <br>, exactly like the examples above. A single-line reply with no paragraph breaks will be rejected.
 - Use the team's exact recurring phrases where they fit: the resource anchor is "Here's the breakdown I prepared." (or "Here's a case study I put together." when it's a case study); the call ask is "Would you be free for a call on {day, date at time TZ} or {day2, date2 at time2 TZ}, where I could share how I would implement our strategy for you?"; the fallback is "If those times aren't suitable, feel free to book a call here." with the link on "book a call here".
 - No em dashes anywhere, ever - use a comma or period instead.
@@ -1209,7 +1221,7 @@ Rules:
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
-- Whenever slots are supplied and slot_status is "ok" you MUST include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. This is the DEFAULT and does not depend on the intent: a resource send, a pricing answer, or a question we can't fully answer all still get the two call times when live slots exist. Two things, and only these two, override that default. FIRST, call_ask: when call_ask is "avoid" the lead is already sorted for a call (a time is agreed, they have booked, or they have just told you when they are free) or has asked something that a fresh call pitch would talk straight past - answer THAT message on its own terms and do not propose times again; when call_ask is "only_if_relevant" a call has already been offered earlier in this thread and their latest message is not about scheduling, so lead with the actual answer and only reach for times if the answer genuinely needs a call; when call_ask is "required" or absent, the default above stands. Never re-propose times a lead has already turned down or already accepted. SECOND, reviewer_feedback about WHICH times to offer ("offer different times", "offer next week"): the slots you have been given have ALREADY been re-picked from the real calendar to match that request, so propose exactly the slots in front of you and do not apologise for or refer to the times a previous draft proposed. You still never invent a time: if the feedback asks for times the calendar cannot supply, say so in feedback_note and use the fallback ladder instead of making one up. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
+- Whenever slots are supplied and slot_status is "ok" you MUST include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. This is the DEFAULT and does not depend on the intent: a resource send, a pricing answer, or a question we can't fully answer all still get the two call times when live slots exist. Two things, and only these two, override that default. FIRST, call_ask: when call_ask is "avoid" the lead is already sorted for a call (a time is agreed, they have booked, or they have just told you when they are free) or has asked something that a fresh call pitch would talk straight past - answer THAT message on its own terms and do not propose times again; when call_ask is "only_if_relevant" a call has already been offered earlier in this thread and their latest message is not about scheduling, so lead with the actual answer and only reach for times if the answer genuinely needs a call; when call_ask is "required" or absent, the default above stands. Never re-propose times a lead has already turned down or already accepted. SECOND, reviewer_feedback about WHICH times to offer ("offer different times", "offer next week"): the slots you have been given have ALREADY been re-picked from the real calendar to match that request, so propose exactly the slots in front of you and do not apologise for or refer to the times a previous draft proposed. You still never invent a time: if the feedback asks for times the calendar cannot supply, say so in feedback_note and use the fallback ladder instead of making one up. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), meaning real dates or times written out as data and never a formatting template, an example time, or a rule about where times come from, pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
 - If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
@@ -1259,6 +1271,39 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "current_datetime_utc": _dt.datetime.now(_dt.timezone.utc).strftime(
             "%A, %d %B %Y, %H:%M UTC"),
     }
+    # No live slots: restate the never-invent-a-time rule IN THE USER MESSAGE,
+    # right beside the instructions it has to beat. DRAFT_SYSTEM has carried
+    # that rule (fallback ladder) all along, but an agent's own instructions
+    # can mandate a fixed reply template with a "[first specific time]"
+    # placeholder and an "add nothing else" clause - concrete, imperative, and
+    # sitting in the user message. Measured on live row 1222 (Navreo agent,
+    # slots: []) 2026-07-28: with the rule only in the system prompt the
+    # drafter filled that placeholder with times it worked out itself 3/3 at
+    # reasoning_effort=minimal, echoing the instructions' own example date
+    # ("Wednesday, 29th July at 2:00 PM EDT") back at the lead. lint_draft
+    # caught every one, so nothing sent, but the draft was wasted. The
+    # "literal list" carve-out keeps fallback ladder step ONE-A alive: an
+    # agent whose instructions DO list real times still proposes them.
+    if (slot_status or "not_configured") != "ok" or not slots:
+        payload["no_live_slots_directive"] = (
+            "You were given NO call times for this draft. Follow the fallback ladder in your rules. "
+            "Nothing in `instructions` is availability unless it is a literal list of dates or times "
+            "written out as data: a reply template, a placeholder such as [first specific time] or "
+            "[second specific time], a formatting rule, an example time, or a rule about taking times "
+            "from a calendar are NOT availability, and you must never fill one in with a time you "
+            "worked out yourself. If `instructions` holds no such literal list, name no weekday, no "
+            "date, and no clock time anywhere in the draft. Where a mandated template has a line that "
+            "proposes times, keep every other block of that template exactly as required and rewrite "
+            "that ONE line in two steps, even where the template says to keep every block as written "
+            "or to add nothing else. STEP 1: drop the times from the ask while keeping the template's "
+            "own reason-for-the-call wording word for word, so a line shaped like \"Would you be open "
+            "to a call on [first specific time] or [second specific time], where I could WORDING?\" "
+            "becomes \"Would you be open to a call, where I could WORDING?\". STEP 2: replace the "
+            "template's \"if those times aren't suitable\" style fallback line (there are no times "
+            "for it to refer to) with exactly this, as its own paragraph: \"When would be a good time "
+            "for us to talk? Here is <a href=\"BOOKING_LINK\">my availability</a>.\", putting the real "
+            "booking_link value in the href."
+        )
     # How hard to push for a call on THIS turn - see the call_ask rule in
     # DRAFT_SYSTEM. Owner report 2026-07-25: "when someone replies beyond the
     # first message, sometimes the drafted response ... just tries to continue
@@ -1379,7 +1424,7 @@ def _visible_digit_runs(html: str) -> set:
     return set(re.findall(r"\d+", plain))
 
 
-def proofread_draft(html: str):
+def proofread_draft(html: str, sender_first: str = ""):
     """Second sweep (owner brief 2026-07-14: "drafts need a second sweep so
     they read correctly without errors") - one extra gpt-5-mini call that
     proofreads an already-drafted email body for grammar, spelling,
@@ -1422,6 +1467,12 @@ def proofread_draft(html: str):
         orig_len = len(original)
         if orig_len and not (0.5 * orig_len <= len(result) <= 1.6 * orig_len):
             return original, False
+        # The proofreader is a second model, and it "corrects" an unfamiliar
+        # first name exactly as the drafter does (owner report 2026-07-28:
+        # "Bjion" came back as "Bjorn" AFTER draft_reply had already been
+        # made canonical). Re-apply the guard here, so it is the LAST thing
+        # that touches the html on every call site.
+        result = enforce_signoff(result, sender_first)
         return result, result != original
     except Exception:  # noqa: BLE001 - a proofread outage must degrade to the original draft, never crash
         return original, False
@@ -2687,7 +2738,7 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                         sender_first=_sender_first_for(snapshot))
                     draft_html = d.get("html")
                     if draft_html:
-                        draft_html, _changed = proofread_draft(draft_html)
+                        draft_html, _changed = proofread_draft(draft_html, _sender_first_for(snapshot))
                     patch = {"agent_id": agent.get("id"), "classification": classification,
                              "draft_subject": d.get("subject"), "draft_body": draft_html,
                              "original_draft_body": draft_html, "slots": slots}
@@ -3226,7 +3277,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             if draft_body:
                 # Second sweep (owner brief 2026-07-14): proofread the draft
                 # BEFORE lint_draft below, so lint checks the final text.
-                draft_body, _proofread_changed = proofread_draft(draft_body)
+                draft_body, _proofread_changed = proofread_draft(draft_body, sender_first)
         except Exception as e:  # noqa: BLE001 - a draft outage falls back to no draft -> lint fails -> review
             if not row.get("error"):
                 row["error"] = f"draft failed: {type(e).__name__}"
@@ -6380,7 +6431,7 @@ def _redraft_sync(payload):
             # Second sweep (owner brief 2026-07-14): proofread before this
             # regenerated draft is saved.
             _t = _time.time()
-            draft_html, _proofread_changed = proofread_draft(draft_html)
+            draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent))
             _stage("proofread", _t)
         # Re-stamped, not preserved: the baseline for an Approve-time diff is
         # the LATEST thing the agent wrote, not its first attempt. Edits the
@@ -7496,7 +7547,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                 # lint_draft below, so lint checks the final text. Shared by
                 # both real (_build_training_case) and synthetic
                 # (_build_synthetic_training_case) cases.
-                draft_html, _proofread_changed = proofread_draft(draft_html)
+                draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent))
             lint_ok, lint_reason = lint_draft(draft_html, {
                 "subject": d.get("subject"), "first_name": "",
                 "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
@@ -8247,7 +8298,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 if draft_html:
                     # Second sweep (owner brief 2026-07-14) - BEFORE lint so
                     # lint checks the final, proofread text.
-                    draft_html, _proofread_changed = proofread_draft(draft_html)
+                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot))
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": "",
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
@@ -8367,7 +8418,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 if draft_html:
                     # Second sweep (owner brief 2026-07-14) - BEFORE lint so
                     # lint checks the final, proofread text.
-                    draft_html, _proofread_changed = proofread_draft(draft_html)
+                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot))
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": "",
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),

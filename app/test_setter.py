@@ -6265,13 +6265,28 @@ def test_draft_system_fallback_ladder_text():
     meeting using what the instructions say) must appear before step TWO
     (the existing plain availability-ask), and the never-invent / never-
     mention-a-failure rules must still be present."""
+    # Commit 20b6929 split step ONE into ONE-A (the instructions list concrete
+    # times) and ONE-B (only a general window), and renamed the ordering rule's
+    # FIRST/SECOND to ONE-A/ONE-B/TWO. These three assertions kept quoting the
+    # pre-20b6929 wording and so failed on a clean tree while the ladder itself
+    # was present and intact. Same intent, current text.
     check("draft ladder: step ONE example block present (instructions-stated availability)",
-         "NO LIVE SLOTS BUT THE INSTRUCTIONS GIVE AVAILABILITY" in setter.DRAFT_SYSTEM, None)
+         "NO LIVE SLOTS BUT THE INSTRUCTIONS LIST CONCRETE AVAILABLE TIMES" in setter.DRAFT_SYSTEM
+         and "NO LIVE SLOTS BUT THE INSTRUCTIONS GIVE ONLY A GENERAL WINDOW" in setter.DRAFT_SYSTEM, None)
     check("draft ladder: step TWO example block present (no availability anywhere)",
          "NO TIMES AVAILABLE ANYWHERE" in setter.DRAFT_SYSTEM, None)
-    check("draft ladder: the FIRST/SECOND ordering rule is spelled out in the rules section",
-         "FIRST, if the instructions state an availability window" in setter.DRAFT_SYSTEM
-         and "SECOND, only when the instructions say nothing at all about availability" in setter.DRAFT_SYSTEM,
+    check("draft ladder: the ONE-A/ONE-B/TWO ordering rule is spelled out in the rules section",
+         "ONE-A, if the instructions contain a CONCRETE list of available times" in setter.DRAFT_SYSTEM
+         and "ONE-B, if the instructions state only a general availability window" in setter.DRAFT_SYSTEM
+         and "TWO, only when the instructions say nothing at all about availability" in setter.DRAFT_SYSTEM,
+         None)
+    # The live failure this guards (row 1222, 2026-07-28): with slots: [] the
+    # drafter read the agent's own "Weekday, Dth Month at H:MM AM/PM EDT, for
+    # example Wednesday, 29th July at 2:00 PM EDT" FORMAT rule as availability
+    # and proposed that example date back at the lead, 3/3 at effort=minimal.
+    check("draft ladder: a formatting template in the instructions is not a source of times",
+         "is a FORMAT, not availability" in setter.DRAFT_SYSTEM
+         and "do not name a weekday, a date, or a clock time anywhere in the draft" in setter.DRAFT_SYSTEM,
          None)
     check("draft ladder: never-invent-a-time rule present",
          "Never invent a time, day, or window that isn't in the slots you were given or literally stated "
@@ -6289,6 +6304,54 @@ def test_draft_system_fallback_ladder_text():
     check("draft ladder: step ONE's example precedes step TWO's example in the prompt", idx_one < idx_two,
          (idx_one, idx_two))
     check("draft ladder: no em dashes anywhere in DRAFT_SYSTEM", "—" not in setter.DRAFT_SYSTEM, None)
+
+
+def test_draft_no_live_slots_directive():
+    """The never-invent-a-time rule has to reach the drafter in the USER
+    message, not only in DRAFT_SYSTEM. Live row 1222 (2026-07-28): the Navreo
+    agent's instructions mandate a reply template with a "[first specific
+    time]" placeholder plus an "add nothing else" clause, and with the rule
+    only in the system prompt the drafter filled that placeholder with times
+    it made up, 3/3 at reasoning_effort=minimal. With the directive beside the
+    instructions it competes on equal footing: 0/8 invented, both efforts."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-slotdir1", "mode": "draft_only", "enabled": True,
+             "instructions": "Resource: Guide - https://x.example/guide\nBooking: https://cal.example/b",
+             "sender_first": "Sam"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    seen = {}
+    http.draft_fn = lambda b: (seen.__setitem__("payload", json.loads(b["messages"][1]["content"])),
+                              {"subject": "Re: hi", "html": "<div>a</div><br><div>b</div><br><div>c</div>"})[1]
+    reply = {"first_name": "Joe", "subject": "hi", "first_outbound": "Hi Joe,", "body": "Sure send it over"}
+
+    setter.draft_reply(reply, agent, {"primary_intent": "send_resource"}, [], "not_configured", "Sam")
+    d = seen["payload"].get("no_live_slots_directive") or ""
+    check("no-slots directive: present when slot_status isn't 'ok'", bool(d), seen["payload"].keys())
+    check("no-slots directive: names the template placeholder the drafter was filling",
+         "[first specific time]" in d, d)
+    check("no-slots directive: forbids naming any weekday, date, or clock time",
+         "name no weekday, no date, and no clock time anywhere in the draft" in d, d)
+    check("no-slots directive: overrides a template's keep-every-block clause",
+         "even where the template says to keep every block as written" in d, d)
+    check("no-slots directive: keeps ladder step ONE-A alive via the literal-list carve-out",
+         "literal list of dates or times" in d, d)
+    check("no-slots directive: hands over the exact availability sentence to substitute",
+         "When would be a good time for us to talk?" in d, d)
+
+    # slot_status "ok" with real slots is the untouched happy path - the
+    # directive must not appear there or it would suppress the two-times ask.
+    seen.clear()
+    setter.draft_reply(reply, agent, {"primary_intent": "send_resource"},
+                       [{"label": "Wednesday, 29th July at 2:00 PM EDT", "link": "https://cal.example/b/1"}],
+                       "ok", "Sam")
+    check("no-slots directive: absent when live slots are supplied",
+         "no_live_slots_directive" not in seen["payload"], seen["payload"].keys())
+
+    # An empty slot list with a nominally "ok" status is still no times.
+    seen.clear()
+    setter.draft_reply(reply, agent, {"primary_intent": "send_resource"}, [], "ok", "Sam")
+    check("no-slots directive: present when the status says 'ok' but the slot list is empty",
+         bool(seen["payload"].get("no_live_slots_directive")), seen["payload"].keys())
 
 
 def test_training_reset_clears_answers_keeps_used_ids():
@@ -7715,6 +7778,38 @@ def test_training_session_digest_corrections_priority_under_cap():
     roomy_digest = setter._training_session_feedback_digest(doc, limit_chars=2000)
     check("session digest priority: with room, confirmations appear too",
          "CONFIRMED" in roomy_digest, roomy_digest)
+
+
+# ── resource sends must link the resource, not just the calendar (2026-07-28) ──
+
+def test_lint_resource_send_rejects_booking_link_only():
+    fresh_setter()
+    booking = "https://calendly.example/book"
+    guide = "https://notion.example/the-guide"
+    ctx = {"needs_resource_link": True, "booking_link": booking, "first_name": "",
+          "instructions": "Booking link: %s\nResource: The Guide - %s" % (booking, guide),
+          "slot_status": "not_configured"}
+    only_booking = ('<div>Hi Markus,</div><br><div>Here is the resource I put together.</div><br>'
+                   '<div>Feel free to <a href="%s">book a call here</a>.</div><br><div>Bjion</div>' % booking)
+    ok, reason = setter.lint_draft(only_booking, ctx)
+    check("lint: a resource send linking ONLY the booking link fails",
+         ok is False and "booking link" in reason, (ok, reason))
+
+    with_guide = ('<div>Hi Markus,</div><br><div>Here is <a href="%s">the resource</a> I put together.</div><br>'
+                 '<div>Feel free to <a href="%s">book a call here</a>.</div><br><div>Bjion</div>' % (guide, booking))
+    ok, reason = setter.lint_draft(with_guide, ctx)
+    check("lint: the same draft passes once the resource itself is linked", ok is True, reason)
+
+
+def test_lint_resource_rule_noop_when_agent_has_no_resource_url():
+    fresh_setter()
+    booking = "https://calendly.example/book"
+    ctx = {"needs_resource_link": True, "booking_link": booking, "first_name": "",
+          "instructions": "Booking link: %s" % booking, "slot_status": "not_configured"}
+    draft = ('<div>Hi Markus,</div><br><div>Happy to get that over to you.</div><br>'
+            '<div>Feel free to <a href="%s">book a call here</a>.</div><br><div>Bjion</div>' % booking)
+    ok, reason = setter.lint_draft(draft, ctx)
+    check("lint: an agent whose instructions hold only a booking link is unaffected", ok is True, reason)
 
 
 # ── sign-off guard: enforce_signoff (owner report 2026-07-28) ──────────────────
@@ -9156,6 +9251,7 @@ if __name__ == "__main__":
     test_training_answer_note_path_still_returns_started_without_agent_load()
     test_training_pending_merges_survive_and_drain_on_next_kick_after_dead_worker()
     test_draft_system_fallback_ladder_text()
+    test_draft_no_live_slots_directive()
     test_training_reset_clears_answers_keeps_used_ids()
     test_training_get_route()
     test_training_get_self_heals_stale_running_marker()
@@ -9200,6 +9296,8 @@ if __name__ == "__main__":
     test_confirmed_examples_rolling_cap_newest_kept()
     test_training_session_digest_confirmations_after_corrections_and_priority()
     test_training_session_digest_corrections_priority_under_cap()
+    test_lint_resource_send_rejects_booking_link_only()
+    test_lint_resource_rule_noop_when_agent_has_no_resource_url()
     test_enforce_signoff_rewrites_a_wrong_name()
     test_enforce_signoff_leaves_the_right_name_and_full_name()
     test_enforce_signoff_never_touches_a_non_name_tail()
