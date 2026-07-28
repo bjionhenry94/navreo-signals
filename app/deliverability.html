@@ -72,6 +72,7 @@
 .ah .charttip .row .v{margin-left:auto;font-weight:600;color:var(--ink);padding-left:12px;font-variant-numeric:tabular-nums}
 
 .ah svg.funnel{display:block;width:100%;height:auto}
+.ah .funnel{display:block;width:100%;max-width:920px;margin:0 auto}
 .ah .funnel text{font-family:var(--font-sans)}
 .ah .fnum{font-family:var(--font-display);font-size:26px;letter-spacing:-0.03em;fill:var(--ink);font-variant-numeric:tabular-nums}
 .ah .fslab{fill:var(--ink);transition:y .45s ease,height .45s ease}
@@ -80,6 +81,7 @@
 .ah a.fstage:hover .fnum{fill:var(--ink-2)}
 .ah .fribbon{fill:var(--cream-50);stroke:var(--line-2);stroke-width:1}
 .ah .fribbon.leak{fill:var(--orange-100);stroke:var(--orange)}
+.ah .fslab.leak{fill:var(--orange)}
 .ah .frate{font-size:11.5px;fill:var(--ink-3)}
 .ah .frate.leak{fill:var(--orange-700);font-weight:600}
 .ah .fpill-r{fill:var(--orange)}
@@ -88,18 +90,8 @@
 .ah .fnum,.ah .frate{transition:opacity .17s ease}
 .ah .funnel.swap .fnum,.ah .funnel.swap .frate{opacity:0}
 
-.ah .hero-flow{display:grid;grid-template-columns:264px 1fr;gap:8px 28px;align-items:center}
-.ah .fuelcard{grid-row:1/3;align-self:center;display:block;text-decoration:none;background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:10px;padding:16px 18px}
-.ah .fuelcard:hover{border-color:var(--amber)}
-.ah .fuel-kick{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--amber)}
-.ah .fuel-num{font-family:var(--font-display);font-size:38px;line-height:1.15;letter-spacing:-0.03em;color:var(--ink);margin-top:5px}
-.ah .fuel-sub{font-size:12.5px;color:var(--ink-2);margin-top:2px}
-.ah .fuel-sub b{font-weight:700;color:var(--amber)}
-.ah .fuel-meter{height:6px;border-radius:3px;background:rgba(255,255,255,.72);margin:12px 0 9px;overflow:hidden}
-.ah .fuel-meter i{display:block;height:100%;border-radius:3px;background:var(--amber);transition:width .45s ease}
-.ah .fuel-out{font-size:12px;font-weight:600;color:var(--amber)}
+.ah .hero-flow{display:block}
 
-.ah .stagestrip{grid-column:2;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);padding-top:12px}
 .ah .stagecell{text-align:center;text-decoration:none;padding:2px 8px}
 .ah .scname{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
 .ah .scstat{margin-top:5px;font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:6px}
@@ -186,7 +178,9 @@
 .ah .splitlbl b{font-weight:600;color:var(--ink)}
 
 .ah .rank{display:flex;flex-direction:column}
-.ah .rrow{display:grid;grid-template-columns:20px minmax(250px,286px) 1fr 46px 62px 58px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.ah .rrow{display:grid;grid-template-columns:20px minmax(150px,1fr) 54px 44px 52px 50px 62px 62px;gap:11px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.ah .rcost{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.ah .rcost.mute{color:var(--ink-3)}
 .ah .rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
 .ah .rrow .idx{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .ah .rname{font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;min-width:0}
@@ -299,14 +293,6 @@
       <div class="hero">
         <div class="hero-flow">
 
-          <a class="fuelcard" href="#lane-leads">
-            <span class="fuel-kick">Fuel · leads still to work</span>
-            <div class="fuel-num num" id="fuel-n">–</div>
-            <div class="fuel-sub num" id="fuel-sub">&nbsp;</div>
-            <div class="fuel-meter" id="fuel-meter"><i id="fuel-fill" style="width:0%"></i></div>
-            <div class="fuel-out num" id="fuel-out">&nbsp;</div>
-          </a>
-
           <svg class="funnel" id="funnel" viewBox="0 0 880 282" role="img" aria-label="Pipeline">
             <path class="fribbon" id="fr1" d=""/>
             <path class="fribbon" id="fr2" d=""/>
@@ -342,24 +328,6 @@
             </g>
           </svg>
 
-          <nav class="stagestrip" aria-label="Pipeline stages">
-            <a class="stagecell" href="#lane-sent">
-              <div class="scname">Emails sent</div>
-              <div class="scstat"><span class="dot mute" id="ssd1"></span><span id="sss1">–</span></div>
-            </a>
-            <a class="stagecell" href="#lane-replies">
-              <div class="scname">Replies</div>
-              <div class="scstat"><span class="dot mute" id="ssd2"></span><span id="sss2">–</span></div>
-            </a>
-            <a class="stagecell" href="#lane-interested">
-              <div class="scname">Interested</div>
-              <div class="scstat"><span class="dot mute" id="ssd3"></span><span id="sss3">–</span></div>
-            </a>
-            <a class="stagecell" href="#lane-meetings">
-              <div class="scname">Meetings</div>
-              <div class="scstat"><span class="dot mute" id="ssd4"></span><span id="sss4">–</span></div>
-            </a>
-          </nav>
         </div>
 
         <div class="leakbar" id="leakbar" style="display:none">
@@ -427,7 +395,10 @@
           <div class="card-head">
             <div class="card-kick" id="week-kick">Reply rate over time</div>
           </div>
-          <svg viewBox="0 0 620 170" width="100%" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
+          <div class="trendwrap" style="margin-top:0">
+            <svg viewBox="0 0 620 170" width="100%" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
+            <div class="charttip" id="week-tip" hidden></div>
+          </div>
           <div class="subline" id="week-sub">&nbsp;</div>
           <div class="take"><span class="arr">→</span><span id="week-take">&nbsp;</span></div>
         </div>
@@ -453,8 +424,6 @@
             <div class="card-kick" style="margin-bottom:2px" id="bnc-kick">Where it comes from</div>
             <div class="bnc-rows num" id="bnc-rows"></div>
           </div>
-
-          <div class="take"><span class="arr">→</span><span id="bnc-take">&nbsp;</span></div>
         </div>
 
       </div>
@@ -1202,24 +1171,46 @@ function renderFunnel() {
   $("fc1").textContent = v.sent ? (Math.round(r1 * 1000) / 10) + " in 100 reply" : "";
   $("fc2").textContent = v.pos ? "about " + plain1in(Math.round(1 / (r2 || 1))) + " replies is interested" : "";
   $("fc3").textContent = v.mtg ? plain1in(Math.round(1 / (r3 || 1))) + " interested becomes a meeting" : "";
-  // the leak: worst stage relative to a healthy book (1.2 in 100 reply,
-  // 15% of replies interested, 25% of interested booked)
-  var exp = [0.012, 0.15, 0.25], ratios = [r1, r2, r3], leak = 0, worst = Infinity;
-  for (i = 0; i < 3; i++) {
-    if (!nums[i]) continue;
-    var q = ratios[i] / exp[i];
-    if (q < worst) { worst = q; leak = i; }
+  // ── Biggest leak (Bjion 2026-07-28 spec) ────────────────────────────────
+  // Two conversion stages have healthy ranges; the leak is the one furthest
+  // BELOW its range average. When BOTH are in range, the biggest FIX is Email
+  // Sent — send more to put more leads in the pipeline. leak index maps to the
+  // ribbon: 0 = email sent (fr1), 1 = replies→interested (fr2), 2 = interested
+  // →meeting (fr3).
+  var posRate = v.rep > 0 ? v.pos / v.rep * 100 : null;   // healthy 5–15%, mid 10
+  var mtgRate = v.pos > 0 ? v.mtg / v.pos * 100 : null;   // healthy 15–40%, mid 27.5
+  var LEAK = { INT: { lo: 5, mid: 10 }, MEET: { lo: 15, mid: 27.5 } };
+  var leak, leakStage = "sent";
+  var belowInt = posRate != null && posRate < LEAK.INT.lo;
+  var belowMeet = mtgRate != null && mtgRate < LEAK.MEET.lo;
+  if (v.rep === 0) {
+    leak = 0; leakStage = "sent";   // no replies yet — more/better sending first
+  } else if (belowInt || belowMeet) {
+    var shortInt = belowInt ? (LEAK.INT.mid - posRate) / LEAK.INT.mid : -1;
+    var shortMeet = belowMeet ? (LEAK.MEET.mid - mtgRate) / LEAK.MEET.mid : -1;
+    if (shortInt >= shortMeet) { leak = 1; leakStage = "interest"; }
+    else { leak = 2; leakStage = "meeting"; }
+  } else {
+    leak = 0; leakStage = "sent";   // both conversions healthy → send more
   }
-  ["fr1", "fr2", "fr3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === leak); });
-  ["fc1", "fc2", "fc3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === leak); });
-  var cx = [220, 440, 660][leak];
-  $("lp-r").setAttribute("x", cx - 54); $("lp-t").setAttribute("x", cx);
+  v.leakStage = leakStage; v.posRate = posRate; v.mtgRate = mtgRate;
+  // Highlight the ribbon for a conversion leak; the SENT BAR for the send-more
+  // fix. rib index: interest→fr2 (1), meeting→fr3 (2), sent→none.
+  var rib = leakStage === "interest" ? 1 : (leakStage === "meeting" ? 2 : -1);
+  ["fr1", "fr2", "fr3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === rib); });
+  ["fc1", "fc2", "fc3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === rib); });
+  ["fs1", "fs2", "fs3", "fs4"].forEach(function (id) { $(id).classList.remove("leak"); });
+  if (leakStage === "sent") $("fs1").classList.add("leak");
+  var cx = leakStage === "sent" ? 110 : (leakStage === "interest" ? 440 : 660);
+  var half = leakStage === "sent" ? 44 : 54;
+  $("lp-t").textContent = leakStage === "sent" ? "SEND MORE" : "BIGGEST LEAK";
+  $("lp-r").setAttribute("x", cx - half); $("lp-r").setAttribute("width", half * 2);
+  $("lp-t").setAttribute("x", cx);
   $("lp-l").setAttribute("x1", cx); $("lp-l").setAttribute("x2", cx);
   $("funnel").setAttribute("aria-label", "Pipeline, " + (v.win ? rangeLabel() : "all time") + ": " +
     fmtN(v.sent) + " emails sent, " + fmtN(v.rep) +
     " replies, " + fmtN(v.pos) + " interested, " + fmtN(v.mtg) + " meetings.");
   renderLeakbar(leak, v);
-  renderStrip(v);
   renderTags(v);
   return v;
 }
@@ -1245,30 +1236,36 @@ function renderLeakbar(leak, v) {
     bar.style.display = "";
     return;
   }
-  if (leak === 2 && lat && lat.n > 0 && (lat.fast_share || 0) < 0.8) {
+  var stage = v.leakStage;
+  if (stage === "meeting" && lat && lat.n > 0 && (lat.fast_share || 0) < 0.8) {
+    // the interested→meeting stage is the leak AND answers are slow — name the
+    // fixable cause (answer speed)
     head.textContent = "Biggest leak — slow answers";
-    body.textContent = "Interested replies get answered in " + fmtMins(lat.avg_mins) + " on average — only " +
-      Math.round((lat.fast_share || 0) * 100) + " in 100 get an answer within the hour.";
+    body.textContent = "Only " + (v.mtgRate == null ? "–" : Math.round(v.mtgRate)) +
+      "% of interested replies book a call (healthy is 15–40%), and answers take " +
+      fmtMins(lat.avg_mins) + " on average — only " + Math.round((lat.fast_share || 0) * 100) +
+      " in 100 get an answer within the hour.";
     fix.textContent = "Answer within the hour to book more.";
-  } else if (leak === 2 && v.pos > 0) {
-    // answers are already fast — "only 100 in 100 within the hour" read as
-    // nonsense (round 3 pre-check); the booking step itself is the leak
-    head.textContent = "Biggest leak — booking";
+  } else if (stage === "meeting") {
+    head.textContent = "Biggest leak — booking the call";
     body.textContent = v.mtg === 0
-      ? "None of the " + fmtN(v.pos) + " interested replies in this window has booked yet."
-      : "Only " + plain1in(Math.round(v.pos / v.mtg)) + " interested becomes a meeting.";
-    fix.textContent = "Push for the meeting inside the first reply.";
-  } else if (leak === 0) {
-    head.textContent = "Biggest leak — replies";
-    body.textContent = (Math.round((v.sent ? v.rep / v.sent : 0) * 1000) / 10) + " in 100 people reply. The message or the list needs work.";
-    fix.textContent = "Refresh the weakest campaigns below.";
-  } else if (leak === 1) {
+      ? "None of the " + fmtN(v.pos) + " interested replies in this window has booked a call yet (healthy is 15–40%)."
+      : "Only " + Math.round(v.mtgRate) + "% of interested replies book a call — below the healthy 15–40%.";
+    fix.textContent = "Push for the call inside the first reply, and answer faster.";
+  } else if (stage === "interest") {
     head.textContent = "Biggest leak — interest";
     body.textContent = v.pos === 0
-      ? "None of the " + fmtN(v.rep) + " replies in this window was a real yes — the wrong people are answering."
-      : "Only " + plain1in(Math.round(1 / ((v.rep ? v.pos / v.rep : 0) || 1))) +
-        " replies is a real yes — the wrong people are answering.";
+      ? "None of the " + fmtN(v.rep) + " replies in this window was a real yes — the wrong people are answering (healthy is 5–15%)."
+      : "Only " + (Math.round(v.posRate * 10) / 10) + "% of replies is a real yes — below the healthy 5–15%; the wrong people are answering.";
     fix.textContent = "Audit the lead lists — biggest campaigns first.";
+  } else if (stage === "sent") {
+    // both conversions healthy (or no replies yet) → the lever is volume
+    head.textContent = v.rep === 0 ? "Biggest fix — get replies" : "Biggest fix — send more";
+    body.textContent = v.rep === 0
+      ? "No replies in this window yet — the message or the list needs work, or there isn't enough sending to read."
+      : "Your reply→interested (" + (Math.round(v.posRate * 10) / 10) + "%) and interested→meeting (" +
+        Math.round(v.mtgRate) + "%) are both healthy — the way to more meetings is more emails sent.";
+    fix.textContent = v.rep === 0 ? "Refresh the weakest campaigns below." : "Add sending capacity — more volume means more leads in the pipeline.";
   } else {
     bar.style.display = "none"; return;
   }
@@ -1348,8 +1345,9 @@ function weekdayAvgSent(daysBack) {
   return n ? tot / n : null;
 }
 function renderRunway(v) {
+  // The lane-1 FUEL card was removed (duplicated this lane) — this now drives
+  // only lane 2's runway (run-*).
   var isAll = state.client === "All";
-  $("fuel-n").textContent = fmtN(v.leadsLeft);
   // Per-client daily send rate (Bjion 2026-07-28: "works for all clients but
   // not individual"). Fleet keeps its tested weekday average; a client's rate
   // comes from ITS window sent ÷ the weekdays in the window — the sweep has
@@ -1364,10 +1362,6 @@ function renderRunway(v) {
   var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
   var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
   if (days != null) {
-    $("fuel-sub").innerHTML = '<b>' + fmtN(days) + ' days</b> of leads left · about ' + fmtN(burn) + ' leads used a day';
-    $("fuel-meter").style.display = "";
-    $("fuel-fill").style.width = Math.max(3, Math.min(100, Math.round(days / 45 * 100))) + "%";
-    $("fuel-out").textContent = days <= 30 ? "Out around " + outTxt + " — add a fresh list before then" : "Enough for the next month";
     $("run-kick").textContent = "Days of leads left";
     $("run-big").innerHTML = fmtN(days) + "<small> days</small>";
     $("run-big").className = "bignum num" + (days <= 21 ? " warn" : "");
@@ -1383,9 +1377,6 @@ function renderRunway(v) {
     $("run-take").textContent = days <= 30 ? "Add a fresh list before " + outTxt + "." : "Lead supply is healthy.";
     $("run-svg").setAttribute("aria-label", "Your leads run out around " + outTxt);
   } else {
-    $("fuel-sub").textContent = "across " + v.active + " running campaign" + (v.active === 1 ? "" : "s");
-    $("fuel-meter").style.display = "none";
-    $("fuel-out").textContent = "";
     $("run-kick").textContent = "Leads still to work";
     $("run-big").innerHTML = fmtN(v.leadsLeft);
     $("run-big").className = "bignum num";
@@ -1494,6 +1485,33 @@ function weekSeries(n) {
   }
   return out;
 }
+var WK = null;
+function weekMove(ev) {
+  if (!WK) return;
+  var svg = $("week-svg"), r = svg.getBoundingClientRect();
+  if (!r.width) return;
+  var vbx = (ev.clientX - r.left) * 620 / r.width;
+  var best = null, bd = Infinity;
+  WK.pts.forEach(function (i2) { var x = WK.L + i2 / WK.den * WK.pw; var dd = Math.abs(x - vbx); if (dd < bd) { bd = dd; best = i2; } });
+  if (best == null) return;
+  var X = WK.L + best / WK.den * WK.pw;
+  var Yv = WK.T + (1 - (WK.rate[best] - WK.lo) / (WK.hi - WK.lo)) * WK.ph;
+  var html = '<line x1="' + X.toFixed(1) + '" y1="' + WK.T + '" x2="' + X.toFixed(1) + '" y2="' + (WK.T + WK.ph) + '" stroke="var(--line-2)" stroke-width="1"/>' +
+    '<circle cx="' + X.toFixed(1) + '" cy="' + Yv.toFixed(1) + '" r="3.5" fill="' + COL.rate + '" stroke="#fff" stroke-width="1.5"/>';
+  var old = document.getElementById("wk-hov"); if (old) old.parentNode.removeChild(old);
+  svg.insertAdjacentHTML("beforeend", '<g id="wk-hov">' + html + "</g>");
+  var tip = $("week-tip");
+  tip.innerHTML = "<b>" + dfull(WK.days[best]) + "</b>" +
+    '<div class="row"><i style="background:' + COL.rate + '"></i>Reply rate<span class="v num">' + WK.rate[best].toFixed(1) + "%</span></div>" +
+    '<div class="row"><i style="background:' + COL.sent + '"></i>Sent<span class="v num">' + fmtN(WK.sent[best] || 0) + "</span></div>";
+  tip.hidden = false;
+  var wrap = svg.parentNode, ww = wrap.offsetWidth, px = X * r.width / 620;
+  var left = px + 14; if (left + tip.offsetWidth > ww - 4) left = px - 14 - tip.offsetWidth; if (left < 4) left = 4;
+  var top = (ev.clientY - r.top) - tip.offsetHeight / 2; if (top < 0) top = 0;
+  var maxTop = r.height - tip.offsetHeight; if (maxTop > 0 && top > maxTop) top = maxTop;
+  tip.style.left = left.toFixed(0) + "px"; tip.style.top = top.toFixed(0) + "px";
+}
+function weekHide() { var g = document.getElementById("wk-hov"); if (g) g.parentNode.removeChild(g); var t = $("week-tip"); if (t) t.hidden = true; }
 function renderWeek() {
   var d = weekSeries(state.range);
   $("week-kick").textContent = "Reply rate over time · " + rangeLabel();
@@ -1501,6 +1519,7 @@ function renderWeek() {
   for (var i = 0; i < d.rate.length; i++) if (d.rate[i] != null) pts.push(i);
   if (pts.length < 2) {
     $("week-svg").innerHTML = "";
+    WK = null;
     $("week-sub").textContent = "Not enough sending in this window to read a rate.";
     $("week-take").textContent = "";
     return;
@@ -1548,6 +1567,8 @@ function renderWeek() {
     dlabel(d.days[d.days.length - 1]) + "</text>";
 
   $("week-svg").innerHTML = s;
+  // geometry + data for the hover tooltip
+  WK = { days: d.days, rate: d.rate, sent: d.sent, pts: pts, L: L, pw: pw, den: den, lo: lo, hi: hi, T: T, ph: ph };
   $("week-svg").setAttribute("aria-label",
     "Reply rate over the " + rangeLabel() + ", now " + d.rate[last].toFixed(1) + "%");
 
@@ -1587,6 +1608,20 @@ function renderWeek() {
 }
 
 /* ── lane 4: ranking + dying + the offer ── */
+// Cost-to-buy-one for a campaign, like the offer table: emails per positive
+// and per meeting. Lifetime basis (positives/meetings are only tracked
+// cumulatively per campaign), so it's a campaign efficiency property — same
+// shape as the offer table. "If no meetings, default to positive" → the
+// per-meeting cell shows "–" and the per-positive column carries the signal.
+// (Meeting = "Call booked" once the scorecard's meeting definition is
+// call-booked-only — see the meetings-definition change.)
+function campCost(id) {
+  var sc = SCORE && SCORE.campaigns && SCORE.campaigns[id];
+  if (!sc) return { perPos: null, perMtg: null };
+  var sent = sc.sent || 0, pos = sc.positives || 0, mtg = sc.meetings || 0;
+  return { perPos: pos > 0 ? Math.round(sent / pos) : null,
+           perMtg: mtg > 0 ? Math.round(sent / mtg) : null };
+}
 function renderRank() {
   // Window rows (client-windows sweep): which campaigns are winning over the
   // SELECTED range — reply rate on window sends. Interested/meetings have no
@@ -1607,13 +1642,14 @@ function renderRank() {
     var top = rows.slice(0, 8);
     $("rank-scope").textContent = "· " + rangeLabel();
     var maxRate = top.length ? (top[0].replied / top[0].sent) : 1;
-    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Sent</span><span style="text-align:right">Replies</span></div>';
+    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Sent</span><span style="text-align:right">Replies</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
     top.forEach(function (c, i) {
       var rate = c.sent ? c.replied / c.sent : 0;
       var w = Math.max(2, Math.round(rate / (maxRate || 1) * 100));
       var bad = rate < 0.01;
       var scLT = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
       var noYes = scLT && (scLT.sent || 0) >= 2000 && !(scLT.positives || 0);
+      var cost = campCost(c.id);
       s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
         '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
         (i === 0 && rate >= 0.02 && c.sent >= minSent * 4 && !noYes ? '<span class="apill green">Best</span>' : "") +
@@ -1622,7 +1658,9 @@ function renderRank() {
         '</div><div class="rsub">' + escq(c.client) + " · " + rangeLabel() + "</div></div>" +
         '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
         '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
-        '<span class="rint">' + fmtN(c.sent) + '</span><span class="rmtg">' + fmtN(c.replied) + "</span></div>";
+        '<span class="rint">' + fmtN(c.sent) + '</span><span class="rmtg">' + fmtN(c.replied) + "</span>" +
+        '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
+        '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
     });
     $("rank-rows").innerHTML = top.length ? s
       : '<div class="subline">No campaign sent ' + fmtN(minSent) + "+ emails in the " + rangeLabel() + " for this view.</div>";
@@ -1649,19 +1687,22 @@ function renderRank() {
   var topLT = rowsLT.slice(0, 8);
   $("rank-scope").textContent = "· all time — the " + rangeLabel() + " view is warming up";
   var maxRateLT = topLT.length ? topLT[0].replied / topLT[0].sent : 1;
-  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Interested</span><span style="text-align:right">Meetings</span></div>';
+  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Sent</span><span style="text-align:right">Replies</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
   topLT.forEach(function (c, i) {
     var rate = c.sent ? c.replied / c.sent : 0;
     var w = Math.max(2, Math.round(rate / (maxRateLT || 1) * 100));
     var bad = rate < 0.01;
+    var cost = campCost(c.id);
     sLT += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
       '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
       (i === 0 && rate >= 0.02 && c.sent >= 2000 ? '<span class="apill green">Best</span>' : "") +
       (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
-      '</div><div class="rsub">' + fmtN(c.sent) + " sent · " + fmtN(c.replied) + " replies</div></div>" +
+      '</div><div class="rsub">' + escq(campClient(c.id, c)) + " · all time</div></div>" +
       '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
       '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
-      '<span class="rint">' + fmtN(c.positives) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span></div>";
+      '<span class="rint">' + fmtN(c.sent) + '</span><span class="rmtg">' + fmtN(c.replied) + "</span>" +
+      '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
+      '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
   });
   $("rank-rows").innerHTML = topLT.length ? sLT : '<div class="subline">No campaigns with 500+ sends yet.</div>';
   var deadLT = {};
@@ -1919,7 +1960,6 @@ function renderBounce() {
   if (!days.length && !cwc) {
     big.textContent = "–"; big.className = "bnc-hero num";
     $("bnc-rows").innerHTML = '<div class="subline" style="padding-top:8px">Waiting on live data.</div>';
-    $("bnc-take").textContent = "";
     return;
   }
 
@@ -2021,29 +2061,8 @@ function renderBounce() {
         '</div>';
       }).join("")
     : '<div class="subline" style="padding-top:8px">Every list is under 2%.</div>';
-
-  // "Pause" only makes sense for a campaign that is still sending — target the
-  // worst-rate ACTIVE list; a finished campaign is already stopped, so it gets
-  // a re-check instruction instead (Priya, 2026-07-28).
-  var clientTag = function (r) {
-    return (state.client === "All" && r.client && r.label.indexOf(r.client) < 0) ? " (" + r.client + ")" : "";
-  };
-  var takeTxt = "Nothing over 2% — keep sending.";
-  if (rows.length) {
-    var live = rows.filter(function (r) { return r.active; });
-    if (live.length) {
-      takeTxt = "Pause " + live[0].label + clientTag(live[0]) +
-        " (" + live[0].pct.toFixed(1) + "%), get those addresses re-checked, then switch it back on.";
-      var hotter = live.slice(1, 3).filter(function (r) { return r.pct >= live[0].pct + 1; })[0];
-      if (hotter) takeTxt += " " + hotter.label + " bounces even harder (" + hotter.pct.toFixed(1) + "%) — same treatment.";
-    } else {
-      // every over-limit list is finished — nothing to pause, but re-check
-      // before those addresses get reused
-      takeTxt = rows[0].label + clientTag(rows[0]) + " bounced " + rows[0].pct.toFixed(1) +
-        "% but has already finished — re-check its addresses before reusing that list.";
-    }
-  }
-  $("bnc-take").textContent = takeTxt;
+  // (the "→ Pause X…" take-line was removed from this section per Bjion's
+  // 2026-07-28 changes — the campaign list above already names the offenders)
 }
 
 function renderAll() {
@@ -2149,6 +2168,8 @@ $("ah-lchips").addEventListener("click", function (e) {
 })();
 $("trend-svg").addEventListener("mousemove", trendMove);
 $("trend-svg").addEventListener("mouseleave", hideTip);
+$("week-svg").addEventListener("mousemove", weekMove);
+$("week-svg").addEventListener("mouseleave", weekHide);
 $("ah-retry").addEventListener("click", boot);
 
 // /api/client-windows builds in the background on a cold server (~2-4 min of

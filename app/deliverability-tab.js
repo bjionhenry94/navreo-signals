@@ -2699,16 +2699,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       <div>
         ${window.DLV_EMBED ? "<h2>Fleet health &amp; to-do</h2>" : "<h1>Fleet health audit.</h1>"}
       </div>
-      <div class="dlv-actions">
-        <button class="btn sm" data-act="copy-claude" title="Copies a text summary you can paste to an AI assistant or teammate.">Copy for Claude</button>
-        <span class="dlv-hdr-sep" aria-hidden="true"></span>
-        <span class="dlv-lastpull" title="When the numbers on this page were last pulled from Smartlead. Refreshes hourly in the background and on Run Live Audit.">${
-          isLive() && S.A._live
-            ? (DATA.audit.polling ? '<span class="dlv-spinner ink" style="width:11px;height:11px"></span> pulling now…' : "Last pull: " + auditAgeLabel(auditAgeNow()))
-            : "No pull yet"
-        }</span>
-        <button class="btn dlv-btn-caution" data-act="run-audit" id="dlv-run-btn" title="Destructive — wipes every action taken this session and pulls a fresh snapshot.">${ic8("error")} Run Live Audit</button>
-      </div>
+      <!-- Copy for Claude / Last pull / Run Live Audit removed per Bjion
+           2026-07-28 (the audit refreshes hourly in the background anyway). -->
     </div>`;
   }
 
