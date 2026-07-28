@@ -5958,8 +5958,19 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
         # never-resume gate is retired). The true-up below restores them to
         # the house 15/day like any non-OUTLOOK box.
         skipped_md = []
+        # Domains living only in client workspaces are unknown to the audit
+        # backend — skip its call rather than let a spurious "unknown domain"
+        # error fail the job before the direct Smartlead handling below runs.
+        cli_only = False
+        try:
+            wss = {r.get("workspace") for r in sb(
+                "GET", "mailboxes?domain=in.(%s)&select=workspace&limit=2000"
+                       % ",".join(doms_all)) or []}
+            cli_only = bool(wss) and "navreo" not in wss
+        except Exception:  # noqa: BLE001 — unknown mix: keep the backend call
+            pass
         rest = f"warmup-{op}?domain=" + quote(",".join(domains), safe="")
-        j = _deliv_backend_json_retry("POST", rest, timeout=170)
+        j = {} if cli_only else _deliv_backend_json_retry("POST", rest, timeout=170)
         if isinstance(j, dict) and j.get("error"):
             msg = str(j["error"])[:160]
             with JOBS_LOCK:
@@ -6005,12 +6016,24 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
                 for d, rows in held.items():
                     errs, last = 0, ""
                     for r in rows:
-                        cap = 2 if (r.get("account_type") == "OUTLOOK") else 15
+                        ws0 = r.get("workspace") or "navreo"
+                        outlook = (r.get("account_type") == "OUTLOOK")
+                        # Navreo restores to the house caps; a client box gets
+                        # its OWN last recorded cap back (client fleets hand-set
+                        # caps — house 15/2 would clobber them).
+                        cap = (2 if outlook else 15) if ws0 == "navreo" \
+                            else _client_ws_restore_cap(ws0, r.get("smartlead_id"), outlook)
                         try:
                             _smartlead_json("POST", f"/email-accounts/{r['smartlead_id']}",
                                             {"max_email_per_day": cap},
-                                            workspace=r.get("workspace") or "navreo")
+                                            workspace=ws0)
                             capped += 1
+                            if ws0 != "navreo":
+                                # The blanket mirror true-up below is navreo-only;
+                                # reconcile the client box at its real cap now.
+                                sb("PATCH", "mailboxes?workspace=eq.%s&smartlead_id=eq.%s"
+                                            % (ws0, r.get("smartlead_id")),
+                                   {"message_per_day": cap})
                         except Exception as e:  # noqa: BLE001 — keep going; report per domain
                             errs += 1
                             last = str(e)[:80]
@@ -6040,9 +6063,13 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
                     try:
                         for i in range(0, len(ok_doms), 40):
                             chunk = ",".join(ok_doms[i:i + 40])
+                            # navreo-only: client boxes were reconciled per-box
+                            # above at their own restored caps.
                             sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                        "&workspace=eq.navreo"
                                         "&account_type=eq.OUTLOOK" % chunk, {"message_per_day": 2})
                             sb("PATCH", "mailboxes?domain=in.(%s)&message_per_day=eq.0"
+                                        "&workspace=eq.navreo"
                                         "&account_type=neq.OUTLOOK" % chunk, {"message_per_day": 15})
                     except Exception:  # noqa: BLE001 — nightly sync self-corrects
                         pass
@@ -6055,6 +6082,28 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
             # keeps an established rest clock) so due-back dates exist at once.
             from datetime import datetime, timezone
             try:
+                # Client-workspace boxes first: the audit backend can't park
+                # them (it only sees Navreo's Smartlead), so without this the
+                # mirror-zeroing below would CLAIM a hold that never reached
+                # Smartlead. Zero their real caps with the owning workspace's
+                # key; failures count so the job can't report a phantom hold.
+                cli_held, cli_errs = 0, 0
+                for i in range(0, len(doms), 40):
+                    for r in sb("GET", "mailboxes?domain=in.(%s)&workspace=neq.navreo"
+                                       "&message_per_day=gt.0&select=smartlead_id,workspace"
+                                       % ",".join(doms[i:i + 40])) or []:
+                        try:
+                            _smartlead_json("POST", f"/email-accounts/{r['smartlead_id']}",
+                                            {"max_email_per_day": 0},
+                                            workspace=r.get("workspace"))
+                            cli_held += 1
+                        except Exception:  # noqa: BLE001 — counted, surfaced below
+                            cli_errs += 1
+                        time.sleep(0.35)  # shared 200req/min Smartlead budget
+                if cli_held:
+                    counts["client_paused"] = cli_held
+                if cli_errs:
+                    counts["client_pause_errors"] = cli_errs
                 for i in range(0, len(doms), 40):
                     sb("PATCH", "mailboxes?domain=in.(%s)" % ",".join(doms[i:i + 40]),
                        {"message_per_day": 0})
@@ -13180,6 +13229,113 @@ def _deliv_merge_client_ws(out):
             w.setdefault("rows", []).extend(rows)
 
 
+# Client-workspace manager rows are actionable in-tool (owner permission
+# 2026-07-28): the audit backend only sees Navreo's Smartlead, so client rows'
+# reconnect / re-enable / pause / restore run directly against the owning
+# workspace's Smartlead — the same calls the backend makes on the Navreo side.
+# Row ids are "ws-<workspace>-<smartlead_id>" (minted by _deliv_merge_client_ws)
+# so a client id can never collide with a backend account id.
+_WS_ROW_ID_RE = re.compile(r"^ws-([A-Za-z0-9_-]+?)-(\d+)$")
+
+
+def _client_ws_ids(raw_ids):
+    """(workspace, smartlead_id) pairs for every client-row id in raw_ids."""
+    out = []
+    for s in raw_ids:
+        m = _WS_ROW_ID_RE.match(str(s).strip())
+        if m:
+            out.append((m.group(1), int(m.group(2))))
+    return out
+
+
+def _client_ws_restore_cap(ws, slid, outlook):
+    """The cap a client box gets back on restore: its own last non-zero cap
+    from the daily stats history (client fleets hand-set caps — asteri runs
+    50/day Gmail boxes — so Navreo's house 15/2 would clobber them). House
+    caps only as the last resort for a box with no recorded history."""
+    try:
+        rows = sb("GET", "mailbox_stats_daily?workspace=eq.%s&smartlead_id=eq.%s"
+                         "&message_per_day=gt.0&select=message_per_day"
+                         "&order=stat_date.desc&limit=1" % (ws, slid)) or []
+        if rows and rows[0].get("message_per_day"):
+            return int(rows[0]["message_per_day"])
+    except Exception:  # noqa: BLE001 — fall through to house caps
+        pass
+    return 2 if outlook else 15
+
+
+def _client_ws_action(action, pairs):
+    """Run one manager action for client-workspace boxes. Returns
+    (ok, skipped, failed, message). Smartlead writes use the owning
+    workspace's key; the mirror row is patched immediately so the next
+    bundle merge shows the new state without waiting for tonight's sync."""
+    ok = skipped = failed = 0
+    msgs = []
+    if action == "reconnect":
+        # Smartlead exposes reconnection only as a per-account bulk retry of
+        # every failed box (no per-box endpoint) — fire it once per workspace;
+        # the boxes clicked are covered by their workspace's sweep.
+        for ws in sorted({w for w, _ in pairs}):
+            n = sum(1 for w, _ in pairs if w == ws)
+            try:
+                _smartlead_json("POST", "/email-accounts/reconnect-failed-email-accounts",
+                                {}, workspace=ws, timeout=120)
+                ok += n
+            except Exception as e:  # noqa: BLE001 — Smartlead rate-limits this to ~1/day
+                failed += n
+                msgs.append("%s: %s" % (ws, str(e)[:120]))
+        return ok, skipped, failed, "; ".join(msgs)
+    rows = {}
+    slids = sorted({str(sl) for _, sl in pairs})
+    for i in range(0, len(slids), 80):
+        for r in sb("GET", "mailboxes?smartlead_id=in.(%s)&workspace=neq.navreo"
+                           "&select=smartlead_id,workspace,account_type,message_per_day"
+                           % ",".join(slids[i:i + 80])) or []:
+            rows[(r.get("workspace"), r.get("smartlead_id"))] = r
+    pol = MAILBOX_SETTINGS_POLICY.get("providers") or {}
+    for ws, sl in pairs:
+        r = rows.get((ws, sl)) or {}
+        outlook = (r.get("account_type") == "OUTLOOK")
+        wp = ((pol.get("microsoft" if outlook else "google") or {}).get("warmup") or {})
+        try:
+            if action == "reenable":
+                _smartlead_json("POST", "/email-accounts/%s/warmup" % sl,
+                                {"warmup_enabled": True,
+                                 "total_warmup_per_day": ((wp.get("per_day") or {}).get("value") or 10),
+                                 "daily_rampup": 2,
+                                 "reply_rate_percentage": ((wp.get("reply_rate_pct") or {}).get("value") or 30)},
+                                workspace=ws)
+                sb("PATCH", "mailboxes?workspace=eq.%s&smartlead_id=eq.%s" % (ws, sl),
+                   {"warmup_enabled": True, "warmup_status": "ACTIVE"})
+            elif action == "capacity-pause":
+                if not (r.get("message_per_day") or 0):
+                    skipped += 1
+                    continue
+                _smartlead_json("POST", "/email-accounts/%s" % sl,
+                                {"max_email_per_day": 0}, workspace=ws)
+                sb("PATCH", "mailboxes?workspace=eq.%s&smartlead_id=eq.%s" % (ws, sl),
+                   {"message_per_day": 0})
+            elif action == "capacity-resume":
+                if r.get("message_per_day"):
+                    skipped += 1
+                    continue
+                cap = _client_ws_restore_cap(ws, sl, outlook)
+                _smartlead_json("POST", "/email-accounts/%s" % sl,
+                                {"max_email_per_day": cap}, workspace=ws)
+                sb("PATCH", "mailboxes?workspace=eq.%s&smartlead_id=eq.%s" % (ws, sl),
+                   {"message_per_day": cap})
+            else:
+                failed += 1
+                msgs.append("unknown action %s" % action)
+                continue
+            ok += 1
+        except Exception as e:  # noqa: BLE001 — keep going, report per box
+            failed += 1
+            msgs.append("ws-%s-%s: %s" % (ws, sl, str(e)[:100]))
+        time.sleep(0.35)  # shared 200req/min Smartlead budget
+    return ok, skipped, failed, "; ".join(msgs[:5])
+
+
 def _deliv_bundle_run_bg_inner():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
@@ -17111,6 +17267,50 @@ class Handler(SimpleHTTPRequestHandler):
                                 "and set 132 Google boxes to 4/day on 2026-07-26. Caps are now "
                                 "tiered per provider by outlook-reply-caps and google-reply-caps."},
                     410)
+            # Client-workspace rows (ids "ws-<workspace>-<id>") never exist in
+            # the audit backend — their actions run in-tool against the owning
+            # workspace's Smartlead; any backend ids on the same click still
+            # forward to the backend and the counts merge.
+            act = path[len("/api/deliverability/"):].split("?")[0].strip("/")
+            if act in ("reconnect", "reenable", "capacity-pause", "capacity-resume"):
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                one = (q.get("id") or [""])[0]
+                many = [s for s in (q.get("ids") or [""])[0].split(",") if s]
+                raw = [one] if one else many
+                cli = _client_ws_ids(raw)
+                if cli:
+                    rest = [s for s in raw if not _WS_ROW_ID_RE.match(s)]
+                    ok, skipped, failed, msg = _client_ws_action(act, cli)
+                    log_activity(path, {"client_ids": len(cli), "ok": ok, "skipped": skipped,
+                                        "failed": failed, "message": msg[:200]},
+                                 actor=self._authed_email() or "app",
+                                 action="client-ws-" + act, entity="deliverability")
+                    b = {}
+                    if rest:
+                        try:
+                            b = _deliv_backend_json_retry(
+                                "POST", act + "?ids=" + ",".join(rest), timeout=170) or {}
+                        except Exception as e:  # noqa: BLE001
+                            b = {"error": str(e)[:160]}
+                    if one:  # single-row shape: {ok, message}
+                        return self._json({"ok": failed == 0, "message": msg})
+                    # bulk shapes mirror the backend's per-action counters
+                    if act == "reconnect":
+                        out = {"count": ok + int(b.get("count") or 0)}
+                    elif act == "reenable":
+                        out = {"ok": ok + int(b.get("ok") or 0),
+                               "failed": failed + int(b.get("failed") or 0)}
+                    elif act == "capacity-pause":
+                        out = {"paused": ok + int(b.get("paused") or 0),
+                               "skipped": skipped + int(b.get("skipped") or 0)}
+                    else:
+                        out = {"resumed": ok + int(b.get("resumed") or 0),
+                               "skipped": skipped + int(b.get("skipped") or 0)}
+                    err = b.get("error") or (msg if (failed and not ok) else "")
+                    if err:
+                        out["error"] = str(err)[:200]
+                    return self._json(out)
             return self._proxy_deliverability("POST")
         setter_route = setter.POST_ROUTES.get(path)
         if setter_route:
