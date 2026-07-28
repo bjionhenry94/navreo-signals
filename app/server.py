@@ -13259,7 +13259,7 @@ def _deliv_merge_client_ws(out):
     boxes = sb_get_all(
         "mailboxes?select=smartlead_id,email,domain,workspace,tags,message_per_day,"
         "warmup_enabled,warmup_status,blocked_reason,smtp_ok,imap_ok,smtp_host,"
-        "last_synced_at&workspace=in.(%s)" % ws_in) or []
+        "campaign_count,last_synced_at&workspace=in.(%s)" % ws_in) or []
     newest = max((str(r.get("last_synced_at") or "") for r in boxes), default="")
     if not boxes or newest < (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat():
         raise RuntimeError("client mirror stale or empty (newest=%s)" % (newest or "none"))
@@ -13293,7 +13293,14 @@ def _deliv_merge_client_ws(out):
             row.update(kind="warmupoff",
                        reason=str(r.get("blocked_reason") or "")[:160])
             view_rows["warmupoff"].append(row)
-        elif not cap:
+        elif not cap or not (r.get("campaign_count") or 0):
+            # In warm-up = warming but not yet sending: either capped at 0, or
+            # attached to no campaign at all (a pre-launch workspace like grout
+            # warms 120 boxes at cap 20 with campaign_count 0 — healthy-looking
+            # but genuinely still warming, so it belongs in this tab, not
+            # dropped as "healthy/no view" the way a launched sender is). This
+            # is what gives a newly-integrated workspace the same In-warm-up
+            # visibility Navreo's own warming inventory gets.
             row["kind"] = "ok"
             view_rows["inwarmup"].append(row)
     for v, rows in view_rows.items():
