@@ -180,7 +180,7 @@
 .ah .splitlbl b{font-weight:600;color:var(--ink)}
 
 .ah .rank{display:flex;flex-direction:column}
-.ah .rrow{display:grid;grid-template-columns:20px minmax(150px,1fr) 54px 44px 52px 50px 62px 62px;gap:11px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.ah .rrow{display:grid;grid-template-columns:20px minmax(180px,1fr) 62px 62px 70px 70px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
 .ah .rcost{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 .ah .rcost.mute{color:var(--ink-3)}
 .ah .rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
@@ -1705,12 +1705,8 @@ function renderRank() {
     });
     var top = rows.slice(0, 8);
     $("rank-scope").textContent = "· " + rangeLabel();
-    var maxRate = 0; top.forEach(function (c) { var rt = c.sent ? c.replied / c.sent : 0; if (rt > maxRate) maxRate = rt; });
-    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
     top.forEach(function (c, i) {
-      var rate = c.sent ? c.replied / c.sent : 0;
-      var w = Math.max(2, Math.round(rate / (maxRate || 1) * 100));
-      var bad = rate < 0.01;
       var scLT = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
       var noYes = scLT && (scLT.sent || 0) >= 2000 && !(scLT.positives || 0);
       var cost = campCost(c.id);
@@ -1720,8 +1716,6 @@ function renderRank() {
         (noYes ? '<span class="apill mute" title="Lots of replies, but none has been a real yes yet">replies, no yes yet</span>' : "") +
         (!c.active ? '<span class="apill mute">finished</span>' : "") +
         '</div><div class="rsub">' + escq(c.client) + " · " + rangeLabel() + "</div></div>" +
-        '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
-        '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
         '<span class="rint">' + fmtN(c.pos) + '</span><span class="rmtg">' + fmtN(c.mtg) + "</span>" +
         '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
         '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
@@ -1752,20 +1746,14 @@ function renderRank() {
   });
   var topLT = rowsLT.slice(0, 8);
   $("rank-scope").textContent = "· all time — the " + rangeLabel() + " view is warming up";
-  var maxRateLT = 0; topLT.forEach(function (c) { var rt = c.sent ? c.replied / c.sent : 0; if (rt > maxRateLT) maxRateLT = rt; });
-  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
   topLT.forEach(function (c, i) {
-    var rate = c.sent ? c.replied / c.sent : 0;
-    var w = Math.max(2, Math.round(rate / (maxRateLT || 1) * 100));
-    var bad = rate < 0.01;
     var cost = campCost(c.id);
     sLT += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
       '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
       (i === 0 && (c.meetings || 0) > 0 ? '<span class="apill green">Best</span>' : "") +
       (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
       '</div><div class="rsub">' + escq(campClient(c.id, c)) + " · all time</div></div>" +
-      '<div class="rbar' + (bad ? " bad" : "") + '" style="width:' + w + '%"></div>' +
-      '<span class="rrate' + (bad ? " bad" : "") + '">' + (Math.round(rate * 1000) / 10) + "%</span>" +
       '<span class="rint">' + fmtN(c.positives || 0) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span>" +
       '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
       '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
