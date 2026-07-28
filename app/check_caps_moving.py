@@ -186,9 +186,75 @@ def main() -> int:
         print("\nFAILURES")
         for f in failures:
             print("  -", f)
+
+    _report_out(report, failures, warnings)
+
+    if failures:
         return 1
     print("\nAll engines running and caps moving.")
     return 0
+
+
+def _report_out(report, failures, warnings):
+    """Deliver the daily verdict where a human will see it:
+
+      1. ALWAYS append it to app_activity_log (action='caps-check') so it lands
+         in the tool's activity feed alongside the cap moves themselves.
+      2. If CAPS_ALERT_HOOK is set (a Slack incoming-webhook or a Make webhook —
+         both are just 'POST JSON to a URL'), post a formatted summary there so
+         the verdict reaches Slack/email without anyone opening a log.
+
+    Posts EVERY day, green or red — the whole point was to keep visible check
+    that caps are moving, not only to alarm on failure. A silent green channel
+    is exactly the blind spot that hid the legacy engine's three dead days.
+    Delivery never changes the exit code: a webhook outage must not read as a
+    caps failure."""
+    ok = not failures
+    head = "✅ Caps moving" if ok else "🔴 Caps check FAILED"
+    lines = [f"{head} — {dt.date.today()}"]
+    for e in report:
+        tag = "excluded" if e["excluded"] else ("ok" if e["ok"] else "STALE")
+        lines.append(f"• {e['provider']}/{e['workspace']}: {tag}, "
+                     f"last move {e['last_cap_move'] or 'never'} "
+                     f"({e['boxes_moved_on_last_move']} boxes)")
+    for f in failures:
+        lines.append(f"⚠ {f}")
+    for w in warnings:
+        lines.append(f"· {w}")
+    text = "\n".join(lines)
+
+    try:
+        server.sb("POST", "app_activity_log",
+                  {"actor": "cron", "endpoint": "/api/cron/caps-check",
+                   "action": "caps-check",
+                   "entity": "deliverability",
+                   "payload": {"ok": ok, "failures": failures,
+                               "warnings": warnings, "groups": report}})
+    except Exception as e:  # noqa: BLE001 — logging is best-effort
+        print(f"(activity-log write failed: {e})", file=sys.stderr)
+
+    hook = server.KEYS.get("CAPS_ALERT_HOOK") or os.environ.get("CAPS_ALERT_HOOK")
+    if not hook:
+        print("\n(CAPS_ALERT_HOOK not set — logged to activity feed only; "
+              "add the webhook URL to Render's env group to reach Slack)",
+              file=sys.stderr)
+        return
+    # Slack incoming-webhooks want {"text": ...}; Make webhooks accept any JSON
+    # and ignore unknown keys — so one payload shape satisfies both.
+    payload = {"text": text, "ok": ok, "date": str(dt.date.today()),
+               "failures": failures, "warnings": warnings}
+    for _ in range(2):
+        try:
+            server.http_json("POST", hook, {}, payload)
+            print("\n(alert posted to CAPS_ALERT_HOOK)", file=sys.stderr)
+            return
+        except ValueError:
+            # Make/Slack answer a bare non-JSON 2xx — that IS success.
+            print("\n(alert posted to CAPS_ALERT_HOOK)", file=sys.stderr)
+            return
+        except Exception as e:  # noqa: BLE001 — retry once, then give up quietly
+            last = str(e)[:200]
+    print(f"\n(alert POST failed, logged to feed only: {last})", file=sys.stderr)
 
 
 if __name__ == "__main__":
