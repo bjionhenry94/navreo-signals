@@ -5093,31 +5093,6 @@ def _subseq_enrolled_emails(sub_campaign_id, max_pages: int = 10):
     return emails
 
 
-def _prime_subseq_list_cache(campaign_ids):
-    """One GET /campaigns/ covers the subsequence lookup for EVERY stale
-    parent campaign in `campaign_ids` (instead of _sl_find_subsequences
-    re-fetching the same full list once per campaign). Best-effort: on any
-    failure the per-campaign path retries individually."""
-    now = _time.time()
-    missing = [str(c) for c in campaign_ids
-               if not (_SUBSEQ_LIST_CACHE.get(str(c))
-                       and (now - _SUBSEQ_LIST_CACHE[str(c)]["at"]) < _SUBSEQ_LIST_TTL)]
-    if not missing:
-        return
-    try:
-        resp = _sl_get("/campaigns/")
-        rows = resp if isinstance(resp, list) else None
-        if rows is None:
-            return
-        for cid in missing:
-            subs = [{"id": r.get("id"), "name": r.get("name")} for r in rows
-                    if isinstance(r, dict) and r.get("id") is not None
-                    and r.get("parent_campaign_id") and str(r.get("parent_campaign_id")) == cid]
-            _SUBSEQ_LIST_CACHE[cid] = {"at": now, "list": subs}
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _reconcile_unresolved_against_smartlead(candidates):
     """`candidates` = [(raw_row, out_dict)]. Returns the out_dicts that are
     STILL unresolved after checking Smartlead ground truth. A lead found in
@@ -5128,25 +5103,67 @@ def _reconcile_unresolved_against_smartlead(candidates):
     by_campaign = {}
     for r, o in candidates:
         by_campaign.setdefault(str(r.get("smartlead_campaign_id")), []).append((r, o))
-    _prime_subseq_list_cache(by_campaign.keys())
     kept = []
     for cid, group in by_campaign.items():
-        enrolled = set()
-        try:
-            subs = _subsequences_for_campaign_cached(cid)
-        except Exception:  # noqa: BLE001
-            subs = []
-        for s in subs:
-            ems = _subseq_enrolled_emails(s.get("id"))
-            if ems:
-                enrolled |= ems
+        # CACHE-ONLY (perf fix 2026-07-28): warming a campaign's subsequence
+        # data inline cost 10-40s on cold caches - the whole tray endpoint
+        # stalled or timed out, which the owner saw as a tray that vanishes
+        # and reappears. A cold campaign now keeps its rows AS-IS (their own
+        # principle: a false positive in the tray beats a hidden miss) and
+        # warms in a background thread, so the NEXT fetch reconciles for real.
+        cached = _enrolled_emails_cached_only(cid)
+        if cached is None:
+            kept.extend(o for _r, o in group)
+            _warm_subseq_caches_async(cid)
+            continue
         for r, o in group:
             em = str(r.get("lead_email") or "").strip().lower()
-            if em and em in enrolled:
+            if em and em in cached:
                 _apply_patch(r, {"added_to_subsequence": True, "subsequence_decision": "pushed"})
             else:
                 kept.append(o)
     return kept
+
+
+def _enrolled_emails_cached_only(cid):
+    """The union of enrolled emails across `cid`'s subsequences, answered
+    ONLY from fresh caches - None when anything would need a network fetch."""
+    now = _time.time()
+    ent = _SUBSEQ_LIST_CACHE.get(str(cid))
+    if not ent or (now - ent["at"]) >= _SUBSEQ_LIST_TTL:
+        return None
+    enrolled = set()
+    for s in ent["list"]:
+        e = _SUBSEQ_ENROLL_CACHE.get(str(s.get("id")))
+        if not e or (now - e["at"]) >= _SUBSEQ_ENROLL_TTL:
+            return None
+        enrolled |= e["emails"]
+    return enrolled
+
+
+_SUBSEQ_WARMING = set()
+_SUBSEQ_WARMING_LOCK = threading.Lock()
+
+
+def _warm_subseq_caches_async(cid):
+    """Fill campaign `cid`'s subsequence-list + enrolled-email caches off the
+    request thread. Dedup-guarded so a fetch burst warms each campaign once."""
+    cid = str(cid)
+    with _SUBSEQ_WARMING_LOCK:
+        if cid in _SUBSEQ_WARMING:
+            return
+        _SUBSEQ_WARMING.add(cid)
+
+    def _worker():
+        try:
+            for s in _subsequences_for_campaign_cached(cid):
+                _subseq_enrolled_emails(s.get("id"))
+        except Exception:  # noqa: BLE001 - warming is best-effort by definition
+            pass
+        finally:
+            with _SUBSEQ_WARMING_LOCK:
+                _SUBSEQ_WARMING.discard(cid)
+    threading.Thread(target=_worker, daemon=True, name=f"subseq-warm-{cid}").start()
 
 
 # Categories a SENT thread may still be chased on. Union of every positive
