@@ -395,7 +395,7 @@
 
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">Replies by the day we sent</div>
+            <div class="card-kick">Reply rate over time</div>
             <div class="seg" role="group" aria-label="Date range" data-seg="week">
               <button data-range="7" aria-pressed="false">7d</button>
               <button data-range="14" aria-pressed="false">14d</button>
@@ -569,7 +569,6 @@ function j(url) {
 }
 
 var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null;
-var HUBCACHE = {};           // days -> analytics-hub payload (weekday presets)
 // Sent and Bounces default OFF: their scale flattens Replies/Interested/
 // Meetings (the lines a founder reads); the landing card owns the bounce
 // story and both stay one chip-tap away.
@@ -1073,35 +1072,90 @@ function landStats(daysBack) {
   var pct = Math.max(0, Math.min(100, Math.round(100 - bounced / sent * 100)));
   return { pct: pct, sent: sent, lastDay: d[idxs[0]] };
 }
+// Fleet reply rate, day by day. A quiet day is not a rate — under WK_MIN_SENT
+// the day is a gap in the line, not a zero.
+var WK_MIN_SENT = 200;
+function weekSeries(n) {
+  var out = { days: [], rate: [], sent: [] };
+  var s = TRENDS && TRENDS.series;
+  if (!s || !s.days || !s.days.length) return out;
+  var from = Math.max(0, s.days.length - n);
+  for (var i = from; i < s.days.length; i++) {
+    var sent = s.sent[i] || 0, rp = s.reply_pct[i];
+    out.days.push(s.days[i]);
+    out.sent.push(sent);
+    out.rate.push(rp == null || sent < WK_MIN_SENT ? null : rp);
+  }
+  return out;
+}
 function renderWeek() {
-  var payload = HUBCACHE[state.week] || HUB;
-  var wk = payload && payload.weekday && payload.weekday[ckey()];
-  if (!wk) { $("week-svg").innerHTML = ""; $("week-sub").textContent = "No replies in this window."; $("week-take").textContent = ""; return; }
-  var vals = [wk[0], wk[1], wk[2], wk[3], wk[4], (wk[5] || 0) + (wk[6] || 0)];
-  var names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat+Sun"];
-  var max = Math.max.apply(null, vals.concat([1]));
-  var best = vals.indexOf(Math.max.apply(null, vals));
-  var Xs = [48, 144, 240, 336, 432, 528];
-  var s = '<line x1="24" y1="134" x2="596" y2="134" stroke="var(--line)" stroke-width="1"/>';
-  vals.forEach(function (v, i) {
-    var h = Math.max(3, Math.round(v / max * 100)), y = 134 - h;
-    s += '<rect x="' + Xs[i] + '" y="' + y + '" width="44" height="' + h + '" rx="' + (h < 8 ? 3 : 4) + '" fill="' + (i === best ? "var(--orange)" : "var(--ink)") + '"/>';
-    s += '<text x="' + (Xs[i] + 22) + '" y="' + (y - 8) + '" font-size="' + (i === best ? 12 : 11) + '"' +
-      (i === best ? ' font-weight="600" fill="var(--ink)"' : ' fill="var(--ink-3)"') + ' text-anchor="middle" class="num">' + fmtN(v) + "</text>";
-    s += '<text x="' + (Xs[i] + 22) + '" y="152" font-size="' + (i === 5 ? 10 : 11) + '"' +
-      (i === best ? ' font-weight="600" fill="var(--ink-2)"' : ' fill="var(--ink-3)"') + ' text-anchor="middle">' + names[i] + "</text>";
+  var d = weekSeries(state.week);
+  var pts = [];
+  for (var i = 0; i < d.rate.length; i++) if (d.rate[i] != null) pts.push(i);
+  if (pts.length < 2) {
+    $("week-svg").innerHTML = "";
+    $("week-sub").textContent = "Not enough sending in this window to read a rate.";
+    $("week-take").textContent = "";
+    return;
+  }
+
+  var vals = pts.map(function (i2) { return d.rate[i2]; });
+  var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  var pad = Math.max((hi - lo) * 0.25, 0.15);
+  lo = Math.max(0, lo - pad); hi = hi + pad;
+
+  var L = 44, R = 52, T = 16, B = 30, W = 620, H = 170;
+  var pw = W - L - R, ph = H - T - B, den = (d.days.length - 1) || 1;
+  var X = function (i2) { return L + i2 / den * pw; };
+  var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * ph; };
+
+  // window-weighted average, drawn as the baseline the line is judged against
+  var S = 0, Rp = 0;
+  pts.forEach(function (i2) { S += d.sent[i2]; Rp += d.sent[i2] * d.rate[i2] / 100; });
+  var avg = S > 0 ? Rp / S * 100 : null;
+
+  var s = "";
+  [hi, lo].forEach(function (v) {
+    s += '<line x1="' + L + '" y1="' + Y(v).toFixed(1) + '" x2="' + (L + pw) + '" y2="' + Y(v).toFixed(1) +
+      '" stroke="var(--line)" stroke-width="1"/>' +
+      '<text x="' + (L - 8) + '" y="' + (Y(v) + 4).toFixed(1) + '" font-size="10" fill="var(--ink-3)" ' +
+      'text-anchor="end" class="num">' + v.toFixed(1) + "%</text>";
   });
+  if (avg != null && avg > lo && avg < hi) {
+    s += '<line x1="' + L + '" y1="' + Y(avg).toFixed(1) + '" x2="' + (L + pw) + '" y2="' + Y(avg).toFixed(1) +
+      '" stroke="var(--brown-300)" stroke-width="1" stroke-dasharray="3 3"/>';
+  }
+
+  s += '<path d="' + pts.map(function (i2, j) {
+    return (j ? "L" : "M") + X(i2).toFixed(1) + " " + Y(d.rate[i2]).toFixed(1);
+  }).join(" ") + '" fill="none" stroke="' + COL.rate + '" stroke-width="2.25" ' +
+    'stroke-linejoin="round" stroke-linecap="round"/>';
+
+  var last = pts[pts.length - 1];
+  s += '<circle cx="' + X(last).toFixed(1) + '" cy="' + Y(d.rate[last]).toFixed(1) + '" r="3.5" fill="' + COL.rate + '"/>' +
+    '<text x="' + (X(last) + 8).toFixed(1) + '" y="' + (Y(d.rate[last]) + 4).toFixed(1) + '" font-size="12" ' +
+    'font-weight="600" fill="' + COL.rate + '" class="num">' + d.rate[last].toFixed(1) + "%</text>";
+
+  s += '<text x="' + L + '" y="' + (H - 8) + '" font-size="10" fill="var(--ink-3)">' + dlabel(d.days[0]) + "</text>" +
+    '<text x="' + (L + pw) + '" y="' + (H - 8) + '" font-size="10" fill="var(--ink-3)" text-anchor="end">' +
+    dlabel(d.days[d.days.length - 1]) + "</text>";
+
   $("week-svg").innerHTML = s;
-  $("week-svg").setAttribute("aria-label", names[best] + " sends get the most replies");
-  var weekdayVals = vals.slice(0, 5).slice().sort(function (a, b) { return a - b; });
-  var median = weekdayVals[2] || 1;
-  var quiet = vals.indexOf(Math.min.apply(null, vals.slice(0, 5)));
-  $("week-sub").textContent = names[quiet] + " is the quiet day.";
-  $("week-take").textContent = vals[best] >= median * 1.8
-    ? names[best] + " gets about double the replies — send your best stuff " + names[best] + "."
-    : (vals[best] >= median * 1.2
-      ? names[best] + " gets the most replies — send more on " + names[best] + "."
-      : "Replies spread evenly — every weekday works.");
+  $("week-svg").setAttribute("aria-label",
+    "Reply rate over the last " + state.week + " days, now " + d.rate[last].toFixed(1) + "%");
+
+  $("week-sub").textContent = avg == null ? "" :
+    "Averaging " + avg.toFixed(1) + "% over the last " + state.week + " days.";
+
+  // first half vs second half of the window — the direction that matters
+  var half = Math.ceil(pts.length / 2);
+  var mean = function (arr) { return arr.reduce(function (a, b) { return a + b; }, 0) / (arr.length || 1); };
+  var a0 = mean(vals.slice(0, half)), a1 = mean(vals.slice(half));
+  $("week-take").textContent = a1 >= a0 * 1.15
+    ? "Reply rate is climbing — keep the current messaging running."
+    : (a1 <= a0 * 0.85
+      ? "Reply rate is sliding — refresh the copy on your biggest senders."
+      : "Reply rate is holding steady — nothing to fix here.");
 }
 
 /* ── lane 4: ranking + dying + openers ── */
@@ -1278,46 +1332,19 @@ function bncCampaigns() {
   return out;
 }
 
-// worst list that carries enough volume to mean anything; falls back to a small
-// one only when that is all a client has, and says so
-function bncWorst(bad) {
-  var solid = bad.filter(function (c) { return !c.small; })
-                 .sort(function (a, b) { return b.pct - a.pct; });
-  if (solid.length) return solid[0];
-  return bad.slice().sort(function (a, b) { return b.pct - a.pct; })[0];
-}
-
+// Always the offending CAMPAIGNS, never the client — a client name is not a
+// thing you can pause. The client rides along so the take-line can still say
+// who to call. Small lists surface only when they are all there is.
 function bncRows() {
-  var camps = bncCampaigns();
-  var bad = camps.filter(function (c) { return c.pct >= BNC_LIMIT; });
-
-  if (state.client !== "All") {
-    return bad.filter(function (c) { return !c.small; })
-              .sort(function (a, b) { return b.bounced - a.bounced; })
-              .map(function (c) {
-                return { label: shortName(c.name), bounced: c.bounced,
-                         pct: c.pct, small: false, names: [c.name] };
-              });
-  }
-
-  var g = {};
-  camps.forEach(function (c) {
-    g[c.client] = g[c.client] || { label: c.client, bounced: 0, bad: [] };
-    if (c.pct >= BNC_LIMIT) { g[c.client].bad.push(c); g[c.client].bounced += c.bounced; }
-  });
-  return Object.keys(g).map(function (k) { return g[k]; })
-    .filter(function (r) { return r.bad.length; })
-    .map(function (r) {
-      var worst = bncWorst(r.bad);
-      r.pct = worst.pct; r.small = !!worst.small;
-      // name the lists worth naming — biggest contributors first
-      var named = r.bad.filter(function (c) { return !c.small; });
-      if (!named.length) named = r.bad;
-      r.names = named.sort(function (a, b) { return b.bounced - a.bounced; })
-                     .map(function (c) { return c.name; });
-      return r;
-    })
-    .sort(function (a, b) { return b.bounced - a.bounced; });
+  var bad = bncCampaigns().filter(function (c) { return c.pct >= BNC_LIMIT; });
+  var solid = bad.filter(function (c) { return !c.small; });
+  if (solid.length) bad = solid;
+  return bad.sort(function (a, b) { return b.bounced - a.bounced; })
+            .map(function (c) {
+              return { label: shortName(c.name), client: c.client,
+                       bounced: c.bounced, pct: c.pct, small: !!c.small,
+                       names: [c.name] };
+            });
 }
 
 function renderBounce() {
@@ -1375,11 +1402,13 @@ function renderBounce() {
   }
 
   var rows = bncRows();
-  $("bnc-kick").textContent = state.client === "All" ? "Where it comes from" : "Which lists";
+  $("bnc-kick").textContent = "Which campaigns";
   $("bnc-rows").innerHTML = rows.length
     ? rows.slice(0, 3).map(function (r) {
         return '<div class="bnc-row">' +
           '<span class="bnc-name">' + r.label +
+            (state.client === "All" && r.client && r.label.indexOf(r.client) < 0
+              ? ' <span class="bnc-small">' + r.client + '</span>' : '') +
             (r.small ? ' <span class="bnc-small">small list — treat as a hint</span>' : '') + '</span>' +
           '<span class="bnc-came">' + r.bounced.toLocaleString("en-US") + ' came back</span>' +
           '<span class="bnc-pct bnc-' + bncBand(r.pct) + '">' + r.pct.toFixed(1) + '%</span>' +
@@ -1388,8 +1417,9 @@ function renderBounce() {
     : '<div class="subline" style="padding-top:8px">Every list is under 2%.</div>';
 
   $("bnc-take").textContent = rows.length
-    ? (state.client === "All" ? "Call " + rows[0].label + " — pause " : "Pause ") +
-      rows[0].names.slice(0, 2).map(shortName).join(" and ") +
+    ? "Pause " + rows[0].label +
+      (state.client === "All" && rows[0].client && rows[0].label.indexOf(rows[0].client) < 0
+        ? " (" + rows[0].client + ")" : "") +
       ", get those addresses re-checked, then switch them back on."
     : "Nothing over 2% — keep sending.";
 }
@@ -1432,11 +1462,9 @@ document.querySelectorAll(".ah .seg").forEach(function (seg) {
     var kind = seg.getAttribute("data-seg");
     if (kind === "trend") { state.trend = n; renderTrend(); }
     else if (kind === "bounce") { state.bounce = n; renderBounce(); }
-    else if (kind === "week") {
-      state.week = n;
-      if (HUBCACHE[n]) renderWeek();
-      else j("/api/analytics-hub?days=" + n).then(function (p) { HUBCACHE[n] = p; renderWeek(); }).catch(function () { renderWeek(); });
-    }
+    // the reply-rate line reads straight off the 30-day trends series, so the
+    // range toggle is a pure slice — no refetch
+    else if (kind === "week") { state.week = n; renderWeek(); }
   });
 });
 $("ah-lchips").addEventListener("click", function (e) {
@@ -1463,7 +1491,6 @@ function boot() {
     j("/api/deliverability/_audit"),
   ]).then(function (rs) {
     HUB = rs[0].status === "fulfilled" && !rs[0].value.error ? rs[0].value : null;
-    if (HUB) HUBCACHE[30] = HUB;
     TRENDS = rs[1].status === "fulfilled" ? rs[1].value : null;
     SCORE = rs[2].status === "fulfilled" ? rs[2].value : null;
     INS = rs[3].status === "fulfilled" ? rs[3].value : null;
