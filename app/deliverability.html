@@ -765,7 +765,18 @@ function priorComparison() {
 }
 
 function renderChips() {
-  var names = ["All"].concat((HUB && HUB.clients) || []);
+  // Chips come from every source that knows a client name — hub RPC, the
+  // client-windows sweep, and the scorecard — so one cold/failed call can
+  // never leave the page with just "All clients" (seen live after the
+  // 2026-07-28 redeploy, when the hub RPC was still waking up).
+  var seen = {}, names = [];
+  function add(c) { if (c && c !== "__all" && !seen[c]) { seen[c] = 1; names.push(c); } }
+  ((HUB && HUB.clients) || []).forEach(add);
+  if (CW && CW.windows && CW.windows["30"]) Object.keys(CW.windows["30"]).forEach(add);
+  if (SCORE && SCORE.campaigns) {
+    Object.keys(SCORE.campaigns).forEach(function (id) { add(campClient(id, SCORE.campaigns[id])); });
+  }
+  names = ["All"].concat(names);
   $("ah-chips").innerHTML = names.map(function (c) {
     return '<button class="chip' + (state.client === c ? " on" : "") + '" data-client="' + escq(c) + '" aria-pressed="' + (state.client === c) + '">' + (c === "All" ? "All clients" : escq(c)) + "</button>";
   }).join("");
@@ -1888,6 +1899,15 @@ function loadCW() {
     if (++_cwPolls <= 20) setTimeout(loadCW, 20000);
   }).catch(function () { if (++_cwPolls <= 20) setTimeout(loadCW, 20000); });
 }
+// the hub RPC can fail once on a cold boot (its cache never stores errors) —
+// retry it instead of leaving the page hub-less until a manual reload
+var _hubPolls = 0;
+function loadHub() {
+  j("/api/analytics-hub?days=30").then(function (d) {
+    if (d && !d.error) { HUB = d; renderAll(); return; }
+    if (++_hubPolls <= 10) setTimeout(loadHub, 15000);
+  }).catch(function () { if (++_hubPolls <= 10) setTimeout(loadHub, 15000); });
+}
 function boot() {
   $("ah-databar").classList.remove("show");
   Promise.allSettled([
@@ -1918,6 +1938,7 @@ function boot() {
     var cwv = rs[8].status === "fulfilled" ? rs[8].value : null;
     if (cwv && !cwv.building && cwv.windows) CW = cwv;
     else setTimeout(loadCW, 20000);
+    if (!HUB) setTimeout(loadHub, 15000);
     if (!HUB && !SCORE) {
       $("ah-databar-msg").textContent = "Live data unavailable right now.";
       $("ah-databar").classList.add("show");
