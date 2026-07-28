@@ -1950,7 +1950,26 @@ function applyLeadPanelHidden() {
     btn.title = PANEL_HIDDEN ? "Show lead details" : "Hide lead details";
   }
 }
+/* Every reply the pane has ever shown, by row id -> the four fields that
+   identify the REPLY rather than the row (bug 2026-07-28). Re-intake deletes a
+   queue row and re-inserts it under a new id, and the same refresh drops the
+   dead id out of QUEUE_ROWS/ALL_ROWS - so at Approve time there is no row
+   object left to read an identity off. Captured here, where the pane provably
+   had the row, this survives the row vanishing underneath it and lets the
+   server re-resolve the send. Never cleared: an id is at most a few fields. */
+const ROW_IDENTITY = {};
+function rememberIdentity(row) {
+  if (!row || row.id === undefined || row.id === null) return;
+  ROW_IDENTITY[row.id] = {
+    workspace: row.workspace,
+    smartlead_campaign_id: row.smartlead_campaign_id,
+    lead_email: row.lead_email,
+    message_id: row.source_message_id || row.message_id,
+  };
+}
+
 function renderDetail(row) {
+  rememberIdentity(row);
   const el = document.getElementById("inboxRight");
   const panelEl = document.getElementById("leadPanel");
   if (!row) {
@@ -3316,14 +3335,12 @@ async function doSend(btn) {
   // The reply's own identity rides along so a stale id can never lose the
   // send (bug 2026-07-28): re-intake swaps a row's id underneath an open tab,
   // and the server re-resolves on these four fields when the id is gone.
-  if (row) {
-    payload.identity = {
-      workspace: row.workspace,
-      smartlead_campaign_id: row.smartlead_campaign_id,
-      lead_email: row.lead_email,
-      message_id: row.source_message_id || row.message_id,
-    };
-  }
+  // Read from ROW_IDENTITY, NOT from `row`: the refresh that orphaned the id
+  // also drops it out of QUEUE_ROWS/ALL_ROWS, so `row` is exactly undefined in
+  // the case this is here to rescue. The cache was filled when the pane
+  // rendered, which is the last moment the row was provably in hand.
+  if (row) rememberIdentity(row);
+  if (ROW_IDENTITY[id]) payload.identity = ROW_IDENTITY[id];
   if (draftEl) payload.body_override = draftEl.innerHTML;
   // The send-gate choice rides along on the same request (spec: no second
   // round trip). No gate rendered for this row (no campaign, or the
