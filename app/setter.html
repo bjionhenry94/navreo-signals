@@ -3295,39 +3295,19 @@ function reapplyEditedDraft(rowId) {
   if (el) el.innerHTML = EDITED_DRAFTS[rowId];
 }
 
-let sendGuardArmedId = null;
 async function doSend(btn) {
   const id = btn.getAttribute("data-id");
   const draftEl = document.querySelector(`.qc-draft[contenteditable][data-id="${CSS.escape(String(id))}"]`);
-  // Guard rails for hand-edited drafts: silently fix em dashes (house rule),
-  // and if the edit removed the resource link the original draft carried,
-  // ask once before sending without it.
+  // Guard rail for hand-edited drafts: silently fix em dashes (house rule).
   if (draftEl && draftEl.innerHTML.includes("—")) {
     draftEl.innerHTML = draftEl.innerHTML.split("—").join(", ");
     if (EDITED_DRAFTS[id] !== undefined) EDITED_DRAFTS[id] = draftEl.innerHTML;
   }
+  // Both send gates removed (booking link 2026-07-20, resource link
+  // 2026-07-28, owner ask): Approve always sends on the first click - no
+  // second-click "send it anyway" confirmation for links or resources.
   const row = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
               ALL_ROWS.find((r) => String(r.id) === String(id));
-  const agent = row ? AGENTS.find((a) => String(a.id) === String(row.agent_id)) : null;
-  // Instructions-only brain: the resource link(s) a draft may use all come
-  // from the agent's instructions text. Warn only when the original draft
-  // actually had one of those links AND the edited body now has none of
-  // them left - a normal edit that keeps at least one stays silent.
-  const instructionUrls = new Set(extractUrls((agent && (agent.instructions || agent.pricing_notes)) || ""));
-  const draftUrls = row ? extractUrls(row.draft_body || "") : [];
-  const draftHadInstructionLink = draftUrls.some((u) => instructionUrls.has(u));
-  const editedUrls = draftEl ? extractUrls(draftEl.innerHTML) : [];
-  const editedHasInstructionLink = editedUrls.some((u) => instructionUrls.has(u));
-  if (draftEl && draftHadInstructionLink && !editedHasInstructionLink && sendGuardArmedId !== id) {
-    sendGuardArmedId = id;
-    showDetailError("The resource link is no longer in this draft. Click Approve again to send without it.");
-    setTimeout(() => { if (sendGuardArmedId === id) sendGuardArmedId = null; }, 6000);
-    return;
-  }
-  // Booking-link send gate removed (owner ask 2026-07-20): a draft with no
-  // booking link now sends on the first Approve click - no second-click
-  // "send it anyway" confirmation. The resource-link gate above is unchanged.
-  sendGuardArmedId = null;
   const restore = busyBtn(btn, "Sending…");
   if (!restore) return;
   // Stated explicitly on every send, never inferred: the server teaches only
