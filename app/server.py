@@ -8161,12 +8161,13 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     # surface quotes) is credited to that bucket. The headline is COST, not
     # rate: how many emails this offer costs to buy one positive reply and one
     # meeting — the two numbers a founder actually plans against.
-    offer_agg: dict = {}
-    cand = [cid for cid, _n in sorted(by_camp.items(), key=lambda kv: -kv[1])[:20]]
+    # Broadened to top-40 (was 20) so each CLIENT has enough campaigns to build
+    # its own offer table — the table now changes per client (Bjion 2026-07-28).
+    cand = [cid for cid, _n in sorted(by_camp.items(), key=lambda kv: -kv[1])[:40]]
     sc_rows = []
     if cand:
         sc_rows = sb("GET", "campaign_scorecard?smartlead_campaign_id=in.(" +
-                     ",".join(cand) + ")&select=smartlead_campaign_id,name,sent,replied,positives")
+                     ",".join(cand) + ")&select=smartlead_campaign_id,name,workspace,sent,replied,positives")
     sc = {str(r.get("smartlead_campaign_id")): r for r in (sc_rows if isinstance(sc_rows, list) else [])}
     # Meetings are per-campaign distinct booked leads. The archive only carries
     # the navreo workspace, so a client-workspace campaign contributes sends
@@ -8174,6 +8175,8 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     # meeting, so those campaigns are excluded from the meetings column only.
     meet = _reply_archive_meetings(cand) or {}
     meet_covered = set(meet.keys())
+    # aggregate per offer bucket, keyed by group: "All" (whole book) + each client
+    per_group_agg: dict = {}
     for cid in cand:
         row = sc.get(str(cid))
         if not row or (row.get("sent") or 0) < 500:
@@ -8184,28 +8187,36 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             continue
         if not bucket:
             continue
-        a = offer_agg.setdefault(bucket, {"sent": 0, "replies": 0, "pos": 0,
-                                          "meet": 0, "meet_sent": 0, "camps": []})
-        a["sent"] += row.get("sent") or 0
-        a["replies"] += row.get("replied") or 0
-        a["pos"] += row.get("positives") or 0
-        a["camps"].append(row.get("name") or str(cid))
-        if str(cid) in meet_covered:
-            a["meet"] += meet.get(str(cid)) or 0
-            a["meet_sent"] += row.get("sent") or 0
+        client = _client_win_label(row.get("workspace"), row.get("name"))
+        for grp in ("All", client):
+            agg = per_group_agg.setdefault(grp, {})
+            a = agg.setdefault(bucket, {"sent": 0, "replies": 0, "pos": 0,
+                                        "meet": 0, "meet_sent": 0, "camps": []})
+            a["sent"] += row.get("sent") or 0
+            a["replies"] += row.get("replied") or 0
+            a["pos"] += row.get("positives") or 0
+            a["camps"].append(row.get("name") or str(cid))
+            if str(cid) in meet_covered:
+                a["meet"] += meet.get(str(cid)) or 0
+                a["meet_sent"] += row.get("sent") or 0
 
     def _per(sent, n):
         return round(sent / n) if (n and sent) else None
 
-    offers = []
-    for k, a in offer_agg.items():
-        if a["sent"] < 2000:
-            continue
-        offers.append([k, round(a["replies"] / a["sent"] * 100, 1), a["sent"], len(a["camps"]),
-                       _per(a["sent"], a["pos"]), _per(a["meet_sent"], a["meet"]),
-                       a["pos"], a["meet"]])
-    # cheapest positive first; a group with no positives at all sorts last
-    offers.sort(key=lambda o: (o[4] is None, o[4] or 0))
+    def _build_offers(agg):
+        out = []
+        for k, a in agg.items():
+            if a["sent"] < 2000:
+                continue
+            out.append([k, round(a["replies"] / a["sent"] * 100, 1), a["sent"], len(a["camps"]),
+                        _per(a["sent"], a["pos"]), _per(a["meet_sent"], a["meet"]),
+                        a["pos"], a["meet"]])
+        out.sort(key=lambda o: (o[4] is None, o[4] or 0))   # cheapest positive first
+        return out
+
+    by_client = {grp: _build_offers(agg) for grp, agg in per_group_agg.items()}
+    by_client = {grp: offs for grp, offs in by_client.items() if len(offs) >= 2}
+    offers = by_client.get("All", [])
     offer_payload = None
     if len(offers) >= 2:
         win, lose = offers[0], offers[-1]
@@ -8221,6 +8232,7 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
                      "priced in emails per positive reply and per meeting. Whole-life numbers, "
                      "not the last 30 days; meetings count only campaigns in the reply archive."),
             "stats": {"offers": offers},
+            "by_client": by_client,   # per-client offer tables; frontend picks by chip
             "source": src_note,
         }
 

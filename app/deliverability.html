@@ -487,7 +487,7 @@
              did: same question shape, one level up — the ask beats the wording. -->
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">What is the offer? <span style="text-transform:none;letter-spacing:0;font-weight:500">· whole book</span></div>
+            <div class="card-kick">What is the offer? <span id="offer-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· whole book</span></div>
           </div>
           <div id="offer-rows"><div class="subline">Reading the offer off each campaign's copy…</div></div>
           <div class="subline" id="offer-sub">&nbsp;</div>
@@ -1772,12 +1772,21 @@ function renderDying() {
 function renderOffer() {
   var p = bookRow("offer");
   var box = $("offer-rows");
-  if (!p || !p.stats || !p.stats.offers || p.stats.offers.length < 2) {
-    box.innerHTML = '<div class="subline">Not enough sending behind any one offer yet.</div>';
+  // per-client offer table when the cron has one for this client, else whole
+  // book (Bjion 2026-07-28). by_client["All"] === the whole-book table.
+  var scoped = p && p.by_client && state.client !== "All" && p.by_client[state.client];
+  var offerList = scoped || (p && p.stats && p.stats.offers);
+  var perClient = !!scoped;
+  if (!p || !offerList || offerList.length < 2) {
+    box.innerHTML = '<div class="subline">Not enough sending behind any one offer' +
+      (state.client === "All" ? "" : " for " + escq(state.client)) + " yet.</div>";
     $("offer-sub").textContent = "";
+    $("offer-take-row").style.display = "none";
+    if ($("offer-scope")) $("offer-scope").textContent = state.client === "All" ? "· whole book" : "· " + state.client;
     return;
   }
-  var offers = p.stats.offers.slice(0, 5);
+  var offers = offerList.slice(0, 5);
+  if ($("offer-scope")) $("offer-scope").textContent = perClient ? "· " + state.client : "· whole book";
   // Two costs per offer: emails to buy one positive reply, emails to buy one
   // meeting. Lower is better, so the winner is the SMALLEST number — the
   // opposite reading to every rate on this page, hence the column headers.
@@ -1792,10 +1801,12 @@ function renderOffer() {
   var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
   var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
   var nomeet = offers.filter(function (o) { return !o[5]; }).length;
-  $("offer-sub").textContent = "Whole book, every campaign — emails it costs to buy one. Across " + fmtN(camps) +
-    " campaigns and " + fmtN(sends) + " emails." +
+  $("offer-sub").textContent = (perClient ? state.client + " — " : "Whole book, every campaign — ") +
+    "emails it costs to buy one. Across " + fmtN(camps) + " campaigns and " + fmtN(sends) + " emails." +
     (nomeet ? " “–” means no meetings booked off that offer yet." : "");
-  if (p.act) { $("offer-take").textContent = p.act; $("offer-take-row").style.display = ""; }
+  // the take-line is a whole-book recommendation; only show it on the All view
+  if (!perClient && p.act) { $("offer-take").textContent = p.act; $("offer-take-row").style.display = ""; }
+  else $("offer-take-row").style.display = "none";
 }
 /* ── lane 5: who replies + waiting ── */
 function renderWho() {
