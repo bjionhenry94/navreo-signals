@@ -605,8 +605,14 @@ function saveFilters() {
 function ckey() { return state.client === "All" ? "__all" : state.client; }
 function clientOfName(name, ws) {
   ws = (ws || "navreo").toLowerCase();
-  if (ws === "asteri") return "Asteri";
-  if (ws === "krg") return "KRG";
+  // Every connected client workspace labels as itself — the map comes from the
+  // server (client-windows ws_labels, same source as analytics_hub_v1's cmap),
+  // so adding a workspace needs no edit here.
+  if (ws !== "navreo") {
+    var lbls = (CW && CW.ws_labels) || {};
+    for (var L in lbls) { if (lbls[L] === ws) return L; }
+    return ws.charAt(0).toUpperCase() + ws.slice(1);
+  }
   var n = (name || "").toLowerCase();
   if (n.indexOf("amplif") >= 0) return "Amplifyy";
   if (n.indexOf("arnic") >= 0) return "Arnic";
@@ -1790,12 +1796,15 @@ function renderAll() {
   renderMeet();
 }
 // The embedded inbox & domain manager follows the client chips (date range
-// doesn't apply to today's mailbox health). Asteri/KRG map 1:1 to a Smartlead
-// workspace so their rows filter exactly; every other client sends from the
-// shared Navreo fleet, and the note says so instead of pretending to split it.
-var WS_CLIENTS = { Asteri: "asteri", KRG: "krg" };
+// doesn't apply to today's mailbox health). A connected client workspace maps
+// 1:1 to a Smartlead account so its rows filter exactly; every other client
+// sends from the shared Navreo fleet, and the note says so instead of
+// pretending to split it. The map is server-supplied (client-windows
+// ws_labels) — the literal below is only the pre-payload fallback.
+function wsClients() { return (CW && CW.ws_labels) || { Asteri: "asteri", KRG: "krg" }; }
 function updateLens() {
   var c = state.client;
+  var WS_CLIENTS = wsClients();
   window.DLV_CLIENT_LENS = { client: c, ws: WS_CLIENTS[c] || null };
   var note = $("dlv-lens-note");
   if (note) {

@@ -830,8 +830,8 @@ def ws_all(refresh: bool = False) -> list:
         if not refresh and _ws_cache["rows"] and now - _ws_cache["at"] < _WS_TTL_S:
             return list(_ws_cache["rows"])
     try:
-        rows = sb("GET", "workspaces?select=id,name,api_key,status,added_at,last_sync_at"
-                         "&order=added_at") or []
+        rows = sb("GET", "workspaces?select=id,name,display_label,api_key,status,added_at,"
+                         "last_sync_at&order=added_at") or []
         rows = [r for r in rows if isinstance(r, dict) and r.get("id")]
     except Exception:  # noqa: BLE001 — a Supabase outage degrades to navreo-only
         rows = []
@@ -13706,10 +13706,14 @@ _CLIENT_WIN_WINDOWS = (30, 14, 7)
 
 def _client_win_label(workspace, name) -> str:
     ws = (workspace or "navreo").lower()
-    if ws == "asteri":
-        return "Asteri"
-    if ws == "krg":
-        return "KRG"
+    if ws != "navreo":
+        # Every connected client workspace labels as ITSELF, off the registry's
+        # display_label — so a newly added workspace needs no edit here (it must
+        # match analytics_hub_v1's cmap, which reads the same column).
+        for w in ws_all():
+            if w.get("id") == ws:
+                return w.get("display_label") or w.get("name") or ws.title()
+        return ws.title()
     n = (name or "").lower()
     if "amplif" in n:
         return "Amplifyy"
@@ -13751,14 +13755,15 @@ def _client_win_build():
         cid = str(r.get("smartlead_campaign_id"))
         if st in ("ACTIVE", "PAUSED", "STOPPED", "COMPLETED"):
             cands.append((cid, r.get("workspace"), r.get("name")))
-    # per-workspace day-wise series (exact daily lines for Asteri/KRG + the sum)
+    # per-workspace day-wise series (exact daily lines for every connected
+    # client workspace + the sum). Driven off the registry, not a literal list,
+    # so a newly added workspace gets its lines without a code change.
     series = {}
-    ws_names = {"navreo": "Navreo-ws", "asteri": "Asteri", "krg": "KRG"}
     start30 = end - _dtmod.timedelta(days=29)
     days_out = [(start30 + _dtmod.timedelta(days=i)).isoformat() for i in range(30)]
     months = {m: i + 1 for i, m in enumerate(
         ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
-    for ws in ("navreo", "asteri", "krg"):
+    for ws in [w.get("id") for w in ws_enabled() if w.get("id")]:
         try:
             key = ws_key(ws)
             if not key:
@@ -13784,10 +13789,9 @@ def _client_win_build():
         except Exception as e:  # noqa: BLE001 — one workspace failing must not void the rest
             print(f"[client-win] day-wise {ws} failed: {e}", file=sys.stderr)
     out_series = {}
-    if "asteri" in series:
-        out_series["Asteri"] = series["asteri"]
-    if "krg" in series:
-        out_series["KRG"] = series["krg"]
+    for ws, s in series.items():
+        if ws != "navreo":  # navreo's own line rides the __all sum, as before
+            out_series[_client_win_label(ws, None)] = s
     if series:
         agg = {k: [0] * 30 for k in ("sent", "replied", "bounced")}
         for s in series.values():
@@ -13856,8 +13860,13 @@ def _client_win_build():
         # the fleet sent tens of thousands this month — a sweep with zero
         # campaign rows is a fault, not a fact; never cache or persist it
         raise RuntimeError(f"sweep found no sending campaigns against a non-zero fleet (errors: {errs[:2]})")
+    # label → workspace slug for every connected client workspace, so the page's
+    # mailbox/domain lens resolves a client chip to its workspace without a
+    # hardcoded list of its own.
+    ws_labels = {_client_win_label(w["id"], None): w["id"]
+                 for w in ws_enabled() if w.get("id") and w["id"] != "navreo"}
     data = {"days": days_out, "series": out_series, "windows": windows,
-            "campaigns": campaigns,
+            "campaigns": campaigns, "ws_labels": ws_labels,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
             "_debug": {"candidates": len(cands), "calls": calls, "errors": errs,
                        "sample": sample, "secs": int(time.time() - t0)}}
