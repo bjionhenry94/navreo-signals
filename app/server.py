@@ -13566,6 +13566,561 @@ def _restore_client_of(domain: str, tags=None) -> str:
     return "Other"
 
 
+# ── Google reply-rate cap tiering ───────────────────────────────────────────
+# Owner ruling 2026-07-28. The standalone audit service's reply-caps engine is
+# Outlook/Azure-only (Maildoso excluded), so Google boxes were never tiered at
+# all: Navreo's 165 sat flat at 20/day until something outside the tool dropped
+# 123 of them to 4/day on 2026-07-26 and nothing pulled them back. This is the
+# Google half, run in-tool so it can't collide with the Outlook engine — the
+# account_type=GMAIL filter is the whole separation, and it is load-bearing.
+#
+# Reply rate is judged at DOMAIN level, never per mailbox. A single box sends
+# ~275 in 30 days, which is far too thin to park a box on: scored per-box, 47
+# of 165 looked sub-floor; pooled across the 3 boxes on their domain, only 21
+# were. Three boxes give an ~830-send denominator, which is a real sample.
+GOOGLE_CAP_TIERS = (          # (min reply rate %, cap/day) — first match wins, descending
+    (1.3, 30),
+    (1.0, 20),
+    (0.8, 10),
+)
+GOOGLE_CAP_PAUSE = 0          # below the lowest tier: park the domain into warm-up
+# Floor on the domain's 30d sends before ANY move fires. saleswithnavreo.info
+# sat at 0 replies on 160 sends — a thin fortnight, not a verdict, and parking
+# a domain fresh off rest on that noise is exactly how rest clocks reset
+# forever. Under the floor the domain is reported and left alone.
+GOOGLE_CAP_MIN_SENDS = 300
+
+
+                              # ── Outlook/Azure ──────────────────────────────
+OUTLOOK_CAP_TIERS = (         # Outlook boxes sit an order of magnitude below
+    (1.2, 4),                 # Google's ceiling — a shared engine could never
+    (1.0, 2),                 # serve both, which is why these are two systems.
+    (0.8, 1),
+)
+OUTLOOK_CAP_PAUSE = None      # below the lowest tier: LEAVE ALONE (never park).
+# Outlook's floor has to be far lower than Google's: a 4/day box tops out at
+# ~120 sends a month, so a 300-send floor would skip most domains outright.
+OUTLOOK_CAP_MIN_SENDS = 100
+
+# Workspaces excluded from AUTOMATIC cap tiering (owner ruling 2026-07-28).
+# Asteri runs its own caps — 73 of its boxes sit at 15/day, a setting nothing in
+# this app produces — so tiering them would fight whoever set them. They are
+# still swept, still recorded, still shown in the manager; only the automatic
+# cap moves are withheld. This is a deliberate carve-out, NOT a parity gap:
+# app/test_workspace_parity.py reports it as excluded rather than failed.
+CAP_EXCLUDED_WORKSPACES = {"asteri"}
+
+# One profile per provider. Separate tiers, separate floors, separate parking
+# posture, separate crons — but ONE engine, so the two can never drift apart.
+CAP_PROFILES = {
+    "GOOGLE": {"account_type": "GMAIL", "tiers": GOOGLE_CAP_TIERS,
+               "pause": GOOGLE_CAP_PAUSE, "min_sends": GOOGLE_CAP_MIN_SENDS},
+    "OUTLOOK": {"account_type": "OUTLOOK", "tiers": OUTLOOK_CAP_TIERS,
+                "pause": OUTLOOK_CAP_PAUSE, "min_sends": OUTLOOK_CAP_MIN_SENDS},
+}
+
+
+def _cap_for(reply_rate: float, prof: dict):
+    """Cap for a reply rate under `prof`. None means 'no verdict — leave the
+    domain exactly as it is' (Outlook's posture below 0.8%)."""
+    for floor, cap in prof["tiers"]:
+        if reply_rate >= floor:
+            return cap
+    return prof["pause"]
+
+
+def _google_cap_for(reply_rate: float) -> int:
+    return _cap_for(reply_rate, CAP_PROFILES["GOOGLE"])
+
+
+def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict:
+    """Tier every mailbox of ONE provider off its DOMAIN's trailing-30d reply
+    rate. preview returns the plan and writes nothing; apply pushes each change
+    to Smartlead, mirrors it into the mailboxes table (so the manager's badges
+    are right now, not after tonight's sync) and stamps the resting ledger for
+    any domain it parks.
+
+    Scoped to a single account_type, so the Google and Outlook engines can
+    never touch each other's boxes — the exact failure that cost ~2,000
+    sends/day when the standalone Outlook service ignored its own filter on
+    2026-07-26. Scoping to OUTLOOK also excludes the 600 Maildoso boxes
+    (account_type SMTP) for free.
+
+    Workspace-aware throughout: domains aggregate per (workspace, domain) and
+    every write goes out on the owning workspace's own Smartlead key, so
+    client workspaces are tiered exactly like Navreo's."""
+    from datetime import datetime, timezone
+
+    prof = CAP_PROFILES.get(provider)
+    if not prof:
+        return {"ok": False, "error": f"unknown provider {provider!r}"}
+    acct = prof["account_type"]
+
+    boxes = [b for b in (sb_get_all(
+        "mailboxes?select=smartlead_id,email,domain,account_type,message_per_day,workspace"
+        f"&account_type=eq.{acct}") or []) if b.get("domain")]
+    if not boxes:
+        return {"ok": False, "error": f"no {acct} mailboxes in the mirror"}
+
+    # Latest stats row per box. mailbox_stats_daily is one row per box per sweep
+    # day, so take the newest stat_date present and read sent_30d/replies_30d
+    # off that — the same trailing window the Outlook engine scores on.
+    #
+    # Every chunk must come back a LIST. A failed sb() call returns an error
+    # dict, and iterating that yields its string keys — which used to blow up
+    # on r["smartlead_id"] ("string indices must be integers"). Google never
+    # tripped it (360 boxes = 6 chunks); Outlook's ~10k boxes are 167 chunks,
+    # so a timeout is near-certain on some run. Retry, then ABORT: a chunk
+    # silently dropped would score those boxes at 0 sends and quietly mis-tier
+    # a whole domain, which is far worse than not running today.
+    ids = [str(b["smartlead_id"]) for b in boxes]
+    stats: dict = {}
+    for i in range(0, len(ids), 60):
+        rows = None
+        for attempt in range(3):
+            rows = sb("GET", "mailbox_stats_daily?select=smartlead_id,stat_date,sent_30d,replies_30d"
+                             "&smartlead_id=in.(%s)&order=stat_date.desc&limit=10000"
+                      % ",".join(ids[i:i + 60]))
+            if isinstance(rows, list):
+                break
+            time.sleep(2 * (attempt + 1))
+        if not isinstance(rows, list):
+            return {"ok": False, "error": f"stats read failed for boxes {i}-{i + 60} "
+                                          f"after 3 attempts: {str(rows)[:120]}"}
+        for r in rows:
+            stats.setdefault(r["smartlead_id"], r)  # desc order → first seen is newest
+
+    resting = {str(r.get("domain") or "").lower()
+               for r in (sb("GET", "deliverability_resting_ledger?select=domain"
+                                   "&dismissed=is.false") or [])}
+
+    agg: dict = {}
+    for b in boxes:
+        d = str(b["domain"]).lower()
+        e = agg.setdefault((b.get("workspace") or "navreo", d),
+                           {"sent": 0, "replies": 0, "boxes": []})
+        s = stats.get(b["smartlead_id"]) or {}
+        e["sent"] += int(s.get("sent_30d") or 0)
+        e["replies"] += int(s.get("replies_30d") or 0)
+        e["boxes"].append(b)
+
+    plan, skipped, changes = [], [], []
+    for (ws, dom), e in sorted(agg.items()):
+        rate = (e["replies"] * 100.0 / e["sent"]) if e["sent"] else 0.0
+        row = {"workspace": ws, "domain": dom, "boxes": len(e["boxes"]),
+               "sent_30d": e["sent"], "replies_30d": e["replies"],
+               "reply_rate": round(rate, 2)}
+        if ws in CAP_EXCLUDED_WORKSPACES:
+            skipped.append({**row, "reason": "workspace excluded from automatic caps"})
+            continue
+        if dom in resting:
+            skipped.append({**row, "reason": "resting"})
+            continue
+        if e["sent"] < prof["min_sends"]:
+            skipped.append({**row, "reason": f"under {prof['min_sends']}-send floor"})
+            continue
+        cap = _cap_for(rate, prof)
+        if cap is None:
+            # No verdict at this rate under this profile (Outlook below 0.8%):
+            # report it and leave the domain exactly as it is.
+            skipped.append({**row, "reason": "below lowest tier — left untouched"})
+            continue
+        row["new_cap"] = cap
+        row["pause"] = cap == 0
+        plan.append(row)
+        for b in e["boxes"]:
+            if (b.get("message_per_day") or 0) != cap:
+                changes.append({"smartlead_id": b["smartlead_id"], "email": b["email"],
+                                "workspace": ws, "domain": dom,
+                                "from_cap": b.get("message_per_day"), "to_cap": cap})
+
+    tiers = list(prof["tiers"]) + ([(0, prof["pause"])] if prof["pause"] is not None else [])
+    out = {"ok": True, "provider": provider, "mode": mode, "domains": len(plan),
+           "skipped": skipped, "mailboxesToChange": len(changes), "plan": plan,
+           "tierCount": {str(c): sum(1 for r in plan if r["new_cap"] == c)
+                         for _, c in tiers}}
+    if mode != "apply" or not changes:
+        return out
+
+    changed, failed = 0, []
+    for c in changes:
+        try:
+            _smartlead_json("POST", f"/email-accounts/{c['smartlead_id']}",
+                            {"max_email_per_day": c["to_cap"]}, workspace=c["workspace"])
+            changed += 1
+        except Exception as ex:  # noqa: BLE001 — one bad box must not stop the sweep
+            failed.append({"email": c["email"], "error": str(ex)[:120]})
+        time.sleep(0.35)  # shared 200req/min Smartlead budget
+
+    # Mirror the caps we actually landed, so the inbox/domain manager reflects
+    # this sweep immediately instead of waiting for the nightly mailbox sync.
+    ok_ids = {c["smartlead_id"] for c in changes} - {
+        c["smartlead_id"] for c in changes
+        for f in failed if f["email"] == c["email"]}
+    by_cap: dict = {}
+    for c in changes:
+        if c["smartlead_id"] in ok_ids:
+            by_cap.setdefault(c["to_cap"], []).append(str(c["smartlead_id"]))
+    for cap, sids in by_cap.items():
+        for i in range(0, len(sids), 60):
+            try:
+                sb("PATCH", "mailboxes?smartlead_id=in.(%s)" % ",".join(sids[i:i + 60]),
+                   {"message_per_day": cap})
+            except Exception:  # noqa: BLE001 — nightly sync self-corrects
+                pass
+
+    parked = [r["domain"] for r in plan if r["pause"]]
+    if parked:
+        # Stamp the ledger so a parked domain lands in the In-warm-up tab with a
+        # due-back date now. ignore-duplicates keeps an established rest clock.
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            sb("POST", "deliverability_resting_ledger?on_conflict=domain",
+               [{"domain": d, "first_rested_at": now_iso, "approx": False,
+                 "last_seen_at": now_iso} for d in parked],
+               prefer="resolution=ignore-duplicates,return=minimal")
+        except Exception:  # noqa: BLE001 — the caps are already 0; the badge can lag
+            pass
+
+    out.update(changed=changed, failed=failed, parked=parked)
+    return out
+
+
+def google_reply_caps(mode: str = "preview") -> dict:
+    """Google/Gmail boxes: 30/20/10 a day, park below 0.8%."""
+    return provider_reply_caps("GOOGLE", mode)
+
+
+def outlook_reply_caps(mode: str = "preview") -> dict:
+    """Outlook/Azure boxes: 4/2/1 a day, never parked. Replaces the standalone
+    audit service's engine, which ignored its own provider filter and crushed
+    132 Google boxes on 2026-07-26."""
+    return provider_reply_caps("OUTLOOK", mode)
+
+
+# ============================================================================
+# Recommended mailbox settings by provider (owner ruling 2026-07-28)
+# ----------------------------------------------------------------------------
+# The house standard every mailbox SHOULD carry, keyed on the sending provider.
+# This is a REFERENCE + AUDIT table only: nothing here writes to Smartlead. The
+# audit below reads the fleet's live settings, compares them against this table
+# and reports the deviations so they surface as a to-do flag on the domain
+# section. Applying a fix stays a deliberate, separate action.
+#
+# `compare`:  "eq"  — an exact value; above OR below both deviate (a daily cap
+#                     of 4 where the standard is 2 deviates as much as 1 does).
+#             "min" — a floor; only values BELOW it (or unset) deviate, so a
+#                     120-minute gap against a 60-minute minimum is fine.
+#             "max" — a ceiling (per-domain daily total).
+#
+# Platforms other than Smartlead are recorded for whoever configures them by
+# hand — we hold no API data for Instantly / PlusVibe / EmailBison, so they are
+# never audited, only displayed.
+# ============================================================================
+MAILBOX_SETTINGS_POLICY = {
+    "version": "2026-07-28",
+    "providers": {
+        "google": {
+            "label": "Google",
+            "smartlead_types": ["GMAIL"],
+            "warmup": {
+                "per_day": {"value": 10, "compare": "eq",
+                            "label": "Warm-up emails per inbox per day"},
+                "reply_rate_pct": {"value": 30, "compare": "eq",
+                                   "label": "Warm-up reply rate"},
+                "min_days_before_campaigns": {"value": 14, "compare": "min",
+                                              "label": "Full days of warm-up before campaigns start"},
+            },
+            "outbound": {
+                "per_day": {"value": 20, "compare": "eq",
+                            "label": "Emails per inbox per day"},
+                "min_gap_mins": {"value": 35, "compare": "min",
+                                 "label": "Minimum gap between emails"},
+            },
+        },
+        "microsoft": {
+            "label": "Outlook / Entra",
+            "smartlead_types": ["OUTLOOK"],
+            "warmup": {
+                "per_day": {"value": 5, "compare": "eq",
+                            "label": "Warm-up emails per inbox per day"},
+                "reply_rate_pct": {"value": 60, "compare": "eq",
+                                   "label": "Warm-up reply rate (Smartlead)"},
+                "min_days_before_campaigns": {"value": 14, "compare": "min",
+                                              "label": "Full days of warm-up before campaigns start"},
+            },
+            "outbound": {
+                # The 50-inbox option: 2/inbox/day x 50 inboxes = the 100/domain/day ceiling.
+                "per_day": {"value": 2, "compare": "eq",
+                            "label": "Emails per inbox per day"},
+                "min_gap_mins": {"value": 60, "compare": "min",
+                                 "label": "Gap between emails"},
+                "max_domain_per_day": {"value": 100, "compare": "max",
+                                       "label": "Outbound emails per domain per day (all inboxes)"},
+            },
+        },
+    },
+    # Not audited — no API data for these. Displayed so whoever sets a mailbox
+    # up on one of these platforms picks the right warm-up reply rate.
+    "platform_warmup_reply_rate": {
+        "smartlead": {"google": 30, "microsoft": 60},
+        "instantly": {"microsoft": 100},
+        "plusvibe": {"microsoft": 100},
+        "other": {"microsoft": 100,
+                  "note": "Any other platform that exposes a warm-up reply-rate setting: 100%."},
+        "emailbison": {"microsoft": None,
+                       "note": "No separate reply-rate control — leave the maximum-reply "
+                               "setting blank / automatic."},
+    },
+    # Smartlead types with NO house recommendation. SMTP is Maildoso, warmed
+    # externally by the provider, so it is never counted as deviating.
+    "unaudited_types": {
+        "SMTP": "Maildoso / generic SMTP — warmed by the provider, no house standard.",
+    },
+}
+
+_SETTINGS_TYPE_TO_PROVIDER = {
+    t: p for p, spec in MAILBOX_SETTINGS_POLICY["providers"].items()
+    for t in spec["smartlead_types"]
+}
+
+_SETTINGS_AUDIT = {"data": None, "ts": 0.0, "running": False, "error": None,
+                   "restore_tried": False, "restore_last_try": 0.0}
+_SETTINGS_AUDIT_LOCK = threading.Lock()
+_SETTINGS_AUDIT_TTL_S = 6 * 3600  # settings drift slowly; a 6h blob keeps the sweep cheap
+
+
+def _settings_warmup_age_days(warmup_created_at):
+    """Days since warm-up started, or None when Smartlead didn't say."""
+    from datetime import datetime, timezone
+    if not warmup_created_at:
+        return None
+    try:
+        started = datetime.fromisoformat(str(warmup_created_at).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - started).total_seconds() / 86400.0
+    except Exception:  # noqa: BLE001 — an unparseable stamp is "unknown", not an issue
+        return None
+
+
+def _settings_issue(rule_key: str, rule: dict, actual, section: str):
+    """One deviation dict, or None when `actual` satisfies `rule`. A missing
+    value is itself a deviation (direction "unset") — an unset gap on an Outlook
+    box is exactly the case this audit exists to surface."""
+    want, cmp_ = rule["value"], rule["compare"]
+    base = {"key": rule_key, "section": section, "label": rule["label"],
+            "expected": want, "compare": cmp_, "actual": actual}
+    if actual is None:
+        return dict(base, direction="unset")
+    if cmp_ == "eq" and actual != want:
+        return dict(base, direction="above" if actual > want else "below")
+    if cmp_ == "min" and actual < want:
+        return dict(base, direction="below")
+    if cmp_ == "max" and actual > want:
+        return dict(base, direction="above")
+    return None
+
+
+def _settings_mailbox_deviations(m: dict):
+    """(provider, [issues]) for one raw Smartlead email-account row.
+    provider is None for types carrying no house recommendation."""
+    provider = _SETTINGS_TYPE_TO_PROVIDER.get(m.get("type"))
+    if not provider:
+        return None, []
+    spec = MAILBOX_SETTINGS_POLICY["providers"][provider]
+    wd = m.get("warmup_details") or {}
+    mpd = m.get("message_per_day")
+    wpd = wd.get("max_email_per_day")
+    if wpd is None:
+        wpd = wd.get("warmup_max_count")
+
+    issues = [
+        _settings_issue("warmup_per_day", spec["warmup"]["per_day"], wpd, "warmup"),
+        _settings_issue("warmup_reply_rate_pct", spec["warmup"]["reply_rate_pct"],
+                        wd.get("reply_rate"), "warmup"),
+    ]
+    # A cap of 0 is a PARKED box (resting / rotated into warm-up), not a
+    # misconfigured one — the rest-rotation cards already own that state, so its
+    # outbound settings are out of scope here. Warm-up settings still apply:
+    # a parked box is supposed to be warming.
+    if (mpd or 0) > 0:
+        issues += [
+            _settings_issue("outbound_per_day", spec["outbound"]["per_day"], mpd, "outbound"),
+            _settings_issue("outbound_min_gap_mins", spec["outbound"]["min_gap_mins"],
+                            m.get("minTimeToWaitInMins"), "outbound"),
+        ]
+
+    # "Warm up for at least 14 full days before starting campaigns" — Smartlead's
+    # list endpoint doesn't reliably say whether a box is attached to a campaign
+    # (campaign_count is absent, is_connected_to_campaign is null), so the check
+    # rides the observable proxy: a daily send cap above 0 means the box is armed
+    # to send. A parked box (cap 0) still warming is never flagged.
+    if (mpd or 0) > 0:
+        age = _settings_warmup_age_days(wd.get("warmup_created_at"))
+        if age is not None:
+            iss = _settings_issue("warmup_days_before_campaigns",
+                                  spec["warmup"]["min_days_before_campaigns"],
+                                  int(age), "warmup")
+            if iss:
+                iss["note"] = ("sending enabled (%s/day) after only %.1f days of warm-up"
+                               % (mpd, age))
+                issues.append(iss)
+
+    return provider, [i for i in issues if i]
+
+
+def _settings_audit_build() -> dict:
+    """Sweep every Smartlead mailbox and report which ones deviate from
+    MAILBOX_SETTINGS_POLICY. Strictly read-only — nothing is written back."""
+    from datetime import datetime, timezone
+    import sync_mailboxes  # lazy: circular-safe (the module imports server)
+
+    key = KEYS.get("SMARTLEAD_API_KEY") or os.environ.get("SMARTLEAD_API_KEY") or ""
+    if not key:
+        raise RuntimeError("SMARTLEAD_API_KEY is not configured on this server")
+    boxes = sync_mailboxes.pull_all_mailboxes(key)
+    if isinstance(boxes, tuple):   # pull_all_mailboxes returns (rows, meta) in some builds
+        boxes = boxes[0]
+    if not boxes:
+        raise RuntimeError("Smartlead returned no mailboxes")
+
+    rows, per_provider, domains, unaudited = [], {}, {}, {}
+    for m in boxes:
+        email = (m.get("from_email") or "").lower()
+        domain = email.split("@")[1] if "@" in email else ""
+        provider, issues = _settings_mailbox_deviations(m)
+        if not provider:
+            t = m.get("type") or "UNKNOWN"
+            unaudited[t] = unaudited.get(t, 0) + 1
+            continue
+        p = per_provider.setdefault(provider, {"mailboxes": 0, "deviating": 0, "byRule": {}})
+        p["mailboxes"] += 1
+        d = domains.setdefault(domain, {"domain": domain, "provider": provider, "mailboxes": 0,
+                                        "deviating": 0, "outbound_per_day": 0, "rules": {}})
+        d["mailboxes"] += 1
+        d["outbound_per_day"] += int(m.get("message_per_day") or 0)
+        if issues:
+            p["deviating"] += 1
+            d["deviating"] += 1
+            for i in issues:
+                p["byRule"][i["key"]] = p["byRule"].get(i["key"], 0) + 1
+                d["rules"][i["key"]] = d["rules"].get(i["key"], 0) + 1
+            rows.append({"email": email, "domain": domain, "provider": provider,
+                         "smartlead_id": m.get("id"), "issues": issues})
+
+    # Per-domain outbound ceiling — a whole-domain rule, scored after the
+    # per-mailbox pass: every inbox can be individually compliant while the
+    # domain's daily total still runs over.
+    for dom in domains.values():
+        cap_rule = MAILBOX_SETTINGS_POLICY["providers"][dom["provider"]]["outbound"].get(
+            "max_domain_per_day")
+        if not cap_rule:
+            continue
+        iss = _settings_issue("domain_outbound_per_day", cap_rule,
+                              dom["outbound_per_day"], "outbound")
+        if iss:
+            dom["domain_issue"] = iss
+            dom["rules"]["domain_outbound_per_day"] = 1
+
+    dom_rows = sorted((d for d in domains.values() if d["deviating"] or d.get("domain_issue")),
+                      key=lambda d: (-d["deviating"], d["domain"]))
+    return {
+        "ok": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "policy_version": MAILBOX_SETTINGS_POLICY["version"],
+        "totals": {
+            "mailboxes_audited": sum(p["mailboxes"] for p in per_provider.values()),
+            "mailboxes_deviating": sum(p["deviating"] for p in per_provider.values()),
+            "domains_audited": len(domains),
+            "domains_with_deviations": len(dom_rows),
+            "unaudited_by_type": unaudited,
+        },
+        "byProvider": per_provider,
+        "domains": dom_rows,
+        "mailboxes": rows[:4000],
+        "mailboxes_truncated": len(rows) > 4000,
+    }
+
+
+def _settings_audit_persist(data):
+    from datetime import datetime, timezone
+    try:
+        sb("POST", "deliverability_audit_cache?on_conflict=id",
+           {"id": "settings_audit", "blob": data,
+            "ts": datetime.now(timezone.utc).isoformat()},
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001 — cache only; the sweep can always re-run
+        print(f"[settings-audit] WARNING persist failed: {e}", file=sys.stderr)
+
+
+def _settings_audit_restore():
+    with _SETTINGS_AUDIT_LOCK:
+        if _SETTINGS_AUDIT["restore_tried"] or _SETTINGS_AUDIT["data"] is not None:
+            return
+        if time.time() - _SETTINGS_AUDIT["restore_last_try"] < 30:
+            return
+        _SETTINGS_AUDIT["restore_last_try"] = time.time()
+    try:
+        rows = sb("GET", "deliverability_audit_cache?id=eq.settings_audit&select=blob,ts",
+                  prefer="return=representation")
+        if rows is not None:  # sb() returns None on failure — retry later, don't mark tried
+            with _SETTINGS_AUDIT_LOCK:
+                _SETTINGS_AUDIT["restore_tried"] = True
+        if rows and isinstance(rows, list) and rows[0].get("blob"):
+            with _SETTINGS_AUDIT_LOCK:
+                if _SETTINGS_AUDIT["data"] is None:
+                    _SETTINGS_AUDIT.update(data=rows[0]["blob"],
+                                           ts=_deliv_iso_epoch(rows[0].get("ts") or ""))
+    except Exception as e:  # noqa: BLE001
+        print(f"[settings-audit] WARNING restore failed: {e}", file=sys.stderr)
+
+
+def _settings_audit_run_bg():
+    try:
+        data = _settings_audit_build()
+        with _SETTINGS_AUDIT_LOCK:
+            _SETTINGS_AUDIT.update(data=data, ts=time.time(), error=None)
+        _settings_audit_persist(data)
+    except Exception as e:  # noqa: BLE001 — a failed sweep keeps the last good blob
+        with _SETTINGS_AUDIT_LOCK:
+            _SETTINGS_AUDIT["error"] = str(e)[:200]
+        print(f"[settings-audit] sweep failed: {e}", file=sys.stderr)
+    finally:
+        with _SETTINGS_AUDIT_LOCK:
+            _SETTINGS_AUDIT["running"] = False
+
+
+def _settings_audit_start(force: bool = False) -> dict:
+    """Kick a background sweep unless one is already running or the blob is fresh."""
+    with _SETTINGS_AUDIT_LOCK:
+        if _SETTINGS_AUDIT["running"]:
+            return {"started": False, "reason": "running"}
+        fresh = (_SETTINGS_AUDIT["data"] is not None
+                 and time.time() - _SETTINGS_AUDIT["ts"] < _SETTINGS_AUDIT_TTL_S)
+        if fresh and not force:
+            return {"started": False, "reason": "fresh"}
+        _SETTINGS_AUDIT["running"] = True
+    threading.Thread(target=_settings_audit_run_bg, daemon=True).start()
+    return {"started": True}
+
+
+def api_mailbox_settings_audit(force: bool = False):
+    """GET /api/mailbox-settings-audit — cached deviation report. Serves the
+    last good blob immediately and refreshes in the background; while `running`
+    with no blob yet the client says "still checking", never "all clear"."""
+    _settings_audit_restore()
+    st = _settings_audit_start(force=force)
+    with _SETTINGS_AUDIT_LOCK:
+        data, ts, running, err = (_SETTINGS_AUDIT["data"], _SETTINGS_AUDIT["ts"],
+                                  _SETTINGS_AUDIT["running"], _SETTINGS_AUDIT["error"])
+    age = (time.time() - ts) if ts else None
+    return {"ok": True, "audit": data, "ageSec": age,
+            "running": bool(running or st.get("started")), "error": err,
+            "stale": bool(data is not None and age is not None and age >= _SETTINGS_AUDIT_TTL_S),
+            "policy": MAILBOX_SETTINGS_POLICY}, 200
+
+
 def _deliv_backend_json(method: str, rest: str, timeout: float = 60):
     """Server-to-server call to the standalone audit service — same target as
     _proxy_deliverability, minus the HTTP-handler plumbing. Raises on
@@ -15659,6 +16214,15 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
             return self._json(body, status)
+        if path == "/api/mailbox-settings-policy":
+            # The recommended settings themselves — no fleet read, no cache.
+            return self._json({"ok": True, "policy": MAILBOX_SETTINGS_POLICY}, 200)
+        if path == "/api/mailbox-settings-audit":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
+            body, status = api_mailbox_settings_audit(force=force)
+            return self._json(body, status)
         if path == "/api/deliverability/reminders":
             # Same data the plain proxy would return, but from the 5-min
             # _restore_reminders cache (invalidated by this app's own
@@ -15906,13 +16470,34 @@ class Handler(SimpleHTTPRequestHandler):
                 threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/reply-caps":
-                # Automatic reply-rate cap tiering (owner ruling 2026-07-25:
-                # "make it automatic" — the button had run once ever). Same
-                # engine and guardrails as the manual flow: preview first,
-                # apply only when it names changes; Outlook/Azure only,
-                # Maildoso excluded, resting and below-0.8% domains untouched,
-                # the backend saves its backup. Everything lands in the
-                # activity feed so cap moves are never silent.
+                # RETIRED 2026-07-28. This used to hand Outlook cap tiering to
+                # the standalone audit service. That engine ignores the
+                # Outlook/Azure filter its own UI advertises: on 2026-07-26 it
+                # set 132 Navreo GOOGLE boxes to 4/day and 2/day, cutting
+                # ~2,000 sends/day. It then reported "skipped — run a
+                # domain-health pull first" for three straight days while
+                # nobody noticed, because a broken run and a quiet run look
+                # identical from outside.
+                #
+                # Cap tiering now runs in-tool, scoped per provider and per
+                # workspace, and cannot cross providers by construction:
+                #   /api/cron/outlook-reply-caps  (app/run_outlook_caps.py)
+                #   /api/cron/google-reply-caps   (app/run_google_caps.py)
+                # The pg_cron job reply-caps-daily (05:45 UTC) may still fire
+                # at this path; it is answered and ignored rather than left to
+                # 404, so the retirement is visible in the activity feed.
+                #
+                # To revert: delete this block. The original body is in git
+                # history at 6b3c4de.
+                log_activity(path, payload={"retired": True,
+                                            "superseded_by": "/api/cron/outlook-reply-caps"},
+                             actor="cron", action="reply-caps-retired",
+                             entity="deliverability")
+                return self._json({"ok": True, "retired": True,
+                                   "message": "Superseded by outlook-reply-caps "
+                                              "(provider-scoped, workspace-aware)."}, 200)
+
+            if path == "/api/cron/reply-caps-legacy-disabled":
                 def _reply_caps_bg():
                     try:
                         p = _deliv_backend_json_retry("POST", "reply-caps?mode=preview", timeout=150)
@@ -15939,6 +16524,37 @@ class Handler(SimpleHTTPRequestHandler):
                         log_activity("/api/cron/reply-caps", payload={"error": str(e)[:200]},
                                      actor="cron", action="reply-caps", entity="deliverability")
                 threading.Thread(target=_reply_caps_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/cron/google-reply-caps":
+                # The Google half of cap tiering (owner ruling 2026-07-28).
+                # Deliberately NOT the audit service's engine: that one is
+                # Outlook/Azure-only and Google was never in scope, so this runs
+                # in-tool against account_type=GMAIL and the two never touch the
+                # same box. ?mode=preview returns the plan without writing.
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                if (q.get("mode") or ["apply"])[0] == "preview":
+                    try:
+                        return self._json(google_reply_caps("preview"), 200)
+                    except Exception as e:  # noqa: BLE001
+                        return self._json({"ok": False, "error": str(e)[:300]}, 500)
+
+                def _google_caps_bg():
+                    try:
+                        r = google_reply_caps("apply")
+                        log_activity("/api/cron/google-reply-caps",
+                                     payload={"changed": r.get("changed", 0),
+                                              "failed": r.get("failed"),
+                                              "parked": r.get("parked"),
+                                              "domains": r.get("domains"),
+                                              "skipped": len(r.get("skipped") or []),
+                                              "tierCount": r.get("tierCount")},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                        _deliv_bundle_start(force=True)  # badges reflect the new caps now
+                    except Exception as e:  # noqa: BLE001 — a failed run must be visible
+                        log_activity("/api/cron/google-reply-caps", payload={"error": str(e)[:200]},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                threading.Thread(target=_google_caps_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/notify/positive-card":
                 # Categoriser → client-card hook bypass (query params only —
@@ -16331,6 +16947,25 @@ class Handler(SimpleHTTPRequestHandler):
             _restore_plan_invalidate()
             return
         if path.startswith("/api/deliverability/"):
+            # The Manager's "apply reply caps" button proxies straight to the
+            # audit service's engine — the one that crushed 132 Google boxes on
+            # 2026-07-26. Retiring only the cron would leave a button in the UI
+            # that re-does the damage on one click, so the trigger is blocked
+            # here at the proxy rather than in deliverability-tab.js (which a
+            # parallel session is mid-edit on). Preview stays allowed: reading
+            # the old engine's plan is harmless and still useful for comparison.
+            if path[len("/api/deliverability/"):].split("?")[0].strip("/") == "reply-caps" \
+                    and "mode=preview" not in (self.path.split("?", 1)[-1] if "?" in self.path else ""):
+                log_activity("/api/deliverability/reply-caps",
+                             payload={"blocked": True, "reason": "legacy engine retired"},
+                             actor=self._authed_email() or "app",
+                             action="reply-caps-blocked", entity="deliverability")
+                return self._json(
+                    {"ok": False, "retired": True,
+                     "message": "This engine is retired — it ignored its own Outlook filter "
+                                "and set 132 Google boxes to 4/day on 2026-07-26. Caps are now "
+                                "tiered per provider by outlook-reply-caps and google-reply-caps."},
+                    410)
             return self._proxy_deliverability("POST")
         setter_route = setter.POST_ROUTES.get(path)
         if setter_route:

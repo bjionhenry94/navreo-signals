@@ -60,3 +60,46 @@ services:
     startCommand: python app/sync_mailboxes.py
     envVars:
       - fromGroup: navreo-secrets
+
+  # Google reply-rate cap tiering. MUST run after navreo-mailbox-sync (04:30):
+  # it scores off that snapshot's trailing-30d columns, so an earlier slot would
+  # re-tier the whole Google fleet on yesterday's numbers. 45min of headroom.
+  - type: cron
+    name: navreo-google-caps
+    runtime: python
+    plan: starter
+    schedule: "15 5 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/run_google_caps.py
+    envVars:
+      - fromGroup: navreo-secrets
+
+  # Outlook/Azure reply-rate cap tiering. Deliberately scheduled AFTER the
+  # legacy pg_cron job (reply-caps-daily, 05:45) that drives the standalone
+  # audit service: that engine ignores its own provider filter and on
+  # 2026-07-26 set 132 Navreo GOOGLE boxes to 4/day. Running last means our
+  # correctly-scoped engines get the final word each morning. Once the legacy
+  # job is retired this can move earlier.
+  - type: cron
+    name: navreo-outlook-caps
+    runtime: python
+    plan: starter
+    schedule: "0 6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/run_outlook_caps.py
+    envVars:
+      - fromGroup: navreo-secrets
+
+  # Daily proof that the two engines are actually MOVING caps. Exists because
+  # the legacy service reported success while doing nothing for three days
+  # (2026-07-26 to 07-28) and the silence looked identical to a quiet day.
+  # Runs after both engines. Exit 1 = something has stalled.
+  - type: cron
+    name: navreo-caps-check
+    runtime: python
+    plan: starter
+    schedule: "30 6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/check_caps_moving.py
+    envVars:
+      - fromGroup: navreo-secrets
