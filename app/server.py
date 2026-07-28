@@ -8295,8 +8295,8 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             # the All (+navreo) tables always build; client-extras stay cache-only
             # (opportunistic) to keep the run bounded (Bjion 2026-07-29).
             copy = _COCKPIT_SEQCOPY_SWR.get(cid)
-            if copy is None and str(cid) in lead_set:
-                copy = _cockpit_sequence_copy(cid)
+            if (copy is None or (isinstance(copy, dict) and copy.get("degraded"))) and str(cid) in lead_set:
+                copy = _cockpit_sequence_copy(cid)   # SWR returns a degraded dict cold, not None
             bucket = _ah_offer_bucket(copy)
         except Exception:  # noqa: BLE001 — one unreadable sequence never kills the insight
             continue
