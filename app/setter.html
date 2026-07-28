@@ -1352,14 +1352,35 @@ async function openUnresolvedRow(id) {
   const known = QUEUE_ROWS.find((r) => String(r.id) === String(id))
              || ALL_ROWS.find((r) => String(r.id) === String(id));
   if (known) { selectRow(id); return; }
+  // Paint IMMEDIATELY from what the tray row already knows (owner report
+  // 2026-07-28: "very slow to react to open") - a provisional shell renders
+  // the lead, the reply snippet and the sent state in one frame, then the
+  // full row (thread, draft, decision) folds in when it lands. renderDetail's
+  // anchor-stable repaint keeps the fold-in from moving anything.
+  const t = unresolvedRows.find((r) => String(r.id) === String(id));
+  if (t) {
+    const nameParts = String(t.lead_name || "").split(" ");
+    ALL_ROWS.push({
+      id: t.id, lead_email: t.lead_email,
+      lead_first_name: nameParts[0] || "", lead_last_name: nameParts.slice(1).join(" "),
+      company_domain: t.company_domain, smartlead_campaign_id: t.smartlead_campaign_id,
+      status: "sent", sent_at: t.sent_at, reply_body: t.reply_snippet || "",
+      subsequence_decision: t.subsequence_decision, thread: null,
+    });
+    selectRow(id);
+  }
   const res = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(id)}`);
   const row = res.ok && res.data && res.data.row;
   if (!row) {
-    showError("Couldn't open that conversation: " + (res.error || "row not found"));
+    if (t) showDetailError("Couldn't load the full conversation: " + (res.error || "row not found"));
+    else showError("Couldn't open that conversation: " + (res.error || "row not found"));
     return;
   }
-  ALL_ROWS.push(row);
-  selectRow(id);
+  const idx = ALL_ROWS.findIndex((r) => String(r.id) === String(id));
+  if (idx >= 0) Object.assign(ALL_ROWS[idx], row); else ALL_ROWS.push(row);
+  const merged = idx >= 0 ? ALL_ROWS[idx] : ALL_ROWS[ALL_ROWS.length - 1];
+  if (String(selectedRowId) === String(id)) renderDetail(merged);
+  else if (!t) selectRow(id);
 }
 /* One shared write path for the retro decision, used by the banner rows AND
    the detail view's own buttons: patch the local copies, refresh whichever
