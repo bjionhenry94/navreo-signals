@@ -1205,7 +1205,7 @@ Rules:
 - When the intent is bespoke_request, objection_or_question, or wrong_person, the ack paragraph must acknowledge the lead's SPECIFIC ask honestly (e.g. "Happy to put a video together for you.") - never a generic "Of course." that ignores what they asked for, and never a promise of a date or deadline for the bespoke work.
 - Never say you are sharing, attaching, or sending something the draft does not actually contain. If the asked-for asset is not the agent's fixed resource, acknowledge the ask ("Happy to get that over to you.") without implying it is included in this email.
 - The ack paragraph must answer the SHAPE of the question. A yes/no question ("So you work on commission?") gets a direct, truthful opener grounded ONLY in the instructions ("Good question, it is a flat monthly fee rather than commission."), never "Of course."
-- BEFORE writing anything, decide the greeting name: use lead_first_name if given; otherwise LOOK AT THE END OF THEIR REPLY for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly"); only if no name exists anywhere use "Hi there". NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off.
+- BEFORE writing anything, decide the greeting name: use lead_first_name if it is a real name (it is "" when we don't have one, and "there" is a placeholder, never a name); otherwise LOOK AT THE END OF THEIR REPLY for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly"); otherwise LOOK AT THE GREETING LINE OF original_outreach, which opens "Hi <first name>," and names this same lead; only if no name exists in any of those three places use "Hi there". NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off.
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
@@ -1231,7 +1231,13 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     agent = agent or {}
     classification = classification or {}
     payload = {
-        "lead_first_name": reply.get("first_name") or "there",
+        # "" when unknown, never "there" (owner report 2026-07-28: the old
+        # "there" fallback was handed to the model as if it WERE the lead's
+        # name, so the greeting rule's first branch always fired and the
+        # reply-signature / outreach-greeting fallbacks below it never ran -
+        # every nameless reply got "Hi there" even when the original
+        # outreach opened "Hi David,").
+        "lead_first_name": reply.get("first_name") or "",
         "original_subject": reply.get("subject") or "",
         "original_outreach": (reply.get("first_outbound") or "")[:1500],
         "reply_body": (reply.get("body") or "")[:3000],
@@ -1303,7 +1309,52 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     # meaningful on a feedback redraft - blank it everywhere else.
     feedback_note = (str(data.get("feedback_note") or "").strip()
                      if payload.get("reviewer_feedback") else "")
+    html_body = enforce_signoff(html_body, sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
+
+
+# A closing word is not a name - never overwrite one of these with SenderFirst.
+_CLOSING_WORDS = {"thanks", "thank you", "cheers", "best", "best regards", "regards",
+                 "sincerely", "kind regards", "many thanks", "speak soon", "warmly",
+                 "all the best", "talk soon", "yours"}
+# The final block's visible text, when the draft ends in a sign-off line.
+_SIGNOFF_TAIL_RE = re.compile(r"<div>([^<>]{1,40})</div>\s*$", re.I)
+# What a personal-name sign-off looks like: one or two capitalised words.
+_NAME_LIKE_RE = re.compile(r"^[A-Z][A-Za-z'’\-]{1,19}(?: [A-Z][A-Za-z'’\-]{1,19})?$")
+
+
+def enforce_signoff(html: str, sender_first: str) -> str:
+    """Deterministic guard on WHOSE name the draft signs off with (owner
+    report 2026-07-28: roughly one draft in four signed "Bjorn" instead of
+    "Bjion" - the drafting model normalising an unfamiliar first name -
+    despite sender_first being set and an explicit owner rule forbidding it.
+    _sender_first_for already made the value canonical; nothing enforced it
+    on the way out).
+
+    Rewrites the final block ONLY when every one of these holds, so it can
+    never damage a draft that just doesn't end in a name:
+      - sender_first is configured (empty -> DRAFT_SYSTEM's "no sign-off
+        line at all" rule owns this case, leave the draft alone);
+      - the html ends in a short plain-text <div> (no links, no markup);
+      - that text looks like a personal name (one or two capitalised words)
+        and is NOT a closing word like "Thanks" or "Best regards";
+      - it does not already match sender_first.
+    Anything else returns the html byte-identical. Never raises."""
+    try:
+        sender_first = str(sender_first or "").strip()
+        if not sender_first or not html:
+            return html
+        m = _SIGNOFF_TAIL_RE.search(html)
+        if not m:
+            return html
+        tail = m.group(1).strip()
+        if not tail or tail.lower() in _CLOSING_WORDS or not _NAME_LIKE_RE.match(tail):
+            return html
+        if tail.lower() == sender_first.lower():
+            return html
+        return html[:m.start(1)] + sender_first + html[m.end(1):]
+    except Exception:  # noqa: BLE001 - a sign-off guard must never sink a draft
+        return html
 
 
 PROOFREAD_SCHEMA = {

@@ -7717,6 +7717,52 @@ def test_training_session_digest_corrections_priority_under_cap():
          "CONFIRMED" in roomy_digest, roomy_digest)
 
 
+# ── sign-off guard: enforce_signoff (owner report 2026-07-28) ──────────────────
+
+_SIGNOFF_BODY = ('<div>Hi Jonas,</div><br><div>Here is the resource I put together.</div><br>'
+                '<div>If those times aren\'t suitable, feel free to '
+                '<a href="https://calendly.example/book">book a call here</a>.</div><br><div>%s</div>')
+
+
+def test_enforce_signoff_rewrites_a_wrong_name():
+    fresh_setter()
+    got = setter.enforce_signoff(_SIGNOFF_BODY % "Bjorn", "Bjion")
+    check("signoff: a drafted name that isn't SenderFirst is rewritten to it",
+         got == _SIGNOFF_BODY % "Bjion", got)
+
+
+def test_enforce_signoff_leaves_the_right_name_and_full_name():
+    fresh_setter()
+    same = _SIGNOFF_BODY % "Bjion"
+    check("signoff: the correct name is left byte-identical",
+         setter.enforce_signoff(same, "Bjion") == same, same)
+    got = setter.enforce_signoff(_SIGNOFF_BODY % "Bjion Henry", "Bjion")
+    check("signoff: a full-name sign-off is normalised to SenderFirst",
+         got == _SIGNOFF_BODY % "Bjion", got)
+
+
+def test_enforce_signoff_never_touches_a_non_name_tail():
+    fresh_setter()
+    for tail in ("Thanks", "Best regards", "Cheers"):
+        same = _SIGNOFF_BODY % tail
+        check("signoff: closing word %r is not a name and is left alone" % tail,
+             setter.enforce_signoff(same, "Bjion") == same, tail)
+    linked = _SIGNOFF_BODY % '<a href="https://x.example">Bjorn</a>'
+    check("signoff: a tail carrying markup is left alone",
+         setter.enforce_signoff(linked, "Bjion") == linked, linked)
+    no_tail = "<div>Hi Jonas,</div><br><div>Speak soon.</div>"
+    check("signoff: a draft with no name-like final block is left alone",
+         setter.enforce_signoff(no_tail, "Bjion") == no_tail, no_tail)
+
+
+def test_enforce_signoff_noop_without_sender_first():
+    fresh_setter()
+    same = _SIGNOFF_BODY % "Bjorn"
+    check("signoff: empty SenderFirst leaves the draft alone (no sign-off rule owns it)",
+         setter.enforce_signoff(same, "") == same, same)
+    check("signoff: empty html is returned unchanged", setter.enforce_signoff("", "Bjion") == "", "")
+
+
 # ── second sweep: proofread_draft (trainer-obedience brief 2026-07-14) ──────────
 
 def test_proofread_draft_clean_fix_applies():
@@ -9154,6 +9200,10 @@ if __name__ == "__main__":
     test_confirmed_examples_rolling_cap_newest_kept()
     test_training_session_digest_confirmations_after_corrections_and_priority()
     test_training_session_digest_corrections_priority_under_cap()
+    test_enforce_signoff_rewrites_a_wrong_name()
+    test_enforce_signoff_leaves_the_right_name_and_full_name()
+    test_enforce_signoff_never_touches_a_non_name_tail()
+    test_enforce_signoff_noop_without_sender_first()
     test_proofread_draft_clean_fix_applies()
     test_proofread_draft_url_mismatch_keeps_original()
     test_proofread_draft_digit_change_keeps_original()
