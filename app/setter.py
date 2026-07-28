@@ -5946,40 +5946,71 @@ _LEAD_CONTACT_TTL = 3600.0        # a lead's profile/website changes ~never; 1h 
 
 
 def route_lead_contact_get(params):
-    """GET /api/setter/lead-contact?id=<queue_id> - the lead's LinkedIn profile
-    and website straight from Smartlead (the system of record), for the
-    sidebar's quick links. Smartlead already stores `linkedin_profile`, so the
-    sidebar links the REAL profile rather than a name search. Cached per email
-    for an hour; test rows and unknown leads answer empty. Never raises."""
+    """GET /api/setter/lead-contact?id=<queue_id> - the lead's personal
+    LinkedIn, real company website, and Smartlead conversation id for the
+    sidebar's quick links (owner ask 2026-07-28: Website linked the freemail
+    domain, LinkedIn fell back to a name search, Smartlead opened a generic
+    search view).
+
+    Two sources, merged: Supabase `people` (linkedin_slug + the REAL
+    company_domain - even a gmail lead knows its bohoplume.pl there) and
+    Smartlead `/leads/` (stored linkedin_profile/website, plus
+    `lead_campaign_data[].campaign_lead_map_id` for THIS campaign - the id
+    the master inbox's ?leadMap= deep link opens directly, verified against
+    the master-inbox bundle 2026-07-28). Cached per email+campaign for an
+    hour; test rows and unknown leads answer empty. Never raises."""
     try:
         qid = _qp(params, "id", "")
         if not qid:
             return 400, {"error": "id is required"}
-        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=lead_email,is_test") if _SB else None
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}"
+                          "&select=lead_email,is_test,smartlead_campaign_id") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
         email = (row.get("lead_email") or "").strip()
-        empty = {"linkedin": "", "website": "", "company_name": "", "phone": ""}
+        campaign_id = row.get("smartlead_campaign_id")
+        empty = {"linkedin": "", "website": "", "company_name": "", "phone": "", "lead_map": ""}
         if not email or row.get("is_test"):
             return 200, empty
         now = _time.time()
-        cached = _LEAD_CONTACT_CACHE.get(email.lower())
+        cache_key = (email.lower(), str(campaign_id or ""))
+        cached = _LEAD_CONTACT_CACHE.get(cache_key)
         if cached and (now - cached[0]) < _LEAD_CONTACT_TTL:
             return 200, cached[1]
         out = dict(empty)
+        # Supabase first (free, no rate limit): the people table's slug is the
+        # personal profile, and its company_domain is the enriched REAL domain.
+        try:
+            ppl = _SB("GET", f"people?email=eq.{quote(email.lower())}"
+                             "&select=linkedin_slug,company_domain&limit=1") if _SB else None
+            if isinstance(ppl, list) and ppl:
+                slug = (ppl[0].get("linkedin_slug") or "").strip().strip("/")
+                if slug:
+                    out["linkedin"] = slug if slug.startswith("http") \
+                        else f"https://www.linkedin.com/in/{slug}"
+                dom = (ppl[0].get("company_domain") or "").strip()
+                if dom:
+                    out["website"] = dom
+        except Exception:  # noqa: BLE001 - Supabase miss just falls through to Smartlead
+            pass
         try:
             resp = _sl_get("/leads/", {"email": email})
             if isinstance(resp, dict):
-                out = {
-                    "linkedin": (resp.get("linkedin_profile") or "").strip(),
-                    "website": (resp.get("website") or "").strip(),
-                    "company_name": (resp.get("company_name") or "").strip(),
-                    "phone": str(resp.get("phone_number") or "").strip(),
-                }
+                out["linkedin"] = out["linkedin"] or (resp.get("linkedin_profile") or "").strip()
+                out["website"] = out["website"] or (resp.get("website") or "").strip()
+                out["company_name"] = (resp.get("company_name") or "").strip()
+                out["phone"] = str(resp.get("phone_number") or "").strip()
+                # The conversation id: this lead's campaign_lead_map_id inside
+                # THIS campaign (same one-call resolution _sl_lead_map_id_by_email
+                # proved live 2026-07-17).
+                for m in (resp.get("lead_campaign_data") or []):
+                    if isinstance(m, dict) and str(m.get("campaign_id")) == str(campaign_id or ""):
+                        out["lead_map"] = str(m.get("campaign_lead_map_id") or "")
+                        break
         except Exception:  # noqa: BLE001 - a missing lookup just means no quick link
             pass
-        _LEAD_CONTACT_CACHE[email.lower()] = (now, out)
+        _LEAD_CONTACT_CACHE[cache_key] = (now, out)
         return 200, out
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}

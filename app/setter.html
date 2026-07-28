@@ -2312,7 +2312,9 @@ function leadLinkedIn(row) {
   if (real) {
     return { href: /^https?:\/\//i.test(real) ? real : ("https://" + real), title: "Open LinkedIn profile", search: false };
   }
-  const brand = companyBrandFromDomain(row.company_domain);
+  // A freemail domain has no brand to search by ("Jane Gmail" helps nobody).
+  const brand = (row.company_domain && !FREEMAIL_RE.test(row.company_domain))
+    ? companyBrandFromDomain(row.company_domain) : "";
   const nm = leadName(row);
   const kw = [nm, brand].filter(Boolean).join(" ").trim() || nm || brand || "";
   return {
@@ -2327,17 +2329,29 @@ function leadLinkedIn(row) {
    stored website. LinkedIn links the stored profile when we have it (Smartlead
    holds `linkedin_profile`); the label is always "LinkedIn", falling back to a
    people-search only until the profile arrives / if none is on file. */
+/* A freemail domain is a mailbox, not a company website - a gmail.com lead
+   used to get a "Website" button pointing at google's inbox login. The real
+   domain arrives from the enrichment layer via hydrateLeadContact. */
+const FREEMAIL_RE = /^(gmail|googlemail|yahoo|ymail|rocketmail|hotmail|outlook|live|msn|icloud|me|mac|aol|gmx|web|mail|proton|protonmail|pm|zoho|yandex|wp|onet|interia|o2|op|seznam|t-online|orange|wanadoo|free|laposte|libero|virgilio|comcast|verizon|att|sbcglobal|bellsouth|cox|shaw|rogers|btinternet|sky|talktalk)\.[a-z.]{2,6}$/i;
 function leadQuickLinksHtml(row) {
-  const domain = row.company_domain || domainFromUrl(row.company_website);
+  const rawDomain = row.company_domain || "";
+  const realDomain = (rawDomain && !FREEMAIL_RE.test(rawDomain)) ? rawDomain : "";
+  const domain = realDomain || domainFromUrl(row.company_website);
   const site = domain ? `https://${esc(domain)}` : (row.company_website ? esc(ensureHttps(row.company_website)) : "");
   const websiteBtn = site
     ? `<a class="lp-qbtn" href="${site}" target="_blank" rel="noopener" title="${esc(domain || row.company_website)}">${ICON_GLOBE}<span>Website</span></a>` : "";
   const li = leadLinkedIn(row);
   const linkedinBtn = `<a class="lp-qbtn lp-li-btn" href="${esc(li.href)}" target="_blank" rel="noopener" title="${esc(li.title)}">${ICON_LINKEDIN}<span>LinkedIn</span></a>`;
-  // "Open in Smartlead" now sits beside Website/LinkedIn as a matching button
-  // (owner ask). The master-inbox ?search= prefills this lead's conversation.
+  // "Open in Smartlead": ?leadMap=<campaign_lead_map_id> opens THIS lead's
+  // conversation directly (the master inbox filters to that one thread and
+  // auto-selects it - verified against Smartlead's own bundle 2026-07-28).
+  // Until the id arrives (hydrateLeadContact), fall back to the search
+  // prefill, which still lands on the right lead after one click.
+  const slHref = row.lead_map_id
+    ? `https://app.smartlead.ai/app/master-inbox?leadMap=${encodeURIComponent(row.lead_map_id)}`
+    : `https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email || "")}`;
   const smartleadBtn = row.lead_email
-    ? `<a class="lp-qbtn" href="https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email)}" target="_blank" rel="noopener" title="Open this lead's conversation in Smartlead's master inbox">${ICON_EXTERNAL}<span>Smartlead</span></a>` : "";
+    ? `<a class="lp-qbtn" href="${slHref}" target="_blank" rel="noopener" title="${row.lead_map_id ? "Open this exact conversation in Smartlead" : "Open this lead's conversation in Smartlead's master inbox"}">${ICON_EXTERNAL}<span>Smartlead</span></a>` : "";
   return websiteBtn + linkedinBtn + smartleadBtn;
 }
 /* Colour tone for the current-category pill: green for a positive, red for a
@@ -2463,17 +2477,25 @@ async function hydrateCategoryOptions(sel, row) {
 async function hydrateLeadContact(row) {
   if (!row || row.is_test) return;
   const haveLi = row.lead_linkedin || row.linkedin_url || row.linkedin;
-  const haveSite = row.company_domain || row.company_website;
-  if (haveLi && haveSite) return;
+  // A freemail company_domain is NOT a usable site - keep fetching until the
+  // enrichment layer's real domain (or Smartlead's stored website) arrives.
+  const haveSite = (row.company_domain && !FREEMAIL_RE.test(row.company_domain)) || row.company_website;
+  const haveMap = row.lead_map_id;
+  if (haveLi && haveSite && haveMap) return;
   const res = await fetchJson(`/api/setter/lead-contact?id=${encodeURIComponent(row.id)}`);
   if (!res.ok || !res.data) return;
   let changed = false;
   if (res.data.linkedin && !haveLi) { row.lead_linkedin = res.data.linkedin; changed = true; }
   if (res.data.website && !haveSite) { row.company_website = res.data.website; changed = true; }
+  if (res.data.lead_map && !haveMap) { row.lead_map_id = res.data.lead_map; changed = true; }
   if (!changed) return;
   [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
     const r = (list || []).find((x) => String(x.id) === String(row.id));
-    if (r) { if (res.data.linkedin) r.lead_linkedin = res.data.linkedin; if (res.data.website) r.company_website = res.data.website; }
+    if (r) {
+      if (res.data.linkedin) r.lead_linkedin = res.data.linkedin;
+      if (res.data.website) r.company_website = res.data.website;
+      if (res.data.lead_map) r.lead_map_id = res.data.lead_map;
+    }
   });
   if (String(selectedRowId) === String(row.id)) {
     // Re-render every quick-links row on the page (sidebar + sticky bar).
