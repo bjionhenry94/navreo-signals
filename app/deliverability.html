@@ -1176,13 +1176,16 @@ function renderStrip(v) {
     set("ssd3", "sss3", waiting > 0 ? "amber" : "mute",
         waiting > 0 ? fmtN(waiting) + " waiting for an answer" : fmtN(v.pos) + " interested so far");
   }
-  // 4 · meetings vs last month
-  var mm = HUB && HUB.meetings_monthly && HUB.meetings_monthly[ckey()];
-  if (mm) {
-    var d = (mm.this || 0) - (mm.prev || 0);
-    var MSHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    set("ssd4", "sss4", d > 0 ? "green" : d < 0 ? "amber" : "mute",
-        fmtN(mm.this) + " in " + MSHORT[new Date().getMonth()] + " · " + (d > 0 ? "up " + d : d < 0 ? "down " + (-d) : "level"));
+  // 4 · meetings over the selected window vs the window before (range-aware,
+  // so it matches the funnel and section 6 under the same toggle — the old
+  // calendar-month tile contradicted them, 2026-07-28 testers)
+  var mtg = seriesFor("meetings") || [];
+  if (mtg.length) {
+    var R = state.range, m1 = halfSum(mtg, R);
+    var havePrior = mtg.length >= R * 2, m0 = havePrior ? halfSum(mtg, R * 2) - m1 : null;
+    var d = m0 == null ? 0 : m1 - m0;
+    set("ssd4", "sss4", m0 == null ? "mute" : d > 0 ? "green" : d < 0 ? "amber" : "mute",
+        fmtN(m1) + " in the last " + R + " days" + (m0 == null ? "" : " · " + (d > 0 ? "up " + d : d < 0 ? "down " + (-d) : "level")));
   } else set("ssd4", "sss4", "mute", "–");
 }
 function set(dotId, txtId, cls, txt) { $(dotId).className = "dot " + cls; $(txtId).textContent = txt; }
@@ -1616,33 +1619,38 @@ function renderWho() {
 
 /* ── lane 6: meetings ── */
 function renderMeet() {
-  // A client with no key gets explicit zeros — an early return here left the
-  // PREVIOUS client's numbers on screen (Asteri showing Amplifyy's July,
-  // caught by the 2026-07-28 testers)
-  var mm = (HUB && HUB.meetings_monthly && HUB.meetings_monthly[ckey()]) || { "this": 0, prev: 0 };
-  var t = mm.this || 0, pv = mm.prev || 0, d = t - pv;
-  var now = new Date();
-  var MFULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-  var thisM = MFULL[now.getMonth()], prevM = MFULL[(now.getMonth() + 11) % 12];
-  $("meet-kick").textContent = "Meetings booked in " + thisM + (state.client === "All" ? "" : " · " + state.client);
-  $("meet-ml1").textContent = prevM + " to the " + now.getDate() + getOrd(now.getDate());
-  $("meet-ml2").textContent = thisM + " so far";
+  // RANGE-AWARE (like every other section): meetings in the selected window vs
+  // the window before it, from the meetings series — so it can't contradict the
+  // funnel's "MEETINGS · N" under the same range toggle (the calendar-month
+  // card did, seen by three rounds of testers 2026-07-28).
+  var mtg = seriesFor("meetings") || [];
+  var R = state.range;
+  var t = halfSum(mtg, R);
+  var havePrior = mtg.length >= R * 2;
+  var pv = havePrior ? (halfSum(mtg, R * 2) - t) : 0;
+  var d = t - pv;
+  $("meet-kick").textContent = "Meetings booked · " + rangeLabel() + (state.client === "All" ? "" : " · " + state.client);
+  $("meet-ml1").textContent = havePrior ? "prior " + R + " days" : "";
+  $("meet-ml2").textContent = "last " + R + " days";
   $("meet-big").textContent = fmtN(t);
   var pill = $("meet-pill");
-  pill.textContent = d > 0 ? "up " + d + " on " + prevM : d < 0 ? "down " + (-d) + " on " + prevM : "level with " + prevM;
-  pill.className = "apill num " + (d > 0 ? "green" : d < 0 ? "amber" : "mute");
-  $("meet-src").textContent = mm.top_campaign ? fmtN(mm.top_n) + " came from “" + shortName(mm.top_campaign) + "”" : "";
+  if (!havePrior) { pill.textContent = ""; pill.className = "apill num mute"; }
+  else {
+    pill.textContent = d > 0 ? "up " + d + " on the " + R + " before" : d < 0 ? "down " + (-d) + " on the " + R + " before" : "level with the " + R + " before";
+    pill.className = "apill num " + (d > 0 ? "green" : d < 0 ? "amber" : "mute");
+  }
+  $("meet-src").textContent = "";
   var max = Math.max(t, pv, 1);
-  $("meet-mv1").textContent = fmtN(pv);
+  $("meet-mv1").textContent = havePrior ? fmtN(pv) : "–";
   $("meet-mb1").style.height = Math.max(6, Math.round(pv / max * 84)) + "px";
   $("meet-mv2").textContent = fmtN(t);
   $("meet-mb2").style.height = Math.max(6, Math.round(t / max * 84)) + "px";
   var lat = HUB.latency && HUB.latency[ckey()];
-  $("meet-take").textContent = (t === 0 && pv === 0)
-    ? "No meetings booked yet" + (state.client === "All" ? "" : " for " + state.client) + " — fix the biggest leak above first."
+  $("meet-take").textContent = (t === 0)
+    ? "No meetings" + (state.client === "All" ? "" : " for " + state.client) + " in the " + rangeLabel() + " — fix the biggest leak above first."
     : (d >= 0
       ? (lat && lat.avg_mins > 60 ? "Answer faster to push it higher." : "Keep doing what works.")
-      : "Down on last month — check the leak above.");
+      : "Down on the previous " + R + " days — check the leak above.");
 }
 
 /* ── header ── */
@@ -1794,9 +1802,24 @@ function renderBounce() {
   var b = bncBand(avgPct);
   big.textContent = avgPct == null ? "–" : avgPct.toFixed(2) + "%";
   big.className = "bnc-hero num bnc-" + b;
+  // On the All view, name the worst CLIENT on bounce in one line — two testers
+  // asked "which client is in trouble?" and had to read campaign names to
+  // infer it (2026-07-28). Per-client bounce from the sweep, min-sent gated.
+  var worst = "";
+  if (state.client === "All" && CW && CW.windows) {
+    var wc = CW.windows[String(state.range)] || {}, best = null;
+    Object.keys(wc).forEach(function (cl) {
+      if (cl === "__all") return;
+      var r = wc[cl];
+      if (!r || r.sent < 2000) return;   // don't crown a tiny list
+      var p = r.bounced / r.sent * 100;
+      if (!best || p > best.p) best = { cl: cl, p: p };
+    });
+    if (best && best.p >= BNC_LIMIT) worst = " · worst client: " + best.cl + " at " + best.p.toFixed(1) + "%";
+  }
   $("bnc-scope").textContent = avgPct == null ? "" :
     (state.client === "All" ? "All clients" : state.client) + " · average over the " + rangeLabel() +
-    (today != null && !winMode ? " · latest day " + today.toFixed(2) + "%" : "");
+    (today != null && !winMode ? " · latest day " + today.toFixed(2) + "%" : "") + worst;
 
   // sparkline: only the trailing run at/over the limit is coloured, so weeks
   // that were genuinely fine are not retro-painted by today
