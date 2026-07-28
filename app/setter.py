@@ -5235,8 +5235,15 @@ def route_subsequence_unresolved(_params):
         if not _SB:
             return 200, {"rows": []}
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=14)).isoformat()
+        # Only the columns this endpoint actually reads. select=* dragged every
+        # row's full thread JSON (megabytes for 14 days of sent rows) and sat
+        # right on the Supabase timeout - measured live 2026-07-28 at 15-33s
+        # with intermittent total failure, which is what made the tray vanish.
+        cols = ("id,lead_email,lead_first_name,lead_last_name,company_domain,reply_body,"
+                "sent_at,smartlead_campaign_id,subsequence_decision,added_to_subsequence,"
+                "category,message_id")
         rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(sent,auto_sent)"
-                          f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select=*")
+                          f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select={cols}")
         if not isinstance(rows, list):
             # sb() answers None on a failed fetch (it is best-effort by
             # design). Translating that into 200 {"rows": []} told the tray
