@@ -768,7 +768,10 @@ function rateDailyShared() {
   });
 }
 function seriesFor(k) {   // full 30-day array for series k under current client, or null
-  if (!HUB) return [];
+  // Don't gate the whole chart on the analytics-hub RPC (the slowest boot read).
+  // sent/bounces/rate/replies all come from client-windows for workspace clients
+  // (All/Asteri/KRG/Grout), so they can plot the moment CW lands — the hub-only
+  // lines (interested/meetings) fill in when HUB arrives, via the guarded tail.
   if (k === "sent" || k === "bounces" || k === "rate") {
     var cs = cwSeries(k);
     if (cs) return cs;
@@ -788,7 +791,7 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     var ws = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
     if (ws && ws.replied) return ws.replied;
   }
-  var s = HUB.series && HUB.series[ckey()];
+  var s = HUB && HUB.series && HUB.series[ckey()];
   return (s && s[k === "interested" ? "interested" : k]) || [];
 }
 function repliesShown() { // THE reply count every widget shows for this view
@@ -926,7 +929,11 @@ function renderTrend() {
   renderLegend();
   $("hero-kick").textContent = "Day by day · " + rangeLabel() +
     (state.client === "All" ? "" : " · " + state.client);
-  var allDays = HUB ? slice(HUB.days) : [];
+  // Axis = the hub's day list, or client-windows' aligned day list while the hub
+  // RPC is still in flight. Either one lets the chart draw; only when BOTH are
+  // missing do we show the loading frame.
+  var axisDays = (HUB && HUB.days) || (CW && CW.days) || [];
+  var allDays = slice(axisDays);
   if (!allDays.length) {
     // hub still loading — say so instead of leaving a silent empty frame
     $("trend-svg").innerHTML = '<text x="560" y="132" text-anchor="middle" font-size="13" fill="var(--ink-3)">Loading your ' + rangeLabel() + "…</text>";
@@ -965,7 +972,7 @@ function renderTrend() {
   // Sent bars ride their own scale (own peak), independent of the line axis.
   var sentMax = 1;
   if (sentBars) sentBars.forEach(function (v) { if (v > sentMax) sentMax = v; });
-  GEO = { ymax: ymax, rmax: rmax, n: n, off: (HUB.days.length - n), keep: keep, sentMax: sentMax };
+  GEO = { ymax: ymax, rmax: rmax, n: n, off: (axisDays.length - n), keep: keep, sentMax: sentMax };
   function X(ii) { return n === 1 ? L : L + ii * pw / (n - 1); }
   function Y(v) { return T + (1 - v / ymax) * ph; }
   function YR(v) { return T + (1 - v / rmax) * ph; }
@@ -1092,10 +1099,9 @@ function hideTip() {
   $("trend-tip").hidden = true;
 }
 function trendMove(ev) {
-  if (!HUB) return;
   var svg = $("trend-svg"), r = svg.getBoundingClientRect();
   if (!r.width) return;
-  var allD = slice(HUB.days);
+  var allD = slice((HUB && HUB.days) || (CW && CW.days) || []);
   if (!allD.length) return;
   var keep = chartKeep(allD);
   var days = keep.map(function (i) { return allD[i]; });
