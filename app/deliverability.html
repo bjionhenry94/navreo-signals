@@ -1784,14 +1784,17 @@ function renderDying() {
 function renderOffer() {
   var p = bookRow("offer");
   var box = $("offer-rows");
-  // per-client offer table when the cron has one for this client, else whole
-  // book (Bjion 2026-07-28). by_client["All"] === the whole-book table.
-  var scoped = p && p.by_client && state.client !== "All" && p.by_client[state.client];
-  var offerList = scoped || (p && p.stats && p.stats.offers);
-  var perClient = !!scoped;
+  // Show ONLY the selected client's offers — never the whole-book table under
+  // a client chip (that mislabelled the fleet's numbers as KRG's, Bjion
+  // 2026-07-29). "All" uses the whole-book table; a client uses its own or,
+  // if it has none, an honest "not enough for this client".
+  var perClient = state.client !== "All";
+  var offerList = perClient
+    ? (p && p.by_client && p.by_client[state.client])
+    : (p && p.stats && p.stats.offers);
   if (!p || !offerList || offerList.length < 2) {
     box.innerHTML = '<div class="subline">Not enough sending behind any one offer' +
-      (state.client === "All" ? "" : " for " + escq(state.client)) + " yet.</div>";
+      (perClient ? " for " + escq(state.client) : "") + " yet.</div>";
     $("offer-sub").textContent = "";
     $("offer-take-row").style.display = "none";
     if ($("offer-scope")) $("offer-scope").textContent = state.client === "All" ? "· whole book" : "· " + state.client;
