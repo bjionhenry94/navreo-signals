@@ -733,12 +733,27 @@ function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none 
   }
   return null;
 }
+// Daily reply-rate for a shared-workspace client (Navreo/Amplifyy/Arnic):
+// EXACT daily replies (hub series) ÷ the estimated daily sent split. Lets those
+// clients show a reply-rate line too, not just a total (Bjion 2026-07-28).
+function rateDailyShared() {
+  var hs = HUB && HUB.series && HUB.series[ckey()];
+  var sd = sentDailyFull();
+  if (!hs || !hs.replies || !sd) return null;
+  return sd.map(function (v, i) {
+    return (v >= 50 && hs.replies[i] != null) ? Math.round((hs.replies[i] || 0) * 10000 / v) / 100 : null;
+  });
+}
 function seriesFor(k) {   // full 30-day array for series k under current client, or null
   if (!HUB) return [];
   if (k === "sent" || k === "bounces" || k === "rate") {
     var cs = cwSeries(k);
     if (cs) return cs;
-    // no per-client daily line exists (shared-workspace client) → null;
+    if (k === "rate" && state.client !== "All") {
+      var rs = rateDailyShared();   // shared-workspace client gets a rate line too
+      if (rs) return rs;
+    }
+    // no per-client daily line exists yet → null;
     // "All" falls back to the fleet trends while client-windows still builds
     return state.client === "All" ? fleetSeries()[k] : null;
   }
