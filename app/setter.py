@@ -5934,6 +5934,20 @@ def route_queue_action(payload):
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
+            # A stale id is not a missing reply (owner bug 2026-07-28: "Couldn't
+            # send the reply: Queue row not found"). Re-intake DELETES a queue
+            # row and re-inserts it under a NEW id (see the re-categorise path),
+            # so any tab open across that swap holds a dead id and every action
+            # 404s even though the reply is sitting right there. The client
+            # sends the reply's own identity alongside the id, so re-resolve on
+            # it and act on the row that now carries this reply.
+            ident = payload.get("identity")
+            if isinstance(ident, dict):
+                row = _existing_row(ident.get("workspace") or WORKSPACE,
+                                    ident.get("smartlead_campaign_id"),
+                                    str(ident.get("lead_email") or "").strip().lower(),
+                                    str(ident.get("message_id") or ""))
+        if not row:
             return 404, {"error": "Queue row not found."}
         if action == "subsequence":
             checked = bool(payload.get("checked"))

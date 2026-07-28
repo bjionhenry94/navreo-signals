@@ -3313,6 +3313,17 @@ async function doSend(btn) {
   // Stated explicitly on every send, never inferred: the server teaches only
   // when this says so, so a stale tab can never spring a surprise lesson.
   const payload = { id: Number(id), action: "send", training: trainingModeOn() };
+  // The reply's own identity rides along so a stale id can never lose the
+  // send (bug 2026-07-28): re-intake swaps a row's id underneath an open tab,
+  // and the server re-resolves on these four fields when the id is gone.
+  if (row) {
+    payload.identity = {
+      workspace: row.workspace,
+      smartlead_campaign_id: row.smartlead_campaign_id,
+      lead_email: row.lead_email,
+      message_id: row.source_message_id || row.message_id,
+    };
+  }
   if (draftEl) payload.body_override = draftEl.innerHTML;
   // The send-gate choice rides along on the same request (spec: no second
   // round trip). No gate rendered for this row (no campaign, or the

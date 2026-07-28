@@ -218,8 +218,13 @@ class FakeSB:
         return []
 
     def _queue_row_matches(self, row, params):
-        for key in ("id", "workspace", "smartlead_campaign_id", "lead_email", "message_id", "status",
-                    "is_test", "agent_id", "updated_at"):
+        # source_message_id is filtered for real: _existing_row's second query
+        # keys on it, and a fake that ignored the filter matched EVERY row, so
+        # a lookup for a message id nobody carries came back with someone
+        # else's reply - the exact wrong-reply case a stale-id recovery must
+        # never hit (2026-07-28).
+        for key in ("id", "workspace", "smartlead_campaign_id", "lead_email", "message_id",
+                    "source_message_id", "status", "is_test", "agent_id", "updated_at"):
             if key in params and not self._match_eq(row.get(key), params[key]):
                 return False
         return True
@@ -1679,6 +1684,35 @@ def test_route_queue_action_send_409_when_already_sent():
 
     status2, resp2 = setter.route_queue_action({"id": 502, "action": "send"})
     check("route_queue_action: send on an already sent row also returns 409", status2 == 409, (status2, resp2))
+
+
+def test_route_queue_action_recovers_a_stale_row_id():
+    """Owner bug 2026-07-28: re-intake DELETEs a queue row and re-inserts it
+    under a new id, so a tab open across the swap sent against a dead id and
+    got "Queue row not found". The identity riding along on the request must
+    re-resolve it onto the row that now carries the reply."""
+    sb, http = fresh_setter()
+    ident = {"workspace": "navreo", "smartlead_campaign_id": 111,
+             "lead_email": "stale@y.com", "message_id": "m-stale"}
+    # id 900 is the id the tab still holds; the live row is 901 (already sent,
+    # which proves WHICH row answered - a 404 would come back instead).
+    sb.queue.append({"id": 901, "status": "sent", "draft_body": "hi", "draft_subject": "Re: hi",
+                     "reply_subject": "hi", **ident})
+
+    status, resp = setter.route_queue_action({"id": 900, "action": "send", "identity": ident})
+    check("stale id: send re-resolves onto the reply's current row",
+         status == 409 and resp == {"error": "This reply was already sent."}, (status, resp))
+
+    # No identity (autopilot, an old client) -> unchanged 404 behaviour.
+    s404, r404 = setter.route_queue_action({"id": 900, "action": "send"})
+    check("stale id: a request with no identity still 404s as before",
+         s404 == 404 and r404 == {"error": "Queue row not found."}, (s404, r404))
+
+    # An identity that matches nothing must not wander onto another reply.
+    s2, r2 = setter.route_queue_action({"id": 900, "action": "send",
+                                       "identity": {**ident, "message_id": "no-such-mid"}})
+    check("stale id: an unmatched identity 404s rather than sending the wrong reply",
+         s2 == 404, (s2, r2))
 
 
 # ── real Smartlead sub-sequence enrolment ───────────────────────────────────
@@ -9174,6 +9208,7 @@ if __name__ == "__main__":
     test_uncat_autoresolve_converts_core_four()
     test_uncat_autoresolve_dismisses_non_core()
     test_uncat_manual_verdict_is_untouchable()
+    test_route_queue_action_recovers_a_stale_row_id()
     test_recategorise_route_convert_and_discard()
     test_recategorise_route_guards()
     test_lead_contact_route()
