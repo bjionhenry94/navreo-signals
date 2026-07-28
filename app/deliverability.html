@@ -888,8 +888,10 @@ function renderTrend() {
     sub += " " + escq(state.client) + "'s totals here are exact; day-by-day lines exist for the whole book, Asteri and KRG.";
   }
   $("trend-sub").textContent = sub;
-  var rep = slice(seriesFor("replies")), mtg = slice(seriesFor("meetings"));
-  $("trend-take").textContent = takeLine(rep, mtg);
+  // FULL series, not the range slice: "this week vs last week" needs 14
+  // trailing days even when the page shows 7 (the sliced version claimed
+  // "up on last week's 0" on every 7-day view)
+  $("trend-take").textContent = takeLine(seriesFor("replies") || [], seriesFor("meetings") || []);
   hideTip();
 }
 function halfSum(a, back) { var t = 0; for (var i = Math.max(0, a.length - back); i < a.length; i++) t += a[i] || 0; return t; }
@@ -898,7 +900,7 @@ function takeLine(rep, mtg) {
   // (the "replies are up" verdict over 2 Asteri replies, 2026-07-28 testers);
   // and the sentence carries its own numbers + window, so it can't read as a
   // contradiction of the calendar-month meetings card lower down
-  var rTot = rep.reduce(function (a, b) { return a + (b || 0); }, 0);
+  var rTot = halfSum(rep, 14);
   if (rTot < 10) return "Small numbers in this view — read the counts, not the trend.";
   var r1 = halfSum(rep, 7), r0 = halfSum(rep, 14) - r1;
   var m1 = halfSum(mtg, 7), m0 = halfSum(mtg, 14) - m1;
@@ -1049,11 +1051,19 @@ function fmtMins(m) {
 function renderLeakbar(leak, v) {
   var lat = HUB && HUB.latency && HUB.latency[ckey()];
   var bar = $("leakbar"), head = $("leak-head"), body = $("leak-body"), fix = $("leak-fix");
-  if (leak === 2 && lat && lat.n > 0) {
+  if (leak === 2 && lat && lat.n > 0 && (lat.fast_share || 0) < 0.8) {
     head.textContent = "Biggest leak — slow answers";
     body.textContent = "Interested replies get answered in " + fmtMins(lat.avg_mins) + " on average — only " +
       Math.round((lat.fast_share || 0) * 100) + " in 100 get an answer within the hour.";
     fix.textContent = "Answer within the hour to book more.";
+  } else if (leak === 2 && v.pos > 0) {
+    // answers are already fast — "only 100 in 100 within the hour" read as
+    // nonsense (round 3 pre-check); the booking step itself is the leak
+    head.textContent = "Biggest leak — booking";
+    body.textContent = v.mtg === 0
+      ? "None of the " + fmtN(v.pos) + " interested replies in this window has booked yet."
+      : "Only " + plain1in(Math.round(v.pos / v.mtg)) + " interested becomes a meeting.";
+    fix.textContent = "Push for the meeting inside the first reply.";
   } else if (leak === 0) {
     head.textContent = "Biggest leak — replies";
     body.textContent = (Math.round((v.sent ? v.rep / v.sent : 0) * 1000) / 10) + " in 100 people reply. The message or the list needs work.";
