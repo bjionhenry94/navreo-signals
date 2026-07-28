@@ -14047,6 +14047,123 @@ def client_windows_get(force: bool = False) -> tuple[dict, int]:
     return ent, 200
 
 
+# ── Who replies + answer speed, LIVE per client × range ─────────────────────
+# Powers the "Who actually replies?" lane. Computed on demand (SWR-cached 10m
+# per client+window) so it follows the chips and the 7/14/30 toggle, unlike the
+# cron's whole-book snapshot. Interested-reply volumes are small (~130/14d), so
+# fetching them all and filtering by client in Python is cheap.
+_WHO_CACHE: dict = {}
+_WHO_LOCK = threading.Lock()
+_WHO_TTL_S = 600
+
+
+def _who_replies_compute(client: str, days: int) -> dict:
+    days = max(7, min(30, int(days or 30)))
+    since = (_dtmod.datetime.utcnow() - _dtmod.timedelta(days=days)).isoformat()
+    score = {str(r.get("smartlead_campaign_id")): r
+             for r in (sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name") or [])}
+
+    def camp_client(cid, ws):
+        sc = score.get(str(cid))
+        return _client_win_label(sc.get("workspace") if sc else ws, sc.get("name") if sc else "")
+
+    pos = ",".join(_AH_POSITIVE_CATS)
+    reps = sb_get_all(f"replies?select=email,smartlead_campaign_id,workspace"
+                      f"&category=in.({urllib.parse.quote(pos)})&replied_at=gte.{since}") or []
+    emails, seen = [], set()
+    for r in reps:
+        em = (r.get("email") or "").strip().lower()
+        if not em or em in seen:
+            continue
+        if client != "All" and camp_client(r.get("smartlead_campaign_id"), r.get("workspace")) != client:
+            continue
+        seen.add(em)
+        emails.append(em)
+    n_pos = len(emails)
+
+    # titles → role buckets (every DB source)
+    title_map: dict = {}
+    for i in range(0, len(emails), 100):
+        batch = ",".join('"' + m + '"' for m in emails[i:i + 100])
+        for table in ("people", "signal_leads", "r250k_agrade", "r250k_batch"):
+            try:
+                rows = sb("GET", f"{table}?email=in.({urllib.parse.quote(batch)})&select=email,title")
+            except Exception:  # noqa: BLE001
+                rows = None
+            for r in (rows if isinstance(rows, list) else []):
+                em = (r.get("email") or "").strip().lower()
+                if em and (r.get("title") or "").strip() and not (title_map.get(em) or "").strip():
+                    title_map[em] = r.get("title")
+    buckets: dict = {}
+    for em in emails:
+        buckets[_ah_title_bucket(title_map.get(em, ""))] = buckets.get(_ah_title_bucket(title_map.get(em, "")), 0) + 1
+    named = n_pos - buckets.get("Unknown", 0)
+    blist = sorted(((k, v) for k, v in buckets.items() if k != "Unknown"), key=lambda kv: -kv[1])
+
+    # company size via email domain → companies
+    dom_of = {em: em.split("@", 1)[1].lower() for em in emails if "@" in em}
+    size_of: dict = {}
+    doms = sorted(set(dom_of.values()))
+    for i in range(0, len(doms), 100):
+        batch = ",".join('"' + d + '"' for d in doms[i:i + 100])
+        try:
+            rows = sb("GET", f"companies?domain=in.({urllib.parse.quote(batch)})&select=domain,employee_range,employee_count")
+        except Exception:  # noqa: BLE001
+            rows = None
+        for r in (rows if isinstance(rows, list) else []):
+            sbk = _ah_size_bucket(r.get("employee_range"), r.get("employee_count"))
+            if sbk:
+                size_of[(r.get("domain") or "").lower()] = sbk
+    size_buckets: dict = {}
+    for em in emails:
+        b = size_of.get(dom_of.get(em))
+        if b:
+            size_buckets[b] = size_buckets.get(b, 0) + 1
+    _SO = ["1–10", "11–50", "51–200", "201–1,000", "1,000+"]
+    slist = [[k, size_buckets[k]] for k in _SO if k in size_buckets]
+
+    # answer speed from setter_queue, same client + window
+    sq = sb_get_all("setter_queue?select=sent_at,replied_at,smartlead_campaign_id,workspace"
+                    "&status=in.(sent,auto_sent)&is_test=eq.false"
+                    f"&sent_at=not.is.null&replied_at=not.is.null&sent_at=gte.{since}") or []
+    mins = []
+    for r in sq:
+        if client != "All" and camp_client(r.get("smartlead_campaign_id"), r.get("workspace")) != client:
+            continue
+        try:
+            st = _dtmod.datetime.fromisoformat(str(r["sent_at"]).replace("Z", "+00:00"))
+            rp = _dtmod.datetime.fromisoformat(str(r["replied_at"]).replace("Z", "+00:00"))
+            mm = (st - rp).total_seconds() / 60.0
+            if mm > 0:
+                mins.append(mm)
+        except Exception:  # noqa: BLE001
+            continue
+    speed = None
+    if mins:
+        mins.sort()
+        speed = {"n": len(mins), "avg_mins": round(sum(mins) / len(mins)),
+                 "median_mins": round(mins[len(mins) // 2]),
+                 "under15_share": round(sum(1 for m in mins if m <= 15) / len(mins), 2)}
+    return {"client": client, "days": days, "n": n_pos, "named": named,
+            "buckets": [[k, v] for k, v in blist], "sizes": slist,
+            "size_named": sum(size_buckets.values()), "speed": speed}
+
+
+def who_replies_get(client: str, days: int) -> tuple[dict, int]:
+    key = f"{client}|{days}"
+    with _WHO_LOCK:
+        ent = _WHO_CACHE.get(key)
+        if ent and (time.time() - ent["ts"]) < _WHO_TTL_S:
+            return ent["data"], 200
+    try:
+        data = _who_replies_compute(client, days)
+    except Exception as e:  # noqa: BLE001
+        return {"error": "who_unavailable", "message": str(e)[:200]}, 200
+    with _WHO_LOCK:
+        _WHO_CACHE[key] = {"data": data, "ts": time.time()}
+    return data, 200
+
+
 # ── Fleet daily stats: the permanent day-by-day record in Supabase ──────────
 # Sent / replies / reply-rate / positives per calendar day, straight from
 # Smartlead's OWN day-wise analytics (same source as the deliverability tab), so
@@ -16878,6 +16995,16 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
             body, status = client_windows_get(force=force)
+            return self._json(body, status)
+        if path == "/api/who-replies":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            cl = (q.get("client") or ["All"])[0]
+            try:
+                dd = int((q.get("days") or ["30"])[0])
+            except ValueError:
+                dd = 30
+            body, status = who_replies_get(cl, dd)
             return self._json(body, status)
         if path == "/api/restore-plan":
             body, status = api_restore_plan()

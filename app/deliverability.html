@@ -1821,12 +1821,26 @@ function renderOffer() {
   else $("offer-take-row").style.display = "none";
 }
 /* ── lane 5: who replies + waiting ── */
+// live per-client × range payload from /api/who-replies (see ensureWho)
+var WHO = null, WHO_KEY = null;
+function ensureWho() {
+  var kk = state.client + "|" + state.range;
+  if (WHO_KEY === kk) { renderWho(); return; }
+  renderWho();   // paint a loading/previous state immediately
+  j("/api/who-replies?client=" + encodeURIComponent(state.client) + "&days=" + state.range)
+    .then(function (d) { if (d && !d.error) { WHO = d; WHO_KEY = kk; renderWho(); } })
+    .catch(function () { /* leave the previous view */ });
+}
 function renderWho() {
-  var p = bookRow("who-replies");
-  var named = (p && p.stats && p.stats.named) || 0;
-  // ── left box: who's replying (role mix + company size), from the database ──
-  var roleRows = (p && p.stats && p.stats.buckets) ? p.stats.buckets.filter(function (x) { return x[0] !== "Unknown"; }) : [];
-  if (named >= 3 && roleRows.length) {
+  var p = (WHO_KEY === state.client + "|" + state.range) ? WHO : null;
+  var scope = state.client === "All" ? "whole book" : state.client;
+  // ── left box: who's replying (role mix + company size), per client+range ──
+  var named = (p && p.named) || 0;
+  var roleRows = (p && p.buckets) || [];
+  if (!p) {
+    $("who-n").textContent = "…"; $("who-rows").innerHTML = '<div class="subline">Loading…</div>';
+    $("who-size").textContent = ""; $("who-take-row").style.display = "none";
+  } else if (named >= 3 && roleRows.length) {
     var b = roleRows.slice(0, 6);
     var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
     $("who-n").textContent = fmtN(named);
@@ -1835,34 +1849,38 @@ function renderWho() {
         '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
         '<span class="val num">' + fmtN(x[1]) + "</span></div>";
     }).join("");
-    // company size line
-    var sizes = (p.stats.sizes || []);
+    var sizes = p.sizes || [];
     if (sizes.length) {
       var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
       $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
         sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
     } else $("who-size").textContent = "Company size: not enough on file yet.";
-    if (p.act) { $("who-take").textContent = p.act; $("who-take-row").style.display = ""; }
+    $("who-take").textContent = "Aim new lists at " + b[0][0].toLowerCase() + " — most of " + scope + "'s real yeses.";
+    $("who-take-row").style.display = "";
   } else {
-    $("who-n").textContent = fmtN((p && p.stats && p.stats.n) || 0);
-    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data yet — enrich the lead lists.</div>';
+    $("who-n").textContent = fmtN((p && p.n) || 0);
+    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data yet for ' + escq(scope) + " — enrich the lead lists.</div>";
     $("who-size").textContent = "";
-    if (p && p.act) { $("who-take").textContent = p.act; $("who-take-row").style.display = ""; }
+    $("who-take").textContent = "Enrich lead lists with job titles so this panel can name your buyers.";
+    $("who-take-row").style.display = "";
   }
   // ── right box: how fast we answer interested replies (benchmark 15 min) ──
   var sp = p && p.speed;
-  $("wait-scope").textContent = "· interested replies · benchmark 15 min";
-  if (sp && sp.n > 0) {
+  $("wait-scope").textContent = "· " + scope + " · benchmark 15 min";
+  if (!p) {
+    $("wait-big").textContent = "…"; $("wait-big").className = "bignum num";
+    $("wait-sub").textContent = "Loading…"; $("wait-take").textContent = "";
+  } else if (sp && sp.n > 0) {
     var med = sp.median_mins, pct = Math.round((sp.under15_share || 0) * 100);
     $("wait-big").textContent = fmtMins(med);
     $("wait-big").className = "bignum num" + (med > 15 ? " warn" : "");
-    $("wait-sub").textContent = "median answer time · " + pct + " in 100 answered under 15 min · " +
-      fmtN(sp.n) + " answered";
+    $("wait-sub").textContent = "median answer time · " + pct + " in 100 answered under 15 min · " + fmtN(sp.n) + " answered";
     $("wait-take").textContent = med <= 15
       ? "Under the 15-minute benchmark — keep it up."
       : "Over the 15-minute benchmark — answer faster to book more.";
   } else {
-    $("wait-big").textContent = "–"; $("wait-sub").textContent = "No answered replies to time yet."; $("wait-take").textContent = "";
+    $("wait-big").textContent = "–"; $("wait-big").className = "bignum num";
+    $("wait-sub").textContent = "No answered replies to time in this window."; $("wait-take").textContent = "";
   }
 }
 
@@ -2124,7 +2142,7 @@ function renderAll() {
   renderBounce();
   renderRank();
   renderOffer();
-  renderWho();
+  ensureWho();
   renderMeet();
 }
 // The embedded inbox & domain manager follows the client chips (date range
