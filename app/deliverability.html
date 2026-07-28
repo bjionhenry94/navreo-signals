@@ -51,6 +51,9 @@
 .ah .lchip:not(.on){color:var(--ink-3)}
 .ah .lchip:not(.on) .sw{filter:grayscale(1);opacity:.45}
 .ah .lchip.off{cursor:default;opacity:.78}
+.ah .lchip.tot{cursor:default;opacity:1}
+.ah .lchip.tot .sw{filter:none;opacity:1}
+.ah .totpill{margin-left:6px;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);background:var(--bg-sunken);border-radius:4px;padding:1px 4px;vertical-align:middle}
 .ah .lchip.off{opacity:.38;cursor:default;pointer-events:none}
 .ah svg.trend{display:block;width:100%;height:auto;cursor:crosshair}
 .ah .trend text{font-family:var(--font-sans)}
@@ -816,12 +819,17 @@ function renderLegend() {
     else if (k === "bounces" && cw) val = fmtN(cw.bounced);
     else if (hasLine) val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
     else val = "–";
+    // "noline" = a real total exists but no day-by-day line (shared-workspace
+    // client). Don't grey it into looking broken — keep the number bright and
+    // tag it "total" so it reads as intentional, not disabled (2026-07-28).
     var noline = !hasLine;
-    return '<button class="lchip' + (state.on[k] && !noline ? " on" : "") + (noline ? " off" : "") +
+    var realTotal = noline && val !== "–";
+    return '<button class="lchip' + (state.on[k] && !noline ? " on" : "") + (realTotal ? " tot" : (noline ? " off" : "")) +
       '" data-s="' + k + '" aria-pressed="' + (state.on[k] && !noline) + '"' +
       (noline ? ' title="Real total for ' + escq(state.client) + " over the " + rangeLabel() +
-                " — a day-by-day line only exists for all-clients and workspace clients.\"" : "") + ">" +
-      '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">' + val + "</b></button>";
+                ' — the day-by-day line only exists for all clients, Asteri and KRG."' : "") + ">" +
+      '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">' + val + "</b>" +
+      (realTotal ? '<span class="totpill">total</span>' : "") + "</button>";
   }).join("");
 }
 function renderTrend() {
@@ -938,20 +946,27 @@ function renderTrend() {
 }
 function halfSum(a, back) { var t = 0; for (var i = Math.max(0, a.length - back); i < a.length; i++) t += a[i] || 0; return t; }
 function takeLine(rep, mtg) {
-  // a trend sentence over a handful of replies is noise dressed as insight
-  // (the "replies are up" verdict over 2 Asteri replies, 2026-07-28 testers);
-  // and the sentence carries its own numbers + window, so it can't read as a
-  // contradiction of the calendar-month meetings card lower down
-  var rTot = halfSum(rep, 14);
-  if (rTot < 10) return "Small numbers in this view — read the counts, not the trend.";
-  // Always a latest-7-days momentum read (independent of the chart's window,
-  // which can be 7/14/30) — labelled "Latest 7 days" so it never reads as a
-  // bug when it sits under a 30-day chart (2026-07-28 tester).
-  var r1 = halfSum(rep, 7), r0 = halfSum(rep, 14) - r1;
-  var m1 = halfSum(mtg, 7), m0 = halfSum(mtg, 14) - m1;
-  var rPh = r1 > r0 * 1.15 ? "up on" : (r1 < r0 * 0.85 ? "down on" : "level with");
-  return "Latest 7 days: " + fmtN(m1) + " meeting" + (m1 === 1 ? "" : "s") + " (" + fmtN(m0) +
-    " the 7 before) · " + fmtN(r1) + " replies, " + rPh + " the prior " + fmtN(r0) + ".";
+  // RANGE-AWARE: the take-line reads the SELECTED window (7/14/30) so it never
+  // contradicts the chart title above it (three rounds of testers kept reading
+  // a fixed "this week" line under a 30-day chart as a bug, 2026-07-28).
+  var R = state.range;
+  var rWin = halfSum(rep, R), mWin = halfSum(mtg, R);
+  if (rWin < 10) return "Small numbers in this view — read the counts, not the trend.";
+  // prior EQUAL window when the 30-day series holds two of them (7, 14); the
+  // 30-day view has no prior 30, so it compares the recent half to the earlier
+  var lab = "Last " + R + " days: ";
+  if (rep.length >= R * 2) {
+    var r1 = halfSum(rep, R), r0 = halfSum(rep, R * 2) - r1;
+    var m1 = halfSum(mtg, R), m0 = halfSum(mtg, R * 2) - m1;
+    var rPh = r1 > r0 * 1.15 ? "up on" : (r1 < r0 * 0.85 ? "down on" : "level with");
+    return lab + fmtN(m1) + " meeting" + (m1 === 1 ? "" : "s") + " (" + fmtN(m0) +
+      " the " + R + " before) · " + fmtN(r1) + " replies, " + rPh + " the prior " + fmtN(r0) + ".";
+  }
+  var half = Math.floor(R / 2);
+  var recent = halfSum(rep, half), earlier = rWin - recent;
+  var ph = recent > earlier * 1.15 ? "picking up" : (recent < earlier * 0.85 ? "slowing" : "holding steady");
+  return lab + fmtN(mWin) + " meeting" + (mWin === 1 ? "" : "s") + " · " + fmtN(rWin) +
+    " replies, " + ph + " in the recent half.";
 }
 function hideTip() {
   var g = document.getElementById("tr-hov");
@@ -1630,20 +1645,26 @@ function renderHead() {
     var mins = Math.max(0, Math.round((Date.now() - Date.parse(HUB.asof)) / 60000));
     $("ah-fresh").textContent = mins < 2 ? "updated just now" : "updated " + (mins < 90 ? mins + " minutes ago" : Math.round(mins / 60) + " hours ago");
   }
-  // The verdict follows the client chip — the fleet's "70 positives this
-  // week" reading as a client's own number was round-1 friction for every
-  // tester. Client verdicts come from that client's interested series.
-  if (state.client === "All") {
+  // The verdict follows BOTH page dimensions — client chip and range — from
+  // the interested series, so it never contradicts the range control or reads
+  // as a client's number when it's the fleet's (every round of testers, 2026-
+  // 07-28). Same window-over-window shape as the hero take-line.
+  var s = HUB && HUB.series && HUB.series[ckey()];
+  var pos = (s && s.interested) || [];
+  if (!pos.length) {
     var wk = bookRow("weekly") || bookRow("book-shape");
-    $("ah-verdict").textContent = (wk && wk.bold) || "";
+    $("ah-verdict").textContent = (state.client === "All" && wk && wk.bold) || "";
   } else {
-    var s = HUB && HUB.series && HUB.series[ckey()];
-    var pos = (s && s.interested) || [];
-    var p1 = halfSum(pos, 7), p0 = halfSum(pos, 14) - p1;
-    $("ah-verdict").textContent = pos.length
-      ? state.client + ": " + fmtN(p1) + " positive" + (p1 === 1 ? "" : "s") +
-        " this week against " + fmtN(p0) + " last week."
-      : "";
+    var R = state.range, lab = state.client === "All" ? "" : state.client + ": ";
+    var p1 = halfSum(pos, R);
+    if (pos.length >= R * 2) {
+      var p0 = halfSum(pos, R * 2) - p1;
+      $("ah-verdict").textContent = lab + fmtN(p1) + " positive" + (p1 === 1 ? "" : "s") +
+        " in the last " + R + " days, vs " + fmtN(p0) + " the " + R + " before.";
+    } else {
+      $("ah-verdict").textContent = lab + fmtN(p1) + " positive repl" + (p1 === 1 ? "y" : "ies") +
+        " in the last " + R + " days.";
+    }
   }
 }
 
@@ -1915,7 +1936,7 @@ $("ah-range").addEventListener("click", function (e) {
 })();
 $("ah-lchips").addEventListener("click", function (e) {
   var b = e.target.closest(".lchip");
-  if (!b || b.classList.contains("off")) return;
+  if (!b || b.classList.contains("off") || b.classList.contains("tot")) return;
   var k = b.getAttribute("data-s");
   state.on[k] = !state.on[k];
   renderTrend();
