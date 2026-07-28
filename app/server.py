@@ -8258,29 +8258,36 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     # surface quotes) is credited to that bucket. The headline is COST, not
     # rate: how many emails this offer costs to buy one positive reply and one
     # meeting — the two numbers a founder actually plans against.
-    # Candidates: the top campaigns of EVERY client, straight from the
-    # scorecard — so each client (incl. client-workspace ones like KRG/Asteri)
-    # builds its own offer table, not just the navreo reply-volume leaders
-    # (Bjion 2026-07-29: KRG was showing the whole-book table). Positives AND
+    # Candidates: the reply-volume leaders (warm sequence-copy cache, so the
+    # bucket read is reliable), PLUS each client's top scorecard campaigns so
+    # client-workspace clients can build their own table too. Positives AND
     # meetings come from the scorecard, so a client with no meetings (KRG)
-    # correctly gets "–" per meeting — same basis as the campaigns table.
+    # correctly gets "–" per meeting — same basis as the campaigns table
+    # (Bjion 2026-07-29). One scorecard read covers everything.
     all_sc = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,name,workspace,"
                         "sent,replied,positives,meetings") or []
-    by_client_camps: dict = {}
+    sc_by_id = {str(r.get("smartlead_campaign_id")): r for r in all_sc}
+    lead_ids = [str(cid) for cid, _n in sorted(by_camp.items(), key=lambda kv: -kv[1])[:40]]
+    per_client_top: dict = {}
     for r in all_sc:
         if (r.get("sent") or 0) < 500:
             continue
-        cl = _client_win_label(r.get("workspace"), r.get("name"))
-        by_client_camps.setdefault(cl, []).append(r)
-    cand_rows = []
-    for cl, rws in by_client_camps.items():
+        per_client_top.setdefault(_client_win_label(r.get("workspace"), r.get("name")), []).append(r)
+    cand_ids = list(lead_ids)
+    seen_ids = set(lead_ids)
+    for cl, rws in per_client_top.items():
         rws.sort(key=lambda r: -(r.get("sent") or 0))
-        cand_rows.extend(rws[:12])   # top 12 per client keeps the seq-copy reads bounded
-    cand_rows = cand_rows[:120]
+        for r in rws[:10]:
+            cid = str(r.get("smartlead_campaign_id"))
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                cand_ids.append(cid)
     # aggregate per offer bucket, keyed by group: "All" (whole book) + each client
     per_group_agg: dict = {}
-    for row in cand_rows:
-        cid = str(row.get("smartlead_campaign_id"))
+    for cid in cand_ids:
+        row = sc_by_id.get(str(cid))
+        if not row or (row.get("sent") or 0) < 500:
+            continue
         try:
             bucket = _ah_offer_bucket(_COCKPIT_SEQCOPY_SWR.get(cid))
         except Exception:  # noqa: BLE001 — one unreadable sequence never kills the insight
