@@ -396,6 +396,8 @@
   font-size: 13px; line-height: 1.65; min-height: 60px; margin-top: 6px;
 }
 .qc-draft:focus { outline: none; box-shadow: var(--focus); }
+.qc-followup { margin-top: 12px; }
+.qc-followup-draft { min-height: 72px; margin-top: 8px; }
 .qc-draft div { min-height: 1em; }
 .qc-draft a { color: var(--orange-700); cursor: pointer; text-decoration: underline; }
 .composer-head .ch-spacer { flex: 1; }
@@ -3086,7 +3088,20 @@ function composerHtml(row) {
       <div class="qc-savestate small muted" id="save-${esc(row.id)}"></div>`;
   }
   if (row.status === "auto_sent" || row.status === "sent") {
-    return `<div class="qc-draft" style="background:var(--bg-sunken)">${row.sent_body || row.draft_body || ""}</div>`;
+    // A sent thread stays writable (owner ask 2026-07-28: "even after an
+    // email has been sent, you should still be able to send more emails").
+    // Collapsed behind one button so the sent view stays calm.
+    return `<div class="qc-draft" style="background:var(--bg-sunken)">${row.sent_body || row.draft_body || ""}</div>
+      <div class="qc-followup" data-id="${esc(row.id)}">
+        <button class="btn qc-followup-open" type="button" data-id="${esc(row.id)}">Write another email</button>
+        <div class="qc-followup-box" style="display:none">
+          <div class="qc-draft qc-followup-draft" contenteditable="true" data-id="${esc(row.id)}"></div>
+          <div class="qc-actions">
+            <button class="btn primary qc-followup-send" type="button" data-id="${esc(row.id)}">Send follow-up</button>
+            <span class="small muted">Sends in this same thread, from the same mailbox.</span>
+          </div>
+        </div>
+      </div>`;
   }
   if (row.status === "no_action" || row.status === "dismissed") {
     const label = row.status === "dismissed" ? "Dismissed." : "No action needed.";
@@ -3176,6 +3191,18 @@ function wireDetailEvents(root, row) {
     if (btn) btn.click();
   }));
   root.querySelectorAll(".qc-dismiss").forEach((btn) => btn.addEventListener("click", () => doDismiss(btn)));
+  const fuOpen = root.querySelector(".qc-followup-open");
+  if (fuOpen) fuOpen.addEventListener("click", () => {
+    const box = root.querySelector(".qc-followup-box");
+    if (box) {
+      box.style.display = "";
+      fuOpen.style.display = "none";
+      const d = box.querySelector(".qc-followup-draft");
+      if (d) d.focus();
+    }
+  });
+  const fuSend = root.querySelector(".qc-followup-send");
+  if (fuSend) fuSend.addEventListener("click", () => doSendFollowup(fuSend));
   root.querySelectorAll(".qc-draft-anyway").forEach((btn) => btn.addEventListener("click", () => doDraftAnyway(btn)));
 
   root.querySelectorAll(".qc-link-btn").forEach((btn) => {
@@ -3391,10 +3418,12 @@ async function doSend(btn) {
   // Both send gates removed (booking link 2026-07-20, resource link
   // 2026-07-28, owner ask): Approve always sends on the first click - no
   // second-click "send it anyway" confirmation for links or resources.
-  const row = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
-              ALL_ROWS.find((r) => String(r.id) === String(id));
-  const restore = busyBtn(btn, "Sending…");
-  if (!restore) return;
+  const qIdx = QUEUE_ROWS.findIndex((r) => String(r.id) === String(id));
+  const qRow = qIdx >= 0 ? QUEUE_ROWS[qIdx] : null;
+  const aRow = ALL_ROWS.find((r) => String(r.id) === String(id)) || null;
+  const row = qRow || aRow;
+  if (btn.disabled) return;
+  btn.disabled = true;
   // Stated explicitly on every send, never inferred: the server teaches only
   // when this says so, so a stale tab can never spring a surprise lesson.
   const payload = { id: Number(id), action: "send", training: trainingModeOn() };
@@ -3418,15 +3447,48 @@ async function doSend(btn) {
       ? { choice: "push", sub_sequence_id: gateSel.subSequenceId || undefined }
       : { choice: "none" };
   }
-  const res = await runSendJob(payload, (secs) => {
-    btn.textContent = secs < 8 ? "Sending…" : `Sending… ${secs}s`;
-  });
-  restore();
+  // OPTIMISTIC (owner ask 2026-07-28: "the UI could immediately just remove
+  // it, but instead it makes me wait"): the reply reads as sent the moment
+  // Approve is clicked - same pattern doDismiss uses. The job completes in
+  // the background; a failure rolls every bit of this back and surfaces the
+  // real error. The edit itself is safe either way: every keystroke was
+  // already auto-saved onto the row (2026-07-16).
+  const sentBody = draftEl ? draftEl.innerHTML : (row && row.draft_body) || "";
+  const originalDraft = (row && row.original_draft_body) || "";
+  const prev = row ? { status: row.status, sent_at: row.sent_at, sent_body: row.sent_body } : null;
+  const counts = KPIS.counts || {};
+  const hadCounts = prev ? { prev: counts[prev.status], sent: counts.sent, nr: KPIS.needs_review } : null;
+  if (row && prev) {
+    const now = new Date().toISOString();
+    [qRow, aRow].forEach((r) => { if (r) { r.status = "sent"; r.sent_at = now; r.sent_body = sentBody; } });
+    if (qIdx >= 0 && currentStatus && currentStatus !== "sent") QUEUE_ROWS.splice(qIdx, 1);
+    if (typeof counts[prev.status] === "number") counts[prev.status] -= 1;
+    if (typeof counts.sent === "number") counts.sent += 1;
+    if (prev.status === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
+    renderKpis(); renderQueueFilters(); renderQueue();
+    if (String(selectedRowId) === String(id)) renderDetail(row);
+    protoNote("Reply sent");
+  }
+  const res = await runSendJob(payload, null);
+  btn.disabled = false;
   // A send that failed is reported as {ok:false} in the BODY, not by HTTP
   // status. Honour res.data.ok so a failed send surfaces the real error
   // instead of a false "Reply sent" toast.
   const sendFailed = !res.ok || (res.data && res.data.ok === false);
   if (sendFailed) {
+    // Roll the optimistic state back: same objects, same index, same counts.
+    if (row && prev) {
+      [qRow, aRow].forEach((r) => { if (r) { r.status = prev.status; r.sent_at = prev.sent_at; r.sent_body = prev.sent_body; } });
+      if (qRow && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
+        QUEUE_ROWS.splice(Math.min(Math.max(qIdx, 0), QUEUE_ROWS.length), 0, qRow);
+      }
+      if (hadCounts) {
+        counts[prev.status] = hadCounts.prev; counts.sent = hadCounts.sent;
+        KPIS.needs_review = hadCounts.nr;
+      }
+      renderKpis(); renderQueueFilters(); renderQueue();
+      if (String(selectedRowId) === String(id)) renderDetail(row);
+    }
     const msg = (res.data && res.data.row && res.data.row.error) || res.error || "the send did not go through";
     showError("Couldn't send the reply: " + msg);
     showDetailError("Couldn't send the reply: " + msg);
@@ -3436,18 +3498,73 @@ async function doSend(btn) {
   delete EDITED_DRAFTS[id];
   delete GATE_SELECTION[id];
   loadUnresolvedTray();
-  protoNote("Reply sent");
+  if (!row) protoNote("Reply sent");
   // If this approve carried an edit and training is on, the learner may turn
   // it into a standing rule ~40s from now. Watch for it and SAY SO - the
   // tester panel's core finding (2026-07-17, 5/5 startled) was that a silent
   // permanent write cannot be made non-surprising by copy alone. The one
   // moment attention is guaranteed is right after the action, so the lesson
   // is announced there, with its exact rule and a working Undo.
-  const sentBody = draftEl ? draftEl.innerHTML : (row && row.draft_body) || "";
-  const originalDraft = (row && row.original_draft_body) || "";
   if (payload.training && originalDraft && plainWords(sentBody) !== plainWords(originalDraft)) {
     watchForEditLesson(id);
   }
+  loadQueue();
+}
+
+/* Another email into an already-sent thread (owner ask 2026-07-28). Same job
+   path Approve uses, but the row's status never changes - only the thread
+   grows. Optimistic: the message lands in the conversation instantly; a
+   failure removes it again and says why. */
+async function doSendFollowup(btn) {
+  if (btn.disabled) return;
+  const id = btn.getAttribute("data-id");
+  const box = btn.closest(".qc-followup-box");
+  const draftEl = box && box.querySelector(".qc-followup-draft");
+  const body = draftEl ? draftEl.innerHTML.split("—").join(", ") : "";
+  if (!plainWords(body)) { showDetailError("Write the follow-up first - the box is empty."); return; }
+  const row = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
+              ALL_ROWS.find((r) => String(r.id) === String(id));
+  btn.disabled = true;
+  const payload = { id: Number(id), action: "send_followup", body };
+  if (row) rememberIdentity(row);
+  if (ROW_IDENTITY[id]) payload.identity = ROW_IDENTITY[id];
+  // Optimistic: graft the message onto the local thread and repaint (the
+  // anchor-stable renderDetail keeps the reader's place).
+  let grafted = null;
+  if (row) {
+    grafted = { type: "SENT", time: new Date().toISOString(), body };
+    row.thread = (row.thread || []).concat([grafted]);
+    row.sent_body = body;
+    if (String(selectedRowId) === String(id)) renderDetail(row);
+    protoNote("Follow-up sent");
+  }
+  const res = await runSendJob(payload, null, { rowTruth: false });
+  btn.disabled = false;
+  const failed = !res.ok || (res.data && res.data.ok === false);
+  if (failed) {
+    if (row && grafted) {
+      row.thread = (row.thread || []).filter((m) => m !== grafted);
+      if (String(selectedRowId) === String(id)) {
+        renderDetail(row);
+        // The repaint collapsed the composer - reopen it with the typed
+        // follow-up intact, so a failure never costs the writing.
+        const wrap = document.querySelector(`.qc-followup[data-id="${CSS.escape(String(id))}"]`);
+        if (wrap) {
+          const openBtn = wrap.querySelector(".qc-followup-open");
+          const nbox = wrap.querySelector(".qc-followup-box");
+          const nd = wrap.querySelector(".qc-followup-draft");
+          if (openBtn) openBtn.style.display = "none";
+          if (nbox) nbox.style.display = "";
+          if (nd) nd.innerHTML = body;
+        }
+      }
+    }
+    const msg = (res.data && res.data.row && res.data.row.error) || res.error || "the follow-up did not go through";
+    showError("Couldn't send the follow-up: " + msg);
+    showDetailError("Couldn't send the follow-up: " + msg);
+    return;
+  }
+  clearError();
   loadQueue();
 }
 
@@ -3579,7 +3696,7 @@ async function runRedraftJob(payload, onTick) {
    shares the redraft job route. Every failure path ends at the ROW as the
    source of truth - if the mail actually left before a blip, this reports
    sent instead of tempting a double-send with a false error. */
-async function runSendJob(payload, onTick) {
+async function runSendJob(payload, onTick, opts) {
   const started = Date.now();
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -3605,6 +3722,12 @@ async function runSendJob(payload, onTick) {
     }
   }
   // START call failed, job vanished, or we timed out: read the row itself.
+  // For a FOLLOW-UP the row was already status=sent before the click, so its
+  // status can't disambiguate - answer honestly instead of guessing.
+  if (opts && opts.rowTruth === false) {
+    return { ok: false, error: res.error ||
+      "couldn't confirm the follow-up went out - check the thread in Smartlead before re-sending" };
+  }
   const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`);
   const row = rowRes.ok && rowRes.data && rowRes.data.row;
   if (row && (row.status === "sent" || row.status === "auto_sent")) {

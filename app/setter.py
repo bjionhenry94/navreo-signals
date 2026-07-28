@@ -1546,6 +1546,60 @@ def _sl_post(path: str, body: dict, params: dict = None):
         return {}
 
 
+# from-email -> from_name for a campaign's sending accounts, cached. The
+# Smartlead message history stopped carrying from_name (observed 2026-07-28:
+# SENT items only have the raw `from` address), so the sending identity must
+# be resolved through the campaign's email-accounts list. One fetch per
+# campaign per 6h. A campaign can MIX senders (3642625 sends as both Jane
+# Smithson and Kevin Dormer), so the map is per-ADDRESS, never per-campaign.
+_CAMPAIGN_SENDER_CACHE = {}
+_CAMPAIGN_SENDER_TTL = 6 * 3600.0
+
+
+def _campaign_sender_map(campaign_id) -> dict:
+    if not campaign_id:
+        return {}
+    key = str(campaign_id)
+    hit = _CAMPAIGN_SENDER_CACHE.get(key)
+    if hit and hit[0] > _time.time():
+        return hit[1]
+    mp = {}
+    try:
+        accs = _sl_get(f"/campaigns/{campaign_id}/email-accounts")
+        for a in (accs if isinstance(accs, list) else []):
+            em = str(a.get("from_email") or "").strip().lower()
+            nm = str(a.get("from_name") or "").strip()
+            if em and nm:
+                mp[em] = nm
+    except Exception:  # noqa: BLE001 - an unavailable list just means no name; never cache the failure
+        return mp
+    _CAMPAIGN_SENDER_CACHE[key] = (_time.time() + _CAMPAIGN_SENDER_TTL, mp)
+    return mp
+
+
+def _thread_sender_first(campaign_id, thread) -> str:
+    """First name of whoever ACTUALLY sent the outbound in this thread -
+    per-lead ground truth (owner report 2026-07-28: sent from Jane, the draft
+    signed Kevin because the agent doc's stamped name was the only source).
+    Uses the stored thread's from_name when present, else resolves the SENT
+    from-address through the campaign's email-accounts. '' when unknowable -
+    callers fall back to the agent's configured name via _sender_first_for."""
+    last_email = ""
+    for m in reversed(thread or []):
+        if not isinstance(m, dict) or str(m.get("type") or "").upper() != "SENT":
+            continue
+        nm = str(m.get("from_name") or "").strip()
+        if nm:
+            return nm.split()[0]
+        if not last_email:
+            last_email = str(m.get("from_email") or "").strip().lower()
+    if last_email:
+        nm = _campaign_sender_map(campaign_id).get(last_email, "")
+        if nm:
+            return nm.split()[0]
+    return ""
+
+
 def _sl_lead_map_id_by_email(campaign_id, lead_email: str):
     """One-call map-id resolution: GET /leads/?email=<email> returns the
     lead with `lead_campaign_data` - a list where each entry carries the
@@ -1697,6 +1751,10 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
                 "stats_id": m.get("stats_id"),
                 "message_id": m.get("message_id"),
                 "from_name": m.get("from_name") or m.get("sender_name") or frm.get("name"),
+                # The raw sending address - since 2026-07-28 the only sender
+                # identity the history carries (from_name vanished from the
+                # API); _thread_sender_first resolves it to a person.
+                "from_email": (m.get("from") if isinstance(m.get("from"), str) else None) or frm.get("email"),
             })
         norm.sort(key=lambda x: x["time"] or "")
         replies = [m for m in norm if m["type"] == "REPLY"]
@@ -1711,10 +1769,12 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
             return False, {}, "Couldn't find the reply in the Smartlead thread."
 
         sent = [m for m in norm if m["type"] == "SENT"]
-        sender_first = ""
-        if sent:
-            name = sent[-1].get("from_name") or ""
-            sender_first = name.split()[0] if name else ""
+        # Who actually sent: from_name when the API still carries it, else the
+        # SENT from-address resolved through the campaign's email-accounts
+        # (from_name vanished from the message-history API, observed
+        # 2026-07-28 - without this every draft fell back to the agent's ONE
+        # stamped name even on campaigns sent by someone else).
+        sender_first = _thread_sender_first(campaign_id, sent)
 
         # The FIRST email we sent this lead - the original outreach that their
         # reply is answering. Without it, "sure, send it" / "what's the price"
@@ -5159,6 +5219,15 @@ def route_subsequence_unresolved(_params):
         since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=14)).isoformat()
         rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(sent,auto_sent)"
                           f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select=*")
+        if not isinstance(rows, list):
+            # sb() answers None on a failed fetch (it is best-effort by
+            # design). Translating that into 200 {"rows": []} told the tray
+            # "everything is resolved" and it vanished (owner report
+            # 2026-07-28: "the send follow-up reminder just randomly vanishes
+            # after you send a few emails" - the post-send fetch burst is
+            # exactly when a transient Supabase timeout hits). A failure must
+            # LOOK like a failure so the client keeps its last good rows.
+            return 503, {"error": "Couldn't load the unresolved list right now."}
         candidates = []
         if isinstance(rows, list):
             for r in rows:
@@ -6085,7 +6154,7 @@ def route_queue_action(payload):
         action = payload.get("action")
         if not qid or not action:
             return 400, {"error": "id and action are required"}
-        if action == "send" and payload.get("async"):
+        if action in ("send", "send_followup") and payload.get("async"):
             # Send-as-a-job (owner report 2026-07-28: "Couldn't send the reply:
             # Request failed (502)"). Same disease the redraft had: a send that
             # must re-hydrate a missing email_stats_id pages Smartlead inline
@@ -6248,6 +6317,30 @@ def route_queue_action(payload):
                     elif choice == "push":
                         _apply_patch(row, {"subsequence_decision": "pushing"})
                         _subsequence_choice_async(row, sub_choice.get("sub_sequence_id"))
+            return 200, {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
+        if action == "send_followup":
+            # A sent thread is not a closed thread (owner ask 2026-07-28):
+            # another email can go into the same Smartlead thread, from the
+            # same mailbox, any time after the reply went out. Guarded to
+            # already-sent rows so Approve stays the one door for the FIRST
+            # reply and its already-sent 409 protection stays intact.
+            if row.get("status") not in ("sent", "auto_sent"):
+                return 409, {"error": "This thread's reply hasn't been sent yet - use Approve for the first send."}
+            body_html = payload.get("body") or ""
+            if not _TAG_RE.sub(" ", body_html).strip():
+                return 400, {"error": "body is required"}
+            agent = _load_agent(row.get("agent_id")) or {}
+            prev_status = row.get("status")
+            subject = row.get("draft_subject") or f"Re: {row.get('reply_subject') or ''}"
+            result = _send_reply(row, agent, subject, body_html,
+                                 is_test=bool(row.get("is_test")), success_status=prev_status)
+            if not result.get("ok"):
+                # A failed follow-up must not un-send the thread: _send_reply's
+                # failure patch drops rows to needs_review, which is right for
+                # a first send but would resurrect an already-answered thread.
+                _apply_patch(row, {"status": prev_status})
+                if isinstance(result.get("row"), dict):
+                    result["row"]["status"] = prev_status
             return 200, {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
         return 400, {"error": f"Unknown action '{action}'."}
     except Exception as e:  # noqa: BLE001
@@ -6530,10 +6623,17 @@ def _redraft_sync(payload):
                       if not slot_note else f"COULD NOT RE-PICK TIMES: {slot_note}")
             combined_feedback = marker + "\n" + combined_feedback
         combined_feedback = _prefix_latest_rules(rules_block, combined_feedback)
-        # No live thread re-read on a redraft (the row doesn't keep a from_name
-        # separate from its stored thread) - resolves to the agent's own
-        # configured identity via _sender_first_for, same as every other
-        # non-live surface. See owner bug report 2026-07-14.
+        # Who signs this draft: the row's STORED thread keeps from_name on
+        # every SENT message (hydration has stored it since the thread was
+        # normalised), so the actual sending identity for THIS lead is right
+        # here - no live re-read needed. The agent's stamped sender_first is
+        # ONE name, but an agent can serve campaigns sent by different people
+        # (owner report 2026-07-28: sent from Jane, regenerate signed Kevin
+        # because the agent doc - its "memory" - was stamped Kevin). Same
+        # precedence as the live pipeline: thread ground truth wins, the
+        # agent's configured name is only the fallback.
+        sender_first = _sender_first_for(
+            agent, _thread_sender_first(row.get("smartlead_campaign_id"), row.get("thread")))
         # call_ask: a redraft on a later turn must not re-pitch a call the lead
         # already settled or never asked about (owner report 2026-07-25).
         # Explicit time feedback always forces "required" - the reviewer is
@@ -6549,7 +6649,7 @@ def _redraft_sync(payload):
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
              "first_outbound": row.get("first_outbound") or "",
              "thread_text": thread_text, "call_ask": call_ask},
-            agent, classification, slots, slot_status, sender_first=_sender_first_for(agent),
+            agent, classification, slots, slot_status, sender_first=sender_first,
             regen_feedback=combined_feedback)
         _stage("draft", _t)
         draft_html = d.get("html")
@@ -6557,7 +6657,7 @@ def _redraft_sync(payload):
             # Second sweep (owner brief 2026-07-14): proofread before this
             # regenerated draft is saved.
             _t = _time.time()
-            draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent))
+            draft_html, _proofread_changed = proofread_draft(draft_html, sender_first)
             _stage("proofread", _t)
         # Re-stamped, not preserved: the baseline for an Approve-time diff is
         # the LATEST thing the agent wrote, not its first attempt. Edits the
