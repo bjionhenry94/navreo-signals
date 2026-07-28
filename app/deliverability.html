@@ -241,14 +241,10 @@
 
   <div class="databar" id="ah-databar"><span id="ah-databar-msg">Live data unavailable.</span><button class="btn sm" id="ah-retry">Retry</button></div>
 
-  <!-- ══ page header — slim verdict line ══ -->
+  <!-- ══ page header — title only (Bjion 2026-07-29) ══ -->
   <header class="pagehead">
     <div>
       <h1>Analytics</h1>
-      <div class="verdict" id="ah-verdict">&nbsp;</div>
-    </div>
-    <div class="pagehead-right">
-      <div class="dateline"><b id="ah-date">&nbsp;</b><br><span id="ah-fresh">&nbsp;</span></div>
     </div>
   </header>
 
@@ -1892,38 +1888,8 @@ function renderMeet() {
 
 /* ── header ── */
 function renderHead() {
-  var now = new Date();
-  var DAYSFULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-  $("ah-date").textContent = DAYSFULL[now.getDay()] + " " + now.getDate() + " " + MONTHS[now.getMonth()];
-  if (HUB && HUB.asof) {
-    var mins = Math.max(0, Math.round((Date.now() - Date.parse(HUB.asof)) / 60000));
-    $("ah-fresh").textContent = mins < 2 ? "updated just now" : "updated " + (mins < 90 ? mins + " minutes ago" : Math.round(mins / 60) + " hours ago");
-  }
-  // The verdict follows BOTH page dimensions — client chip and range — from
-  // the interested series, so it never contradicts the range control or reads
-  // as a client's number when it's the fleet's (every round of testers, 2026-
-  // 07-28). Same window-over-window shape as the hero take-line.
-  var s = HUB && HUB.series && HUB.series[ckey()];
-  var pos = (s && s.interested) || [];
-  if (!pos.length) {
-    var wk = bookRow("weekly") || bookRow("book-shape");
-    // a known client with no series is dormant — say so, never leave it blank
-    // (Grout showed an empty subtitle, read as broken — Elena 2026-07-28)
-    $("ah-verdict").textContent = state.client === "All"
-      ? ((wk && wk.bold) || "")
-      : state.client + ": no sending yet — nothing to report for the " + rangeLabel() + ".";
-  } else {
-    var R = state.range, lab = state.client === "All" ? "" : state.client + ": ";
-    var p1 = halfSum(pos, R);
-    if (pos.length >= R * 2) {
-      var p0 = halfSum(pos, R * 2) - p1;
-      $("ah-verdict").textContent = lab + fmtN(p1) + " positive" + (p1 === 1 ? "" : "s") +
-        " in the last " + R + " days, vs " + fmtN(p0) + " the " + R + " before.";
-    } else {
-      $("ah-verdict").textContent = lab + fmtN(p1) + " positive repl" + (p1 === 1 ? "y" : "ies") +
-        " in the last " + R + " days.";
-    }
-  }
+  // Header is title-only now (Bjion 2026-07-29) — the verdict line and the
+  // date/updated line were removed, so there's nothing to populate here.
 }
 
 /* ── render-all + wiring ── */
