@@ -7911,6 +7911,48 @@ def _ah_subject_label(subject: str) -> str:
     return (s[:44] + "…") if len(s) > 46 else s
 
 
+# The offer is the thing the email asks the reader to say yes to — a Loom, a
+# written breakdown, a free sample. It is never a stored field, so it is read
+# back off the live sequence copy. Precedence matters: a campaign that offers a
+# Loom AND mentions "the details" is a video offer, not a details offer, so the
+# strongest-named artifact wins ties.
+_AH_OFFER_PATTERNS = (
+    ("A short video",
+     r"\bloom\b|\b(short|quick|little)\s+video\b|\bscreen[- ]?record|\brecord(?:ed)?\s+(?:you\s+)?a\s+video\b|\bvideo\s+walk"),
+    ("A written breakdown",
+     r"\bbreakdown\b|\bteardown\b|\bone[- ]?pager?\b|\b(short|quick|rough)\s+plan\b|\bgame\s?plan\b|\bstrategy\s+doc"),
+    ("A free sample",
+     r"\bsample\b|\bexample\s+(?:posts?|leads?|emails?|copy|campaigns?)\b|\bmock[- ]?up\b|"
+     r"\bwrite\s+(?:you\s+)?(?:a\s+)?(?:few|couple)\b|\bbuild\s+(?:you\s+)?one\b|\bfree\s+(?:piece|version|batch)\b"),
+    ("A case study",
+     r"\bcase\s+stud|\bresults?\s+(?:doc|sheet|from)\b|\bwhat\s+we\s+did\s+for\b"),
+    ("A quick call",
+     r"\b(?:quick|short)\s+(?:call|chat)\b|\bhop\s+on\s+a\s+call\b|\bbook\s+a\s+(?:call|time|slot)\b|"
+     r"\b15[- ]?min|\bcalendar\s+link\b|\bgrab\s+(?:a\s+)?(?:15|20|30)\b"),
+    ("Just the details",
+     r"\bsend\s+(?:you\s+)?(?:over\s+)?the\s+details\b|\bmore\s+info(?:rmation)?\b|\bthe\s+details\b"),
+)
+
+
+def _ah_offer_bucket(copy: dict) -> str:
+    """Live sequence copy → the offer the campaign is actually making."""
+    if not isinstance(copy, dict) or copy.get("degraded"):
+        return ""
+    text = []
+    for st in (copy.get("steps") or []):
+        for v in (st.get("variants") or []):
+            text.append((v.get("subject") or "") + " " + (v.get("body") or ""))
+    blob = re.sub(r"\{\{[^}]*\}\}", " ", " ".join(text)).lower()
+    if not blob.strip():
+        return ""
+    best, best_n = "", 0
+    for label, pat in _AH_OFFER_PATTERNS:   # tuple order IS the tie-break
+        n = len(re.findall(pat, blob))
+        if n > best_n:
+            best, best_n = label, n
+    return best or "Something else"
+
+
 def _analytics_hub_insights_refresh(force: bool = False) -> dict:
     """Generate/refresh the two hub insights into campaign_insights."""
     with _AH_INSIGHTS_LOCK:
@@ -7941,10 +7983,10 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
         [sorted(by_camp.items()), sorted(pos_by_camp.items())], sort_keys=True
     ).encode()).hexdigest()
     live = sb("GET", "campaign_insights?scope=eq.book"
-                     "&insight_key=in.(messaging,who-replies)&status=eq.live"
+                     "&insight_key=in.(messaging,who-replies,offer)&status=eq.live"
                      "&select=id,insight_key,data_fingerprint,generated_at")
     live = live if isinstance(live, list) else []
-    if not force and len({r.get("insight_key") for r in live}) == 2:
+    if not force and len({r.get("insight_key") for r in live}) == 3:
         fresh = all(
             r.get("data_fingerprint") == fp and
             (now - datetime.fromisoformat(str(r.get("generated_at")).replace("Z", "+00:00"))).total_seconds() < 86400
@@ -8063,9 +8105,52 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             "source": src_note,
         }
 
+    # 3 · What is the offer — the ask in the copy, scored by reply rate
+    # No table stores a campaign's offer, so it is read off the live sequence
+    # copy and the campaign's whole-life sent/replied (campaign_scorecard, the
+    # same numbers every other surface quotes) is credited to that bucket.
+    offer_agg: dict = {}
+    cand = [cid for cid, _n in sorted(by_camp.items(), key=lambda kv: -kv[1])[:20]]
+    sc_rows = []
+    if cand:
+        sc_rows = sb("GET", "campaign_scorecard?smartlead_campaign_id=in.(" +
+                     ",".join(cand) + ")&select=smartlead_campaign_id,name,sent,replied")
+    sc = {str(r.get("smartlead_campaign_id")): r for r in (sc_rows if isinstance(sc_rows, list) else [])}
+    for cid in cand:
+        row = sc.get(str(cid))
+        if not row or (row.get("sent") or 0) < 500:
+            continue
+        try:
+            bucket = _ah_offer_bucket(_COCKPIT_SEQCOPY_SWR.get(cid))
+        except Exception:  # noqa: BLE001 — one unreadable sequence never kills the insight
+            continue
+        if not bucket:
+            continue
+        a = offer_agg.setdefault(bucket, {"sent": 0, "replies": 0, "camps": []})
+        a["sent"] += row.get("sent") or 0
+        a["replies"] += row.get("replied") or 0
+        a["camps"].append(row.get("name") or str(cid))
+    offers = [[k, round(a["replies"] / a["sent"] * 100, 1), a["sent"], len(a["camps"])]
+              for k, a in offer_agg.items() if a["sent"] >= 2000]
+    offers.sort(key=lambda o: -o[1])
+    offer_payload = None
+    if len(offers) >= 2:
+        win, lose = offers[0], offers[-1]
+        offer_payload = {
+            "kind": "offer", "tag": "fine", "client": "All", "owner": "Lilly",
+            "bold": f"{win[0]} pulls {win[1]}% across {win[2]:,} sends.",
+            "act": (f"Make {win[0].lower()} the ask on new campaigns ({win[1]}%); "
+                    f"stop leading with {lose[0].lower()} at {lose[1]}%."),
+            "note": ("What each campaign actually asks for, read off its live sequence copy. "
+                     "Reply rate is each group's whole-life sent and replied, not the last 30 days."),
+            "stats": {"offers": offers},
+            "source": src_note,
+        }
+
     written = []
     expires = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for ikey, payload in (("messaging", messaging_payload), ("who-replies", who_payload)):
+    for ikey, payload in (("messaging", messaging_payload), ("who-replies", who_payload),
+                          ("offer", offer_payload)):
         if not payload:
             continue
         sb("PATCH", f"campaign_insights?scope=eq.book&insight_key=eq.{ikey}&status=eq.live",
@@ -8080,7 +8165,7 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     except Exception:  # noqa: BLE001
         pass
     return {"ok": True, "reused": False, "written": written, "fingerprint": fp,
-            "lines": len(lines), "who_n": n_pos}
+            "lines": len(lines), "who_n": n_pos, "offers": len(offers)}
 
 
 # ── tier1-live-ship Step 2: campaign detail insights, hiring-signal campaign
