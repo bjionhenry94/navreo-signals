@@ -1986,6 +1986,7 @@ def _save_settings(doc: dict):
         return
     _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": SETTINGS_ID, "doc": doc},
        prefer="resolution=merge-duplicates,return=minimal")
+    _bust_agents_cache()   # settings ride along in route_agents_get's payload
 
 
 def _load_grading() -> dict:
@@ -2228,6 +2229,7 @@ def _save_agent(doc: dict) -> dict:
     if _SB:
         _SB("POST", f"{AGENTS_TABLE}?on_conflict=id", {"id": doc["id"], "doc": doc},
            prefer="resolution=merge-duplicates,return=minimal")
+        _bust_agents_cache()   # the agents list just changed - next GET reads fresh
         # Adopt orphaned agentless rows (owner follow-up 2026-07-14): assigning
         # a campaign to an agent must also claim the campaign's already-intaken
         # agentless queue rows - otherwise they keep the "No agent" pill and
@@ -4794,17 +4796,68 @@ def route_queue_recategorise(payload):
         return 500, {"error": str(e)[:300]}
 
 
+# ── Agents+settings read cache (perf pass 2026-07-28) ─────────────────────
+# route_agents_get gates the setter page's first paint, and _load_agents()
+# pulls EVERY agent doc (multi-KB instruction blobs, one ~15KB) on every load —
+# measured 1.6-2.2s live. Agents and settings change only on an explicit save,
+# so cache the built payload with the same SWR shape as _queue_rows_cached:
+#   fresh  -> serve cached;
+#   stale  -> serve cached NOW, refresh once in the background (SWR);
+#   absent -> compute synchronously, single-flight so concurrent GETs join it.
+# Every write path (_save_agent, _save_settings, route_agents_delete) calls
+# _bust_agents_cache(), so a read right after a save is never zombie-stale.
+_AGENTS_TTL = 30.0
+_AGENTS_CACHE = {"at": 0.0, "val": None}
+_AGENTS_LOCK = threading.Lock()
+
+
+def _build_agents_payload() -> dict:
+    s = _load_settings()
+    return {"agents": _load_agents(), "settings": {
+        "calendly_connected": bool(s.get("calendly_token")),
+        "work_start": s.get("work_start", 9),
+        "work_end": s.get("work_end", 17),
+        "autopilot_enabled": bool(s.get("autopilot_enabled")),
+        "webhooks": s.get("webhooks") or {},
+    }}
+
+
+def _kick_agents_refresh():
+    def run():
+        if not _AGENTS_LOCK.acquire(blocking=False):
+            return   # a compute/refresh is already in flight
+        try:
+            _AGENTS_CACHE["val"] = _build_agents_payload()
+            _AGENTS_CACHE["at"] = _time.time()
+        except Exception:  # noqa: BLE001 - background refresh must never raise
+            pass
+        finally:
+            _AGENTS_LOCK.release()
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _agents_payload_cached() -> dict:
+    if _AGENTS_CACHE["val"] is not None:
+        if (_time.time() - _AGENTS_CACHE["at"]) < _AGENTS_TTL:
+            return _AGENTS_CACHE["val"]
+        _kick_agents_refresh()          # stale-while-revalidate
+        return _AGENTS_CACHE["val"]
+    with _AGENTS_LOCK:
+        if _AGENTS_CACHE["val"] is not None:   # a waiter's compute may have landed
+            return _AGENTS_CACHE["val"]
+        _AGENTS_CACHE["val"] = _build_agents_payload()
+        _AGENTS_CACHE["at"] = _time.time()
+        return _AGENTS_CACHE["val"]
+
+
+def _bust_agents_cache():
+    _AGENTS_CACHE["at"] = 0.0
+    _AGENTS_CACHE["val"] = None
+
+
 def route_agents_get(_params):
     try:
-        agents = _load_agents()
-        s = _load_settings()
-        return 200, {"agents": agents, "settings": {
-            "calendly_connected": bool(s.get("calendly_token")),
-            "work_start": s.get("work_start", 9),
-            "work_end": s.get("work_end", 17),
-            "autopilot_enabled": bool(s.get("autopilot_enabled")),
-            "webhooks": s.get("webhooks") or {},
-        }}
+        return 200, _agents_payload_cached()
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -4865,6 +4918,7 @@ def route_agents_delete(payload):
             return 400, {"error": "id is required"}
         if _SB:
             _SB("DELETE", f"{AGENTS_TABLE}?id=eq.{aid}")
+            _bust_agents_cache()
         return 200, {"ok": True}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -5463,10 +5517,8 @@ def _subsequence_choice_async(row: dict, sub_sequence_id_override):
     return t
 
 
-def route_campaigns_get(_params):
-    try:
-        if not _SB:
-            return 200, []
+def _compute_campaigns_list() -> list:
+    if _SB:
         rows = _SB("GET", f"campaigns?workspace=eq.{WORKSPACE}&select=smartlead_campaign_id,name,status"
                           f"&status=in.(ACTIVE,PAUSED,STOPPED)&order=created_at_smartlead.desc")
         out = []
@@ -5517,7 +5569,57 @@ def route_campaigns_get(_params):
                     seen.add(cid)
         except Exception:  # noqa: BLE001 - union is additive; a failure here must not break the endpoint
             pass
-        return 200, out
+        return out
+    return []
+
+
+# ── Campaign-picker read cache (perf pass 2026-07-28) ─────────────────────
+# route_campaigns_get does 2-3 sequential Supabase reads on every boot (~1s
+# live) to build the picker list, which changes only when the background
+# campaign sync runs - never from a user action on this page. TTL-only SWR:
+# serve cached, refresh in the background when stale. An empty result is never
+# cached (a Supabase blip returns [] the same as "no campaigns" - freezing that
+# for 60s would blank the picker), so an outage keeps retrying for real.
+_CAMPAIGNS_TTL = 60.0
+_CAMPAIGNS_CACHE = {"at": 0.0, "val": None}
+_CAMPAIGNS_LOCK = threading.Lock()
+
+
+def _kick_campaigns_refresh():
+    def run():
+        if not _CAMPAIGNS_LOCK.acquire(blocking=False):
+            return
+        try:
+            val = _compute_campaigns_list()
+            if val:                       # never cache an empty/degraded read
+                _CAMPAIGNS_CACHE["val"] = val
+                _CAMPAIGNS_CACHE["at"] = _time.time()
+        except Exception:  # noqa: BLE001 - background refresh must never raise
+            pass
+        finally:
+            _CAMPAIGNS_LOCK.release()
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _campaigns_list_cached() -> list:
+    if _CAMPAIGNS_CACHE["val"] is not None:
+        if (_time.time() - _CAMPAIGNS_CACHE["at"]) < _CAMPAIGNS_TTL:
+            return _CAMPAIGNS_CACHE["val"]
+        _kick_campaigns_refresh()          # stale-while-revalidate
+        return _CAMPAIGNS_CACHE["val"]
+    with _CAMPAIGNS_LOCK:
+        if _CAMPAIGNS_CACHE["val"] is not None:
+            return _CAMPAIGNS_CACHE["val"]
+        val = _compute_campaigns_list()
+        if val:
+            _CAMPAIGNS_CACHE["val"] = val
+            _CAMPAIGNS_CACHE["at"] = _time.time()
+        return val
+
+
+def route_campaigns_get(_params):
+    try:
+        return 200, _campaigns_list_cached()
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
