@@ -189,12 +189,6 @@
 .ah .dying .dfix{font-size:13px;font-weight:700;color:var(--red)}
 .ah .dying a.btn{background:var(--card);flex-shrink:0;text-decoration:none}
 
-.ah .orows{display:flex;flex-direction:column;gap:13px;flex:1;justify-content:space-evenly}
-.ah .orow .otop{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;margin-bottom:5px}
-.ah .orow .oq{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ah .orow .oq.win{font-weight:600;color:var(--ink)}
-.ah .orow .ov{font-weight:600;font-variant-numeric:tabular-nums}
-.ah .orow .ov.bad{color:var(--red)}
 
 .ah .meet{flex-direction:row;align-items:center;gap:36px}
 .ah .meet .mleft{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
@@ -403,17 +397,18 @@
       </div>
       <div class="cards c23">
 
-        <!-- What is the offer — the thing each campaign asks for (a Loom, a
-             written breakdown, a free sample), scored by reply rate. No date
-             seg: the rates are each group's whole sending life, so a 7d/30d
-             toggle would promise a window the numbers don't have. -->
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">What is the offer?</div>
+            <div class="card-kick">Reply rate over time</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="week">
+              <button data-range="7" aria-pressed="false">7d</button>
+              <button data-range="14" aria-pressed="false">14d</button>
+              <button class="on" data-range="30" aria-pressed="true">30d</button>
+            </div>
           </div>
-          <div id="offer-rows"><div class="subline">Reading the offer off each campaign's copy…</div></div>
-          <div class="subline" id="offer-sub">&nbsp;</div>
-          <div class="take" id="offer-take-row" style="display:none"><span class="arr">→</span><span id="offer-take">&nbsp;</span></div>
+          <svg viewBox="0 0 620 170" width="100%" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
+          <div class="subline" id="week-sub">&nbsp;</div>
+          <div class="take"><span class="arr">→</span><span id="week-take">&nbsp;</span></div>
         </div>
 
         <!-- Bounce rate — today's number, the trend against the 2% limit, and
@@ -484,12 +479,17 @@
           <div class="take"><span class="arr">→</span><span id="rank-take">&nbsp;</span></div>
         </div>
 
+        <!-- What is the offer — the thing each campaign asks for (a Loom, a
+             written breakdown, a quick call), priced in the emails it costs to
+             buy one positive reply and one meeting. Sits where "Opening lines"
+             did: same question shape, one level up — the ask beats the wording. -->
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">Opening lines — what gets replies</div>
+            <div class="card-kick">What is the offer?</div>
           </div>
-          <div class="orows num" id="open-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
-          <div class="take" id="open-take-row" style="display:none"><span class="arr">→</span><span id="open-take"></span></div>
+          <div id="offer-rows"><div class="subline">Reading the offer off each campaign's copy…</div></div>
+          <div class="subline" id="offer-sub">&nbsp;</div>
+          <div class="take" id="offer-take-row" style="display:none"><span class="arr">→</span><span id="offer-take">&nbsp;</span></div>
         </div>
 
       </div>
@@ -581,7 +581,7 @@ var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null,
 // Sent and Bounces default OFF: their scale flattens Replies/Interested/
 // Meetings (the lines a founder reads); the landing card owns the bounce
 // story and both stay one chip-tap away.
-var state = { client: "All", trend: 30, bounce: 30,
+var state = { client: "All", trend: 30, week: 30, bounce: 30,
               on: { sent: false, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 
 function ckey() { return state.client === "All" ? "__all" : state.client; }
@@ -1062,7 +1062,7 @@ function renderNC() {
   $("nc-take").textContent = added > 0 ? "Fresh campaigns keep the pipeline fed — keep them coming." : "Nothing new this month — launch one.";
 }
 
-/* ── lane 3: landing + the offer ── */
+/* ── lane 3: landing + weekday ── */
 function landStats(daysBack) {
   if (!TRENDS || !TRENDS.series || !TRENDS.series.days.length) return null;
   var d = TRENDS.series.days, sArr = TRENDS.series.sent, bArr = TRENDS.series.bounce_pct;
@@ -1081,38 +1081,93 @@ function landStats(daysBack) {
   var pct = Math.max(0, Math.min(100, Math.round(100 - bounced / sent * 100)));
   return { pct: pct, sent: sent, lastDay: d[idxs[0]] };
 }
-// What is the offer — book-scope "offer" insight (the cron reads the ask off
-// each campaign's live sequence copy). Rate per offer group, best first.
-function renderOffer() {
-  var p = bookRow("offer");
-  var box = $("offer-rows");
-  if (!p || !p.stats || !p.stats.offers || p.stats.offers.length < 2) {
-    box.innerHTML = '<div class="subline">Not enough sending behind any one offer yet.</div>';
-    $("offer-sub").textContent = "";
+// Fleet reply rate, day by day. A quiet day is not a rate — under WK_MIN_SENT
+// the day is a gap in the line, not a zero.
+var WK_MIN_SENT = 200;
+function weekSeries(n) {
+  var out = { days: [], rate: [], sent: [] };
+  var s = TRENDS && TRENDS.series;
+  if (!s || !s.days || !s.days.length) return out;
+  var from = Math.max(0, s.days.length - n);
+  for (var i = from; i < s.days.length; i++) {
+    var sent = s.sent[i] || 0, rp = s.reply_pct[i];
+    out.days.push(s.days[i]);
+    out.sent.push(sent);
+    out.rate.push(rp == null || sent < WK_MIN_SENT ? null : rp);
+  }
+  return out;
+}
+function renderWeek() {
+  var d = weekSeries(state.week);
+  var pts = [];
+  for (var i = 0; i < d.rate.length; i++) if (d.rate[i] != null) pts.push(i);
+  if (pts.length < 2) {
+    $("week-svg").innerHTML = "";
+    $("week-sub").textContent = "Not enough sending in this window to read a rate.";
+    $("week-take").textContent = "";
     return;
   }
-  var offers = p.stats.offers.slice(0, 5);
-  // Two costs per offer: emails to buy one positive reply, emails to buy one
-  // meeting. Lower is better, so the winner is the SMALLEST number — the
-  // opposite reading to every rate on this page, hence the column headers.
-  var s = '<div class="ocol ohead"><span></span><span>Per positive</span><span>Per meeting</span></div>';
-  s += offers.map(function (o, i) {
-    var pos = o[4], mt = o[5];
-    return '<div class="ocol"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(o[0]) + "</span>" +
-      '<span class="val num' + (i === 0 ? " win" : "") + '">' + (pos ? fmtN(pos) : "–") + "</span>" +
-      '<span class="val num' + (i === 0 && mt ? " win" : "") + '">' + (mt ? fmtN(mt) : "–") + "</span></div>";
-  }).join("");
-  box.innerHTML = s;
-  var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
-  var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
-  var nomeet = offers.filter(function (o) { return !o[5]; }).length;
-  $("offer-sub").textContent = "Emails it costs to buy one. Across " + fmtN(camps) +
-    " campaigns and " + fmtN(sends) + " emails." +
-    (nomeet ? " “–” means no meetings booked off that offer yet." : "");
-  if (p.act) { $("offer-take").textContent = p.act; $("offer-take-row").style.display = ""; }
+
+  var vals = pts.map(function (i2) { return d.rate[i2]; });
+  var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  var pad = Math.max((hi - lo) * 0.25, 0.15);
+  lo = Math.max(0, lo - pad); hi = hi + pad;
+
+  var L = 44, R = 52, T = 16, B = 30, W = 620, H = 170;
+  var pw = W - L - R, ph = H - T - B, den = (d.days.length - 1) || 1;
+  var X = function (i2) { return L + i2 / den * pw; };
+  var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * ph; };
+
+  // window-weighted average, drawn as the baseline the line is judged against
+  var S = 0, Rp = 0;
+  pts.forEach(function (i2) { S += d.sent[i2]; Rp += d.sent[i2] * d.rate[i2] / 100; });
+  var avg = S > 0 ? Rp / S * 100 : null;
+
+  var s = "";
+  [hi, lo].forEach(function (v) {
+    s += '<line x1="' + L + '" y1="' + Y(v).toFixed(1) + '" x2="' + (L + pw) + '" y2="' + Y(v).toFixed(1) +
+      '" stroke="var(--line)" stroke-width="1"/>' +
+      '<text x="' + (L - 8) + '" y="' + (Y(v) + 4).toFixed(1) + '" font-size="10" fill="var(--ink-3)" ' +
+      'text-anchor="end" class="num">' + v.toFixed(1) + "%</text>";
+  });
+  if (avg != null && avg > lo && avg < hi) {
+    s += '<line x1="' + L + '" y1="' + Y(avg).toFixed(1) + '" x2="' + (L + pw) + '" y2="' + Y(avg).toFixed(1) +
+      '" stroke="var(--brown-300)" stroke-width="1" stroke-dasharray="3 3"/>';
+  }
+
+  s += '<path d="' + pts.map(function (i2, j) {
+    return (j ? "L" : "M") + X(i2).toFixed(1) + " " + Y(d.rate[i2]).toFixed(1);
+  }).join(" ") + '" fill="none" stroke="' + COL.rate + '" stroke-width="2.25" ' +
+    'stroke-linejoin="round" stroke-linecap="round"/>';
+
+  var last = pts[pts.length - 1];
+  s += '<circle cx="' + X(last).toFixed(1) + '" cy="' + Y(d.rate[last]).toFixed(1) + '" r="3.5" fill="' + COL.rate + '"/>' +
+    '<text x="' + (X(last) + 8).toFixed(1) + '" y="' + (Y(d.rate[last]) + 4).toFixed(1) + '" font-size="12" ' +
+    'font-weight="600" fill="' + COL.rate + '" class="num">' + d.rate[last].toFixed(1) + "%</text>";
+
+  s += '<text x="' + L + '" y="' + (H - 8) + '" font-size="10" fill="var(--ink-3)">' + dlabel(d.days[0]) + "</text>" +
+    '<text x="' + (L + pw) + '" y="' + (H - 8) + '" font-size="10" fill="var(--ink-3)" text-anchor="end">' +
+    dlabel(d.days[d.days.length - 1]) + "</text>";
+
+  $("week-svg").innerHTML = s;
+  $("week-svg").setAttribute("aria-label",
+    "Reply rate over the last " + state.week + " days, now " + d.rate[last].toFixed(1) + "%");
+
+  $("week-sub").textContent = avg == null ? "" :
+    "Averaging " + avg.toFixed(1) + "% over the last " + state.week + " days.";
+
+  // first half vs second half of the window — the direction that matters
+  var half = Math.ceil(pts.length / 2);
+  var mean = function (arr) { return arr.reduce(function (a, b) { return a + b; }, 0) / (arr.length || 1); };
+  var a0 = mean(vals.slice(0, half)), a1 = mean(vals.slice(half));
+  $("week-take").textContent = a1 >= a0 * 1.15
+    ? "Reply rate is climbing — keep the current messaging running."
+    : (a1 <= a0 * 0.85
+      ? "Reply rate is sliding — refresh the copy on your biggest senders."
+      : "Reply rate is holding steady — nothing to fix here.");
 }
 
-/* ── lane 4: ranking + dying + openers ── */
+/* ── lane 4: ranking + dying + the offer ── */
 function renderRank() {
   // running campaigns answer "what's winning" — finished ones only appear
   // when a client has nothing live
@@ -1153,21 +1208,36 @@ function renderDying() {
   $("dying-link").href = "campaigns.html#/c/" + encodeURIComponent(r.scope);
   $("dying").style.display = "";
 }
-function renderOpeners() {
-  var p = bookRow("messaging");
-  if (!p || !p.stats || !p.stats.lines || !p.stats.lines.length) return;   // keep the placeholder
-  var lines = p.stats.lines.slice(0, 4);
-  var max = Math.max.apply(null, lines.map(function (l) { return parseFloat(l[1]) || 0; }).concat([0.1]));
-  $("open-rows").innerHTML = lines.map(function (l, i) {
-    var v = parseFloat(l[1]) || 0;
-    var bad = i === lines.length - 1 && lines.length > 2 && v < max * 0.55;
-    return '<div class="orow"><div class="otop"><span class="oq' + (i === 0 ? " win" : "") + '">“' + escq(l[0]) + '”</span>' +
-      '<span class="ov' + (bad ? " bad" : "") + '">' + v + "%</span></div>" +
-      '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(v / max * 100)) + '%"></div></div>';
+// What is the offer — book-scope "offer" insight (the cron reads the ask off
+// each campaign's live sequence copy). Rate per offer group, best first.
+function renderOffer() {
+  var p = bookRow("offer");
+  var box = $("offer-rows");
+  if (!p || !p.stats || !p.stats.offers || p.stats.offers.length < 2) {
+    box.innerHTML = '<div class="subline">Not enough sending behind any one offer yet.</div>';
+    $("offer-sub").textContent = "";
+    return;
+  }
+  var offers = p.stats.offers.slice(0, 5);
+  // Two costs per offer: emails to buy one positive reply, emails to buy one
+  // meeting. Lower is better, so the winner is the SMALLEST number — the
+  // opposite reading to every rate on this page, hence the column headers.
+  var s = '<div class="ocol ohead"><span></span><span>Per positive</span><span>Per meeting</span></div>';
+  s += offers.map(function (o, i) {
+    var pos = o[4], mt = o[5];
+    return '<div class="ocol"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(o[0]) + "</span>" +
+      '<span class="val num' + (i === 0 ? " win" : "") + '">' + (pos ? fmtN(pos) : "–") + "</span>" +
+      '<span class="val num' + (i === 0 && mt ? " win" : "") + '">' + (mt ? fmtN(mt) : "–") + "</span></div>";
   }).join("");
-  if (p.act) { $("open-take").textContent = p.act; $("open-take-row").style.display = ""; }
+  box.innerHTML = s;
+  var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
+  var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
+  var nomeet = offers.filter(function (o) { return !o[5]; }).length;
+  $("offer-sub").textContent = "Emails it costs to buy one. Across " + fmtN(camps) +
+    " campaigns and " + fmtN(sends) + " emails." +
+    (nomeet ? " “–” means no meetings booked off that offer yet." : "");
+  if (p.act) { $("offer-take").textContent = p.act; $("offer-take-row").style.display = ""; }
 }
-
 /* ── lane 5: who replies + waiting ── */
 function renderWho() {
   var p = bookRow("who-replies");
@@ -1386,10 +1456,10 @@ function renderAll() {
   renderRunway(v);
   renderSignals();
   renderNC();
-  renderOffer();
+  renderWeek();
   renderBounce();
   renderRank();
-  renderOpeners();
+  renderOffer();
   renderWho();
   renderMeet();
 }
@@ -1416,6 +1486,9 @@ document.querySelectorAll(".ah .seg").forEach(function (seg) {
     var kind = seg.getAttribute("data-seg");
     if (kind === "trend") { state.trend = n; renderTrend(); }
     else if (kind === "bounce") { state.bounce = n; renderBounce(); }
+    // the reply-rate line reads straight off the 30-day trends series, so the
+    // range toggle is a pure slice — no refetch
+    else if (kind === "week") { state.week = n; renderWeek(); }
   });
 });
 $("ah-lchips").addEventListener("click", function (e) {
