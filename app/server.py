@@ -7099,6 +7099,44 @@ def _demo_who_replies(days):
                        "positives": round(41 * scale), "booked": round(12 * scale)}}
 
 
+def _demo_spread(total, n):
+    """Spread a 30d total across n days with weekends at zero (matches how the real
+    daily series read — used for the Acme interested/meetings/replies lines)."""
+    wk = [i for i in range(n) if (i % 7) not in (5, 6)] or list(range(n))
+    per = total / float(len(wk))
+    arr = [0] * n
+    for i in wk:
+        arr[i] = round(per)
+    return arr
+
+
+def _inject_demo_analytics_hub(p):
+    """Splice Acme into the analytics-hub payload when the toggle is ON: the per-day
+    interested/meetings/replies series (this is what fills the hero graph's Interested &
+    Meetings lines, the funnel, and the 'biggest leak' card), the client list, the
+    campaign→client map, and the monthly-meetings tile. Response-layer only."""
+    if not show_demo_clients() or not isinstance(p, dict) or not p.get("days"):
+        return p
+    if "Acme" in (p.get("series") or {}):
+        return p
+    n = len(p["days"])
+    series = {**(p.get("series") or {}), "Acme": {
+        "replies": _demo_spread(_DEMO_ACME_WINDOW_30D["replied"], n),
+        "interested": _demo_spread(64, n),
+        "meetings": _demo_spread(22, n)}}
+    clients = list(p.get("clients") or [])
+    if "Acme" not in clients:
+        clients = clients + ["Acme"]
+    cc = dict(p.get("campaign_clients") or {})
+    for c in _DEMO_ACME:
+        cc[c["id"]] = "Acme"
+    mm = dict(p.get("meetings_monthly") or {})
+    mm["Acme"] = {"prev": 18, "this": 22, "top_n": 12,
+                  "top_campaign": "Acme — Founders (Worldwide 20–200)"}
+    return {**p, "series": series, "clients": clients, "campaign_clients": cc,
+            "meetings_monthly": mm}
+
+
 def _inject_demo_campaigns(payload: dict) -> dict:
     """Append the demo Acme campaigns to the campaigns-unified list when the toggle is
     ON — on a shallow copy so the SWR cache is never mutated."""
@@ -14501,7 +14539,25 @@ def _inject_demo_client_windows(data: dict) -> dict:
         windows[w] = {**wk, "Acme": {"sent": round(tot["sent"] * f),
                                      "replied": round(tot["replied"] * f),
                                      "bounced": round(tot["bounced"] * f)}}
-    return {**data, "series": series, "windows": windows or data.get("windows")}
+    # Per-campaign windowed rows — this is what the "Campaigns best to worst"
+    # leaderboard reads (with lifetime positives/meetings joined from the scorecard).
+    totsent = float(sum(c["sent"] for c in _DEMO_ACME)) or 1.0
+    camps_by_w = dict(data.get("campaigns") or {})
+    for w, lst in list(camps_by_w.items()):
+        try:
+            n = int(w)
+        except (TypeError, ValueError):
+            n = 30
+        f = min(1.0, n / 30.0)
+        extra = []
+        for c in _DEMO_ACME:
+            s = round(tot["sent"] * (c["sent"] / totsent) * f)
+            extra.append({"id": c["id"], "client": "Acme", "name": c["name"], "sent": s,
+                          "replied": round(s * tot["replied"] / max(1, tot["sent"])),
+                          "bounced": round(s * tot["bounced"] / max(1, tot["sent"]))})
+        camps_by_w[w] = list(lst or []) + extra
+    return {**data, "series": series, "windows": windows or data.get("windows"),
+            "campaigns": camps_by_w or data.get("campaigns")}
 
 
 # ── Who replies + answer speed, LIVE per client × range ─────────────────────
@@ -17290,7 +17346,7 @@ class Handler(SimpleHTTPRequestHandler):
             # setter speed + monthly meetings, one round trip (analytics_hub_v1).
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            return self._json(_ANALYTICS_HUB_SWR.get((q.get("days") or ["30"])[0]))
+            return self._json(_inject_demo_analytics_hub(_ANALYTICS_HUB_SWR.get((q.get("days") or ["30"])[0])))
         if path == "/api/cockpit/insights":
             # Cockpit render layer: what Claude wrote on the morning crunch
             # (live unexpired campaign_insights) + the graded track record.
