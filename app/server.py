@@ -18653,7 +18653,15 @@ if __name__ == "__main__":
     # per-campaign performance without 874 live calls per page load
     threading.Thread(target=_scorecard_sync_loop, daemon=True).start()
     threading.Thread(target=_subseq_stats_loop, daemon=True).start()
-    # every ~6h: live-confirmed collision census so the double-tap bar shows the
-    # true number, not the ghost-inflated daily contact_history count
-    threading.Thread(target=_collision_live_loop, daemon=True).start()
+    # The live-confirmed collision census is HEAVY — one full Smartlead
+    # leads-export per ACTIVE campaign, all held in memory to cross-reference
+    # same-client overlap. Run inside the web process it OOM-killed the 512MB
+    # starter instance ~120s after every boot (server_boot_ledger showed
+    # instances dying at ~120-123s — exactly _collision_live_loop's sleep(120)),
+    # a permanent crash-loop that took the whole tool down. It now runs as an
+    # isolated cron (app/run_collision_census.py → render.yaml navreo-collision-
+    # census); /api/collisions serves the last value it stored. Escape hatch:
+    # set COLLISION_LIVE_IN_WEB=1 to restore the in-process loop.
+    if os.environ.get("COLLISION_LIVE_IN_WEB") == "1":
+        threading.Thread(target=_collision_live_loop, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

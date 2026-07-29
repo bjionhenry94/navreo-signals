@@ -103,3 +103,18 @@ services:
     startCommand: python app/check_caps_moving.py
     envVars:
       - fromGroup: navreo-secrets
+
+  # Live-confirmed collision census (the double-tap bar's true number). One full
+  # Smartlead leads-export per active campaign, held in memory — too heavy for
+  # the web instance, where it OOM-crash-looped the 512MB box ~120s after every
+  # boot. Isolated here with the whole 512MB to itself; every 6h. The web app
+  # (/api/collisions) just serves the value this writes to app_activity_log.
+  - type: cron
+    name: navreo-collision-census
+    runtime: python
+    plan: starter
+    schedule: "45 */6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/run_collision_census.py
+    envVars:
+      - fromGroup: navreo-secrets
