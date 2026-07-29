@@ -3441,6 +3441,13 @@ def api_lists_index() -> tuple:
                        "last_opened_at,last_opened_by&order=created_at.desc")
     if not isinstance(folders, list) or not isinstance(lists_, list):
         return 503, _LISTS_DB_DOWN
+    if show_demo_clients():  # UI-only demo signal-list for Acme (no real rows behind it)
+        lists_ = list(lists_) + [{
+            "id": "demo-acme-list-1", "name": "Acme — Founder signal (DEMO)", "client": "Acme",
+            "folder_id": None, "source_skill": "lilly-signal", "owner": "demo",
+            "access": "team", "row_count": 4200, "created_at": None,
+            "last_opened_at": None, "last_opened_by": None, "demo": True,
+        }]
     return 200, {"folders": folders, "lists": lists_}
 
 
