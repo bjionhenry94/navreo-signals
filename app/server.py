@@ -17353,7 +17353,13 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/cockpit/insights":
             # Cockpit render layer: what Claude wrote on the morning crunch
             # (live unexpired campaign_insights) + the graded track record.
-            return self._json(_COCKPIT_INSIGHTS_SWR.get())
+            _ins = _COCKPIT_INSIGHTS_SWR.get()
+            if show_demo_clients() and isinstance(_ins, dict):
+                _mbc = dict(_ins.get("meetings_by_campaign") or {})
+                for _c in _DEMO_ACME:
+                    _mbc[_c["id"]] = _c.get("meetings") or 0
+                _ins = {**_ins, "meetings_by_campaign": _mbc}
+            return self._json(_ins)
         if path == "/api/cockpit/assignments":
             # Team-shared ownership of the cockpit's suggested actions: who has
             # claimed / completed / dismissed each one. Keyed by the action's
