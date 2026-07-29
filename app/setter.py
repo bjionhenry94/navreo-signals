@@ -1559,8 +1559,12 @@ def _sl_key_for(path: str, campaign_id=None):
     return _sl_key()
 
 
-def _sl_get(path: str, params: dict = None):
-    key = _sl_key_for(path)
+def _sl_get(path: str, params: dict = None, campaign_id=None):
+    # campaign_id lets a workspace-scoped call (e.g. /leads/?email=) resolve the
+    # OWNING client's key even though the path carries no /campaigns/{id} for the
+    # regex to find — without it, such calls silently fall back to the navreo key
+    # and a client-workspace lead (Grout, etc.) is "not found". (Bjion 2026-07-29)
+    key = _sl_key_for(path, campaign_id)
     if not key:
         return None
     qs = dict(params or {})

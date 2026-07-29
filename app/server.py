@@ -12687,7 +12687,7 @@ def positive_card_notify(campaign_id, email: str, category: str) -> dict:
     """Fetch lead + thread from Smartlead, compose the card payload, POST it
     to the client-card hook. Two attempts; failures land in app_activity_log
     (actor='positive_card') so a miss is visible, never silent."""
-    lead_resp = setter._sl_get("/leads/", {"email": email})
+    lead_resp = setter._sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
     lead = None
     if isinstance(lead_resp, dict):
         lead = lead_resp.get("lead") if isinstance(lead_resp.get("lead"), dict) else lead_resp
