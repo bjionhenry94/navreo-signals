@@ -7017,6 +7017,87 @@ _DEMO_ACME = [
 # ~38k sent, ~1.5% reply, ~1.9% bounce. Scaled to 14/7 by the injector.
 _DEMO_ACME_WINDOW_30D = {"sent": 38000, "replied": 560, "bounced": 720}
 
+_DEMO_ACME_BY_ID = {c["id"]: c for c in _DEMO_ACME}
+
+
+def _demo_cockpit_detail(cid):
+    """Demo campaign-detail payload for an Acme campaign id — mirrors the real
+    rpc/cockpit_campaign_detail shape so the detail Overview renders (leads total +
+    meetings + contacted window) instead of a 'bad_id' degrade. Returns None for any
+    non-demo id so real campaigns fall through untouched."""
+    c = _DEMO_ACME_BY_ID.get(str(cid or ""))
+    if not c:
+        return None
+    total = c["total"]
+    contacted = total - round(total * 0.06)  # ~6% not-yet-contacted, like a live run
+    return {
+        "leads": {"total": total, "first_contacted": "2026-06-16T09:12:00Z",
+                  "last_contacted": "2026-07-28T15:40:00Z"},
+        "replies": [], "sources": [], "meetings": c.get("meetings") or 0,
+        "receipts": [], "sequence": None, "versions": [],
+        "lead_statuses": [
+            {"status": "Not contacted", "n": total - contacted},
+            {"status": "In sequence", "n": round(contacted * 0.34)},
+            {"status": "Completed", "n": round(contacted * 0.58)},
+            {"status": "Replied", "n": c["replied"]},
+            {"status": "Bounced", "n": c["bounced"]},
+        ],
+        "campaign_id": cid, "degraded": False,
+    }
+
+
+def _demo_perf_daily(campaign, days):
+    """Per-day series for a demo Acme campaign's detail graph — matches perf_daily's
+    shape (days + sent/leads_added/positives/meetings/reply_rate/bounce_rate arrays)."""
+    c = _DEMO_ACME_BY_ID.get(str(campaign or ""))
+    try:
+        n = max(7, min(120, int(days or 30)))
+    except (TypeError, ValueError):
+        n = 30
+    today = _dtmod.datetime.now(_dtmod.timezone.utc).date()
+    dates = [(today - _dtmod.timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
+    if not c:
+        return {"days": dates, "campaign": campaign, "sent": [None] * n, "leads_added": [None] * n,
+                "positives": [None] * n, "meetings": [None] * n, "reply_rate": [None] * n,
+                "bounce_rate": [None] * n}
+    share = c["sent"] / float(sum(x["sent"] for x in _DEMO_ACME))
+    base = max(1, round(_DEMO_ACME_WINDOW_30D["sent"] * share / 30.0))
+    sent = [0 if (i % 7) in (5, 6) else round(base * (0.8 + 0.4 * ((i % 5) / 4.0))) for i in range(n)]
+    leads_added = [round(s * 0.92) for s in sent]
+    positives = [0] * n
+    for j in range(max(1, round(c["positives"] * 0.5))):
+        k = (j * 3 + 2) % n
+        if sent[k]:
+            positives[k] += 1
+    meetings = [0] * n
+    for j in range(max(0, round((c.get("meetings") or 0) * 0.5))):
+        k = (j * 5 + 4) % n
+        if sent[k]:
+            meetings[k] += 1
+    reply_rate = [1.5 if s else None for s in sent]
+    bounce_rate = [1.8 if s else None for s in sent]
+    return {"days": dates, "campaign": campaign, "sent": sent, "leads_added": leads_added,
+            "positives": positives, "meetings": meetings, "reply_rate": reply_rate,
+            "bounce_rate": bounce_rate}
+
+
+def _demo_who_replies(days):
+    """Full 'Who actually replies?' payload for the Acme demo — role/size mix, answer
+    speed and subsequence stats — so the Analytics reply lane looks like a real client's."""
+    d = max(7, min(30, int(days or 30)))
+    scale = d / 30.0
+    buckets = [["Founders and CEOs", 26], ["Sales leaders", 19], ["VPs and Directors", 14],
+               ["Marketing and Growth", 8], ["Operations", 4], ["Other", 3]]
+    sizes = [["51–200", 28], ["11–50", 22], ["201–1,000", 16], ["1–10", 5], ["1,001+", 3]]
+    buckets = [[k, max(1, round(v * scale))] for k, v in buckets]
+    sizes = [[k, max(1, round(v * scale))] for k, v in sizes]
+    n = sum(v for _, v in buckets)
+    return {"client": "Acme", "days": d, "n": n, "named": n,
+            "buckets": buckets, "sizes": sizes, "size_named": sum(v for _, v in sizes),
+            "speed": {"n": n, "avg_mins": 42, "median_mins": 18, "under15_share": 0.46},
+            "subseq": {"enrolled": round(3100 * scale), "sent": round(8600 * scale),
+                       "positives": round(41 * scale), "booked": round(12 * scale)}}
+
 
 def _inject_demo_campaigns(payload: dict) -> dict:
     """Append the demo Acme campaigns to the campaigns-unified list when the toggle is
@@ -17192,11 +17273,14 @@ class Handler(SimpleHTTPRequestHandler):
             # ?start=&end=. Nulls (labelled absent), never fake zeros.
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
+            _pcamp = (q.get("campaign") or [None])[0]
+            if show_demo_clients() and str(_pcamp or "") in _DEMO_ACME_BY_ID:
+                return self._json(_demo_perf_daily(_pcamp, (q.get("days") or ["30"])[0]))
             return self._json(_PERF_DAILY_SWR.get((
                 (q.get("days") or ["30"])[0],
                 (q.get("start") or [None])[0],
                 (q.get("end") or [None])[0],
-                (q.get("campaign") or [None])[0])))
+                _pcamp)))
         if path == "/api/collective-30d":
             # Homepage strip's LAST-30-DAYS top line (sent/reply/positives/meetings/
             # signals) — one cheap DB round-trip via rpc/collective_30d, SWR-cached.
@@ -17220,7 +17304,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/cockpit/campaign-detail":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            return self._json(_COCKPIT_DETAIL_SWR.get((q.get("id") or [""])[0]))
+            did = (q.get("id") or [""])[0]
+            if show_demo_clients():
+                demo = _demo_cockpit_detail(did)
+                if demo is not None:
+                    return self._json(demo)
+            return self._json(_COCKPIT_DETAIL_SWR.get(did))
         if path == "/api/cockpit/messaging":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -17439,6 +17528,8 @@ class Handler(SimpleHTTPRequestHandler):
                 dd = int((q.get("days") or ["30"])[0])
             except ValueError:
                 dd = 30
+            if show_demo_clients() and cl == "Acme":
+                return self._json(_demo_who_replies(dd), 200)
             body, status = who_replies_get(cl, dd)
             return self._json(body, status)
         if path == "/api/restore-plan":
