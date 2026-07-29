@@ -13909,6 +13909,48 @@ def _client_win_restore():
                 _CLIENT_WIN.update(data=snap, ts=0.0)  # ts 0 → refresh kicks
 
 
+_DAYWISE_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+
+
+def _daywise_series(key, days_out, start_iso, end_iso, campaign_ids=None):
+    """Exact per-day {sent,replied,bounced} arrays aligned to days_out, from
+    Smartlead's day-wise-overall-stats. When campaign_ids is given, the SAME
+    endpoint scopes to exactly those campaigns (proven 2026-07-29: the filter
+    is real, not ignored — a name-matched id list reproduces the per-campaign
+    sweep to the digit), so a shared-workspace client gets a REAL daily line in
+    one call instead of an apportioned estimate. IDs are chunked to keep the URL
+    sane; per-day metrics sum across chunks."""
+    chunks = [campaign_ids[i:i + 100] for i in range(0, len(campaign_ids), 100)] \
+        if campaign_ids else [None]
+    by_dm = {}
+    for chunk in chunks:
+        url = (f"{SMARTLEAD_BASE}/analytics/day-wise-overall-stats?api_key={key}"
+               f"&start_date={start_iso}&end_date={end_iso}")
+        if chunk:
+            url += "&campaign_ids=" + ",".join(str(c) for c in chunk)
+        raw = ((http_json("GET", url, {}, timeout=40) or {}).get("data") or {}).get("day_wise_stats") or []
+        for r in raw:
+            try:
+                d, mon = str(r.get("date", "")).split()
+                m = r.get("email_engagement_metrics") or {}
+                acc = by_dm.setdefault((int(d), _DAYWISE_MONTHS.get(mon[:3], 0)),
+                                       {"sent": 0, "replied": 0, "bounced": 0})
+                acc["sent"] += int(m.get("sent") or 0)
+                acc["replied"] += int(m.get("replied") or 0)
+                acc["bounced"] += int(m.get("bounced") or 0)
+            except (ValueError, AttributeError):
+                continue
+    sent, rep, bnc = [], [], []
+    for iso in days_out:
+        dt = _dtmod.date.fromisoformat(iso)
+        m = by_dm.get((dt.day, dt.month)) or {}
+        sent.append(int(m.get("sent") or 0))
+        rep.append(int(m.get("replied") or 0))
+        bnc.append(int(m.get("bounced") or 0))
+    return {"sent": sent, "replied": rep, "bounced": bnc}
+
+
 def _client_win_build():
     """The sweep. Candidates: every ACTIVE/PAUSED/STOPPED/COMPLETED campaign —
     COMPLETED must be swept unconditionally because finished campaigns keep
@@ -13935,41 +13977,44 @@ def _client_win_build():
     series = {}
     start30 = end - _dtmod.timedelta(days=29)
     days_out = [(start30 + _dtmod.timedelta(days=i)).isoformat() for i in range(30)]
-    months = {m: i + 1 for i, m in enumerate(
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
     for ws in [w.get("id") for w in ws_enabled() if w.get("id")]:
         try:
             key = ws_key(ws)
             if not key:
                 continue
-            url = (f"{SMARTLEAD_BASE}/analytics/day-wise-overall-stats?api_key={key}"
-                   f"&start_date={start30.isoformat()}&end_date={end.isoformat()}")
-            raw = ((http_json("GET", url, {}, timeout=30) or {}).get("data") or {}).get("day_wise_stats") or []
-            by_dm = {}
-            for r in raw:
-                try:
-                    d, mon = str(r.get("date", "")).split()
-                    by_dm[(int(d), months.get(mon[:3], 0))] = r.get("email_engagement_metrics") or {}
-                except (ValueError, AttributeError):
-                    continue
-            sent, rep, bnc = [], [], []
-            for iso in days_out:
-                dt = _dtmod.date.fromisoformat(iso)
-                m = by_dm.get((dt.day, dt.month)) or {}
-                sent.append(int(m.get("sent") or 0))
-                rep.append(int(m.get("replied") or 0))
-                bnc.append(int(m.get("bounced") or 0))
-            series[ws] = {"sent": sent, "replied": rep, "bounced": bnc}
+            series[ws] = _daywise_series(key, days_out, start30.isoformat(), end.isoformat())
         except Exception as e:  # noqa: BLE001 — one workspace failing must not void the rest
             print(f"[client-win] day-wise {ws} failed: {e}", file=sys.stderr)
     out_series = {}
     for ws, s in series.items():
         if ws != "navreo":  # navreo's own line rides the __all sum, as before
             out_series[_client_win_label(ws, None)] = s
-    # Navreo-workspace daily series exposed under a reserved key so the page can
-    # split it across the clients that SHARE that workspace (Navreo, Amplifyy,
-    # Arnic) proportionally — they have no daily line of their own, only window
-    # totals, and Bjion needs per-day sent per client (2026-07-28).
+    # Shared-workspace clients (Navreo/Amplifyy/Arnic/…) live inside the ONE
+    # navreo Smartlead workspace, told apart by campaign name. They used to get
+    # an APPORTIONED estimate of the workspace daily line (window total exact,
+    # daily shape guessed) because no store holds per-client daily sent. But
+    # day-wise-overall-stats accepts a campaign_ids filter (proven 2026-07-29),
+    # so each shared client now gets its EXACT daily line in one scoped call —
+    # the tooltip matches Smartlead's own name-filtered view to the digit
+    # (Bjion: "we don't need to guess it, it's right here").
+    nav_key = ws_key("navreo")
+    if nav_key:
+        ids_by_client = {}
+        for cid, cws, name in cands:
+            if (cws or "navreo").lower() != "navreo":
+                continue
+            cl = _client_win_label(cws, name)
+            if cl == _CLIENT_UNASSIGNED:
+                continue
+            ids_by_client.setdefault(cl, []).append(cid)
+        for cl, ids in ids_by_client.items():
+            try:
+                out_series[cl] = _daywise_series(
+                    nav_key, days_out, start30.isoformat(), end.isoformat(), campaign_ids=ids)
+            except Exception as e:  # noqa: BLE001 — fall back to the estimate below
+                print(f"[client-win] day-wise client {cl} failed: {e}", file=sys.stderr)
+    # Navreo-workspace daily series still exposed under a reserved key as the
+    # estimate fallback (used only if a shared client's scoped call above failed).
     if "navreo" in series:
         out_series["__navreo_ws"] = series["navreo"]
     if series:
