@@ -6987,14 +6987,38 @@ def campaign_lead_lookup(q: dict) -> dict:
             "name": nm, "company": lead.get("company_name") or "", "others": others}
 
 
+# UI-only DEMO campaign — a fake Acme campaign card injected at the response layer
+# (never a real Smartlead object, never sends, never in campaign_scorecard so it can't
+# touch any aggregate). Shown only when the Settings "Show demo clients" toggle is ON;
+# carries its own display stats on the row so the card looks alive without real data.
+_DEMO_CAMPAIGN_ROW = {
+    "key": "camp-sl-demo-acme-1", "platform": "smartlead", "platform_id": "demo-acme-1",
+    "name": "Acme — Founder outreach (DEMO)", "status": "ACTIVE",
+    "workspace": "navreo", "workspace_name": "navreo", "created_at": None,
+    "managed": False, "demo": True,
+    "sent": 4120, "replied": 512, "positives": 63, "bounced": 74, "total": 4200,
+}
+
+
+def _inject_demo_campaigns(payload: dict) -> dict:
+    """Append the demo Acme campaign when the toggle is ON — on a shallow copy so the
+    SWR cache is never mutated."""
+    if not show_demo_clients() or not isinstance(payload, dict):
+        return payload
+    rows = list(payload.get("rows") or [])
+    if not any(isinstance(r, dict) and r.get("key") == _DEMO_CAMPAIGN_ROW["key"] for r in rows):
+        rows = rows + [dict(_DEMO_CAMPAIGN_ROW)]
+    return {**payload, "rows": rows}
+
+
 def campaigns_unified(p: dict) -> dict:
     if bool(p.get("refresh")):
         out = _compute_campaigns_unified(refresh=True)
         with _CAMPAIGNS_UNIFIED_SWR.lock:
             _CAMPAIGNS_UNIFIED_SWR.ts = time.time()
             _CAMPAIGNS_UNIFIED_SWR.payload = out
-        return out
-    return _CAMPAIGNS_UNIFIED_SWR.get()
+        return _inject_demo_campaigns(out)
+    return _inject_demo_campaigns(_CAMPAIGNS_UNIFIED_SWR.get())
 
 
 # ── Per-day performance series (campaigns-unified-home) ────────────────────
@@ -14319,7 +14343,31 @@ def client_windows_get(force: bool = False) -> tuple[dict, int]:
         threading.Thread(target=_client_win_run_bg, daemon=True).start()
     if ent is None:
         return {"building": True, "error": _CLIENT_WIN["error"]}, 200
-    return ent, 200
+    return _inject_demo_client_windows(ent), 200
+
+
+def _inject_demo_client_windows(data: dict) -> dict:
+    """UI-only: splice a fake 'Acme' client into the analytics payload (series +
+    7/14/30 windows) when the Settings toggle is ON. Never mutates the cache; the
+    numbers are self-consistent placeholders, not real data."""
+    if not show_demo_clients() or not isinstance(data, dict) or not data.get("days"):
+        return data
+    if "Acme" in (data.get("series") or {}):
+        return data
+    days = data["days"]
+    daily = [130 + (i % 7) * 6 for i in range(len(days))]  # gentle wiggle, ~130–166/day
+    series = {**(data.get("series") or {}), "Acme": daily}
+    windows = {}
+    for w, wk in (data.get("windows") or {}).items():
+        try:
+            n = int(w)
+        except (TypeError, ValueError):
+            n = 30
+        sent = sum(daily[-n:]) or (140 * n)
+        windows[w] = {**wk, "Acme": {"sent": sent,
+                                     "replied": round(sent * 0.124),
+                                     "bounced": round(sent * 0.018)}}
+    return {**data, "series": series, "windows": windows or data.get("windows")}
 
 
 # ── Who replies + answer speed, LIVE per client × range ─────────────────────
@@ -16902,6 +16950,25 @@ class Handler(SimpleHTTPRequestHandler):
                 qs = f"signal_cron_runs?summary->>kind=eq.{kind}&order=id.desc&limit=1"
             rows = sb("GET", qs)
             return self._json((rows or [{}])[0])
+        if path == "/api/collisions":
+            # Latest same-client collision census — the daily row written by
+            # collision_detector_tick() into collision_ledger. per_client sums
+            # to leads_colliding (the fleet total). One-row read, cheap enough
+            # to serve live on every analytics-hub load. Powers the double-tap
+            # warning bar under the fresh-leads widgets: client-specific, and
+            # collated to the fleet total on the All view.
+            rows = sb("GET", "collision_ledger?select=run_date,run_at,"
+                             "leads_colliding,per_client,double_sent_30d,"
+                             "stacked_generations&order=run_date.desc&limit=1")
+            row = (rows or [{}])[0] if isinstance(rows, list) else {}
+            return self._json({
+                "run_date": row.get("run_date"),
+                "run_at": row.get("run_at"),
+                "total": row.get("leads_colliding") or 0,
+                "per_client": row.get("per_client") or {},
+                "double_sent_30d": row.get("double_sent_30d") or 0,
+                "stacked_generations": row.get("stacked_generations") or 0,
+            })
         if path == "/api/sources":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
