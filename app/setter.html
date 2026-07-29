@@ -312,6 +312,55 @@
   .inbox-shell.mobile-detail .lead-panel { margin-top: 14px; }
 }
 
+/* ── Routine / embed board (?chrome=none) ───────────────────────────────────
+   Opened in a split pane beside the daily-routine chat. The normal web view
+   drops LEAD DETAILS to a full-width block at the bottom below ~1200px; in the
+   pane that reads as the panel "falling off" underneath. Here we (1) fill the
+   pane top-to-bottom with no dead space, and (2) keep the three-pane row
+   (list | conversation | LEAD DETAILS sidebar) with fluid columns so the
+   sidebar stays a sidebar and the board survives a narrow pane. Everything is
+   scoped to html.headless, so a human on setter.html (no ?chrome=none) is
+   unchanged. */
+html.headless .main {
+  height: 100vh; display: flex; flex-direction: column;
+  padding: 12px clamp(10px, 2vw, 22px) 0; box-sizing: border-box;
+}
+html.headless .main > * { flex: 0 0 auto; }
+html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0; }
+
+/* Keep the full three-pane row down to 700px, overriding the web view's
+   wrap / stack / column breakpoints. Columns are fluid (clamp) so they shrink
+   with the pane; each fills the height and scrolls on its own. */
+@media (min-width: 700px) {
+  html.headless .inbox-shell {
+    flex-direction: row; flex-wrap: nowrap;
+    border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+    height: auto; min-height: 0;
+  }
+  html.headless .inbox-left {
+    width: clamp(228px, 26%, 340px); flex: 0 0 auto;
+    border-right: 1px solid var(--line); border-top: none; border-radius: 0;
+    height: auto; min-height: 0;
+  }
+  html.headless .inbox-shell:not(.mobile-detail) .inbox-right { display: block; }
+  html.headless .inbox-right { height: auto; min-height: 0; padding: 0 20px 28px; }
+  /* LEAD DETAILS stays a docked right sidebar (not a full-width block below).
+     JS still toggles its inline display none/"" per selection; these rules only
+     shape it when shown. */
+  html.headless .inbox-shell:not(.mobile-detail) .lead-panel { display: block; }
+  html.headless .lead-panel {
+    flex: 0 0 auto; width: clamp(208px, 22%, 280px);
+    border-left: 1px solid var(--line); border-top: none;
+    margin: 0; padding: 20px 18px 32px; max-height: none;
+  }
+}
+/* Below 700px the pane is too narrow for three columns, so it stacks to one
+   column (list, then the selected reply) and the list fills the height. */
+@media (max-width: 699px) {
+  html.headless .main > .inbox-shell { min-height: 0; }
+  html.headless .inbox-left { flex: 1 1 auto; min-height: 0; }
+}
+
 .back-link { color: var(--ink-3); text-decoration: none; font-size: 13px; align-items: center; gap: 5px; }
 .back-link:hover { color: var(--ink); }
 
