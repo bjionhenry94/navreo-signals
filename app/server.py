@@ -7454,6 +7454,97 @@ def _scorecard_sync_loop():
         time.sleep(_SCORECARD_SYNC_INTERVAL_S)
 
 
+# ── Subsequence (automated follow-up) effectiveness ─────────────────────────
+# Powers the "How effective are our follow-ups?" card (analytics lane 5, 3rd
+# column). A subsequence is its OWN Smartlead campaign (parent_campaign_id) and
+# is deliberately excluded from campaign_scorecard — so its stats are collated
+# here in a dedicated hourly job and held in memory (too many subs, ~540, to
+# compute per page-load). Per client, SENT-basis: positive-reply rate =
+# Σpositive_reply_count / Σsent, book-call rate = Σbooked / Σsent; `enrolled`
+# (Σtotal_count) is the headline count. Booked = distinct {Call Booked,
+# Meeting Request} from the reply archive (navreo-workspace only — connected
+# client workspaces read 0 there, which the card must caveat). Fully additive +
+# defensive: any failure leaves the card blank, never the two siblings.
+_SUBSEQ_STATS: dict = {}
+_SUBSEQ_LOCK = threading.Lock()
+_SUBSEQ_TS = 0.0
+_SUBSEQ_SYNC_INTERVAL_S = 3600
+_SUBSEQ_SYNC_LOCK = threading.Lock()
+
+
+def _subseq_stats_sync_all():
+    """Collate every client's subsequence stats from Smartlead /analytics.
+    Paced under the shared 200/min cap; one bad sub never aborts the run."""
+    global _SUBSEQ_TS
+    if not _SUBSEQ_SYNC_LOCK.acquire(blocking=False):
+        return
+    try:
+        per: dict = {}
+        for w in ws_enabled():
+            wid = w.get("id")
+            wkey = ws_key(wid)
+            if not wkey:
+                continue
+            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={wkey}", {})
+            if not isinstance(camps, list):
+                continue
+            by_id = {c.get("id"): c for c in camps}
+            for c in camps:
+                if not c.get("parent_campaign_id"):
+                    continue
+                cid = c.get("id")
+                parent = by_id.get(c.get("parent_campaign_id")) or {}
+                cl = _client_win_label(wid, parent.get("name") or "")
+                if not cid or cl == _CLIENT_UNASSIGNED:
+                    continue
+                try:
+                    m = _parse_smartlead_analytics(
+                        _smartlead_json("GET", f"/campaigns/{cid}/analytics", workspace=wid))
+                except Exception:  # noqa: BLE001 — a missing sub is a zero, not a failure
+                    continue
+                e = per.setdefault(cl, {"enrolled": 0, "sent": 0, "positives": 0, "sub_ids": []})
+                e["enrolled"] += m["total"]
+                e["sent"] += m["sent"]
+                e["positives"] += m["positives"]
+                e["sub_ids"].append(cid)
+                time.sleep(0.3)  # ~200/min — under the shared Smartlead cap
+        out: dict = {}
+        allc = {"enrolled": 0, "sent": 0, "positives": 0, "booked": 0}
+        for cl, e in per.items():
+            booked = 0
+            try:
+                mm = _reply_archive_meetings(e["sub_ids"])
+                if isinstance(mm, dict):
+                    booked = sum(mm.values())
+            except Exception:  # noqa: BLE001
+                booked = 0
+            rec = {"enrolled": e["enrolled"], "sent": e["sent"],
+                   "positives": e["positives"], "booked": booked}
+            out[cl] = rec
+            for k in ("enrolled", "sent", "positives", "booked"):
+                allc[k] += rec[k]
+        out["All"] = allc
+        with _SUBSEQ_LOCK:
+            _SUBSEQ_STATS.clear()
+            _SUBSEQ_STATS.update(out)
+            _SUBSEQ_TS = time.time()
+        print(f"[subseq-sync] refreshed {len(out) - 1} clients", flush=True)
+    finally:
+        _SUBSEQ_SYNC_LOCK.release()
+
+
+def _subseq_stats_loop():
+    """Background: prime ~90s after boot (after the scorecard sweep's burst so
+    the Smartlead load is spread), then refresh hourly. Must never die."""
+    time.sleep(90)
+    while True:
+        try:
+            _subseq_stats_sync_all()
+        except Exception as e:  # noqa: BLE001
+            print(f"[subseq-sync] cycle failed: {e}", flush=True)
+        time.sleep(_SUBSEQ_SYNC_INTERVAL_S)
+
+
 def _all_campaign_scorecard() -> dict:
     """The cached scorecard for EVERY campaign — one Supabase read. Keyed by
     str(smartlead_campaign_id), same shape as _compute_campaign_scorecard so the
@@ -14251,9 +14342,22 @@ def _who_replies_compute(client: str, days: int) -> dict:
         speed = {"n": len(mins), "avg_mins": round(sum(mins) / len(mins)),
                  "median_mins": round(mins[len(mins) // 2]),
                  "under15_share": round(sum(1 for m in mins if m <= 15) / len(mins), 2)}
+    # Third card: subsequence effectiveness (collated hourly, held in memory).
+    # Defensive — a missing/bad snapshot yields subseq=None (card shows a
+    # "gathering data" state), never disturbs the two siblings above.
+    subseq = None
+    try:
+        with _SUBSEQ_LOCK:
+            s = _SUBSEQ_STATS.get(client)
+            s = dict(s) if s else None
+        if s and s.get("sent"):
+            subseq = {"enrolled": s.get("enrolled", 0), "sent": s["sent"],
+                      "positives": s.get("positives", 0), "booked": s.get("booked", 0)}
+    except Exception:  # noqa: BLE001
+        subseq = None
     return {"client": client, "days": days, "n": n_pos, "named": named,
             "buckets": [[k, v] for k, v in blist], "sizes": slist,
-            "size_named": sum(size_buckets.values()), "speed": speed}
+            "size_named": sum(size_buckets.values()), "speed": speed, "subseq": subseq}
 
 
 def who_replies_get(client: str, days: int) -> tuple[dict, int]:
@@ -18192,4 +18296,5 @@ if __name__ == "__main__":
     # hourly: cache every campaign's Smartlead analytics so the list shows real
     # per-campaign performance without 874 live calls per page load
     threading.Thread(target=_scorecard_sync_loop, daemon=True).start()
+    threading.Thread(target=_subseq_stats_loop, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

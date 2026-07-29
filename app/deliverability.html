@@ -120,7 +120,7 @@
 
 .ah .cards{display:grid;gap:14px}
 .ah .c3{grid-template-columns:repeat(3,1fr)}
-.ah .c23{grid-template-columns:2fr 3fr}
+.ah .c23{grid-template-columns:2fr 3fr 3fr}
 .ah .c32{grid-template-columns:3fr 2fr}
 .ah .acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
 .ah .card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
@@ -172,6 +172,25 @@
 .ah .ocol.ohead span{text-align:right;font-weight:500}
 .ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
 .ah .fill.orange{background:var(--orange)}
+/* ── third card · follow-up (subsequence) effectiveness — benchmark meters ── */
+.ah .m5-meter+.m5-meter{margin-top:20px}
+.ah .m5-mtop{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.ah .m5-mlab{font-size:13px;font-weight:600;color:var(--ink)}
+.ah .m5-right{display:flex;align-items:center;gap:8px}
+.ah .m5-mval{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.ah .m5-track{position:relative;height:13px;background:var(--bg-sunken);border-radius:7px;overflow:hidden}
+.ah .m5-fill{position:absolute;left:0;top:0;bottom:0;border-radius:7px;transition:width .4s ease}
+.ah .m5-gap{position:absolute;top:0;bottom:0;background:rgba(20,17,14,.06)}
+.ah .m5-tick{position:absolute;top:0;bottom:0;width:3px;background:var(--ink);border-radius:2px}
+.ah .m5-axis{position:relative;height:15px;margin-top:6px}
+.ah .m5-ticklab{position:absolute;top:0;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--ink-2);white-space:nowrap}
+.ah .tone-green{color:var(--green)} .ah .bg-green{background:var(--green)}
+.ah .tone-amber{color:var(--amber)} .ah .bg-amber{background:var(--amber)}
+.ah .tone-red{color:var(--red)} .ah .bg-red{background:var(--red)}
+.ah .m5-chip{font:700 10px var(--font-sans);letter-spacing:.03em;text-transform:uppercase;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.ah .m5-chip.c-green{background:var(--green-bg);color:#195C3F}
+.ah .m5-chip.c-amber{background:var(--amber-bg);color:#6B4A00}
+.ah .m5-chip.c-red{background:var(--red-bg);color:#861E10}
 
 .ah .split{display:flex;gap:2px;height:12px}
 .ah .split .g{background:var(--green);border-radius:4px 2px 2px 4px;transition:flex-grow .35s ease}
@@ -512,6 +531,11 @@
           <div class="bignum num" id="wait-big">–</div>
           <div class="subline" id="wait-sub">&nbsp;</div>
           <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
+        </div>
+        <div class="acard">
+          <div class="card-kick">How effective are our follow-ups <span id="subseq-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· automated subsequences</span></div>
+          <div id="subseq-body"><div class="subline">Fills in after the next follow-up sync.</div></div>
+          <div class="take" id="subseq-take-row" style="display:none"><span class="arr">→</span><span id="subseq-take"></span></div>
         </div>
       </div>
     </section>
@@ -1891,6 +1915,48 @@ function renderWho() {
     $("wait-big").textContent = "–"; $("wait-big").className = "bignum num";
     $("wait-sub").textContent = "No answered replies to time in this window."; $("wait-take").textContent = "";
   }
+  // ── third box: how effective are our automated follow-ups (subsequences) ──
+  try { renderSubseq(p && p.subseq); } catch (e) { /* never break the two siblings above */ }
+}
+
+// Third card. SENT-basis: positive-reply rate = positives/sent, book-call rate =
+// booked/sent; benchmarks 12.5% and 5%. Colour = severity, plain-word chips.
+function renderSubseq(s) {
+  var scope = $("subseq-scope"), body = $("subseq-body"),
+      takeRow = $("subseq-take-row"), take = $("subseq-take");
+  if (!scope || !body) return;
+  if (!s || !s.sent) {
+    scope.textContent = "· automated subsequences";
+    body.innerHTML = '<div class="subline">Fills in after the next follow-up sync.</div>';
+    takeRow.style.display = "none";
+    return;
+  }
+  var T_REPLY = 12.5, T_BOOK = 5;
+  var reply = Math.round(1000 * s.positives / s.sent) / 10;
+  var book = Math.round(1000 * s.booked / s.sent) / 10;
+  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups";
+  function tone(v, t) { return v >= t ? "green" : v >= t * 0.75 ? "amber" : "red"; }
+  function chip(tn) {
+    var t = tn === "green" ? "On target" : tn === "amber" ? "Just under" : "Well under";
+    return '<span class="m5-chip c-' + tn + '">' + t + '</span>';
+  }
+  function meter(lab, val, target, axis) {
+    var tn = tone(val, target), w = Math.min(100, val / axis * 100), tl = Math.min(100, target / axis * 100);
+    var gap = val < target ? '<div class="m5-gap" style="left:' + w + '%;width:' + (tl - w) + '%"></div>' : "";
+    return '<div class="m5-meter"><div class="m5-mtop"><span class="m5-mlab">' + lab + '</span>' +
+      '<span class="m5-right"><span class="m5-mval tone-' + tn + '">' + val + '%</span>' + chip(tn) + '</span></div>' +
+      '<div class="m5-track"><div class="m5-fill bg-' + tn + '" style="width:' + w + '%"></div>' + gap +
+      '<div class="m5-tick" style="left:' + tl + '%"></div></div>' +
+      '<div class="m5-axis"><span class="m5-ticklab" style="left:' + tl + '%">target ' + target + '%</span></div></div>';
+  }
+  body.innerHTML = '<div style="margin-top:2px">' +
+    meter("Positive replies", reply, T_REPLY, 20) + meter("Booked calls", book, T_BOOK, 10) + '</div>';
+  var rt = tone(reply, T_REPLY), bt = tone(book, T_BOOK);
+  take.textContent = (rt === "green" && bt === "green") ? "Follow-ups are pulling their weight."
+    : (rt !== "green" && bt !== "green") ? "Both under target — booked calls leak most. Rewrite the follow-up that asks for the call."
+    : (bt !== "green") ? "Booked calls are under — rewrite the follow-up that asks for the call."
+    : "Positive replies are under — the follow-up needs a sharper opener.";
+  takeRow.style.display = "";
 }
 
 /* ── lane 6: meetings ── */
