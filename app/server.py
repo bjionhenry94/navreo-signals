@@ -7038,12 +7038,11 @@ def _demo_cockpit_detail(cid):
                   "last_contacted": "2026-07-28T15:40:00Z"},
         "replies": [], "sources": [], "meetings": c.get("meetings") or 0,
         "receipts": [], "sequence": None, "versions": [],
-        "lead_statuses": [
-            {"status": "Not contacted", "n": total - contacted},
-            {"status": "In sequence", "n": round(contacted * 0.34)},
-            {"status": "Completed", "n": round(contacted * 0.58)},
-            {"status": "Replied", "n": c["replied"]},
-            {"status": "Bounced", "n": c["bounced"]},
+        "lead_statuses": [  # 'k' = Smartlead status code the detail panel labels via OLBL
+            {"k": "COMPLETED", "n": round(contacted * 0.58)},
+            {"k": "INPROGRESS", "n": round(contacted * 0.34)},
+            {"k": "STARTED", "n": (total - contacted) + c["replied"]},
+            {"k": "BLOCKED", "n": c["bounced"]},
         ],
         "campaign_id": cid, "degraded": False,
     }
