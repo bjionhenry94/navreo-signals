@@ -6242,6 +6242,17 @@ def queue_response(params, accept_gzip: bool):
                 # Level policy mirrors _json: past ~256KB, level 1 compresses
                 # JSON nearly as well at a fraction of the CPU.
                 gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
+                # Never memoize an empty-rows body. On a cold boot the thread-
+                # collapse light-fetch (_thread_rep_ids) can briefly filter the
+                # list to [] while kpis still show a backlog; caching that would
+                # hold the inbox blank for the whole TTL — the very "not loading"
+                # symptom. Empty is a few hundred bytes to serialize, so skipping
+                # the cache is free (the memo only exists to spare the multi-MB
+                # full-hydrate). A genuinely empty pill just rebuilds cheaply.
+                if not (isinstance(body, dict) and body.get("rows")):
+                    if accept_gzip and len(raw) >= 512:
+                        return 200, "gzip", gz
+                    return 200, None, raw
                 # Bound the memo: legit shapes number ~10 (pills x {slim,full});
                 # drop expired entries if an odd `limit` fan-out grows it.
                 if len(_QUEUE_RESP_MEMO) > 32:
