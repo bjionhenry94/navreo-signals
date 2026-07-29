@@ -7554,6 +7554,10 @@ def _all_campaign_scorecard() -> dict:
     camps = {}
     for r in (rows or []):
         sid = str(r.get("smartlead_campaign_id"))
+        # Demo-client campaigns stay off the day-to-day Campaigns page unless the
+        # Settings "Show demo clients" toggle is ON.
+        if _client_hidden(_client_win_label(r.get("workspace") or "navreo", r.get("name") or "")):
+            continue
         camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total", "status")}
         # name was selected but never returned, so every campaign the crunch had
         # not written up rendered as "Campaign <id>". The list is the whole
@@ -13960,9 +13964,101 @@ _SHARED_WS_CLIENTS = (
     ("arnic", "Arnic"),
     ("qwintiq", "Qwintiq"),
     ("thunderbird", "ThunderBird"),   # ThunderBird is its own client (Bjion 2026-07-28)
+    ("acme", "Acme"),                 # DEMO client (Bjion 2026-07-29) — see _DEMO_CLIENT_LABELS
     ("navreo", "Navreo"),             # Navreo is now name-gated like every other client
 )
 _CLIENT_UNASSIGNED = "__unassigned"
+
+# Demo clients: fake clients that PERSIST in the tool so prospects can be shown how
+# the platform works. Their data must never mix into a real client's numbers — the
+# Settings "Show demo clients" toggle filters them in/out of every surface (Campaigns,
+# Lists, Analytics, Setter) via is_demo_client(). Name-gated demos live in the label
+# set below; own-workspace demos (none yet) would carry a slug in _DEMO_WORKSPACE_SLUGS.
+_DEMO_CLIENT_LABELS = frozenset({"Acme"})
+_DEMO_WORKSPACE_SLUGS = frozenset()
+
+
+def is_demo_client(label=None, workspace=None) -> bool:
+    """True if a client (by display label and/or workspace slug) is a demo client."""
+    if workspace and workspace in _DEMO_WORKSPACE_SLUGS:
+        return True
+    return bool(label) and label in _DEMO_CLIENT_LABELS
+
+
+# UI prefs — KV-backed (same deliverability_audit_cache store client_windows uses, so a
+# deploy restores instantly). Currently one pref: whether DEMO clients show in day-to-day
+# surfaces. Default False → demo clients hidden everywhere until Bjion flips the Settings
+# "Show demo clients" switch.
+_UI_PREFS = {"show_demo_clients": False}
+_UI_PREFS_TS = 0.0
+_UI_PREFS_TTL = 30.0
+
+
+def _ui_prefs(force: bool = False) -> dict:
+    global _UI_PREFS_TS
+    if not force and (time.time() - _UI_PREFS_TS) < _UI_PREFS_TTL:
+        return _UI_PREFS
+    try:
+        rows = sb("GET", "deliverability_audit_cache?id=eq.ui_prefs&select=blob") or []
+        if rows and isinstance(rows[0].get("blob"), dict):
+            _UI_PREFS["show_demo_clients"] = bool(rows[0]["blob"].get("show_demo_clients"))
+    except Exception:  # noqa: BLE001 — a read miss just keeps the default
+        pass
+    _UI_PREFS_TS = time.time()
+    return dict(_UI_PREFS)
+
+
+def show_demo_clients() -> bool:
+    return bool(_ui_prefs().get("show_demo_clients"))
+
+
+def _ui_prefs_set(show_demo: bool) -> dict:
+    global _UI_PREFS_TS
+    blob = {"show_demo_clients": bool(show_demo)}
+    sb("POST", "deliverability_audit_cache?on_conflict=id",
+       {"id": "ui_prefs", "blob": blob, "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
+       prefer="resolution=merge-duplicates,return=minimal")
+    _UI_PREFS.update(blob)
+    _UI_PREFS_TS = 0.0
+    return blob
+
+
+def _client_hidden(label) -> bool:
+    """A demo client is hidden from day-to-day surfaces unless the toggle is ON.
+    The single test every display builder calls so demo data never leaks in by default."""
+    return is_demo_client(label) and not show_demo_clients()
+
+
+# Persistent DEMO client seed — synthetic-but-realistic campaign_scorecard rows for
+# "Acme" (token 'acme', name-gated to the Acme client). Idempotent: upsert on the
+# campaign id. These rows STAY (that's the point — Bjion shows prospects a populated
+# tool), hidden by default via _client_hidden until the Settings toggle is ON. Fake ids
+# in a high 9009xxxxx band so they never collide with a real Smartlead campaign id.
+_DEMO_ACME_CAMPAIGNS = [
+    {"smartlead_campaign_id": 900900001, "workspace": "navreo", "name": "Acme — Founder outreach (Q3)",
+     "status": "ACTIVE", "sent": 4120, "replied": 512, "positives": 63, "bounced": 74, "completed": 3900, "total": 4200},
+    {"smartlead_campaign_id": 900900002, "workspace": "navreo", "name": "Acme — VP Sales, mid-market SaaS",
+     "status": "ACTIVE", "sent": 2870, "replied": 331, "positives": 41, "bounced": 39, "completed": 2600, "total": 3000},
+    {"smartlead_campaign_id": 900900003, "workspace": "navreo", "name": "Acme — RevOps leaders (hiring signal)",
+     "status": "ACTIVE", "sent": 1980, "replied": 268, "positives": 37, "bounced": 22, "completed": 1810, "total": 2100},
+    {"smartlead_campaign_id": 900900004, "workspace": "navreo", "name": "Acme — Reactivation, past demos",
+     "status": "COMPLETED", "sent": 940, "replied": 118, "positives": 19, "bounced": 8, "completed": 940, "total": 940},
+]
+
+
+def api_demo_seed() -> tuple[dict, int]:
+    """Upsert the persistent Acme demo campaigns into campaign_scorecard. Idempotent."""
+    try:
+        r = sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id",
+               _DEMO_ACME_CAMPAIGNS, prefer="resolution=merge-duplicates,return=minimal")
+        if r is None:
+            return {"ok": False, "error": "supabase upsert returned None"}, 502
+        log_activity("/api/demo/seed", {"campaigns": len(_DEMO_ACME_CAMPAIGNS)},
+                     action="seed", entity="demo")
+        return {"ok": True, "client": "Acme", "campaigns": len(_DEMO_ACME_CAMPAIGNS),
+                "note": "hidden by default; flip Settings 'Show demo clients' to view"}, 200
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:300]}, 502
 
 
 def _client_win_label(workspace, name) -> str:
@@ -14085,7 +14181,9 @@ def _client_win_build():
     out_series = {}
     for ws, s in series.items():
         if ws != "navreo":  # navreo's own line rides the __all sum, as before
-            out_series[_client_win_label(ws, None)] = s
+            _lbl = _client_win_label(ws, None)
+            if not _client_hidden(_lbl):  # demo clients hidden unless toggle ON
+                out_series[_lbl] = s
     # Shared-workspace clients (Navreo/Amplifyy/Arnic/…) live inside the ONE
     # navreo Smartlead workspace, told apart by campaign name. They used to get
     # an APPORTIONED estimate of the workspace daily line (window total exact,
@@ -14101,7 +14199,7 @@ def _client_win_build():
             if (cws or "navreo").lower() != "navreo":
                 continue
             cl = _client_win_label(cws, name)
-            if cl == _CLIENT_UNASSIGNED:
+            if cl == _CLIENT_UNASSIGNED or _client_hidden(cl):
                 continue
             ids_by_client.setdefault(cl, []).append(cid)
         for cl, ids in ids_by_client.items():
@@ -14152,11 +14250,12 @@ def _client_win_build():
             if s <= 0 and r <= 0:
                 continue
             cl = _client_win_label(ws, name)
-            if cl == _CLIENT_UNASSIGNED:
+            if cl == _CLIENT_UNASSIGNED or _client_hidden(cl):
                 # shared-workspace campaign owned by no client (name matches no
                 # roster entry) — never fold it into a client's window. __all is
                 # rebuilt below from workspace telemetry, so the fleet total is
-                # unaffected by this exclusion.
+                # unaffected by this exclusion. Demo clients drop here too unless
+                # the Settings toggle is ON.
                 continue
             agg = windows[str(w)].setdefault(cl, {"sent": 0, "replied": 0, "bounced": 0})
             agg["sent"] += s
@@ -14540,6 +14639,7 @@ _RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags
     ("thunderbird", "ThunderBird"),
     ("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
     ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang"),
+    ("acme", "Acme"),  # DEMO client — kept in sync with _SHARED_WS_CLIENTS
     ("navreo", "Navreo"),
 )
 
@@ -17065,6 +17165,8 @@ class Handler(SimpleHTTPRequestHandler):
                                "render_instance_id": os.environ.get("RENDER_INSTANCE_ID"),
                                "on_render": _ON_RENDER,
                                "uptime_seconds": round(time.time() - _BOOT_AT)})
+        if path == "/api/settings/ui":
+            return self._json({"ok": True, **_ui_prefs(force=True)})
         if path == "/api/jobs":
             # Memory first (live progress), then union in durable app_jobs rows
             # that aren't in memory (recent history + jobs from before a restart).
@@ -17439,6 +17541,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             body, status = (api_workspaces_delete(p) if path.endswith("/delete")
                             else api_workspaces_add(p))
+            return self._json(body, status)
+        if path == "/api/settings/ui":
+            # Settings "Show demo clients" toggle (KV-persisted). Session-gated above.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            blob = _ui_prefs_set(bool(p.get("show_demo_clients")))
+            log_activity("/api/settings/ui", blob, action="set", entity="settings")
+            return self._json({"ok": True, **blob})
+        if path == "/api/demo/seed":
+            body, status = api_demo_seed()
             return self._json(body, status)
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)

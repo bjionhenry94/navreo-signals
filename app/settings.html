@@ -67,6 +67,19 @@ table.ws tr:last-child td { border-bottom: none; }
       </div>
       <div id="ws-table"><div class="loading">Loading workspaces…</div></div>
     </section>
+
+    <section class="section" id="demo-section">
+      <h2>Demo clients</h2>
+      <p class="sub">A demo client (<strong>Acme</strong>) lives in the tool with
+      synthetic campaigns, positives and analytics so you can show prospects how the
+      platform works. It's hidden from day-to-day use by default. Turn it on only when
+      demoing — its data never mixes into any real client's numbers.</p>
+      <label class="demo-toggle">
+        <input type="checkbox" id="demo-switch">
+        <span>Show demo clients</span>
+      </label>
+      <span class="hint" id="demo-hint">Off — demo clients hidden everywhere.</span>
+    </section>
   </main>
 </div>
 
@@ -215,7 +228,42 @@ document.getElementById("rm-go").addEventListener("click", async () => {
   load();
 });
 
+// ── Demo clients toggle ─────────────────────────────────────────────────────
+const demoSwitch = document.getElementById("demo-switch");
+const demoHint = document.getElementById("demo-hint");
+function paintDemo(on) {
+  demoSwitch.checked = !!on;
+  demoHint.textContent = on
+    ? "On — demo clients (Acme) shown across the tool, badged DEMO."
+    : "Off — demo clients hidden everywhere.";
+}
+async function loadDemo() {
+  try {
+    const r = await fetch("/api/settings/ui", { cache: "no-store" });
+    const b = await r.json();
+    paintDemo(b.show_demo_clients);
+  } catch (e) { /* keep default off */ }
+}
+demoSwitch.addEventListener("change", async () => {
+  const on = demoSwitch.checked;
+  try {
+    const r = await fetch("/api/settings/ui", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ show_demo_clients: on })
+    });
+    const b = await r.json();
+    if (!r.ok || !b.ok) throw new Error(b.message || ("HTTP " + r.status));
+    paintDemo(b.show_demo_clients);
+    toast(on ? "Demo clients shown." : "Demo clients hidden.");
+  } catch (e) {
+    paintDemo(!on);
+    toast("Couldn't save: " + String(e.message || e));
+  }
+});
+
 load();
+loadDemo();
 </script>
 </body>
 </html>
