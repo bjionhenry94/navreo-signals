@@ -6080,9 +6080,17 @@ def _rows_lock(key):
         return lk
 
 
-def _fetch_queue_rows(status: str, limit: int) -> list:
-    """The uncached read: fetch, direction-reclassify, annotate. Pure read."""
+def _fetch_queue_rows(status: str, limit: int):
+    """The uncached read: fetch, direction-reclassify, annotate. Pure read.
+
+    Returns None (NOT []) when the underlying Supabase fetch FAILED. The rows
+    query is a heavy select=* (it needs the `thread` blobs for who-spoke-last
+    reclassify) and times out on a cold/slow connection while the cheap pill
+    COUNT still reports a backlog — so a false-empty here would blank an inbox
+    that says "19 needs review" AND get cached for the TTL. Callers keep the
+    last-good value on None; a genuinely empty pill still returns []."""
     rows = []
+    fetch_failed = False
     if _SB:
         base = f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}&select=*"
         # For the direction-aware pills (needs_review / sent / auto_sent) the
@@ -6099,9 +6107,18 @@ def _fetch_queue_rows(status: str, limit: int) -> list:
                 fetched = _SB("GET", f"{QUEUE_TABLE}?{base}&status=eq.{st}")
                 if isinstance(fetched, list):
                     rows.extend(fetched)
+                else:  # None = timeout/error from _SB, never "no rows"
+                    fetch_failed = True
         else:  # All
             fetched = _SB("GET", f"{QUEUE_TABLE}?{base}")
-            rows = fetched if isinstance(fetched, list) else []
+            if isinstance(fetched, list):
+                rows = fetched
+            else:
+                fetch_failed = True
+        # Every fetch failed and we have nothing: signal failure so the caller
+        # keeps its last-good rows instead of caching/serving a false-empty.
+        if fetch_failed and not rows:
+            return None
         # Thread collapse FIRST (one representative row per conversation),
         # THEN the who-spoke-last reclass on the survivor - the order is
         # load-bearing: a stale needs_review sibling must vanish because a
@@ -6117,6 +6134,8 @@ def _fetch_queue_rows(status: str, limit: int) -> list:
 
 
 def _store_rows(key, rows):
+    if rows is None:   # a failed fetch (timeout) — never cache a false-empty
+        return
     _ROWS_CACHE[key] = {"at": _time.time(), "rows": rows}
 
 
@@ -6134,6 +6153,9 @@ def _queue_rows_cached(status: str, limit: int) -> list:
         if ent:
             return ent["rows"]
         rows = _fetch_queue_rows(status, limit)
+        if rows is None:              # fetch failed: keep last-good, don't cache
+            ent = _ROWS_CACHE.get(key)
+            return ent["rows"] if ent else []
         _store_rows(key, rows)
         return rows
 
