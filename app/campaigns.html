@@ -2500,12 +2500,11 @@
        cache. Insights decorate a row; they no longer create one. Before this,
        join() looped byScope, so a campaign Lilly had not written about could not
        render at all however healthy it was: on 24 Jul 2026 that was 45 rows out
-       of 1,053 tracked campaigns, hiding 91 ACTIVE ones. Main-workspace
-       campaigns only; connected client workspaces have their own hub. */
+       of 1,053 tracked campaigns, hiding 91 ACTIVE ones. EVERY workspace under
+       management renders here now (navreo + every connected client workspace);
+       each row carries its workspace label so it can be filtered by client. */
     var scopes = [], seenScope = {};
     Object.keys(sc).forEach(function (id) {
-      var r = sc[id] || {};
-      if ((r.workspace || "navreo") !== "navreo") return;
       seenScope[id] = 1; scopes.push(id);
     });
     /* and the other direction: an insight for something the inventory sync has
@@ -2553,6 +2552,8 @@
       campaigns.push({
         id: scope,
         name: vp.campaign_name || (s && s.name) || ("Campaign " + scope),
+        workspace: (s && s.workspace) || "navreo",
+        wsLabel: (s && s.ws_label) || "",
         slStatus: (s && s.status) || "",
         tag: tag, tier: meta.tier, reviewed: reviewed,
         pill: reviewed ? (vp.pill || meta.pill) : meta.pill,
@@ -2651,6 +2652,11 @@
   ];
   var CLIENT_OTHER = "Other";
   function clientOf(c) {
+    /* A connected client workspace IS its own client: label it by the
+       workspace's display_label (server-supplied), so the Client filter groups
+       every client-workspace campaign under that client. navreo campaigns keep
+       the name-keyword mapping below (Navreo runs campaigns for many clients). */
+    if (c.wsLabel) return c.wsLabel;
     var n = String(c.name || "").toLowerCase();
     for (var i = 0; i < CLIENT_KEYWORDS.length; i++) {
       if (n.indexOf(CLIENT_KEYWORDS[i][0]) !== -1) return CLIENT_KEYWORDS[i][1];
@@ -2755,7 +2761,7 @@
       fmtInt(cov.tracked) + " campaigns tracked &middot; " + fmtInt(drawn) + " on this page &middot; " +
       fmtInt(cov.reviewed) + " reviewed by Lilly &middot; " + fmtInt(unaccounted) + " unaccounted for. " +
       "Reviewed means she has written a verdict; the rest still show their real Smartlead numbers. " +
-      "Client-workspace campaigns live in the client hub, not here.</p>");
+      "Every workspace under management is here (Navreo and every connected client); filter by Client to see one workspace at a time.</p>");
     h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run." +
       (STATE.midSync ? " <strong>Smartlead sync in progress: " + STATE.midSync + " row" + (STATE.midSync === 1 ? "" : "s") + " showing the morning-crunch snapshot until it finishes.</strong>" : "") + "</p>");
 

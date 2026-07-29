@@ -7468,7 +7468,13 @@ def _all_campaign_scorecard() -> dict:
         # not written up rendered as "Campaign <id>". The list is the whole
         # inventory now, so the synced name is the only title most rows get.
         camps[sid]["name"] = r.get("name") or ""
-        camps[sid]["workspace"] = r.get("workspace") or "navreo"
+        _w = r.get("workspace") or "navreo"
+        camps[sid]["workspace"] = _w
+        # Client-workspace campaigns render on the campaigns page too now (not a
+        # separate hub) — carry the workspace's own display_label so the page can
+        # label + filter by it. navreo campaigns keep their name-keyword client
+        # label (computed page-side); ws_label is blank for them.
+        camps[sid]["ws_label"] = "" if _w == "navreo" else _client_win_label(_w, "")
         camps[sid]["meetings"] = None
     # meetings from the reply archive: one per distinct booked lead, the same
     # definition every other surface uses (the optimiser-cache snapshot this
