@@ -6001,6 +6001,14 @@ def _thread_rep_ids():
         if not isinstance(light, list):
             return None
         val = {r.get("id") for r in _collapse_threads(light) if isinstance(r, dict)}
+        if not val:
+            # An empty representative-set while the queue has rows (the KPIs show
+            # a backlog) means the light fetch came back empty/short — a cold-boot
+            # or transient blip, never a real "zero threads". Return None so
+            # callers SKIP the collapse and show the uncollapsed inbox rather than
+            # filtering every row out and blanking an inbox that says "19 needs
+            # review". Don't cache the empty (10s TTL) — retry on the next read.
+            return None
     except Exception:  # noqa: BLE001 - collapse is best-effort, never sink the queue
         return None
     _REP_IDS_CACHE["val"] = val
