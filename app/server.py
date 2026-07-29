@@ -14062,6 +14062,8 @@ def _ui_prefs(force: bool = False) -> dict:
 
 
 def show_demo_clients() -> bool:
+    if os.environ.get("DEMO_FORCE") == "1":  # local dev/test override (never set in prod)
+        return True
     return bool(_ui_prefs().get("show_demo_clients"))
 
 
@@ -14389,9 +14391,16 @@ def _inject_demo_client_windows(data: dict) -> dict:
            "replied": sum(c["replied"] for c in _DEMO_ACME),
            "bounced": sum(c["bounced"] for c in _DEMO_ACME)}
     days = data["days"]
-    per_day = (tot["sent"] / 30.0) if tot["sent"] else 230.0
-    daily = [round(per_day * (0.85 + 0.30 * ((i % 7) / 6.0))) for i in range(len(days))]
-    series = {**(data.get("series") or {}), "Acme": daily}
+    n_days = len(days)
+    def _spread(total):
+        if not n_days:
+            return []
+        base = total / float(n_days)
+        return [round(base * (0.85 + 0.30 * ((i % 7) / 6.0))) for i in range(n_days)]
+    # Real series entries are {sent:[…], bounced:[…], replied:[…]} — match that shape.
+    acme_series = {"sent": _spread(tot["sent"]), "bounced": _spread(tot["bounced"]),
+                   "replied": _spread(tot["replied"])}
+    series = {**(data.get("series") or {}), "Acme": acme_series}
     windows = {}
     for w, wk in (data.get("windows") or {}).items():
         try:
