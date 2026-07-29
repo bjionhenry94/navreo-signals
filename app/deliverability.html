@@ -206,6 +206,8 @@
 .ah .rrow .idx{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .ah .rname{font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;min-width:0}
 .ah .rname .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .rname a.nm{color:inherit;text-decoration:none;cursor:pointer}
+.ah .rname a.nm:hover{text-decoration:underline}
 .ah .rsub{font-size:11px;color:var(--ink-3);font-weight:400;margin-top:1px}
 .ah .rrate,.ah .rint,.ah .rmtg{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
 .ah .rint,.ah .rmtg{color:var(--ink-2)}
@@ -1774,7 +1776,7 @@ function renderRank() {
       var noYes = scLT && (scLT.sent || 0) >= 2000 && !(scLT.positives || 0);
       var cost = campCost(c.id);
       s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
-        '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
+        '<div><div class="rname"><a class="nm" href="campaigns.html#/c/' + encodeURIComponent(c.id) + '" title="' + escq(c.name) + '">' + escq(c.name) + "</a>" +
         (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
         (noYes ? '<span class="apill mute" title="Lots of replies, but none has been a real yes yet">replies, no yes yet</span>' : "") +
         (!c.active ? '<span class="apill mute">finished</span>' : "") +
@@ -1813,7 +1815,7 @@ function renderRank() {
   topLT.forEach(function (c, i) {
     var cost = campCost(c.id);
     sLT += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
-      '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
+      '<div><div class="rname"><a class="nm" href="campaigns.html#/c/' + encodeURIComponent(c.id) + '" title="' + escq(c.name) + '">' + escq(c.name) + "</a>" +
       (i === 0 && (c.meetings || 0) > 0 ? '<span class="apill green">Best</span>' : "") +
       (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
       '</div><div class="rsub">' + escq(campClient(c.id, c)) + " · all time</div></div>" +
