@@ -1,5 +1,31 @@
 /* Shared shell: rail nav, data loading, small helpers. */
 
+/* ── Headless / embed mode ──────────────────────────────────────────────────
+   Opening any page with ?chrome=none (alias ?headless=1) strips the app sidebar
+   rail AND the floating "Tasks" tab, leaving a bare board that embeds as an
+   "artefact" surface. Used by the daily routines, which keep a no-sidebar board
+   open beside the chat. The flag lives in the QUERY string so it survives
+   hash-routed deep-links, e.g. campaigns.html?chrome=none#/c/123.
+   <main> is a flex:1 sibling of .rail (.app{display:flex} in navreo.css), so
+   removing the rail reclaims the full width with no gutter to patch. */
+function isHeadless() {
+  try {
+    const q = new URLSearchParams(location.search);
+    return q.get("chrome") === "none" || q.get("headless") === "1" || q.has("headless");
+  } catch (_) { return false; }
+}
+
+if (isHeadless()) {
+  document.documentElement.classList.add("headless");
+  const s = document.createElement("style");
+  // renderRail() already returns nothing in headless; this also hides any page
+  // that hardcodes a rail (or the setter-train share-mode rail) and the Tasks tab.
+  s.textContent =
+    ".rail{display:none!important}" +
+    "#nav-jobs-tab,#nav-jobs-panel{display:none!important}";
+  (document.head || document.documentElement).appendChild(s);
+}
+
 /* Icons8 "Windows 10" set, rendered via CSS mask so they inherit color.
    Pass a bare name for icons/<name>.png, or a full filename (e.g. "settings.svg"). */
 function ic8(name, cls = "") {
@@ -23,6 +49,7 @@ const NAV = [
 ];
 
 function renderRail(active) {
+  if (isHeadless()) return "";  // headless/embed: no sidebar rail at all
   const items = NAV.map(([href, key, label]) =>
     `<a class="nav-i ${key === active ? "on" : ""}" href="${href}" title="${label}">${ICONS[key]}</a>`
   ).join("");
@@ -754,6 +781,7 @@ function setupChartTooltip(wrap) {
   }
 
   function init() {
+    if (isHeadless()) return;  // embed mode: no floating "Tasks" chrome
     injectStyle();
     buildDom();
     if (isOpenSaved()) setOpen(true);
