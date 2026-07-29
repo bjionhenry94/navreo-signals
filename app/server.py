@@ -14029,36 +14029,14 @@ def _client_hidden(label) -> bool:
     return is_demo_client(label) and not show_demo_clients()
 
 
-# Persistent DEMO client seed — synthetic-but-realistic campaign_scorecard rows for
-# "Acme" (token 'acme', name-gated to the Acme client). Idempotent: upsert on the
-# campaign id. These rows STAY (that's the point — Bjion shows prospects a populated
-# tool), hidden by default via _client_hidden until the Settings toggle is ON. Fake ids
-# in a high 9009xxxxx band so they never collide with a real Smartlead campaign id.
-_DEMO_ACME_CAMPAIGNS = [
-    {"smartlead_campaign_id": 900900001, "workspace": "navreo", "name": "Acme — Founder outreach (Q3)",
-     "status": "ACTIVE", "sent": 4120, "replied": 512, "positives": 63, "bounced": 74, "completed": 3900, "total": 4200},
-    {"smartlead_campaign_id": 900900002, "workspace": "navreo", "name": "Acme — VP Sales, mid-market SaaS",
-     "status": "ACTIVE", "sent": 2870, "replied": 331, "positives": 41, "bounced": 39, "completed": 2600, "total": 3000},
-    {"smartlead_campaign_id": 900900003, "workspace": "navreo", "name": "Acme — RevOps leaders (hiring signal)",
-     "status": "ACTIVE", "sent": 1980, "replied": 268, "positives": 37, "bounced": 22, "completed": 1810, "total": 2100},
-    {"smartlead_campaign_id": 900900004, "workspace": "navreo", "name": "Acme — Reactivation, past demos",
-     "status": "COMPLETED", "sent": 940, "replied": 118, "positives": 19, "bounced": 8, "completed": 940, "total": 940},
-]
-
-
-def api_demo_seed() -> tuple[dict, int]:
-    """Upsert the persistent Acme demo campaigns into campaign_scorecard. Idempotent."""
-    try:
-        r = sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id",
-               _DEMO_ACME_CAMPAIGNS, prefer="resolution=merge-duplicates,return=minimal")
-        if r is None:
-            return {"ok": False, "error": "supabase upsert returned None"}, 502
-        log_activity("/api/demo/seed", {"campaigns": len(_DEMO_ACME_CAMPAIGNS)},
-                     action="seed", entity="demo")
-        return {"ok": True, "client": "Acme", "campaigns": len(_DEMO_ACME_CAMPAIGNS),
-                "note": "hidden by default; flip Settings 'Show demo clients' to view"}, 200
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": str(e)[:300]}, 502
+# NOTE (2026-07-29): demo-client DATA seeding is intentionally NOT done via
+# campaign_scorecard rows — the Campaigns page (campaigns_unified) and the analytics
+# daily lines read LIVE from Smartlead, so fake scorecard ids never surface there, and
+# several SQL aggregates (collective_30d, analytics_hub_v1) sum campaign_scorecard
+# UNFILTERED and would be corrupted by fake sends. Populating the demo client needs a
+# proper demo-data layer (synthesised at each surface, or the demo pointed at a real
+# low-volume campaign) — a deliberate design choice left for Bjion. The is_demo flag +
+# _client_hidden filtering + Settings toggle below are correct and stay.
 
 
 def _client_win_label(workspace, name) -> str:
@@ -17551,9 +17529,6 @@ class Handler(SimpleHTTPRequestHandler):
             blob = _ui_prefs_set(bool(p.get("show_demo_clients")))
             log_activity("/api/settings/ui", blob, action="set", entity="settings")
             return self._json({"ok": True, **blob})
-        if path == "/api/demo/seed":
-            body, status = api_demo_seed()
-            return self._json(body, status)
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
