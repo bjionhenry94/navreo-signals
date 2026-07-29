@@ -18486,42 +18486,34 @@ _COLL_LIVE_INTERVAL_S = 6 * 3600
 _COLL_LIVE_STATUSES = {"INPROGRESS", "STARTED"}
 
 
-def _sl_get_text(url, tries=3):
+def _sl_get_text(url, tries=5):
     """GET returning raw text (the leads-export CSV). urllib on Render; curl
-    fallback for the local Mac where urllib hits SSL CERTIFICATE_VERIFY_FAILED."""
-    import urllib.request
-    last = ""
+    fallback for the local Mac where urllib hits SSL CERTIFICATE_VERIFY_FAILED.
+    Backs off ~20s on a 429 (the shared 200/min budget) so a rate-limited
+    campaign is retried, never silently counted as unreachable."""
+    import subprocess, urllib.request, urllib.error
     for a in range(tries):
         try:
             with urllib.request.urlopen(url, timeout=120) as r:
                 return r.read().decode("utf-8", "replace")
-        except Exception:  # noqa: BLE001 — fall back to curl, then retry
-            try:
-                import subprocess
-                out = subprocess.run(["curl", "-s", "--max-time", "120", url],
-                                     capture_output=True, text=True)
-                if out.returncode == 0 and out.stdout:
-                    return out.stdout
-            except Exception:  # noqa: BLE001
-                pass
-            time.sleep(2 * (a + 1))
-    return last
-
-
-def _collision_client_of(name, ws, ws_names):
-    """Same rule as the census + the page chips: a client NAME token wins
-    (navreo beats everything when two appear); otherwise the owning client
-    workspace's label; otherwise Unknown."""
-    n = (name or "").lower()
-    if "navreo" in n: return "Navreo"
-    if "amplif" in n: return "Amplifyy"
-    if "arnic" in n:  return "Arnic"
-    if "qwintiq" in n: return "Qwintiq"
-    if "thunderbird" in n: return "ThunderBird"
-    w = (ws or "navreo").lower()
-    if w != "navreo":
-        return ws_names.get(w) or (w[:1].upper() + w[1:])
-    return "Unknown"
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                time.sleep(20 + a * 10); continue
+        except Exception:  # noqa: BLE001 — SSL etc. -> curl fallback below
+            pass
+        try:
+            out = subprocess.run(["curl", "-s", "-w", "\n%{http_code}",
+                                  "--max-time", "120", url], capture_output=True, text=True)
+            body, _nl, code = out.stdout.rpartition("\n")
+            code = code.strip()
+            if out.returncode == 0 and code == "200" and body:
+                return body
+            if code == "429":
+                time.sleep(20 + a * 10); continue
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(3 + a * 3)
+    return ""
 
 
 def collision_live_recount(persist=True):
@@ -18532,8 +18524,6 @@ def collision_live_recount(persist=True):
     import csv, io
     from collections import Counter
     from datetime import datetime, timezone
-    ws_names = {w.get("id"): (w.get("name") or (w.get("id") or "").title())
-                for w in (ws_all() or [])}
     rows = sb("GET", "campaigns?select=smartlead_campaign_id,name,workspace"
                      "&status=eq.ACTIVE") or []
     camps = [r for r in rows if not _COLL_LIVE_SUBSEQ_RE.search(r.get("name") or "")]
@@ -18543,7 +18533,9 @@ def collision_live_recount(persist=True):
     for c in camps:
         cid = c.get("smartlead_campaign_id")
         ws = c.get("workspace") or "navreo"
-        client = _collision_client_of(c.get("name"), ws, ws_names)
+        # canonical resolver — identical to the page chips / analytics_hub cmap,
+        # so the bar's per-client keys line up with the client filter exactly.
+        client = _client_win_label(ws, c.get("name"))
         key = ws_key(ws)
         if not cid or not key:
             unreachable.append(cid); continue
@@ -18563,10 +18555,16 @@ def collision_live_recount(persist=True):
             if n >= 2:
                 per_client[cl] = per_client.get(cl, 0) + 1
     run_at = datetime.now(timezone.utc).isoformat()
+    total_camps = len(camps)
+    # A rate-limited sweep that only reached half the campaigns must NEVER
+    # publish its undercount over a good stored value — the bar is labelled
+    # "true". Persist only a sufficiently-complete run (>=85% reached).
+    complete = total_camps > 0 and scanned >= int(total_camps * 0.85)
     payload = {"total": sum(per_client.values()), "per_client": per_client,
-               "run_at": run_at, "campaigns_scanned": scanned,
-               "unreachable": len(unreachable)}
-    if persist:
+               "run_at": run_at, "campaigns_total": total_camps,
+               "campaigns_scanned": scanned, "unreachable": len(unreachable),
+               "complete": complete}
+    if persist and complete:
         try:
             sb("POST", "app_activity_log",
                {"ts": run_at, "actor": "collision_live", "endpoint": "app:collision-live",
@@ -18575,6 +18573,9 @@ def collision_live_recount(persist=True):
                prefer="return=minimal")
         except Exception as e:  # noqa: BLE001 — a failed write must not kill the loop
             print(f"[collision-live] persist failed: {e}")
+    elif persist:
+        print(f"[collision-live] INCOMPLETE ({scanned}/{total_camps} reached) — "
+              f"keeping last good value, not publishing this run")
     return payload
 
 
