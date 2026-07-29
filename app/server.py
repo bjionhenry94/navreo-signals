@@ -17427,6 +17427,42 @@ class Handler(SimpleHTTPRequestHandler):
                                      actor="cron", action="reply-caps", entity="deliverability")
                 threading.Thread(target=_reply_caps_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/cron/outlook-reply-caps":
+                # The Outlook/Azure half of cap tiering (owner ruling 2026-07-28).
+                # The retirement note at /api/cron/reply-caps has named this path
+                # since 07-28, but only run_outlook_caps.py existed to serve it —
+                # a laptop-side script, so the tiering silently stopped running on
+                # any day nobody opened the machine. Added 2026-07-29 so the
+                # Outlook half is scheduled server-side like its Google twin.
+                # Scores off mailbox_stats_daily's trailing-30d columns, so it must
+                # fire AFTER mailbox-sync-tick (04:30 UTC) or it re-tiers the fleet
+                # on yesterday's numbers. ?mode=preview returns the plan without
+                # writing.
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                if (q.get("mode") or ["apply"])[0] == "preview":
+                    try:
+                        return self._json(outlook_reply_caps("preview"), 200)
+                    except Exception as e:  # noqa: BLE001
+                        return self._json({"ok": False, "error": str(e)[:300]}, 500)
+
+                def _outlook_caps_bg():
+                    try:
+                        r = outlook_reply_caps("apply")
+                        log_activity("/api/cron/outlook-reply-caps",
+                                     payload={"changed": r.get("changed", 0),
+                                              "failed": r.get("failed"),
+                                              "parked": r.get("parked"),
+                                              "domains": r.get("domains"),
+                                              "skipped": len(r.get("skipped") or []),
+                                              "tierCount": r.get("tierCount")},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                        _deliv_bundle_start(force=True)  # badges reflect the new caps now
+                    except Exception as e:  # noqa: BLE001 — a failed run must be visible
+                        log_activity("/api/cron/outlook-reply-caps", payload={"error": str(e)[:200]},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                threading.Thread(target=_outlook_caps_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/google-reply-caps":
                 # The Google half of cap tiering (owner ruling 2026-07-28).
                 # Deliberately NOT the audit service's engine: that one is
