@@ -7398,16 +7398,25 @@ def _scorecard_sync_all():
             if not isinstance(camps, list):
                 print(f"[scorecard-sync] {wid}: campaign list unavailable: {camps}", flush=True)
                 continue
+            # Subsequences (the "interested / meeting-request" follow-up
+            # campaigns Smartlead spawns off a parent) are plumbing, not outreach
+            # of their own — they must never appear in the campaigns list or get
+            # daily analysis. Smartlead marks them with parent_campaign_id, so
+            # skip them on insert and treat them as non-live so any already in the
+            # cache get pruned out.
+            def _is_subseq(c):
+                return bool(c.get("parent_campaign_id"))
             # Prune: a campaign deleted in Smartlead used to linger in the cache
             # forever, so the tool showed campaigns that no longer exist. Only
             # ever prune off a NON-EMPTY list — a rate-limited or empty response
             # must never be read as "the workspace has no campaigns" and wipe it.
-            live_ids = {c.get("id") for c in camps if c.get("id")}
+            # Subsequences are excluded from live_ids so they prune out too.
+            live_ids = {c.get("id") for c in camps if c.get("id") and not _is_subseq(c)}
             if live_ids:
                 _scorecard_prune(wid, live_ids)
             for c in camps:
                 cid = c.get("id")
-                if not cid:
+                if not cid or _is_subseq(c):
                     continue
                 try:
                     data = _smartlead_json("GET", f"/campaigns/{cid}/analytics", workspace=wid)
@@ -8272,7 +8281,10 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     for r in all_sc:
         if (r.get("sent") or 0) < 500:
             continue
-        per_client_top.setdefault(_client_win_label(r.get("workspace"), r.get("name")), []).append(r)
+        _cl = _client_win_label(r.get("workspace"), r.get("name"))
+        if _cl == _CLIENT_UNASSIGNED:
+            continue
+        per_client_top.setdefault(_cl, []).append(r)
     lead_set = set(lead_ids)
     cand_ids = list(lead_ids)
     seen_ids = set(lead_ids)
@@ -8304,7 +8316,8 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             continue
         client = _client_win_label(row.get("workspace"), row.get("name"))
         sent = row.get("sent") or 0
-        for grp in ("All", client):
+        groups = ("All",) if client == _CLIENT_UNASSIGNED else ("All", client)
+        for grp in groups:
             agg = per_group_agg.setdefault(grp, {})
             a = agg.setdefault(bucket, {"sent": 0, "replies": 0, "pos": 0,
                                         "meet": 0, "meet_sent": 0, "camps": []})
@@ -13838,6 +13851,23 @@ _CLIENT_WIN_TTL_S = 7200
 _CLIENT_WIN_WINDOWS = (30, 14, 7)
 
 
+# Clients that SHARE the navreo Smartlead workspace are told apart purely by
+# campaign NAME (case-insensitive substring) — this is exactly the filter Bjion
+# runs by hand in Smartlead ("all campaigns whose name contains X"), so the tool
+# must replicate it 1:1 (Bjion 2026-07-29). Ordered: first match wins. A shared-
+# workspace campaign matching NONE of these is UNASSIGNED — it belongs to no
+# client and must not inflate anyone's totals (previously everything unmatched
+# was silently dumped into "Navreo", over-counting Navreo 30d sent by ~34%).
+_SHARED_WS_CLIENTS = (
+    ("amplif", "Amplifyy"),
+    ("arnic", "Arnic"),
+    ("qwintiq", "Qwintiq"),
+    ("thunderbird", "ThunderBird"),   # ThunderBird is its own client (Bjion 2026-07-28)
+    ("navreo", "Navreo"),             # Navreo is now name-gated like every other client
+)
+_CLIENT_UNASSIGNED = "__unassigned"
+
+
 def _client_win_label(workspace, name) -> str:
     ws = (workspace or "navreo").lower()
     if ws != "navreo":
@@ -13849,15 +13879,10 @@ def _client_win_label(workspace, name) -> str:
                 return w.get("display_label") or w.get("name") or ws.title()
         return ws.title()
     n = (name or "").lower()
-    if "amplif" in n:
-        return "Amplifyy"
-    if "arnic" in n:
-        return "Arnic"
-    if "qwintiq" in n:
-        return "Qwintiq"
-    if "thunderbird" in n:   # ThunderBird is its own client (Bjion 2026-07-28)
-        return "ThunderBird"
-    return "Navreo"
+    for needle, label in _SHARED_WS_CLIENTS:
+        if needle in n:
+            return label
+    return _CLIENT_UNASSIGNED
 
 
 def _client_win_restore():
@@ -13985,6 +14010,12 @@ def _client_win_build():
             if s <= 0 and r <= 0:
                 continue
             cl = _client_win_label(ws, name)
+            if cl == _CLIENT_UNASSIGNED:
+                # shared-workspace campaign owned by no client (name matches no
+                # roster entry) — never fold it into a client's window. __all is
+                # rebuilt below from workspace telemetry, so the fleet total is
+                # unaffected by this exclusion.
+                continue
             agg = windows[str(w)].setdefault(cl, {"sent": 0, "replied": 0, "bounced": 0})
             agg["sent"] += s
             agg["replied"] += r
