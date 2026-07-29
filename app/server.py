@@ -6999,12 +6999,23 @@ def campaign_lead_lookup(q: dict) -> dict:
 # aggregate is ever touched). Shown only when the Settings "Show demo clients" toggle is
 # ON. ONE fixture feeds every surface (campaigns list + campaign-scorecard chips/stats +
 # analytics windows) keyed by the same demo ids so it behaves like a real client.
+# Lifetime-scale campaign stats, calibrated to real Navreo campaigns (tens of thousands
+# sent, hundreds of replies, ~2% bounce, single/double-digit meetings) so the demo looks
+# as full as a real client. Recent-window analytics are a SEPARATE fixture below (lifetime
+# totals ≠ last-30-days activity).
 _DEMO_ACME = [
-    {"id": "demo-acme-1", "name": "Acme — Founder outreach (Q3)", "status": "ACTIVE",
-     "sent": 4120, "replied": 512, "positives": 63, "bounced": 74, "completed": 3900, "total": 4200},
+    {"id": "demo-acme-1", "name": "Acme — Founders (Worldwide 20–200)", "status": "ACTIVE",
+     "sent": 48200, "replied": 604, "positives": 31, "bounced": 980, "completed": 44100, "total": 26800, "meetings": 12},
     {"id": "demo-acme-2", "name": "Acme — VP Sales, mid-market SaaS", "status": "ACTIVE",
-     "sent": 2870, "replied": 331, "positives": 41, "bounced": 39, "completed": 2600, "total": 3000},
+     "sent": 36400, "replied": 512, "positives": 24, "bounced": 720, "completed": 33900, "total": 19500, "meetings": 8},
+    {"id": "demo-acme-3", "name": "Acme — RevOps leaders (hiring signal)", "status": "ACTIVE",
+     "sent": 29700, "replied": 388, "positives": 19, "bounced": 410, "completed": 27600, "total": 15900, "meetings": 6},
+    {"id": "demo-acme-4", "name": "Recontact: Acme — Founders", "status": "ARCHIVED",
+     "sent": 18300, "replied": 241, "positives": 14, "bounced": 190, "completed": 18300, "total": 9800, "meetings": 5},
 ]
+# Recent last-30-days activity for the Analytics windows (an active, full client's month):
+# ~38k sent, ~1.5% reply, ~1.9% bounce. Scaled to 14/7 by the injector.
+_DEMO_ACME_WINDOW_30D = {"sent": 38000, "replied": 560, "bounced": 720}
 
 
 def _inject_demo_campaigns(payload: dict) -> dict:
@@ -7036,7 +7047,7 @@ def _inject_demo_scorecard(payload: dict) -> dict:
         camps[c["id"]] = {"sent": c["sent"], "replied": c["replied"], "positives": c["positives"],
                           "bounced": c["bounced"], "completed": c["completed"], "total": c["total"],
                           "status": c["status"], "name": c["name"], "workspace": "navreo",
-                          "ws_label": "", "meetings": None, "demo": True}
+                          "ws_label": "", "meetings": c.get("meetings"), "demo": True}
     return {**payload, "campaigns": camps}
 
 
@@ -14385,11 +14396,9 @@ def _inject_demo_client_windows(data: dict) -> dict:
         return data
     if "Acme" in (data.get("series") or {}):
         return data
-    # Totals reconcile with the _DEMO_ACME campaign fixture (Σsent≈6990/30d) so the
-    # Analytics numbers match the Campaigns page on camera.
-    tot = {"sent": sum(c["sent"] for c in _DEMO_ACME),
-           "replied": sum(c["replied"] for c in _DEMO_ACME),
-           "bounced": sum(c["bounced"] for c in _DEMO_ACME)}
+    # Recent last-30-days activity (NOT the lifetime campaign totals) — a full, active
+    # client's month, calibrated to real client windows.
+    tot = dict(_DEMO_ACME_WINDOW_30D)
     days = data["days"]
     n_days = len(days)
     def _spread(total):
