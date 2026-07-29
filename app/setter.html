@@ -1535,24 +1535,16 @@ function doTrayDismiss(btn) {
   head.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
 })();
 
-/* Full-fidelity corpus refresh, single-flight. Reuses one in-flight fetch
-   across callers; re-arms after it lands so the next loadQueue refreshes it. */
-let _hydrateP = null;
-function hydrateAllRows() {
-  if (_hydrateP) return _hydrateP;
-  _hydrateP = (async () => {
-    try {
-      const res = await fetchJson(`/api/setter/queue?limit=200`);
-      if (res.ok) {
-        ALL_ROWS = res.data.rows || [];
-        _allRowsLoaded = true;
-        graftThreads(QUEUE_ROWS);
-        renderQueue();  // hydrated threads / fresh search corpus (edit-safe: reapplyEditedDraft)
-      }
-    } finally { _hydrateP = null; }
-  })();
-  return _hydrateP;
-}
+/* Full-trim (owner ask 2026-07-29): the all-statuses corpus is no longer
+   pre-hydrated — only Needs review + the follow-up tray are kept warm, so the
+   512MB web instance never holds the multi-MB thread corpus. With _allRowsLoaded
+   staying false, everything the corpus used to power degrades gracefully: the
+   pill handler falls to a per-pill server fetch on click, search scopes to the
+   loaded pill (visibleInboxRows: source = q ? ALL_ROWS(=provisional current
+   pill) : QUEUE_ROWS), and opening a conversation fetches its full row (thread)
+   on demand via /queue/row. Kept as a no-op so every existing caller is safe. */
+let _hydrateP = null;  // retained: some call sites read/await the handle
+function hydrateAllRows() { return Promise.resolve(); }
 
 /* Copy stored threads from the hydrated corpus onto slim rows by id, so a
    conversation opened from a slim list still shows its history instantly. */

@@ -6057,8 +6057,11 @@ _ROWS_TTL = 20.0
 _ROWS_CACHE = {}   # (status, limit) -> {"at": ts, "rows": [annotated rows]}
 _ROWS_LOCKS = {}   # (status, limit) -> per-key single-flight lock
 _ROWS_META = threading.Lock()
-# Keys worth rewarming after a bust: the standard pill fetches the UI makes.
-_ROWS_REWARM_STATUSES = ("", "needs_review", "sent", "auto_sent", "dismissed")
+# Full-trim (owner ask 2026-07-29): only Needs review is kept warm in the row
+# cache. The other pills (sent / auto_sent / dismissed / all-statuses "") fetch
+# fresh on their rare click and are never cached, so they don't sit in the
+# 512MB web instance's memory. The follow-up tray is its own endpoint.
+_ROWS_REWARM_STATUSES = ("needs_review",)
 
 # Memoized serialize+gzip of the queue GET body (see queue_response below).
 # _queue_rows_cached single-flights the Supabase FETCH, but every GET still
@@ -6140,6 +6143,12 @@ def _store_rows(key, rows):
 
 
 def _queue_rows_cached(status: str, limit: int) -> list:
+    # Full-trim (owner ask 2026-07-29): only Needs review is cached. Every other
+    # pill fetches fresh on its (rare) click so nothing but the inbox sits warm
+    # in the 512MB instance's memory. A failed fetch degrades to [] like before.
+    if status != "needs_review":
+        rows = _fetch_queue_rows(status, limit)
+        return [] if rows is None else rows
     key = (status, limit)
     ent = _ROWS_CACHE.get(key)
     if ent:
@@ -6251,6 +6260,18 @@ def queue_response(params, accept_gzip: bool):
     except (ValueError, TypeError):
         limit = 200
     fields = _qp(params, "fields", "")
+    # Full-trim (owner ask 2026-07-29): only Needs review is memoized. Other
+    # pills build fresh on their rare click (slim fields=list responses) so
+    # nothing but the inbox holds a cached response buffer in memory.
+    if status_q != "needs_review":
+        st, body = route_queue_get(params)
+        raw = json.dumps(body).encode()
+        if st != 200:
+            return st, None, raw
+        gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
+        if accept_gzip and len(raw) >= 512:
+            return 200, "gzip", gz
+        return 200, None, raw
     # Warm the rows cache OUTSIDE the global lock so the (rare) cold Supabase
     # fetch never blocks other queue responses; the lock then guards CPU only.
     if _SB:
