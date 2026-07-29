@@ -17334,6 +17334,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                    "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/setter/poll",
+                   # Both provider-scoped cap engines. Their handlers live INSIDE
+                   # this gate, so a path missing here is not merely unguarded —
+                   # it is unreachable. google-reply-caps shipped 07-28 without
+                   # being listed and never once served a request; the 07-28 cap
+                   # moves all came from the laptop-side scripts. Added 07-29.
+                   "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
                    "/api/notify/positive-card"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
