@@ -6994,28 +6994,50 @@ def campaign_lead_lookup(q: dict) -> dict:
             "name": nm, "company": lead.get("company_name") or "", "others": others}
 
 
-# UI-only DEMO campaign — a fake Acme campaign card injected at the response layer
-# (never a real Smartlead object, never sends, never in campaign_scorecard so it can't
-# touch any aggregate). Shown only when the Settings "Show demo clients" toggle is ON;
-# carries its own display stats on the row so the card looks alive without real data.
-_DEMO_CAMPAIGN_ROW = {
-    "key": "camp-sl-demo-acme-1", "platform": "smartlead", "platform_id": "demo-acme-1",
-    "name": "Acme — Founder outreach (DEMO)", "status": "ACTIVE",
-    "workspace": "navreo", "workspace_name": "navreo", "created_at": None,
-    "managed": False, "demo": True,
-    "sent": 4120, "replied": 512, "positives": 63, "bounced": 74, "total": 4200,
-}
+# UI-only DEMO client "Acme" — fake campaigns injected at the RESPONSE layer (never a
+# real Smartlead object, never sends, never written to campaign_scorecard, so no SQL
+# aggregate is ever touched). Shown only when the Settings "Show demo clients" toggle is
+# ON. ONE fixture feeds every surface (campaigns list + campaign-scorecard chips/stats +
+# analytics windows) keyed by the same demo ids so it behaves like a real client.
+_DEMO_ACME = [
+    {"id": "demo-acme-1", "name": "Acme — Founder outreach (Q3)", "status": "ACTIVE",
+     "sent": 4120, "replied": 512, "positives": 63, "bounced": 74, "completed": 3900, "total": 4200},
+    {"id": "demo-acme-2", "name": "Acme — VP Sales, mid-market SaaS", "status": "ACTIVE",
+     "sent": 2870, "replied": 331, "positives": 41, "bounced": 39, "completed": 2600, "total": 3000},
+]
 
 
 def _inject_demo_campaigns(payload: dict) -> dict:
-    """Append the demo Acme campaign when the toggle is ON — on a shallow copy so the
-    SWR cache is never mutated."""
+    """Append the demo Acme campaigns to the campaigns-unified list when the toggle is
+    ON — on a shallow copy so the SWR cache is never mutated."""
     if not show_demo_clients() or not isinstance(payload, dict):
         return payload
     rows = list(payload.get("rows") or [])
-    if not any(isinstance(r, dict) and r.get("key") == _DEMO_CAMPAIGN_ROW["key"] for r in rows):
-        rows = rows + [dict(_DEMO_CAMPAIGN_ROW)]
+    have = {r.get("key") for r in rows if isinstance(r, dict)}
+    for c in _DEMO_ACME:
+        key = f"camp-sl-{c['id']}"
+        if key in have:
+            continue
+        rows = rows + [{"key": key, "platform": "smartlead", "platform_id": c["id"],
+                        "name": c["name"], "status": c["status"], "workspace": "navreo",
+                        "workspace_name": "navreo", "created_at": None,
+                        "managed": False, "demo": True}]
     return {**payload, "rows": rows}
+
+
+def _inject_demo_scorecard(payload: dict) -> dict:
+    """Splice the demo Acme campaigns into the campaign-scorecard payload when the toggle
+    is ON. This is what makes an 'Acme' chip appear on the Analytics page AND gives the
+    Campaigns list its per-campaign stats. Response-layer only; the cache/DB are untouched."""
+    if not show_demo_clients() or not isinstance(payload, dict):
+        return payload
+    camps = dict(payload.get("campaigns") or {})
+    for c in _DEMO_ACME:
+        camps[c["id"]] = {"sent": c["sent"], "replied": c["replied"], "positives": c["positives"],
+                          "bounced": c["bounced"], "completed": c["completed"], "total": c["total"],
+                          "status": c["status"], "name": c["name"], "workspace": "navreo",
+                          "ws_label": "", "meetings": None, "demo": True}
+    return {**payload, "campaigns": camps}
 
 
 def campaigns_unified(p: dict) -> dict:
@@ -14361,8 +14383,14 @@ def _inject_demo_client_windows(data: dict) -> dict:
         return data
     if "Acme" in (data.get("series") or {}):
         return data
+    # Totals reconcile with the _DEMO_ACME campaign fixture (Σsent≈6990/30d) so the
+    # Analytics numbers match the Campaigns page on camera.
+    tot = {"sent": sum(c["sent"] for c in _DEMO_ACME),
+           "replied": sum(c["replied"] for c in _DEMO_ACME),
+           "bounced": sum(c["bounced"] for c in _DEMO_ACME)}
     days = data["days"]
-    daily = [130 + (i % 7) * 6 for i in range(len(days))]  # gentle wiggle, ~130–166/day
+    per_day = (tot["sent"] / 30.0) if tot["sent"] else 230.0
+    daily = [round(per_day * (0.85 + 0.30 * ((i % 7) / 6.0))) for i in range(len(days))]
     series = {**(data.get("series") or {}), "Acme": daily}
     windows = {}
     for w, wk in (data.get("windows") or {}).items():
@@ -14370,10 +14398,10 @@ def _inject_demo_client_windows(data: dict) -> dict:
             n = int(w)
         except (TypeError, ValueError):
             n = 30
-        sent = sum(daily[-n:]) or (140 * n)
-        windows[w] = {**wk, "Acme": {"sent": sent,
-                                     "replied": round(sent * 0.124),
-                                     "bounced": round(sent * 0.018)}}
+        f = min(1.0, n / 30.0)
+        windows[w] = {**wk, "Acme": {"sent": round(tot["sent"] * f),
+                                     "replied": round(tot["replied"] * f),
+                                     "bounced": round(tot["bounced"] * f)}}
     return {**data, "series": series, "windows": windows or data.get("windows")}
 
 
@@ -16958,23 +16986,41 @@ class Handler(SimpleHTTPRequestHandler):
             rows = sb("GET", qs)
             return self._json((rows or [{}])[0])
         if path == "/api/collisions":
-            # Latest same-client collision census — the daily row written by
-            # collision_detector_tick() into collision_ledger. per_client sums
-            # to leads_colliding (the fleet total). One-row read, cheap enough
-            # to serve live on every analytics-hub load. Powers the double-tap
-            # warning bar under the fresh-leads widgets: client-specific, and
-            # collated to the fleet total on the All view.
-            rows = sb("GET", "collision_ledger?select=run_date,run_at,"
-                             "leads_colliding,per_client,double_sent_30d,"
-                             "stacked_generations&order=run_date.desc&limit=1")
-            row = (rows or [{}])[0] if isinstance(rows, list) else {}
+            # Powers the double-tap warning bar. Ground-truth FIRST: the
+            # live-confirmed census (collision_live_recount, every ~6h into
+            # app_activity_log) counts only leads still live in Smartlead, so it
+            # isn't inflated by paused-but-unsynced ghosts the daily
+            # contact_history census (collision_ledger) counts. Serve live when
+            # present; fall back to the daily census (labelled approx) only
+            # until the first live run lands.
+            census = sb("GET", "collision_ledger?select=run_date,run_at,"
+                               "leads_colliding,per_client,double_sent_30d,"
+                               "stacked_generations&order=run_date.desc&limit=1")
+            crow = (census or [{}])[0] if isinstance(census, list) else {}
+            live = sb("GET", "app_activity_log?select=payload,ts&"
+                             "actor=eq.collision_live&order=id.desc&limit=1")
+            lrow = (live or [{}])[0] if isinstance(live, list) else {}
+            lp = lrow.get("payload") if isinstance(lrow.get("payload"), dict) else {}
+            if lp and lp.get("per_client") is not None:
+                stamp = lp.get("run_at") or lrow.get("ts") or ""
+                return self._json({
+                    "run_date": stamp[:10] or crow.get("run_date"),
+                    "run_at": stamp,
+                    "total": lp.get("total") or 0,
+                    "per_client": lp.get("per_client") or {},
+                    "source": "live",
+                    "census_total": crow.get("leads_colliding") or 0,
+                    "double_sent_30d": crow.get("double_sent_30d") or 0,
+                    "stacked_generations": crow.get("stacked_generations") or 0,
+                })
             return self._json({
-                "run_date": row.get("run_date"),
-                "run_at": row.get("run_at"),
-                "total": row.get("leads_colliding") or 0,
-                "per_client": row.get("per_client") or {},
-                "double_sent_30d": row.get("double_sent_30d") or 0,
-                "stacked_generations": row.get("stacked_generations") or 0,
+                "run_date": crow.get("run_date"),
+                "run_at": crow.get("run_at"),
+                "total": crow.get("leads_colliding") or 0,
+                "per_client": crow.get("per_client") or {},
+                "source": "census",
+                "double_sent_30d": crow.get("double_sent_30d") or 0,
+                "stacked_generations": crow.get("stacked_generations") or 0,
             })
         if path == "/api/sources":
             from urllib.parse import parse_qs, urlparse
@@ -17109,7 +17155,7 @@ class Handler(SimpleHTTPRequestHandler):
             # from the background-synced campaign_scorecard cache (Smartlead's own
             # numbers) + HeyReach LinkedIn progress. SWR ~2min over a cheap
             # Supabase read; the slow /analytics fetches happen in the bg thread.
-            return self._json(_CAMPAIGN_SCORECARD_ALL_SWR.get())
+            return self._json(_inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get()))
         if path == "/api/workspaces":
             # Settings page: connected Smartlead workspaces (keys masked to
             # last 4 — the raw key never leaves the server).
@@ -18427,6 +18473,125 @@ def _boot_ledger_start():
         threading.Thread(target=_heartbeat, daemon=True).start()
 
 
+# ── Live-confirmed collision census ─────────────────────────────────────────
+# The daily contact_history census (collision_ledger) over-counts massively:
+# it keeps counting leads that were already paused in Smartlead but whose
+# status hasn't synced back yet (measured 2026-07-29: census said 7,308 Navreo,
+# live truth was ~814). The bar must show the TRUE number, so we recompute it
+# from live Smartlead lead-exports on a timer and store the result; /api/
+# collisions serves that instead of the census. Heavy (~1 export/campaign) —
+# never run this on a page load.
+_COLL_LIVE_SUBSEQ_RE = re.compile(r"interested reply|meeting request", re.I)
+_COLL_LIVE_INTERVAL_S = 6 * 3600
+_COLL_LIVE_STATUSES = {"INPROGRESS", "STARTED"}
+
+
+def _sl_get_text(url, tries=3):
+    """GET returning raw text (the leads-export CSV). urllib on Render; curl
+    fallback for the local Mac where urllib hits SSL CERTIFICATE_VERIFY_FAILED."""
+    import urllib.request
+    last = ""
+    for a in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 — fall back to curl, then retry
+            try:
+                import subprocess
+                out = subprocess.run(["curl", "-s", "--max-time", "120", url],
+                                     capture_output=True, text=True)
+                if out.returncode == 0 and out.stdout:
+                    return out.stdout
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(2 * (a + 1))
+    return last
+
+
+def _collision_client_of(name, ws, ws_names):
+    """Same rule as the census + the page chips: a client NAME token wins
+    (navreo beats everything when two appear); otherwise the owning client
+    workspace's label; otherwise Unknown."""
+    n = (name or "").lower()
+    if "navreo" in n: return "Navreo"
+    if "amplif" in n: return "Amplifyy"
+    if "arnic" in n:  return "Arnic"
+    if "qwintiq" in n: return "Qwintiq"
+    if "thunderbird" in n: return "ThunderBird"
+    w = (ws or "navreo").lower()
+    if w != "navreo":
+        return ws_names.get(w) or (w[:1].upper() + w[1:])
+    return "Unknown"
+
+
+def collision_live_recount(persist=True):
+    """Ground-truth collision census: leads live (INPROGRESS/STARTED) in 2+ of
+    the SAME client's ACTIVE campaigns, read straight from Smartlead exports so
+    paused-but-unsynced ghosts don't inflate it. Cross-client overlap is NOT a
+    collision. Persists to app_activity_log (actor 'collision_live')."""
+    import csv, io
+    from collections import Counter
+    from datetime import datetime, timezone
+    ws_names = {w.get("id"): (w.get("name") or (w.get("id") or "").title())
+                for w in (ws_all() or [])}
+    rows = sb("GET", "campaigns?select=smartlead_campaign_id,name,workspace"
+                     "&status=eq.ACTIVE") or []
+    camps = [r for r in rows if not _COLL_LIVE_SUBSEQ_RE.search(r.get("name") or "")]
+    member = {}   # email -> set of (client, campaign_id)
+    scanned = 0
+    unreachable = []
+    for c in camps:
+        cid = c.get("smartlead_campaign_id")
+        ws = c.get("workspace") or "navreo"
+        client = _collision_client_of(c.get("name"), ws, ws_names)
+        key = ws_key(ws)
+        if not cid or not key:
+            unreachable.append(cid); continue
+        txt = _sl_get_text(f"{SMARTLEAD_BASE}/campaigns/{cid}/leads-export?api_key={key}")
+        if not txt or "email" not in txt[:400].lower():
+            unreachable.append(cid); continue
+        scanned += 1
+        for r in csv.DictReader(io.StringIO(txt)):
+            if (r.get("status") or "").upper() in _COLL_LIVE_STATUSES:
+                em = (r.get("email") or "").strip().lower()
+                if em:
+                    member.setdefault(em, set()).add((client, str(cid)))
+        time.sleep(1.0)
+    per_client = {}
+    for _em, pairs in member.items():
+        for cl, n in Counter(cl for cl, _ in pairs).items():
+            if n >= 2:
+                per_client[cl] = per_client.get(cl, 0) + 1
+    run_at = datetime.now(timezone.utc).isoformat()
+    payload = {"total": sum(per_client.values()), "per_client": per_client,
+               "run_at": run_at, "campaigns_scanned": scanned,
+               "unreachable": len(unreachable)}
+    if persist:
+        try:
+            sb("POST", "app_activity_log",
+               {"ts": run_at, "actor": "collision_live", "endpoint": "app:collision-live",
+                "action": "live_census", "entity": "collision_live",
+                "entity_id": run_at[:10], "payload": payload},
+               prefer="return=minimal")
+        except Exception as e:  # noqa: BLE001 — a failed write must not kill the loop
+            print(f"[collision-live] persist failed: {e}")
+    return payload
+
+
+def _collision_live_loop():
+    """Refresh the live-confirmed census every few hours so the bar stays true
+    between the daily contact_history runs."""
+    time.sleep(120)  # let boot settle before the first heavy Smartlead sweep
+    while True:
+        try:
+            r = collision_live_recount()
+            print(f"[collision-live] {r.get('total')} true collisions across "
+                  f"{r.get('campaigns_scanned')} campaigns {r.get('per_client')}")
+        except Exception as e:  # noqa: BLE001 — the loop must never die
+            print(f"[collision-live] recount failed: {e}")
+        time.sleep(_COLL_LIVE_INTERVAL_S)
+
+
 if __name__ == "__main__":
     # Render injects $PORT and needs 0.0.0.0; locally, argv[1] or 7901 on 127.0.0.1.
     port = int(os.environ.get("PORT") or (sys.argv[1] if len(sys.argv) > 1 else 7901))
@@ -18460,4 +18625,7 @@ if __name__ == "__main__":
     # per-campaign performance without 874 live calls per page load
     threading.Thread(target=_scorecard_sync_loop, daemon=True).start()
     threading.Thread(target=_subseq_stats_loop, daemon=True).start()
+    # every ~6h: live-confirmed collision census so the double-tap bar shows the
+    # true number, not the ghost-inflated daily contact_history count
+    threading.Thread(target=_collision_live_loop, daemon=True).start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()
