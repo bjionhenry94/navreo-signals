@@ -250,6 +250,25 @@
   .ah .fuelcard{grid-row:auto}
   .ah .stagestrip{grid-column:1}
 }
+/* Double-tap (collision) warning bar — under the fresh-leads widgets. Amber,
+   and quiet until it has something to flag (JS adds .on when count > 0). */
+.ah .dtwarn{display:none;align-items:center;justify-content:space-between;gap:16px;
+  margin-top:14px;padding:13px 18px;background:var(--amber-bg);
+  border:1px solid var(--amber-line);border-radius:var(--radius)}
+.ah .dtwarn.on{display:flex}
+.ah .dtwarn-main{display:flex;align-items:center;gap:13px;min-width:0}
+.ah .dtwarn-ico{font-size:18px;line-height:1;color:var(--amber);flex:none}
+.ah .dtwarn-txt{min-width:0}
+.ah .dtwarn-head{font-size:14px;font-weight:600;color:var(--ink);letter-spacing:-0.005em}
+.ah .dtwarn-head .num{color:var(--amber);font-variant-numeric:tabular-nums}
+.ah .dtwarn-sub{font-size:12.5px;color:var(--ink-2);margin-top:2px}
+.ah .dtwarn-copy{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;
+  color:#fff;background:var(--amber);border:1px solid var(--amber);padding:9px 16px;
+  border-radius:999px;cursor:pointer;white-space:nowrap;flex:none;transition:opacity .12s}
+.ah .dtwarn-copy:hover{opacity:.88}
+.ah .dtwarn-copy.copied{background:var(--card);color:var(--amber)}
+@media(max-width:640px){.ah .dtwarn{flex-direction:column;align-items:stretch}
+  .ah .dtwarn-copy{width:100%}}
 </style>
 </head>
 <body>
@@ -404,6 +423,22 @@
           <div class="take"><span class="arr">→</span><span id="nc-take">&nbsp;</span></div>
         </div>
 
+      </div>
+
+      <!-- Double-tap (collision) warning bar — flags leads live in 2+ of the
+           SAME client's ACTIVE campaigns. Client-specific; on the All view it
+           collates every client's count into one fleet total. Copy prompt hands
+           Claude a client-scoped brief to route the backlog out. Stays hidden
+           (no .on) until there is something to flag. Fed by /api/collisions. -->
+      <div class="dtwarn" id="dtwarn" role="alert" aria-live="polite">
+        <div class="dtwarn-main">
+          <span class="dtwarn-ico" aria-hidden="true">&#9888;</span>
+          <div class="dtwarn-txt">
+            <div class="dtwarn-head"><span class="num" id="dtwarn-n">–</span> <span id="dtwarn-lbl">double-tap leads</span></div>
+            <div class="dtwarn-sub" id="dtwarn-sub">&nbsp;</div>
+          </div>
+        </div>
+        <button type="button" class="dtwarn-copy" id="dtwarn-copy" title="Copy a ready-to-run prompt for Claude">Copy prompt</button>
       </div>
     </section>
 
@@ -619,7 +654,7 @@ function j(url) {
   });
 }
 
-var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null, CW = null;
+var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null, CW = null, COLL = null;
 // Sent and Bounces default OFF: their scale flattens Replies/Interested/
 // Meetings (the lines a founder reads); the landing card owns the bounce
 // story and both stay one chip-tap away.
@@ -2205,6 +2240,59 @@ function renderBounce() {
   // 2026-07-28 changes — the campaign list above already names the offenders)
 }
 
+// ── Double-tap (collision) warning bar ──────────────────────────────────
+// Leads live in 2+ of the SAME client's ACTIVE campaigns. Client-specific:
+// on a client view it shows that client's count; on All it collates every
+// client's count into the fleet total. The numbers come straight from the
+// daily census (collision_ledger via /api/collisions) where per_client sums
+// to the total. Quiet (hidden) whenever the current view has nothing to flag.
+var _dtPrompt = "";
+function renderCollision() {
+  var bar = $("dtwarn");
+  if (!bar) return;
+  var pc = (COLL && COLL.per_client) || null;
+  if (!pc) { bar.classList.remove("on"); return; }
+  var all = state.client === "All";
+  var n = all ? (COLL.total || 0) : (pc[state.client] || 0);
+  if (!n || n <= 0) { bar.classList.remove("on"); return; }   // nothing to flag
+
+  $("dtwarn-n").textContent = fmtN(n);
+  $("dtwarn-lbl").textContent = "double-tap lead" + (n === 1 ? "" : "s");
+
+  var sub;
+  if (all) {
+    var split = Object.keys(pc)
+      .filter(function (k) { return pc[k] > 0; })
+      .sort(function (a, b) { return pc[b] - pc[a]; })
+      .map(function (k) { return k + " " + fmtN(pc[k]); });
+    sub = "Live in 2+ of the same client's active campaigns · " + split.join(" · ");
+  } else {
+    sub = state.client + " leads live in 2+ of " + state.client + "'s own active campaigns.";
+  }
+  if (COLL.run_date) sub += "  ·  as of " + COLL.run_date;
+  $("dtwarn-sub").textContent = sub;
+
+  _dtPrompt = buildCollPrompt(all, n, pc);
+  bar.classList.add("on");
+}
+// The copy-prompt: a client-scoped brief matching the collision-guard ruling
+// (keep the best-performing campaign, pause the loser; same-client only;
+// pause never delete; plan before acting).
+function buildCollPrompt(all, n, pc) {
+  var head, scope;
+  if (all) {
+    var split = Object.keys(pc).filter(function (k) { return pc[k] > 0; })
+      .sort(function (a, b) { return pc[b] - pc[a]; })
+      .map(function (k) { return k + " " + pc[k]; }).join(", ");
+    head = "Across all clients, " + n + " leads are double-tapped — live in 2+ of the SAME client's active Smartlead campaigns (" + split + ").";
+    scope = "Work each client separately (same-client only — a lead in one client's campaign and a different client's campaign is NOT a collision).";
+  } else {
+    head = "In the " + state.client + " campaigns, " + n + " leads are double-tapped — live in 2+ of " + state.client + "'s own active Smartlead campaigns.";
+    scope = "Scope this to " + state.client + " only.";
+  }
+  return head + " " + scope +
+    " Route the backlog out: for each colliding lead, KEEP it in the best-performing campaign (highest positive replies per 1,000 sent) and PAUSE it in the lower-performing one(s). Never delete a lead — pause only (it is reversible). Build the plan from live Smartlead lead-exports, show me the plan (leads, which campaign wins each tie, total pauses) for approval before pausing anything, then execute paced with a resume file. This is the smartlead-collision-guard Step 3.";
+}
 function renderAll() {
   renderChips();
   renderHead();
@@ -2213,6 +2301,7 @@ function renderAll() {
   renderRunway(v);
   renderSignals();
   renderNC();
+  renderCollision();
   renderWeek();
   renderBounce();
   renderRank();
@@ -2311,6 +2400,27 @@ $("trend-svg").addEventListener("mouseleave", hideTip);
 $("week-svg").addEventListener("mousemove", weekMove);
 $("week-svg").addEventListener("mouseleave", weekHide);
 $("ah-retry").addEventListener("click", boot);
+// Copy-prompt on the double-tap bar → clipboard (with a non-secure-context
+// fallback), then a 1.6s "Copied ✓" confirmation.
+$("dtwarn-copy").addEventListener("click", function () {
+  var btn = this, txt = _dtPrompt || "";
+  function done() {
+    btn.classList.add("copied");
+    btn.textContent = "Copied ✓";
+    setTimeout(function () { btn.classList.remove("copied"); btn.textContent = "Copy prompt"; }, 1600);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done, function () { dtFallbackCopy(txt); done(); });
+  } else { dtFallbackCopy(txt); done(); }
+});
+function dtFallbackCopy(t) {
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    document.execCommand("copy"); document.body.removeChild(ta);
+  } catch (e) { console.log(t); }
+}
 
 // /api/client-windows builds in the background on a cold server (~2-4 min of
 // Smartlead calls) — poll until it lands, then re-render with true per-client
@@ -2374,6 +2484,7 @@ function boot() {
   j("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
   j("/api/sources?slim=1").then(function (d) { SRC = d; scheduleRender(); }, function () {});
   j("/api/deliverability/_audit").then(function (d) { AUDIT = d; scheduleRender(); }, function () {});
+  j("/api/collisions").then(function (d) { COLL = d && !d.error ? d : null; scheduleRender(); }, function () {});
   j("/api/client-windows").then(function (d) {
     if (d && !d.building && d.windows) { CW = d; scheduleRender(); }
     else setTimeout(loadCW, 20000);
