@@ -17534,6 +17534,24 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(data)
             return
         if path.startswith("/api/setter/"):
+            if path == "/api/setter/queue":
+                # Heavy full-hydrate corpus (~6MB): served via setter's memoized,
+                # single-flighted serialize/gzip so a boot burst can't peg the
+                # instance (see setter.queue_response). Bytes are pre-built.
+                from urllib.parse import parse_qs, urlparse
+                params = parse_qs(urlparse(self.path).query)
+                status, enc, body = setter.queue_response(params, self._accepts_gzip())
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                if enc:
+                    self.send_header("Content-Encoding", enc)
+                    self.send_header("Vary", "Accept-Encoding")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+                return
             fn = setter.GET_ROUTES.get(path)
             if fn:
                 from urllib.parse import parse_qs, urlparse

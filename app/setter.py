@@ -6052,6 +6052,17 @@ _ROWS_META = threading.Lock()
 # Keys worth rewarming after a bust: the standard pill fetches the UI makes.
 _ROWS_REWARM_STATUSES = ("", "needs_review", "sent", "auto_sent", "dismissed")
 
+# Memoized serialize+gzip of the queue GET body (see queue_response below).
+# _queue_rows_cached single-flights the Supabase FETCH, but every GET still
+# re-ran json.dumps(~6MB full-hydrate corpus)+gzip through server.py's _json.
+# N tabs booting -> N concurrent multi-MB serializations, GIL-pinned on the
+# 0.5-CPU starter box: /healthz starves and Render restarts it (observed
+# crash-looping ~every 2-4 min on a fixed commit). Build the bytes ONCE behind
+# a single global lock and hand the same buffer to every concurrent caller.
+_QUEUE_RESP_MEMO = {}          # (status, limit, fields) -> (etag, raw_len, gz, at)
+_QUEUE_RESP_LOCK = threading.Lock()
+_QUEUE_RESP_TTL = _ROWS_TTL    # align with the rows SWR window
+
 
 def _rows_lock(key):
     with _ROWS_META:
@@ -6147,6 +6158,7 @@ def _bust_read_caches(rewarm: bool = True):
     stale_keys = [k for k in list(_ROWS_CACHE.keys())
                   if k[0] in _ROWS_REWARM_STATUSES and k[1] == 200]
     _ROWS_CACHE.clear()
+    _QUEUE_RESP_MEMO.clear()   # the serialized bodies are now stale too
     if rewarm:
         _kick_kpi_refresh()
         for k in (stale_keys or [("needs_review", 200)]):
@@ -6172,6 +6184,79 @@ def route_queue_get(params):
         return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
+
+
+def _queue_resp_etag(status: str, limit: int, fields: str) -> str:
+    """Cheap content fingerprint for the queue body - no serialization. Folds in
+    the rows-cache timestamp (bumped whenever rows refetch, incl. after a
+    mutation bust) plus the kpi/last-checked SWR values, so it changes iff the
+    serialized body would."""
+    import hashlib
+    ent = _ROWS_CACHE.get((status, limit))
+    rows_at = ent["at"] if ent else 0.0
+    try:
+        kpis = json.dumps(_compute_kpis(), sort_keys=True)
+    except Exception:  # noqa: BLE001 - a fingerprint must never raise
+        kpis = ""
+    sig = f"{status}|{limit}|{fields}|{rows_at}|{kpis}|{_last_poll_done_at()}"
+    return hashlib.sha256(sig.encode()).hexdigest()[:32]
+
+
+def queue_response(params, accept_gzip: bool):
+    """Memoized, single-flighted serialize/gzip for GET /api/setter/queue.
+
+    The JSON is byte-identical to route_queue_get() - this only stops the
+    multi-MB serialize+gzip from being re-run per concurrent caller, which is
+    the boot burst that crash-looped the Render instance. At most ONE big
+    serialization runs process-wide (the global lock), and identical fetches
+    within the SWR window share the built buffer. route_queue_get() stays the
+    source of truth (the unit tests call it directly).
+
+    Returns (status, content_encoding_or_None, body_bytes).
+    """
+    import gzip
+    status_q = _qp(params, "status", "")
+    try:
+        limit = max(1, min(int(_qp(params, "limit", "200") or 200), 500))
+    except (ValueError, TypeError):
+        limit = 200
+    fields = _qp(params, "fields", "")
+    # Warm the rows cache OUTSIDE the global lock so the (rare) cold Supabase
+    # fetch never blocks other queue responses; the lock then guards CPU only.
+    if _SB:
+        try:
+            _queue_rows_cached(status_q, limit)
+        except Exception:  # noqa: BLE001 - route_queue_get repeats the read + handles errors
+            pass
+    memo_key = (status_q, limit, fields)
+    etag = _queue_resp_etag(status_q, limit, fields)
+    ent = _QUEUE_RESP_MEMO.get(memo_key)
+    if not (ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL):
+        with _QUEUE_RESP_LOCK:
+            ent = _QUEUE_RESP_MEMO.get(memo_key)   # a peer may have built it while we waited
+            if not (ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL):
+                st, body = route_queue_get(params)
+                if st != 200:
+                    return st, None, json.dumps(body).encode()
+                raw = json.dumps(body).encode()
+                # Level policy mirrors _json: past ~256KB, level 1 compresses
+                # JSON nearly as well at a fraction of the CPU.
+                gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
+                # Bound the memo: legit shapes number ~10 (pills x {slim,full});
+                # drop expired entries if an odd `limit` fan-out grows it.
+                if len(_QUEUE_RESP_MEMO) > 32:
+                    cutoff = _time.time() - _QUEUE_RESP_TTL
+                    for k in [k for k, v in list(_QUEUE_RESP_MEMO.items())
+                              if v[3] < cutoff]:
+                        _QUEUE_RESP_MEMO.pop(k, None)
+                ent = (etag, len(raw), gz, _time.time())
+                _QUEUE_RESP_MEMO[memo_key] = ent
+    raw_len, gz = ent[1], ent[2]
+    if accept_gzip and raw_len >= 512:
+        return 200, "gzip", gz
+    # Non-gzip clients (rare - browsers all send Accept-Encoding: gzip) get the
+    # raw body back; storing only the compressed copy keeps the memo lean.
+    return 200, None, gzip.decompress(gz)
 
 
 def route_poll_status(_params):
