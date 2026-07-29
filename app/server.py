@@ -7003,14 +7003,17 @@ def campaign_lead_lookup(q: dict) -> dict:
 # sent, hundreds of replies, ~2% bounce, single/double-digit meetings) so the demo looks
 # as full as a real client. Recent-window analytics are a SEPARATE fixture below (lifetime
 # totals ≠ last-30-days activity).
+# Numeric ids (in a high 9009xxxxx band) so the campaign-detail router — which only
+# accepts #/c/<digits> — resolves them exactly like a real campaign. These live ONLY in
+# response payloads, never in the DB, so the high ids can't collide or hit any aggregate.
 _DEMO_ACME = [
-    {"id": "demo-acme-1", "name": "Acme — Founders (Worldwide 20–200)", "status": "ACTIVE",
+    {"id": "900900001", "name": "Acme — Founders (Worldwide 20–200)", "status": "ACTIVE",
      "sent": 48200, "replied": 604, "positives": 31, "bounced": 980, "completed": 44100, "total": 26800, "meetings": 12},
-    {"id": "demo-acme-2", "name": "Acme — VP Sales, mid-market SaaS", "status": "ACTIVE",
+    {"id": "900900002", "name": "Acme — VP Sales, mid-market SaaS", "status": "ACTIVE",
      "sent": 36400, "replied": 512, "positives": 24, "bounced": 720, "completed": 33900, "total": 19500, "meetings": 8},
-    {"id": "demo-acme-3", "name": "Acme — RevOps leaders (hiring signal)", "status": "ACTIVE",
+    {"id": "900900003", "name": "Acme — RevOps leaders (hiring signal)", "status": "ACTIVE",
      "sent": 29700, "replied": 388, "positives": 19, "bounced": 410, "completed": 27600, "total": 15900, "meetings": 6},
-    {"id": "demo-acme-4", "name": "Recontact: Acme — Founders", "status": "ARCHIVED",
+    {"id": "900900004", "name": "Recontact: Acme — Founders", "status": "ARCHIVED",
      "sent": 18300, "replied": 241, "positives": 14, "bounced": 190, "completed": 18300, "total": 9800, "meetings": 5},
 ]
 # Recent last-30-days activity for the Analytics windows (an active, full client's month):
