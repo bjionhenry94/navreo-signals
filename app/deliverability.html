@@ -699,6 +699,7 @@ function clientOfName(name, ws) {
   if (n.indexOf("arnic") >= 0) return "Arnic";
   if (n.indexOf("qwintiq") >= 0) return "Qwintiq";
   if (n.indexOf("thunderbird") >= 0) return "ThunderBird";   // its own client
+  if (n.indexOf("acme") >= 0) return "Acme";                 // demo client (toggle-gated server-side)
   return "Navreo";
 }
 function campClient(id, c) {
@@ -2269,7 +2270,13 @@ function renderCollision() {
   } else {
     sub = state.client + " leads live in 2+ of " + state.client + "'s own active campaigns.";
   }
-  if (COLL.run_date) sub += "  ·  as of " + COLL.run_date;
+  var live = COLL.source === "live";
+  var when = "";
+  if (live && COLL.run_at) {
+    try { when = new Date(COLL.run_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+    catch (e) { when = (COLL.run_at || "").slice(0, 16).replace("T", " "); }
+  } else { when = COLL.run_date || ""; }
+  if (when) sub += "  ·  " + (live ? "confirmed live · " + when : "approx · " + when + " (confirming live)");
   $("dtwarn-sub").textContent = sub;
 
   _dtPrompt = buildCollPrompt(all, n, pc);
