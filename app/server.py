@@ -15452,6 +15452,12 @@ _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/cron/reply-caps",
+                     # A cron path must appear in BOTH this set and the token-gate
+                     # tuple in do_POST: this one clears the session gate, that one
+                     # makes the handler reachable and token-guarded. Missing from
+                     # either, the route is dead. Both cap engines were missing from
+                     # both from 07-28 until 07-29.
+                     "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
                      "/api/notify/positive-card",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
