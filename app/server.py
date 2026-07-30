@@ -7425,14 +7425,16 @@ def _scorecard_smartlead_ids() -> list:
 
 def _reply_archive_meetings(sl_ids: list | None = None) -> dict | None:
     """{smartlead_campaign_id: meetings} from the reply archive. A meeting is a
-    PERSON: each distinct lead with at least one Call Booked / Meeting Request
-    reply counts once, however many rows their thread produced (per-row counting
-    showed "5 meetings" on a campaign where 2 people booked). Auditable by
-    construction: anyone can re-count the same rows. Returns None when the
-    archive is unreachable so callers gate rather than show false zeros."""
+    PERSON: each distinct lead with at least one Call Booked reply counts once,
+    however many rows their thread produced (per-row counting showed "5
+    meetings" on a campaign where 2 people booked). Call Booked ONLY (owner
+    ruling 2026-07-30): a Meeting Request is not a meeting until the call is
+    actually booked. Auditable by construction: anyone can re-count the same
+    rows. Returns None when the archive is unreachable so callers gate rather
+    than show false zeros."""
     from urllib.parse import quote
     q = ("replies?select=smartlead_campaign_id,email&workspace=eq.navreo"
-         "&category=in.(%22Call%20Booked%22,%22Meeting%20Request%22)")
+         "&category=eq.Call%20Booked")
     if sl_ids:
         ors = ",".join(str(s) for s in sl_ids)
         q += f"&smartlead_campaign_id=in.({quote(ors, safe=',')})"
@@ -8024,7 +8026,7 @@ def _cockpit_messaging(cid) -> dict:
     # one Smartlead history lookup each, stamped back onto the archive row so
     # the lookup never repeats.
     mrows = sb("GET", f"replies?workspace=eq.navreo&smartlead_campaign_id=eq.{n}"
-                      "&category=in.(%22Call%20Booked%22,%22Meeting%20Request%22)"
+                      "&category=eq.Call%20Booked"
                       "&select=id,email,step:raw->>email_seq_number,"
                       "stepbf:raw->>email_seq_number_backfill"
                       "&order=replied_at.asc")
@@ -8582,6 +8584,12 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
                 seen_ids.add(cid)
                 cand_ids.append(cid)
     # aggregate per offer bucket, keyed by group: "All" (whole book) + each client
+    # campaign_scorecard.meetings is written OUTSIDE this repo with the old
+    # Call Booked + Meeting Request definition. Override at read time from the
+    # reply archive (Call Booked ONLY, owner ruling 2026-07-30) so this table
+    # obeys the rule no matter what the external writer stamps. None (archive
+    # unreachable) falls back to the scorecard column rather than showing 0s.
+    _cb_meet = _reply_archive_meetings([c for c in cand_ids if str(c).isdigit()])
     per_group_agg: dict = {}
     for cid in cand_ids:
         row = sc_by_id.get(str(cid))
@@ -8610,7 +8618,9 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             a["sent"] += sent
             a["replies"] += row.get("replied") or 0
             a["pos"] += row.get("positives") or 0
-            a["meet"] += row.get("meetings") or 0   # scorecard meetings — per-client accurate
+            # archive CB-only count wins; scorecard column only when unreachable
+            a["meet"] += (_cb_meet.get(str(cid), 0) if isinstance(_cb_meet, dict)
+                          else row.get("meetings") or 0)
             a["meet_sent"] += sent
             a["camps"].append(row.get("name") or cid)
 
@@ -8703,7 +8713,9 @@ def _tier1_write_ok(res) -> bool:
 
 # ── 1. Campaign insights (proxy source attribution + deterministic findings) ─
 _POS_REPLY_CATS = {"Interested", "Call Booked", "Meeting Request", "Information Request"}
-_MEETING_REPLY_CATS = {"Call Booked", "Meeting Request"}
+# Call Booked ONLY (owner ruling 2026-07-30): a Meeting Request is not a
+# meeting until the call is actually booked.
+_MEETING_REPLY_CATS = {"Call Booked"}
 _IN_PROGRESS_STATUSES = {"INPROGRESS", "STARTED", "PAUSED"}
 
 
@@ -16590,6 +16602,12 @@ class Handler(SimpleHTTPRequestHandler):
     # chunked/streamed response anywhere in this file. See verification report
     # for the full audit list.
     protocol_version = "HTTP/1.1"
+    # 502 fix 2026-07-30: with keep-alive + thread-per-connection, an idle
+    # browser connection used to pin an OS thread FOREVER (no handler timeout)
+    # - ~6 per open tab. 30s releases idle keep-alive threads; an active
+    # request is unaffected (the socket timeout only fires between requests
+    # or on a stalled peer, and the browser transparently reconnects).
+    timeout = 30
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PROJECT_DIR), **kwargs)
@@ -17741,8 +17759,12 @@ class Handler(SimpleHTTPRequestHandler):
         if not self._drain_request_body():
             return
         path = self.path.split("?")[0]
-        if path not in self._CLEAR_CACHE_EXEMPT_POST:
-            _clear_ui_caches()  # G2: every other POST may mutate — never let a stale cached GET follow it
+        if path not in self._CLEAR_CACHE_EXEMPT_POST and self._authed_email():
+            # G2: every other POST may mutate — never let a stale cached GET
+            # follow it. Session-gated (2026-07-30): an UNAUTHENTICATED POST
+            # can't mutate anything, so it must not wipe eight SWR caches
+            # either (any drive-by request used to cold-start every reader).
+            _clear_ui_caches()
         if path == "/api/auth/login":
             length = int(self.headers.get("Content-Length") or 0)
             if length > 4096:
@@ -18606,6 +18628,14 @@ def _boot_warmup():
         ("restore-sweep", _restore_sweep_start),
         ("restore-reminders", _restore_reminders),
         ("tag-names", _warm_tag_names),
+        # 502 fix 2026-07-30: the setter queue had NO warmup - the first
+        # /api/setter/queue after every boot paid the full cold build (rows
+        # fetch + KPI fan-out + serialize + gzip) inline, on the box's most
+        # fragile moment. Pre-build the exact buffer the UI's first request
+        # asks for; queue_response's SWR path then serves stale-instantly
+        # forever after.
+        ("setter-queue", lambda: setter.queue_response(
+            {"status": ["needs_review"], "limit": ["200"], "fields": ["list"]}, True)),
     ):
         try:
             fn()
@@ -18784,6 +18814,18 @@ def _collision_live_loop():
         time.sleep(_COLL_LIVE_INTERVAL_S)
 
 
+class _NavreoServer(ThreadingHTTPServer):
+    """502 fix 2026-07-30. The stdlib default listen backlog is FIVE
+    (socketserver.TCPServer.request_queue_size = 5): once five unaccepted
+    connections queue - trivial with multiple tabs each holding ~6 keep-alive
+    sockets - the kernel refuses new ones and Render's proxy answers 502 for
+    a server that is otherwise healthy. 128 puts acceptance ahead of the
+    proxy's patience; Handler.timeout=30 (above) keeps the accepted-thread
+    population bounded by releasing idle keep-alive connections."""
+    request_queue_size = 128
+    daemon_threads = True
+
+
 if __name__ == "__main__":
     # Render injects $PORT and needs 0.0.0.0; locally, argv[1] or 7901 on 127.0.0.1.
     port = int(os.environ.get("PORT") or (sys.argv[1] if len(sys.argv) > 1 else 7901))
@@ -18795,7 +18837,7 @@ if __name__ == "__main__":
         # from writing mock analytics into the real scorecard cache or marking
         # production in-flight jobs interrupted.
         print("NAVREO_NO_BG=1 — background threads disabled (HTTP only)")
-        ThreadingHTTPServer((host, port), Handler).serve_forever()
+        _NavreoServer((host, port), Handler).serve_forever()
     threading.Thread(target=_boot_ledger_start, daemon=True).start()
     threading.Thread(target=_boot_warmup, daemon=True).start()
     # Serialise verify/remove jobs so multiple ListMint runs don't blow its rate
@@ -18828,4 +18870,4 @@ if __name__ == "__main__":
     # set COLLISION_LIVE_IN_WEB=1 to restore the in-process loop.
     if os.environ.get("COLLISION_LIVE_IN_WEB") == "1":
         threading.Thread(target=_collision_live_loop, daemon=True).start()
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    _NavreoServer((host, port), Handler).serve_forever()

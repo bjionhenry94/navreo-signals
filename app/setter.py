@@ -1569,7 +1569,15 @@ def _sl_get(path: str, params: dict = None, campaign_id=None):
         return None
     qs = dict(params or {})
     qs["api_key"] = key
-    return _HTTP("GET", f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}", {})
+    # 15s, not http_json's 60s default (502 fix 2026-07-30): Smartlead READS
+    # on the send/hydrate path used to inherit 60s each - a send needing
+    # rehydration could pin a worker thread (and its parsed thread corpus)
+    # for up to 4 minutes on the 512MB box. Reads that slow are already
+    # failures; fail fast and let the row land in needs_review with a real
+    # error. Mirrors _SB_TIMEOUT_S for Supabase. _sl_post (the actual reply
+    # send) deliberately keeps 60s - timing out a send that might have gone
+    # out risks a double-send on retry.
+    return _HTTP("GET", f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}", {}, timeout=15)
 
 
 def _sl_post(path: str, body: dict, params: dict = None):
@@ -5324,11 +5332,15 @@ FOLLOWUP_POSITIVE_CATEGORIES = (set(CORE_FOUR) | set(POSITIVE_CATEGORIES)
 # reminder tray" (setter_queue is schema-frozen - these are new VALUES in the
 # existing text column, never a new column):
 #   dismissed    - explicit Dismiss (owner ruling 2026-07-22)
-#   none_at_send - the send-gate's "no follow-up" choice, made AT send time
 #   pushing      - a send-gate "push" choice whose Smartlead call is in flight
-# 'none' is deliberately NOT here: that is the tray's own "No follow-up
-# needed" MARK, which stays until dismissed (owner ruling 2026-07-22).
-RESOLVED_DECISIONS = ("dismissed", "none_at_send", "pushing")
+# 'none' and 'none_at_send' are deliberately NOT here (owner ruling
+# 2026-07-30, reaffirming 2026-07-22): a "no follow-up" choice - whether made
+# from the tray ('none') or at send time in the send-gate ('none_at_send') -
+# is a MARK, not a removal. The row stays visible in "Sent without follow-up"
+# until an explicit Dismiss; the mark only changes which pill it renders.
+# (2026-07-25's cabfc1a hid none_at_send rows entirely - that contradicted the
+# owner's rule and made gate-"None" sends invisible; reverted 2026-07-30.)
+RESOLVED_DECISIONS = ("dismissed", "pushing")
 # A 'pushing' row whose worker never finished (process restart mid-push) must
 # not vanish forever - after this it resurfaces as unresolved.
 PUSHING_GRACE_MIN = 15
@@ -5336,12 +5348,14 @@ PUSHING_GRACE_MIN = 15
 
 def _followup_category_ok(category) -> bool:
     """True when this lead's category still justifies a follow-up reminder.
-    An unknown/empty category returns True - "not categorised yet" is not the
-    same as "not positive", and a silent drop is the worse failure."""
-    name = str(category or "").strip()
-    if not name:
+    An unknown/empty/uncategorised category returns True - "not categorised
+    yet" is not the same as "not positive", and a silent drop is the worse
+    failure. Uses _is_uncategorised_value so the legacy literal
+    "Uncategorizable by Ai" counts as uncategorised too (it was silently
+    dropping every uncategorised-intake sent reply from the tray)."""
+    if _is_uncategorised_value(category):
         return True
-    return name in FOLLOWUP_POSITIVE_CATEGORIES
+    return str(category).strip() in FOLLOWUP_POSITIVE_CATEGORIES
 
 
 def _fresh_categories_for(rows: list) -> dict:
@@ -5738,8 +5752,14 @@ def _compute_kpis_sync() -> dict:
             # "dir" maps row id -> (inbound, pill) so the thread-collapsed
             # count below can look up JUST the representative rows; the flat
             # stay/sent/auto tallies stay as the no-collapse fallback.
+            # Slim select (502 fix 2026-07-30): this used to pull the FULL
+            # thread blob for every needs_review row - the multi-MB corpus -
+            # on every cold KPI compute, i.e. after every mutation bust. The
+            # direction verdict only needs the newest message's type; the
+            # thread->-1 alias serves it in a few KB (see _queue_direction).
             rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=eq.needs_review"
-                              f"&is_test=eq.false&select=id,thread,sent_at,decision,status")
+                              f"&is_test=eq.false&select=id,sent_at,decision,status,"
+                              "last_type:thread->-1->>type")
             stay = m_sent = m_auto = 0
             dirs = {}
             if isinstance(rows, list):
@@ -5904,6 +5924,17 @@ def _queue_direction(row: dict):
     """
     thread = row.get("thread")
     if not isinstance(thread, list) or not thread:
+        # Slim row (memory ruling 2026-07-30): the list fetch aliases the
+        # newest thread message's type off thread->-1 instead of carrying the
+        # whole blob. hydrate_lead always persists threads time-sorted
+        # ascending, so the last element is the newest - same verdict the
+        # max() below reaches on a full thread.
+        lt = row.get("last_type")
+        if lt:
+            if str(lt).upper() == "REPLY":
+                return True, None
+            is_agent = bool(row.get("sent_at")) and row.get("decision") == "auto_send"
+            return False, ("auto_sent" if is_agent else "sent")
         return True, None
     try:
         # ISO8601 times sort lexicographically (same approach as thread
@@ -6041,6 +6072,21 @@ def _last_poll_done_at():
     return val
 
 
+# Every setter_queue column EXCEPT the fat `thread` jsonb, plus two scalar
+# aliases off its newest element for who-spoke-last (memory ruling 2026-07-30;
+# see _fetch_queue_rows). setter_queue is schema-frozen (see the schema-freeze
+# gotcha) so this list drifts only if that ruling is ever revisited - if a
+# column IS added, add it here or the queue list silently won't carry it.
+QUEUE_LIST_COLUMNS = (
+    "added_to_subsequence,agent_id,category,category_source,classification,"
+    "company_domain,created_at,decision,decision_reason,draft_body,"
+    "draft_subject,email_stats_id,error,first_outbound,guardrails,id,is_test,"
+    "lead_email,lead_first_name,lead_last_name,message_id,original_draft_body,"
+    "replied_at,reply_body,reply_subject,sent_at,sent_body,slots,"
+    "smartlead_campaign_id,smartlead_lead_id,source_message_id,status,"
+    "subsequence_decision,timezone,updated_at,workspace,"
+    "last_type:thread->-1->>type,last_time:thread->-1->>time")
+
 # ── Queue-rows read cache (perf pass 2026-07-16) ──────────────────────────
 # One /api/setter/queue GET used to re-fetch every row (2MB+ of stored threads)
 # from Supabase and re-run the direction reclass on EVERY call - and the
@@ -6086,16 +6132,24 @@ def _rows_lock(key):
 def _fetch_queue_rows(status: str, limit: int):
     """The uncached read: fetch, direction-reclassify, annotate. Pure read.
 
-    Returns None (NOT []) when the underlying Supabase fetch FAILED. The rows
-    query is a heavy select=* (it needs the `thread` blobs for who-spoke-last
-    reclassify) and times out on a cold/slow connection while the cheap pill
-    COUNT still reports a backlog — so a false-empty here would blank an inbox
-    that says "19 needs review" AND get cached for the TTL. Callers keep the
-    last-good value on None; a genuinely empty pill still returns []."""
+    Returns None (NOT []) when the underlying Supabase fetch FAILED. A false-
+    empty here would blank an inbox whose pill COUNT still reports a backlog -
+    so callers keep the last-good value on None; a genuinely empty pill still
+    returns [].
+
+    Memory ruling 2026-07-30 (502 fix): this used to select=* including the
+    full `thread` blobs - 6.9MB of JSON for 177 rows, held resident in
+    _ROWS_CACHE as tens of MB of Python dicts on a 512MB box, refetched on
+    every SWR refresh - when the ONLY thing the list path needs from the
+    thread is "who spoke last" (_queue_direction). thread->-1 gives exactly
+    that: hydrate_lead always persists the thread time-sorted ascending, so
+    the last element IS the newest message. Full threads are served per-row
+    by /api/setter/thread (cache-first) - never by the list."""
     rows = []
     fetch_failed = False
     if _SB:
-        base = f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}&select=*"
+        base = (f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}"
+                f"&select={QUEUE_LIST_COLUMNS}")
         # For the direction-aware pills (needs_review / sent / auto_sent) the
         # membership depends on who spoke last, computed at read time from
         # `thread` (see _queue_direction). The sent/auto_sent pills must also
@@ -6183,23 +6237,66 @@ def _kick_rows_refresh(key):
     threading.Thread(target=run, daemon=True).start()
 
 
+def _kick_queue_resp_rebuild(memo_key, params):
+    """Rebuild one memoized queue response OFF the request path (SWR leg of
+    queue_response, 502 fix 2026-07-30). Non-blocking single-flight: if the
+    global lock is busy someone is already building - skip, the next GET
+    re-kicks if still stale. Never raises; an empty-rows body is never stored
+    (same guard as the inline build - a cold thread-collapse can briefly
+    filter to [] and caching that blanks the inbox for a whole TTL)."""
+    def run():
+        import gzip
+        if not _QUEUE_RESP_LOCK.acquire(blocking=False):
+            return
+        try:
+            etag = _queue_resp_etag(*memo_key)
+            ent = _QUEUE_RESP_MEMO.get(memo_key)
+            if ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL:
+                return   # a peer rebuilt it while we queued
+            st, body = route_queue_get({"status": [memo_key[0]],
+                                        "limit": [str(memo_key[1])],
+                                        "fields": [memo_key[2]]})
+            if st != 200 or not (isinstance(body, dict) and body.get("rows")):
+                return
+            raw = json.dumps(body).encode()
+            gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
+            _QUEUE_RESP_MEMO[memo_key] = (etag, len(raw), gz, _time.time())
+        except Exception:  # noqa: BLE001 - background rebuild must never raise
+            pass
+        finally:
+            _QUEUE_RESP_LOCK.release()
+    threading.Thread(target=run, daemon=True, name="setter-queue-rebuild").start()
+
+
 def _bust_read_caches(rewarm: bool = True):
-    """A mutation changed queue rows: drop every read cache so the next GET
-    reads fresh, and start rewarming so that GET usually joins a compute
-    already in flight instead of starting cold."""
+    """A mutation changed queue rows: mark every read cache STALE (never
+    empty) so the next GET serves the last-good value instantly while a
+    background refresh replaces it.
+
+    502 fix 2026-07-30: this used to CLEAR the caches outright, so the first
+    GET after ANY action paid a cold 12-query KPI compute + a multi-MB rows
+    fetch + serialize + gzip synchronously - under the process-global response
+    lock, on a 512MB / 0.5-CPU box. Every send fires 2-4 busts, so a burst of
+    actions GIL-starved /healthz, Render restarted the instance (boot ledger:
+    20+ restarts/day), and every in-flight request got the proxy's 502 - the
+    "Couldn't send the reply" / "Couldn't refresh the queue" reports. Stale-
+    marking keeps the same freshness contract (every cache here is already
+    SWR; the UI tolerates seconds of lag) with none of the cold cliffs."""
     with _KPI_LOCK:
-        _KPI_CACHE["val"] = None
-        _KPI_CACHE["at"] = 0.0
+        if _KPI_CACHE.get("val") is not None:
+            _KPI_CACHE["at"] = 0.0   # stale -> _compute_kpis serves cached + bg refresh
+        # val stays None only on a true cold boot: that one compute is sync.
     _POLL_TS_CACHE["at"] = 0.0
-    _POLL_TS_CACHE["val"] = None
     _REP_IDS_CACHE["at"] = 0.0
-    _REP_IDS_CACHE["val"] = None
-    stale_keys = [k for k in list(_ROWS_CACHE.keys())
-                  if k[0] in _ROWS_REWARM_STATUSES and k[1] == 200]
-    _ROWS_CACHE.clear()
-    _QUEUE_RESP_MEMO.clear()   # the serialized bodies are now stale too
+    for ent in _ROWS_CACHE.values():
+        ent["at"] = 0.0              # stale, never cleared: SWR keeps serving
+    # _QUEUE_RESP_MEMO entries deliberately survive: their etag (rows_at +
+    # kpis) stops matching the moment refreshed rows land, and queue_response
+    # then serves the stale buffer while rebuilding in the background.
     if rewarm:
         _kick_kpi_refresh()
+        stale_keys = [k for k in list(_ROWS_CACHE.keys())
+                      if k[0] in _ROWS_REWARM_STATUSES and k[1] == 200]
         for k in (stale_keys or [("needs_review", 200)]):
             _kick_rows_refresh(k)
 
@@ -6282,7 +6379,16 @@ def queue_response(params, accept_gzip: bool):
     memo_key = (status_q, limit, fields)
     etag = _queue_resp_etag(status_q, limit, fields)
     ent = _QUEUE_RESP_MEMO.get(memo_key)
-    if not (ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL):
+    if ent and not (ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL):
+        # SWR (502 fix 2026-07-30): a stale buffer exists - serve it NOW and
+        # rebuild in the background. The old behaviour rebuilt synchronously
+        # under the global lock (multi-MB fetch + dumps + gzip on 0.5 CPU),
+        # which is exactly the request that outlived the proxy timeout or
+        # starved /healthz right after a mutation bust. Only a true cold boot
+        # (no buffer at all) still builds inline - and _boot_warmup now
+        # pre-builds that before the first real request lands.
+        _kick_queue_resp_rebuild(memo_key, params)
+    if not ent:   # cold boot only - no buffer exists yet, build it inline
         with _QUEUE_RESP_LOCK:
             ent = _QUEUE_RESP_MEMO.get(memo_key)   # a peer may have built it while we waited
             if not (ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL):
@@ -6369,28 +6475,93 @@ def route_queue_row_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def _kick_thread_rehydrate(row: dict):
+    """Live-refresh one row's thread OFF the request path (cache-first open,
+    2026-07-30). Per-row single-flight; the refreshed thread persists via the
+    normal _apply_patch (whose no-change guard means an already-current
+    thread costs zero cache busts). The next open serves the refreshed copy."""
+    rid = row.get("id")
+    with _THREAD_REFRESH_LOCK:
+        if rid in _THREAD_REFRESH_INFLIGHT:
+            return
+        # Per-row hydrate throttle: the client now calls /thread on EVERY open
+        # (the read is one indexed select - cheap), so the 2-Smartlead-call
+        # refresh behind it must self-limit or rapid row-browsing spawns a
+        # hydrate burst - the exact class of load that used to OOM the box.
+        last = _THREAD_REFRESH_LAST.get(rid, 0.0)
+        if _time.time() - last < _THREAD_REFRESH_MIN_S:
+            return
+        _THREAD_REFRESH_LAST[rid] = _time.time()
+        if len(_THREAD_REFRESH_LAST) > 2000:   # bound the map across re-intakes
+            cutoff = _time.time() - 3600
+            for k in [k for k, v in list(_THREAD_REFRESH_LAST.items()) if v < cutoff]:
+                _THREAD_REFRESH_LAST.pop(k, None)
+        _THREAD_REFRESH_INFLIGHT.add(rid)
+
+    def run():
+        try:
+            mid = row.get("message_id") or row.get("source_message_id") or ""
+            ok, hyd, _err = hydrate_lead(row.get("smartlead_campaign_id"),
+                                         row.get("lead_email"), mid)
+            if ok:
+                thread = hyd.get("thread") or []
+                if thread:
+                    _apply_patch(row, {"thread": thread})
+        except Exception:  # noqa: BLE001 - background refresh must never raise
+            pass
+        finally:
+            with _THREAD_REFRESH_LOCK:
+                _THREAD_REFRESH_INFLIGHT.discard(rid)
+    threading.Thread(target=run, daemon=True, name="setter-thread-refresh").start()
+
+
+_THREAD_REFRESH_LOCK = threading.Lock()
+_THREAD_REFRESH_INFLIGHT: set = set()
+_THREAD_REFRESH_LAST: dict = {}    # row id -> last background-hydrate kick
+_THREAD_REFRESH_MIN_S = 90.0
+
+
 def route_thread_get(params):
-    """Fresh thread for one queue row, re-hydrated live from Smartlead when
-    the owner OPENS it (owner ruling 2026-07-15: an opened thread must show
-    the latest emails, not the intake-time snapshot). The refreshed thread is
-    also persisted back to the row (real column - schema-safe) so the list
-    stays current even without another open. Test rows have no Smartlead
-    lead behind them; they return their stored thread untouched."""
+    """Thread for one queue row - CACHE-FIRST (perf ruling 2026-07-30).
+
+    Every intake path (process_reply / agentless / uncategorised, plus the
+    3-minute reply-sync) already persists the full normalized thread into
+    setter_queue.thread the moment a reply lands. Opening a conversation used
+    to ignore that and pay 2 serial Smartlead round trips (60s timeouts) per
+    open - the 'history takes way too long' report. Now: serve the stored
+    snapshot immediately and kick the live Smartlead re-hydrate onto a
+    background thread; the open after a refresh (or the client's follow-up
+    poll) picks up anything new. The owner ruling 2026-07-15 ('an opened
+    thread must show the latest emails') is honoured by the background
+    refresh + the client's stale re-poll, not by blocking the paint.
+
+    ?live=1 forces the old synchronous hydrate (explicit refresh / tests).
+    Test rows return their stored thread untouched, as before."""
     try:
+        from urllib.parse import quote as _q
         qid = _qp(params, "id", "")
         if not qid:
             return 400, {"error": "id is required"}
-        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
+        # workspace scope + quoted id (hardening 2026-07-30: this was the one
+        # row read with neither; route_queue_row_get has both)
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{_q(str(qid), safe='')}"
+                          f"&workspace=eq.{WORKSPACE}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
         if row.get("is_test"):
-            return 200, {"thread": row.get("thread") or [], "refreshed": False}
+            return 200, {"thread": row.get("thread") or [], "refreshed": False, "cached": True}
+        stored = row.get("thread") or []
+        want_live = _qp(params, "live", "") == "1"
+        if stored and not want_live:
+            _kick_thread_rehydrate(row)
+            return 200, {"thread": stored, "refreshed": False, "cached": True, "stale": True}
+        # No stored snapshot (legacy row) or an explicit live ask: hydrate inline.
         mid = row.get("message_id") or row.get("source_message_id") or ""
         ok, hyd, herr = hydrate_lead(row.get("smartlead_campaign_id"), row.get("lead_email"), mid)
         if not ok:
             # Stale beats broken: hand back the stored snapshot with the why.
-            return 200, {"thread": row.get("thread") or [], "refreshed": False, "detail": herr}
+            return 200, {"thread": stored, "refreshed": False, "cached": True, "detail": herr}
         thread = hyd.get("thread") or []
         try:
             _apply_patch(row, {"thread": thread})

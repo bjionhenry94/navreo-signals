@@ -1150,16 +1150,44 @@ function buildCampaignClientMap(unifiedRes, clientsRes) {
   return map;
 }
 
-/* ── Fetch helper (never throws to the caller) ────────────── */
+/* ── Fetch helper (never throws to the caller) ──────────────
+   Opts extensions (both optional, both OFF by default so every existing call
+   is byte-identical): _timeoutMs aborts a hung request; _retries re-tries
+   502/503/504/network errors with 1.5-3.5s jitter. Only IDEMPOTENT reads may
+   pass _retries - the instance restarts that cause the 502s (boot ledger:
+   20+/day before the 2026-07-30 fix) last a few seconds, so one jittered
+   retry rides most windows out instead of surfacing a scary banner. */
 async function fetchJson(url, opts) {
-  try {
-    const res = await fetch(url, opts);
-    let data = {};
-    try { data = await res.json(); } catch { data = {}; }
-    if (!res.ok) return { ok: false, status: res.status, error: (data && data.error) || `Request failed (${res.status})`, data };
-    return { ok: true, data };
-  } catch (e) {
-    return { ok: false, error: (e && e.message) || "Network error" };
+  const o = opts || {};
+  const timeoutMs = o._timeoutMs || 0;
+  const retries = o._retries || 0;
+  const init = { ...o };
+  delete init._timeoutMs; delete init._retries;
+  for (let attempt = 0; ; attempt++) {
+    let ctrl, timer;
+    if (timeoutMs && typeof AbortController !== "undefined") {
+      ctrl = new AbortController();
+      timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    }
+    let out;
+    try {
+      const res = await fetch(url, ctrl ? { ...init, signal: ctrl.signal } : init);
+      let data = {};
+      try { data = await res.json(); } catch { data = {}; }
+      out = !res.ok
+        ? { ok: false, status: res.status, error: (data && data.error) || `Request failed (${res.status})`, data }
+        : { ok: true, data };
+    } catch (e) {
+      out = { ok: false, error: (e && e.name === "AbortError") ? "Request timed out" : ((e && e.message) || "Network error") };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    const transient = !out.ok && (!out.status || [502, 503, 504].includes(out.status));
+    if (transient && attempt < retries) {
+      await new Promise((r) => setTimeout(r, 1500 + Math.random() * 2000));
+      continue;
+    }
+    return out;
   }
 }
 function showError(msg) {
@@ -1216,7 +1244,24 @@ async function loadAgentsAndCampaigns() {
    switching (see rowDirection/clientPillRows, mirrors the server's
    _queue_direction/_reclassify_queue), and instant conversation-opens (the
    stored thread is grafted onto the slim rows by id). */
-async function loadQueue(prefetch) {
+/* Coalesced entry (502 fix 2026-07-30): 13 call sites + a 60s timer + N tabs
+   used to stack un-deduped queue GETs, each pinning a server thread behind
+   one global build lock. Loads now run strictly one-at-a-time per page, and
+   while one is in flight at most ONE trailing refresh queues behind it (so a
+   mutation's refresh still sees post-mutation data - never dropped, never
+   stacked). */
+let _queueChain = null;
+let _queuePending = 0;
+function loadQueue(prefetch) {
+  if (_queuePending >= 2) return _queueChain;   // running + one queued: enough
+  _queuePending++;
+  const prev = _queueChain || Promise.resolve();
+  _queueChain = prev
+    .then(() => _loadQueueInner(prefetch))
+    .finally(() => { _queuePending--; });
+  return _queueChain;
+}
+async function _loadQueueInner(prefetch) {
   const params = new URLSearchParams();
   // Every pill now maps to a real status column value (needs_review / sent /
   // auto_sent / dismissed, or blank for All), so the server filters directly.
@@ -1227,7 +1272,10 @@ async function loadQueue(prefetch) {
   // agents/campaigns load instead of waiting for it (the fetch is pill-status
   // specific, so it's only reused for the initial default-status load).
   _queueLoading = true;
-  const res = await (prefetch || fetchJson(`/api/setter/queue?${params.toString()}`));
+  // 25s abort + one jittered retry on 502/503/504 (read-only, safe to retry):
+  // most 502s are a restarting instance and clear within seconds.
+  const res = await (prefetch ||
+    fetchJson(`/api/setter/queue?${params.toString()}`, { _timeoutMs: 25000, _retries: 1 }));
   _queueLoading = false;
   if (res.ok) {
     QUEUE_ROWS = res.data.rows || [];
@@ -1348,9 +1396,9 @@ function trayRowHtml(r) {
     </div>
     <div class="tray-row-actions">
       ${failTag}
-      ${r.subsequence_decision === "none" ? `<span class="pill n tray-none-tag">No follow-up</span>` : ""}
+      ${["none", "none_at_send"].includes(r.subsequence_decision) ? `<span class="pill n tray-none-tag">No follow-up</span>` : ""}
       <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence &#9662;</button>
-      ${r.subsequence_decision === "none" ? "" : `<button class="tray-none-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>`}
+      ${["none", "none_at_send"].includes(r.subsequence_decision) ? "" : `<button class="tray-none-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>`}
       <button class="tray-dismiss-btn sg-dismiss" type="button" data-id="${esc(r.id)}" title="Remove from this reminder list">Dismiss</button>
     </div>
     <div class="tray-row-picker" id="sgPicker-${esc(r.id)}" style="display:none"></div>
@@ -1370,8 +1418,14 @@ function renderUnresolvedTray() {
   // bare sends can't pile up unseen behind a folded header - but only a send
   // that happened THIS session: the first render after a page load adopts
   // the standing count without opening (owner report 2026-07-28).
-  if (_lastTrayCount !== null && n > _lastTrayCount) trayOpen = true;
-  _lastTrayCount = n;
+  // Only UNDECIDED rows (no decision yet, or a failed push) trigger the
+  // auto-open: a send whose gate choice was "None" now stays VISIBLE in the
+  // tray (owner ruling 2026-07-30) but was explicitly decided, so it must not
+  // pop a collapsed tray open (that pop was the 2026-07-25 complaint).
+  const nUndecided = unresolvedRows.filter(r =>
+    !r.subsequence_decision || r.subsequence_decision === "push_failed").length;
+  if (_lastTrayCount !== null && nUndecided > _lastTrayCount) trayOpen = true;
+  _lastTrayCount = nUndecided;
   tray.style.display = "";
   tray.classList.toggle("open", trayOpen);
   document.getElementById("trayTitle").textContent = `Sent without follow-up (${n})`;
@@ -2371,6 +2425,11 @@ function slotSituationText(row) {
    normal flow. Mirrors CORE_FOUR in setter.py; used only for the tone of the
    category pill, so a drift here is cosmetic, never load-bearing. */
 const CORE_FOUR_JS = ["Interested", "Information Request", "Meeting Request", "positive-re-reply"];
+/* One-click "Not qualified" (owner ask 2026-07-30). The exact live Smartlead
+   label - resolved against /api/setter/categories at click time, never a
+   hardcoded id; the button no-ops with an error hint if the label ever
+   disappears from the workspace's master list. */
+const NQ_CATEGORY_NAME = "Not a qualified lead";
 const CAT_NEGATIVE_RE = /(not interested|do not contact|do-not-contact|unsubscrib|opt.?out|bounce|wrong|blacklist|spam|unqualif|invalid|junk|no longer|left the company)/i;
 const CAT_HINT_DEFAULT = "Positive keeps them in the flow; anything else files it in Smartlead and drops it from the queue.";
 function leadFirstNameOr(row, fallback) {
@@ -2479,6 +2538,8 @@ function categoryControlInner(row, compact) {
       ${editable ? `<div class="lp-cat-edit">
         <select class="lp-cat-sel" aria-label="Change lead category"><option value="">Loading…</option></select>
         <button type="button" class="btn primary sm lp-cat-btn" disabled>Update</button>
+        ${curCat.toLowerCase() === NQ_CATEGORY_NAME.toLowerCase() ? "" :
+          `<button type="button" class="btn danger sm lp-cat-nq" title="Files this lead as '${esc(NQ_CATEGORY_NAME)}' in Smartlead and clears it from the queue - one click, no dropdown.">Not qualified</button>`}
       </div>
       <div class="lp-cat-hint">${hint}</div>` : ""}`;
 }
@@ -2645,18 +2706,26 @@ function updateCatBtn(block, row) {
    lead (converted), a positive->positive nudge relabels, anything else files
    it and drops it from the queue (discarded). Scoped to the passed .lp-cat
    block so it works from the sidebar or the sticky bar. */
-async function applyCategory(block) {
+async function applyCategory(block, override) {
   if (!block) return;
   const sel = block.querySelector(".lp-cat-sel");
-  const btn = block.querySelector(".lp-cat-btn");
+  const btn = override ? block.querySelector(".lp-cat-nq") : block.querySelector(".lp-cat-btn");
   const hint = block.querySelector(".lp-cat-hint");
-  if (!sel || !sel.value || !selectedRowId) return;
-  const name = sel.options[sel.selectedIndex].getAttribute("data-name") || "";
+  let catId, name;
+  if (override) {
+    // One-click path (Not qualified): {id, name} resolved live by the caller.
+    catId = override.id; name = override.name;
+    if (!catId || !selectedRowId) return;
+  } else {
+    if (!sel || !sel.value || !selectedRowId) return;
+    catId = sel.value;
+    name = sel.options[sel.selectedIndex].getAttribute("data-name") || "";
+  }
   if (btn) { btn.disabled = true; btn.classList.add("busy"); }
   if (hint) { hint.textContent = "Updating Smartlead…"; hint.classList.remove("lp-hint-err"); }
   const res = await fetchJson("/api/setter/queue/recategorise", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: selectedRowId, category_id: sel.value, category_name: name }),
+    body: JSON.stringify({ id: selectedRowId, category_id: catId, category_name: name }),
   });
   if (btn) btn.classList.remove("busy");
   if (!res.ok) {
@@ -2691,6 +2760,19 @@ function wireCategoryControls(root, row) {
     sel.addEventListener("change", () => updateCatBtn(block, row));
     const btn = block.querySelector(".lp-cat-btn");
     if (btn) btn.addEventListener("click", () => applyCategory(block));
+    const nq = block.querySelector(".lp-cat-nq");
+    if (nq) nq.addEventListener("click", async () => {
+      // Resolve the live Smartlead id for the label at click time - never a
+      // hardcoded id (ids differ per workspace; the master list is 1h-cached).
+      const cats = await fetchCategories();
+      const hit = (cats || []).find((c) => String(c.name || "").trim().toLowerCase() === NQ_CATEGORY_NAME.toLowerCase());
+      const hint = block.querySelector(".lp-cat-hint");
+      if (!hit) {
+        if (hint) { hint.textContent = `"${NQ_CATEGORY_NAME}" isn't in this workspace's Smartlead categories - use the dropdown instead.`; hint.classList.add("lp-hint-err"); }
+        return;
+      }
+      applyCategory(block, { id: hit.id, name: hit.name });
+    });
   });
 }
 function wireLeadPanelEvents(root, row) {
@@ -2903,7 +2985,7 @@ function needsRetroFollowup(row) {
 }
 function retroFollowupHtml(row) {
   if (!needsRetroFollowup(row)) return "";
-  const isNone = row.subsequence_decision === "none";
+  const isNone = ["none", "none_at_send"].includes(row.subsequence_decision);
   const failTag = row.subsequence_decision === "push_failed"
     ? `<span class="pill r">push failed — retry</span>` : "";
   const noneTag = isNone ? `<span class="pill n">No follow-up</span>` : "";
@@ -3822,12 +3904,30 @@ async function runSendJob(payload, onTick, opts) {
     return { ok: false, error: res.error ||
       "couldn't confirm the follow-up went out - check the thread in Smartlead before re-sending" };
   }
-  const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`);
-  const row = rowRes.ok && rowRes.data && rowRes.data.row;
-  if (row && (row.status === "sent" || row.status === "auto_sent")) {
-    return { ok: true, data: { ok: true, row } };
+  // Truthful fallback (502 fix 2026-07-30): when the START POST 502s the job
+  // may STILL have started (the 502 is the proxy's, not the handler's - the
+  // instance was restarting). One instant row read used to race the worker,
+  // see needs_review mid-flight, and report failure over an email that then
+  // went out. Re-read up to 3 times over ~6s before deciding; if the row
+  // stays ambiguous with no recorded error, say so honestly instead of
+  // claiming failure.
+  let row = null, rowReadOk = false;
+  for (let i = 0; i < 3; i++) {
+    if (i) await sleep(2000);
+    const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`, { _retries: 1 });
+    rowReadOk = rowReadOk || rowRes.ok;
+    row = (rowRes.ok && rowRes.data && rowRes.data.row) || row;
+    if (row && (row.status === "sent" || row.status === "auto_sent")) {
+      return { ok: true, data: { ok: true, row } };
+    }
+    if (row && row.error) break;   // a real recorded failure - stop waiting
   }
-  return { ok: false, error: (row && row.error) || res.error ||
+  if (row && row.error) return { ok: false, error: row.error };
+  if (rowReadOk && row && row.status === "needs_review" && res.error) {
+    return { ok: false, error:
+      "couldn't confirm this send (the server hiccuped mid-request) - check the thread in Smartlead before re-sending" };
+  }
+  return { ok: false, error: res.error ||
     "the send did not go through - your reply is still here, nothing was lost" };
 }
 
@@ -4110,7 +4210,9 @@ setInterval(() => {
   const active = document.activeElement;
   if (active && (active.isContentEditable || active.tagName === "TEXTAREA" || active.tagName === "INPUT")) return;
   loadQueue();
-}, 60000);
+  // 60s + per-tab jitter (502 fix 2026-07-30): N open tabs used to fire on
+  // the same boundary, stacking N GETs behind one global build lock.
+}, 60000 + Math.floor(Math.random() * 10000));
 
 /* ── Slide-over drawers ────────────────────────────────── */
 function openDrawer(id) { document.getElementById(id).classList.add("on"); }
@@ -4695,28 +4797,39 @@ async function saveSettings() {
 /* ── Boot ──────────────────────────────────────────────── */
 /* Owner ruling 2026-07-15: opening a thread auto-refreshes it with the
    latest emails. The stored snapshot renders instantly; a live re-hydrate
-   runs in the background (at most once per row per minute) and the detail
-   re-renders only when the thread actually changed - reapplyEditedDraft
-   inside renderDetail keeps any in-progress edit safe. */
-const THREAD_REFRESH_AT = new Map();
+   answers instantly from the stored snapshot (cache-first, 2026-07-30); the
+   server throttles its own background Smartlead re-hydrate per row. The
+   detail re-renders only when the thread actually changed -
+   reapplyEditedDraft inside renderDetail keeps any in-progress edit safe. */
 function threadKey(t) {
   return (t || []).map((m) => `${m.type}:${m.message_id || m.stats_id || String(m.body || "").slice(0, 40)}`).join("|");
 }
-async function refreshThreadFor(row) {
+async function refreshThreadFor(row, isRepoll) {
   if (!row || row.is_test) return;
-  const last = THREAD_REFRESH_AT.get(String(row.id)) || 0;
-  if (Date.now() - last < 60000) return;
-  THREAD_REFRESH_AT.set(String(row.id), Date.now());
-  const res = await fetchJson(`/api/setter/thread?id=${encodeURIComponent(row.id)}`);
-  if (!res.ok || !res.data || !Array.isArray(res.data.thread) || !res.data.refreshed) return;
+  // Cache-first (perf ruling 2026-07-30): the endpoint now answers instantly
+  // from the stored snapshot (one indexed Supabase read) and re-hydrates from
+  // Smartlead in the background, so every open may take it - the old 60s
+  // throttle only made sense when each call cost 2 serial Smartlead calls.
+  // The old guard also DISCARDED every refreshed:false response, which made
+  // the server's stale-beats-broken fallbacks invisible (the pane sat on
+  // "Loading earlier messages…" forever) - cached snapshots are exactly what
+  // we want to paint now.
+  const res = await fetchJson(`/api/setter/thread?id=${encodeURIComponent(row.id)}`, { _retries: 1 });
+  if (!res.ok || !res.data || !Array.isArray(res.data.thread)) return;
   const fresh = res.data.thread;
-  if (threadKey(fresh) === threadKey(row.thread)) return;
-  row.thread = fresh;
-  [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
-    const r = (list || []).find((x) => String(x.id) === String(row.id));
-    if (r) r.thread = fresh;
-  });
-  if (String(selectedRowId) === String(row.id)) renderDetail(row);
+  // A stale cached answer means a live re-hydrate is running server-side:
+  // poll once more shortly to pick up whatever it wrote. One re-poll only.
+  if (res.data.stale && !isRepoll) {
+    setTimeout(() => refreshThreadFor(row, true), 4000);
+  }
+  if (fresh.length && threadKey(fresh) !== threadKey(row.thread)) {
+    row.thread = fresh;
+    [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
+      const r = (list || []).find((x) => String(x.id) === String(row.id));
+      if (r) r.thread = fresh;
+    });
+    if (String(selectedRowId) === String(row.id)) renderDetail(row);
+  }
 }
 
 document.addEventListener("click", (e) => {

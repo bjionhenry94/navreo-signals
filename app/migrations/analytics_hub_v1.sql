@@ -16,7 +16,7 @@
 --   meetings_monthly  distinct booked leads this vs previous calendar month +
 --                     top booking campaign (meetings def identical to
 --                     perf_daily_series_v2: one per lead, dated by FIRST
---                     Call Booked / Meeting Request reply)
+--                     Call Booked reply — Call Booked ONLY, 2026-07-30)
 --   campaign_clients  campaign id -> client label, for client-side filtering
 --                     of scorecard-driven widgets
 -- Client attribution: workspace when not 'navreo', else name keyword
@@ -60,10 +60,12 @@ rep as (
 ),
 mtg_base as (
   -- unbounded on purpose: a lead who booked before the window must not recount
+  -- Call Booked ONLY (owner ruling 2026-07-30): a Meeting Request is not a
+  -- meeting until the call is actually booked.
   select r.smartlead_campaign_id::text as cid, r.email,
          (min(r.replied_at) at time zone 'utc')::date as d
   from replies r
-  where r.category in ('Call Booked','Meeting Request')
+  where r.category = 'Call Booked'
   group by 1,2
 ),
 mtg as (

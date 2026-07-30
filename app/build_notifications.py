@@ -122,14 +122,15 @@ LOW_RUNWAY_FLOOR = 2     # expected remaining positives below this = drained:
                          # never rescue a campaign with nothing left to win
 
 POSITIVE_CATEGORIES = {"Interested", "Call Booked", "Meeting Request", "Information Request"}
-# Meetings are a SUBSET of positives (both categories are also in
+# Meetings are a SUBSET of positives (Call Booked is also in
 # POSITIVE_CATEGORIES above) - counted separately for Section 7's structured
 # variants table so a CSM can see "how many of these positives were a booked
 # meeting" per variant. Never counted as extra on top of positives; capped at
 # each bucket's own positives count after reconcile_positives runs (see
 # reconcile_positives' docstring - the same "never exceed the campaign-level
-# count" rule applies one level down).
-MEETING_CATEGORIES = {"Call Booked", "Meeting Request"}
+# count" rule applies one level down). Call Booked ONLY (owner ruling
+# 2026-07-30): a Meeting Request is not a meeting until the call is booked.
+MEETING_CATEGORIES = {"Call Booked"}
 
 TABLE = "optimiser_notifications"
 APP_DIR = Path(__file__).resolve().parent

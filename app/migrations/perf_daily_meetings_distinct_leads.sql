@@ -1,7 +1,9 @@
--- Meetings/day = distinct booked LEADS, dated by their FIRST Call Booked /
--- Meeting Request reply — one per person. The old series counted reply ROWS
--- per day, so a chatty thread (one person, five CB/MR replies) plotted as
--- five meetings and never reconciled with the cockpit's meetings tile.
+-- Meetings/day = distinct booked LEADS, dated by their FIRST Call Booked
+-- reply — one per person, Call Booked ONLY (owner ruling 2026-07-30: a
+-- Meeting Request is not a meeting until the call is actually booked). The
+-- old series counted reply ROWS per day, so a chatty thread (one person,
+-- five booked replies) plotted as five meetings and never reconciled with
+-- the cockpit's meetings tile.
 -- The inner group-by is deliberately UNBOUNDED by the window: a lead who
 -- booked before p_start and replied again inside the window must not recount.
 -- Signature and return shape unchanged; rep keeps positives/replies_all.
@@ -28,10 +30,12 @@ AS $function$
       and (p_campaign is null or smartlead_campaign_id::text = p_campaign)
     group by 1),
   mtg as (
+    -- Call Booked ONLY (owner ruling 2026-07-30): a Meeting Request is not a
+    -- meeting until the call is actually booked.
     select b.d, count(*) n from (
       select (min(replied_at) at time zone 'utc')::date d
       from replies
-      where category in ('Call Booked','Meeting Request')
+      where category = 'Call Booked'
         and (p_campaign is null or smartlead_campaign_id::text = p_campaign)
       group by smartlead_campaign_id, email) b
     where b.d between p_start and p_end
