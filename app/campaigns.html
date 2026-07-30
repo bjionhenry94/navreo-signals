@@ -1159,20 +1159,21 @@
   .gv-info > summary::-webkit-details-marker { display: none; }
   .gv-info[open] { display: block; margin-top: 8px; }
   .gv-info p { margin: 0; font-size: 0.78rem; color: var(--fg-subtle); line-height: 1.5; max-width: 68ch; }
-  .gv-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.74rem; font-weight: 700; padding: 4px 11px; border-radius: 999px; margin-top: 12px; }
+  .gv-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.74rem; font-weight: 700; padding: 4px 11px; border-radius: 999px; margin-top: 16px; }
   .gv-pill::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
   .gv-pill.gv-good { background: var(--success-bg); color: var(--success); }
   .gv-pill.gv-avg { background: var(--warning-bg); color: var(--warning); }
   .gv-pill.gv-bad { background: var(--danger-bg); color: var(--danger); }
   .gv-pill.gv-neutral { background: var(--sunken); color: var(--fg-subtle); }
-  .gv-word { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.6rem, 3.4vw, 2.1rem); letter-spacing: -0.02em; line-height: 1; margin: 12px 0 3px; }
+  /* .gv-card scope beats the global `.cockpit p { margin:0 }` reset so the verdict keeps its breathing room */
+  .gv-card .gv-word { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.6rem, 3.4vw, 2.1rem); letter-spacing: -0.02em; line-height: 1.05; margin: 18px 0 9px; }
   .gv-word.gv-good { color: var(--success); }
   .gv-word.gv-avg { color: var(--warning); }
   .gv-word.gv-bad { color: var(--danger); }
   .gv-word.gv-neutral { color: var(--fg); }
   .gv-sub { font-size: 0.98rem; color: var(--fg-muted); margin: 0; }
   .gv-sub b { color: inherit; font-family: var(--font-display); font-weight: 400; }
-  .gv-quad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; align-items: end; margin-top: 18px; }
+  .gv-quad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; align-items: end; margin-top: 26px; }
   .gv-n { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.9rem, 4.2vw, 2.5rem); letter-spacing: -0.02em; line-height: 1; color: var(--fg); }
   .gv-n.gv-good { color: var(--success); }
   .gv-n.gv-avg { color: var(--warning); }
@@ -3470,7 +3471,7 @@
        Meetings), and the audience split (completed / in progress / not started)
        hydrated async into #ovm-status from the campaign-detail payload. */
     var gSpp = st.positives ? Math.round(st.sent / st.positives) : null;
-    var gPosPct = (st.positives != null && st.sent) ? pct(st.positives, st.sent, 1) : null;
+    var gPosPct = (st.positives && st.replied) ? pct(st.positives, st.replied, 1) : null;
     var gClass, gWord, gPill, gSub;
     if (!st.sent) {
       gClass = "gv-neutral"; gWord = "Not sending yet."; gPill = "Draft";
@@ -3978,8 +3979,7 @@
         var aCompPct = aTot ? Math.round(100 * aDone / aTot) : 0;
         ov.innerHTML = '<div class="gv-audh"><span>Who we\'re working &mdash; <b class="tnum">' + fmtInt(aTot) + '</b> people</span><span><b class="tnum">' + aCompPct + '%</b> completed</span></div>' +
           '<div class="gv-stack">' + aSeg(aDone, A_DONE) + aSeg(aProg, A_PROG) + aSeg(aNot, A_NOT) + aSeg(aBlk, A_BLK) + "</div>" +
-          '<div class="gv-legend">' + aLeg(aDone, A_DONE, "Completed") + aLeg(aProg, A_PROG, "In progress") + aLeg(aNot, A_NOT, "Not started") + aLeg(aBlk, A_BLK, "Blocked") + "</div>" +
-          (aPlat != null && aPlat !== aSeqd ? '<p class="gv-note">Smartlead holds ' + fmtInt(aPlat) + " leads; " + fmtInt(aSeqd) + " have entered the sequence &mdash; a different counter, not a contradiction.</p>" : "");
+          '<div class="gv-legend">' + aLeg(aDone, A_DONE, "Completed") + aLeg(aProg, A_PROG, "In progress") + aLeg(aNot, A_NOT, "Not started") + aLeg(aBlk, A_BLK, "Blocked") + "</div>";
       }
       /* sources */
       var sr = document.getElementById("sources-root");
