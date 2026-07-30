@@ -1042,6 +1042,7 @@
     color: var(--fg-muted);
   }
   .back-link:hover { color: var(--fg); }
+  .campaign-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .campaign-header-main {
     display: flex;
     flex-wrap: wrap;
@@ -3174,7 +3175,7 @@
       "</details>";
     return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
       '<span class="action-num" aria-hidden="true">' + (i + 1) + "</span>" +
-      '<div class="action-body"><div class="action-top">' + badge + ' <span class="owner-chip">' + esc(p.owner || "Lilly") + "</span>" +
+      '<div class="action-body"><div class="action-top">' + badge +
       '<span class="assignee-tag" hidden></span>' +
       '<a class="opt-smartlead" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead ' + EXT_ICON + "</a></div>" +
       '<p class="action-how">' + esc(p.act) + "</p>" +
@@ -3434,7 +3435,13 @@
     var bouncePct = pct(st.bounced, st.sent, 1);
     var h = [];
     h.push('<article class="campaign-page" data-cid="' + esc(c.id) + '">');
-    h.push('<a href="#/" class="back-link">&larr; Campaigns</a>');
+    /* Top bar: back-link left, "Open in Smartlead" pinned top-right above the
+       title (Bjion, 31 Jul 2026). Status ("Active") moved into the subtitle;
+       "Runs in Smartlead" dropped. */
+    h.push('<div class="campaign-topbar">' +
+      '<a href="#/" class="back-link">&larr; Campaigns</a>' +
+      '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a>' +
+      "</div>");
     var dial = "";
     if (st.completion != null) {
       var compPct = Math.max(0, Math.min(100, st.completion));
@@ -3445,13 +3452,12 @@
         '<circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="' + DIAL_C + '" stroke-dashoffset="' + (DIAL_C * (1 - compPct / 100)).toFixed(1) + '" transform="rotate(-90 32 32)"/>' +
         '</svg><span class="dial-value tnum">' + compPct.toFixed(0) + "%</span></div></div>";
     }
+    var slStatus = c.slStatus ? String(c.slStatus) : "";
+    if (slStatus) slStatus = slStatus.charAt(0).toUpperCase() + slStatus.slice(1).toLowerCase();
     h.push('<div class="campaign-header-main">' + dial + '<div>' +
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
-      '<p class="campaign-subtitle">Navreo &middot; campaign ' + esc(c.id) + "</p></div>" +
-      '<div class="campaign-header-right">' +
-      '<div class="campaign-run-row"><span class="campaign-run-status">Runs in Smartlead' + (c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "") + "</span>" +
-      '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a>' +
-      "</div></div></div>");
+      '<p class="campaign-subtitle">Navreo' + (slStatus ? " &middot; " + esc(slStatus) : "") + " &middot; campaign " + esc(c.id) + "</p></div>" +
+      "</div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
       '<a href="#/c/' + esc(c.id) + '/messaging" class="campaign-tab' + (tab === "messaging" ? " is-active" : "") + '" data-tab="messaging">Messaging</a>' +
@@ -3506,17 +3512,8 @@
       "</div>" +
       '<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>' +
       "</div>");
-    /* Insights — ONLY the visualised widget insights (nvzCard), no prose. If a
-       campaign has none, the whole section is omitted (Bjion, 31 Jul 2026): he
-       only wants the widgets, never a text-only "whole picture" write-up. */
-    if (c.others && c.others.length) {
-      h.push('<div class="ov-card"><div class="card-title">Insights</div>' +
-        '<div class="campaign-widget-grid">');
-      c.others.forEach(function (r) {
-        h.push(nvzCard(r, KIND_LABEL[r.insight_key] || r.insight_key));
-      });
-      h.push("</div></div>");
-    }
+    /* Insights section removed entirely (Bjion, 31 Jul 2026): the Suggested
+       actions below usually mirror the insights, so it was redundant. */
     /* actions */
     var acts = c.insights.filter(function (r) { return (r.payload || {}).act; });
     if (acts.length) {
@@ -3528,8 +3525,7 @@
       });
       h.push("</div></div>");
     }
-    h.push('<div class="ov-card" id="receipts-card" hidden><div class="card-title">Warm replies, receipts</div><div class="receipts-list" id="receipts-list"></div>' +
-      '<p class="sample-footer">The five most recent positive replies, live from the reply archive. Emails and links redacted.</p></div>');
+    /* Warm replies / receipts section removed (Bjion, 31 Jul 2026): not required. */
     h.push("</div>");
 
     /* messaging */
