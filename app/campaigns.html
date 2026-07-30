@@ -3506,22 +3506,17 @@
       "</div>" +
       '<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>' +
       "</div>");
-    h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
-    if (c.teaser) h.push('<p class="wp-headline">' + esc(c.teaser) + "</p>");
-    if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The glance numbers above are campaign lifetime: a different counter, not a contradiction.</p>");
-    if (c.drifted) h.push('<p class="footnote-line">Written at the morning crunch; the numbers above come from the newer Smartlead sync and have moved since.</p>');
-    if (c.others.length) {
-      h.push('<div class="campaign-widget-grid">');
+    /* Insights — ONLY the visualised widget insights (nvzCard), no prose. If a
+       campaign has none, the whole section is omitted (Bjion, 31 Jul 2026): he
+       only wants the widgets, never a text-only "whole picture" write-up. */
+    if (c.others && c.others.length) {
+      h.push('<div class="ov-card"><div class="card-title">Insights</div>' +
+        '<div class="campaign-widget-grid">');
       c.others.forEach(function (r) {
         h.push(nvzCard(r, KIND_LABEL[r.insight_key] || r.insight_key));
       });
-      h.push("</div>");
-    } else {
-      h.push('<p class="card-subtitle">' + ((c.ghost || c.reviewed === false)
-        ? "Lilly has not written this campaign up yet, so there is no verdict and there are no flags. The numbers above are the real ones from the daily Smartlead sync."
-        : "No open flags beyond the verdict. That is the whole picture.") + "</p>");
+      h.push("</div></div>");
     }
-    h.push("</div>");
     /* actions */
     var acts = c.insights.filter(function (r) { return (r.payload || {}).act; });
     if (acts.length) {
