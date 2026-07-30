@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Optimisation cockpit · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  @font-face{
+    font-family:"Acid Grotesk";
+    src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight:400; font-style:normal; font-display:swap;
+  }
+  :root{
+    --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+    --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-400:#A89684;
+    --cream:#F9F0E7;
+    --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF; --line:#ECECEA; --line-2:#DDDDDA;
+    --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+    --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+    --red:#C2371F;   --red-bg:#F7DCD5;   --red-line:#EFC7BB;
+    --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+    --font-display:"Acid Grotesk","DM Sans",sans-serif;
+    --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+    --radius:14px; --focus:0 0 0 3px rgba(255,77,0,.32);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:var(--font-sans); background:var(--bg); color:var(--ink);
+    line-height:1.5; letter-spacing:-.015em; -webkit-font-smoothing:antialiased;
+  }
+  .tnum{font-variant-numeric:tabular-nums}
+  .wrap{max-width:940px; margin:0 auto; padding:32px clamp(18px,4vw,40px) 96px}
+
+  /* ── dashboard header ─────────────────────────────── */
+  .eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--orange-700)}
+  .head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:10px 0 4px}
+  h1{font-family:var(--font-display);font-weight:400;font-size:30px;letter-spacing:-.03em;line-height:1.1}
+  .head-sub{font-size:13px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .pill{font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:6px}
+  .pill .dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+  .pill.g{background:var(--green-bg);color:#195C3F}
+  .pill.n{background:#F2F2F0;color:var(--ink-2)}
+  a.slink{color:var(--ink-3);text-decoration:none;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--line-2)}
+  a.slink:hover{color:var(--ink)}
+
+  /* ── the pinned reminder (sticky, on every tab) ──── */
+  .pinwrap{position:sticky;top:0;z-index:40;padding-top:14px;background:linear-gradient(var(--bg) 72%,rgba(255,255,255,0))}
+  .pin{
+    border:1px solid var(--orange-100); border-left:4px solid var(--orange);
+    background:linear-gradient(180deg,#FFF9F5,#FFFFFF);
+    border-radius:var(--radius); padding:18px 20px;
+    box-shadow:0 8px 24px rgba(255,77,0,.07);
+  }
+  .pin.done{border-color:var(--green-line);border-left-color:var(--green);background:linear-gradient(180deg,#F3FAF6,#fff);box-shadow:none}
+  .pin-top{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .pin-kick{font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--orange-700)}
+  .pin.done .pin-kick{color:var(--green)}
+  .pin-min{margin-left:auto;background:none;border:1px solid var(--line-2);border-radius:8px;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink-3);flex:none}
+  .pin-min:hover{background:#fff;color:var(--ink)}
+  .pin-min svg{width:16px;height:16px;transition:transform .2s}
+  /* minimised: collapse to a slim one-line bar so there's room to navigate */
+  .pin.collapsed{padding:12px 20px}
+  .pin.collapsed .pin-why,.pin.collapsed .pin-proof,.pin.collapsed .pin-note,.pin.collapsed .pin-foot{display:none}
+  .pin.collapsed .pin-top{margin-bottom:4px}
+  .pin.collapsed .pin-job{font-size:14.5px;margin-top:2px}
+  .pin.collapsed .pin-min svg{transform:rotate(180deg)}
+  .pin-job{font-size:19px;font-weight:600;letter-spacing:-.02em;line-height:1.35;color:var(--ink)}
+  .pin-why{font-size:14px;color:var(--ink-2);margin-top:8px;max-width:64ch}
+  .pin-note{font-size:12.5px;color:var(--ink-3);margin-top:12px;display:flex;align-items:center;gap:8px}
+  .pin-note svg{width:14px;height:14px;flex:none;color:var(--ink-3)}
+  .pin-proof{margin-top:15px;padding-top:15px;border-top:1px solid var(--orange-100)}
+  .pin.done .pin-proof{border-top-color:var(--green-line)}
+  .pin-foot{display:flex;justify-content:flex-end;margin-top:16px}
+  /* glanceable proof: reply rate by version (unique to the pin — no repeated raw stats) */
+  .vbars{display:flex;flex-direction:column;gap:8px;max-width:480px}
+  .vbars-h{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);margin-bottom:2px}
+  .vbar{display:flex;align-items:center;gap:10px;font-size:12.5px}
+  .vb-l{width:74px;color:var(--ink-2);font-weight:500}
+  .vb-l b{font-weight:600}
+  .vb-t{flex:1;height:9px;border-radius:999px;background:#EEE8E1;overflow:hidden}
+  .vb-f{height:100%;border-radius:999px;background:#CDBFB0;transition:width .5s cubic-bezier(.2,.8,.3,1)}
+  .vb-f.win{background:var(--green)}
+  .vb-v{width:64px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-3);font-weight:500}
+
+  .btn{
+    border:1px solid var(--line-2);background:transparent;color:var(--ink);
+    border-radius:999px;padding:11px 20px;font:600 14px var(--font-sans);letter-spacing:-.005em;
+    cursor:pointer;display:inline-flex;align-items:center;gap:8px;white-space:nowrap;
+  }
+  .btn:hover{background:var(--bg-sunken)}
+  .btn:focus-visible{outline:none;box-shadow:var(--focus)}
+  .btn svg{width:16px;height:16px;flex:none}
+  .btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
+  .btn.primary:hover{background:var(--orange-600)}
+  .btn.done{background:var(--green);border-color:var(--green);color:#fff;cursor:default}
+  .btn.done:hover{background:var(--green)}
+
+  /* ── tabs ─────────────────────────────────────────── */
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:22px 0 20px}
+  .tab{background:none;border:none;font:600 14px var(--font-sans);color:var(--ink-3);
+       padding:11px 16px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab:hover{color:var(--ink-2)}
+  .tab.on{color:var(--orange-700);border-bottom-color:var(--orange)}
+  .tab .c{opacity:.5;font-weight:500}
+
+  /* ── cards / content ──────────────────────────────── */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:18px}
+  .card-title{font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .card-sub{font-size:13px;color:var(--ink-3);margin-top:4px}
+  .glance{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
+  @media(max-width:680px){.glance{grid-template-columns:repeat(2,1fr)}}
+  .tile{border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+  .tile .lab{font-size:12px;color:var(--ink-3);font-weight:500}
+  .tile .num{font-family:var(--font-display);font-size:30px;line-height:1;margin-top:10px}
+  .tile .num.bad{color:var(--red)}
+  .tile .hint{font-size:11.5px;color:var(--ink-3);margin-top:7px}
+  .plain{background:var(--bg-sunken);border-radius:12px;padding:16px 18px;margin-top:18px;font-size:14px;color:var(--ink-2);line-height:1.6}
+  .plain b{color:var(--ink);font-weight:600}
+
+  table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+  .tbl th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);padding:10px 12px;border-bottom:1px solid var(--line)}
+  .tbl td{padding:12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl tr.win td{background:#F3FAF6}
+  .verb{font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px}
+  .verb.keep{background:var(--green-bg);color:#195C3F}
+  .verb.pause{background:#F2F2F0;color:var(--ink-2)}
+  .lead-name{font-weight:600}
+  .lead-sub{font-size:12px;color:var(--ink-3)}
+  .st{font-size:11.5px;font-weight:500;padding:2px 9px;border-radius:999px}
+  .st.sent{background:var(--green-bg);color:#195C3F}
+  .st.wait{background:#F2F2F0;color:var(--ink-2)}
+
+  /* messaging: version performance footnotes + read-only sequence viewer */
+  .foot{font-size:12px;color:var(--ink-3);margin-top:12px;line-height:1.55}
+  .seq{display:flex;flex-direction:column;gap:14px;margin-top:16px}
+  .seq-step{border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:var(--bg-sunken)}
+  .seq-h{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+  .seq-step-n{font-weight:600;font-size:14px}
+  .seq-pills{display:flex;gap:5px;margin-left:auto}
+  .vpill{font-size:11px;font-weight:600;padding:3px 11px;border-radius:999px;background:#EFEAE4;color:var(--ink-3);border:none;cursor:pointer;font-family:inherit}
+  .vpill:hover{background:#E4DBD0;color:var(--ink-2)}
+  .vpill.on{background:var(--ink);color:var(--cream)}
+  .vpill.win{box-shadow:inset 0 0 0 1.5px var(--green)}
+  .vpill.win.on{box-shadow:none}
+  .win-tag{font-size:11px;font-weight:600;color:var(--green);display:inline-flex;align-items:center;gap:5px}
+  .win-tag::before{content:"";width:6px;height:6px;border-radius:999px;background:var(--green)}
+  .v-copy.hidden{display:none}
+  .seq-subj{font-size:13.5px;margin-bottom:10px;color:var(--ink-2)}
+  .seq-body{font-size:13.5px;color:var(--ink-2);line-height:1.7;background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .var{font-family:var(--font-mono);font-size:12px;background:#EFEAE4;border-radius:5px;padding:1px 6px;color:var(--ink-2)}
+  .hidden{display:none}
+  /* toast */
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(90px);
+    background:var(--ink);color:var(--cream);font-size:13px;font-weight:500;padding:12px 20px;
+    border-radius:999px;transition:transform .28s cubic-bezier(.2,.9,.3,1.2);z-index:90;box-shadow:0 10px 30px rgba(20,17,14,.25)}
+  .toast.on{transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<div id="app"><div class="wrap" style="padding-top:60px"><p class="card-sub">Loading the optimisation…</p></div></div>
+<script>
+
+const $ = (id)=>document.getElementById(id);
+const esc = (s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = (n)=> (n==null||isNaN(n))?"—":Number(n).toLocaleString();
+const ratio = (sent,rep)=> rep>0 ? ("1 in "+Math.round(sent/rep).toLocaleString()) : "—";
+const qp = new URLSearchParams(location.search);
+const CID = qp.get("c"); const NID = qp.get("nid");
+
+function pickPrimary(rows){
+  if(NID){ const m=rows.find(r=>String(r.id)===String(NID)); if(m) return m; }
+  const rank = {High:3, Medium:2, Low:1};
+  const actionable = rows.filter(r=> (r.finding_type||"")!=="performing");
+  const pool = actionable.length?actionable:rows;
+  // prefer a row that carries per-variant data, then priority, then newest
+  return pool.slice().sort((a,b)=>{
+    const av=(a.variants&&a.variants.length)?1:0, bv=(b.variants&&b.variants.length)?1:0;
+    if(av!==bv) return bv-av;
+    const ap=rank[a.priority]||0, bp=rank[b.priority]||0;
+    if(ap!==bp) return bp-ap;
+    return String(b.created_at||"").localeCompare(String(a.created_at||""));
+  })[0];
+}
+
+function cleanWhy(detail){
+  // drop the header line + "Priority:" line, keep the bullet sentences as plain prose
+  const lines=(detail||"").split(/\n+/).map(s=>s.trim()).filter(Boolean)
+     .filter(l=>!/^priority:/i.test(l) && !/\|\s*[\d,]+\s+sent/i.test(l));
+  const bullets=lines.filter(l=>l.startsWith("-")).map(l=>l.replace(/^-\s*/,""));
+  const txt=(bullets.length?bullets:lines).join(" ");
+  return esc(txt);
+}
+
+function barsFrom(variants){
+  const vs=(variants||[]).map(v=>({label:v.angle||"", rate: v.sent>0? v.replies/v.sent:0,
+     sent:v.sent, rep:v.replies, win:(v.flags||[]).includes("winner")}))
+     .filter(v=>v.sent>0).sort((a,b)=>b.rate-a.rate).slice(0,3);
+  if(!vs.length) return "";
+  const max=vs[0].rate||1;
+  const shortLabel=(a,i)=>{ const s=(a||"").split("/")[0].trim(); return s? s.slice(0,26) : ("Version "+String.fromCharCode(65+i)); };
+  const rows=vs.map((v,i)=>`<div class="vbar"><span class="vb-l">${v.win?("<b>"+esc(shortLabel(v.label,i))+"</b>"):esc(shortLabel(v.label,i))}</span>`
+     +`<div class="vb-t"><div class="vb-f${v.win?" win":""}" style="width:${Math.max(8,Math.round(v.rate/max*100))}%"></div></div>`
+     +`<span class="vb-v">${esc(ratio(v.sent,v.rep))}</span></div>`).join("");
+  return `<div class="pin-proof"><div class="vbars"><div class="vbars-h">Which version is winning · reply rate · higher = better</div>${rows}</div></div>`;
+}
+
+function messagingTable(variants){
+  if(!(variants&&variants.length)) return `<p class="card-sub" style="margin-top:14px">No per-version breakdown yet for this campaign.</p>`;
+  const rows=variants.map(v=>{
+    const win=(v.flags||[]).includes("winner");
+    const label=(v.angle||"").split("/")[0].trim().slice(0,30) || ("Email "+(v.email||""));
+    return `<tr class="${win?"win":""}"><td>Email ${esc(v.email)}</td>`
+      +`<td>${win?("<b>"+esc(label)+"</b> · winner"):esc(label)}</td>`
+      +`<td class="tnum">${fmt(v.sent)}</td><td class="tnum">${fmt(v.replies)}</td>`
+      +`<td class="tnum">${fmt(v.positives!=null?v.positives:(v.pos||0))}</td>`
+      +`<td class="tnum">${esc(ratio(v.sent,v.replies))}</td></tr>`;
+  }).join("");
+  return `<table class="tbl" style="margin-top:16px"><thead><tr><th>Email</th><th>Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>1 per</th></tr></thead><tbody>${rows}</tbody></table>`
+    +`<p class="foot">Reply frequency shown as "1 per N" — lower is better. Positives = Smartlead's "interested" mark.</p>`;
+}
+
+function sequenceView(variants){
+  const e1=(variants||[]).filter(v=>String(v.email)==="1").slice(0,3);
+  if(!e1.length) return "";
+  const pills=e1.map((v,i)=>`<button class="vpill${i===0?" on":""}${(v.flags||[]).includes("winner")?" win":""}" onclick="showVariant('V${i}',this)">${String.fromCharCode(65+i)}</button>`).join("");
+  const copies=e1.map((v,i)=>{
+    const parts=(v.angle||"").split("/"); const subj=(parts.shift()||"").trim(); const body=parts.join("/").trim();
+    return `<div class="v-copy${i? " hidden":""}" data-v="V${i}"><div class="seq-subj"><b>Subject:</b> ${esc(subj)||"—"}</div>`
+      +`<div class="seq-body">${esc(body)||"(full body lives in Smartlead)"}</div></div>`;
+  }).join("");
+  const wintag = e1.some(v=>(v.flags||[]).includes("winner")) ? `<span class="win-tag">winner flagged</span>`:"";
+  return `<div class="card"><div class="card-title">The sequence</div>`
+    +`<div class="card-sub">Openers from the optimiser data (truncated). Tap the pills to compare versions. Full copy lives in Smartlead.</div>`
+    +`<div class="seq"><div class="seq-step"><div class="seq-h"><span class="seq-step-n">Email 1</span>${wintag}<span class="seq-pills">${pills}</span></div>${copies}</div></div></div>`;
+}
+
+function leadsTable(leads, sent){
+  const rows=(leads||[]).slice(0,6).map(L=>{
+    const name=((L.first_name||"")+" "+(L.last_name||"")).trim()|| (L.name||"—");
+    const co=L.company_name||L.company||""; const title=L.title||L.job_title||"";
+    const st=(L.status||"Emailed"); 
+    return `<tr><td class="lead-name">${esc(name)}</td><td class="lead-sub">${esc((title?title+" · ":"")+co)}</td><td><span class="st sent">${esc(String(st).replace(/_/g," "))}</span></td></tr>`;
+  }).join("");
+  return `<div class="card"><div class="card-title">Who's in this campaign</div>`
+    +`<div class="card-sub">The live audience, straight from Smartlead. Showing the first few of ${fmt(sent)}.</div>`
+    +`<table class="tbl" style="margin-top:16px"><thead><tr><th>Name</th><th>Role &amp; company</th><th>Status</th></tr></thead>`
+    +`<tbody>${rows||'<tr><td colspan="3" class="lead-sub">Live audience loads from Smartlead.</td></tr>'}</tbody></table></div>`;
+}
+
+function render(r, leads){
+  const sent=r.sent||0, rep=r.replied||0, pos=r.positive||0, mtg=r.meetings||0;
+  const rr=(r.reply_rate!=null)? r.reply_rate : (sent? (rep/sent*100):0);
+  const job = esc((r.suggested_action||r.title||"Review this campaign")).replace(/^(\w)/,c=>c.toUpperCase());
+  const why = cleanWhy(r.detail) || `${fmt(sent)} emails, ${fmt(rep)} replies (${(+rr).toFixed(2)}%). ${esc(r.title||"")}`;
+  const bars = barsFrom(r.variants);
+  const floorHint = rr>=1 ? "above the 1% floor" : "under the 1% floor";
+  const app = `
+  <div class="wrap">
+    <div class="eyebrow">Optimisation cockpit</div>
+    <div class="head"><div>
+      <h1>${esc(r.campaign_name||("Campaign "+r.campaign_id))}</h1>
+      <div class="head-sub"><span class="pill g"><span class="dot"></span> Running</span>
+        <span>${esc(r.client||"Navreo")} · campaign <span class="tnum">${esc(r.campaign_id)}</span></span><span>·</span>
+        ${r.smartlead_url?`<a class="slink" href="${esc(r.smartlead_url)}" target="_blank" rel="noopener">Open in Smartlead ↗</a>`:""}</div>
+    </div></div>
+    <div class="pinwrap"><div class="pin" id="pin">
+      <div class="pin-top"><span class="pin-kick" id="pin-kick">You're working on this</span>
+        <button class="pin-min" onclick="togglePin()" aria-label="Minimise" title="Minimise so you have room to navigate">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button></div>
+      <div class="pin-job" id="pin-job">${job}</div>
+      <div class="pin-why">${why}</div>
+      ${bars}
+      <div class="pin-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> This is a suggestion — nothing changes until you action it in Smartlead.</div>
+      <div class="pin-foot"><button class="btn primary" id="done-btn" onclick="markDone('${esc(r.id)}')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Mark this optimisation done</button></div>
+    </div></div>
+    <nav class="tabs" role="tablist">
+      <button class="tab on" data-tab="overview" onclick="showTab('overview')">Overview</button>
+      <button class="tab" data-tab="messaging" onclick="showTab('messaging')">Messaging</button>
+      <button class="tab" data-tab="leads" onclick="showTab('leads')">Leads <span class="c tnum">(${fmt(sent)})</span></button></nav>
+    <section class="tab-panel" data-tab="overview">
+      <div class="card"><div class="card-title">The campaign so far</div>
+        <div class="card-sub">Everything this campaign has done since it started. Numbers from the daily Smartlead sync.</div>
+        <div class="glance">
+          <div class="tile"><div class="lab">Emails sent</div><div class="num tnum">${fmt(sent)}</div><div class="hint">to date</div></div>
+          <div class="tile"><div class="lab">Replies</div><div class="num tnum">${fmt(rep)}</div><div class="hint">${(+rr).toFixed(2)}% — ${floorHint}</div></div>
+          <div class="tile"><div class="lab">Positive</div><div class="num tnum${pos?"":" bad"}">${fmt(pos)}</div><div class="hint">Smartlead's interested mark</div></div>
+          <div class="tile"><div class="lab">Meetings</div><div class="num tnum">${fmt(mtg)}</div><div class="hint">booked from this campaign</div></div>
+        </div>
+        <div class="plain">${why}</div></div></section>
+    <section class="tab-panel hidden" data-tab="messaging">
+      <div class="card"><div class="card-title">Version performance</div>
+        <div class="card-sub">Every version, pulled live from Smartlead (positives = Smartlead's "interested" mark).</div>
+        ${messagingTable(r.variants)}</div>
+      ${sequenceView(r.variants)}</section>
+    <section class="tab-panel hidden" data-tab="leads">${leadsTable(leads, sent)}</section>
+  </div>
+  <div class="toast" id="toast">✓ Marked done — staged for approval</div>`;
+  return app;
+}
+
+function emptyState(msg){
+  return `<div class="wrap"><div class="eyebrow">Optimisation cockpit</div>
+    <div class="card" style="margin-top:20px"><div class="card-title">Nothing to work on here</div>
+    <div class="card-sub">${esc(msg||("No open optimisation found for campaign "+(CID||"")+". It may already be actioned, or this campaign has no flags right now."))}</div></div></div>`;
+}
+
+// ── interactions ──
+function togglePin(){ $("pin").classList.toggle("collapsed"); }
+function showTab(name){
+  document.querySelectorAll(".tab-panel").forEach(p=>p.classList.toggle("hidden", p.getAttribute("data-tab")!==name));
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on", t.getAttribute("data-tab")===name));
+}
+function showVariant(v, el){
+  const step=el.closest(".seq-step");
+  step.querySelectorAll(".vpill").forEach(p=>p.classList.toggle("on", p===el));
+  step.querySelectorAll(".v-copy").forEach(c=>c.classList.toggle("hidden", c.getAttribute("data-v")!==v));
+}
+function toast(msg){ const t=$("toast"); if(!t) return; t.textContent=msg; t.classList.add("on"); setTimeout(()=>t.classList.remove("on"),2600); }
+async function markDone(nid){
+  const pin=$("pin"), btn=$("done-btn");
+  if(pin.classList.contains("done")) return;
+  btn.disabled=true;
+  try{
+    const r=await fetch(`/api/notifications/${encodeURIComponent(nid)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"actioned"})});
+    if(!r.ok) throw new Error("bad status");
+    pin.classList.add("done"); $("pin-kick").textContent="Done — staged for approval";
+    btn.className="btn done"; btn.textContent="✓ Done"; toast("✓ Marked done — staged for approval");
+  }catch(e){ btn.disabled=false; toast("Couldn't mark done — try again"); }
+}
+
+async function boot(){
+  if(!CID && !NID){ $("app").innerHTML=emptyState("Open this page with ?c=<campaign id> (or ?nid=<optimisation id>)."); return; }
+  try{
+    const url = NID ? `/api/notifications?id=${encodeURIComponent(NID)}` : `/api/notifications?campaign_id=${encodeURIComponent(CID)}`;
+    let data = await fetch(url,{cache:"no-store"}).then(r=>r.json());
+    let rows = Array.isArray(data)?data:(data.items||data.data||data.rows||[]);
+    rows = rows.filter(r=>(r.status||"new")==="new" || NID);
+    if(!rows.length){ $("app").innerHTML=emptyState(); return; }
+    const row=pickPrimary(rows);
+    let leads=[];
+    try{ leads = await fetch(`/api/campaign-platform-leads?platform=smartlead&id=${encodeURIComponent(row.campaign_id)}&offset=0&limit=6`,{cache:"no-store"}).then(r=>r.ok?r.json():[]); }catch(e){}
+    leads = Array.isArray(leads)?leads:(leads.leads||leads.data||[]);
+    $("app").innerHTML = render(row, leads);
+  }catch(e){ $("app").innerHTML=emptyState("Couldn't load this optimisation ("+esc(e.message||e)+")."); }
+}
+boot();
+
+</script>
+</body>
+</html>
