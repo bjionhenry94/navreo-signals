@@ -173,6 +173,28 @@ def _pristine_fleet() -> dict:
             # lets the dry-run visibly move them out of the held view.
             "_saved_cap": 20,
         }
+    # Partial-hold in-warm-up case (count-truth, 2026-07-30): a healthy domain
+    # with SOME boxes held (cap 0, in warm-up) and the rest already back to
+    # sending. domainBoxes=8 (full footprint) but liveZeroCap=5 (held) — the
+    # exact split that made the In-warm-up header (Σ held) disagree with each
+    # row's "· N mbx" (footprint). Row "· N mbx", the Mailboxes column, "sends
+    # paused (N)" and the header must now ALL read 5 for this domain.
+    for k in range(8):
+        _held = k < 5
+        email = f"ph{k}@partialhold-mock.test"
+        row = {
+            "email": email, "domain": "partialhold-mock.test", "brand": "navreo",
+            "batch": "Navreo Mock", "from_name": "Bjion Henry",
+            "created": _days_ago(12), "tagged": True, "inCampaign": True,
+            "campaign_id": _CAMPAIGN_IDS[0],
+            "sig_state": "ok", "sig_issue": None,
+            "warmup_state": "ok", "warmup_issue": None,
+            "cap": 0 if _held else 35,
+            "email_account_id": 2300 + k, "tag_ids": {1},
+        }
+        if _held:
+            row["_saved_cap"] = 20
+        fleet[email] = row
     _CONN_REASONS = ["SMTP auth failed", "IMAP connection refused", "OAuth token expired"]
     for k in range(3):
         email = f"broken{k}@clearpath-mail.com"

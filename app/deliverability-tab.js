@@ -4294,13 +4294,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     else doms.sort((a, b) => groups.get(b).length - groups.get(a).length || a.localeCompare(b));
     const selectable = flow !== "inwarmup";
     const truncNote = flowTruncated(flow) ? " · mailbox detail limited to the first 2,000 (every domain still listed)" : "";
-    // Mailbox total from the census for the In-warm-up flow — the rendered
-    // row count (all.length) under-counts when the views truncate (said
-    // "2,769" while 3,411 boxes were actually held, tester panel finding).
-    const _cLz = (flow === "inwarmup" && isLive()) ? (bundleData() || {}).liveZeroCap : null;
-    const mbxTotal = _cLz
-      ? doms.reduce((s, d) => s + (_cLz[String(d).toLowerCase()] != null ? _cLz[String(d).toLowerCase()] : groups.get(d).filter((r) => !r._censusOnly).length), 0)
-      : all.length;
+    // ── ONE per-domain mailbox count (count-truth, 2026-07-30) ──────────────
+    // The row's "· N mbx", the header total, the caption, and the in-warm-up
+    // "sends paused (N)" tag ALL read the same per-domain number, so the eye's
+    // sum of the rows can never disagree with the header. Each box tab counts
+    // the mailboxes IT is about on a domain:
+    //   • in-warm-up → HELD (cap-0) boxes, census-complete via liveZeroCap so a
+    //     truncated view can't undercount. (Was: the header summed liveZeroCap
+    //     while each row showed domainBoxes = the full footprint — so 30 rows of
+    //     "52 mbx" sat over a "1262 mailbox(es)" header. Now both are held.)
+    //   • not-warming / reconnect → the boxes actually rendered in this domain's
+    //     group (the subset the tab surfaces), never the full-domain footprint.
+    const _lzAll = isLive() ? (bundleData() || {}).liveZeroCap : null;
+    const renderedBoxes = (rs) => rs.filter((r) => !r._censusOnly).length || rs.length;
+    const heldBoxes = (dom, rs) => {
+      const k = String(dom).toLowerCase();
+      if (_lzAll && _lzAll[k] != null) return _lzAll[k];
+      return rs.filter((r) => r.cap === 0 || r.rested).length || renderedBoxes(rs);
+    };
+    const boxesFor = (dom, rs) => flow === "inwarmup" ? heldBoxes(dom, rs) : renderedBoxes(rs);
+    const mbxTotal = doms.reduce((s, d) => s + boxesFor(d, groups.get(d)), 0);
     // The excluded Maildoso fleet is named, never silently missing: 600 boxes
     // vanishing from "Not warming" with no explanation reads as data loss.
     let mdNote = "";
@@ -4365,10 +4378,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const ck = selectable ? `<td class="ck">${selKeys.length ? `<input type="checkbox" ${allSel ? "checked" : ""} data-act="mgr-dom-select" data-domain="${esc(dom)}" title="Select all ${selKeys.length} mailboxes on ${esc(dom)}">` : ""}</td>` : "";
       const maildoso = rows.some((r) => r.maildoso);
       const cliWs = (rows.find(isClientRow) || {}).workspace;
-      // Header count from the full-fleet census when it knows the domain —
-      // the view rows truncate at 2,000, so rows.length under-counts big
-      // domains ("· 5 mbx" beside "sends paused (52)", tester panel finding).
-      const _domBoxes = (isLive() && ((bundleData() || {}).domainBoxes || {})[String(dom).toLowerCase()]) || rows.filter((r) => !r._censusOnly).length || rows.length;
+      // "· N mbx" = the count THIS tab is about on the domain (held for
+      // in-warm-up, rendered subset otherwise) — the SAME source as the header
+      // total and, in-warm-up, the "sends paused (N)" tag (count-truth).
+      const _domBoxes = boxesFor(dom, rows);
       const name = `<td><div class="dlv-mb-email">${caret}${esc(dom)} <span class="dlv-mb-dom">· ${_domBoxes} mbx</span>${maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : ""}${rows.some((r) => r.instantly) ? ` <span class="dlv-tag md" title="These boxes live in the Instantly workspace">Instantly</span>` : ""}${cliWs ? ` <span class="dlv-tag md" title="Client workspace — synced nightly from its own Smartlead">${esc(cliWs)}</span>` : ""}</div></td>`;
       let mid = "", action = "";
       if (flow === "notwarming") {
@@ -4390,13 +4403,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         // "warming" with no hold tag and a dead grey "warming" action (read as
         // broken / not-actionable), while a rested domain showed
         // "sends paused (N)" + Restore for the SAME real state.
-        // Live cap-0 truth wins over the cached (2,000-row-truncated) backend
-        // views — the frozen view count is what painted "sends paused (14)"
-        // on domains whose 52 boxes were all back at 2/day.
-        const _lzMap = isLive() ? (bundleData() || {}).liveZeroCap : null;
-        const _lzKey = String(dom).toLowerCase();
-        const heldN = (_lzMap && _lzMap[_lzKey] != null) ? _lzMap[_lzKey]
-          : (rows.filter((r) => r.cap === 0 || r.rested).length || rows.length);
+        // Held count = the SAME census-first source as "· N mbx" and the header,
+        // so the row's "sends paused (N)", its Mailboxes column, its "· N mbx"
+        // and the header total are one number (count-truth). Census (liveZeroCap)
+        // wins over truncated view rows.
+        const heldN = heldBoxes(dom, rows);
         const isMaildoso = rows.some((r) => r.maildoso);
         const led = domDue(dom, rows); // real ledger/rest due-back, if any
         const isDueNow = dueSet.has(String(dom).toLowerCase());
@@ -4423,10 +4434,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
             ? ``
             : `<span class="dlv-tag md" title="Warm-up is running underneath — only cold sends are held">warming</span> `;
         const heldTag = `<span class="dlv-tag inactive" title="Send cap is 0 — no cold sends go out while it warms">sends paused (${heldN})</span>`;
-        // ONE number per row: the census count (same source as the badge and
-        // the "· N mbx" header) — the rendered-row count showed "1" on a
-        // synthesized row and "47" beside "(52)" on truncated ones.
-        mid = `<td style="text-align:right">${(_lzMap && _lzMap[_lzKey] != null) ? _lzMap[_lzKey] : rows.filter((r) => !r._censusOnly).length || rows.length}</td><td style="text-align:right">${dueCell}</td>
+        // ONE number per row: the Mailboxes column, the "· N mbx" header and
+        // "sends paused (N)" are all heldN (count-truth) — no more "47" beside
+        // "(52)" or a synthesized "1".
+        mid = `<td style="text-align:right">${heldN}</td><td style="text-align:right">${dueCell}</td>
           <td>${warmTag}${heldTag}</td>`;
         // Every held row is restorable (continuity), but only a DUE-NOW row gets
         // the primary/act-now emphasis — not-yet-due and Maildoso rows get a
