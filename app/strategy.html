@@ -316,8 +316,11 @@
   }
   /* ---- rest row: name + hero number + state dot, ONE line — everything
      else (who/offer/why/splits/tag/full status) moves into .im-detail,
-     summoned by the chevron, one card open at a time. The dot vocabulary
-     is declared once in a tiny legend above the list, then trusted here. ---- */
+     summoned by the chevron, one card open at a time.
+     NOTE (2026-07-28): the four IDEA cards no longer use this row — they are
+     laid out as pipeline-stepper rows (.im-head/.im-now/.im-count/.im-track,
+     see the lab-style block at the end of the file). The shelf entries and the
+     validation card still use it, so it stays exactly as it was. ---- */
   .idea-mini .im-rest-row {
     display: flex;
     align-items: center;
@@ -431,16 +434,11 @@
     white-space: nowrap;
     margin: 0 0 8px;
   }
-  /* fix A: the same quiet ink-on-sunken pill, docked under the rest row so
-     the priority cue (Recommended/Cheapest per lead/Warmest/Biggest clean
-     pool) reads at rest — never only after the card is expanded.
-     fix (pill/bar collision): explicit bottom margin — the base .im-tag
-     rule's own bottom margin got zeroed out by this override's shorthand,
-     which is exactly what let the pill sit flush against the progress bar
-     below it with nothing keeping them apart. */
-  .idea-mini .im-tag.im-tag-rest {
-    margin: 6px 0 10px 29px;
-  }
+  /* fix A: the priority cue (Recommended/Cheapest per lead/Warmest/Biggest
+     clean pool) reads at rest, never only after the card is expanded. Since
+     2026-07-28 that pill rides the card's count row (.im-count, see the
+     lab-style block) instead of a docked line of its own — the old
+     .im-tag-rest override went with it. */
   .idea-mini .im-number-label {
     display: block;
     font-family: "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -485,9 +483,9 @@
      bottom regardless of the card's own padding, desktop or the 168px
      mobile chip), with its OWN bottom corners rounded to match the card's
      border-radius so it reads as part of the card, not a floating overlay.
-     This also physically separates it from the pill above (which now has
-     a real bottom margin of its own — see .im-tag-rest) so the two can
-     never touch, in any state. */
+     (Hidden since the launch-lab merge — see `.idea-mini .im-bar-track
+     {display:none}` in the lab-style block; the card's own 5-stage track
+     carries progress now. The hook and its styling are kept intact.) */
   .im-bar-track {
     position: absolute;
     left: 0;
@@ -635,7 +633,60 @@
     color: var(--muted);
     margin: 0 0 6px;
   }
-  .ws-name { font-size: 24px; margin: 0 0 22px; }
+  .ws-name { font-size: 24px; margin: 0 0 18px; }
+
+  /* ---- pipeline stepper (right pane only — the left list is untouched):
+     one row of stage pills above the panel. A pill is a VIEW control. Its
+     dot reports where the JOURNEY is (filled = done, orange = the stage the
+     work is on now, hollow = not reached), while the "is-viewing" ring
+     reports which stage is currently on screen — two separate signals on
+     purpose, so you can look ahead at a queued stage and still see where
+     the campaign actually stands. Scrolls inside itself on narrow widths so
+     the page never scrolls sideways. ---- */
+  .stage-pills {
+    /* 640 (the panel's width) + the track's own 4px gutters, pulled back by
+       the same 4px so the first pill still lines up with the panel edge. The
+       gutters exist so the global 2px/2px-offset focus ring is never clipped
+       by this scroller. */
+    max-width: 648px;
+    margin: -4px 0 16px -4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .stage-pills::-webkit-scrollbar { display: none; }
+  .stage-pills-track { display: flex; gap: 6px; width: max-content; padding: 4px; }
+  .stage-pill {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--card-line);
+    background: var(--raised);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 5px 13px 5px 10px;
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .stage-pill.st-done, .stage-pill.st-active { color: var(--ink-2); }
+  .stage-pill:hover:not([disabled]) { border-color: var(--line-2); color: var(--ink); }
+  /* focus ring comes from the page-wide button:focus-visible rule */
+  .stage-pill[disabled] { cursor: default; opacity: 0.55; }
+  .stage-pill.is-viewing {
+    background: var(--sunken);
+    border-color: var(--select-border);
+    box-shadow: var(--select-ring);
+    color: var(--ink);
+  }
+  .stage-pill .state-dot { width: 7px; height: 7px; }
+  .stage-pill-label { display: inline-block; }
+  /* the one quiet line a stage that the journey has not reached gets */
+  .panel .stage-empty { color: var(--muted); font-size: 14px; margin: 2px 0 0; }
 
   .panel { font-size: 15px; max-width: 640px; }
   .panel p { margin: 0 0 16px; }
@@ -742,16 +793,10 @@
   .disclosure-panel[hidden] { display: none; }
   @media (prefers-reduced-motion: reduce) { .disclosure-btn::before { transition: none; } }
 
-  /* state-dot legend — declared once above the list, then trusted */
-  .dot-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px 14px;
-    font-size: 10.5px;
-    color: var(--muted);
-    margin: 0 6px 14px;
-  }
-  .dot-legend .dl-item { display: inline-flex; align-items: center; gap: 5px; }
+  /* the dot-vocabulary legend that used to sit above the list is GONE
+     (2026-07-28): every card now writes its own state in plain words on its
+     status line, so a key explaining four dots is redundant — and if it needs
+     explaining, it is already too complicated. */
 
   /* sign-off / launched: the pack collapses to a stat line before the email */
   .stat-line { font-size: 14px; font-weight: 600; color: var(--ink); margin: 16px 0 14px; }
@@ -842,6 +887,107 @@
     color: var(--ink-3);
     font-weight: 700;
     margin-left: 6px;
+  }
+
+  /* "Campaign at a glance" showcase — the full idea, shown at rest at the TOP
+     of the home view (service, reachable audience, lookalike anchors, case
+     studies, the exact decision-makers we email, how we'd help, and the real
+     outreach email). Data-driven + gated in renderShowcase(); every colour
+     comes from the wizard's own tokens so it themes light/dark like the rest. */
+  .sc-showcase {
+    border: 1px solid var(--card-line);
+    background: var(--sunken);
+    border-radius: 12px;
+    padding: 16px 18px 18px;
+    margin: 0 0 22px;
+    max-width: 620px;
+  }
+  .sc-eyebrow {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  .sc-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 16px;
+  }
+  .sc-service {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--ink);
+    background: var(--raised);
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    padding: 5px 12px;
+  }
+  .sc-stat { text-align: right; margin-left: auto; }
+  .sc-stat-num { display: block; font-size: 30px; line-height: 1.05; color: var(--ink); }
+  .sc-stat-cap { display: block; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .sc-stat-note { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .sc-sect { margin: 0 0 14px; }
+  .sc-sect:last-child { margin-bottom: 0; }
+  .sc-sect-head {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+  .sc-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .sc-chip {
+    display: inline-block;
+    font-size: 11.5px;
+    line-height: 1.35;
+    color: var(--ink-2);
+    background: var(--raised);
+    border: 1px solid var(--line-2);
+    border-radius: 5px;
+    padding: 3px 8px;
+  }
+  .sc-chip-sub { color: var(--muted); font-weight: 400; }
+  .sc-chip-more { color: var(--muted); background: transparent; }
+  .sc-offer {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-2);
+  }
+  .sc-mail {
+    background: var(--mail-bg);
+    border: 1px solid var(--card-line);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--mail-frame-shadow);
+    margin-top: 4px;
+  }
+  .sc-mail-head {
+    background: var(--mail-head-bg);
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--card-line);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--mail-muted);
+  }
+  .sc-mail-body {
+    padding: 16px 14px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--mail-ink);
+  }
+  @media (max-width: 480px) {
+    .sc-stat { text-align: left; margin-left: 0; }
   }
 
   /* pre-start preview mockup */
@@ -1678,7 +1824,6 @@
   <div class="left-pane">
     <h1>Your campaigns.</h1>
     <p class="sub">Pick one to work on. The others keep building.</p>
-    <p class="dot-legend"><span class="dl-item"><span class="state-dot"></span>not started</span><span class="dl-item"><span class="state-dot is-building"></span>building</span><span class="dl-item"><span class="state-dot is-needs-you"></span>needs you</span><span class="dl-item"><span class="state-dot is-ready"></span>ready</span></p>
     <div id="idea-list" class="idea-mini-list"></div>
     <footer id="board-footer">Prototype — illustrative data. Nothing here spends money or sends email.</footer>
     <button type="button" class="theme-toggle-btn" id="theme-toggle-btn" aria-pressed="false" aria-label="Switch to dark mode">
@@ -2121,10 +2266,22 @@ IDEAS.forEach(i => {
     // approved" disclosure covering the versions recap, evidence and QA
     // ticks that used to sit inline. Closed by default so the upload hero
     // is the only thing competing for attention at rest.
-    reviewApprovedOpen: false
+    reviewApprovedOpen: false,
+    // pipeline stepper (right pane): which stage this campaign is currently
+    // LOOKING AT — 0 Targeting, 1 Copy, 2 First line, 3 Checks, 4 Live, or
+    // null for "follow the journey" (derive the screen from `phase`, exactly
+    // as the board always did). Purely a view cursor: nothing downstream —
+    // not stateLabel(), not the left list, not syncLab() — reads it, so
+    // setting it can never move a campaign forward. Reset to null whenever
+    // the campaign changes or the journey itself moves.
+    viewStage: null
   };
 });
 let activeId = null;
+// pipeline stepper: which campaign the right pane painted last, so that
+// arriving at a different campaign always opens it where its journey is
+// rather than inheriting the previous peek.
+let wsViewIdeaId = null;
 // left-list accordion: which idea card (or the validation card) has its
 // chevron open right now. Independent of activeId/selection — peeking at a
 // card's detail never changes which campaign is loaded in the workspace.
@@ -2416,13 +2573,48 @@ function stateLabel(idea, s) {
   return { text: "", cls: "" };
 }
 
+// ---- the card's 5-stage track: ONE arithmetic ------------------------------
+// The five stages, and which of them is done / active / queued, come from
+// exactly the same place the right pane's stage pills read them — WS_STAGES +
+// journeyStageIdx(s), via wsStagePillState(). Nothing here re-derives the
+// stage model. (Both live further down the file; they are only ever *called*
+// at render time, long after that block has run.)
+//
+// The fill rule, in one sentence: a finished stage is full, a queued stage is
+// empty, a stage that is BUILDING right now shows how far through its own
+// build it has got, and a stage that is WAITING ON YOU is full — its work is
+// finished, only your decision is outstanding. A launch-ready campaign is all
+// five, full, and completely still.
+function cardStageState(s, i) {
+  // launch-ready owns the whole track: nothing is in flight any more, so no
+  // segment is "active" (an active segment pulses, and a launched campaign
+  // must sit still).
+  if (s.phase >= 7) return "done";
+  return wsStagePillState(s, i);
+}
+function cardActiveFill(s) {
+  // build A (2 sub-stages) heads for Copy; build B (3) heads for Checks
+  if (s.phase === 3) return clampPct(Math.round(s.stagesDone / 2 * 100));
+  if (s.phase === 5) return clampPct(Math.round((s.stagesDone - 2) / 3 * 100));
+  return 100; // a gate: the stage's own work is done, your decision is not
+}
+function clampPct(n) { return Math.max(0, Math.min(100, n || 0)); }
+function cardStageFill(s, i) {
+  const st = cardStageState(s, i);
+  if (st === "done") return 100;
+  if (st === "queued") return 0;
+  return cardActiveFill(s);
+}
+
+// The one percentage on a card. It is the MEAN of the five segment fills the
+// track draws, so the figure can never disagree with the picture — the number
+// IS the bar. (It used to be s.stagesDone / 5, which read 100% at the sign-off
+// gate, i.e. a full-looking number beside a track with Live still empty.)
+// Callers are unchanged; this is still the board's single progress function.
 function progressPct(idea, s) {
-  if (s.phase === 7) return 100;
-  if (s.phase <= 1) return 0;
-  // 5 stages total across build A (0-1) and build B (2-4) — "Protecting"
-  // dropped (see stagesFor()) — plus gates count as fractional ticks
-  const total = 5;
-  return Math.round((s.stagesDone / total) * 100);
+  let sum = 0;
+  for (let i = 0; i < WS_STAGES.length; i++) sum += cardStageFill(s, i);
+  return Math.round(sum / WS_STAGES.length);
 }
 
 function renderList() {
@@ -2450,8 +2642,32 @@ function renderList() {
       (expanded ? " expanded" : "");
     card.setAttribute("role", "button");
     card.setAttribute("tabindex", "0");
-    card.setAttribute("aria-label", "Open " + idea.name + (needsYou ? " — needs you" : ""));
+    // the state is written in words on the card now, so the accessible name
+    // says the same words rather than a separate "needs you" shorthand
+    card.setAttribute("aria-label", "Open " + idea.name + (label.text ? " — " + label.text : ""));
     const pct = progressPct(idea, s);
+    // ---- the 5-stage track, from the same stage model the workspace's stage
+    // pills use (WS_STAGES + journeyStageIdx, via cardStageState) ----
+    const segsHtml = WS_STAGES.map((stage, i) => {
+      const st = cardStageState(s, i);
+      const w = cardStageFill(s, i);
+      // only the stage in flight carries a marker, and it overhangs the bar
+      const marker = st === "active" ? `<span class="im-seg-top"><i></i></span>` : "";
+      return `<span class="im-seg st-${st}">${marker}` +
+        `<span class="im-seg-bar"><span class="im-seg-fill" style="width:${w}%"></span></span>` +
+        `<span class="im-seg-label">${esc(stage.label)}</span></span>`;
+    }).join("");
+    const trackLabel = "Launch progress " + pct + "% — " + WS_STAGES
+      .map((stage, i) => stage.label + " " + WS_STAGE_STATE_WORD[cardStageState(s, i)]).join(", ");
+    // a per-stage figure only MEANS anything while a build is actually running:
+    // it is the pulsing segment's own fill, i.e. the same arithmetic as the
+    // picture, never a second number that could disagree with it. At a gate
+    // (waiting on you) or at rest the words carry it on their own.
+    const nowPct = building ? `<span class="im-now-pct">&middot; ${cardActiveFill(s)}%</span>` : "";
+    const nowLine = label.text
+      ? `<p class="im-now ${label.cls}"><span class="im-now-dot ${dotClassFor(label.cls)}"></span>` +
+        `<span class="im-now-text">${esc(label.text)}</span>${nowPct}</p>`
+      : "";
     // gap C: compact free-vs-paid footnote, only where the idea actually has
     // a records split (customs, ecomm) — now folded into the on-demand detail
     const provenanceHtml = idea.freeFromRecords
@@ -2462,14 +2678,17 @@ function renderList() {
       ? `<p class="im-copy-badge evidence-line">${esc(idea.copyProvenance)}</p>`
       : "";
     card.innerHTML = `
-      <div class="im-rest-row">
-        <button type="button" class="im-chevron" data-act="expand" aria-expanded="${expanded}" aria-label="${expanded ? "Hide" : "Show"} details for ${esc(idea.name)}"></button>
+      <div class="im-head">
         <p class="im-name" title="${esc(idea.name)}">${esc(idea.name)}</p>
-        <p class="im-number mono">${idea.net.toLocaleString()}</p>
-        <span class="state-dot ${dotClassFor(label.cls)}" title="${esc(label.text)}"></span>
+        <button type="button" class="im-chevron" data-act="expand" aria-expanded="${expanded}" aria-label="${expanded ? "Hide" : "Show"} details for ${esc(idea.name)}"></button>
       </div>
       <p class="im-caption">${esc(idea.caption)}</p>
-      <p class="im-tag im-tag-rest">${esc(idea.tag)}</p>
+      ${nowLine}
+      <p class="im-count"><span class="im-number mono">${idea.net.toLocaleString()}</span><span class="im-count-unit">people</span><span class="im-tag">${esc(idea.tag)}</span></p>
+      <div class="im-track" role="img" aria-label="${esc(trackLabel)}">
+        <div class="im-segs">${segsHtml}</div>
+        <span class="im-track-pct num">${pct}%</span>
+      </div>
       <div class="im-detail"${expanded ? "" : " hidden"}>
         <p class="im-number-label">${idea.net.toLocaleString()} ${esc(idea.netUnit || "people we can reach")}</p>
         <p class="im-who">${esc(idea.who)}</p>
@@ -2530,8 +2749,146 @@ function renderList() {
 
 const wsEl = document.getElementById("workspace");
 
+// ============== pipeline stepper (right pane) ==============
+// The interior of the launch-dashboard pipeline stepper, dropped into the
+// workspace: a row of stage pills across the top, then the selected stage's
+// panel below. The LEFT LIST IS UNTOUCHED by all of this.
+//
+// The single rule that makes it safe: LOOKING NEVER CHANGES STATE. A pill
+// writes exactly one field — `s.viewStage`, a view cursor nothing else reads
+// — and repaints only the workspace. Phase, stagesDone, copyPackPage,
+// uploadState, approvals and builds are moved solely by the gate buttons
+// that already lived inside the panels, exactly as before.
+const WS_STAGES = [
+  { key: "targeting", label: "Targeting" },
+  { key: "emails",    label: "Copy" },
+  { key: "opener",    label: "First line" },
+  { key: "checks",    label: "Checks" },
+  { key: "live",      label: "Live" }
+];
+const WS_STAGE_STATE_WORD = { done: "done", active: "in progress", queued: "not started yet" };
+
+// Where the JOURNEY is, as a stage index — read off `phase` alone, never off
+// what is being viewed. -1 = nothing started (phase 1). Phases 3 and 5 are
+// transitional builds with no pill of their own, so they report the stage the
+// build is heading toward (3 -> Copy, 5 -> Checks).
+function journeyStageIdx(s) {
+  if (s.phase <= 1) return -1;
+  if (s.phase === 2) return 0;
+  if (s.phase === 3) return 1;
+  if (s.phase === 4) return s.copyPackPage === 2 ? 2 : 1;
+  if (s.phase === 5) return 3;
+  if (s.phase === 6) return 3;
+  return 4;
+}
+
+// A stage only has something to show once the journey has actually produced
+// it. Everything earlier than that gets the one-line placeholder instead of a
+// renderer that would invent content (or throw) for work that hasn't happened.
+function wsStageReached(s, idx) {
+  if (idx === 0) return s.phase >= 2;                 // targeting gate opened
+  if (idx === 1 || idx === 2) return s.phase >= 4;    // build A finished, copy exists
+  if (idx === 3) return s.phase >= 6;                 // build B finished, checks exist
+  return s.phase >= 7;                                // approved and in Smartlead
+}
+
+function wsStagePillState(s, idx) {
+  const j = journeyStageIdx(s);
+  if (j < 0) return "queued";
+  if (idx < j) return "done";
+  if (idx === j) return "active";
+  return "queued";
+}
+
+// The eyebrow above the name names whatever is ON SCREEN. Reuses stepLabel()
+// with a literal stand-in for the copy-pack page so `s` is never written to.
+function wsStageEyebrow(s, idx) {
+  if ((s.phase === 3 || s.phase === 5) && idx === journeyStageIdx(s)) return stepLabel(3, s);
+  if (idx === 0) return stepLabel(2, s);
+  if (idx === 1) return stepLabel(4, { copyPackPage: 1 });
+  if (idx === 2) return stepLabel(4, { copyPackPage: 2 });
+  if (idx === 3) return stepLabel(6, s);
+  return stepLabel(7, s);
+}
+
+function wsStageNotStarted() {
+  const el = document.createElement("div");
+  el.innerHTML = `<p class="stage-empty">Not started yet</p>`;
+  return el;
+}
+
+// Maps a stage onto the renderer that already exists for it. Nothing new is
+// invented here. Note the copy pack: instead of setting s.copyPackPage to pick
+// a page (which IS journey state at phase 4 — stateLabel and the left list
+// both read it), the two page renderers are called directly, so viewing page 2
+// from page 1 writes nothing at all.
+function wsStagePanel(idea, s, idx) {
+  // a build in flight owns the stage it is heading toward — show the build,
+  // not a placeholder, because that stage is genuinely happening right now
+  if ((s.phase === 3 || s.phase === 5) && idx === journeyStageIdx(s)) return renderBuild(idea, s);
+  if (!wsStageReached(s, idx)) return wsStageNotStarted();
+  if (idx === 0) return renderTargeting(idea, s);
+  if (idx === 1) { ensureVersions(idea, s); return renderCopyPackEmailsPage(idea, s); }
+  if (idx === 2) { ensureVersions(idea, s); return renderCopyPackOpenerPage(idea, s); }
+  if (idx === 3) return renderSignoff(idea, s);
+  return renderLaunched(idea, s);
+}
+
+function renderStagePills(idea, s, viewIdx) {
+  const nav = document.createElement("nav");
+  nav.className = "stage-pills";
+  nav.setAttribute("aria-label", "Campaign stages");
+  const track = document.createElement("div");
+  track.className = "stage-pills-track";
+  const started = journeyStageIdx(s) >= 0;
+  WS_STAGES.forEach((stage, i) => {
+    const st = wsStagePillState(s, i);
+    const viewing = i === viewIdx;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "stage-pill st-" + st + (viewing ? " is-viewing" : "");
+    btn.setAttribute("data-stage", String(i));
+    btn.setAttribute("aria-label",
+      stage.label + ", " + WS_STAGE_STATE_WORD[st] + (viewing ? ", showing" : ""));
+    if (viewing) btn.setAttribute("aria-current", "true");
+    // before the campaign is started there is nothing behind any pill, and
+    // the intro's own Start button must stay reachable — so the row shows the
+    // shape of the journey but isn't tappable yet.
+    if (!started) { btn.disabled = true; btn.setAttribute("aria-disabled", "true"); }
+    const dotCls = st === "done" ? " dot-ready" : st === "active" ? " dot-needs-you" : "";
+    btn.innerHTML = `<span class="state-dot${dotCls}" aria-hidden="true"></span>` +
+      `<span class="stage-pill-label">${esc(stage.label)}</span>`;
+    btn.addEventListener("click", () => {
+      // VIEW ONLY. No phase change, no build, no approval, no journey move.
+      // Tapping the stage already on screen goes back to following the journey.
+      s.viewStage = (s.viewStage === i) ? null : i;
+      renderWorkspace();   // the workspace alone — the left list is not repainted
+    });
+    track.appendChild(btn);
+  });
+  nav.appendChild(track);
+  return nav;
+}
+
+// While a stage other than the journey's own is on screen, the panel's gate
+// controls still do precisely what they always did — this only keeps the VIEW
+// pointed somewhere sensible once they have. Capture phase, so it settles the
+// cursor before the control's own handler re-renders.
+function wireStagePeekSync(panel, s, viewIdx) {
+  panel.addEventListener("click", (e) => {
+    const t = (e.target && e.target.closest) ? e.target.closest("[data-act], .link-quiet") : null;
+    if (!t || !panel.contains(t)) return;
+    const act = t.getAttribute("data-act");
+    if (viewIdx === 1 && act === "next") s.viewStage = 2;                  // emails -> first line
+    else if (viewIdx === 2 && !act && t.classList.contains("link-quiet")) s.viewStage = 1;
+    else if (act === "confirm" || act === "approve" || act === "launch") s.viewStage = null;
+  }, true);
+}
+
 function renderWorkspace() {
   wsEl.innerHTML = "";
+  const switchedIdea = wsViewIdeaId !== activeId;
+  wsViewIdeaId = activeId;
   // blend: the board footer now lives as a static, always-visible line at
   // the bottom of the left pane (item 1) — it no longer sits in the right
   // pane, so there's nothing here left to hide/show as activeId changes.
@@ -2568,16 +2925,31 @@ function renderWorkspace() {
   const idea = ideaById(activeId);
   const s = cardState[activeId];
 
+  // ---- pipeline stepper: settle the view cursor before painting anything.
+  // A peek is deliberately short-lived — it is dropped the moment you arrive
+  // at a different campaign, and the moment the journey itself moves (a gate
+  // approved, a build finishing in the background, chat driving the board),
+  // so the screen always snaps back to where the work actually is.
+  if (switchedIdea) s.viewStage = null;
+  const journeyKey = s.phase + "/" + s.copyPackPage;
+  if (s._wsJourneyKey !== journeyKey) { s.viewStage = null; s._wsJourneyKey = journeyKey; }
+  const peeking = s.viewStage !== null && s.viewStage !== undefined;
+  const viewIdx = peeking ? s.viewStage : journeyStageIdx(s);
+
   const head = document.createElement("div");
   head.innerHTML = `
-    <p class="step-label">${esc(stepLabel(s.phase, s))}</p>
+    <p class="step-label">${esc(peeking ? wsStageEyebrow(s, viewIdx) : stepLabel(s.phase, s))}</p>
     <h2 class="ws-name">${esc(idea.name)}</h2>
   `;
   wsEl.appendChild(head);
+  wsEl.appendChild(renderStagePills(idea, s, viewIdx));
 
   const panel = document.createElement("div");
   panel.className = "panel";
-  if (s.phase === 1) panel.appendChild(renderIntro(idea, s));
+  // journey view (viewStage null) is byte-for-byte the behaviour this board
+  // always had; the peek branch is the only new path.
+  if (peeking) { panel.appendChild(wsStagePanel(idea, s, viewIdx)); wireStagePeekSync(panel, s, viewIdx); }
+  else if (s.phase === 1) panel.appendChild(renderIntro(idea, s));
   else if (s.phase === 2) panel.appendChild(renderTargeting(idea, s));
   else if (s.phase === 3 || s.phase === 5) panel.appendChild(renderBuild(idea, s));
   else if (s.phase === 4) panel.appendChild(renderCopyPack(idea, s));
@@ -2677,6 +3049,94 @@ function targetingHtml(idea) {
         </div>` : ""}
       ${t.note ? `<span class="targeting-note">${esc(t.note)}</span>` : ""}
     </div>`;
+}
+
+// "Campaign at a glance" showcase: a rich, data-driven overview of the whole
+// idea, shown at rest at the TOP of the home view. Every section renders only
+// when its field is present, and the whole block is GATED on anchors/service —
+// runs that don't carry these fields (other clients) render nothing rather than
+// erroring. All values pass through esc(); the email's \n become <br>.
+function renderShowcase(idea) {
+  if (!idea || !(idea.anchors || idea.service)) return "";
+
+  // header: the lead-growth service as a pill + the reachable-audience stat
+  const servicePill = idea.service
+    ? `<span class="sc-service">${esc(idea.service)}</span>` : "";
+  let statHtml = "";
+  if (typeof idea.reachablePool === "number") {
+    const min = (idea.minCapacity || 5000).toLocaleString();
+    const label = idea.reachablePoolLabel ? esc(idea.reachablePoolLabel) + " · " : "";
+    statHtml = `
+      <div class="sc-stat">
+        <span class="sc-stat-num num mono">${idea.reachablePool.toLocaleString()}</span>
+        <span class="sc-stat-cap">reachable — we email all</span>
+        <span class="sc-stat-note">${label}minimum ${min}, not a cap</span>
+      </div>`;
+  }
+
+  // "Lookalike anchor — companies like these"
+  const anchorsHtml = (idea.anchors && idea.anchors.length)
+    ? `<div class="sc-sect">
+        <p class="sc-sect-head">Lookalike anchor — companies like these</p>
+        <div class="sc-chips">${idea.anchors.map(a => `<span class="sc-chip">${esc(a)}</span>`).join("")}</div>
+      </div>` : "";
+
+  // "Case studies we pull" — each is "Consultant — brand work"; de-emphasise
+  // the "— brand" tail when the em-dash separator is present.
+  const casesHtml = (idea.cases && idea.cases.length)
+    ? `<div class="sc-sect">
+        <p class="sc-sect-head">Case studies we pull</p>
+        <div class="sc-chips">${idea.cases.map(c => {
+          const ix = String(c).indexOf(" — ");
+          if (ix === -1) return `<span class="sc-chip">${esc(c)}</span>`;
+          return `<span class="sc-chip">${esc(c.slice(0, ix))}` +
+            `<span class="sc-chip-sub"> — ${esc(c.slice(ix + 3))}</span></span>`;
+        }).join("")}</div>
+      </div>` : "";
+
+  // "Decision-makers we email" — cap at 12 chips with a "+N more"
+  const roles = (idea.targeting && idea.targeting.roles) || [];
+  let rolesHtml = "";
+  if (roles.length) {
+    const CAP = 12;
+    const shown = roles.slice(0, CAP).map(r => `<span class="sc-chip">${esc(r)}</span>`).join("");
+    const moreN = roles.length - CAP;
+    const more = moreN > 0 ? `<span class="sc-chip sc-chip-more">+${moreN} more</span>` : "";
+    rolesHtml = `<div class="sc-sect">
+        <p class="sc-sect-head">Decision-makers we email</p>
+        <div class="sc-chips">${shown}${more}</div>
+      </div>`;
+  }
+
+  // "How we'd help"
+  const offerHtml = idea.offer
+    ? `<div class="sc-sect">
+        <p class="sc-sect-head">How we'd help</p>
+        <p class="sc-offer">${esc(idea.offer)}</p>
+      </div>` : "";
+
+  // the real outreach email — \n → <br>, signed = last non-empty line
+  let emailHtml = "";
+  if (idea.email) {
+    const signed = String(idea.email).split("\n").map(l => l.trim()).filter(Boolean).slice(-1)[0] || "";
+    const body = esc(idea.email).replace(/\n/g, "<br>");
+    emailHtml = `
+      <div class="sc-mail">
+        <div class="sc-mail-head">Sample email${signed ? " — signed " + esc(signed) : ""}</div>
+        <div class="sc-mail-body">${body}</div>
+      </div>`;
+  }
+
+  return `
+    <section class="sc-showcase" aria-label="Campaign at a glance">
+      <p class="sc-eyebrow">Campaign at a glance</p>
+      <div class="sc-top">${servicePill}${statHtml}</div>
+      ${anchorsHtml}
+      ${casesHtml}
+      ${rolesHtml}
+      ${offerHtml}
+      ${emailHtml}
+    </section>`;
 }
 
 function renderIntro(idea, s) {
@@ -3949,15 +4409,120 @@ renderAll();
 .l1-fact b{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-right:6px}
 
 .idea-mini .im-bar-track{display:none}
-.runway{display:flex;gap:4px;margin:8px 0 2px;align-items:center}
-.rw-stop{flex:1;display:flex;flex-direction:column;gap:3px;align-items:center;border:none;background:none;
-  cursor:pointer;padding:2px 0;font:inherit}
-.rw-stop[disabled]{cursor:default;opacity:.35}
-.rw-seg{width:100%;height:4px;border-radius:2px;background:var(--sunken);border:1px solid var(--card-line)}
-.rw-stop.done .rw-seg{background:var(--ink);border-color:var(--ink)}
-.rw-stop.now .rw-seg{background:var(--orange);border-color:var(--orange)}
-.rw-lbl{font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
-.rw-stop.done .rw-lbl,.rw-stop.now .rw-lbl{color:var(--ink-2)}
+
+/* ============================================================================
+   LEFT CARD = the pipeline-stepper row (Bjion, 2026-07-28)
+   Replaces the 4-segment WHO/WORDS/OPENER/GO runway with the launch-dashboard
+   row card: name, caption, what-is-happening line, count + tag, then the
+   5-stage track. Same stage model as the workspace's stage pills; the number
+   at the right of the track is the mean of the five fills it draws.
+   Sidebar arithmetic (340px pane): 340 - 32 padding = 308 content; a card
+   spends 4px on borders (1 + 3 left) and 28px on padding -> 276px inside.
+   Track: 276 - 34 (pct) - 8 (gap) = 234 for the segments, minus 4x3px gaps
+   = 222 / 5 = 44.4px per stage label. Longest label "Targeting" measures
+   ~41.6px at 10px with -0.01em tracking, so all five sit on one line with
+   room to spare; nowrap + ellipsis makes any overflow degrade cleanly.
+   ========================================================================= */
+.idea-mini .im-head{display:flex;align-items:flex-start;gap:8px;margin:0}
+.idea-mini .im-head .im-name{
+  flex:1 1 auto;min-width:0;margin:0;
+  font-family:"Acid Grotesk","DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-size:19px;font-weight:700;line-height:1.16;letter-spacing:-.015em;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+/* the chevron drops to the end of the name row, small and muted, so the card
+   still reads name-first exactly like the reference row */
+.idea-mini .im-head .im-chevron{margin-top:3px}
+.idea-mini .im-caption{margin:5px 0 0;font-size:12.5px}
+
+/* what is HAPPENING, in plain words — stateLabel()'s own text and .cls */
+.idea-mini .im-now{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:9px 0 0;
+  font-size:13px;line-height:1.3;color:var(--muted)}
+.idea-mini .im-now-dot{flex:0 0 auto;width:8px;height:8px;border-radius:999px;
+  border:1.5px solid var(--dot-hollow);background:transparent}
+.idea-mini .im-now-dot.is-needs-you,
+.idea-mini .im-now-dot.is-building{background:var(--orange);border-color:var(--orange)}
+.idea-mini .im-now-dot.is-building{animation:dot-pulse 1.3s ease-in-out infinite}
+.idea-mini .im-now-dot.is-ready{background:var(--dot-ready);border-color:var(--dot-ready)}
+.idea-mini .im-now-text{min-width:0}
+.idea-mini .im-now.needs-you .im-now-text,
+.idea-mini .im-now.building .im-now-text{color:var(--orange);font-weight:600}
+.idea-mini .im-now.ready .im-now-text{color:var(--ink);font-weight:600}
+.idea-mini .im-now-pct{flex:0 0 auto;color:var(--muted)}
+
+/* how many people, and which pill this idea earned */
+.idea-mini .im-count{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:9px 0 0}
+.idea-mini .im-count .im-number{font-size:16px;line-height:1.2;margin:0}
+.idea-mini .im-count-unit{font-size:12px;color:var(--muted)}
+.idea-mini .im-count .im-tag{margin:0}
+
+/* ---- the 5-stage track: ONE segmented bar, not five meters ---- */
+.idea-mini .im-track{display:flex;align-items:flex-start;gap:8px;margin:15px 0 0}
+.idea-mini .im-segs{flex:1 1 auto;min-width:0;display:flex;gap:3px}
+.idea-mini .im-track-pct{flex:0 0 34px;text-align:right;font-size:11px;line-height:1;
+  padding-top:1px;white-space:nowrap;color:var(--ink-2)}
+.idea-mini .im-seg{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column}
+/* zero height in flow — only the ACTIVE stage gets a marker, and it overhangs */
+.idea-mini .im-seg-top{position:absolute;left:0;right:0;top:-9px;height:9px;display:flex;
+  align-items:center;justify-content:center;pointer-events:none}
+.idea-mini .im-seg-top i{display:block;width:6px;height:6px;border-radius:50%;background:var(--orange)}
+.idea-mini .im-seg-bar{height:7px;background:var(--line-2);overflow:hidden}
+.idea-mini .im-seg:first-child .im-seg-bar{border-radius:999px 0 0 999px}
+.idea-mini .im-seg:last-child .im-seg-bar{border-radius:0 999px 999px 0}
+.idea-mini .im-seg-fill{display:block;height:100%;width:0;background:transparent;
+  transition:width .25s linear}
+/* no --green in this palette: "done" is the house ready-ink (--fill-ink, the
+   same token the old progress fill used), "in flight" is --orange */
+.idea-mini .im-seg.st-done .im-seg-fill{background:var(--fill-ink)}
+.idea-mini .im-seg.st-active .im-seg-fill{background:var(--orange);
+  animation:im-seg-glow 1.8s ease-in-out infinite}
+.idea-mini .im-seg-label{display:block;margin-top:7px;font-size:10px;line-height:1.2;
+  text-align:center;letter-spacing:-.01em;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.idea-mini .im-seg.st-done .im-seg-label{color:var(--ink-2)}
+.idea-mini .im-seg.st-active .im-seg-label{color:var(--ink)}
+/* opacity only, anchored, nothing moves or resizes */
+@keyframes im-seg-glow{0%,100%{opacity:.62}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+  .idea-mini .im-seg.st-active .im-seg-fill{animation:none}
+  .idea-mini .im-now-dot.is-building{animation:none}
+  .idea-mini .im-seg-fill{transition:none}
+}
+
+/* launch-ready card: its own inverted palette, every stage full, nothing moving */
+.idea-mini.launched-mini .im-seg-bar{background:var(--invert-line)}
+.idea-mini.launched-mini .im-seg.st-done .im-seg-fill{background:var(--invert-text)}
+.idea-mini.launched-mini .im-seg-label{color:#B9AF9F}
+.idea-mini.launched-mini .im-seg.st-done .im-seg-label{color:#D3C8B8}
+.idea-mini.launched-mini .im-track-pct{color:#D3C8B8}
+.idea-mini.launched-mini .im-count-unit,
+.idea-mini.launched-mini .im-now{color:#C9BFAF}
+.idea-mini.launched-mini .im-now.ready .im-now-text{color:var(--invert-text)}
+.idea-mini.launched-mini .im-now-dot.is-ready{background:var(--invert-text);border-color:var(--invert-text)}
+
+/* the validation entry has no phase and no stages, so its markup is untouched —
+   it just picks up the new title voice, and its chevron is moved to the end of
+   the row by layout order alone, so it reads as a sibling of the cards above it
+   instead of a differently-built thing */
+.idea-mini.validation-mini .im-name{
+  font-family:"Acid Grotesk","DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-size:16px;letter-spacing:-.012em;line-height:1.22}
+.idea-mini.validation-mini .im-rest-row{align-items:flex-start}
+.idea-mini.validation-mini .im-name{order:1}
+.idea-mini.validation-mini .im-verdict-snippet{order:2;margin-top:2px}
+.idea-mini.validation-mini .im-chevron{order:3;margin-top:2px}
+
+/* the 168px mobile chip has no room for five words — the bar and the number
+   still read, and the workspace's stage pills carry the labels there */
+@media (max-width:820px){
+  .idea-mini .im-head .im-name{font-size:15px}
+  .idea-mini .im-caption{font-size:11.5px}
+  .idea-mini .im-now{font-size:11.5px;gap:5px}
+  .idea-mini .im-count{gap:6px}
+  .idea-mini .im-count .im-number{font-size:14px}
+  .idea-mini .im-track{margin-top:11px;gap:6px}
+  .idea-mini .im-track-pct{flex-basis:28px;font-size:11px}
+  .idea-mini .im-seg-label{display:none}
+}
 </style>
 <script>
 // capture base renderers before any lab override (assignment-form overrides follow)
@@ -4259,6 +4824,7 @@ LAB.minimalIntro = function(idea, s){
   const chips = s.labChips.slice(0,6).map(c=>`<span class="trg-chip">${esc(c.name)}</span>`).join("")
     + (s.labChips.length>6?`<span class="trg-chip">+${s.labChips.length-6} more</span>`:"");
   el.innerHTML = `
+    ${renderShowcase(idea)}
     <p class="lab-live-wrap"><span class="lab-live-num num mono">${idea.net.toLocaleString()}</span>
       <span class="lab-live-unit">${esc(idea.netUnit||"people we can reach")}</span></p>
     <div class="l2-chips targeting-chips" style="margin:12px 0">${chips}</div>
@@ -4278,32 +4844,14 @@ renderAll();
 LAB.sharedList = renderList;
 LAB.aCount = function(idea){ return stagesFor(idea).filter(st=>st.phase==="A").length; };
 renderIntro = LAB.minimalIntro;
+// The per-card WHO/WORDS/OPENER/GO runway this override used to append is
+// RETIRED (2026-07-28): the card itself now draws the real 5-stage track —
+// Targeting · Copy · First line · Checks · Live — off the same stage model the
+// workspace's stage pills read, and stage navigation lives on those pills. The
+// override itself stays in place (and still runs last) so the renderList chain
+// is unbroken for anything that wraps it after this point.
 renderList = function(){
   LAB.sharedList();
-  const cards = Array.from(listEl.querySelectorAll(".idea-mini")).filter(c=>!c.classList.contains("validation-mini"));
-  cards.forEach((card, ix) => {
-    const idea = IDEAS[ix]; if (!idea) return;
-    const s = cardState[idea.id];
-    const done = { who: s.phase>=3, words: s.phase>=5 || (s.phase===4 && s.copyPackPage===2), opener: s.phase>=5, go: s.phase===7 };
-    const now = s.phase===2?"who" : (s.phase===4&&s.copyPackPage!==2)?"words" : s.phase===4?"opener" : s.phase===6?"go" : null;
-    const can = { who: true, words: s.stagesDone>=LAB.aCount(idea), opener: s.stagesDone>=LAB.aCount(idea), go: s.phase>=6 };
-    const strip = document.createElement("div");
-    strip.className = "runway";
-    strip.innerHTML = [["who","Who"],["words","Words"],["opener","Opener"],["go","Go"]].map(x=>
-      `<button type="button" class="rw-stop${done[x[0]]?" done":""}${now===x[0]?" now":""}" data-stop="${x[0]}"
-        ${can[x[0]]?"":"disabled"} aria-label="${x[1]}"><span class="rw-seg"></span><span class="rw-lbl">${x[1]}</span></button>`).join("");
-    strip.querySelectorAll(".rw-stop:not([disabled])").forEach(b=>b.addEventListener("click",(e)=>{
-      e.stopPropagation();
-      activeId = idea.id;
-      const st = b.dataset.stop;
-      if (st==="who") s.phase = 2;
-      else if (st==="words"){ s.phase = 4; s.copyPackPage = 1; }
-      else if (st==="opener"){ s.phase = 4; s.copyPackPage = 2; }
-      else if (st==="go") s.phase = s.phase===7 ? 7 : 6;
-      renderAll();
-    }));
-    card.appendChild(strip);
-  });
 };
 renderAll();
 </script>
@@ -4451,7 +4999,15 @@ LIVE.defaultState = function(i){ return {
     // approved" disclosure covering the versions recap, evidence and QA
     // ticks that used to sit inline. Closed by default so the upload hero
     // is the only thing competing for attention at rest.
-    reviewApprovedOpen: false
+    reviewApprovedOpen: false,
+    // pipeline stepper (right pane): which stage this campaign is currently
+    // LOOKING AT — 0 Targeting, 1 Copy, 2 First line, 3 Checks, 4 Live, or
+    // null for "follow the journey" (derive the screen from `phase`, exactly
+    // as the board always did). Purely a view cursor: nothing downstream —
+    // not stateLabel(), not the left list, not syncLab() — reads it, so
+    // setting it can never move a campaign forward. Reset to null whenever
+    // the campaign changes or the journey itself moves.
+    viewStage: null
   }; };
 LIVE.applyRun = function(run){
   const keep = new Set((run.ideas || []).map(i => i.id));
