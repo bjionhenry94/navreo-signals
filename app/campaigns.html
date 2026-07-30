@@ -2057,6 +2057,11 @@
   .cockpit .review-badge .caret { transition: transform .2s; flex: 0 0 auto; }
   .cockpit .review-badge[aria-expanded="true"] { background: var(--nav-orange); color: #fff; }
   .cockpit .review-badge[aria-expanded="true"] .caret { transform: rotate(180deg); }
+  /* in-progress share of the badge stays amber (same token as the Paused chip)
+     so a claimed action reads differently from an unreviewed one at a glance */
+  .cockpit .review-badge .rb-prog { color: #DFA000; font-weight: 700; }
+  .cockpit .review-badge:hover .rb-prog,
+  .cockpit .review-badge[aria-expanded="true"] .rb-prog { color: #FFDF8F; }
   .cockpit .row-optim { background: var(--sunken); border-top: 1px solid var(--border); padding: 12px 22px 16px; }
   /* proto look: white card on the grey panel, no number circle, loud orange Fix */
   .cockpit .row-optim .action-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
@@ -2836,7 +2841,13 @@
     if (s.indexOf("ARCHIV") !== -1) return "archived";
     if (s.indexOf("DRAFT") !== -1) return "drafted";
     if (s.indexOf("PAUS") !== -1 || s.indexOf("STOP") !== -1) return "paused";
-    if (s.indexOf("ACTIVE") !== -1 || s.indexOf("START") !== -1 || s.indexOf("RUNNING") !== -1) return "active";
+    if (s.indexOf("ACTIVE") !== -1 || s.indexOf("START") !== -1 || s.indexOf("RUNNING") !== -1) {
+      /* Smartlead keeps a fully-sent campaign labelled ACTIVE; the list must
+         not — 100% completion files it under Completed, off the Active pick */
+      if ((ls && ls.completion != null && ls.completion >= 100) ||
+          (ls && ls.total > 0 && ls.completed != null && ls.completed >= ls.total)) return "completed";
+      return "active";
+    }
     return "other";
   }
   function liveCompletion(id) {
@@ -2856,7 +2867,9 @@
     var visible = cs.filter(function (c) {
       if (!(v.tier === "all" || c.tier === v.tier)) return false;
       if (!(v.client === "all" || c.client === v.client)) return false;
-      if (!(v.status === "all" || liveBucket(c.id) === v.status)) return false;
+      /* typing a search widens to every status — the status pick only narrows
+         browsing, never hides a campaign someone is explicitly looking for */
+      if (!q && !(v.status === "all" || liveBucket(c.id) === v.status)) return false;
       if (q) {
         var hay = (c.name + " " + c.pill + " " + c.tier + " " + (c.client || "")).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
@@ -2898,9 +2911,13 @@
     if (empty) empty.hidden = visible.length > 0;
     var emptyTxt = document.getElementById("rows-empty-text");
     if (emptyTxt && !visible.length) {
-      emptyTxt.textContent = (v.status !== "all")
-        ? "No " + (STATUS_LABEL[v.status] || v.status) + " campaigns" + (q ? " match that search" : " right now") + "."
-        : (q ? "No campaigns match that search in this view." : "No campaigns in this view.");
+      /* a search runs across every status, so its empty message must not
+         blame the status pick */
+      emptyTxt.textContent = q
+        ? "No campaigns match that search in this view."
+        : (v.status !== "all")
+          ? "No " + (STATUS_LABEL[v.status] || v.status) + " campaigns right now."
+          : "No campaigns in this view.";
     }
     var live = document.getElementById("rows-live-region");
     if (live) live.textContent = visible.length + " campaign" + (visible.length === 1 ? "" : "s") + " shown" +
@@ -3013,8 +3030,11 @@
   function rowStatusBit(c) {
     var ls = STATE.liveStatus && STATE.liveStatus[c.id];
     if (ls && ls.status) {
+      /* chip agrees with the filter bucket: a 100%-sent campaign says
+         "completed" even while Smartlead's raw label is still ACTIVE */
+      var txt = liveBucket(c.id) === "completed" ? "completed" : String(ls.status).toLowerCase();
       return ' &middot; <span class="row-live"><span class="row-live-dot"></span>' +
-        esc(String(ls.status).toLowerCase()) + "</span>";
+        esc(txt) + "</span>";
     }
     return c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "";
   }

@@ -3681,7 +3681,12 @@ async function doSend(btn) {
   // permanent write cannot be made non-surprising by copy alone. The one
   // moment attention is guaranteed is right after the action, so the lesson
   // is announced there, with its exact rule and a working Undo.
-  if (payload.training && originalDraft && plainWords(sentBody) !== plainWords(originalDraft)) {
+  // originalDraft may be empty on the local row: original_draft_body left
+  // the slim list payload (panel fix, #2 - it duplicated draft_body for ~25%
+  // of the list bytes); the send response's full row still carries it.
+  const odb = originalDraft ||
+    ((res.data && res.data.row && res.data.row.original_draft_body) || "");
+  if (payload.training && odb && plainWords(sentBody) !== plainWords(odb)) {
     watchForEditLesson(id);
   }
   loadQueue();

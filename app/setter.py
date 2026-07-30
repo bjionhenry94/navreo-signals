@@ -2737,6 +2737,18 @@ def _resolve_stats_id(row: dict):
         return str(sid), ""
     ok, hyd, herr = hydrate_lead(row.get("smartlead_campaign_id"), row.get("lead_email"),
                                  row.get("message_id"))
+    if not ok and re.search(r"timeout|timed out|urlerror|connection", str(herr), re.I):
+        # Transient network blip - retry once before deciding anything (panel
+        # fix, F6: the 15s _sl_get timeout made one-off read blips far more
+        # common, and treating them as terminal told the owner to "reply in
+        # Smartlead directly" over a row that would send fine seconds later).
+        ok, hyd, herr = hydrate_lead(row.get("smartlead_campaign_id"), row.get("lead_email"),
+                                     row.get("message_id"))
+        if not ok:
+            return "", ("Smartlead was slow to answer just now, so this reply "
+                        "couldn't be matched to its thread. This is usually "
+                        "temporary - try Approve again in a moment."
+                        + (f" ({herr})" if herr else ""))
     sid = hyd.get("email_stats_id") if ok else None
     if sid is None or not str(sid).strip():
         # Never hand Smartlead a null and never relay its Joi text to a human.
@@ -2757,6 +2769,14 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
     """Sends (or stub-sends) one reply. Returns {"ok": bool, "row": <patch dict>}.
     is_test rows NEVER hit Smartlead regardless of SETTER_DRY_RUN."""
     now = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    if row.get("error"):
+        # Clear a PRIOR attempt's error the moment a new send starts (panel
+        # fix, F5): the client's row-truth fallback reads this column while
+        # the job is in flight, and a stale error made it report hard failure
+        # over a send that was still going out - the false message that tempts
+        # a double-send.
+        _apply_patch(row, {"error": None})
+        row["error"] = None
     dry = bool(is_test) or _dry_run()
     if dry:
         patch = {"status": success_status, "sent_at": now, "sent_body": html_body, "error": None,
@@ -5672,14 +5692,26 @@ def _kick_kpi_refresh():
     already running, do nothing - concurrent queue GETs stacking parallel
     ~10-query computes is exactly the storm that measured 12.6s live
     (2026-07-16), worse than the serial baseline it replaced."""
+    # Lock tested in the caller (H9): don't spawn a thread just to fail an
+    # acquire under a bust burst.
+    if not _KPI_COMPUTE.acquire(blocking=False):
+        return
+
     def run():
-        if not _KPI_COMPUTE.acquire(blocking=False):
-            return
         try:
-            _compute_kpis_sync()
+            # Generation loop (H1): a compute that a mutation raced is stamped
+            # stale by _compute_kpis_sync; run again so the cache converges.
+            for _ in range(3):
+                gen0 = _CACHE_GEN[0]
+                _compute_kpis_sync()
+                if _CACHE_GEN[0] == gen0:
+                    break
         finally:
             _KPI_COMPUTE.release()
-    threading.Thread(target=run, daemon=True).start()
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except RuntimeError:
+        _KPI_COMPUTE.release()
 
 
 def _count_rows(filt: str) -> int:
@@ -5715,6 +5747,7 @@ def _compute_kpis(force: bool = False) -> dict:
 
 def _compute_kpis_sync() -> dict:
     now = _time.time()
+    _kpi_gen0 = _CACHE_GEN[0]   # H1: captured before any fetch; see the write
     kpis = {"needs_review": 0, "auto_sent_today": 0, "sent_today": 0,
            "avg_response_mins_7d": None, "no_action_today": 0, "counts": {}}
     if not _SB:
@@ -5777,38 +5810,53 @@ def _compute_kpis_sync() -> dict:
 
         def _light():
             # The thread-collapse source: every real row's key fields (no
-            # thread blobs - a few KB). Same is_test=false semantics as the
-            # pill counts.
-            rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&is_test=eq.false&limit=2000"
-                              "&select=id,status,smartlead_campaign_id,lead_email,replied_at,created_at")
-            return rows if isinstance(rows, list) else None
+            # thread blobs - a few KB). Shared with _thread_rep_ids via
+            # _light_rows_all (panel fix, #3: this exact scan used to run
+            # TWICE under two uncoordinated caches); is_test filtered here
+            # in Python to keep the pill-count semantics.
+            rows = _light_rows_all()
+            if not isinstance(rows, list):
+                return None
+            return [r for r in rows if isinstance(r, dict) and not r.get("is_test")]
 
+        # Panel fix, #4: the five COUNT queries are consumed ONLY when the
+        # light scan fails (the else-branch below), and one of them duplicated
+        # the "needs_review" task byte-for-byte. Run the primary wave first;
+        # pay the count fallback only on a light failure. 12 queries -> 5.
         tasks = {
             "light": _light,
-            "c_needs_review": lambda: _pill("status=eq.needs_review"),
-            "c_sent": lambda: _pill("status=eq.sent"),
-            "c_auto_sent": lambda: _pill("status=eq.auto_sent"),
-            "c_dismissed": lambda: _pill("status=eq.dismissed"),
-            "c_all": lambda: _pill("id=not.is.null"),
             "reclass": _reclass,
-            "needs_review": lambda: _count_rows("is_test=eq.false&status=eq.needs_review"),
             "auto_sent_today": lambda: _count_rows(f"is_test=eq.false&status=eq.auto_sent&created_at=gte.{today}"),
             "sent_today": lambda: _count_rows(f"is_test=eq.false&status=eq.sent&created_at=gte.{today}"),
             "no_action_today": lambda: _count_rows(f"is_test=eq.false&status=eq.no_action&created_at=gte.{today}"),
             "avg_response_mins_7d": _avg_response,
         }
+        fallback_tasks = {
+            "c_needs_review": lambda: _pill("status=eq.needs_review"),
+            "c_sent": lambda: _pill("status=eq.sent"),
+            "c_auto_sent": lambda: _pill("status=eq.auto_sent"),
+            "c_dismissed": lambda: _pill("status=eq.dismissed"),
+            "c_all": lambda: _pill("id=not.is.null"),
+        }
         results = {}
         # 5 workers, not len(tasks): each worker opens its own TLS connection
         # to Supabase (urllib has no keep-alive) and ~11 simultaneous
         # handshakes visibly choked the small Render instance.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(tasks))) as pool:
-            fut_key = {pool.submit(fn): k for k, fn in tasks.items()}
-            for fut in concurrent.futures.as_completed(fut_key):
-                k = fut_key[fut]
-                try:
-                    results[k] = fut.result()
-                except Exception:  # noqa: BLE001 - one bad query must not sink the block
-                    results[k] = None
+
+        def _run_wave(wave):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(wave))) as pool:
+                fut_key = {pool.submit(fn): k for k, fn in wave.items()}
+                for fut in concurrent.futures.as_completed(fut_key):
+                    k = fut_key[fut]
+                    try:
+                        results[k] = fut.result()
+                    except Exception:  # noqa: BLE001 - one bad query must not sink the block
+                        results[k] = None
+        _run_wave(tasks)
+        if results.get("light") is None:
+            _run_wave(fallback_tasks)
+        # the else-branch's needs_review fallback reads the same count
+        results["needs_review"] = results.get("c_needs_review")
         # Fold order matches the read path: thread-collapse FIRST (one
         # representative row per conversation, from the light fetch), THEN
         # the who-spoke-last direction on each surviving needs_review row.
@@ -5869,7 +5917,9 @@ def _compute_kpis_sync() -> dict:
         pass
     with _KPI_LOCK:
         _KPI_CACHE["val"] = kpis
-        _KPI_CACHE["at"] = now
+        # H1: a compute that a mutation raced must not stamp itself fresh -
+        # mark stale so the SWR path serves it but re-kicks a refresh.
+        _KPI_CACHE["at"] = now if _CACHE_GEN[0] == _kpi_gen0 else 0.0
     return kpis
 
 
@@ -6019,6 +6069,28 @@ _REP_IDS_TTL = 10.0
 _REP_IDS_CACHE = {"at": 0.0, "val": None}
 
 
+def _light_rows_all():
+    """ONE 2000-row light scan shared by the thread-collapse and the KPI
+    compute (panel fix, #3: the same scan ran twice under two uncoordinated
+    caches - which could even disagree about a thread's representative).
+    is_test is UNfiltered here; callers filter in Python. order= is load-
+    bearing: without it PostgREST truncation past 2000 rows is arbitrary and
+    the collapse silently drops representatives (panel nitpick, correctness
+    cliff). Returns None on fetch failure. Rides _REP_IDS_CACHE's 10s clock."""
+    now = _time.time()
+    if _REP_IDS_CACHE.get("rows") is not None and (now - _REP_IDS_CACHE.get("rows_at", 0.0)) < _REP_IDS_TTL:
+        return _REP_IDS_CACHE["rows"]
+    light = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&limit=2000"
+                       "&order=created_at.desc"
+                       "&select=id,status,smartlead_campaign_id,lead_email,"
+                       "replied_at,created_at,is_test") if _SB else None
+    if not isinstance(light, list):
+        return None
+    _REP_IDS_CACHE["rows"] = light
+    _REP_IDS_CACHE["rows_at"] = now
+    return light
+
+
 def _thread_rep_ids():
     """Set of setter_queue ids that are their thread's representative row,
     or None when the light fetch fails (callers then skip the collapse and
@@ -6027,8 +6099,7 @@ def _thread_rep_ids():
     if _REP_IDS_CACHE["val"] is not None and (now - _REP_IDS_CACHE["at"]) < _REP_IDS_TTL:
         return _REP_IDS_CACHE["val"]
     try:
-        light = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&limit=2000"
-                           "&select=id,smartlead_campaign_id,lead_email,replied_at,created_at,is_test") if _SB else None
+        light = _light_rows_all()
         if not isinstance(light, list):
             return None
         val = {r.get("id") for r in _collapse_threads(light) if isinstance(r, dict)}
@@ -6058,7 +6129,30 @@ def _last_poll_done_at():
     the display is minutes-granular, so the extra Supabase round-trip per GET
     was pure overhead (perf pass 2026-07-16)."""
     now = _time.time()
-    if _POLL_TS_CACHE["val"] is not None and (now - _POLL_TS_CACHE["at"]) < _POLL_TS_TTL:
+    if _POLL_TS_CACHE["val"] is not None:
+        if (now - _POLL_TS_CACHE["at"]) < _POLL_TS_TTL:
+            return _POLL_TS_CACHE["val"]
+        # Stale-serve + background refresh (panel fix, F3): after a bust the
+        # next queue GET used to pay this Supabase round trip synchronously -
+        # inside the 'instant' response path. The display is minutes-granular;
+        # a 10s-stale value is indistinguishable to the user.
+        if _POLL_TS_REFRESHING.acquire(blocking=False):
+            def _rf():
+                try:
+                    rows = _SB("GET", "app_activity_log?action=eq.setter_poll_done"
+                                      "&order=ts.desc&limit=1&select=ts") if _SB else None
+                    v = rows[0].get("ts") if isinstance(rows, list) and rows else None
+                    if v is not None:
+                        _POLL_TS_CACHE["val"] = v
+                        _POLL_TS_CACHE["at"] = _time.time()
+                except Exception:  # noqa: BLE001 - best-effort display value
+                    pass
+                finally:
+                    _POLL_TS_REFRESHING.release()
+            try:
+                threading.Thread(target=_rf, daemon=True).start()
+            except RuntimeError:
+                _POLL_TS_REFRESHING.release()
         return _POLL_TS_CACHE["val"]
     try:
         rows = _SB("GET", "app_activity_log?action=eq.setter_poll_done"
@@ -6072,20 +6166,27 @@ def _last_poll_done_at():
     return val
 
 
+_POLL_TS_REFRESHING = threading.Lock()
+
+
 # Every setter_queue column EXCEPT the fat `thread` jsonb, plus two scalar
 # aliases off its newest element for who-spoke-last (memory ruling 2026-07-30;
 # see _fetch_queue_rows). setter_queue is schema-frozen (see the schema-freeze
 # gotcha) so this list drifts only if that ruling is ever revisited - if a
 # column IS added, add it here or the queue list silently won't carry it.
 QUEUE_LIST_COLUMNS = (
+    # original_draft_body deliberately absent (panel fix, #2): it is a byte
+    # copy of draft_body (~25% of the list payload) consumed by exactly one
+    # client line, which now reads it off the send response's full row.
+    # last_time deliberately absent: selected-but-never-read dead payload.
     "added_to_subsequence,agent_id,category,category_source,classification,"
     "company_domain,created_at,decision,decision_reason,draft_body,"
     "draft_subject,email_stats_id,error,first_outbound,guardrails,id,is_test,"
-    "lead_email,lead_first_name,lead_last_name,message_id,original_draft_body,"
+    "lead_email,lead_first_name,lead_last_name,message_id,"
     "replied_at,reply_body,reply_subject,sent_at,sent_body,slots,"
     "smartlead_campaign_id,smartlead_lead_id,source_message_id,status,"
     "subsequence_decision,timezone,updated_at,workspace,"
-    "last_type:thread->-1->>type,last_time:thread->-1->>time")
+    "last_type:thread->-1->>type")
 
 # ── Queue-rows read cache (perf pass 2026-07-16) ──────────────────────────
 # One /api/setter/queue GET used to re-fetch every row (2MB+ of stored threads)
@@ -6119,6 +6220,12 @@ _ROWS_REWARM_STATUSES = ("needs_review",)
 _QUEUE_RESP_MEMO = {}          # (status, limit, fields) -> (etag, raw_len, gz, at)
 _QUEUE_RESP_LOCK = threading.Lock()
 _QUEUE_RESP_TTL = _ROWS_TTL    # align with the rows SWR window
+# Hard wall-clock bound on serving a stale buffer (panel fix, F1/H3): if the
+# background rebuild keeps failing, one inline build restores truth rather
+# than serving a frozen snapshot forever.
+_QUEUE_RESP_MAX_STALE_S = 120.0
+# Single-flight for the rare non-needs_review pill builds (H7).
+_PILL_BUILD_LOCK = threading.Lock()
 
 
 def _rows_lock(key):
@@ -6154,24 +6261,34 @@ def _fetch_queue_rows(status: str, limit: int):
         # membership depends on who spoke last, computed at read time from
         # `thread` (see _queue_direction). The sent/auto_sent pills must also
         # consider needs_review rows we've already answered, so pull both.
-        statuses = []
+        def _one_fetch(filt):
+            """One PostgREST read with a LOUD degraded fallback (panel fix,
+            F2): http_json returns a 4xx error BODY as a dict (it does not
+            raise), so a select-syntax rejection - e.g. a PostgREST version
+            that refuses the thread->-1 alias - used to be indistinguishable
+            from 'no rows' and blanked the inbox silently, forever. A dict
+            answer is logged and retried once with the alias-free select."""
+            got = _SB("GET", f"{QUEUE_TABLE}?{filt}")
+            if isinstance(got, dict):
+                print(f"[setter] queue select rejected ({str(got)[:200]}) - "
+                      f"retrying without JSON-path aliases", file=sys.stderr)
+                plain = QUEUE_LIST_COLUMNS.split(",last_type:")[0]
+                got = _SB("GET", f"{QUEUE_TABLE}?{filt.replace(QUEUE_LIST_COLUMNS, plain)}")
+            return got
+
+        # sent/auto_sent pills must also consider needs_review rows we've
+        # already answered - one in.() query, not two serial round trips
+        # (panel fix, #5: two calls also made the effective cap 2x limit).
         if status in ("sent", "auto_sent"):
-            statuses = [status, "needs_review"]
+            fetched = _one_fetch(f"{base}&status=in.({status},needs_review)")
         elif status:
-            statuses = [status]
-        if statuses:
-            for st in statuses:
-                fetched = _SB("GET", f"{QUEUE_TABLE}?{base}&status=eq.{st}")
-                if isinstance(fetched, list):
-                    rows.extend(fetched)
-                else:  # None = timeout/error from _SB, never "no rows"
-                    fetch_failed = True
+            fetched = _one_fetch(f"{base}&status=eq.{status}")
         else:  # All
-            fetched = _SB("GET", f"{QUEUE_TABLE}?{base}")
-            if isinstance(fetched, list):
-                rows = fetched
-            else:
-                fetch_failed = True
+            fetched = _one_fetch(base)
+        if isinstance(fetched, list):
+            rows = fetched
+        else:  # None = timeout/error from _SB, never "no rows"
+            fetch_failed = True
         # Every fetch failed and we have nothing: signal failure so the caller
         # keeps its last-good rows instead of caching/serving a false-empty.
         if fetch_failed and not rows:
@@ -6190,10 +6307,20 @@ def _fetch_queue_rows(status: str, limit: int):
     return [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
 
 
-def _store_rows(key, rows):
+# Mutation generation counter (panel fix 2026-07-30, H1). Stale-marking means
+# an in-flight refresh that started BEFORE a mutation could land AFTER it and
+# stamp pre-mutation rows with a fresh timestamp - serving deleted rows for a
+# full TTL. Every writer captures the generation before its fetch; a store
+# whose generation moved underneath it is stamped already-stale (at=0.0), so
+# the SWR path still serves it but immediately re-kicks a refresh.
+_CACHE_GEN = [0]
+
+
+def _store_rows(key, rows, gen=None):
     if rows is None:   # a failed fetch (timeout) — never cache a false-empty
         return
-    _ROWS_CACHE[key] = {"at": _time.time(), "rows": rows}
+    fresh = gen is None or gen == _CACHE_GEN[0]
+    _ROWS_CACHE[key] = {"at": _time.time() if fresh else 0.0, "rows": rows}
 
 
 def _queue_rows_cached(status: str, limit: int) -> list:
@@ -6224,17 +6351,31 @@ def _queue_rows_cached(status: str, limit: int) -> list:
 
 
 def _kick_rows_refresh(key):
+    # Lock is tested in the CALLER (panel fix 2026-07-30, H9): under a bust
+    # burst most refresh threads used to exist only to fail an acquire and
+    # exit - spawn only when this kick actually owns the refresh.
+    lk = _rows_lock(key)
+    if not lk.acquire(blocking=False):
+        return   # someone is already refreshing this key
+
     def run():
-        lk = _rows_lock(key)
-        if not lk.acquire(blocking=False):
-            return   # someone is already refreshing this key
         try:
-            _store_rows(key, _fetch_queue_rows(*key))
+            # Generation loop (H1): if a mutation lands mid-fetch the store is
+            # stamped stale - refetch so the cache converges on post-mutation
+            # data without waiting for the next GET. Bounded, never spins.
+            for _ in range(3):
+                gen0 = _CACHE_GEN[0]
+                _store_rows(key, _fetch_queue_rows(*key), gen=gen0)
+                if _CACHE_GEN[0] == gen0:
+                    break
         except Exception:  # noqa: BLE001 - background refresh must never raise
             pass
         finally:
             lk.release()
-    threading.Thread(target=run, daemon=True).start()
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except RuntimeError:   # can't start new thread - release, next GET re-kicks
+        lk.release()
 
 
 def _kick_queue_resp_rebuild(memo_key, params):
@@ -6244,28 +6385,48 @@ def _kick_queue_resp_rebuild(memo_key, params):
     re-kicks if still stale. Never raises; an empty-rows body is never stored
     (same guard as the inline build - a cold thread-collapse can briefly
     filter to [] and caching that blanks the inbox for a whole TTL)."""
+    # Lock tested in the caller (H9): no thread spawned just to fail an acquire.
+    if not _QUEUE_RESP_LOCK.acquire(blocking=False):
+        return
+
     def run():
         import gzip
-        if not _QUEUE_RESP_LOCK.acquire(blocking=False):
-            return
         try:
-            etag = _queue_resp_etag(*memo_key)
+            status_q, limit = memo_key
+            etag = _queue_resp_etag(status_q, limit)
             ent = _QUEUE_RESP_MEMO.get(memo_key)
             if ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL:
                 return   # a peer rebuilt it while we queued
-            st, body = route_queue_get({"status": [memo_key[0]],
-                                        "limit": [str(memo_key[1])],
-                                        "fields": [memo_key[2]]})
-            if st != 200 or not (isinstance(body, dict) and body.get("rows")):
+            # Freshen the ROWS first (panel fix, H2): building off
+            # _queue_rows_cached's stale-serving would memoize pre-mutation
+            # rows and make convergence take a third GET. This worker is
+            # already off the request path - pay the real fetch here.
+            rows_ent = _ROWS_CACHE.get((status_q, limit))
+            if not rows_ent or (_time.time() - rows_ent["at"]) >= _ROWS_TTL:
+                for _ in range(3):   # generation loop, same as _kick_rows_refresh
+                    gen0 = _CACHE_GEN[0]
+                    _store_rows((status_q, limit),
+                                _fetch_queue_rows(status_q, limit), gen=gen0)
+                    if _CACHE_GEN[0] == gen0:
+                        break
+            st, body = route_queue_get({"status": [status_q],
+                                        "limit": [str(limit)]})
+            if st != 200 or not _queue_body_cacheable(body):
                 return
             raw = json.dumps(body).encode()
             gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
-            _QUEUE_RESP_MEMO[memo_key] = (etag, len(raw), gz, _time.time())
-        except Exception:  # noqa: BLE001 - background rebuild must never raise
-            pass
+            _QUEUE_RESP_MEMO[memo_key] = (_queue_resp_etag(status_q, limit),
+                                          len(raw), gz, _time.time())
+        except Exception as e:  # noqa: BLE001 - must never raise, but NEVER silently:
+            # a permanently-failing rebuild is indistinguishable from a healthy
+            # one, and the max-stale ceiling is the only other safety net (F1).
+            print(f"[setter] queue memo rebuild failed: {e}", file=sys.stderr)
         finally:
             _QUEUE_RESP_LOCK.release()
-    threading.Thread(target=run, daemon=True, name="setter-queue-rebuild").start()
+    try:
+        threading.Thread(target=run, daemon=True, name="setter-queue-rebuild").start()
+    except RuntimeError:
+        _QUEUE_RESP_LOCK.release()
 
 
 def _bust_read_caches(rewarm: bool = True):
@@ -6282,13 +6443,15 @@ def _bust_read_caches(rewarm: bool = True):
     "Couldn't send the reply" / "Couldn't refresh the queue" reports. Stale-
     marking keeps the same freshness contract (every cache here is already
     SWR; the UI tolerates seconds of lag) with none of the cold cliffs."""
+    _CACHE_GEN[0] += 1   # H1: any in-flight refresh must not stamp itself fresh
     with _KPI_LOCK:
         if _KPI_CACHE.get("val") is not None:
             _KPI_CACHE["at"] = 0.0   # stale -> _compute_kpis serves cached + bg refresh
         # val stays None only on a true cold boot: that one compute is sync.
     _POLL_TS_CACHE["at"] = 0.0
     _REP_IDS_CACHE["at"] = 0.0
-    for ent in _ROWS_CACHE.values():
+    _REP_IDS_CACHE["rows_at"] = 0.0
+    for ent in list(_ROWS_CACHE.values()):   # list(): concurrent insert-safe (M12)
         ent["at"] = 0.0              # stale, never cleared: SWR keeps serving
     # _QUEUE_RESP_MEMO entries deliberately survive: their etag (rows_at +
     # kpis) stops matching the moment refreshed rows land, and queue_response
@@ -6310,32 +6473,29 @@ def route_queue_get(params):
             limit = 200
         limit = max(1, min(limit, 500))
         rows = _queue_rows_cached(status, limit) if _SB else []
-        # fields=list: the inbox LIST doesn't need the stored `thread` blobs -
-        # they're ~80% of the payload (measured 1.3MB of 1.6MB live). The UI
-        # opts in for its fast first paint and hydrates full rows in the
-        # background; the default (no param) response is byte-identical to
-        # before, so nothing else changes shape.
-        if _qp(params, "fields", "") == "list":
-            rows = [{k: v for k, v in r.items() if k != "thread"} for r in rows]
+        # fields=list is accepted for client compatibility but is now a no-op:
+        # the slim QUEUE_LIST_COLUMNS select never fetches `thread`, so list
+        # and default responses are identical (threads come from
+        # /api/setter/thread, cache-first).
         return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
 
-def _queue_resp_etag(status: str, limit: int, fields: str) -> str:
-    """Cheap content fingerprint for the queue body - no serialization. Folds in
-    the rows-cache timestamp (bumped whenever rows refetch, incl. after a
-    mutation bust) plus the kpi/last-checked SWR values, so it changes iff the
-    serialized body would."""
-    import hashlib
+def _queue_resp_etag(status: str, limit: int) -> str:
+    """PURE in-memory fingerprint for the queue body - no serialization, no
+    I/O (panel fix 2026-07-30, F3: the old version called _compute_kpis() and
+    _last_poll_done_at() on every GET, which post-bust meant a synchronous
+    Supabase round trip - or on a cold boot the full 12-query fan-out -
+    INSIDE the fingerprint, before the 'instant' stale bytes went out).
+    rows_at moves whenever the rows refetch; _CACHE_GEN moves on every
+    mutation - together they change iff the body's rows could have. The
+    kpis/last_checked blocks riding in the body may lag one rows-refresh
+    behind; both are advisory displays the UI already treats as eventually
+    consistent."""
     ent = _ROWS_CACHE.get((status, limit))
     rows_at = ent["at"] if ent else 0.0
-    try:
-        kpis = json.dumps(_compute_kpis(), sort_keys=True)
-    except Exception:  # noqa: BLE001 - a fingerprint must never raise
-        kpis = ""
-    sig = f"{status}|{limit}|{fields}|{rows_at}|{kpis}|{_last_poll_done_at()}"
-    return hashlib.sha256(sig.encode()).hexdigest()[:32]
+    return f"{status}|{limit}|{rows_at}|{_CACHE_GEN[0]}"
 
 
 def queue_response(params, accept_gzip: bool):
@@ -6356,16 +6516,17 @@ def queue_response(params, accept_gzip: bool):
         limit = max(1, min(int(_qp(params, "limit", "200") or 200), 500))
     except (ValueError, TypeError):
         limit = 200
-    fields = _qp(params, "fields", "")
     # Full-trim (owner ask 2026-07-29): only Needs review is memoized. Other
-    # pills build fresh on their rare click (slim fields=list responses) so
-    # nothing but the inbox holds a cached response buffer in memory.
+    # pills build fresh on their rare click, but single-flighted (panel fix
+    # 2026-07-30, H7): N tabs clicking "All" together used to pay N concurrent
+    # fetch+serialize+gzip passes, GIL-pinned on 0.5 CPU.
     if status_q != "needs_review":
-        st, body = route_queue_get(params)
-        raw = json.dumps(body).encode()
-        if st != 200:
-            return st, None, raw
-        gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
+        with _PILL_BUILD_LOCK:
+            st, body = route_queue_get(params)
+            raw = json.dumps(body).encode()
+            if st != 200:
+                return st, None, raw
+            gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
         if accept_gzip and len(raw) >= 512:
             return 200, "gzip", gz
         return 200, None, raw
@@ -6376,19 +6537,26 @@ def queue_response(params, accept_gzip: bool):
             _queue_rows_cached(status_q, limit)
         except Exception:  # noqa: BLE001 - route_queue_get repeats the read + handles errors
             pass
-    memo_key = (status_q, limit, fields)
-    etag = _queue_resp_etag(status_q, limit, fields)
+    # fields is deliberately NOT in the memo key (panel fix, #9): the slim
+    # select made fields=list and the default byte-identical, and two keys
+    # doubled the buffer memory for nothing.
+    memo_key = (status_q, limit)
+    etag = _queue_resp_etag(status_q, limit)
     ent = _QUEUE_RESP_MEMO.get(memo_key)
-    if ent and not (ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL):
+    fresh = ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL
+    over_ceiling = ent and (_time.time() - ent[3]) > _QUEUE_RESP_MAX_STALE_S
+    if ent and not fresh and not over_ceiling:
         # SWR (502 fix 2026-07-30): a stale buffer exists - serve it NOW and
         # rebuild in the background. The old behaviour rebuilt synchronously
         # under the global lock (multi-MB fetch + dumps + gzip on 0.5 CPU),
         # which is exactly the request that outlived the proxy timeout or
-        # starved /healthz right after a mutation bust. Only a true cold boot
-        # (no buffer at all) still builds inline - and _boot_warmup now
-        # pre-builds that before the first real request lands.
+        # starved /healthz right after a mutation bust.
         _kick_queue_resp_rebuild(memo_key, params)
-    if not ent:   # cold boot only - no buffer exists yet, build it inline
+    if not ent or over_ceiling:
+        # Cold boot (no buffer), or the buffer aged past the hard ceiling
+        # (panel fix, F1/H3: background rebuilds can fail silently - lock
+        # busy, fetch error - and without a wall-clock bound the inbox could
+        # serve one snapshot forever). One inline build restores truth.
         with _QUEUE_RESP_LOCK:
             ent = _QUEUE_RESP_MEMO.get(memo_key)   # a peer may have built it while we waited
             if not (ent and ent[0] == etag and (_time.time() - ent[3]) <= _QUEUE_RESP_TTL):
@@ -6399,25 +6567,27 @@ def queue_response(params, accept_gzip: bool):
                 # Level policy mirrors _json: past ~256KB, level 1 compresses
                 # JSON nearly as well at a fraction of the CPU.
                 gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
-                # Never memoize an empty-rows body. On a cold boot the thread-
-                # collapse light-fetch (_thread_rep_ids) can briefly filter the
-                # list to [] while kpis still show a backlog; caching that would
-                # hold the inbox blank for the whole TTL — the very "not loading"
-                # symptom. Empty is a few hundred bytes to serialize, so skipping
-                # the cache is free (the memo only exists to spare the multi-MB
-                # full-hydrate). A genuinely empty pill just rebuilds cheaply.
-                if not (isinstance(body, dict) and body.get("rows")):
+                if not _queue_body_cacheable(body):
+                    # Incoherent cold blip only (rows empty while KPIs still
+                    # show a backlog) - serve it, never memoize it. A
+                    # GENUINELY empty inbox (KPIs agree) memoizes normally
+                    # (panel fix, F1: refusing every empty froze the last
+                    # non-empty snapshot forever once the queue drained).
                     if accept_gzip and len(raw) >= 512:
                         return 200, "gzip", gz
                     return 200, None, raw
-                # Bound the memo: legit shapes number ~10 (pills x {slim,full});
+                # Bound the memo: legit shapes number ~10 (pills x limits);
                 # drop expired entries if an odd `limit` fan-out grows it.
                 if len(_QUEUE_RESP_MEMO) > 32:
                     cutoff = _time.time() - _QUEUE_RESP_TTL
                     for k in [k for k, v in list(_QUEUE_RESP_MEMO.items())
                               if v[3] < cutoff]:
                         _QUEUE_RESP_MEMO.pop(k, None)
-                ent = (etag, len(raw), gz, _time.time())
+                # Etag stamped AFTER the build (panel fix, #6): stamping the
+                # pre-build etag against the post-build body guaranteed a
+                # mismatch-and-second-rebuild whenever the rows refreshed
+                # mid-build.
+                ent = (_queue_resp_etag(status_q, limit), len(raw), gz, _time.time())
                 _QUEUE_RESP_MEMO[memo_key] = ent
     raw_len, gz = ent[1], ent[2]
     if accept_gzip and raw_len >= 512:
@@ -6425,6 +6595,18 @@ def queue_response(params, accept_gzip: bool):
     # Non-gzip clients (rare - browsers all send Accept-Encoding: gzip) get the
     # raw body back; storing only the compressed copy keeps the memo lean.
     return 200, None, gzip.decompress(gz)
+
+
+def _queue_body_cacheable(body) -> bool:
+    """False only for the incoherent cold blip: rows empty while the KPI block
+    still reports a needs_review backlog (the _thread_rep_ids race). A body
+    whose rows and KPIs AGREE - including a genuinely empty inbox - caches."""
+    if not isinstance(body, dict):
+        return False
+    if body.get("rows"):
+        return True
+    kpis = body.get("kpis") or {}
+    return not (kpis.get("needs_review") or 0)
 
 
 def route_poll_status(_params):
@@ -6712,7 +6894,11 @@ def _learn_from_edit_async(row: dict, agent: dict, original: str, sent: str, tra
 def route_queue_action(payload):
     try:
         payload = payload or {}
-        qid = payload.get("id")
+        # Coerce + quote once (panel fix, F7): qid comes straight from the
+        # JSON body and was interpolated raw into PostgREST filters; every
+        # row read/write below is also workspace-scoped now (the /thread
+        # hardening covered only the read-only route).
+        qid = quote(str(payload.get("id") or ""), safe="")
         action = payload.get("action")
         if not qid or not action:
             return 400, {"error": "id and action are required"}
