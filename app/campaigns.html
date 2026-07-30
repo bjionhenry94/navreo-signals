@@ -1150,6 +1150,47 @@
   .bar-chip--ok { background: var(--success-bg, rgba(46,125,91,0.14)); color: var(--success, #2E7D5B); }
   @media (max-width: 900px) { .ovm-split { grid-template-columns: 1fr; gap: 18px; } .ovm-vline { display: none; } }
 
+  /* ── The glance, P5 "clean scoreboard" (31 Jul 2026) ──────────────────────
+     Verdict-first, four-number scoreboard, three-state audience bar. Health
+     colour follows the sends-per-positive tier (good/average/poor). */
+  .gv-head { display: flex; align-items: baseline; gap: 8px; }
+  .gv-info { display: inline; }
+  .gv-info > summary { list-style: none; cursor: pointer; width: 16px; height: 16px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--fg-subtle); font-size: 0.62rem; font-style: italic; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .gv-info > summary::-webkit-details-marker { display: none; }
+  .gv-info[open] { display: block; margin-top: 8px; }
+  .gv-info p { margin: 0; font-size: 0.78rem; color: var(--fg-subtle); line-height: 1.5; max-width: 68ch; }
+  .gv-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.74rem; font-weight: 700; padding: 4px 11px; border-radius: 999px; margin-top: 12px; }
+  .gv-pill::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+  .gv-pill.gv-good { background: var(--success-bg); color: var(--success); }
+  .gv-pill.gv-avg { background: var(--warning-bg); color: var(--warning); }
+  .gv-pill.gv-bad { background: var(--danger-bg); color: var(--danger); }
+  .gv-pill.gv-neutral { background: var(--sunken); color: var(--fg-subtle); }
+  .gv-word { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.6rem, 3.4vw, 2.1rem); letter-spacing: -0.02em; line-height: 1; margin: 12px 0 3px; }
+  .gv-word.gv-good { color: var(--success); }
+  .gv-word.gv-avg { color: var(--warning); }
+  .gv-word.gv-bad { color: var(--danger); }
+  .gv-word.gv-neutral { color: var(--fg); }
+  .gv-sub { font-size: 0.98rem; color: var(--fg-muted); margin: 0; }
+  .gv-sub b { color: inherit; font-family: var(--font-display); font-weight: 400; }
+  .gv-quad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; align-items: end; margin-top: 18px; }
+  .gv-n { font-family: var(--font-display); font-weight: 400; font-size: clamp(1.9rem, 4.2vw, 2.5rem); letter-spacing: -0.02em; line-height: 1; color: var(--fg); }
+  .gv-n.gv-good { color: var(--success); }
+  .gv-n.gv-avg { color: var(--warning); }
+  .gv-n.gv-bad { color: var(--danger); }
+  .gv-c { font-family: var(--font-display); font-weight: 400; font-size: 1.05rem; color: var(--fg-subtle); margin-left: 7px; }
+  .gv-l { display: block; font-size: 0.76rem; color: var(--fg-subtle); margin-top: 5px; }
+  .gv-aud { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .gv-audh { display: flex; justify-content: space-between; font-size: 0.84rem; color: var(--fg-subtle); margin-bottom: 9px; }
+  .gv-audh b { color: var(--fg); font-family: var(--font-display); font-weight: 400; }
+  .gv-stack { height: 12px; border-radius: 999px; overflow: hidden; display: flex; background: var(--track-bg); }
+  .gv-stack i { height: 100%; display: block; }
+  .gv-legend { display: flex; gap: 18px; margin-top: 11px; font-size: 0.78rem; color: var(--fg-subtle); flex-wrap: wrap; }
+  .gv-legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .gv-legend i { width: 10px; height: 10px; border-radius: 3px; }
+  .gv-legend b { color: var(--fg); font-family: var(--font-display); font-weight: 400; }
+  .gv-note { margin: 10px 0 0; font-size: 0.72rem; color: var(--fg-subtle); }
+  @media (max-width: 640px) { .gv-quad { grid-template-columns: repeat(2, 1fr); gap: 16px; } }
+
   .whole-picture-grid {
     display: grid;
     grid-template-columns: minmax(0,1.35fr) minmax(0,1fr);
@@ -3422,22 +3463,48 @@
        one two-panel section (overview-merge P2, results left / audience right).
        Left paints synchronously from the sync stats; the right panel hydrates
        from the same campaign-detail payload as the Leads tab's status card. */
-    h.push('<div class="ov-card"><div class="card-title">The campaign at a glance</div>' +
-      '<p class="card-subtitle">Campaign-to-date (positives = Smartlead\'s interested mark). ' +
-      (c.stats.source === "crunch"
-        ? "From the morning-crunch snapshot: the Smartlead sync is refilling right now."
-        : "From the daily Smartlead sync, synced " + esc(localStamp(STATE.insights.stats_updated_at)) + ".") + "</p>" +
-      '<div class="ovm-split">' +
-      '<div><div class="ovm-panelh">Results so far</div>' +
-      '<div class="perf-grid ovm-tiles">' +
-      '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.sent) + '</span><span class="perf-label">Emails sent' + (st.bounced != null ? ' <span class="perf-sub tnum">(' + fmtInt(st.bounced) + " bounced" + (bouncePct != null ? " &middot; " + bouncePct + "%" : "") + ")</span>" : "") + "</span></div>" +
-      '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.replied) + '</span><span class="perf-label">Replies' + (replyPct != null ? ' <span class="perf-sub tnum">(' + replyPct + "%)</span>" : "") + "</span>" + ((replyPct != null && parseFloat(replyPct) < 1) ? '<span class="bar-chip bar-chip--warning">under the 1% floor</span>' : "") + "</div>" +
-      '<div class="perf-tile"><span class="perf-num tnum' + (st.positives === 0 ? " is-bad" : "") + '">' + fmtInt(st.positives) + '</span><span class="perf-label">Positive replies</span></div>' +
-      '<div class="perf-tile"><span class="perf-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="perf-label">Meetings</span></div>' +
-      "</div>" + ovmMeterHTML(c, st) + "</div>" +
-      '<div class="ovm-vline"></div>' +
-      '<div><div class="ovm-panelh">Who we\'re working</div><div id="ovm-status"><p class="lw-loading">Loading the contact record&hellip;</p></div></div>' +
-      "</div></div>");
+    /* The glance — P5 "clean scoreboard" (shipped 31 Jul 2026, Bjion): a plain
+       health verdict tiered on sends-per-positive (<=1,500 good / 1,500-2,500
+       average / >2,500 poor), a four-number scoreboard (Sent, Replied as a rate
+       with the count beside it, Positives as a count with its rate beside it,
+       Meetings), and the audience split (completed / in progress / not started)
+       hydrated async into #ovm-status from the campaign-detail payload. */
+    var gSpp = st.positives ? Math.round(st.sent / st.positives) : null;
+    var gPosPct = (st.positives != null && st.sent) ? pct(st.positives, st.sent, 1) : null;
+    var gClass, gWord, gPill, gSub;
+    if (!st.sent) {
+      gClass = "gv-neutral"; gWord = "Not sending yet."; gPill = "Draft";
+      gSub = "No emails have gone out on this campaign yet.";
+    } else if (!st.positives) {
+      gClass = "gv-bad"; gWord = "Nothing landed yet."; gPill = "No positives";
+      gSub = "No positives yet from " + fmtInt(st.sent) + " emails sent.";
+    } else if (gSpp <= 1500) {
+      gClass = "gv-good"; gWord = "It’s working."; gPill = "Healthy";
+      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — good, under the 1,500 line.";
+    } else if (gSpp <= 2500) {
+      gClass = "gv-avg"; gWord = "Ticking along."; gPill = "Average";
+      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — average (1,500–2,500).";
+    } else {
+      gClass = "gv-bad"; gWord = "Underperforming."; gPill = "Needs work";
+      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — high, over the 2,500 line.";
+    }
+    var gSync = (c.stats.source === "crunch"
+      ? "From the morning-crunch snapshot; the Smartlead sync is refilling now."
+      : "Campaign-to-date, from the daily Smartlead sync" + (STATE.insights.stats_updated_at ? ", synced " + esc(localStamp(STATE.insights.stats_updated_at)) : "") + ".") +
+      " Positives = Smartlead’s interested mark. Under 1,500 emails per positive is good, 1,500–2,500 average, above that poor.";
+    h.push('<div class="ov-card gv-card"><div class="gv-head"><div class="card-title" style="margin:0">The campaign at a glance</div>' +
+      '<details class="gv-info"><summary aria-label="about these numbers">i</summary><p>' + gSync + "</p></details></div>" +
+      '<span class="gv-pill ' + gClass + '">' + esc(gPill) + "</span>" +
+      '<p class="gv-word ' + gClass + '">' + gWord + "</p>" +
+      '<p class="gv-sub">' + gSub + "</p>" +
+      '<div class="gv-quad">' +
+      '<div class="gv-q"><span class="gv-n tnum">' + fmtInt(st.sent) + '</span><span class="gv-l">Sent</span></div>' +
+      '<div class="gv-q"><span class="gv-n tnum">' + (replyPct != null ? replyPct + "%" : fmtInt(st.replied)) + "</span>" + (replyPct != null ? '<span class="gv-c tnum">' + fmtInt(st.replied) + "</span>" : "") + '<span class="gv-l">Replied</span></div>' +
+      '<div class="gv-q"><span class="gv-n tnum ' + gClass + '">' + fmtInt(st.positives != null ? st.positives : 0) + "</span>" + (gPosPct != null ? '<span class="gv-c tnum">' + gPosPct + "%</span>" : "") + '<span class="gv-l">Positives</span></div>' +
+      '<div class="gv-q"><span class="gv-n tnum' + ((st.meetings || 0) > 0 ? " gv-good" : "") + '">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="gv-l">Meetings</span></div>' +
+      "</div>" +
+      '<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>' +
+      "</div>");
     h.push('<div class="ov-card"><div class="card-title">The whole picture</div>');
     if (c.teaser) h.push('<p class="wp-headline">' + esc(c.teaser) + "</p>");
     if (c.note) h.push('<p class="footnote-line">' + esc(c.note) + ". The glance numbers above are campaign lifetime: a different counter, not a contradiction.</p>");
@@ -3888,27 +3955,31 @@
           (c.stats.leads != null ? " &mdash; Smartlead itself holds " + fmtInt(c.stats.leads) + " leads" : "") +
           ". The Leads tab shows the live platform audience.</p>";
       } else if (ov) {
-        var oTotal = (d.leads || {}).total;
-        var OLBL = { INPROGRESS: "Being worked", COMPLETED: "Finished the sequence", PAUSED: "Paused", BLOCKED: "Blocked", STARTED: "Started" };
-        var OCLR = { STARTED: "#E3C9A8", INPROGRESS: "#B08D62", COMPLETED: "#59422C", PAUSED: "#DFA000", BLOCKED: "#C2371F" };
-        var oRows = (d.lead_statuses || []).slice().sort(function (a, b) { return (b.n || 0) - (a.n || 0); });
-        var omax = oRows.length ? (oRows[0].n || 0) : 0;
-        var oh = '<p class="ovm-total"><span class="ovm-total-num tnum">' + fmtInt(oTotal) + '</span><span class="ovm-total-lab">in the contact record</span></p>';
-        oRows.forEach(function (s) {
-          var w = omax ? Math.max(1.5, 100 * (s.n || 0) / omax) : 0;
-          var p = oTotal ? Math.round(1000 * (s.n || 0) / oTotal) / 10 : null;
-          oh += '<div class="ovm-srow"><span class="ovm-slab">' + esc(OLBL[s.k] || s.k) + "</span>" +
-            '<span class="ovm-strk"><span class="ovm-sfill" style="width:' + w.toFixed(1) + "%;background:" + (OCLR[s.k] || "#B7B2AA") + '"></span></span>' +
-            '<span class="ovm-sn tnum">' + fmtInt(s.n) + '</span><span class="ovm-spc tnum">' + (p != null ? p + "%" : "") + "</span></div>";
-        });
-        var ofoot = oRows.reduce(function (a, s) { return a + (s.n || 0); }, 0);
-        oh += '<p class="status-note">' + (ofoot === oTotal
-          ? "The statuses foot exactly to the " + fmtInt(oTotal) + " leads in the contact record."
-          : "Statuses cover " + fmtInt(ofoot) + " of " + fmtInt(oTotal) + " contact-record rows.") +
-          (c.stats.leads != null && c.stats.leads !== oTotal
-            ? " Smartlead's own lead count is " + fmtInt(c.stats.leads) + ": a different counter (platform audience vs contact record), not a contradiction."
-            : "") + "</p>";
-        ov.innerHTML = oh;
+        /* Audience split into the three states Bjion wants at a glance —
+           completed (full green), in progress (faded green), not started (grey);
+           STARTED/INPROGRESS/PAUSED all read as in-progress. Blocked is a real
+           bad state, so when present it shows as a distinct red segment rather
+           than being folded into "not started". Not-started = the platform
+           audience (or contact record) minus everyone with a known status. */
+        var aBy = {}; (d.lead_statuses || []).forEach(function (s) { aBy[s.k] = (aBy[s.k] || 0) + (s.n || 0); });
+        var aDone = aBy.COMPLETED || 0;
+        var aProg = (aBy.INPROGRESS || 0) + (aBy.STARTED || 0) + (aBy.PAUSED || 0);
+        var aBlk = aBy.BLOCKED || 0;
+        var aAcc = aDone + aProg + aBlk;
+        var aSeqd = (d.leads || {}).total || aAcc;
+        var aPlat = c.stats.leads;
+        var aBase = Math.max(aAcc, aSeqd, aPlat != null ? aPlat : 0);
+        var aNot = Math.max(0, aBase - aAcc);
+        var aTot = aBase;
+        var A_DONE = "#2E7D5B", A_PROG = "#A7CDB8", A_NOT = "#D9D6D1", A_BLK = "var(--danger)";
+        var aPc = function (n) { return aTot ? (100 * n / aTot).toFixed(1) : "0"; };
+        var aSeg = function (n, col) { return n > 0 ? '<i style="width:' + aPc(n) + "%;background:" + col + '"></i>' : ""; };
+        var aLeg = function (n, col, lab) { return n > 0 ? '<span><i style="background:' + col + '"></i>' + lab + ' <b class="tnum">' + fmtInt(n) + "</b></span>" : ""; };
+        var aCompPct = aTot ? Math.round(100 * aDone / aTot) : 0;
+        ov.innerHTML = '<div class="gv-audh"><span>Who we\'re working &mdash; <b class="tnum">' + fmtInt(aTot) + '</b> people</span><span><b class="tnum">' + aCompPct + '%</b> completed</span></div>' +
+          '<div class="gv-stack">' + aSeg(aDone, A_DONE) + aSeg(aProg, A_PROG) + aSeg(aNot, A_NOT) + aSeg(aBlk, A_BLK) + "</div>" +
+          '<div class="gv-legend">' + aLeg(aDone, A_DONE, "Completed") + aLeg(aProg, A_PROG, "In progress") + aLeg(aNot, A_NOT, "Not started") + aLeg(aBlk, A_BLK, "Blocked") + "</div>" +
+          (aPlat != null && aPlat !== aSeqd ? '<p class="gv-note">Smartlead holds ' + fmtInt(aPlat) + " leads; " + fmtInt(aSeqd) + " have entered the sequence &mdash; a different counter, not a contradiction.</p>" : "");
       }
       /* sources */
       var sr = document.getElementById("sources-root");
