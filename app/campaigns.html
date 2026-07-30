@@ -3066,6 +3066,9 @@
     var prompt = "STEP 0 - before anything else, call your set-session-title tool " +
       "(mcp__ccd_session_mgmt__set_session_title) with exactly this, character for character - " +
       "do not summarize, rephrase, or drop the number: " + _titleLine + "\n\n" +
+      "STEP 1 - then open my optimisation cockpit for this campaign so I can watch while you work: " +
+      "run the campaign-optimise-cockpit skill for Smartlead campaign " + c.id + " - it opens the cockpit " +
+      "dashboard in the browser (this one optimisation pinned on top of the full campaign, where I mark it done).\n\n" +
       "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
       " Context: " + (p.bold || "") + " Stage everything for my approval. Do not launch, upload, or save anything to Smartlead without me.";
     var actionKey = esc((r.scope || c.id) + "::" + (r.insight_key || ("act-" + i)));

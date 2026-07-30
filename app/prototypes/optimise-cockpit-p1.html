@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Optimisation cockpit · Navreo</title>
+<!--
+  OPTIMISATION COCKPIT — prototype p1 (campaign-optimise-cockpit skill)
+  Standalone + fixture-driven. Mirrors renderDraftCampaign (app/campaigns.html):
+  read-only header + Overview / Messaging / Leads tabs, in the ?chrome=none frame.
+
+  LIVE WIRING CONTRACT (for the migration step — not wired in this fixture):
+   • Reminder text  ← GET /api/notifications/{nid}     (row.claude_prompt, keyed by campaign_id)
+   • Find the nid   ← GET /api/notifications?campaign_id=<id>&status=new
+   • Mark done      → PATCH /api/notifications/{nid}  {"status":"actioned"}  (stamps actioned_at)
+   • Open-on-paste  → campaigns.html?chrome=none#/c/<id>  carrying this cockpit layer
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  @font-face{
+    font-family:"Acid Grotesk";
+    src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight:400; font-style:normal; font-display:swap;
+  }
+  :root{
+    --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+    --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-400:#A89684;
+    --cream:#F9F0E7;
+    --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF; --line:#ECECEA; --line-2:#DDDDDA;
+    --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+    --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+    --red:#C2371F;   --red-bg:#F7DCD5;   --red-line:#EFC7BB;
+    --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+    --font-display:"Acid Grotesk","DM Sans",sans-serif;
+    --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+    --radius:14px; --focus:0 0 0 3px rgba(255,77,0,.32);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:var(--font-sans); background:var(--bg); color:var(--ink);
+    line-height:1.5; letter-spacing:-.015em; -webkit-font-smoothing:antialiased;
+  }
+  .tnum{font-variant-numeric:tabular-nums}
+  .wrap{max-width:940px; margin:0 auto; padding:32px clamp(18px,4vw,40px) 96px}
+
+  /* ── dashboard header ─────────────────────────────── */
+  .eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--orange-700)}
+  .head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:10px 0 4px}
+  h1{font-family:var(--font-display);font-weight:400;font-size:30px;letter-spacing:-.03em;line-height:1.1}
+  .head-sub{font-size:13px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .pill{font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:6px}
+  .pill .dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+  .pill.g{background:var(--green-bg);color:#195C3F}
+  .pill.n{background:#F2F2F0;color:var(--ink-2)}
+  a.slink{color:var(--ink-3);text-decoration:none;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--line-2)}
+  a.slink:hover{color:var(--ink)}
+
+  /* ── the pinned reminder (sticky, on every tab) ──── */
+  .pinwrap{position:sticky;top:0;z-index:40;padding-top:14px;background:linear-gradient(var(--bg) 72%,rgba(255,255,255,0))}
+  .pin{
+    border:1px solid var(--orange-100); border-left:4px solid var(--orange);
+    background:linear-gradient(180deg,#FFF9F5,#FFFFFF);
+    border-radius:var(--radius); padding:18px 20px;
+    box-shadow:0 8px 24px rgba(255,77,0,.07);
+  }
+  .pin.done{border-color:var(--green-line);border-left-color:var(--green);background:linear-gradient(180deg,#F3FAF6,#fff);box-shadow:none}
+  .pin-top{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .pin-kick{font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--orange-700)}
+  .pin.done .pin-kick{color:var(--green)}
+  .pin-min{margin-left:auto;background:none;border:1px solid var(--line-2);border-radius:8px;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink-3);flex:none}
+  .pin-min:hover{background:#fff;color:var(--ink)}
+  .pin-min svg{width:16px;height:16px;transition:transform .2s}
+  /* minimised: collapse to a slim one-line bar so there's room to navigate */
+  .pin.collapsed{padding:12px 20px}
+  .pin.collapsed .pin-why,.pin.collapsed .pin-proof,.pin.collapsed .pin-note,.pin.collapsed .pin-foot{display:none}
+  .pin.collapsed .pin-top{margin-bottom:4px}
+  .pin.collapsed .pin-job{font-size:14.5px;margin-top:2px}
+  .pin.collapsed .pin-min svg{transform:rotate(180deg)}
+  .pin-job{font-size:19px;font-weight:600;letter-spacing:-.02em;line-height:1.35;color:var(--ink)}
+  .pin-why{font-size:14px;color:var(--ink-2);margin-top:8px;max-width:64ch}
+  .pin-note{font-size:12.5px;color:var(--ink-3);margin-top:12px;display:flex;align-items:center;gap:8px}
+  .pin-note svg{width:14px;height:14px;flex:none;color:var(--ink-3)}
+  .pin-proof{margin-top:15px;padding-top:15px;border-top:1px solid var(--orange-100)}
+  .pin.done .pin-proof{border-top-color:var(--green-line)}
+  .pin-foot{display:flex;justify-content:flex-end;margin-top:16px}
+  /* glanceable proof: reply rate by version (unique to the pin — no repeated raw stats) */
+  .vbars{display:flex;flex-direction:column;gap:8px;max-width:480px}
+  .vbars-h{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);margin-bottom:2px}
+  .vbar{display:flex;align-items:center;gap:10px;font-size:12.5px}
+  .vb-l{width:74px;color:var(--ink-2);font-weight:500}
+  .vb-l b{font-weight:600}
+  .vb-t{flex:1;height:9px;border-radius:999px;background:#EEE8E1;overflow:hidden}
+  .vb-f{height:100%;border-radius:999px;background:#CDBFB0;transition:width .5s cubic-bezier(.2,.8,.3,1)}
+  .vb-f.win{background:var(--green)}
+  .vb-v{width:64px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-3);font-weight:500}
+
+  .btn{
+    border:1px solid var(--line-2);background:transparent;color:var(--ink);
+    border-radius:999px;padding:11px 20px;font:600 14px var(--font-sans);letter-spacing:-.005em;
+    cursor:pointer;display:inline-flex;align-items:center;gap:8px;white-space:nowrap;
+  }
+  .btn:hover{background:var(--bg-sunken)}
+  .btn:focus-visible{outline:none;box-shadow:var(--focus)}
+  .btn svg{width:16px;height:16px;flex:none}
+  .btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
+  .btn.primary:hover{background:var(--orange-600)}
+  .btn.done{background:var(--green);border-color:var(--green);color:#fff;cursor:default}
+  .btn.done:hover{background:var(--green)}
+
+  /* ── tabs ─────────────────────────────────────────── */
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:22px 0 20px}
+  .tab{background:none;border:none;font:600 14px var(--font-sans);color:var(--ink-3);
+       padding:11px 16px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab:hover{color:var(--ink-2)}
+  .tab.on{color:var(--orange-700);border-bottom-color:var(--orange)}
+  .tab .c{opacity:.5;font-weight:500}
+
+  /* ── cards / content ──────────────────────────────── */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:18px}
+  .card-title{font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .card-sub{font-size:13px;color:var(--ink-3);margin-top:4px}
+  .glance{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
+  @media(max-width:680px){.glance{grid-template-columns:repeat(2,1fr)}}
+  .tile{border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+  .tile .lab{font-size:12px;color:var(--ink-3);font-weight:500}
+  .tile .num{font-family:var(--font-display);font-size:30px;line-height:1;margin-top:10px}
+  .tile .num.bad{color:var(--red)}
+  .tile .hint{font-size:11.5px;color:var(--ink-3);margin-top:7px}
+  .plain{background:var(--bg-sunken);border-radius:12px;padding:16px 18px;margin-top:18px;font-size:14px;color:var(--ink-2);line-height:1.6}
+  .plain b{color:var(--ink);font-weight:600}
+
+  table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+  .tbl th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);padding:10px 12px;border-bottom:1px solid var(--line)}
+  .tbl td{padding:12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl tr.win td{background:#F3FAF6}
+  .verb{font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px}
+  .verb.keep{background:var(--green-bg);color:#195C3F}
+  .verb.pause{background:#F2F2F0;color:var(--ink-2)}
+  .lead-name{font-weight:600}
+  .lead-sub{font-size:12px;color:var(--ink-3)}
+  .st{font-size:11.5px;font-weight:500;padding:2px 9px;border-radius:999px}
+  .st.sent{background:var(--green-bg);color:#195C3F}
+  .st.wait{background:#F2F2F0;color:var(--ink-2)}
+
+  /* messaging: version performance footnotes + read-only sequence viewer */
+  .foot{font-size:12px;color:var(--ink-3);margin-top:12px;line-height:1.55}
+  .seq{display:flex;flex-direction:column;gap:14px;margin-top:16px}
+  .seq-step{border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:var(--bg-sunken)}
+  .seq-h{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+  .seq-step-n{font-weight:600;font-size:14px}
+  .seq-pills{display:flex;gap:5px;margin-left:auto}
+  .vpill{font-size:11px;font-weight:600;padding:3px 11px;border-radius:999px;background:#EFEAE4;color:var(--ink-3);border:none;cursor:pointer;font-family:inherit}
+  .vpill:hover{background:#E4DBD0;color:var(--ink-2)}
+  .vpill.on{background:var(--ink);color:var(--cream)}
+  .vpill.win{box-shadow:inset 0 0 0 1.5px var(--green)}
+  .vpill.win.on{box-shadow:none}
+  .win-tag{font-size:11px;font-weight:600;color:var(--green);display:inline-flex;align-items:center;gap:5px}
+  .win-tag::before{content:"";width:6px;height:6px;border-radius:999px;background:var(--green)}
+  .v-copy.hidden{display:none}
+  .seq-subj{font-size:13.5px;margin-bottom:10px;color:var(--ink-2)}
+  .seq-body{font-size:13.5px;color:var(--ink-2);line-height:1.7;background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .var{font-family:var(--font-mono);font-size:12px;background:#EFEAE4;border-radius:5px;padding:1px 6px;color:var(--ink-2)}
+  .hidden{display:none}
+  /* toast */
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(90px);
+    background:var(--ink);color:var(--cream);font-size:13px;font-weight:500;padding:12px 20px;
+    border-radius:999px;transition:transform .28s cubic-bezier(.2,.9,.3,1.2);z-index:90;box-shadow:0 10px 30px rgba(20,17,14,.25)}
+  .toast.on{transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ── dashboard header (read-only) ── -->
+  <div class="eyebrow">Optimisation cockpit</div>
+  <div class="head">
+    <div>
+      <h1 id="camp-name">Navreo | Presentation Skills | (5-10) &amp; LookAlike</h1>
+      <div class="head-sub">
+        <span class="pill g"><span class="dot"></span> Running</span>
+        <span>Campaign <span class="tnum">3703621</span></span>
+        <span>·</span>
+        <a class="slink" href="#" onclick="return false">Open in Smartlead ↗</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── THE pinned reminder — the one job, on every tab ── -->
+  <div class="pinwrap">
+    <div class="pin" id="pin">
+      <div class="pin-top">
+        <span class="pin-kick" id="pin-kick">You're working on this</span>
+        <button class="pin-min" id="pin-min" onclick="togglePin()" aria-label="Minimise" title="Minimise so you have room to navigate">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+        </button>
+      </div>
+      <div class="pin-job" id="pin-job">
+        Keep only <b>Version B</b> running — it's the only one getting replies. Switch the other versions off, and don't add any new people for now.
+      </div>
+      <div class="pin-why">
+        Almost every reply — <b>33 of your 46</b> — is coming from Version&nbsp;B. You've already emailed 1,905 people, so back the winner and don't add more until it earns them.
+      </div>
+      <div class="pin-proof">
+        <div class="vbars">
+          <div class="vbars-h">Which version is winning · reply rate</div>
+          <div class="vbar"><span class="vb-l"><b>Version B</b></span><div class="vb-t"><div class="vb-f win" style="width:100%"></div></div><span class="vb-v">1 in 19</span></div>
+          <div class="vbar"><span class="vb-l">Version A</span><div class="vb-t"><div class="vb-f" style="width:26%"></div></div><span class="vb-v">1 in 71</span></div>
+          <div class="vbar"><span class="vb-l">Version C</span><div class="vb-t"><div class="vb-f" style="width:11%"></div></div><span class="vb-v">1 in 159</span></div>
+        </div>
+      </div>
+      <div class="pin-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Nothing goes live. Stage every change for approval — do not launch, upload, or save to Smartlead.
+      </div>
+      <div class="pin-foot">
+        <button class="btn primary" id="done-btn" onclick="markDone()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          Mark this optimisation done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── tabs (same three as the real detail view) ── -->
+  <nav class="tabs" role="tablist">
+    <button class="tab on" data-tab="overview" onclick="showTab('overview')">Overview</button>
+    <button class="tab" data-tab="messaging" onclick="showTab('messaging')">Messaging</button>
+    <button class="tab" data-tab="leads" onclick="showTab('leads')">Leads <span class="c tnum">(1,905)</span></button>
+  </nav>
+
+  <!-- OVERVIEW -->
+  <section class="tab-panel" data-tab="overview">
+    <div class="card">
+      <div class="card-title">The campaign so far</div>
+      <div class="card-sub">Everything this campaign has done since it started. Numbers from the daily Smartlead sync.</div>
+      <div class="glance">
+        <div class="tile"><div class="lab">Emails sent</div><div class="num tnum">1,905</div><div class="hint">3 bounced · 0.2%</div></div>
+        <div class="tile"><div class="lab">Replies</div><div class="num tnum">46</div><div class="hint">about 1 in 40 people</div></div>
+        <div class="tile"><div class="lab">Said yes</div><div class="num tnum bad">0</div><div class="hint">none interested yet</div></div>
+        <div class="tile"><div class="lab">Meetings</div><div class="num tnum">0</div><div class="hint">booked from this campaign</div></div>
+      </div>
+      <div class="plain">
+        In plain words: <b>people are opening and replying, but no one's biting yet.</b> The good news is the replies aren't spread evenly — <b>Version B is doing almost all the work</b>. That's the whole reason for today's job: keep B, drop the rest, and don't pour more leads in until B turns replies into real "yes"es.
+      </div>
+    </div>
+  </section>
+
+  <!-- MESSAGING (mirrors the real detail view: version performance + the sequence copy) -->
+  <section class="tab-panel hidden" data-tab="messaging">
+    <div class="card">
+      <div class="card-title">Version performance</div>
+      <div class="card-sub">Every version, pulled live from Smartlead (positives = Smartlead's "interested" mark).</div>
+      <table class="tbl" style="margin-top:16px">
+        <thead><tr><th>Email</th><th>Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>1 per</th><th>Meetings</th></tr></thead>
+        <tbody>
+          <tr class="win"><td>Email 1</td><td><b>B</b> · winner</td><td class="tnum">628</td><td class="tnum">33</td><td class="tnum">0</td><td class="tnum">1 per 19</td><td class="tnum">0</td></tr>
+          <tr><td>Email 1</td><td>A</td><td class="tnum">641</td><td class="tnum">9</td><td class="tnum">0</td><td class="tnum">1 per 71</td><td class="tnum">0</td></tr>
+          <tr><td>Email 1</td><td>C</td><td class="tnum">636</td><td class="tnum">4</td><td class="tnum">0</td><td class="tnum">1 per 159</td><td class="tnum">0</td></tr>
+        </tbody>
+      </table>
+      <p class="foot">Positives is Smartlead's "interested" mark — this campaign has none yet.<br>Smartlead counters reset when a sequence is re-saved: read as since relaunch.</p>
+      <div class="plain">
+        In plain words: Version&nbsp;B gets a reply from <b>1 in every 19</b> people. A and C are closer to 1 in 71 and 1 in 159. Same audience, same offer — the wording is the difference. So back B and switch A and C off.
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">The sequence</div>
+      <div class="card-sub">A read-only copy of what's live in Smartlead — steps, subjects and bodies. Tap <b>A</b>, <b>B</b> or <b>C</b> to see that version's wording. The live copy stays in Smartlead (the only safe place to edit it).</div>
+      <div class="seq">
+        <div class="seq-step">
+          <div class="seq-h"><span class="seq-step-n">Email 1</span>
+            <span class="win-tag">B is the winner</span>
+            <span class="seq-pills">
+              <button class="vpill on" onclick="showVariant('A',this)">A</button>
+              <button class="vpill win" onclick="showVariant('B',this)">B</button>
+              <button class="vpill" onclick="showVariant('C',this)">C</button>
+            </span>
+          </div>
+          <div class="v-copy" data-v="A">
+            <div class="seq-subj"><b>Subject:</b> Is this relevant <span class="var">{{first_name}}</span>?</div>
+            <div class="seq-body">
+              Hi <span class="var">{{first_name}}</span>,<br><br>
+              <span class="var">{{Icebreaker}}</span><br><br>
+              We've noticed there's a lot of noise right now around how teams sharpen their presentation skills.<br><br>
+              I recorded a short video for <span class="var">{{company_name}}</span> showing what we'd build to <span class="var">{{Angle}}</span>.<br><br>
+              If it fits, we can build or run it for you — worth a quick look?
+            </div>
+          </div>
+          <div class="v-copy hidden" data-v="B">
+            <div class="seq-subj"><b>Subject:</b> quick idea for <span class="var">{{company_name}}</span>'s team</div>
+            <div class="seq-body">
+              Hi <span class="var">{{first_name}}</span>,<br><br>
+              <span class="var">{{Icebreaker}}</span><br><br>
+              Most teams we talk to want their people presenting with more confidence, but no one has time to coach it.<br><br>
+              We put together a short <span class="var">{{Angle}}</span> for <span class="var">{{company_name}}</span> — a 3-minute watch.<br><br>
+              Want me to send it over?
+            </div>
+          </div>
+          <div class="v-copy hidden" data-v="C">
+            <div class="seq-subj"><b>Subject:</b> presentation skills at <span class="var">{{company_name}}</span></div>
+            <div class="seq-body">
+              Hi <span class="var">{{first_name}}</span>,<br><br>
+              <span class="var">{{Icebreaker}}</span><br><br>
+              Curious how <span class="var">{{company_name}}</span> helps the team prep for high-stakes presentations right now?<br><br>
+              We've built a light programme that <span class="var">{{Angle}}</span> — happy to share a quick example.<br><br>
+              Open to it?
+            </div>
+          </div>
+        </div>
+        <div class="seq-step">
+          <div class="seq-h"><span class="seq-step-n">Email 2</span><span class="muted" style="font-size:12.5px">· follow-up, 3 days later</span></div>
+          <div class="seq-subj"><b>Subject:</b> Re: Is this relevant <span class="var">{{first_name}}</span>?</div>
+          <div class="seq-body">Just floating this back to the top, <span class="var">{{first_name}}</span> — worth a quick look?</div>
+        </div>
+      </div>
+      <p class="foot">Open the sequence in Smartlead to edit the copy — nothing is editable here.</p>
+    </div>
+  </section>
+
+  <!-- LEADS -->
+  <section class="tab-panel hidden" data-tab="leads">
+    <div class="card">
+      <div class="card-title">Who's in this campaign</div>
+      <div class="card-sub">The live audience, straight from Smartlead. Showing the first few of 1,905.</div>
+      <table class="tbl" style="margin-top:16px">
+        <thead><tr><th>Name</th><th>Role & company</th><th>Where it's from</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="lead-name">Priya Nadar</td><td class="lead-sub">Head of L&D · Meridian Group</td><td class="lead-sub">(5-10) list</td><td><span class="st sent">Emailed</span></td></tr>
+          <tr><td class="lead-name">Tom Alvarez</td><td class="lead-sub">People Director · Brightwell</td><td class="lead-sub">LookAlike</td><td><span class="st sent">Emailed</span></td></tr>
+          <tr><td class="lead-name">Sara Kim</td><td class="lead-sub">VP Talent · Northlane</td><td class="lead-sub">(5-10) list</td><td><span class="st sent">Emailed</span></td></tr>
+          <tr><td class="lead-name">Daniel Osei</td><td class="lead-sub">COO · Cadence Labs</td><td class="lead-sub">LookAlike</td><td><span class="st wait">Waiting</span></td></tr>
+          <tr><td class="lead-name">Mara Lindqvist</td><td class="lead-sub">Head of People · Vant6</td><td class="lead-sub">(5-10) list</td><td><span class="st wait">Waiting</span></td></tr>
+        </tbody>
+      </table>
+      <div class="plain">
+        This is who the emails go to. You don't need to touch the list today — the job is about <b>which version</b> they get, not <b>who</b> they are.
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="toast" id="toast">✓ Marked done — staged for your approval</div>
+
+<script>
+  function togglePin(){
+    document.getElementById('pin').classList.toggle('collapsed');
+  }
+  function showVariant(v, el){
+    var step = el.closest('.seq-step');
+    step.querySelectorAll('.vpill').forEach(function(p){ p.classList.toggle('on', p===el); });
+    step.querySelectorAll('.v-copy').forEach(function(c){ c.classList.toggle('hidden', c.getAttribute('data-v')!==v); });
+  }
+  function showTab(name){
+    document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.toggle('hidden', p.getAttribute('data-tab')!==name); });
+    document.querySelectorAll('.tab').forEach(function(t){ t.classList.toggle('on', t.getAttribute('data-tab')===name); });
+  }
+  function markDone(){
+    var pin=document.getElementById('pin'), btn=document.getElementById('done-btn');
+    if(pin.classList.contains('done')) return;
+    pin.classList.add('done');
+    document.getElementById('pin-kick').textContent='Done — staged for approval';
+    btn.className='btn done'; btn.textContent='✓ Done';
+    // LIVE: PATCH /api/notifications/{nid} {"status":"actioned"}
+    var t=document.getElementById('toast'); t.classList.add('on');
+    setTimeout(function(){ t.classList.remove('on'); },2600);
+  }
+</script>
+</body>
+</html>
