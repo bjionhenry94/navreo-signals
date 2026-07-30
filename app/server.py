@@ -8017,6 +8017,35 @@ def _cockpit_messaging(cid) -> dict:
             "positives": r.get("positive_reply_count") or 0,
             "bounces": r.get("bounce_count") or 0})
     versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
+    # Fold in EVERY variant that variant-statistics leaves out — above all the
+    # DELETED / disabled ones. A founder must still see a variant that ran and
+    # was turned off; the table must never silently hide one. The raw /sequences
+    # payload carries is_deleted variants (the sequence-copy endpoint strips
+    # them); merge them here — with 0 stats when the stats endpoint has dropped
+    # them — and flag `disabled`. Fully defensive: any failure leaves the
+    # variant-statistics list exactly as it was.
+    try:
+        _sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
+        _seqs = _sraw if isinstance(_sraw, list) else (
+            (_sraw.get("data") or _sraw.get("sequences") or []) if isinstance(_sraw, dict) else [])
+        _idx = {(str(r.get("step")), r.get("label") or ""): r for r in versions}
+        for _s in (_seqs or []):
+            _step = _s.get("seq_number")
+            for _v in (_s.get("sequence_variants") or []):
+                _key = (str(_step), _v.get("variant_label") or "")
+                _hit = _idx.get(_key)
+                if _hit is not None:
+                    if _v.get("is_deleted"):
+                        _hit["disabled"] = True
+                    continue
+                _new = {"step": _step, "label": _v.get("variant_label"), "inline": False,
+                        "sent": 0, "replies": 0, "positives": 0, "bounces": 0,
+                        "disabled": bool(_v.get("is_deleted"))}
+                _idx[_key] = _new
+                versions.append(_new)
+        versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
+    except Exception:  # noqa: BLE001 — variant completeness must never break the tab
+        pass
     # Meetings by step, from the reply archive (Call Booked + Meeting Request —
     # the page's standing definition: one meeting per PERSON, so this table's
     # total always equals the overview tile). Smartlead never attributes a

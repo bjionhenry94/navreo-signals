@@ -4196,7 +4196,7 @@
       }
       return "<tr>" +
         "<td data-label=\"Email\">Email " + esc(v.step != null ? v.step : "?") + "</td>" +
-        "<td data-label=\"Version\">" + esc(label) + "</td>" +
+        "<td data-label=\"Version\">" + esc(label) + (v.disabled ? ' <span class="ring-caption">off</span>' : "") + "</td>" +
         '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + "</td>" +
         '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + "</td>" +
         '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + "</td>" +
