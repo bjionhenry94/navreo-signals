@@ -1747,6 +1747,11 @@
     letter-spacing: 0.04em; text-transform: uppercase; color: #fff;
     background: var(--nav-orange); padding: 1px 6px; border-radius: 999px; vertical-align: 1px;
   }
+  .vp-combos { margin-top: 22px; }
+  .vp-combos-h { font-size: 0.8rem; font-weight: 600; color: var(--fg); margin-bottom: 2px; }
+  .vp-combos-h .ring-caption { text-transform: none; letter-spacing: 0; font-weight: 500; }
+  table.version-perf-table tr.vp-win { background: linear-gradient(90deg, rgba(255,77,0,0.06), transparent); }
+  table.version-perf-table tr.vp-win td:first-child { box-shadow: inset 3px 0 0 var(--nav-orange); }
 
   /* -- B. "the sequence": Smartlead-editor-like vertical step rail -- */
   .seq-rail { margin-top: 16px; display: flex; flex-direction: column; }
@@ -4081,7 +4086,7 @@
         }
         return;
       }
-      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings);
+      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations);
     };
     if (STATE.messaging[id]) { apply(STATE.messaging[id]); return; }
     var fetchIt = function (isRetry) {
@@ -4190,17 +4195,18 @@
     fetchIt(false);
   }
 
-  function versionTableHTML(versions, note, meetings) {
+  function versionTableHTML(versions, note, meetings, combinations) {
     /* meetings land on the email STEP, never the version (Smartlead cannot
        attribute a booking to a variant) — so the count renders once, on the
        step's first row, and other rows of that step show a dot. */
-    var hasMeet = !!(meetings && meetings.by_step);
+    var hasMeet = !!(meetings && (meetings.by_step || meetings.by_variant));
+    var byVar = (meetings && meetings.by_variant) || {};
     function rateSpan(n, d) { return (d && n) ? ' <span class="ring-caption">' + (n / d * 100).toFixed(1) + '%</span>' : ''; }
     function perPos(v) { return (v.positives > 0 && v.sent) ? fmtInt(Math.round(v.sent / v.positives)) : '<span class="ring-caption">' + (v.sent < 300 ? 'early' : '—') + '</span>'; }
-    /* group by email step: each step is a band header carrying the step-level
-       meetings (a booking sits on the step, not a single variant — per-variant
-       attribution arrives with the per-lead trace), then its variants below,
-       alphabetical, disabled ones flagged "off". */
+    /* sent lookup by "step|label" — sizes the combination rows below. */
+    var sentBy = {};
+    versions.forEach(function (v) { if (!v.inline && v.label != null) sentBy[String(v.step) + '|' + v.label] = v.sent || 0; });
+    /* group by email step; variants alphabetical, disabled flagged "off". */
     var byStep = {};
     versions.forEach(function (v) { var k = v.step != null ? String(v.step) : '?'; (byStep[k] = byStep[k] || []).push(v); });
     var stepKeys = Object.keys(byStep).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
@@ -4212,17 +4218,17 @@
       if (best === null || pp < best.pp) best = { label: v.label, pp: pp };
     });
     var rows = stepKeys.map(function (sk) {
-      var vs = byStep[sk].slice().sort(function (a, b) { return String(a.label || '~').localeCompare(String(b.label || '~')); });
-      var stepSent = vs.reduce(function (s, v) { return s + (v.sent || 0); }, 0);
-      var stepMeet = hasMeet ? (meetings.by_step[sk] || 0) : null;
-      var perMeet = (stepMeet && stepSent) ? fmtInt(Math.round(stepSent / stepMeet)) : (stepMeet != null ? '—' : '');
-      var band = '<tr class="vp-band"><td class="vp-l" colspan="5">Email ' + esc(sk) +
-        ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') + '</span></td>' +
-        '<td class="tnum" data-label="Meetings">' + (stepMeet != null ? fmtInt(stepMeet) : '') + '</td>' +
-        '<td class="tnum" data-label="Sent / meeting">' + perMeet + '</td></tr>';
+      var vs = byStep[sk].slice().sort(function (a, b) { return (a.label == null ? '￿' : String(a.label)).localeCompare(b.label == null ? '￿' : String(b.label)); });
+      var band = '<tr class="vp-band"><td class="vp-l" colspan="7">Email ' + esc(sk) +
+        ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') + '</span></td></tr>';
       var body = vs.map(function (v) {
         var label = v.inline ? 'inline' : (v.label || '?');
         var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
+        /* deduced meetings on this variant (calls whose journey ran through it) */
+        var mv = (!v.inline && v.label != null) ? (byVar[sk + '|' + v.label] || 0) : null;
+        var meetCell = !hasMeet ? '' : (mv == null ? '<span class="ring-caption">&middot;</span>'
+          : (mv > 0 ? fmtInt(mv) : '<span class="ring-caption">0</span>'));
+        var pmCell = (mv && v.sent) ? fmtInt(Math.round(v.sent / mv)) : '';
         return '<tr>' +
           '<td data-label="Version">' + esc(label) +
             (v.disabled ? ' <span class="ring-caption">off</span>' : '') +
@@ -4231,19 +4237,40 @@
           '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
           '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>' +
           '<td class="tnum" data-label="Sent / positive">' + perPos(v) + '</td>' +
-          '<td class="tnum" data-label="Meetings"></td>' +
-          '<td class="tnum" data-label="Sent / meeting"></td></tr>';
+          '<td class="tnum" data-label="Meetings">' + meetCell + '</td>' +
+          '<td class="tnum" data-label="Sent / meeting">' + pmCell + '</td></tr>';
       }).join('');
       return band + body;
     }).join('');
+    /* combinations: opener → follow-up paths deduced from booked replies */
+    var comboHTML = '';
+    if (combinations && Object.keys(combinations).length) {
+      var crows = Object.keys(combinations).map(function (k) {
+        var p = k.split('>');
+        return { e1: p[0], e2: p[1], mt: combinations[k], snt: (sentBy['1|' + p[0]] || 0) + (sentBy['2|' + p[1]] || 0) };
+      }).sort(function (a, b) { return b.mt - a.mt || String(a.e1).localeCompare(String(b.e1)); });
+      var bestMt = crows.reduce(function (m, c) { return Math.max(m, c.mt); }, 0);
+      comboHTML = '<div class="vp-combos"><div class="vp-combos-h">Best combination <span class="ring-caption">the opener the booker saw &rarr; the follow-up · sent counts both emails</span></div>' +
+        '<div class="leads-table-wrap"><table class="leads-table version-perf-table"><thead><tr><th>Combination</th><th class="tnum">Sent</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead><tbody>' +
+        crows.map(function (c) {
+          var isb = c.mt === bestMt && c.mt > 0;
+          return '<tr' + (isb ? ' class="vp-win"' : '') + '><td data-label="Combination">' + esc(c.e1) + ' <span class="ring-caption">&rarr;</span> ' + esc(c.e2) + (isb ? ' <span class="vp-best">best</span>' : '') + '</td>' +
+            '<td class="tnum" data-label="Sent">' + (c.snt ? fmtInt(c.snt) : '<span class="ring-caption">—</span>') + '</td>' +
+            '<td class="tnum" data-label="Meetings">' + fmtInt(c.mt) + '</td>' +
+            '<td class="tnum" data-label="Sent / meeting">' + (c.mt && c.snt ? fmtInt(Math.round(c.snt / c.mt)) : '<span class="ring-caption">—</span>') + '</td></tr>';
+        }).join('') + '</tbody></table></div></div>';
+    }
     var meetNote = '';
     if (hasMeet) {
-      meetNote = fmtInt(meetings.total || 0) + ' meeting' + (meetings.total === 1 ? '' : 's') + " on this campaign — one per person. Meetings sit on the email step, not a single variant: Smartlead doesn't record which variant a booked lead was sent, so a booking can't be tied to one.";
-      if (meetings.unattributed > 0) meetNote += ' ' + fmtInt(meetings.unattributed) + ' not tied to a step yet.';
+      var tot = meetings.total || 0, att = meetings.attributed || 0;
+      meetNote = fmtInt(tot) + ' meeting' + (tot === 1 ? '' : 's') + ' on this campaign, one per person. ' +
+        fmtInt(att) + ' tied to the variant each booker saw by matching the email they quoted back in their reply' +
+        (tot > att ? ' (' + fmtInt(tot - att) + " didn't quote enough to tell, or the variants share the same copy)" : '') +
+        ". A booked call runs through an opener and a follow-up, so a variant's Meetings counts every call whose journey passed through it.";
     }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
       '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table></div>' +
+      '<tbody>' + rows + '</tbody></table></div>' + comboHTML +
       (meetNote ? '<p class="sample-footer">' + esc(meetNote) + '</p>' : '') +
       (note ? '<p class="sample-footer">' + esc(note) + '</p>' : '');
   }
