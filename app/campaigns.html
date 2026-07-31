@@ -1755,6 +1755,7 @@
   .vp-combos-h .ring-caption { text-transform: none; letter-spacing: 0; font-weight: 500; }
   table.version-perf-table tr.vp-win { background: linear-gradient(90deg, rgba(255,77,0,0.06), transparent); }
   table.version-perf-table tr.vp-win td:first-child { box-shadow: inset 3px 0 0 var(--nav-orange); }
+  .vp-sib { text-transform: none; letter-spacing: 0; opacity: 0.75; }
 
   /* -- B. "the sequence": Smartlead-editor-like vertical step rail -- */
   .seq-rail { margin-top: 16px; display: flex; flex-direction: column; }
@@ -4199,17 +4200,37 @@
   }
 
   function versionTableHTML(versions, note, meetings, combinations) {
-    /* meetings land on the email STEP, never the version (Smartlead cannot
-       attribute a booking to a variant) — so the count renders once, on the
-       step's first row, and other rows of that step show a dot. */
+    /* Meetings attach to the COPY, not the label: Smartlead exposes no
+       sent-variant per lead, and A/B tests routinely run several identical
+       spintax siblings under different labels. The backend clusters variants by
+       copy and credits a booking to the cluster's ACTIVE (representative) label.
+       So a cluster's meetings render once, on the active row; its siblings read
+       "= A". Engagement stats (Sent/Replies/Positives) stay per-label — those
+       Smartlead does track. */
     var hasMeet = !!(meetings && (meetings.by_step || meetings.by_variant));
     var byVar = (meetings && meetings.by_variant) || {};
+    var clusters = (meetings && meetings.clusters) || {};
     function rateSpan(n, d) { return (d && n) ? ' <span class="ring-caption">' + (n / d * 100).toFixed(1) + '%</span>' : ''; }
     function perPos(v) { return (v.positives > 0 && v.sent) ? fmtInt(Math.round(v.sent / v.positives)) : '<span class="ring-caption">' + (v.sent < 300 ? 'early' : '—') + '</span>'; }
-    /* sent lookup by "step|label" — sizes the combination rows below. */
-    var sentBy = {};
-    versions.forEach(function (v) { if (!v.inline && v.label != null) sentBy[String(v.step) + '|' + v.label] = v.sent || 0; });
-    /* group by email step; variants alphabetical, disabled flagged "off". */
+    /* map every member label to its cluster's representative, and sum each
+       cluster's Sent (meetings belong to the whole copy, so Sent/meeting must
+       divide by the copy's total sends, not one sibling's). */
+    var repOf = {}, membersOf = {}, hasGroup = false;
+    Object.keys(clusters).forEach(function (sk) {
+      (clusters[sk] || []).forEach(function (cl) {
+        membersOf[sk + '|' + cl.rep] = cl.labels || [cl.rep];
+        if ((cl.labels || []).length > 1) hasGroup = true;
+        (cl.labels || [cl.rep]).forEach(function (l) { repOf[sk + '|' + l] = cl.rep; });
+      });
+    });
+    var sentByRep = {};
+    versions.forEach(function (v) {
+      if (v.inline || v.label == null) return;
+      var rep = repOf[String(v.step) + '|' + v.label] || v.label;
+      var kk = String(v.step) + '|' + rep;
+      sentByRep[kk] = (sentByRep[kk] || 0) + (v.sent || 0);
+    });
+    /* group by email step; variants alphabetical, disabled flagged with a dot. */
     var byStep = {};
     versions.forEach(function (v) { var k = v.step != null ? String(v.step) : '?'; (byStep[k] = byStep[k] || []).push(v); });
     var stepKeys = Object.keys(byStep).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
@@ -4227,15 +4248,25 @@
       var body = vs.map(function (v) {
         var label = v.inline ? 'inline' : (v.label || '?');
         var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
-        /* deduced meetings on this variant (calls whose journey ran through it) */
-        var mv = (!v.inline && v.label != null) ? (byVar[sk + '|' + v.label] || 0) : null;
-        var meetCell = !hasMeet ? '' : (mv == null ? '<span class="ring-caption">&middot;</span>'
-          : (mv > 0 ? fmtInt(mv) : '<span class="ring-caption">0</span>'));
-        var pmCell = (mv && v.sent) ? fmtInt(Math.round(v.sent / mv)) : '';
+        var rep = (!v.inline && v.label != null) ? (repOf[sk + '|' + v.label] || v.label) : null;
+        var isRep = rep != null && rep === v.label;
+        var siblings = rep != null ? (membersOf[sk + '|' + rep] || [v.label]).length > 1 : false;
+        /* meetings render on the representative row only; siblings point to it */
+        var meetCell, pmCell = '';
+        if (!hasMeet) { meetCell = ''; }
+        else if (rep == null) { meetCell = '<span class="ring-caption">&middot;</span>'; }
+        else if (!isRep) { meetCell = '<span class="ring-caption vp-sib">= ' + esc(rep) + '</span>'; }
+        else {
+          var mv = byVar[sk + '|' + rep] || 0;
+          meetCell = mv > 0 ? fmtInt(mv) : '<span class="ring-caption">0</span>';
+          var cs = sentByRep[sk + '|' + rep] || v.sent;
+          if (mv && cs) pmCell = fmtInt(Math.round(cs / mv));
+        }
         return '<tr>' +
           '<td data-label="Version">' + esc(label) +
             (v.inline ? '' : ' <span class="vp-dot vp-dot--' + (v.disabled ? 'off' : 'on') + '" title="' + (v.disabled ? 'turned off' : 'active') + '"></span>') +
-            (isBest ? ' <span class="vp-best">best</span>' : '') + '</td>' +
+            (isBest ? ' <span class="vp-best">best</span>' : '') +
+            (isRep && siblings ? ' <span class="ring-caption" title="' + esc((membersOf[sk + '|' + rep] || []).join(', ')) + ' are the same copy">+' + ((membersOf[sk + '|' + rep] || []).length - 1) + ' same</span>' : '') + '</td>' +
           '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + '</td>' +
           '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
           '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>' +
@@ -4245,12 +4276,13 @@
       }).join('');
       return band + body;
     }).join('');
-    /* combinations: opener → follow-up paths deduced from booked replies */
+    /* combinations: opener → follow-up paths deduced from booked replies. Keys
+       and sent counts are per representative label (i.e. per distinct copy). */
     var comboHTML = '';
     if (combinations && Object.keys(combinations).length) {
       var crows = Object.keys(combinations).map(function (k) {
         var p = k.split('>');
-        return { e1: p[0], e2: p[1], mt: combinations[k], snt: (sentBy['1|' + p[0]] || 0) + (sentBy['2|' + p[1]] || 0) };
+        return { e1: p[0], e2: p[1], mt: combinations[k], snt: (sentByRep['1|' + p[0]] || 0) + (sentByRep['2|' + p[1]] || 0) };
       }).sort(function (a, b) { return b.mt - a.mt || String(a.e1).localeCompare(String(b.e1)); });
       var bestMt = crows.reduce(function (m, c) { return Math.max(m, c.mt); }, 0);
       comboHTML = '<div class="vp-combos"><div class="vp-combos-h">Best combination <span class="ring-caption">the opener the booker saw &rarr; the follow-up · sent counts both emails</span></div>' +
@@ -4265,11 +4297,14 @@
     }
     var meetNote = '';
     if (hasMeet) {
-      var tot = meetings.total || 0, att = meetings.attributed || 0;
+      var tot = meetings.total || 0, att = meetings.attributed || 0, rem = meetings.removed || 0;
+      var traceless = Math.max(0, tot - att - rem);
       meetNote = fmtInt(tot) + ' meeting' + (tot === 1 ? '' : 's') + ' on this campaign, one per person. ' +
-        fmtInt(att) + ' tied to the variant each booker saw by matching the email they quoted back in their reply' +
-        (tot > att ? ' (' + fmtInt(tot - att) + " didn't quote enough to tell, or the variants share the same copy)" : '') +
-        ". A booked call runs through an opener and a follow-up, so a variant's Meetings counts every call whose journey passed through it.";
+        fmtInt(att) + ' traced to the copy each booker quoted back in their reply' +
+        (rem ? '; ' + fmtInt(rem) + ' came from an opener since removed from the sequence (its copy is gone from Smartlead, so it has no row above)' : '') +
+        (traceless ? '; ' + fmtInt(traceless) + " didn't quote enough to place" : '') + '. ' +
+        (hasGroup ? 'Variants with identical copy count as one version — the meetings show on the active label and the rest read “= it”. ' : '') +
+        "A booked call runs through an opener and a follow-up, so a version's Meetings counts every call whose journey passed through it.";
     }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
       '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
