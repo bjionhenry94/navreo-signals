@@ -8120,19 +8120,23 @@ def _trace_probe(cid) -> dict:
         except Exception as e:  # noqa: BLE001
             out["leads"].append({"err": str(e)[:80]})
             continue
-        sent = []
+        # (a) does the LEAD record carry the assigned variant?
+        lcd = lead.get("lead_campaign_data") or []
+        lcd_row = next((c for c in lcd if str(c.get("campaign_id")) == str(n)), (lcd[0] if lcd else {}))
+        lead_variant_fields = {k: v for k, v in (lcd_row or {}).items()
+                               if any(t in str(k).lower() for t in ("variant", "seq"))}
+        # (b) the Email-1 SENT body — do variants differ enough to content-match?
+        e1_body = ""
         for m in (hist or []):
-            if not isinstance(m, dict) or str(m.get("type") or "").upper() != "SENT":
-                continue
-            item = {"keys": sorted(m.keys()),
-                    "email_seq_number": m.get("email_seq_number"),
-                    "subject": (m.get("subject") or "")[:70]}
-            for k, v in m.items():
-                lk = str(k).lower()
-                if "variant" in lk or "seq" in lk or lk in ("stats_id", "email_campaign_seq_id"):
-                    item[k] = v
-            sent.append(item)
-        out["leads"].append({"email_head": em[:3] + "…", "sent_items": sent})
+            if isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT" and str(m.get("email_seq_number") or "") == "1":
+                e1_body = _email_html_to_text(m.get("email_body") or m.get("body") or "")[:220]
+                break
+        out["leads"].append({
+            "email_head": em[:3] + "…",
+            "lead_keys": sorted((lead or {}).keys())[:40],
+            "lcd_keys": sorted((lcd_row or {}).keys())[:40],
+            "lead_variant_fields": lead_variant_fields,
+            "email1_body_head": e1_body})
     return out
 
 
