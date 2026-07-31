@@ -8054,14 +8054,12 @@ def _variant_paths(n: int) -> dict:
                 path[st] = best
         if not path:
             continue
-        # credit the booking to the variant at the reply step (last touch); fall
-        # back to the deepest step whose variant we could name.
-        rstep = str(r.get("step") or "").strip()
-        if rstep not in path:
-            rstep = max(path.keys(), key=lambda k: int(k) if k.isdigit() else 0)
-        if rstep in path:
-            by_variant[rstep + "|" + path[rstep]] = by_variant.get(rstep + "|" + path[rstep], 0) + 1
-            attributed += 1
+        attributed += 1
+        # credit the booking to every variant on the lead's journey — their
+        # Email-1 opener AND, where the follow-up also varies, that follow-up —
+        # so each variant row reflects the calls whose journey ran through it.
+        for st, lbl in path.items():
+            by_variant[st + "|" + lbl] = by_variant.get(st + "|" + lbl, 0) + 1
         e1, e2 = path.get("1"), path.get("2")
         if e1 and e2:
             combos[e1 + ">" + e2] = combos.get(e1 + ">" + e2, 0) + 1
