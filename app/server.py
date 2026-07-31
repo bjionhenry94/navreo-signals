@@ -8091,55 +8091,6 @@ def _cockpit_messaging(cid) -> dict:
             "note": "Smartlead counters reset when a sequence is re-saved: read as since relaunch."}
 
 
-def _trace_probe(cid) -> dict:
-    """TEMP: inspect Smartlead per-lead message-history field shape for a couple
-    of booked leads, so we can build per-variant / combination attribution on the
-    right field. Returns SENT-item keys + any variant/seq/stats field — never the
-    email body. Authed route only; remove once the trace is wired."""
-    from urllib.parse import quote
-    try:
-        n = int(str(cid).strip())
-    except Exception:  # noqa: BLE001
-        return {"error": "bad_id"}
-    rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
-                     "&select=email&limit=3") or []
-    out = {"campaign_id": n, "leads": []}
-    for r in (rows or [])[:2]:
-        em = (r.get("email") or "").strip().lower()
-        if not em:
-            continue
-        try:
-            lr = _smartlead_json("GET", f"/leads/?email={quote(em)}")
-            lead = lr.get("lead") if isinstance(lr, dict) and isinstance(lr.get("lead"), dict) else (
-                lr[0] if isinstance(lr, list) and lr else lr)
-            lid = lead.get("id") if isinstance(lead, dict) else None
-            if not lid:
-                continue
-            hr = _smartlead_json("GET", f"/campaigns/{n}/leads/{lid}/message-history")
-            hist = hr.get("history") if isinstance(hr, dict) else hr
-        except Exception as e:  # noqa: BLE001
-            out["leads"].append({"err": str(e)[:80]})
-            continue
-        # (a) does the LEAD record carry the assigned variant?
-        lcd = lead.get("lead_campaign_data") or []
-        lcd_row = next((c for c in lcd if str(c.get("campaign_id")) == str(n)), (lcd[0] if lcd else {}))
-        lead_variant_fields = {k: v for k, v in (lcd_row or {}).items()
-                               if any(t in str(k).lower() for t in ("variant", "seq"))}
-        # (b) the Email-1 SENT body — do variants differ enough to content-match?
-        e1_body = ""
-        for m in (hist or []):
-            if isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT" and str(m.get("email_seq_number") or "") == "1":
-                e1_body = _email_html_to_text(m.get("email_body") or m.get("body") or "")[:220]
-                break
-        out["leads"].append({
-            "email_head": em[:3] + "…",
-            "lead_keys": sorted((lead or {}).keys())[:40],
-            "lcd_keys": sorted((lcd_row or {}).keys())[:40],
-            "lead_variant_fields": lead_variant_fields,
-            "email1_body_head": e1_body})
-    return out
-
-
 _COCKPIT_MESSAGING_SWR = _SWRKeyedCache(
     _cockpit_messaging, 600,
     is_degraded=lambda p: not isinstance(p, dict) or p.get("degraded"),
@@ -17473,8 +17424,6 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/cockpit/messaging":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            if q.get("trace_probe"):
-                return self._json(_trace_probe((q.get("id") or [""])[0]))
             return self._json(_COCKPIT_MESSAGING_SWR.get((q.get("id") or [""])[0]))
         if path == "/api/cockpit/sequence-copy":
             from urllib.parse import parse_qs, urlparse
