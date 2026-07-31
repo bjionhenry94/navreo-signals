@@ -4238,7 +4238,7 @@
     }).join('');
     var meetNote = '';
     if (hasMeet) {
-      meetNote = fmtInt(meetings.total || 0) + ' meeting' + (meetings.total === 1 ? '' : 's') + " on this campaign — one per person. Meetings sit on the email step (shared by that step's variants), not on a single variant; per-variant attribution is on the way.";
+      meetNote = fmtInt(meetings.total || 0) + ' meeting' + (meetings.total === 1 ? '' : 's') + " on this campaign — one per person. Meetings sit on the email step, not a single variant: Smartlead doesn't record which variant a booked lead was sent, so a booking can't be tied to one.";
       if (meetings.unattributed > 0) meetNote += ' ' + fmtInt(meetings.unattributed) + ' not tied to a step yet.';
     }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
