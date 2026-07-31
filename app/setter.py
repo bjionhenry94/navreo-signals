@@ -76,6 +76,70 @@ GRADING_ID = "__grading__"
 SMARTLEAD_BASE = "https://server.smartlead.ai/api/v1"
 OPENAI_MODEL = "gpt-5-mini"
 
+# ── All-workspaces federation for the Setter (MONITOR gate) ────────────────
+# Historically the Setter read ONLY the `navreo` workspace, so the three sub-
+# brands that live inside the shared navreo Smartlead workspace (Navreo /
+# Amplifyy / Arnic) were the only clients that ever appeared. Every OTHER
+# client (asteri, krg, grout, …) is its own federated workspace whose replies
+# the Setter never read. This gate widens the LIST + intake to every enabled
+# workspace so any client can be MANAGED here — but strictly as MONITOR-ONLY:
+# a non-navreo row is surfaced for review and can NEVER send (enforced three
+# ways: _is_monitor_ws, the _send_reply dry-force, and the send-action
+# refusal). navreo behaviour AND navreo KPIs stay byte-for-byte unchanged
+# (the pill/KPI queries remain navreo-scoped; the KPI fold re-filters to
+# navreo even off the federated light scan).
+#
+# ONE reversal switch: SETTER_MONITOR_ALL_WS=0 restores navreo-only scoping.
+# Default ON. Making a proven workspace genuinely sendable is a SEPARATE,
+# explicit change (remove it from _is_monitor_ws's net) — never done here.
+SETTER_MONITOR_ALL_WS = os.environ.get("SETTER_MONITOR_ALL_WS", "1") not in ("0", "false", "False", "")
+
+# Never a real Setter reply source even if present in the table.
+_WS_MONITOR_SKIP = ("heyreach", "opan-test")
+_WS_IDS_CACHE = {"at": 0.0, "ids": None}
+
+
+def _enabled_workspace_ids() -> list:
+    """Enabled workspace ids (navreo always first). Read straight from the
+    `workspaces` table — server.py owns the richer ws_all(); the Setter only
+    needs the id list. 5-min cache; any failure degrades to navreo-only."""
+    now = _time.time()
+    c = _WS_IDS_CACHE
+    if c["ids"] is not None and now - c["at"] < 300:
+        return list(c["ids"])
+    ids = ["navreo"]
+    try:
+        rows = _SB("GET", "workspaces?select=id,status&order=added_at") if _SB else None
+        if isinstance(rows, list):
+            for r in rows:
+                wid = r.get("id") if isinstance(r, dict) else None
+                if (wid and wid != "navreo" and wid not in _WS_MONITOR_SKIP
+                        and (r.get("status") or "enabled") == "enabled"):
+                    ids.append(wid)
+    except Exception:  # noqa: BLE001 - a workspaces outage degrades to navreo-only
+        pass
+    c.update(at=now, ids=ids)
+    return list(ids)
+
+
+def _list_ws_filter() -> str:
+    """PostgREST fragment scoping the Setter LIST + collapse reads. Gate OFF
+    (or only navreo enabled) → navreo alone, byte-for-byte historical. Gate ON
+    → every enabled workspace."""
+    if not SETTER_MONITOR_ALL_WS:
+        return f"workspace=eq.{WORKSPACE}"
+    ids = _enabled_workspace_ids()
+    if len(ids) <= 1:
+        return f"workspace=eq.{WORKSPACE}"
+    return "workspace=in.(" + ",".join(ids) + ")"
+
+
+def _is_monitor_ws(ws) -> bool:
+    """True for a workspace whose Setter rows are review-only and must NEVER
+    send. Fail-closed: while the gate is on, ANYTHING that isn't navreo is
+    monitor-only, whether or not it is still in the enabled list."""
+    return bool(SETTER_MONITOR_ALL_WS) and (ws or "navreo") != "navreo"
+
 # ── one OpenAI round trip, with a deadline and a retry ──────────────────────
 # Every model call used to be a bare _HTTP on http_json's 60s default with
 # nothing to catch a slow one. A urllib read timeout stringifies to exactly
@@ -2777,7 +2841,11 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
         # a double-send.
         _apply_patch(row, {"error": None})
         row["error"] = None
-    dry = bool(is_test) or _dry_run()
+    # Monitor-only backstop: a non-navreo (federation-monitor) row can NEVER
+    # hit Smartlead, by any caller (manual, auto, async). The send-action
+    # handler already refuses these up front; this is defence-in-depth so no
+    # code path can ever slip a monitor-workspace send out.
+    dry = bool(is_test) or _dry_run() or _is_monitor_ws(row.get("workspace"))
     if dry:
         patch = {"status": success_status, "sent_at": now, "sent_body": html_body, "error": None,
                  "draft_subject": subject, "draft_body": html_body}
@@ -4409,6 +4477,75 @@ def _redrive_stranded_claims(agents: list, settings: dict, summary: dict) -> Non
             print(f"[setter] redrive: row {qid} failed: {e}", file=sys.stderr)
 
 
+def _poll_monitor_workspaces(since: str, summary: dict) -> None:
+    """MONITOR intake for every non-navreo enabled workspace (federation gate).
+
+    Ships the OTHER half of "why only three clients show": even with the read
+    federated, a client only APPEARS once its replies are in setter_queue, and
+    the navreo sweep above pulls navreo only. This walks each enabled client
+    workspace and intakes its recent replies as review-only rows.
+
+    Two deliberate departures from the navreo sweep, both from the brief's
+    "temporarily allow ANY responses from ANY workspace in":
+      • ANY category — no CORE_FOUR gate (the only client replies that exist
+        today are krg's Out-Of-Office ones; gating to positives would prove
+        nothing). Monitor rows are review-only, so a non-core reply is safe.
+      • ALWAYS agentless — never look up / run an agent, so nothing is ever
+        drafted, classified or auto-sent for a client. Pure surface-for-review.
+    Rows land is_test=False (so they RENDER and hydrate; is_test rows are
+    hidden by the UI), and CANNOT send: _is_monitor_ws forces every send path
+    dry and the send action refuses them. Best-effort; never raises. Poll/cron
+    path only — never a web request (512MB box)."""
+    if not SETTER_MONITOR_ALL_WS or not _SB:
+        return
+    client_ids = [w for w in _enabled_workspace_ids() if w != "navreo"]
+    if not client_ids:
+        return
+    processed = 0
+    for ws in client_ids:
+        if processed >= 15:   # shared cap with the navreo sweep's blast radius
+            break
+        try:
+            replies = _SB("GET", f"replies?workspace=eq.{ws}"
+                                 f"&replied_at=gte.{quote(since, safe='')}"
+                                 f"&order=replied_at.desc&limit=50"
+                                 f"&select=id,smartlead_campaign_id,email,replied_at,category,"
+                                 f"reply_subject,reply_body,smartlead_message_id")
+        except Exception as e:  # noqa: BLE001
+            summary["errors"] += 1
+            print(f"[setter] monitor poll: replies GET failed for {ws}: {e}", file=sys.stderr)
+            continue
+        if not isinstance(replies, list):
+            summary["errors"] += 1
+            continue
+        for r in sorted([x for x in replies if isinstance(x, dict)],
+                        key=lambda x: x.get("replied_at") or ""):
+            if processed >= 15:
+                break
+            cid = r.get("smartlead_campaign_id")
+            email = (r.get("email") or "").strip().lower()
+            mid = str(r.get("smartlead_message_id") or r.get("id") or "")
+            if not cid or not email or not mid:
+                continue
+            reply = {
+                "workspace": ws, "campaign_id": cid, "email": email,
+                "subject": r.get("reply_subject") or "",
+                "body": r.get("reply_body") or "",
+                "replied_at": r.get("replied_at"), "message_id": mid,
+                "category": r.get("category"), "is_test": False,
+            }
+            processed += 1
+            summary["checked"] += 1
+            try:
+                row = _intake_agentless(reply)   # dedup + hydrate + needs_review row
+                summary["agentless"] += 1
+                if (row or {}).get("status") == "needs_review":
+                    summary["needs_review"] += 1
+            except Exception as e:  # noqa: BLE001 - one bad reply never stops the sweep
+                summary["errors"] += 1
+                print(f"[setter] monitor poll intake error {ws} {email}/{cid}: {e}", file=sys.stderr)
+
+
 def run_poll() -> dict:
     """Sweeps recent core-four `replies` rows across EVERY campaign in the
     workspace (owner ruling 2026-07-14: a positive must reach the queue even
@@ -4543,6 +4680,11 @@ def run_poll() -> dict:
         # past the grace window. Runs AFTER the positive sweep so the 15-cap
         # above is always spent on positives first.
         _sweep_uncategorised(agents, settings, since, summary)
+        # Federation MONITOR sweep: pull every non-navreo enabled workspace's
+        # recent replies into the queue as review-only rows (see the function
+        # docstring). Last, so the navreo positive sweep always spends its cap
+        # first. Never sends — _is_monitor_ws forces these dry everywhere.
+        _poll_monitor_workspaces(since, summary)
     except Exception as e:  # noqa: BLE001 - run_poll itself must never raise
         summary["errors"] += 1
         print(f"[setter] run_poll crashed: {e}", file=sys.stderr)
@@ -5874,6 +6016,11 @@ def _compute_kpis_sync() -> dict:
         light = results.get("light")
         if isinstance(light, list) and light:
             reps = _collapse_threads(light)
+            # KPI badges stay navreo-only (byte-for-byte): the federated light
+            # scan may carry monitor-workspace rows for the LIST/collapse, but
+            # navreo's pill counts must not move — and _reclass's dir map is
+            # navreo-scoped, so only navreo reps have a direction verdict here.
+            reps = [r for r in reps if (r.get("workspace") or "navreo") == "navreo"]
             dirs = rc.get("dir") or {}
             n_nr = n_sent = n_auto = n_dis = 0
             for r in reps:
@@ -6080,10 +6227,10 @@ def _light_rows_all():
     now = _time.time()
     if _REP_IDS_CACHE.get("rows") is not None and (now - _REP_IDS_CACHE.get("rows_at", 0.0)) < _REP_IDS_TTL:
         return _REP_IDS_CACHE["rows"]
-    light = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&limit=2000"
+    light = _SB("GET", f"{QUEUE_TABLE}?{_list_ws_filter()}&limit=2000"
                        "&order=created_at.desc"
                        "&select=id,status,smartlead_campaign_id,lead_email,"
-                       "replied_at,created_at,is_test") if _SB else None
+                       "replied_at,created_at,is_test,workspace") if _SB else None
     if not isinstance(light, list):
         return None
     _REP_IDS_CACHE["rows"] = light
@@ -6255,7 +6402,7 @@ def _fetch_queue_rows(status: str, limit: int):
     rows = []
     fetch_failed = False
     if _SB:
-        base = (f"workspace=eq.{WORKSPACE}&order=created_at.desc&limit={limit}"
+        base = (f"{_list_ws_filter()}&order=created_at.desc&limit={limit}"
                 f"&select={QUEUE_LIST_COLUMNS}")
         # For the direction-aware pills (needs_review / sent / auto_sent) the
         # membership depends on who spoke last, computed at read time from
@@ -7043,6 +7190,9 @@ def route_queue_action(payload):
         if action == "send":
             if row.get("status") in ("sent", "auto_sent"):
                 return 409, {"error": "This reply was already sent."}
+            if _is_monitor_ws(row.get("workspace")):
+                return 403, {"error": "This workspace is monitor-only (federation test) — "
+                                      "sending is disabled here. Reply in Smartlead directly."}
             agent = _load_agent(row.get("agent_id")) or {}
             subject = payload.get("subject_override") or row.get("draft_subject") or f"Re: {row.get('reply_subject') or ''}"
             body_html = payload.get("body_override") or row.get("draft_body") or ""
@@ -7090,6 +7240,9 @@ def route_queue_action(payload):
             # reply and its already-sent 409 protection stays intact.
             if row.get("status") not in ("sent", "auto_sent"):
                 return 409, {"error": "This thread's reply hasn't been sent yet - use Approve for the first send."}
+            if _is_monitor_ws(row.get("workspace")):
+                return 403, {"error": "This workspace is monitor-only (federation test) — "
+                                      "sending is disabled here. Reply in Smartlead directly."}
             body_html = payload.get("body") or ""
             if not _TAG_RE.sub(" ", body_html).strip():
                 return 400, {"error": "body is required"}
