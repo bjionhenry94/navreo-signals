@@ -7986,6 +7986,89 @@ def _stamp_meeting_step(reply_id, step: str):
         pass
 
 
+def _variant_paths(n: int) -> dict:
+    """Per-variant meeting attribution + opener→follow-up combinations, DEDUCED
+    from the copy each booked lead quotes back in their reply. Every reply in the
+    Supabase archive quotes the full sent thread, so the actual Email-1 and
+    Email-2 that went to that lead are right there — match them against the
+    variant bodies (raw /sequences, incl disabled) to recover the variant per
+    step. No per-lead Smartlead call needed. Best-effort by design: a lead whose
+    reply doesn't quote a step, or a step whose variants are the SAME copy
+    (indistinguishable), stays unattributed rather than guessed."""
+    try:
+        sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
+    except Exception:  # noqa: BLE001
+        return {}
+    seqs = sraw if isinstance(sraw, list) else (
+        (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
+    if not seqs:
+        return {}
+
+    def _norm(s):
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", re.sub(r"<[^>]+>", " ", s or "").lower())).strip()
+
+    def _shingles(t):
+        t = re.sub(r"\{\{[^}]*\}\}", " ", t or "")   # {{merge vars}}
+        t = re.sub(r"\{[^}]*\}", " ", t)             # {spintax}
+        w = _norm(t).split()
+        return set(" ".join(w[i:i + 7]) for i in range(max(0, len(w) - 6)))
+
+    step_uniq = {}   # step -> {label: phrases unique to that variant}
+    for s in seqs:
+        st = str(s.get("seq_number"))
+        vs = {}
+        for v in (s.get("sequence_variants") or []):
+            lbl = v.get("variant_label")
+            if lbl is None:
+                continue
+            body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
+            vs[lbl] = _shingles(body)
+        if not vs:
+            continue
+        step_uniq[st] = ({l: vs[l] for l in vs} if len(vs) == 1
+                         else {l: (vs[l] - set().union(*[vs[o] for o in vs if o != l])) for l in vs})
+
+    rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
+                     "&select=email,reply_body,rawbody:raw->>email_body,"
+                     "step:raw->>email_seq_number&order=replied_at.asc")
+    if not isinstance(rows, list):
+        return {}
+    by_variant, combos, seen = {}, {}, set()
+    attributed = 0
+    for r in rows:
+        em = (r.get("email") or "").strip().lower()
+        if not em or em in seen:
+            continue
+        seen.add(em)
+        body = _norm((r.get("reply_body") or r.get("rawbody") or ""))
+        if not body:
+            continue
+        path = {}
+        for st, uniq in step_uniq.items():
+            best, hit = None, 0
+            for lbl, shs in uniq.items():
+                h = sum(1 for p in shs if p and p in body)
+                if h > hit:
+                    best, hit = lbl, h
+            if best:
+                path[st] = best
+        if not path:
+            continue
+        # credit the booking to the variant at the reply step (last touch); fall
+        # back to the deepest step whose variant we could name.
+        rstep = str(r.get("step") or "").strip()
+        if rstep not in path:
+            rstep = max(path.keys(), key=lambda k: int(k) if k.isdigit() else 0)
+        if rstep in path:
+            by_variant[rstep + "|" + path[rstep]] = by_variant.get(rstep + "|" + path[rstep], 0) + 1
+            attributed += 1
+        e1, e2 = path.get("1"), path.get("2")
+        if e1 and e2:
+            combos[e1 + ">" + e2] = combos.get(e1 + ">" + e2, 0) + 1
+    return {"by_variant": by_variant, "combinations": combos,
+            "attributed": attributed, "booked": len(seen)}
+
+
 def _cockpit_messaging(cid) -> dict:
     """Per-version table straight from Smartlead variant-statistics (the source
     of truth). Rows with a null seq_variant_id are inline step counters: kept
@@ -8086,7 +8169,18 @@ def _cockpit_messaging(cid) -> dict:
                     "total": len(booked)}
     else:
         meetings = None  # archive unreachable: the UI omits the column rather than showing false zeros
+    # Per-variant meeting attribution + opener→follow-up combinations, deduced
+    # from the sent copy each booked lead quotes back in their reply.
+    vpaths = {}
+    try:
+        vpaths = _variant_paths(n)
+    except Exception:  # noqa: BLE001 — attribution is best-effort, never break the tab
+        vpaths = {}
+    if isinstance(meetings, dict):
+        meetings["by_variant"] = vpaths.get("by_variant") or {}
+        meetings["attributed"] = vpaths.get("attributed") or 0
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
+            "combinations": vpaths.get("combinations") or {},
             "degraded": False,
             "note": "Smartlead counters reset when a sequence is re-saved: read as since relaunch."}
 
