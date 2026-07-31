@@ -1747,6 +1747,9 @@
     letter-spacing: 0.04em; text-transform: uppercase; color: #fff;
     background: var(--nav-orange); padding: 1px 6px; border-radius: 999px; vertical-align: 1px;
   }
+  .vp-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 7px; vertical-align: middle; }
+  .vp-dot--on { background: #2E7D5B; }
+  .vp-dot--off { background: #C0B0A0; }
   .vp-combos { margin-top: 22px; }
   .vp-combos-h { font-size: 0.8rem; font-weight: 600; color: var(--fg); margin-bottom: 2px; }
   .vp-combos-h .ring-caption { text-transform: none; letter-spacing: 0; font-weight: 500; }
@@ -4231,7 +4234,7 @@
         var pmCell = (mv && v.sent) ? fmtInt(Math.round(v.sent / mv)) : '';
         return '<tr>' +
           '<td data-label="Version">' + esc(label) +
-            (v.disabled ? ' <span class="ring-caption">off</span>' : '') +
+            (v.inline ? '' : ' <span class="vp-dot vp-dot--' + (v.disabled ? 'off' : 'on') + '" title="' + (v.disabled ? 'turned off' : 'active') + '"></span>') +
             (isBest ? ' <span class="vp-best">best</span>' : '') + '</td>' +
           '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + '</td>' +
           '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
