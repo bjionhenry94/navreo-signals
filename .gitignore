@@ -6,3 +6,4 @@ __pycache__/
 app/data/*.json
 app/data/.drafts.lock
 .DS_Store
+base/
