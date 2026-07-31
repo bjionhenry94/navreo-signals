@@ -868,6 +868,10 @@ let currentClient = "";
    every row instead of showing a broken/empty dropdown. */
 let campaignClientMap = {};
 let clientRegistryNames = [];   // canonical client names from /api/clients (campaigns-section source of truth)
+// {workspace id -> display label} from /api/workspaces. A federated client
+// workspace (asteri, grout, krg, …) IS its own client, so its rows label by
+// the workspace, never the campaign-name heuristic that buckets them "Other".
+let workspaceLabels = {};
 
 let editingAgentId = null;
 let currentAgentMode = "draft_only";
@@ -1114,6 +1118,13 @@ function clientFromCampaignName(name) {
    here. Used everywhere a client label is needed (queue filter dropdown +
    row filtering below). */
 function clientForRow(row) {
+  // A federated client workspace IS the client (Asteri, Grout, KRG, …): its
+  // label is authoritative over the campaign-name heuristic, which has no
+  // client registry for these and would bucket every one into "Other". navreo
+  // is the shared multi-brand workspace, so it keeps the campaign-based
+  // derivation below (Navreo / Amplifyy / Arnic live inside it).
+  const ws = row.workspace || "navreo";
+  if (ws !== "navreo" && workspaceLabels[ws]) return workspaceLabels[ws];
   const sid = row.smartlead_campaign_id;
   const mapped = sid != null ? campaignClientMap[String(sid)] : undefined;
   if (mapped) return mapped;
@@ -1211,11 +1222,12 @@ async function loadAgentsAndCampaigns() {
   // campaigns-unified + clients ride along in the same parallel batch (Change
   // 3): they power campaignClientMap, not AGENTS/CAMPAIGNS, but there's no
   // reason to wait for them separately or block the page on either one.
-  const [agentsRes, campaignsRes, unifiedRes, clientsRes] = await Promise.all([
+  const [agentsRes, campaignsRes, unifiedRes, clientsRes, workspacesRes] = await Promise.all([
     fetchJson("/api/setter/agents"),
     fetchJson("/api/setter/campaigns"),
     fetchJson("/api/campaigns-unified"),
     fetchJson("/api/clients"),
+    fetchJson("/api/workspaces"),
   ]);
   if (agentsRes.ok) {
     AGENTS = agentsRes.data.agents || [];
@@ -1232,6 +1244,12 @@ async function loadAgentsAndCampaigns() {
   campaignMap = {};
   CAMPAIGNS.forEach((c) => { campaignMap[c.id] = c.name; });
   campaignClientMap = buildCampaignClientMap(unifiedRes, clientsRes);
+  workspaceLabels = {};
+  if (workspacesRes.ok && Array.isArray((workspacesRes.data || {}).workspaces)) {
+    workspacesRes.data.workspaces.forEach((w) => {
+      if (w && w.id) workspaceLabels[w.id] = w.display_label || w.name || w.id;
+    });
+  }
   renderAutopilotSwitch();
   renderAgents();
   renderSettings();

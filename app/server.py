@@ -898,6 +898,7 @@ def api_workspaces_list() -> dict:
         wid = w.get("id")
         raw = w.get("api_key") or ""
         out.append({"id": wid, "name": w.get("name") or wid,
+                    "display_label": w.get("display_label") or w.get("name") or wid,
                     "status": w.get("status") or "enabled",
                     "added_at": w.get("added_at"), "last_sync_at": w.get("last_sync_at"),
                     "campaigns": tallies.get(wid, 0),
