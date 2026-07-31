@@ -7986,15 +7986,55 @@ def _stamp_meeting_step(reply_id, step: str):
         pass
 
 
+def _vp_sent_bodies_from_history(cid: int, email: str) -> dict:
+    """{step -> the actual body Smartlead SENT this lead} — the fallback for a
+    booker whose reply doesn't quote the earlier email. One /leads + one
+    message-history call; SENT items carry email_seq_number + email_body."""
+    from urllib.parse import quote
+    out = {}
+    try:
+        lr = _smartlead_json("GET", f"/leads/?email={quote(email)}")
+        lead = lr.get("lead") if isinstance(lr, dict) and isinstance(lr.get("lead"), dict) else (
+            lr[0] if isinstance(lr, list) and lr else lr)
+        lid = lead.get("id") if isinstance(lead, dict) else None
+        if not lid:
+            return out
+        hr = _smartlead_json("GET", f"/campaigns/{cid}/leads/{lid}/message-history")
+        hist = hr.get("history") if isinstance(hr, dict) else hr
+        for mm in (hist or []):
+            if not isinstance(mm, dict) or str(mm.get("type") or "").upper() != "SENT":
+                continue
+            st = str(mm.get("email_seq_number") or "").strip()
+            if st.isdigit() and st not in out:
+                out[st] = mm.get("email_body") or mm.get("body") or ""
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _vp_stamp_path(reply_id, path: dict) -> None:
+    """Cache a deduced {step->variant} onto the reply row so the (possibly
+    history-fetching) resolution never repeats for this lead."""
+    try:
+        rows = sb("GET", f"replies?id=eq.{reply_id}&select=raw")
+        raw = rows[0].get("raw") if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+        if not isinstance(raw, dict):
+            raw = {}
+        raw["vpath"] = path
+        sb("PATCH", f"replies?id=eq.{reply_id}", {"raw": raw}, prefer="return=minimal")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _variant_paths(n: int) -> dict:
-    """Per-variant meeting attribution + opener→follow-up combinations, DEDUCED
-    from the copy each booked lead quotes back in their reply. Every reply in the
-    Supabase archive quotes the full sent thread, so the actual Email-1 and
-    Email-2 that went to that lead are right there — match them against the
-    variant bodies (raw /sequences, incl disabled) to recover the variant per
-    step. No per-lead Smartlead call needed. Best-effort by design: a lead whose
-    reply doesn't quote a step, or a step whose variants are the SAME copy
-    (indistinguishable), stays unattributed rather than guessed."""
+    """Per-variant meeting attribution + opener\u2192follow-up combinations, DEDUCED
+    from the copy each booked lead saw. Primary source: the sent thread the lead
+    QUOTES BACK in their reply (Supabase reply archive). Fallback for bookers who
+    didn't quote: fetch the lead's Smartlead message-history and read the SENT
+    body per step. Match against variant bodies (raw /sequences, incl disabled).
+    Resolved paths are cached onto the reply row (raw.vpath) so a lookup never
+    repeats. Best-effort: a booker with no recoverable copy, or a step whose
+    variants share IDENTICAL copy, stays unattributed rather than guessed."""
     try:
         sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
     except Exception:  # noqa: BLE001
@@ -8008,12 +8048,12 @@ def _variant_paths(n: int) -> dict:
         return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", re.sub(r"<[^>]+>", " ", s or "").lower())).strip()
 
     def _shingles(t):
-        t = re.sub(r"\{\{[^}]*\}\}", " ", t or "")   # {{merge vars}}
-        t = re.sub(r"\{[^}]*\}", " ", t)             # {spintax}
+        t = re.sub(r"\{\{[^}]*\}\}", " ", t or "")
+        t = re.sub(r"\{[^}]*\}", " ", t)
         w = _norm(t).split()
         return set(" ".join(w[i:i + 7]) for i in range(max(0, len(w) - 6)))
 
-    step_uniq = {}   # step -> {label: phrases unique to that variant}
+    step_uniq = {}
     for s in seqs:
         st = str(s.get("seq_number"))
         vs = {}
@@ -8028,36 +8068,59 @@ def _variant_paths(n: int) -> dict:
         step_uniq[st] = ({l: vs[l] for l in vs} if len(vs) == 1
                          else {l: (vs[l] - set().union(*[vs[o] for o in vs if o != l])) for l in vs})
 
+    def _match(body_norm, uniq):
+        best, hit = None, 0
+        for lbl, shs in uniq.items():
+            h = sum(1 for p in shs if p and p in body_norm)
+            if h > hit:
+                best, hit = lbl, h
+        return best
+
     rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
-                     "&select=email,reply_body,rawbody:raw->>email_body,"
-                     "step:raw->>email_seq_number&order=replied_at.asc")
+                     "&select=id,email,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath"
+                     "&order=replied_at.asc")
     if not isinstance(rows, list):
         return {}
     by_variant, combos, seen = {}, {}, set()
     attributed = 0
+    fetches = 0
     for r in rows:
         em = (r.get("email") or "").strip().lower()
         if not em or em in seen:
             continue
         seen.add(em)
-        body = _norm((r.get("reply_body") or r.get("rawbody") or ""))
-        if not body:
-            continue
         path = {}
-        for st, uniq in step_uniq.items():
-            best, hit = None, 0
-            for lbl, shs in uniq.items():
-                h = sum(1 for p in shs if p and p in body)
-                if h > hit:
-                    best, hit = lbl, h
-            if best:
-                path[st] = best
+        cached = r.get("vpath")
+        if isinstance(cached, str) and cached:
+            try:
+                cp = json.loads(cached)
+                if isinstance(cp, dict):
+                    path = {str(k): v for k, v in cp.items() if v}
+            except Exception:  # noqa: BLE001
+                path = {}
+        if not path or (set(step_uniq) - set(path)):
+            body = _norm(r.get("reply_body") or r.get("rawbody") or "")
+            for st, uniq in step_uniq.items():
+                if st in path or not body:
+                    continue
+                lbl = _match(body, uniq)
+                if lbl:
+                    path[st] = lbl
+            need = set(step_uniq) - set(path)
+            if need and fetches < 12:
+                fetches += 1
+                sent = _vp_sent_bodies_from_history(n, em)
+                for st in list(need):
+                    b = _norm(sent.get(st) or "")
+                    if b:
+                        lbl = _match(b, step_uniq[st])
+                        if lbl:
+                            path[st] = lbl
+            if path:
+                _vp_stamp_path(r.get("id"), path)
         if not path:
             continue
         attributed += 1
-        # credit the booking to every variant on the lead's journey — their
-        # Email-1 opener AND, where the follow-up also varies, that follow-up —
-        # so each variant row reflects the calls whose journey ran through it.
         for st, lbl in path.items():
             by_variant[st + "|" + lbl] = by_variant.get(st + "|" + lbl, 0) + 1
         e1, e2 = path.get("1"), path.get("2")
