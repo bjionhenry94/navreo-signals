@@ -8026,15 +8026,100 @@ def _vp_stamp_path(reply_id, path: dict) -> None:
         pass
 
 
+def _vp_norm(s):
+    """Lowercase, strip HTML + punctuation, collapse whitespace \u2014 the canonical
+    text form both variant bodies and reply quotes are compared in."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", re.sub(r"<[^>]+>", " ", s or "").lower())).strip()
+
+
+def _vp_shingles(t):
+    """7-word shingles of a variant body, with {{merge_vars}} and {spintax}
+    blanked first so a resolved reply and its template still share windows."""
+    t = re.sub(r"\{\{[^}]*\}\}", " ", t or "")
+    t = re.sub(r"\{[^}]*\}", " ", t)
+    w = _vp_norm(t).split()
+    return set(" ".join(w[i:i + 7]) for i in range(max(0, len(w) - 6)))
+
+
+def _vp_cluster_steps(seqs: list) -> dict:
+    """Group each step's variants by COPY, not by label. A/B tests routinely run
+    six spintax siblings of one email under labels A..G; they are the same copy,
+    so a booking can never be pinned to one label \u2014 but it CAN be pinned to the
+    shared copy. Returns {step -> [cluster,...]} where each cluster carries its
+    member labels, a representative (active) label, the union of its shingles,
+    and the shingles DISTINCTIVE to it (used for clean, clear-winner matching)."""
+    step_clusters = {}
+    for s in (seqs or []):
+        st = str(s.get("seq_number"))
+        variants = []  # (label, shingles, is_deleted)
+        for v in (s.get("sequence_variants") or []):
+            lbl = v.get("variant_label")
+            if lbl is None:
+                continue
+            body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
+            variants.append((lbl, _vp_shingles(body), bool(v.get("is_deleted"))))
+        if not variants:
+            continue
+        clusters = []  # {labels, dels, shset}
+        for lbl, sh, dele in variants:
+            placed = False
+            for cl in clusters:
+                a, b = sh, cl["shset"]
+                if a and b:
+                    sim = len(a & b) / min(len(a), len(b))
+                elif not a and not b:
+                    sim = 1.0            # two empty bodies \u2192 same (empty) copy
+                else:
+                    sim = 0.0
+                if sim >= 0.8:           # near-identical copy \u2192 one real version
+                    cl["labels"].append(lbl)
+                    cl["dels"].append(dele)
+                    cl["shset"] |= sh
+                    placed = True
+                    break
+            if not placed:
+                clusters.append({"labels": [lbl], "dels": [dele], "shset": set(sh)})
+        for cl in clusters:
+            paired = sorted(zip(cl["labels"], cl["dels"]))
+            cl["labels"] = [l for l, _ in paired]
+            cl["rep"] = next((l for l, d in paired if not d), cl["labels"][0])
+            cl["key"] = "/".join(cl["labels"])
+        for cl in clusters:
+            others = set().union(*[c["shset"] for c in clusters if c is not cl]) if len(clusters) > 1 else set()
+            cl["dist"] = cl["shset"] - others
+        step_clusters[st] = clusters
+    return step_clusters
+
+
+def _vp_match_cluster(body_norm: str, clusters: list):
+    """The cluster whose DISTINCTIVE copy the body clearly contains, or None.
+    Distinctive shingle sets are disjoint across clusters, so a real quote lands
+    on exactly one; a tie (identical distinctiveness, or no hit) \u2192 unattributed
+    rather than a guess."""
+    if not body_norm:
+        return None
+    scored = []
+    for cl in clusters:
+        probe = cl["dist"] or cl["shset"]
+        hit = sum(1 for p in probe if p and p in body_norm)
+        scored.append((hit, cl))
+    scored.sort(key=lambda x: -x[0])
+    if not scored or scored[0][0] == 0:
+        return None
+    if len(scored) > 1 and scored[1][0] == scored[0][0]:
+        return None
+    return scored[0][1]
+
+
 def _variant_paths(n: int) -> dict:
-    """Per-variant meeting attribution + opener\u2192follow-up combinations, DEDUCED
-    from the copy each booked lead saw. Primary source: the sent thread the lead
-    QUOTES BACK in their reply (Supabase reply archive). Fallback for bookers who
-    didn't quote: fetch the lead's Smartlead message-history and read the SENT
-    body per step. Match against variant bodies (raw /sequences, incl disabled).
-    Resolved paths are cached onto the reply row (raw.vpath) so a lookup never
-    repeats. Best-effort: a booker with no recoverable copy, or a step whose
-    variants share IDENTICAL copy, stays unattributed rather than guessed."""
+    """Per-COPY meeting attribution + opener\u2192follow-up combinations, deduced from
+    the copy each booked lead saw. Smartlead exposes no sent-variant per lead, so
+    the variant is recovered from the sent thread the lead QUOTES BACK in their
+    reply (Supabase archive), with a message-history fallback (the SENT body) for
+    quiet repliers. Variants that share identical copy are ONE version here \u2014 a
+    booking pins to the shared copy, never a fabricated label split. Every meeting
+    is placed in one of three honest buckets: attributed (matched a live copy),
+    removed (clearly quoted an opener no longer in the sequence), or traceless."""
     try:
         sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
     except Exception:  # noqa: BLE001
@@ -8043,47 +8128,20 @@ def _variant_paths(n: int) -> dict:
         (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
     if not seqs:
         return {}
-
-    def _norm(s):
-        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", re.sub(r"<[^>]+>", " ", s or "").lower())).strip()
-
-    def _shingles(t):
-        t = re.sub(r"\{\{[^}]*\}\}", " ", t or "")
-        t = re.sub(r"\{[^}]*\}", " ", t)
-        w = _norm(t).split()
-        return set(" ".join(w[i:i + 7]) for i in range(max(0, len(w) - 6)))
-
-    step_uniq = {}
-    for s in seqs:
-        st = str(s.get("seq_number"))
-        vs = {}
-        for v in (s.get("sequence_variants") or []):
-            lbl = v.get("variant_label")
-            if lbl is None:
-                continue
-            body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
-            vs[lbl] = _shingles(body)
-        if not vs:
-            continue
-        step_uniq[st] = ({l: vs[l] for l in vs} if len(vs) == 1
-                         else {l: (vs[l] - set().union(*[vs[o] for o in vs if o != l])) for l in vs})
-
-    def _match(body_norm, uniq):
-        best, hit = None, 0
-        for lbl, shs in uniq.items():
-            h = sum(1 for p in shs if p and p in body_norm)
-            if h > hit:
-                best, hit = lbl, h
-        return best
+    step_clusters = _vp_cluster_steps(seqs)
+    if not step_clusters:
+        return {}
+    valid_keys = {st: {cl["key"] for cl in cls} for st, cls in step_clusters.items()}
 
     rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
-                     "&select=id,email,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath"
+                     "&select=id,email,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath2"
                      "&order=replied_at.asc")
     if not isinstance(rows, list):
         return {}
     by_variant, combos, seen = {}, {}, set()
     attributed = 0
     fetches = 0
+    unresolved = []  # (email, shingles) \u2014 bookers with a real quote but no live-copy match
     for r in rows:
         em = (r.get("email") or "").strip().lower()
         if not em or em in seen:
@@ -8095,39 +8153,62 @@ def _variant_paths(n: int) -> dict:
             try:
                 cp = json.loads(cached)
                 if isinstance(cp, dict):
-                    path = {str(k): v for k, v in cp.items() if v}
+                    path = {str(k): v for k, v in cp.items()
+                            if v and str(k) in valid_keys and v in valid_keys[str(k)]}
             except Exception:  # noqa: BLE001
                 path = {}
-        if not path or (set(step_uniq) - set(path)):
-            body = _norm(r.get("reply_body") or r.get("rawbody") or "")
-            for st, uniq in step_uniq.items():
-                if st in path or not body:
+        body = _vp_norm(r.get("reply_body") or r.get("rawbody") or "")
+        if not path or (set(step_clusters) - set(path)):
+            for st, clusters in step_clusters.items():
+                if st in path:
                     continue
-                lbl = _match(body, uniq)
-                if lbl:
-                    path[st] = lbl
-            need = set(step_uniq) - set(path)
+                cl = _vp_match_cluster(body, clusters)
+                if cl:
+                    path[st] = cl["key"]
+            need = set(step_clusters) - set(path)
             if need and fetches < 12:
                 fetches += 1
                 sent = _vp_sent_bodies_from_history(n, em)
                 for st in list(need):
-                    b = _norm(sent.get(st) or "")
-                    if b:
-                        lbl = _match(b, step_uniq[st])
-                        if lbl:
-                            path[st] = lbl
+                    cl = _vp_match_cluster(_vp_norm(sent.get(st) or ""), step_clusters[st])
+                    if cl:
+                        path[st] = cl["key"]
             if path:
                 _vp_stamp_path(r.get("id"), path)
         if not path:
+            # No live copy matched. If the booker still quoted a substantial
+            # thread, their opener was real but has since been removed from the
+            # sequence (Smartlead purges a deleted variant's body) \u2014 count it as
+            # 'removed', honestly, rather than guess a label. Too little text to
+            # quote \u2192 genuinely traceless.
+            if len(_vp_shingles(body)) >= 6:
+                unresolved.append((em, _vp_shingles(body)))
             continue
         attributed += 1
-        for st, lbl in path.items():
-            by_variant[st + "|" + lbl] = by_variant.get(st + "|" + lbl, 0) + 1
+        for st, key in path.items():
+            by_variant[st + "|" + key] = by_variant.get(st + "|" + key, 0) + 1
         e1, e2 = path.get("1"), path.get("2")
         if e1 and e2:
             combos[e1 + ">" + e2] = combos.get(e1 + ">" + e2, 0) + 1
+    # Removed-opener recovery: cluster the unresolved bookers by mutual copy so
+    # two people who saw the same since-deleted opener count as one distinct
+    # removed version (surfaced as a count + reason, never a fake label).
+    removed = 0
+    removed_groups = []
+    for em, sh in unresolved:
+        placed = False
+        for g in removed_groups:
+            if len(sh & g["shset"]) / max(1, min(len(sh), len(g["shset"]))) >= 0.4:
+                g["n"] += 1
+                g["shset"] |= sh
+                placed = True
+                break
+        if not placed:
+            removed_groups.append({"n": 1, "shset": set(sh)})
+    removed = sum(g["n"] for g in removed_groups)
     return {"by_variant": by_variant, "combinations": combos,
-            "attributed": attributed, "booked": len(seen)}
+            "attributed": attributed, "booked": len(seen),
+            "removed": removed, "removed_versions": len(removed_groups)}
 
 
 def _variant_paths_debug(n: int, email: str = "") -> dict:
@@ -8157,39 +8238,12 @@ def _variant_paths_debug(n: int, email: str = "") -> dict:
         return {"error": f"sequences: {e}"}
     seqs = sraw if isinstance(sraw, list) else (
         (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
-
-    def _norm(s):
-        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", re.sub(r"<[^>]+>", " ", s or "").lower())).strip()
-
-    def _shingles(t):
-        t = re.sub(r"\{\{[^}]*\}\}", " ", t or "")
-        t = re.sub(r"\{[^}]*\}", " ", t)
-        w = _norm(t).split()
-        return set(" ".join(w[i:i + 7]) for i in range(max(0, len(w) - 6)))
-
-    step_full, step_uniq = {}, {}
-    for s in seqs:
-        st = str(s.get("seq_number"))
-        vs, bodies = {}, {}
-        for v in (s.get("sequence_variants") or []):
-            lbl = v.get("variant_label")
-            if lbl is None:
-                continue
-            body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
-            vs[lbl] = _shingles(body)
-            bodies[lbl] = {"deleted": bool(v.get("is_deleted")),
-                           "nshingles": len(vs[lbl]),
-                           "body_norm_head": _norm(body)[:220]}
-        if not vs:
-            continue
-        step_full[st] = vs
-        step_uniq[st] = ({l: vs[l] for l in vs} if len(vs) == 1
-                         else {l: (vs[l] - set().union(*[vs[o] for o in vs if o != l])) for l in vs})
-        out["steps"].append({"step": st,
-                             "variants": {l: {**bodies[l], "nuniq": len(step_uniq[st][l])} for l in vs}})
-
-    def _score(body_norm, shset):
-        return sum(1 for p in shset if p and p in body_norm)
+    step_clusters = _vp_cluster_steps(seqs)
+    for st in sorted(step_clusters):
+        out["steps"].append({"step": st, "clusters": [
+            {"key": cl["key"], "labels": cl["labels"], "rep": cl["rep"],
+             "nshingles": len(cl["shset"]), "ndistinct": len(cl["dist"])}
+            for cl in step_clusters[st]]})
 
     rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
                      "&select=id,email,reply_body,rawbody:raw->>email_body"
@@ -8200,13 +8254,16 @@ def _variant_paths_debug(n: int, email: str = "") -> dict:
         if not em or em in seen:
             continue
         seen.add(em)
-        body = _norm(r.get("reply_body") or r.get("rawbody") or "")
-        trace = {"email": em, "steps": {}}
-        for st in step_full:
-            uniq_scores = {l: _score(body, step_uniq[st][l]) for l in step_uniq[st]}
-            full_scores = {l: _score(body, step_full[st][l]) for l in step_full[st]}
-            trace["steps"][st] = {"uniq": uniq_scores, "full": full_scores}
-        out["bookers"].append(trace)
+        body = _vp_norm(r.get("reply_body") or r.get("rawbody") or "")
+        matched = {}
+        for st in step_clusters:
+            cl = _vp_match_cluster(body, step_clusters[st])
+            matched[st] = cl["key"] if cl else None
+        out["bookers"].append({"email": em, "matched": matched,
+                               "nshingles": len(_vp_shingles(body))})
+    result = _variant_paths(n)
+    out["result"] = {k: result.get(k) for k in
+                     ("by_variant", "combinations", "attributed", "booked", "removed", "removed_versions")}
     return out
 
 
@@ -8320,6 +8377,12 @@ def _cockpit_messaging(cid) -> dict:
     if isinstance(meetings, dict):
         meetings["by_variant"] = vpaths.get("by_variant") or {}
         meetings["attributed"] = vpaths.get("attributed") or 0
+        # 'removed' = meetings whose booker clearly quoted an opener that has
+        # since been deleted from the sequence (its body is purged from
+        # Smartlead, so it can't be a table row — but the meeting is real and
+        # honestly accounted for here). traceless = the rest.
+        meetings["removed"] = vpaths.get("removed") or 0
+        meetings["removed_versions"] = vpaths.get("removed_versions") or 0
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "combinations": vpaths.get("combinations") or {},
             "degraded": False,
