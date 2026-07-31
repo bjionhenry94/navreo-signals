@@ -1733,6 +1733,21 @@
     color: var(--fg-subtle);
   }
 
+  /* -- A2. version-performance: right-aligned numbers, step-band rows, best pill -- */
+  table.version-perf-table th.tnum, table.version-perf-table td.tnum { text-align: right; }
+  table.version-perf-table tr.vp-band td {
+    background: var(--sunken);
+    font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--fg-muted); padding-top: 7px; padding-bottom: 7px;
+  }
+  table.version-perf-table tr.vp-band td.vp-l { text-align: left; }
+  table.version-perf-table tr.vp-band .ring-caption { text-transform: none; letter-spacing: 0; }
+  .vp-best {
+    display: inline-block; margin-left: 6px; font-size: 0.55rem; font-weight: 800;
+    letter-spacing: 0.04em; text-transform: uppercase; color: #fff;
+    background: var(--nav-orange); padding: 1px 6px; border-radius: 999px; vertical-align: 1px;
+  }
+
   /* -- B. "the sequence": Smartlead-editor-like vertical step rail -- */
   .seq-rail { margin-top: 16px; display: flex; flex-direction: column; }
   .seq-step {
@@ -4180,38 +4195,57 @@
        attribute a booking to a variant) — so the count renders once, on the
        step's first row, and other rows of that step show a dot. */
     var hasMeet = !!(meetings && meetings.by_step);
-    var seenStep = {};
-    var rows = versions.map(function (v) {
-      var ratio = (v.positives > 0 && v.sent) ? "1 per " + fmtInt(Math.round(v.sent / v.positives)) : '-<span class="ring-caption"> ' + (v.sent < 300 ? "early" : "no positives") + "</span>";
-      var label = v.inline ? "inline" : (v.label || "?");
-      var meetCell = "";
-      if (hasMeet) {
-        var stepKey = v.step != null ? String(v.step) : "?";
-        if (!seenStep[stepKey]) {
-          seenStep[stepKey] = true;
-          meetCell = '<td class="tnum" data-label="Meetings">' + fmtInt(meetings.by_step[stepKey] || 0) + "</td>";
-        } else {
-          meetCell = '<td class="tnum" data-label="Meetings"><span class="ring-caption">&middot;</span></td>';
-        }
-      }
-      return "<tr>" +
-        "<td data-label=\"Email\">Email " + esc(v.step != null ? v.step : "?") + "</td>" +
-        "<td data-label=\"Version\">" + esc(label) + (v.disabled ? ' <span class="ring-caption">off</span>' : "") + "</td>" +
-        '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + "</td>" +
-        '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + "</td>" +
-        '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + "</td>" +
-        '<td class="tnum" data-label="1 per">' + ratio + "</td>" + meetCell + "</tr>";
-    }).join("");
-    var meetNote = "";
+    function rateSpan(n, d) { return (d && n) ? ' <span class="ring-caption">' + (n / d * 100).toFixed(1) + '%</span>' : ''; }
+    function perPos(v) { return (v.positives > 0 && v.sent) ? fmtInt(Math.round(v.sent / v.positives)) : '<span class="ring-caption">' + (v.sent < 300 ? 'early' : '—') + '</span>'; }
+    /* group by email step: each step is a band header carrying the step-level
+       meetings (a booking sits on the step, not a single variant — per-variant
+       attribution arrives with the per-lead trace), then its variants below,
+       alphabetical, disabled ones flagged "off". */
+    var byStep = {};
+    versions.forEach(function (v) { var k = v.step != null ? String(v.step) : '?'; (byStep[k] = byStep[k] || []).push(v); });
+    var stepKeys = Object.keys(byStep).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
+    /* best opener: Email-1, active, with positives, fewest sends per positive */
+    var best = null;
+    (byStep['1'] || []).forEach(function (v) {
+      if (v.disabled || v.inline || !(v.positives > 0) || !v.sent) return;
+      var pp = v.sent / v.positives;
+      if (best === null || pp < best.pp) best = { label: v.label, pp: pp };
+    });
+    var rows = stepKeys.map(function (sk) {
+      var vs = byStep[sk].slice().sort(function (a, b) { return String(a.label || '~').localeCompare(String(b.label || '~')); });
+      var stepSent = vs.reduce(function (s, v) { return s + (v.sent || 0); }, 0);
+      var stepMeet = hasMeet ? (meetings.by_step[sk] || 0) : null;
+      var perMeet = (stepMeet && stepSent) ? fmtInt(Math.round(stepSent / stepMeet)) : (stepMeet != null ? '—' : '');
+      var band = '<tr class="vp-band"><td class="vp-l" colspan="5">Email ' + esc(sk) +
+        ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') + '</span></td>' +
+        '<td class="tnum" data-label="Meetings">' + (stepMeet != null ? fmtInt(stepMeet) : '') + '</td>' +
+        '<td class="tnum" data-label="Sent / meeting">' + perMeet + '</td></tr>';
+      var body = vs.map(function (v) {
+        var label = v.inline ? 'inline' : (v.label || '?');
+        var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
+        return '<tr>' +
+          '<td data-label="Version">' + esc(label) +
+            (v.disabled ? ' <span class="ring-caption">off</span>' : '') +
+            (isBest ? ' <span class="vp-best">best</span>' : '') + '</td>' +
+          '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + '</td>' +
+          '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
+          '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>' +
+          '<td class="tnum" data-label="Sent / positive">' + perPos(v) + '</td>' +
+          '<td class="tnum" data-label="Meetings"></td>' +
+          '<td class="tnum" data-label="Sent / meeting"></td></tr>';
+      }).join('');
+      return band + body;
+    }).join('');
+    var meetNote = '';
     if (hasMeet) {
-      meetNote = fmtInt(meetings.total || 0) + " meeting" + (meetings.total === 1 ? "" : "s") + " on this campaign — one per person, however many replies the thread produced, so this column always adds up to the overview tile. Meetings belong to the email step, not the version.";
-      if (meetings.unattributed > 0) meetNote += " " + fmtInt(meetings.unattributed) + " of them " + (meetings.unattributed === 1 ? "is" : "are") + " not tied to a step yet (the replies arrived without step info).";
+      meetNote = fmtInt(meetings.total || 0) + ' meeting' + (meetings.total === 1 ? '' : 's') + " on this campaign — one per person. Meetings sit on the email step (shared by that step's variants), not on a single variant; per-variant attribution is on the way.";
+      if (meetings.unattributed > 0) meetNote += ' ' + fmtInt(meetings.unattributed) + ' not tied to a step yet.';
     }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
-      "<thead><tr><th>Email</th><th>Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>1 per</th>" + (hasMeet ? "<th>Meetings</th>" : "") + "</tr></thead>" +
-      "<tbody>" + rows + "</tbody></table></div>" +
-      (meetNote ? '<p class="sample-footer">' + esc(meetNote) + "</p>" : "") +
-      (note ? '<p class="sample-footer">' + esc(note) + "</p>" : "");
+      '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>' +
+      (meetNote ? '<p class="sample-footer">' + esc(meetNote) + '</p>' : '') +
+      (note ? '<p class="sample-footer">' + esc(note) + '</p>' : '');
   }
 
   /* ── Live-audience grid (leads hub): lists.html's datagrid look on the
