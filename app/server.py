@@ -8131,7 +8131,13 @@ def _variant_paths(n: int) -> dict:
     step_clusters = _vp_cluster_steps(seqs)
     if not step_clusters:
         return {}
-    valid_keys = {st: {cl["key"] for cl in cls} for st, cls in step_clusters.items()}
+    # Attribution is keyed by each cluster's REPRESENTATIVE (active) label, e.g.
+    # opener "A" standing for the identical-copy group A/B/C/D/F/G. The frontend
+    # uses `clusters` to map every member label back to its rep so it can show
+    # the meeting count once ("A: 6") and mark the siblings ("B: = A").
+    valid_keys = {st: {cl["rep"] for cl in cls} for st, cls in step_clusters.items()}
+    clusters_out = {st: [{"rep": cl["rep"], "labels": cl["labels"]} for cl in cls]
+                    for st, cls in step_clusters.items()}
 
     rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
                      "&select=id,email,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath2"
@@ -8164,7 +8170,7 @@ def _variant_paths(n: int) -> dict:
                     continue
                 cl = _vp_match_cluster(body, clusters)
                 if cl:
-                    path[st] = cl["key"]
+                    path[st] = cl["rep"]
             need = set(step_clusters) - set(path)
             if need and fetches < 12:
                 fetches += 1
@@ -8172,7 +8178,7 @@ def _variant_paths(n: int) -> dict:
                 for st in list(need):
                     cl = _vp_match_cluster(_vp_norm(sent.get(st) or ""), step_clusters[st])
                     if cl:
-                        path[st] = cl["key"]
+                        path[st] = cl["rep"]
             if path:
                 _vp_stamp_path(r.get("id"), path)
         if not path:
@@ -8206,7 +8212,7 @@ def _variant_paths(n: int) -> dict:
         if not placed:
             removed_groups.append({"n": 1, "shset": set(sh)})
     removed = sum(g["n"] for g in removed_groups)
-    return {"by_variant": by_variant, "combinations": combos,
+    return {"by_variant": by_variant, "combinations": combos, "clusters": clusters_out,
             "attributed": attributed, "booked": len(seen),
             "removed": removed, "removed_versions": len(removed_groups)}
 
@@ -8376,6 +8382,7 @@ def _cockpit_messaging(cid) -> dict:
         vpaths = {}
     if isinstance(meetings, dict):
         meetings["by_variant"] = vpaths.get("by_variant") or {}
+        meetings["clusters"] = vpaths.get("clusters") or {}
         meetings["attributed"] = vpaths.get("attributed") or 0
         # 'removed' = meetings whose booker clearly quoted an opener that has
         # since been deleted from the sequence (its body is purged from
