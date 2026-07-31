@@ -8130,10 +8130,26 @@ def _variant_paths(n: int) -> dict:
             "attributed": attributed, "booked": len(seen)}
 
 
-def _variant_paths_debug(n: int) -> dict:
+def _variant_paths_debug(n: int, email: str = "") -> dict:
     """TEMP diagnostic: dump the raw variant bodies (incl deleted), the
     per-step unique-shingle sizes, and the per-booker match trace so we can see
     exactly WHERE attribution leaks. Gated behind auth via /api/cockpit/vpdebug."""
+    if email:
+        # Raw dump of one lead's Smartlead record + message-history so we can see
+        # whether the SENT items carry a variant id/label (exact attribution).
+        from urllib.parse import quote
+        lr = _smartlead_json("GET", f"/leads/?email={quote(email)}")
+        lead = lr.get("lead") if isinstance(lr, dict) and isinstance(lr.get("lead"), dict) else (
+            lr[0] if isinstance(lr, list) and lr else lr)
+        lid = lead.get("id") if isinstance(lead, dict) else None
+        hr = _smartlead_json("GET", f"/campaigns/{n}/leads/{lid}/message-history") if lid else None
+        hist = (hr.get("history") if isinstance(hr, dict) else hr) or []
+        sent = [{k: (str(v)[:120] if k in ("email_body", "body", "subject") else v)
+                 for k, v in m.items()} for m in hist
+                if isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT"]
+        return {"campaign_id": n, "email": email, "lead_id": lid,
+                "lead_keys": sorted(lead.keys()) if isinstance(lead, dict) else None,
+                "sent_items": sent}
     out = {"campaign_id": n, "steps": [], "bookers": []}
     try:
         sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
@@ -17652,7 +17668,8 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             try:
-                return self._json(_variant_paths_debug(int((q.get("id") or ["0"])[0])))
+                return self._json(_variant_paths_debug(
+                    int((q.get("id") or ["0"])[0]), (q.get("email") or [""])[0]))
             except Exception as e:  # noqa: BLE001
                 return self._json({"error": str(e)})
         if path == "/api/cockpit/live-status":
