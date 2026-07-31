@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Table T4 · Grouped by step · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;
+  --cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;
+  --line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--green-bg:#E4F1EA;--red:#C2371F;--red-bg:#F8E1DA;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;--font-mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:900px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.01em;margin:2px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:16px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.verdict{font-family:var(--font-display);font-size:17px;line-height:1.3;background:var(--ink);color:var(--cream);border-radius:12px;padding:14px 18px;margin-bottom:14px}
+.verdict b{color:#FFB98F}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px;min-width:600px}
+thead th{text-align:right;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);padding:13px 16px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
+thead th.l{text-align:left}
+tr.grp td{background:var(--sunken);padding:12px 16px;border-bottom:1px solid var(--line)}
+.grphead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.grphead .name{font-family:var(--font-display);font-size:16px}
+.grphead .name small{font-family:var(--font-sans);font-size:11px;color:var(--ink-3);font-weight:600;margin-left:8px}
+.callbadge{display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:5px 12px;font-size:12.5px}
+.callbadge b{font-family:var(--font-display);font-size:15px;color:var(--orange-600)}
+tbody td{padding:13px 16px;text-align:right;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--line)}
+tbody td.l{text-align:left}
+tr.ver td:first-child{padding-left:30px;position:relative}
+tr.ver.win td:first-child::before{content:"";position:absolute;left:16px;top:50%;transform:translateY(-50%);width:4px;height:22px;border-radius:2px;background:var(--orange)}
+tr.ver.win{background:linear-gradient(90deg,rgba(255,77,0,.05),transparent)}
+tr.ver.lose td{color:var(--ink-3)}
+.vlabel{font-weight:700}
+.pill{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;margin-left:8px}
+.pill.win{background:var(--orange);color:#fff}.pill.cut{background:var(--red-bg);color:var(--red)}
+.big{font-family:var(--font-display);font-size:16px}
+.win .big{color:var(--orange-600)}
+.foot{padding:14px 18px;font-size:11.5px;color:var(--ink-3);line-height:1.6;background:var(--cream-50);border-top:1px solid var(--line)}
+.foot b{color:var(--ink-2)}
+.act{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;background:var(--orange-100);flex-wrap:wrap}
+.act .txt{font-size:14px;font-weight:600}.act .txt span{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-top:2px}
+.btn{background:var(--orange);color:#fff;border:none;border-radius:999px;padding:10px 18px;font:600 13px var(--font-sans);cursor:pointer}.btn:hover{background:var(--orange-600)}
+@media(max-width:640px){thead th:nth-child(3),tbody td:nth-child(3){display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Version performance</div><div class="h1">Calls by step, versions inside</div></div>
+    <div class="chip">Live from Smartlead · since relaunch</div>
+  </div>
+  <div class="verdict" id="verdict"></div>
+  <div class="card">
+    <div class="tscroll">
+    <table>
+      <thead><tr><th class="l">Step / Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Warm %</th><th>1 per</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+    <div class="act" id="act"></div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+<script>
+const DATA={
+  versions:[
+    {step:1,label:"A",sent:1269,replies:20,positives:14,bounces:28},
+    {step:1,label:"B",sent:1259,replies:18,positives:9,bounces:28},
+    {step:2,label:"inline",inline:true,sent:1757,replies:22,positives:13,bounces:11}
+  ],
+  meetings:{total:16,by_step:{1:13,2:3}}
+};
+const FLOOR=300;
+const perPos=v=>v.positives>0?Math.round(v.sent/v.positives):null;
+const warm=v=>v.positives/v.sent*100;
+const m1=DATA.meetings.by_step[1]||0,m2=DATA.meetings.by_step[2]||0,mt=DATA.meetings.total;
+// group by step
+const steps={};DATA.versions.forEach(v=>{(steps[v.step]=steps[v.step]||[]).push(v);});
+const A=DATA.versions[0],B=DATA.versions[1];
+const winner=warm(A)>=warm(B)?A:B,loser=winner===A?B:A;
+
+let html="";
+Object.keys(steps).sort((a,b)=>a-b).forEach(sk=>{
+  const vs=steps[sk], calls=DATA.meetings.by_step[sk]||0;
+  const stepSent=vs.reduce((s,v)=>s+v.sent,0);
+  html+=`<tr class="grp"><td class="l" colspan="6"><div class="grphead">
+    <div class="name">Email ${sk}<small>${vs.length} version${vs.length>1?'s':''} · ${stepSent.toLocaleString()} sent</small></div>
+    <span class="callbadge">${calls?'<b>'+calls+'</b> call'+(calls===1?'':'s')+' booked':'no calls yet'}</span>
+  </div></td></tr>`;
+  // rank within step by warm
+  const localWin=[...vs].sort((a,b)=>warm(b)-warm(a))[0];
+  vs.forEach(v=>{
+    const early=v.sent<FLOOR;
+    const isW=v===winner, isL=v===loser;
+    const cls=isW?"win":isL?"lose":"";
+    const label=v.inline?"inline":v.label;
+    let pill=early?'<span class="pill cut">too early</span>':isW?'<span class="pill win">winner</span>':isL?'<span class="pill cut">cut</span>':'';
+    html+=`<tr class="ver ${cls}">
+      <td class="l"><span class="vlabel">${label}</span>${pill}</td>
+      <td>${v.sent.toLocaleString()}</td>
+      <td>${v.replies}</td>
+      <td><span class="big">${v.positives}</span></td>
+      <td>${early?'—':warm(v).toFixed(1)+'%'}</td>
+      <td>${early?'early':'1 / '+perPos(v)}</td>
+    </tr>`;
+  });
+});
+document.getElementById("tbody").innerHTML=html;
+document.getElementById("verdict").innerHTML=`Your <b>${mt} calls</b> sit on the steps that got the reply — <b>${m1} on Email 1</b>, ${m2} on Email 2. Inside Email 1, <b>Version ${winner.label}</b> is the opener to keep.`;
+document.getElementById("act").innerHTML=`<div class="txt">Keep ${winner.label}, retire ${loser.label}.<span>Both feed the same Email 1 that books most of your calls — ${winner.label} converts better (${perPos(winner)} vs ${perPos(loser)} per good reply).</span></div><button class="btn">Do this</button>`;
+document.getElementById("foot").innerHTML=`Each <b>step</b> shows its booked calls once, on its header — Smartlead attributes a booking to the email step, not the version, so Email 1's ${m1} calls belong to A and B together and are never split by guess. <b>Warm %</b> = good replies ÷ sent. <b>1 per</b> = emails per good reply (lower is better). Since relaunch.`;
+</script>
+</body>
+</html>

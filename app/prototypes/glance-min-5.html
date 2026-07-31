@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glance &mdash; P5: Clean scoreboard</title>
+<link rel="stylesheet" href="overview-hub-base.css">
+<style>
+  body { background:var(--sunken); margin:0; padding:44px clamp(18px,5vw,64px); font-family:var(--font-sans); color:var(--fg); }
+  .flag { font-size:0.72rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-subtle); margin:0 auto 16px; max-width:1000px; }
+  .flag b { color:var(--success); }
+  .card { background:var(--bg); border:1px solid var(--border); border-radius:var(--r-xl); padding:30px 34px; max-width:1000px; margin:0 auto; box-shadow:0 1px 2px rgba(20,17,14,0.04); }
+  .ct { display:flex; align-items:baseline; gap:10px; margin:0 0 16px; }
+  .ct h2 { font-family:var(--font-display); font-weight:400; font-size:1.15rem; letter-spacing:-0.01em; margin:0; }
+  .ginfo { display:inline; }
+  .ginfo > summary { list-style:none; cursor:pointer; width:16px; height:16px; border-radius:999px; border:1px solid var(--border-strong); color:var(--fg-subtle); font-size:0.66rem; font-style:italic; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .ginfo > summary::-webkit-details-marker { display:none; }
+  .ginfo[open] { display:block; margin-top:10px; }
+  .ginfo[open] > summary { margin-bottom:6px; }
+  .ginfo p { margin:0; font-size:0.8rem; color:var(--fg-subtle); line-height:1.5; max-width:66ch; }
+  .synced { margin-left:auto; font-size:0.72rem; color:var(--fg-subtle); }
+  .hpill { display:inline-flex; align-items:center; gap:6px; background:var(--success-bg); color:var(--success); font-size:0.78rem; font-weight:700; padding:4px 11px; border-radius:999px; }
+  .hpill::before { content:""; width:7px; height:7px; border-radius:999px; background:var(--success); }
+  .tnum { font-variant-numeric:tabular-nums; }
+  .vline { font-family:var(--font-display); font-weight:400; font-size:clamp(1.7rem,3.6vw,2.2rem); color:var(--success); letter-spacing:-0.02em; line-height:1; margin:12px 0 2px; }
+  .vsub { font-size:1rem; color:var(--fg-muted); margin:0; }
+  .vsub b { color:var(--success); font-weight:700; }
+  .oh { display:flex; gap:20px; align-items:flex-end; }
+  .oh .n { font-family:var(--font-display); font-weight:400; font-size:clamp(3rem,6.6vw,4.2rem); line-height:0.82; letter-spacing:-0.03em; color:var(--success); }
+  .oh .l { display:block; font-size:0.84rem; color:var(--fg-subtle); margin-top:9px; }
+  .oh-arrow { font-family:var(--font-display); font-size:1.8rem; color:var(--success); opacity:0.5; padding-bottom:18px; }
+
+  .g5-quad { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; align-items:end; margin-top:14px; }
+  .g5-q .n { font-family:var(--font-display); font-weight:400; letter-spacing:-0.02em; line-height:1; }
+  .g5-q.small .n { font-size:clamp(1.4rem,3vw,1.8rem); color:var(--fg-muted); }
+  .g5-q.good .n { font-size:clamp(2.4rem,5.2vw,3.2rem); color:var(--success); }
+  .g5-q .comp { font-family:var(--font-display); font-weight:400; letter-spacing:-0.01em; color:var(--fg-subtle); margin-left:7px; }
+  .g5-q.small .comp { font-size:0.9rem; }
+  .g5-q.good .comp { font-size:1.15rem; }
+  .g5-q .l { display:block; font-size:0.76rem; color:var(--fg-subtle); margin-top:5px; }
+  .g5-aud { margin-top:22px; padding-top:18px; border-top:1px solid var(--border); }
+  .g5-audh { display:flex; justify-content:space-between; font-size:0.84rem; color:var(--fg-subtle); margin-bottom:9px; }
+  .g5-audh b { color:var(--fg); font-family:var(--font-display); font-weight:400; }
+  .g5-stack { height:12px; border-radius:999px; overflow:hidden; display:flex; background:var(--track-bg); }
+  .g5-stack i { height:100%; display:block; }
+  .g5-legend { display:flex; gap:20px; margin-top:11px; font-size:0.78rem; color:var(--fg-subtle); flex-wrap:wrap; }
+  .g5-legend span { display:inline-flex; align-items:center; gap:7px; }
+  .g5-legend i { width:10px; height:10px; border-radius:3px; }
+  .g5-legend b { color:var(--fg); font-family:var(--font-display); font-weight:400; }
+
+</style>
+</head>
+<body>
+  <p class="flag">Glance redesign &middot; <b>P5</b> &mdash; Clean scoreboard</p>
+  <div class="card">
+    <div class="ct"><h2>The campaign at a glance</h2><details class="ginfo"><summary aria-label="about these numbers">i</summary><p>Campaign-to-date, from the daily Smartlead sync (00:13). 14,586 sent, 156 replies (1.07%), 156 bounced (1.1%). Positives = Smartlead's interested mark. Of 7,713 people: 6,692 finished, 442 in progress, 579 unreachable. Contact record 7,713 vs Smartlead's 8,747 is a different counter (platform audience vs contact record), not a contradiction.</p></details><span class="synced">synced 00:13</span></div>
+
+    <span class="hpill">Healthy</span>
+    <p class="vline">It's working.</p>
+    <p class="vsub"><b>1 yes every 251 emails</b> &mdash; good, well under the 1,500 line.</p>
+    <div class="g5-quad">
+      <div class="g5-q small"><span class="n tnum">14,586</span><span class="l">Sent</span></div>
+      <div class="g5-q small"><span class="n tnum">1.07%</span><span class="comp tnum">156</span><span class="l">Replied</span></div>
+      <div class="g5-q good"><span class="n tnum">58</span><span class="comp tnum">0.4%</span><span class="l">Positives</span></div>
+      <div class="g5-q good"><span class="n tnum">8</span><span class="l">Meetings</span></div>
+    </div>
+    <div class="g5-aud">
+      <div class="g5-audh"><span>Who we're working &mdash; <b class="tnum">8,168</b> people</span><span><b style="color:var(--fg);font-family:var(--font-display)">82%</b> completed</span></div>
+      <div class="g5-stack"><i style="width:81.9%;background:#2E7D5B"></i><i style="width:5.4%;background:#A7CDB8"></i><i style="width:12.7%;background:#D9D6D1"></i></div>
+      <div class="g5-legend"><span><i style="background:#2E7D5B"></i>Completed <b class="tnum">6,692</b></span><span><i style="background:#A7CDB8"></i>In progress <b class="tnum">442</b></span><span><i style="background:#D9D6D1"></i>Not started <b class="tnum">1,034</b></span></div>
+    </div>
+
+  </div>
+</body>
+</html>

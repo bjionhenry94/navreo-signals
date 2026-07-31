@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Min P4 · Flow lanes · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{--orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;--ink:#14110E;--ink-3:#6B6055;--brown-300:#C0B0A0;
+--cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;--line:#EBE1D5;--line-2:#DCC6AE;
+--font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;--font-display:"Acid Grotesk","DM Sans",sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:720px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:25px;letter-spacing:-.01em;margin:2px 0 22px}
+.sect{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.tag{font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:2px 7px;border-radius:999px}
+.lane{display:flex;align-items:center;gap:0;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+.lane.win{border-color:var(--orange);box-shadow:0 0 0 1px var(--orange)}
+.node{text-align:center;flex:0 0 auto}
+.node .cap{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
+.chip{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;min-width:74px;padding:10px 14px;border-radius:12px;background:var(--sunken)}
+.chip .big{font-family:var(--font-display);font-size:20px;line-height:1}
+.chip .sm{font-size:11px;color:var(--ink-3);margin-top:3px}
+.opnchip.win{background:var(--orange-100)}
+.flow{flex:1;height:3px;background:var(--line-2);position:relative;margin:0 4px;min-width:26px}
+.win .flow{background:var(--orange)}
+.flow::after{content:"›";position:absolute;right:-3px;top:50%;transform:translateY(-50%);color:var(--line-2);font-size:20px;font-weight:700}
+.win .flow::after{color:var(--orange)}
+.result{flex:0 0 auto;text-align:center;padding-left:8px}
+.result .calls{font-family:var(--font-display);font-size:34px;line-height:1}
+.win .result .calls{color:var(--orange-600)}
+.result .rl{font-size:11px;color:var(--ink-3);margin-top:2px}
+.medal{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--orange);padding:2px 7px;border-radius:999px;margin-top:5px}
+@media(max-width:560px){.chip{min-width:58px;padding:8px 9px}.result .calls{font-size:28px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Version performance</div>
+  <div class="h1">Follow each path to the call</div>
+  <div class="sect">Combinations <span class="tag">opener → follow-up → result</span></div>
+
+  <div class="lane win">
+    <div class="node"><div class="cap">Opener</div><div class="chip opnchip win"><span class="big">A</span><span class="sm">14 · 1.1%</span></div></div>
+    <div class="flow"></div>
+    <div class="node"><div class="cap">Then</div><div class="chip"><span class="big">Email 2</span><span class="sm">follow-up</span></div></div>
+    <div class="flow"></div>
+    <div class="result"><div class="calls">10</div><div class="rl">calls booked</div><span class="medal">best path</span></div>
+  </div>
+
+  <div class="lane">
+    <div class="node"><div class="cap">Opener</div><div class="chip opnchip"><span class="big">B</span><span class="sm">9 · 0.7%</span></div></div>
+    <div class="flow"></div>
+    <div class="node"><div class="cap">Then</div><div class="chip"><span class="big">Email 2</span><span class="sm">follow-up</span></div></div>
+    <div class="flow"></div>
+    <div class="result"><div class="calls">6</div><div class="rl">calls booked</div></div>
+  </div>
+</div>
+</body>
+</html>

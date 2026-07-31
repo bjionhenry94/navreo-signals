@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Meetings per variant + Combinations · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{--orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;--ink:#14110E;--ink-3:#6B6055;--brown-300:#C0B0A0;
+--cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;--line:#EBE1D5;--line-2:#DCC6AE;--amber:#8F6600;--amber-bg:#F8EAC4;
+--preview:#F3ECFA;--preview-line:#E4D6F2;--preview-ink:#6B4E9E;
+--font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;--font-display:"Acid Grotesk","DM Sans",sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:960px;margin:0 auto}
+.hd{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:25px;letter-spacing:-.01em;margin-top:3px}
+.cchip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--card);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:820px}
+thead th{text-align:right;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);padding:12px 13px 9px;white-space:nowrap;vertical-align:bottom}
+thead th.l{text-align:left}
+thead th.pv{background:var(--preview);color:var(--preview-ink)}
+.pvtag{display:block;font-size:8px;font-weight:800;letter-spacing:.03em;color:var(--preview-ink);margin-top:3px}
+td.pv{background:var(--preview)}
+.band td{background:var(--sunken);border-top:1px solid var(--line);padding:10px 13px;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.band td.pv{background:var(--preview)}
+.band .bl{font-family:var(--font-display);font-size:14px;text-transform:none;letter-spacing:0}
+.band .bl small{font-family:var(--font-sans);font-size:11px;color:var(--ink-3);font-weight:600;margin-left:8px}
+tbody td{padding:12px 13px;text-align:right;font-variant-numeric:tabular-nums;border-top:1px solid var(--line);white-space:nowrap}
+tbody td.l{text-align:left}
+.name{font-family:var(--font-display);font-size:14.5px;font-weight:600}
+.arrow{color:var(--brown-300);margin:0 4px;font-weight:700}
+.medal{display:inline-block;margin-left:8px;font-size:8.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--orange);padding:2px 7px;border-radius:999px;vertical-align:1px}
+.tagp{display:inline-block;margin-left:7px;font-size:8.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:999px;vertical-align:1px}
+.m-follow{color:var(--amber);background:var(--amber-bg)}
+.m-early{color:var(--ink-3);background:var(--sunken);border:1px solid var(--line)}
+.n{font-family:var(--font-display);font-size:14.5px;font-weight:600}
+.win .n{color:var(--orange-600)}
+.pvn{font-family:var(--font-display);font-size:14.5px;font-weight:600;color:var(--preview-ink)}
+.r{font-size:11px;color:var(--ink-3);font-weight:600;margin-left:3px}
+.dot{color:var(--brown-300)}
+.win td:first-child{box-shadow:inset 3px 0 0 var(--orange)}
+.win{background:linear-gradient(90deg,rgba(255,77,0,.05),transparent)}
+.win td.pv{background:var(--preview)}
+.foot{padding:12px 16px;font-size:11px;color:var(--ink-3);line-height:1.6;background:var(--cream-50);border-top:1px solid var(--line)}
+.foot b{color:var(--ink-2)}
+.foot .sw{display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--preview);border:1px solid var(--preview-line);vertical-align:0;margin-right:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <div><div class="eyebrow">Version performance</div><div class="h1">Meetings per variant, and the best combination</div></div>
+    <span class="cchip">Campaign 2825791 · live · 5 variants</span>
+  </div>
+  <div class="card"><div class="tscroll"><table>
+    <thead><tr>
+      <th class="l">Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>Sent / positive</th>
+      <th class="pv">Meetings<span class="pvtag">preview</span></th><th class="pv">Sent / meeting<span class="pvtag">preview</span></th>
+    </tr></thead>
+    <tbody>
+      <tr class="band"><td class="l" colspan="5"><span class="bl">Versions<small>every variant · exact numbers</small></span></td><td class="pv"></td><td class="pv"></td></tr>
+      <tr><td class="l"><span class="name">Email 1 · A</span></td>
+        <td><span class="n">3,540</span></td><td><span class="n">42</span><span class="r">1.2%</span></td>
+        <td><span class="n">18</span><span class="r">0.5%</span></td><td>197</td>
+        <td class="pv"><span class="pvn">1</span></td><td class="pv">3,540</td></tr>
+      <tr class="win"><td class="l"><span class="name">Email 1 · B</span><span class="medal">best opener</span></td>
+        <td><span class="n">3,540</span></td><td><span class="n">46</span><span class="r">1.3%</span></td>
+        <td><span class="n">21</span><span class="r">0.6%</span></td><td>169</td>
+        <td class="pv"><span class="pvn">1</span></td><td class="pv">3,540</td></tr>
+      <tr><td class="l"><span class="name">Email 1 · original</span><span class="tagp m-early">too early</span></td>
+        <td><span class="n">34</span></td><td><span class="n">10</span><span class="r">29.4%</span></td>
+        <td><span class="n">3</span><span class="r">8.8%</span></td><td>11</td>
+        <td class="pv"><span class="dot">0</span></td><td class="pv"><span class="dot">—</span></td></tr>
+      <tr><td class="l"><span class="name">Email 2 · A</span><span class="tagp m-follow">follow-up</span></td>
+        <td><span class="n">7,411</span></td><td><span class="n">57</span><span class="r">0.8%</span></td>
+        <td><span class="n">15</span><span class="r">0.2%</span></td><td>494</td>
+        <td class="pv"><span class="pvn">6</span></td><td class="pv">1,235</td></tr>
+      <tr><td class="l"><span class="name">Email 2 · original</span><span class="tagp m-early">too early</span></td>
+        <td><span class="n">61</span></td><td><span class="n">1</span><span class="r">1.6%</span></td>
+        <td><span class="n">1</span><span class="r">1.6%</span></td><td>61</td>
+        <td class="pv"><span class="dot">0</span></td><td class="pv"><span class="dot">—</span></td></tr>
+      <tr class="band"><td class="l" colspan="5"><span class="bl">Best combination<small>which opener the booker first saw · the real journey credit</small></span></td><td class="pv"></td><td class="pv"></td></tr>
+      <tr><td class="l"><span class="name">A<span class="arrow">&rarr;</span>Email 2</span></td>
+        <td><span class="n">3,540</span></td><td class="dot">&mdash;</td>
+        <td><span class="n">24</span><span class="r">0.7%</span></td><td>148</td>
+        <td class="pv"><span class="pvn">3</span></td><td class="pv">1,180</td></tr>
+      <tr class="win"><td class="l"><span class="name">B<span class="arrow">&rarr;</span>Email 2</span><span class="medal">best path</span></td>
+        <td><span class="n">3,540</span></td><td class="dot">&mdash;</td>
+        <td><span class="n">30</span><span class="r">0.8%</span></td><td>118</td>
+        <td class="pv"><span class="pvn">5</span></td><td class="pv">708</td></tr>
+    </tbody>
+  </table></div>
+    <div class="foot"><span class="sw"></span><b>Purple columns are a preview</b> — meetings per variant and per path need the per-lead trace (which variant each booker was sent). Everything else is live &amp; exact. In the table, <b>Meetings</b> = the variant that got the booking reply (so Email 2 &middot; A shows 6). The <b>Best combination</b> re-credits those to the opener the person first saw — <b>B &rarr; Email 2 leads with 5 of the 8</b>, because Email 2 only ever emails people the openers didn't already close.</div>
+  </div>
+</div>
+</body>
+</html>

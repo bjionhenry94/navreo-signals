@@ -1,0 +1,88 @@
+/* launch-dashboard-base.css — shared shell for the 5 launch-dashboard prototypes.
+   Navreo white-app tokens under the app's own --var names (trivial merge later).
+   One universal stage language: done · active (breathes, the orange moment) · queued. */
+
+@font-face{ font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight:400; font-display:swap; }
+
+:root{
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055;
+  --orange:#FF4D00; --orange-100:#FFE4D6; --orange-700:#C23A00;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --cream:#F9F0E7;
+  --font-display:"Acid Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans:"DM Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:ui-monospace, "SF Mono", "Roboto Mono", Menlo, monospace;
+  --radius:12px; --focus:rgba(255,77,0,.32);
+  --st-done:var(--green); --st-active:var(--orange); --st-queued:var(--line-2);
+  --shadow:0 1px 2px rgba(20,17,14,.04), 0 8px 24px rgba(20,17,14,.05);
+}
+:root[data-theme="dark"]{
+  --bg:#131010; --bg-sunken:#1B1714; --card:#201B17;
+  --line:#302A24; --line-2:#413931;
+  --ink:#F7F3EE; --ink-2:#D9D0C5; --ink-3:#A99C8C;
+  --orange:#FF5E1A; --orange-100:#3A2417; --orange-700:#FF8654;
+  --green:#5FBF8E; --green-bg:#17281F; --green-line:#274838;
+  --amber:#E0B24A; --amber-bg:#2A2312; --amber-line:#463A1C;
+  --red:#F08163; --red-bg:#2C1712; --red-line:#4A2418;
+  --cream:#221C16;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--font-sans);
+  font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+  padding:0; min-height:100vh;
+}
+h1,h2,h3{margin:0; font-weight:500}
+.num{font-family:var(--font-display); font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+.mono{font-variant-numeric:tabular-nums}
+
+/* ---- shell ---------------------------------------------------------------- */
+.ld-app{max-width:1120px; margin:0 auto; padding:28px 22px 80px}
+.ld-top{display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:22px}
+.ld-title{font-family:var(--font-display); font-size:27px; letter-spacing:-.02em; line-height:1}
+.ld-sub{color:var(--ink-3); font-size:13px; margin-top:6px}
+.ld-tools{display:flex; align-items:center; gap:10px; flex-shrink:0}
+.ld-preview{font-size:11px; color:var(--ink-3); border:1px solid var(--line-2); border-radius:999px;
+  padding:3px 9px; letter-spacing:.02em}
+.ld-theme{appearance:none; border:1px solid var(--line-2); background:var(--card); color:var(--ink-2);
+  border-radius:999px; width:34px; height:34px; cursor:pointer; font-size:14px; line-height:1}
+.ld-theme:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+
+/* ---- universal stage language (shared by every prototype) ------------------ */
+.stagedot{width:9px; height:9px; border-radius:50%; flex:0 0 auto; background:var(--st-queued)}
+.st-done  .stagedot{background:var(--st-done)}
+.st-active .stagedot{background:var(--st-active)}
+.st-done  .stagelabel{color:var(--ink-2)}
+.st-active .stagelabel{color:var(--ink)}
+.st-queued .stagelabel{color:var(--ink-3)}
+
+/* the breathing element — put class="breathe" on the ACTIVE stage's marker */
+@keyframes ld-breathe{0%,100%{opacity:.55; transform:scale(.9)} 50%{opacity:1; transform:scale(1)}}
+@keyframes ld-halo{0%{box-shadow:0 0 0 0 var(--orange-100)} 70%,100%{box-shadow:0 0 0 7px transparent}}
+@keyframes ld-fill{from{width:0}}
+.breathe{animation:ld-breathe 1.8s ease-in-out infinite}
+.halo{animation:ld-halo 2.2s ease-out infinite}
+@media (prefers-reduced-motion:reduce){ .breathe,.halo{animation:none} }
+
+/* ---- shared atoms ---------------------------------------------------------- */
+.chip{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-2);
+  background:var(--bg-sunken); border:1px solid var(--line); border-radius:999px; padding:4px 10px}
+.chip.on{background:var(--orange-100); border-color:transparent; color:var(--orange-700)}
+.card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius)}
+.btn{appearance:none; cursor:pointer; font:inherit; font-weight:500; border-radius:999px;
+  padding:9px 16px; border:1px solid var(--line-2); background:var(--card); color:var(--ink)}
+.btn.primary{background:var(--orange); border-color:transparent; color:#fff}
+.btn:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+.tick{color:var(--green)} .running{color:var(--orange)} .waiting{color:var(--ink-3)}
+.backbtn{display:inline-flex; align-items:center; gap:6px; cursor:pointer; background:none;
+  border:none; color:var(--ink-2); font:inherit; padding:6px 2px}
+.mailframe{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+.mailhead{background:var(--cream); border-bottom:1px solid var(--line); padding:9px 13px; font-size:12px; color:var(--ink-2)}
+.mailbody{padding:13px; color:var(--ink-2); font-size:13px}

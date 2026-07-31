@@ -1,0 +1,137 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>P4 v2 · Needs-you first, refined · Prototype</title>
+<style>
+:root{
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055;
+  --brown-400:#A89684; --cream:#F9F0E7;
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --orange:#FF4D00; --orange-100:#FFE4D6; --orange-700:#C23D00;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --radius:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--bg);color:var(--ink);line-height:1.45;letter-spacing:-.015em;-webkit-font-smoothing:antialiased}
+.app{display:flex;min-height:100vh}
+.rail{width:64px;flex-shrink:0;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:6px;background:var(--bg)}
+.rail .logo{width:36px;height:36px;border-radius:10px;background:var(--ink);color:var(--cream);display:flex;align-items:center;justify-content:center;font-size:19px;margin-bottom:12px}
+.rail .ni{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;color:var(--brown-400);font-size:17px}
+.rail .ni.on{background:var(--orange-100);color:var(--orange-700)}
+main{flex:1;max-width:1060px;padding:34px 44px 80px}
+.crumb{font-size:.82rem;color:var(--ink-3);margin-bottom:14px}
+.c-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+h1{font-size:1.65rem;letter-spacing:-.02em;font-weight:600}
+.chip{font-size:.72rem;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--bg-sunken);border:1px solid var(--line);color:var(--ink-2)}
+.chip.ok{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
+.pause{margin-left:auto;background:var(--orange);color:#fff;border:0;border-radius:999px;padding:9px 20px;font-weight:600;font-size:.82rem;font-family:inherit}
+.sub{font-size:.82rem;color:var(--ink-3);margin-top:4px}
+.tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin-top:22px}
+.tab{padding:12px 2px 11px;font-size:.86rem;font-weight:600;color:var(--ink-3);border-bottom:2px solid transparent;margin-bottom:-1px;text-decoration:none}
+.tab.on{color:var(--ink);border-bottom-color:var(--orange)}
+.tnum{font-variant-numeric:tabular-nums;font-weight:500}
+.body{margin-top:22px}
+.slabel{font-size:.68rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+.cards{display:flex;flex-direction:column;gap:10px}
+.sname{font-weight:600;font-size:.9rem}
+.smeta{font-size:.78rem;color:var(--ink-3)}
+.pill,.pill-primary{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1px solid var(--line-2);border-radius:999px;background:var(--bg);color:var(--ink-2);font-size:.78rem;font-weight:600;font-family:inherit;cursor:pointer;text-decoration:none;white-space:nowrap}
+.pill:hover{background:var(--bg-sunken)}
+.pill-primary{background:var(--orange);border-color:var(--orange);color:#fff}
+.pill-danger{color:var(--red)}
+.btnrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sigchip{font-size:.66rem;font-weight:700;letter-spacing:.08em;padding:3px 8px;border-radius:6px;background:var(--orange-100);color:var(--orange-700)}
+.waitchip{font-size:.74rem;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--amber-bg);border:1px solid var(--amber-line);color:var(--amber)}
+.bar{height:8px;border-radius:4px;background:var(--line-2);overflow:hidden}
+.bar i{display:block;height:100%;background:#E8590C}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+/* CSS-only live toggle */
+.tgl{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:.76rem;font-weight:600;color:var(--green)}
+.tgl input{position:absolute;opacity:0}
+.tgl .knob{width:34px;height:20px;border-radius:999px;background:var(--line-2);position:relative;transition:.15s}
+.tgl .knob::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s}
+.tgl input:checked+.knob{background:var(--green)}
+.tgl input:checked+.knob::after{left:16px}
+details>summary{list-style:none;cursor:pointer}
+details>summary::-webkit-details-marker{display:none}
+.field{display:flex;gap:8px;align-items:center}
+.field input[type=text]{flex:1;font-family:inherit;font-size:.82rem;padding:9px 12px;border:1px solid var(--line-2);border-radius:9px;color:var(--ink-2);background:var(--bg)}
+.hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+.note{font-size:.74rem;color:var(--ink-3)}
+
+</style></head><body><div class="app">
+<div class="rail"><div class="logo">n</div><div class="ni">⌂</div><div class="ni on">✉</div><div class="ni">☰</div><div class="ni">✓</div><div class="ni">💬</div></div>
+<main>
+<div class="crumb">← Campaigns</div>
+<div class="c-head"><h1>Navreo | Hiring 'More leads' type roles</h1>
+<span class="chip">Navreo</span><span class="chip">Smartlead</span><span class="chip ok">● Active</span><span class="chip ok">● Running</span>
+<button class="pause">Pause</button></div>
+<div class="sub">Sending daily on autopilot · numbers synced 8 minutes ago</div>
+<nav class="tabs"><a class="tab" href="#">Overview</a><a class="tab" href="#">Messaging</a><a class="tab" href="#">Leads <span class="tnum">(1,084)</span></a><a class="tab on" href="#">Sources</a></nav>
+<div class="body">
+
+<div class="card" style="border-color:var(--amber-line);background:var(--amber-bg);margin-bottom:18px">
+  <div class="sname" style="color:var(--amber);margin-bottom:8px">Needs you: 2 new people are waiting for your OK</div>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#fff;border:1px solid var(--amber-line);border-radius:9px;padding:10px 14px">
+    <span class="smeta" style="color:var(--ink-2)"><b>Head of Sales</b> hiring signal · <b class="num">2</b> people from the last pull</span>
+    <span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="pill-primary">Review one by one</button>
+      <button class="pill">Keep all 2</button>
+      <button class="pill">Reject the rest</button>
+    </span>
+  </div>
+  <div class="note" style="color:var(--amber);margin-top:8px">Nothing gets emailed until you decide. Other sources are all caught up.</div>
+</div>
+
+<div class="slabel">Signal sources · running on autopilot</div>
+<p class="note" style="margin:-4px 0 12px">Live means this source keeps finding new people every day. Switching one off pauses just that source; the orange Pause button top-right stops the whole campaign.</p>
+<div class="cards">
+
+<div class="card">
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="min-width:0;flex:1">
+      <div style="display:flex;gap:8px;align-items:center"><span class="sname">Hiring 'get more leads' roles (Head of Sales)</span><span class="sigchip">HIRING</span></div>
+      <div class="smeta" style="margin-top:3px"><b class="num" style="color:var(--ink)">720</b> found · <b class="num" style="color:var(--ink)">718</b> sent · pulled 2 h ago</div>
+    </div>
+    <label class="tgl"><input type="checkbox" checked><span class="knob"></span>Live</label>
+    <button class="pill-primary">Find people again</button>
+    <button class="pill">Edit targeting</button>
+    <details style="display:inline-block"><summary class="pill">⋯</summary>
+      <div class="btnrow" style="margin-top:8px"><button class="pill">Duplicate</button><button class="pill pill-danger">Remove</button></div>
+    </details>
+  </div>
+  <div class="field" style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+    <span class="smeta" style="white-space:nowrap">Icebreaker · first line of the email</span>
+    <input type="text" value="Saw {{company}} is hiring a Demand Gen lead">
+    <button class="pill">Save</button>
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="min-width:0;flex:1">
+      <div style="display:flex;gap:8px;align-items:center"><span class="sname">Hiring 'get more leads' roles (CEO)</span><span class="sigchip">HIRING</span></div>
+      <div class="smeta" style="margin-top:3px"><b class="num" style="color:var(--ink)">364</b> found · <b class="num" style="color:var(--ink)">364</b> sent · pulled 1 h ago</div>
+    </div>
+    <label class="tgl"><input type="checkbox" checked><span class="knob"></span>Live</label>
+    <button class="pill-primary">Find people again</button>
+    <button class="pill">Edit targeting</button>
+    <details style="display:inline-block"><summary class="pill">⋯</summary>
+      <div class="btnrow" style="margin-top:8px"><button class="pill">Duplicate</button><button class="pill pill-danger">Remove</button></div>
+    </details>
+  </div>
+  <div class="field" style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+    <span class="smeta" style="white-space:nowrap">Icebreaker · first line of the email</span>
+    <input type="text" value="Saw {{company}} is hiring a Demand Gen lead">
+    <button class="pill">Save</button>
+  </div>
+</div>
+
+</div>
+<div style="margin-top:14px"><button class="pill">+ Add source</button></div>
+</div></main></div></body></html>

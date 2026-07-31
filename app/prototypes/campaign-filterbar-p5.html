@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F5 · On demand</title>
+<style>
+  @font-face {
+    font-family: "Acid Grotesk";
+    src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  :root {
+    color-scheme: light;
+    --nav-ink:#14110E; --nav-orange:#FF4D00;
+    --sunken:#F7F7F6; --track-bg:#EFEDEA;
+    --bg:#FFFFFF; --bg-elevated:#FFFFFF;
+    --fg:var(--nav-ink); --fg-muted:#3A332C; --fg-subtle:#6B6055;
+    --border:#ECECEA; --border-strong:#DDDDDA;
+    --chip-active-bg:var(--nav-ink); --chip-active-fg:#FFFFFF;
+    --font-sans:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --r-pill:999px; --r-lg:12px;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:var(--font-sans); color:var(--fg); background:var(--bg); font-size:15px; letter-spacing:-0.008em; -webkit-font-smoothing:antialiased; }
+  .cockpit { max-width:1180px; margin:0 auto; padding:36px clamp(18px,4vw,48px); }
+
+  .bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; position:relative; }
+  .search-wrap { position:relative; flex:0 1 300px; min-width:200px; }
+  .search-input { width:100%; padding:9px 14px 9px 34px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg); font-size:0.85rem; font-family:inherit; }
+  .search-input::placeholder { color:var(--fg-subtle); }
+  .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); width:14px; height:14px; color:var(--fg-subtle); pointer-events:none; }
+  .spacer { flex:1 1 auto; }
+  .select { padding:9px 30px 9px 14px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg); font-size:0.84rem; font-weight:600; font-family:inherit; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6055' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 11px center; }
+  .sortby { display:inline-flex; align-items:center; gap:6px; padding:9px 15px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg); font-size:0.84rem; font-weight:700; font-family:inherit; cursor:pointer; }
+  .sortby .pre { color:var(--fg-subtle); font-weight:500; }
+  .sortby svg { width:12px; height:12px; color:var(--fg-subtle); }
+  .filters-btn { display:inline-flex; align-items:center; gap:7px; padding:9px 16px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg-muted); font-size:0.84rem; font-weight:600; font-family:inherit; cursor:pointer; }
+  .filters-btn svg { width:14px; height:14px; color:var(--fg-subtle); }
+  .filters-btn .n { background:var(--sunken); border-radius:999px; padding:1px 8px; font-size:0.74rem; color:var(--fg-muted); }
+
+  .pop { position:absolute; top:calc(100% + 8px); right:0; background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:var(--r-lg); box-shadow:0 10px 30px rgba(20,17,14,0.10); padding:14px 16px; display:flex; gap:10px; z-index:5; }
+  .pop .lab { font-size:0.72rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--fg-subtle); display:block; margin-bottom:6px; }
+
+  .ghost { margin-top:26px; opacity:0.4; pointer-events:none; }
+  .grow { border:1px solid var(--border); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:10px; display:flex; align-items:center; gap:16px; }
+  .gbar { height:11px; border-radius:6px; background:var(--track-bg); }
+  .gpill { width:74px; height:22px; border-radius:999px; background:var(--track-bg); flex:none; }
+</style>
+</head>
+<body>
+  <div class="cockpit">
+    <nav class="bar" aria-label="Filter campaigns">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" class="search-input" placeholder="Search a campaign or client…" aria-label="Search campaigns">
+      </div>
+      <span class="spacer"></span>
+      <button class="sortby" type="button" aria-label="Sort by — currently Most urgent">
+        <span class="pre">Sort by:</span> Most urgent
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <!-- menu options: Most urgent · Most meetings · Most positives · Most efficient · Most left to send · Biggest lists -->
+      <button class="filters-btn" type="button" id="filters-btn" aria-expanded="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="17" x2="14" y2="17"/></svg>
+        Filters <span class="n">Active</span>
+      </button>
+      <div class="pop" id="filters-pop">
+        <div><span class="lab">Client</span>
+          <select class="select" aria-label="Filter by client"><option>All clients</option></select></div>
+        <div><span class="lab">Status</span>
+          <select class="select" aria-label="Filter by status"><option>Active (109)</option><option>All statuses</option><option>Paused</option><option>Completed</option><option>Draft</option><option>Archived</option></select></div>
+      </div>
+    </nav>
+    <div class="ghost">
+      <div class="grow"><div class="gbar" style="width:220px"></div><div class="gbar" style="width:90px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+      <div class="grow"><div class="gbar" style="width:260px"></div><div class="gbar" style="width:70px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+    </div>
+  </div>
+<script>
+  var btn = document.getElementById("filters-btn"), pop = document.getElementById("filters-pop");
+  btn.addEventListener("click", function () {
+    var open = pop.style.display !== "none";
+    pop.style.display = open ? "none" : "flex";
+    btn.setAttribute("aria-expanded", String(!open));
+  });
+</script>
+</body>
+</html>

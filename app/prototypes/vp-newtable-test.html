@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VP new table test</title>
+<style>
+:root{--fg:#14110E;--fg-muted:#3A332C;--fg-subtle:#6B6055;--border:#ECECEA;--border-strong:#DDDDDA;--sunken:#F4ECE2;--nav-orange:#FF4D00;--danger:#C2371F;}
+body{background:#F9F0E7;color:var(--fg);font-family:"DM Sans",system-ui,sans-serif;padding:30px;-webkit-font-smoothing:antialiased}
+.card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:20px 22px;max-width:900px;margin:0 auto}
+.card-title{font-size:1.1rem;font-weight:600;margin-bottom:2px}
+.card-subtitle{font-size:.8rem;color:var(--fg-subtle);margin-bottom:6px}
+.leads-table-wrap{overflow-x:auto;margin-top:14px}
+table.leads-table{width:100%;border-collapse:collapse;font-size:.82rem;min-width:480px}
+table.leads-table th,table.leads-table td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border)}
+table.leads-table th{font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-subtle);font-weight:600}
+table.leads-table tbody tr:last-child td{border-bottom:none}
+.tnum{font-variant-numeric:tabular-nums}
+.ring-caption{font-size:.55rem;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--fg-subtle);white-space:nowrap}
+.sample-footer{font-size:.72rem;color:var(--fg-subtle);margin-top:10px;line-height:1.5}
+table.version-perf-table th.tnum,table.version-perf-table td.tnum{text-align:right}
+table.version-perf-table tr.vp-band td{background:var(--sunken);font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--fg-muted);padding-top:7px;padding-bottom:7px}
+table.version-perf-table tr.vp-band td.vp-l{text-align:left}
+table.version-perf-table tr.vp-band .ring-caption{text-transform:none;letter-spacing:0}
+.vp-best{display:inline-block;margin-left:6px;font-size:.55rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--nav-orange);padding:1px 6px;border-radius:999px;vertical-align:1px}
+</style></head>
+<body>
+<div class="card">
+  <div class="card-title">Version performance</div>
+  <div class="card-subtitle">Every version, pulled live from Smartlead (positives = Smartlead's interested mark).</div>
+  <div id="root"></div>
+</div>
+<script>
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];});}
+function fmtInt(n){return (n==null?0:n).toLocaleString();}
+function versionTableHTML(versions, note, meetings) {
+    var hasMeet = !!(meetings && meetings.by_step);
+    function rateSpan(n, d) { return (d && n) ? ' <span class="ring-caption">' + (n / d * 100).toFixed(1) + '%</span>' : ''; }
+    function perPos(v) { return (v.positives > 0 && v.sent) ? fmtInt(Math.round(v.sent / v.positives)) : '<span class="ring-caption">' + (v.sent < 300 ? 'early' : '—') + '</span>'; }
+    var byStep = {};
+    versions.forEach(function (v) { var k = v.step != null ? String(v.step) : '?'; (byStep[k] = byStep[k] || []).push(v); });
+    var stepKeys = Object.keys(byStep).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
+    var best = null;
+    (byStep['1'] || []).forEach(function (v) {
+      if (v.disabled || v.inline || !(v.positives > 0) || !v.sent) return;
+      var pp = v.sent / v.positives;
+      if (best === null || pp < best.pp) best = { label: v.label, pp: pp };
+    });
+    var rows = stepKeys.map(function (sk) {
+      var vs = byStep[sk].slice().sort(function (a, b) { return String(a.label || '~').localeCompare(String(b.label || '~')); });
+      var stepSent = vs.reduce(function (s, v) { return s + (v.sent || 0); }, 0);
+      var stepMeet = hasMeet ? (meetings.by_step[sk] || 0) : null;
+      var perMeet = (stepMeet && stepSent) ? fmtInt(Math.round(stepSent / stepMeet)) : (stepMeet != null ? '—' : '');
+      var band = '<tr class="vp-band"><td class="vp-l" colspan="5">Email ' + esc(sk) +
+        ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') + '</span></td>' +
+        '<td class="tnum" data-label="Meetings">' + (stepMeet != null ? fmtInt(stepMeet) : '') + '</td>' +
+        '<td class="tnum" data-label="Sent / meeting">' + perMeet + '</td></tr>';
+      var body = vs.map(function (v) {
+        var label = v.inline ? 'inline' : (v.label || '?');
+        var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
+        return '<tr>' +
+          '<td data-label="Version">' + esc(label) +
+            (v.disabled ? ' <span class="ring-caption">off</span>' : '') +
+            (isBest ? ' <span class="vp-best">best</span>' : '') + '</td>' +
+          '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + '</td>' +
+          '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
+          '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>' +
+          '<td class="tnum" data-label="Sent / positive">' + perPos(v) + '</td>' +
+          '<td class="tnum" data-label="Meetings"></td>' +
+          '<td class="tnum" data-label="Sent / meeting"></td></tr>';
+      }).join('');
+      return band + body;
+    }).join('');
+    var meetNote = '';
+    if (hasMeet) {
+      meetNote = fmtInt(meetings.total || 0) + ' meeting' + (meetings.total === 1 ? '' : 's') + " on this campaign — one per person. Meetings sit on the email step (shared by that step's variants), not on a single variant; per-variant attribution is on the way.";
+    }
+    return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
+      '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>' +
+      (meetNote ? '<p class="sample-footer">' + esc(meetNote) + '</p>' : '') +
+      (note ? '<p class="sample-footer">' + esc(note) + '</p>' : '');
+}
+var VERS=[
+ {step:1,label:"A",inline:false,sent:584,replies:2,positives:0,disabled:true},
+ {step:1,label:"B",inline:false,sent:586,replies:5,positives:0,disabled:true},
+ {step:1,label:"C",inline:false,sent:610,replies:7,positives:1,disabled:true},
+ {step:1,label:"D",inline:false,sent:572,replies:5,positives:1,disabled:true},
+ {step:1,label:"E",inline:false,sent:9148,replies:53,positives:8},
+ {step:1,label:"F",inline:false,sent:9226,replies:55,positives:11},
+ {step:2,label:"A",inline:false,sent:9126,replies:37,positives:13},
+ {step:2,label:"B",inline:false,sent:7541,replies:16,positives:6}
+];
+document.getElementById("root").innerHTML=versionTableHTML(VERS,"Smartlead counters reset when a sequence is re-saved: read as since relaunch.",{by_step:{"1":2,"2":3},total:5,unattributed:0});
+</script>
+</body></html>

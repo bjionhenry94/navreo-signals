@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live · follow-up effectiveness</title>
+<link rel="stylesheet" href="subseq-effectiveness-base.css">
+<style>.wrap{padding-top:22px}.livebar{margin:0 0 16px 58px;display:flex;align-items:center;gap:10px}
+.livedot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-bg)}
+.livebar span{font:700 11px var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}</style>
+</head><body>
+<div class="wrap">
+  <div class="livebar"><span class="livedot"></span><span>Live · production · all clients · deployed to deliverability.html</span></div>
+  <div class="ah"><section class="lane"><span class="node num">5</span>
+    <div class="lane-head"><h2 class="lane-q">Who actually replies?</h2><span class="lane-tag num">Pipeline · Interested · 266</span></div>
+    <div class="cards c233"><div class="acard" id="who"></div><div class="acard" id="fast"></div><div class="acard" id="third"></div></div>
+  </section></div>
+</div>
+<script>
+var LIVE={enrolled:750,sent:1744,positives:89,booked:7};   // real /api/who-replies subseq (All)
+var T_REPLY=12.5,T_BOOK=5;
+function tone(v,t){return v>=t?"green":v>=t*0.75?"amber":"red";}
+function chip(tn){var t=tn==="green"?"On target":tn==="amber"?"Just under":"Well under";return '<span class="m5-chip c-'+tn+'">'+t+'</span>';}
+function whoCard(){return '<div class="card-kick">Who\'s replying <span class="soft">· 12 interested with a known title · whole book</span></div>'+
+  '<div class="brows num"><div class="brow"><span class="lbl strong">Founders and CEOs</span><div class="fill orange" style="width:100%"></div><span class="val">9</span></div>'+
+  '<div class="brow"><span class="lbl">Sales leaders</span><div class="fill" style="width:44%"></div><span class="val">4</span></div>'+
+  '<div class="brow"><span class="lbl">Marketing and Gro…</span><div class="fill" style="width:33%"></div><span class="val">3</span></div></div>'+
+  '<div class="subline" style="margin-top:8px"><b>Company size</b> (10 known): 11–50 6 · 51–200 4</div>'+
+  '<div class="take"><span class="arr">→</span><span>Aim new lists at founders and ceos — most of the real yeses.</span></div>';}
+function fastCard(){return '<div class="card-kick">How fast we answer <span class="soft">· Navreo · benchmark 15 min</span></div>'+
+  '<div class="bignum warn num">6 h 12 m</div><div class="subline">median answer time · 4 in 100 answered under 15 min · 61 answered</div>'+
+  '<div class="take"><span class="arr">→</span><span>Over the 15-minute benchmark — answer faster to book more.</span></div>';}
+function meter(lab,val,target,axis){var tn=tone(val,target),w=Math.min(100,val/axis*100),tl=Math.min(100,target/axis*100);
+  var gap=val<target?'<div class="m5-gap" style="left:'+w+'%;width:'+(tl-w)+'%"></div>':"";
+  return '<div class="m5-meter"><div class="m5-mtop"><span class="m5-mlab">'+lab+'</span>'+
+    '<span class="m5-right"><span class="m5-mval tone-'+tn+'">'+val+'%</span>'+chip(tn)+'</span></div>'+
+    '<div class="m5-track"><div class="m5-fill bg-'+tn+'" style="width:'+w+'%"></div>'+gap+
+    '<div class="m5-tick" style="left:'+tl+'%"></div></div>'+
+    '<div class="m5-axis"><span class="m5-ticklab" style="left:'+tl+'%">target '+target+'%</span></div></div>';}
+function thirdCard(s){var reply=Math.round(1000*s.positives/s.sent)/10,book=Math.round(1000*s.booked/s.sent)/10;
+  var rt=tone(reply,T_REPLY),bt=tone(book,T_BOOK);
+  var take=(rt==="green"&&bt==="green")?"Follow-ups are pulling their weight.":(rt!=="green"&&bt!=="green")?"Both under target — booked calls leak most. Rewrite the follow-up that asks for the call.":(bt!=="green")?"Booked calls are under — rewrite the follow-up that asks for the call.":"Positive replies are under — the follow-up needs a sharper opener.";
+  return '<div class="card-kick">How effective are our follow-ups <span class="soft">· '+s.enrolled.toLocaleString()+' in follow-ups</span></div>'+
+    '<div style="margin-top:8px">'+meter("Positive replies",reply,T_REPLY,20)+meter("Booked calls",book,T_BOOK,10)+'</div>'+
+    '<div class="take"><span class="arr">→</span><span>'+take+'</span></div>';}
+document.getElementById('who').innerHTML=whoCard();
+document.getElementById('fast').innerHTML=fastCard();
+document.getElementById('third').innerHTML=thirdCard(LIVE);
+</script></body></html>

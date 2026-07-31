@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Min P1 · Combinations leaderboard · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{--orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;--ink:#14110E;--ink-3:#6B6055;--brown-300:#C0B0A0;
+--cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;--line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--green-bg:#E4F1EA;
+--font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;--font-display:"Acid Grotesk","DM Sans",sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:720px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:25px;letter-spacing:-.01em;margin:2px 0 22px}
+.sect{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.tag{font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:2px 7px;border-radius:999px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:22px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:right;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);padding:12px 16px 9px;white-space:nowrap}
+th.l{text-align:left}
+td{padding:14px 16px;text-align:right;font-variant-numeric:tabular-nums;border-top:1px solid var(--line)}
+td.l{text-align:left}
+.name{font-family:var(--font-display);font-size:16px}
+.medal{display:inline-block;margin-left:8px;font-size:10px;font-weight:800;letter-spacing:.04em;color:#fff;background:var(--orange);padding:2px 8px;border-radius:999px;vertical-align:middle}
+.big{font-family:var(--font-display);font-size:18px}
+.win .big{color:var(--orange-600)}
+.win{background:linear-gradient(90deg,rgba(255,77,0,.06),transparent)}
+.win td:first-child{box-shadow:inset 3px 0 0 var(--orange)}
+.rate{font-size:12px;color:var(--ink-3);font-weight:600}
+.dim{color:var(--brown-300)}
+.arrow{color:var(--brown-300);margin:0 6px;font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Version performance</div>
+  <div class="h1">Openers, then combinations</div>
+
+  <div class="sect">The openers <span class="tag">live · A/B test</span></div>
+  <div class="card"><table>
+    <thead><tr><th class="l">Version</th><th>Sent</th><th>Positives · rate</th><th>1 per</th></tr></thead>
+    <tbody>
+      <tr class="win"><td class="l"><span class="name">A</span><span class="medal">winner</span></td><td>1,269</td><td><span class="big">14</span> <span class="rate">· 1.1%</span></td><td>1 / 91</td></tr>
+      <tr><td class="l"><span class="name">B</span></td><td>1,259</td><td><span class="big dim">9</span> <span class="rate">· 0.7%</span></td><td class="dim">1 / 140</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="sect">Combinations <span class="tag">whole journey</span></div>
+  <div class="card"><table>
+    <thead><tr><th class="l">Path</th><th>People</th><th>Positives</th><th>Calls</th></tr></thead>
+    <tbody>
+      <tr class="win"><td class="l"><span class="name">A<span class="arrow">→</span>Email 2</span><span class="medal">best path</span></td><td>1,269</td><td>22</td><td><span class="big">10</span></td></tr>
+      <tr><td class="l"><span class="name">B<span class="arrow">→</span>Email 2</span></td><td>1,259</td><td class="dim">14</td><td><span class="big dim">6</span></td></tr>
+    </tbody>
+  </table></div>
+</div>
+</body>
+</html>

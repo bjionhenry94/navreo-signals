@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "signals",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["app/server.py", "7901"],
+      "port": 7901
+    }
+  ]
+}

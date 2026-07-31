@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Table T2 · Heat table · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;
+  --cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;
+  --line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--green-bg:#E4F1EA;--red:#C2371F;--red-bg:#F8E1DA;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;--font-mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:920px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.01em;margin:2px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:16px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.verdict{font-family:var(--font-display);font-size:17px;line-height:1.3;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:12px;padding:14px 18px;margin-bottom:14px}
+.verdict b{color:var(--orange-600)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:560px}
+thead th{text-align:left;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);padding:13px 14px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody td{padding:11px 9px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody td:first-child,thead th:first-child{padding-left:16px}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--cream-50)}
+.em{font-family:var(--font-display);font-size:14px}
+.vlabel{font-weight:700;font-size:14px}
+.role{font-size:11px;color:var(--ink-3)}
+.cellbar{position:relative;min-width:78px}
+.cellbar .track{height:24px;border-radius:6px;background:var(--sunken);overflow:hidden;position:relative}
+.cellbar .fill{height:100%;border-radius:6px}
+.cellbar .num{position:absolute;top:0;left:9px;height:24px;display:flex;align-items:center;font-weight:700;font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--ink)}
+.cellbar.win .num{color:#fff}
+.rank{font-size:10px;font-weight:800;color:var(--ink-3);margin-left:6px}
+.pill{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.pill.win{background:var(--orange);color:#fff}.pill.cut{background:var(--red-bg);color:var(--red)}.pill.keep{background:var(--green-bg);color:var(--green)}
+.mtg{font-family:var(--font-display);font-size:16px}
+.dotcell{color:var(--brown-300)}
+.plain{font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.foot{padding:14px 18px;font-size:11.5px;color:var(--ink-3);line-height:1.6;background:var(--cream-50);border-top:1px solid var(--line)}
+.foot b{color:var(--ink-2)}
+@media(max-width:660px){thead th:nth-child(4),tbody td:nth-child(4){display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Version performance</div><div class="h1">Read it like a chart</div></div>
+    <div class="chip">Live from Smartlead · since relaunch</div>
+  </div>
+  <div class="verdict" id="verdict"></div>
+  <div class="card">
+    <div class="tscroll">
+    <table>
+      <thead><tr>
+        <th>Email / Version</th><th>Sent</th><th>Replies</th><th>Positives</th>
+        <th>Warm %</th><th>1 per &darr;better</th><th>Meetings</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+<script>
+const DATA={
+  versions:[
+    {step:1,label:"A",sent:1269,replies:20,positives:14,bounces:28},
+    {step:1,label:"B",sent:1259,replies:18,positives:9,bounces:28},
+    {step:2,label:"inline",inline:true,sent:1757,replies:22,positives:13,bounces:11}
+  ],
+  meetings:{total:16,by_step:{1:13,2:3}}
+};
+const FLOOR=300;
+const perPos=v=>v.positives>0?Math.round(v.sent/v.positives):null;
+const warm=v=>v.positives/v.sent*100;
+const A=DATA.versions[0],B=DATA.versions[1];
+const m1=DATA.meetings.by_step[1]||0,m2=DATA.meetings.by_step[2]||0,mt=DATA.meetings.total;
+const winner=warm(A)>=warm(B)?A:B,loser=winner===A?B:A;
+const maxSent=Math.max(...DATA.versions.map(v=>v.sent));
+const maxPos=Math.max(...DATA.versions.map(v=>v.positives));
+const maxWarm=Math.max(...DATA.versions.map(warm));
+const bestPer=Math.min(...DATA.versions.map(perPos));
+
+function bar(frac,text,color,isWin){
+  const w=Math.max(7,frac*100);
+  return `<div class="cellbar ${isWin?'win':''}"><div class="track"><div class="fill" style="width:${w}%;background:${color}"></div></div><span class="num">${text}</span></div>`;
+}
+// rank helper for a metric (1=best)
+function ranks(vals,higher){const s=[...vals].sort((a,b)=>higher?b-a:a-b);return vals.map(v=>s.indexOf(v)+1);}
+const posRank=ranks(DATA.versions.map(v=>v.positives),true);
+const warmRank=ranks(DATA.versions.map(warm),true);
+const perRank=ranks(DATA.versions.map(perPos),false);
+
+const seenStep={};
+document.getElementById("tbody").innerHTML=DATA.versions.map((v,i)=>{
+  const early=v.sent<FLOOR;
+  const isWin=v===winner,isLose=v===loser;
+  const label=v.inline?"inline":v.label;
+  const orange="var(--orange)",neutral="var(--brown-300)",soft="var(--line-2)";
+  const posCol=posRank[i]===1?orange:neutral, warmCol=warmRank[i]===1?orange:neutral, perCol=perRank[i]===1?orange:neutral;
+  let pill=early?'<span class="pill cut">too early</span>':isWin?'<span class="pill win">winner</span>':isLose?'<span class="pill cut">cut</span>':'<span class="pill keep">keep</span>';
+  const sk=String(v.step);let mcell;
+  if(!seenStep[sk]){seenStep[sk]=true;const n=DATA.meetings.by_step[sk]||0;mcell=`<span class="mtg">${n||0}</span>`;}
+  else mcell='<span class="dotcell" title="Same step — calls counted once per step">·</span>';
+  return `<tr>
+    <td><div class="em">Email ${v.step} <span class="role">${v.inline?'follow-up':'opener'}</span></div><span class="vlabel">${label}</span> ${pill}</td>
+    <td><span class="plain">${v.sent.toLocaleString()}</span></td>
+    <td><span class="plain">${v.replies}</span></td>
+    <td>${bar(v.positives/maxPos,v.positives+(posRank[i]===1?' ▲':''),posCol,isWin)}</td>
+    <td>${early?'<span class="plain">—</span>':bar(warm(v)/maxWarm,warm(v).toFixed(1)+'%',warmCol,false)}</td>
+    <td>${early?'<span class="plain">early</span>':bar(bestPer/perPos(v),'1 / '+perPos(v),perCol,false)}</td>
+    <td>${mcell}</td>
+  </tr>`;
+}).join("");
+
+document.getElementById("verdict").innerHTML=`<b>Version ${winner.label}</b> owns the warm-reply and efficiency columns — the orange bars are all hers. <b>Email 1</b> books ${m1} of your ${mt} calls; ${loser.label} is the one to cut.`;
+document.getElementById("foot").innerHTML=`Longer / oranger bar = stronger; on <b>1 per</b> a longer bar means fewer emails per good reply (better). <b>Meetings</b> sit on the email step, not the version — Email 1's ${m1} calls come from A and B together, counted once. Numbers are Smartlead's own, since the sequence was last saved.`;
+</script>
+</body>
+</html>

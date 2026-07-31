@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>VP combos test</title>
+<style>
+:root{--fg:#14110E;--fg-muted:#3A332C;--fg-subtle:#6B6055;--border:#ECECEA;--border-strong:#DDDDDA;--sunken:#F4ECE2;--nav-orange:#FF4D00;--danger:#C2371F;}
+body{background:#F9F0E7;color:var(--fg);font-family:"DM Sans",system-ui,sans-serif;padding:30px}
+.card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:20px 22px;max-width:940px;margin:0 auto}
+.card-title{font-size:1.1rem;font-weight:600}.card-subtitle{font-size:.8rem;color:var(--fg-subtle);margin-bottom:6px}
+.leads-table-wrap{overflow-x:auto;margin-top:14px}
+table.leads-table{width:100%;border-collapse:collapse;font-size:.82rem;min-width:480px}
+table.leads-table th,table.leads-table td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border)}
+table.leads-table th{font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-subtle);font-weight:600}
+table.leads-table tbody tr:last-child td{border-bottom:none}
+.tnum{font-variant-numeric:tabular-nums}
+.ring-caption{font-size:.55rem;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--fg-subtle);white-space:nowrap}
+.sample-footer{font-size:.72rem;color:var(--fg-subtle);margin-top:10px;line-height:1.5}
+table.version-perf-table th.tnum,table.version-perf-table td.tnum{text-align:right}
+table.version-perf-table tr.vp-band td{background:var(--sunken);font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--fg-muted);padding-top:7px;padding-bottom:7px}
+table.version-perf-table tr.vp-band td.vp-l{text-align:left}
+table.version-perf-table tr.vp-band .ring-caption{text-transform:none;letter-spacing:0}
+.vp-best{display:inline-block;margin-left:6px;font-size:.55rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--nav-orange);padding:1px 6px;border-radius:999px;vertical-align:1px}
+.vp-combos{margin-top:22px}.vp-combos-h{font-size:.8rem;font-weight:600;color:var(--fg);margin-bottom:2px}
+.vp-combos-h .ring-caption{text-transform:none;letter-spacing:0;font-weight:500}
+table.version-perf-table tr.vp-win{background:linear-gradient(90deg,rgba(255,77,0,.06),transparent)}
+table.version-perf-table tr.vp-win td:first-child{box-shadow:inset 3px 0 0 var(--nav-orange)}
+</style></head><body>
+<div class="card"><div class="card-title">Version performance</div>
+<div class="card-subtitle">Every version, pulled live from Smartlead (positives = Smartlead's interested mark).</div>
+<div id="root"></div></div>
+<script>
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];});}
+function fmtInt(n){return (n==null?0:n).toLocaleString();}
+</script>
+<script src="vp-fn.js"></script>
+<script>
+var VERS=[
+ {step:1,label:"A",inline:false,sent:3540,replies:42,positives:18},
+ {step:1,label:"B",inline:false,sent:3540,replies:46,positives:21},
+ {step:1,label:null,inline:true,sent:34,replies:10,positives:3},
+ {step:2,label:"A",inline:false,sent:7411,replies:57,positives:15},
+ {step:2,label:null,inline:true,sent:61,replies:1,positives:1}
+];
+var MEET={total:8,by_step:{"1":2,"2":6},by_variant:{"1|A":4,"1|B":3,"2|A":5},attributed:7};
+var COMB={"B>A":3,"A>A":2};
+document.getElementById("root").innerHTML=versionTableHTML(VERS,"Smartlead counters reset when a sequence is re-saved: read as since relaunch.",MEET,COMB);
+</script>
+</body></html>

@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics P4 — The Rhythm · Navreo</title>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+  PROTOTYPE P4 — "THE RHYTHM"
+  Time is the hero: WHEN does outreach work, and are you keeping the beat?
+  Self-contained. Mock data. No libraries, no network beyond two local assets.
+═════════════════════════════════════════════════════════════════════════ -->
+
+<style>
+/* ── design tokens (verbatim from builder spec) ─────────────────────────── */
+@font-face { font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight:400; font-style:normal; font-display:swap; }
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --radius:12px; --focus:0 0 0 3px rgba(255,77,0,.32);
+}
+
+/* ── base ───────────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:400 14px/1.45 var(--font-sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:inherit}
+
+/* prototype banner */
+.proto-banner{font-size:11px;color:var(--ink-3);background:var(--bg-sunken);border-bottom:1px solid var(--line);padding:8px 32px;letter-spacing:.01em}
+
+/* page frame */
+.wrap{max-width:1240px;margin:0 auto;padding:0 32px 72px}
+@media (max-width:1280px){.wrap{padding:0 24px 64px}}
+
+/* header */
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:30px 0 8px}
+.page-head h1{font-family:var(--font-display);font-weight:400;font-size:30px;letter-spacing:-0.03em;margin:0;line-height:1.1}
+.datesub{font-size:12.5px;color:var(--ink-3);padding-bottom:3px}
+.datesub b{font-weight:600;color:var(--ink-2)}
+
+/* section kicker */
+.kick{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);margin:20px 0 10px}
+
+/* cards + grids */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;display:flex;flex-direction:column;min-width:0}
+.card-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 16px}
+.card-head h2{font-size:14.5px;font-weight:600;letter-spacing:-0.01em;margin:0}
+.card-cap{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px;align-items:stretch}
+.grid2a{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:18px;margin-top:18px;align-items:stretch}
+.hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+
+/* takeaway line — the coach voice under every visual */
+.take{display:flex;gap:9px;align-items:baseline;font-size:13px;font-weight:600;color:var(--ink);letter-spacing:-0.005em;margin-top:14px}
+.take .arr{font-weight:700;color:var(--ink-3);flex-shrink:0}
+.take.orange .arr{color:var(--orange)}
+.take.green  .arr{color:var(--green)}
+.take.amber  .arr{color:var(--amber)}
+.take.red    .arr{color:var(--red)}
+.subnote{font-size:12px;color:var(--ink-3);margin-top:6px;padding-left:23px}
+
+/* pills / status chips (mine — distinct from the verbatim .dlv-tag) */
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.pill.g{background:var(--green-bg);color:#195C3F}
+.pill.a{background:var(--amber-bg);color:#6B4A00}
+.pill.r{background:var(--red-bg);color:#861E10}
+.pill.n{background:var(--bg-sunken);color:var(--ink-2)}
+
+/* big display numbers */
+.bignum{font-family:var(--font-display);font-weight:400;letter-spacing:-0.03em;font-size:36px;line-height:1.05;font-variant-numeric:tabular-nums}
+.bigsub{font-size:12px;color:var(--ink-3);margin-top:4px}
+
+/* ── HERO · reply heatmap ───────────────────────────────────────────────── */
+.hm{display:grid;grid-template-columns:76px repeat(5,minmax(0,1fr));gap:7px;align-items:center;margin-top:2px}
+.hm-dow{text-align:center;font-size:11px;font-weight:600;color:var(--ink-3);padding-bottom:2px}
+.hm-wk{text-align:right;padding-right:8px;font-size:11px;color:var(--ink-3);line-height:1.2}
+.hm-wk.now{color:var(--ink-2);font-weight:600}
+.hm-cell{height:62px;border-radius:8px;position:relative;cursor:default;transition:box-shadow .12s ease}
+.hm-cell:hover{box-shadow:inset 0 0 0 2px rgba(20,17,14,.22)}
+.hm-cell::after{content:attr(data-n);position:absolute;inset:0;display:grid;place-items:center;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink);opacity:0;transition:opacity .12s ease}
+.hm-cell:hover::after{opacity:1}
+.hm-cell.deep::after{color:#FFF7F2}
+.hm-tot{text-align:center;font-size:12px;font-weight:600;color:var(--ink-3);font-variant-numeric:tabular-nums;padding-top:3px}
+.hm-tot.hot{color:var(--orange-600);font-size:13.5px;font-weight:700}
+.hm-totlab{text-align:right;padding-right:8px;font-size:10.5px;color:var(--brown-400);text-transform:uppercase;letter-spacing:.04em;padding-top:3px}
+
+/* ── HERO · answer-speed dial ───────────────────────────────────────────── */
+.dialwrap{display:flex;justify-content:center;margin:2px 0 6px}
+.dial{width:100%;max-width:264px;height:auto;display:block}
+.g-lab{font:600 10.5px var(--font-sans);fill:var(--ink-3)}
+.g-lab.green{fill:var(--green)}
+.g-big{font-family:var(--font-display);font-weight:400;font-size:33px;letter-spacing:-0.03em;fill:var(--ink)}
+.g-cap{font:500 11.5px var(--font-sans);fill:var(--ink-3)}
+.sp-row{margin-top:11px}
+.sp-top{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:var(--ink-2);margin-bottom:5px}
+.sp-top b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.sp-bar{height:8px;border-radius:4px;background:var(--bg-sunken);overflow:hidden}
+.sp-bar i{display:block;height:100%;border-radius:4px}
+.sp-fact{font-size:12px;color:var(--ink-3);margin-top:12px}
+
+/* ── this month's beat strip ────────────────────────────────────────────── */
+.beat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);margin-top:18px;overflow:hidden}
+.beat-cap{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);padding:12px 22px;border-bottom:1px solid var(--line)}
+.beat-row{display:grid;grid-template-columns:1fr 1fr 1.3fr}
+.beat-cell{padding:18px 22px;min-width:0}
+.beat-cell + .beat-cell{border-left:1px solid var(--line)}
+.beat-lab{font-size:11.5px;color:var(--ink-3);margin-bottom:8px}
+.beat-numrow{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.beat-name{font-size:12.5px;font-weight:600;margin-bottom:6px}
+.beat-cell .take{margin-top:12px;font-size:12.5px}
+
+/* ── campaign ranking mini-table ────────────────────────────────────────── */
+table.rank{width:100%;border-collapse:collapse;font-size:12.5px}
+table.rank th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;padding:0 10px 8px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+table.rank th.num, table.rank td.num{text-align:right;font-variant-numeric:tabular-nums}
+table.rank td{padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle}
+table.rank tr:last-child td{border-bottom:0}
+table.rank td.cname{font-weight:600;max-width:220px}
+table.rank td.cname .pill{margin-left:7px;vertical-align:1px}
+.rtrack{height:6px;border-radius:3px;background:var(--bg-sunken);min-width:110px}
+.rtrack i{display:block;height:100%;border-radius:3px;background:var(--ink)}
+.rtrack i.win{background:var(--orange)}
+.rtrack i.die{background:var(--red)}
+td.rate{font-weight:600;white-space:nowrap}
+td.rate.bad{color:var(--red);font-weight:700}
+td.mtg{font-weight:700}
+
+/* ── proportion bars (who replies / openers) ────────────────────────────── */
+.who3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px}
+.who3 .col-cap{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);margin-bottom:9px;white-space:nowrap}
+.prow{display:grid;grid-template-columns:94px minmax(0,1fr) 38px;align-items:center;gap:8px;padding:4.5px 0}
+.prow .plab{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prow .ptrack{height:6px;border-radius:3px;background:var(--bg-sunken)}
+.prow .ptrack i{display:block;height:100%;border-radius:3px;background:var(--brown-300)}
+.prow .pval{font-size:12px;color:var(--ink-3);text-align:right;font-variant-numeric:tabular-nums}
+.prow.lead .plab{font-weight:600;color:var(--ink)}
+.prow.lead .ptrack i{background:var(--ink)}
+.prow.lead .pval{font-weight:700;color:var(--ink)}
+
+/* openers — stacked label + bar rows */
+.op-row{padding:8px 0}
+.op-row + .op-row{border-top:1px solid var(--line)}
+.op-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:6px}
+.op-lab{font-size:12.5px;color:var(--ink-2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.op-row.win .op-lab{font-weight:600;color:var(--ink)}
+.op-val{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink-2);white-space:nowrap}
+.op-row.win .op-val{color:var(--orange-700)}
+.op-row.lose .op-val{color:var(--red)}
+.op-track{height:6px;border-radius:3px;background:var(--bg-sunken)}
+.op-track i{display:block;height:100%;border-radius:3px;background:var(--ink)}
+.op-row.win .op-track i{background:var(--orange)}
+.op-row.lose .op-track i{background:var(--red)}
+
+/* ── leads runway card ──────────────────────────────────────────────────── */
+.run-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.runbar{position:relative;height:10px;border-radius:5px;background:var(--bg-sunken);margin:26px 0 6px}
+.runbar i{display:block;height:100%;width:63%;border-radius:5px;background:var(--amber)}
+.runbar .tick{position:absolute;left:63%;top:-7px;bottom:-7px;width:2px;background:var(--ink);border-radius:1px}
+.runbar .ticklab{position:absolute;left:63%;transform:translateX(-50%);top:-22px;font-size:11px;font-weight:700;color:var(--amber);white-space:nowrap}
+.run-legend{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-3)}
+.sigbar{display:flex;gap:2px;height:8px;margin:10px 0 7px}
+.sigbar i{display:block;height:100%}
+.sigbar i:first-child{border-radius:4px 0 0 4px}
+.sigbar i:last-child{border-radius:0 4px 4px 0}
+.sig-labs{display:flex;gap:2px;font-size:11px;color:var(--ink-3)}
+.sig-labs span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sig-line{font-size:13px;font-weight:600}
+
+/* ── landing section top ────────────────────────────────────────────────── */
+.land-top{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:4px}
+.land-chips{display:grid;grid-template-columns:auto auto;gap:8px;justify-items:start;align-content:start;padding-top:6px}
+.land-card{margin-top:18px}
+.land-card .dlv-subtab-panel{margin-top:16px}
+</style>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+  INBOX & DOMAIN MANAGER — VERBATIM from app/deliverability-tab.js
+  renderManagerPanel() + paintFloorRows(). DO NOT REDESIGN, RESTYLE OR "IMPROVE".
+  Paste the <style> block once into the page <head> styles, and the panel markup
+  wherever the deliverability section places it. Static floor-flow view with the
+  fixture's 2 flagged domains. Icon path assumes the page lives in app/prototypes/.
+═════════════════════════════════════════════════════════════════════════ -->
+
+<!-- ── styles (extracted from <style id="dlv-styles"> + navreo.css) ── -->
+<style>
+.ic8{display:inline-block;width:18px;height:18px;background-color:currentColor;flex-shrink:0;-webkit-mask:var(--icon) center / contain no-repeat;mask:var(--icon) center / contain no-repeat;vertical-align:-3px}
+.ictile{width:36px;height:36px;border-radius:10px;background:var(--bg-sunken);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ictile .ic8{width:18px;height:18px;color:var(--ink-2)}
+.btn{border:1px solid var(--line-2);background:transparent;color:var(--ink);border-radius:999px;padding:8px 16px;font:500 13px var(--font-sans);letter-spacing:-0.005em;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{background:var(--bg-sunken)}
+.btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
+.btn.primary:hover{background:var(--orange-600)}
+.btn.sm{padding:5px 12px;font-size:11.5px}
+.dlv-subtab-panel{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.dlv-subtab-head{display:flex;align-items:center;gap:9px;padding:14px 16px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line)}
+.dlv-subtab-head .hint{font-weight:500;font-size:12px;color:var(--ink-3)}
+.dlv-fold-body{padding:16px}
+.dlv-flowchips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.dlv-flowchip{font-family:var(--font-sans);font-size:13px;font-weight:600;padding:8px 14px;border:1px solid var(--line-2);border-radius:9px;background:var(--card);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.dlv-flowchip:hover{border-color:var(--ink-3)}
+.dlv-flowchip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.dlv-flowchip-n{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--bg-sunken);color:var(--ink-2)}
+.dlv-flowchip.on .dlv-flowchip-n{background:rgba(255,255,255,.18);color:#fff}
+.dlv-flowchip.warn:not(.on) .dlv-flowchip-n{background:var(--red-bg);color:#861E10}
+.dlv-mb-cap{font-size:10.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;align-self:center}
+.dlv-mb-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.dlv-mb-bar select,.dlv-mb-bar input[type=text],.dlv-mb-bar input[type=number]{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-mb-bar input[type=text]{flex:1;min-width:160px}
+.dlv-mb-count{font-size:11.5px;color:var(--ink-3)}
+.dlv-mb-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dlv-mb-scroll{max-height:420px;overflow:auto}
+table.dlv-mb{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dlv-mb th{position:sticky;top:0;background:var(--bg-sunken);text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;padding:9px 11px;z-index:1}
+table.dlv-mb td{padding:8px 11px;border-top:1px solid var(--line);vertical-align:middle}
+table.dlv-mb tr:hover td{background:var(--bg-sunken)}
+.dlv-mb-email{font-weight:600}
+.dlv-mb-dom{font-size:11px;color:var(--ink-3)}
+.dlv-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.dlv-tag.inactive{background:var(--amber-bg);color:#6B4A00}
+.dlv-tag.ok{background:var(--green-bg);color:#195C3F}
+.dlv-mgr-adv{display:inline-flex;align-items:center;gap:7px}
+.dlv-mgr-adv summary{font-size:11.5px;color:var(--ink-3);font-weight:600;cursor:pointer;list-style:none;padding:6px 4px;text-transform:uppercase;letter-spacing:.04em}
+.dlv-mgr-adv summary::-webkit-details-marker{display:none}
+.dlv-mgr-adv[open] summary{color:var(--ink)}
+.dlv-dl{font-size:11.5px;font-weight:600;color:var(--orange-700);text-decoration:none;cursor:pointer}
+.dlv-input{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-select{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+</style>
+</head>
+
+<body>
+
+<div class="proto-banner">Prototype 4 of 5 — The Rhythm · mock data · not production</div>
+
+<div class="wrap">
+
+  <!-- ── header ─────────────────────────────────────────────────────────── -->
+  <header class="page-head">
+    <h1>Analytics</h1>
+    <div class="datesub"><b>Saturday 26 July</b> · updated 8 minutes ago</div>
+  </header>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       HERO — WHAT MOVES THE NEEDLE?
+       Q5: best send days + how fast you answer. (Landing lives further down.)
+  ═════════════════════════════════════════════════════════════════════════ -->
+  <div class="kick">What moves the needle?</div>
+
+  <div class="hero-grid">
+
+    <!-- ── replies-by-send-day heatmap ──────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Replies by send day</h2>
+        <span class="card-cap">last 4 weeks · 502 replies</span>
+      </div>
+
+      <div class="hm" role="img" aria-label="Replies by weekday over the last four weeks. Tuesday is by far the busiest day with 178 replies; Friday is the quietest with 41.">
+        <i></i>
+        <div class="hm-dow" aria-hidden="true">Mon</div>
+        <div class="hm-dow" aria-hidden="true">Tue</div>
+        <div class="hm-dow" aria-hidden="true">Wed</div>
+        <div class="hm-dow" aria-hidden="true">Thu</div>
+        <div class="hm-dow" aria-hidden="true">Fri</div>
+
+        <div class="hm-wk" aria-hidden="true">3 wks ago</div>
+        <div class="hm-cell" data-n="21" style="background:#FFB796" aria-hidden="true"></div>
+        <div class="hm-cell deep" data-n="40" style="background:#FF6F30" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="22" style="background:#FFB390" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="20" style="background:#FFBA9B" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="11" style="background:#FFDCCB" aria-hidden="true"></div>
+
+        <div class="hm-wk" aria-hidden="true">2 wks ago</div>
+        <div class="hm-cell" data-n="24" style="background:#FFAB86" aria-hidden="true"></div>
+        <div class="hm-cell deep" data-n="43" style="background:#FF6420" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="24" style="background:#FFAB86" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="22" style="background:#FFB390" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="10" style="background:#FFE0D1" aria-hidden="true"></div>
+
+        <div class="hm-wk" aria-hidden="true">last week</div>
+        <div class="hm-cell" data-n="26" style="background:#FFA47B" aria-hidden="true"></div>
+        <div class="hm-cell deep" data-n="46" style="background:#FF5810" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="25" style="background:#FFA880" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="23" style="background:#FFAF8B" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="9" style="background:#FFE4D6" aria-hidden="true"></div>
+
+        <div class="hm-wk now" aria-hidden="true">this week</div>
+        <div class="hm-cell" data-n="25" style="background:#FFA880" aria-hidden="true"></div>
+        <div class="hm-cell deep" data-n="49" style="background:#FF4D00" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="27" style="background:#FFA076" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="24" style="background:#FFAB86" aria-hidden="true"></div>
+        <div class="hm-cell" data-n="11" style="background:#FFDCCB" aria-hidden="true"></div>
+
+        <div class="hm-totlab" aria-hidden="true">Replies</div>
+        <div class="hm-tot" aria-hidden="true">96</div>
+        <div class="hm-tot hot" aria-hidden="true">178</div>
+        <div class="hm-tot" aria-hidden="true">98</div>
+        <div class="hm-tot" aria-hidden="true">89</div>
+        <div class="hm-tot" aria-hidden="true">41</div>
+      </div>
+
+      <div class="take orange"><span class="arr">→</span>Tuesday gets double the replies — send your best stuff Tuesday.</div>
+      <div class="subnote">Friday is wasted effort — and weekends barely reply (10 all month).</div>
+    </section>
+
+    <!-- ── answer-speed dial ────────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h2>How fast you answer</h2>
+        <span class="card-cap">96 nice replies this month</span>
+      </div>
+
+      <div class="dialwrap">
+        <svg class="dial" viewBox="0 0 240 150" role="img" aria-label="A dial from 0 to 8 hours. Your average answer speed is 4 hours 20 minutes, far past the green first-hour zone.">
+          <!-- track: 0h → 8h across the top -->
+          <path d="M 28 126 A 92 92 0 0 1 212 126" fill="none" stroke="var(--cream)" stroke-width="13" stroke-linecap="round"/>
+          <!-- green fast zone: the first hour -->
+          <path d="M 28 126 A 92 92 0 0 1 35 90.8" fill="none" stroke="var(--green)" stroke-width="13" stroke-linecap="round"/>
+          <!-- quiet hour ticks at 2h, 4h, 6h -->
+          <line x1="64.9" y1="70.9" x2="59.2" y2="65.2" stroke="var(--line-2)" stroke-width="1.5"/>
+          <line x1="120" y1="48"   x2="120" y2="40"   stroke="var(--line-2)" stroke-width="1.5"/>
+          <line x1="175.1" y1="70.9" x2="180.8" y2="65.2" stroke="var(--line-2)" stroke-width="1.5"/>
+          <!-- scale labels -->
+          <text class="g-lab" x="28"  y="146" text-anchor="middle">0h</text>
+          <text class="g-lab" x="120" y="22"  text-anchor="middle">4h</text>
+          <text class="g-lab" x="212" y="146" text-anchor="middle">8h</text>
+          <text class="g-lab green" x="22" y="80" text-anchor="middle">1h</text>
+          <!-- you are here: 4 h 20 m -->
+          <circle cx="132" cy="34.8" r="7.5" fill="var(--ink)" stroke="#FFFFFF" stroke-width="3"/>
+          <!-- centre reading -->
+          <text class="g-big" x="120" y="98" text-anchor="middle">4 h 20 m</text>
+          <text class="g-cap" x="120" y="118" text-anchor="middle">your average answer speed</text>
+        </svg>
+      </div>
+
+      <div class="sp-row">
+        <div class="sp-top"><span>Answered within 1 hour</span><b>62 of 100 turn into meetings</b></div>
+        <div class="sp-bar"><i style="width:62%;background:var(--green)"></i></div>
+      </div>
+      <div class="sp-row">
+        <div class="sp-top"><span>Answered after 4 hours</span><b>21 of 100</b></div>
+        <div class="sp-bar"><i style="width:21%;background:var(--brown-300)"></i></div>
+      </div>
+
+      <div class="sp-fact">Only 24 of your 96 nice replies got an answer inside the hour.</div>
+      <div class="take green"><span class="arr">→</span>Answer within the hour — three times more meetings.</div>
+    </section>
+  </div>
+
+  <!-- ── this month's beat ──────────────────────────────────────────────── -->
+  <section class="beat">
+    <div class="beat-cap">This month's beat</div>
+    <div class="beat-row">
+
+      <div class="beat-cell">
+        <div class="beat-lab">Meetings booked</div>
+        <div class="beat-numrow">
+          <span class="bignum">14</span>
+          <span class="pill g">+5</span>
+        </div>
+        <div class="take green"><span class="arr">→</span>Five more than last month — the rhythm is working.</div>
+      </div>
+
+      <div class="beat-cell">
+        <div class="beat-lab">How many reply</div>
+        <div class="beat-numrow">
+          <span class="bignum">3 in 100</span>
+        </div>
+        <div class="bigsub">512 replies from 18,420 emails</div>
+        <div class="take"><span class="arr">→</span>Normal for cold email — nothing needs doing.</div>
+      </div>
+
+      <div class="beat-cell">
+        <div class="beat-lab">Losing the beat · last 4 weeks</div>
+        <div class="beat-name">Agencies — ops leaders</div>
+        <svg width="220" height="62" viewBox="0 0 220 62" role="img" aria-label="This campaign's replies fell from 3.1 percent to 0.4 percent over four weeks.">
+          <text x="12" y="10" text-anchor="start" style="font:600 10.5px var(--font-sans)" fill="var(--ink-3)">3.1%</text>
+          <polyline points="12,18.1 77,31.5 143,40.7 208,45.9" fill="none" stroke="var(--red)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+          <circle cx="208" cy="45.9" r="3.5" fill="var(--red)"/>
+          <text x="214" y="60" text-anchor="end" style="font:700 11.5px var(--font-sans)" fill="var(--red)">0.4%</text>
+        </svg>
+        <div class="take red"><span class="arr">→</span>This campaign stopped working — pause it.<span style="margin-left:auto"></span><button class="btn sm" type="button">Pause campaign</button></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       ROW A — Q3: which campaigns are winning? · Q2: do you have enough leads?
+  ═════════════════════════════════════════════════════════════════════════ -->
+  <div class="grid2a">
+
+    <!-- ── campaign ranking ─────────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Which campaigns are winning?</h2>
+        <span class="card-cap">7 live campaigns</span>
+      </div>
+
+      <table class="rank">
+        <thead>
+          <tr>
+            <th>Campaign</th>
+            <th style="width:24%">Replies per 100</th>
+            <th class="num">Sent</th>
+            <th class="num">Replies</th>
+            <th class="num">Nice replies</th>
+            <th class="num">Meetings</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="cname">SaaS founders — just hired sales</td>
+            <td><div class="rtrack"><i class="win" style="width:100%"></i></div></td>
+            <td class="num">3,900</td>
+            <td class="num rate">164 · 4.2%</td>
+            <td class="num">41</td>
+            <td class="num mtg">6</td>
+          </tr>
+          <tr>
+            <td class="cname">Construction — new permits<span class="pill n">new this week</span></td>
+            <td><div class="rtrack"><i style="width:81%"></i></div></td>
+            <td class="num">1,720</td>
+            <td class="num rate">58 · 3.4%</td>
+            <td class="num">8</td>
+            <td class="num mtg">1</td>
+          </tr>
+          <tr>
+            <td class="cname">E-commerce — new store openings</td>
+            <td><div class="rtrack"><i style="width:74%"></i></div></td>
+            <td class="num">2,800</td>
+            <td class="num rate">87 · 3.1%</td>
+            <td class="num">22</td>
+            <td class="num mtg">4</td>
+          </tr>
+          <tr>
+            <td class="cname">Logistics — page followers</td>
+            <td><div class="rtrack"><i style="width:64%"></i></div></td>
+            <td class="num">2,300</td>
+            <td class="num rate">62 · 2.7%</td>
+            <td class="num">14</td>
+            <td class="num mtg">2</td>
+          </tr>
+          <tr>
+            <td class="cname">Recruiters — engagement</td>
+            <td><div class="rtrack"><i style="width:64%"></i></div></td>
+            <td class="num">1,900</td>
+            <td class="num rate">51 · 2.7%</td>
+            <td class="num">9</td>
+            <td class="num mtg">1</td>
+          </tr>
+          <tr>
+            <td class="cname">Fintech — funding news</td>
+            <td><div class="rtrack"><i style="width:62%"></i></div></td>
+            <td class="num">1,700</td>
+            <td class="num rate">44 · 2.6%</td>
+            <td class="num">6</td>
+            <td class="num mtg">1</td>
+          </tr>
+          <tr>
+            <td class="cname">Agencies — ops leaders<span class="pill r">pause it</span></td>
+            <td><div class="rtrack"><i class="die" style="width:10%"></i></div></td>
+            <td class="num">4,100</td>
+            <td class="num rate bad">16 · 0.4%</td>
+            <td class="num">2</td>
+            <td class="num mtg">0</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="take"><span class="arr">→</span>Put more leads behind the winner — pause the loser.</div>
+    </section>
+
+    <!-- ── leads runway ─────────────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Do you have enough leads?</h2>
+      </div>
+
+      <div class="run-head">
+        <span class="bignum">19 days</span>
+        <span class="pill a">out on Aug 14</span>
+      </div>
+      <div class="bigsub">2,840 fresh leads left · you use about 150 a day</div>
+
+      <div class="runbar">
+        <i></i>
+        <span class="tick"></span>
+        <span class="ticklab">Aug 14 — out of leads</span>
+      </div>
+      <div class="run-legend"><span>today</span><span>30 days from now</span></div>
+
+      <div class="take amber"><span class="arr">→</span>You run out on Aug 14 — add leads this week.</div>
+
+      <hr class="hr">
+
+      <div class="sig-line">1,240 signals found this month · 6 new campaigns added</div>
+      <div class="sigbar" role="img" aria-label="Of 1,240 signals: 520 hiring, 430 engagement, 290 news.">
+        <i style="width:42%;background:var(--ink-2)"></i>
+        <i style="width:35%;background:var(--brown-400)"></i>
+        <i style="width:23%;background:var(--brown-300)"></i>
+      </div>
+      <div class="sig-labs">
+        <span style="width:42%">hiring 520</span>
+        <span style="width:35%">engagement 430</span>
+        <span style="width:23%">news 290</span>
+      </div>
+
+      <div class="take"><span class="arr">→</span>1,240 new signals — plenty more leads to pull.</div>
+    </section>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       ROW B — Q4: who actually replies? · Q6: which messages work?
+  ═════════════════════════════════════════════════════════════════════════ -->
+  <div class="grid2a">
+
+    <!-- ── who actually replies ─────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Who actually replies?</h2>
+        <span class="card-cap">your 96 nice replies</span>
+      </div>
+
+      <div class="who3">
+        <div>
+          <div class="col-cap">Job type · of 96</div>
+          <div class="prow lead"><span class="plab">Founders &amp; CEOs</span><span class="ptrack"><i style="width:100%"></i></span><span class="pval">37</span></div>
+          <div class="prow"><span class="plab">Sales leaders</span><span class="ptrack"><i style="width:62%"></i></span><span class="pval">23</span></div>
+          <div class="prow"><span class="plab">Marketing</span><span class="ptrack"><i style="width:41%"></i></span><span class="pval">15</span></div>
+          <div class="prow"><span class="plab">Operations</span><span class="ptrack"><i style="width:32%"></i></span><span class="pval">12</span></div>
+          <div class="prow"><span class="plab">Other</span><span class="ptrack"><i style="width:24%"></i></span><span class="pval">9</span></div>
+        </div>
+        <div>
+          <div class="col-cap">Company size</div>
+          <div class="prow lead"><span class="plab">11–50 people</span><span class="ptrack"><i style="width:100%"></i></span><span class="pval">52%</span></div>
+          <div class="prow"><span class="plab">1–10</span><span class="ptrack"><i style="width:54%"></i></span><span class="pval">28%</span></div>
+          <div class="prow"><span class="plab">51–200</span><span class="ptrack"><i style="width:29%"></i></span><span class="pval">15%</span></div>
+          <div class="prow"><span class="plab">200+</span><span class="ptrack"><i style="width:10%"></i></span><span class="pval">5%</span></div>
+        </div>
+        <div>
+          <div class="col-cap">Industry</div>
+          <div class="prow lead"><span class="plab">Agencies</span><span class="ptrack"><i style="width:100%"></i></span><span class="pval">31%</span></div>
+          <div class="prow"><span class="plab">SaaS</span><span class="ptrack"><i style="width:87%"></i></span><span class="pval">27%</span></div>
+          <div class="prow"><span class="plab">E-commerce</span><span class="ptrack"><i style="width:58%"></i></span><span class="pval">18%</span></div>
+          <div class="prow"><span class="plab">Logistics</span><span class="ptrack"><i style="width:39%"></i></span><span class="pval">12%</span></div>
+          <div class="prow"><span class="plab">Other</span><span class="ptrack"><i style="width:39%"></i></span><span class="pval">12%</span></div>
+        </div>
+      </div>
+
+      <div class="take"><span class="arr">→</span>Founders at 11–50-person companies are your buyers.</div>
+    </section>
+
+    <!-- ── which messages work ──────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Which messages work?</h2>
+        <span class="card-cap">replies per 100, by first line</span>
+      </div>
+
+      <div class="op-row win">
+        <div class="op-top"><span class="op-lab">“Quick question about your new sales hire”</span><span class="op-val">5.1%</span></div>
+        <div class="op-track"><i style="width:100%"></i></div>
+      </div>
+      <div class="op-row">
+        <div class="op-top"><span class="op-lab">“Congrats on the new store”</span><span class="op-val">4.4%</span></div>
+        <div class="op-track"><i style="width:86%"></i></div>
+      </div>
+      <div class="op-row">
+        <div class="op-top"><span class="op-lab">“Saw you're hiring”</span><span class="op-val">3.8%</span></div>
+        <div class="op-track"><i style="width:75%"></i></div>
+      </div>
+      <div class="op-row lose">
+        <div class="op-top"><span class="op-lab">“Intro — how we help”</span><span class="op-val">1.9%</span></div>
+        <div class="op-track"><i style="width:37%"></i></div>
+      </div>
+
+      <div class="take red"><span class="arr">→</span>“Quick question” beats “Intro” almost 3 to 1 — kill the intro email.</div>
+    </section>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       Q1 — ARE YOUR EMAILS LANDING?
+  ═════════════════════════════════════════════════════════════════════════ -->
+  <section class="card land-card">
+    <div class="card-head">
+      <h2>Are your emails landing?</h2>
+    </div>
+
+    <div class="land-top">
+      <div>
+        <span class="bignum">96 of 100</span>
+        <div class="bigsub">emails land in the inbox · 4 bounce or vanish</div>
+      </div>
+      <div class="land-chips">
+        <span class="pill g">41 of 44 inboxes healthy</span>
+        <span class="pill n">3 domains resting — back Aug 2</span>
+        <span class="pill a">1 mailbox not warming</span>
+        <span class="pill g">0 reconnects needed</span>
+      </div>
+    </div>
+
+    <div class="take amber"><span class="arr">→</span>Mostly healthy — rest 2 tired domains.</div>
+
+    <!-- ── panel markup (floor flow selected, fixture data) ── -->
+    <div class="dlv-subtab-panel" id="dlv-fold-manager">
+      <div class="dlv-subtab-head"><span class="ictile dlv-headic"><span class="ic8" style="--icon:url('../icons/mail.png')"></span></span>Inbox &amp; domain manager<span class="hint">2 domain(s) need warm-up → warm up · restore · reconnect</span></div>
+      <div class="dlv-fold-body">
+        <div class="dlv-flowchips" role="tablist">
+          <button class="dlv-flowchip on warn" role="tab" aria-selected="true" title="Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest">Below reply floor <span class="dlv-flowchip-n">2</span></button>
+          <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix.">Not warming <span class="dlv-flowchip-n">1</span></button>
+          <button class="dlv-flowchip" role="tab" aria-selected="false" title="Sends held while warming — the cap is 0 so no cold sends go out.">In warm-up <span class="dlv-flowchip-n">3</span></button>
+          <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes whose connection failed — silently sending nothing until reconnected">Needs reconnect <span class="dlv-flowchip-n">0</span></button>
+        </div>
+        <div class="dlv-mb-bar">
+          <span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" title="Reporting window the reply floor is judged over"><option selected>Last 7 days</option><option>Last 14 days</option><option>Last 30 days</option></select>
+          <span class="dlv-mb-count">Jul 19 → Jul 26</span>
+          <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search domain or mailbox…" value="">
+          <button class="btn sm" title="Re-pull manager data from Smartlead in the background">↻ Refresh</button>
+          <button class="btn sm primary" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>
+          <details class="dlv-mgr-adv"><summary>Advanced</summary>
+            <span class="dlv-mb-count">min sent</span><input class="dlv-input" style="width:78px" type="number" value="50" title="Only judge domains with at least this many sends in the window">
+            <span class="dlv-mb-count">flag if reply % under</span><input class="dlv-input" style="width:70px" type="number" step="0.1" value="1" title="Domains replying below this rate get flagged for warm-up">
+          </details>
+          <span class="dlv-mb-count" id="dlv-mgr-count">2 below the 1% floor · min 50 sent · last 7 days · 3 resting or recovering fleet-wide</span>
+          <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"><button class="btn sm">Warm up all (2)</button></span>
+        </div>
+        <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr><th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th></tr></thead><tbody id="dlv-mgr-body">
+          <tr><td><div class="dlv-mb-email">navreo-mail.com <span class="dlv-mb-dom">· 6 mbx</span></div><div class="dlv-mb-dom">Batch 4 · Batch 7</div></td>
+            <td style="text-align:right">412</td>
+            <td style="text-align:right">398</td>
+            <td style="text-align:right;color:var(--red);font-weight:700">0.24% <span class="dlv-mb-dom">(1)</span></td>
+            <td style="text-align:right">0.00%</td>
+            <td style="text-align:right">3.86%</td>
+            <td style="text-align:right"><button class="btn sm" title="Rests all 6 mailboxes on navreo-mail.com">Warm up domain</button></td></tr>
+          <tr><td><div class="dlv-mb-email">getnavreo.io <span class="dlv-mb-dom">· 5 mbx</span></div><div class="dlv-mb-dom">Batch 6</div></td>
+            <td style="text-align:right">388</td>
+            <td style="text-align:right">371</td>
+            <td style="text-align:right;color:var(--red);font-weight:700">0.52% <span class="dlv-mb-dom">(2)</span></td>
+            <td style="text-align:right">0.26%</td>
+            <td style="text-align:right">1.12%</td>
+            <td style="text-align:right"><button class="btn sm" title="Rests all 5 mailboxes on getnavreo.io">Warm up domain</button></td></tr>
+        </tbody></table></div></div>
+        <div style="margin-top:8px"><a class="dlv-dl">View full table</a></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

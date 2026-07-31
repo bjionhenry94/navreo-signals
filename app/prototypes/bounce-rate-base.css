@@ -1,0 +1,86 @@
+/* Bounce-rate prototypes — shared tokens + the lane-3 slot harness.
+   The widget is NOT a lane of its own: it drops into the empty second column
+   of lane 3 ("Are your emails landing?"), beside "Replies by the day we sent".
+   That column is .c23's 3fr — roughly 700x330 at the hub's 1240px max-width,
+   so every prototype is built to that box, not to a full-width lane. */
+
+@font-face { font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight:400; font-style:normal; font-display:swap; }
+
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055;
+  --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --light-200:#E8D7C4;
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F;   --red-bg:#F7DCD5;   --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --radius:12px;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-sans);
+     -webkit-font-smoothing:antialiased;padding:44px clamp(20px,5vw,64px) 80px}
+.num{font-variant-numeric:tabular-nums}
+
+/* ── harness: lane 3 exactly as the hub renders it ───────────────────── */
+.ah{max-width:1240px}
+.lane{position:relative;padding-left:58px}
+.lane::before{content:"";position:absolute;left:19px;top:-44px;bottom:-80px;width:1px;background:var(--line)}
+.node{position:absolute;left:0;top:-4px;width:38px;height:38px;border-radius:50%;
+      background:var(--bg);border:1px solid var(--line);display:grid;place-items:center;
+      font-size:13px;color:var(--ink-3);z-index:1}
+.lane-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+.lane-q{font-size:19px;font-weight:600;letter-spacing:-0.01em;margin:0}
+.lane-tag{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.cards{display:grid;gap:14px;grid-template-columns:2fr 3fr;align-items:stretch}
+.fleetnote{font-size:12.5px;color:var(--ink-3);margin-top:12px}
+
+/* the neighbour card, mocked so the fit is judged in context, not in isolation */
+.ghost{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+       padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.ghost .bars{flex:1;display:flex;align-items:flex-end;gap:10px;padding:14px 0 0}
+.ghost .bars i{flex:1;background:var(--ink);border-radius:3px 3px 0 0;display:block}
+.ghost .bars i.hi{background:var(--orange)}
+.ghostnote{font-size:11px;color:var(--brown-400);font-style:italic}
+
+/* ── the widget card itself ──────────────────────────────────────────── */
+.acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+       padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.card-kick .soft{text-transform:none;letter-spacing:0;font-weight:500}
+.subline{font-size:12.5px;color:var(--ink-3)}
+
+.seg{display:inline-flex;gap:3px;flex-shrink:0}
+.seg button{font:600 11px/1 var(--font-sans);color:var(--ink-3);background:transparent;border:0;
+            padding:5px 9px;border-radius:999px;cursor:pointer}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--bg-sunken);color:var(--ink)}
+.seg button:focus-visible{outline:0;box-shadow:0 0 0 3px rgba(255,77,0,.32)}
+
+.take{margin-top:auto;padding-top:11px;border-top:1px solid var(--line);
+      font-size:13px;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:baseline}
+.take .arr{color:var(--brown-400);font-weight:400;flex-shrink:0}
+
+/* status colour — red/amber/green mean ONE thing each: where you sit vs 2%.
+   Nothing else on these cards is allowed to use them. */
+.g{color:var(--green)} .a{color:var(--amber)} .r{color:var(--red)}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
+      padding:3px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.pill.g{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
+.pill.a{background:var(--amber-bg);border-color:var(--amber-line);color:var(--amber)}
+.pill.r{background:var(--red-bg);border-color:var(--red-line);color:var(--red)}
+/* the trend chip is deliberately NOT a status colour — "it moved" and
+   "you are over the limit" must not share a palette */
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;
+      padding:3px 8px;border-radius:999px;background:var(--bg-sunken);color:var(--ink-3);white-space:nowrap}
+
+@media (max-width:980px){
+  .cards{grid-template-columns:1fr}
+  .lane{padding-left:0}
+  .lane::before,.node{display:none}
+}

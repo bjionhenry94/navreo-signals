@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Table T5 · Scorecard · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;
+  --cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;
+  --line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--green-bg:#E4F1EA;--green-line:#C4E2D3;
+  --red:#C2371F;--red-bg:#F8E1DA;--amber:#8F6600;--amber-bg:#F8EAC4;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;--font-mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:940px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.01em;margin:2px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:16px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.verdict{font-family:var(--font-display);font-size:17px;line-height:1.3;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:12px;padding:14px 18px;margin-bottom:14px}
+.verdict b{color:var(--orange-600)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px;min-width:640px}
+thead th{text-align:left;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);padding:13px 16px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody td{padding:15px 16px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--cream-50)}
+.vname{font-family:var(--font-display);font-size:17px}
+.vrole{font-size:11px;color:var(--ink-3)}
+.grade{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-size:20px;font-weight:700}
+.grade.a{background:var(--orange);color:#fff}
+.grade.b{background:var(--sunken);color:var(--ink-2)}
+.grade.c{background:var(--red-bg);color:var(--red)}
+.grade.na{background:var(--sunken);color:var(--brown-300);font-size:13px}
+.dots{display:inline-flex;gap:3px;vertical-align:middle;margin-left:8px}
+.dots i{width:7px;height:7px;border-radius:99px;background:var(--line-2)}
+.dots i.on{background:var(--orange)}
+.warmv{font-weight:700}
+.effchip{display:inline-block;font-weight:700;font-size:13px;padding:3px 10px;border-radius:999px;font-variant-numeric:tabular-nums}
+.effchip.g{background:var(--green-bg);color:var(--green)}
+.effchip.a{background:var(--amber-bg);color:var(--amber)}
+.effchip.r{background:var(--red-bg);color:var(--red)}
+.callchip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2)}
+.callchip b{font-family:var(--font-display);font-size:15px;color:var(--ink)}
+.callchip small{color:var(--ink-3);font-size:11px}
+.donext{font-weight:700;font-size:13px}
+.donext.scale{color:var(--orange-600)}.donext.keep{color:var(--green)}.donext.cut{color:var(--red)}
+.foot{padding:14px 18px;font-size:11.5px;color:var(--ink-3);line-height:1.6;background:var(--cream-50);border-top:1px solid var(--line)}
+.foot b{color:var(--ink-2)}
+@media(max-width:680px){thead th:nth-child(2),tbody td:nth-child(2){display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Version performance</div><div class="h1">Report card</div></div>
+    <div class="chip">Live from Smartlead · since relaunch</div>
+  </div>
+  <div class="verdict" id="verdict"></div>
+  <div class="card">
+    <div class="tscroll">
+    <table>
+      <thead><tr>
+        <th>Version</th><th>Sent</th><th>Warmth</th><th>Effort / good reply</th><th>Calls</th><th>Grade</th><th>Do next</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+<script>
+const DATA={
+  versions:[
+    {step:1,label:"A",sent:1269,replies:20,positives:14,bounces:28},
+    {step:1,label:"B",sent:1259,replies:18,positives:9,bounces:28},
+    {step:2,label:"inline",inline:true,sent:1757,replies:22,positives:13,bounces:11}
+  ],
+  meetings:{total:16,by_step:{1:13,2:3}}
+};
+const FLOOR=300;
+const perPos=v=>v.positives>0?Math.round(v.sent/v.positives):null;
+const warm=v=>v.positives/v.sent*100;
+const m1=DATA.meetings.by_step[1]||0,m2=DATA.meetings.by_step[2]||0,mt=DATA.meetings.total;
+const A=DATA.versions[0],B=DATA.versions[1];
+// grade order = warmth first, efficiency as tie-breaker (best → worst)
+const ranked=[...DATA.versions].filter(v=>v.sent>=FLOOR).sort((a,b)=>{const w=warm(b)-warm(a);return Math.abs(w)>1e-9?w:perPos(a)-perPos(b);});
+const winner=ranked[0],loser=ranked[ranked.length-1];
+const bestWarm=warm(ranked[0]);
+const bestPer=Math.min(...DATA.versions.map(perPos));
+
+function gradeOf(v){
+  if(v.sent<FLOOR) return{cls:"na",g:"—"};
+  if(v===winner) return{cls:"a",g:"A"};
+  if(v===loser) return{cls:"c",g:"C"};
+  return{cls:"b",g:"B"};
+}
+function effClass(v){const r=perPos(v)/bestPer;return r<=1.05?"g":r<=1.6?"a":"r";}
+function warmDots(v){const on=Math.max(1,Math.round(warm(v)/bestWarm*3));return `<span class="dots">${[1,2,3].map(i=>`<i class="${i<=on?'on':''}"></i>`).join("")}</span>`;}
+
+const seenStep={};
+document.getElementById("tbody").innerHTML=DATA.versions.map(v=>{
+  const early=v.sent<FLOOR;
+  const label=v.inline?"inline":v.label;
+  const gr=gradeOf(v);
+  // calls: on the step, shown once, shared note for multi-version steps
+  const sk=String(v.step);let call;
+  if(!seenStep[sk]){seenStep[sk]=true;const n=DATA.meetings.by_step[sk]||0;const multi=(DATA.versions.filter(x=>String(x.step)===sk).length>1);
+    call=`<span class="callchip"><b>${n}</b> <small>on Email ${sk}${multi?' · shared A&amp;B':''}</small></span>`;}
+  else call='<span class="callchip"><small style="color:var(--brown-300)">↑ same step</small></span>';
+  const doNext=early?'<span class="donext">Wait</span>':v===winner?'<span class="donext scale">▲ Scale</span>':v===loser?'<span class="donext cut">✕ Cut</span>':'<span class="donext keep">Keep</span>';
+  return `<tr>
+    <td><div class="vname">${label}</div><span class="vrole">Email ${v.step} · ${v.inline?'follow-up':'opener'}</span></td>
+    <td style="font-variant-numeric:tabular-nums">${v.sent.toLocaleString()}</td>
+    <td>${early?'<span class="vrole">too early</span>':'<span class="warmv">'+warm(v).toFixed(1)+'%</span>'+warmDots(v)}</td>
+    <td>${early?'<span class="vrole">—</span>':'<span class="effchip '+effClass(v)+'">1 / '+perPos(v)+'</span>'}</td>
+    <td>${call}</td>
+    <td><span class="grade ${gr.cls}">${gr.g}</span></td>
+    <td>${doNext}</td>
+  </tr>`;
+}).join("");
+document.getElementById("verdict").innerHTML=`<b>Version ${winner.label} grades an A</b> — warmest replies and the least effort per good reply. ${loser.label} grades a C: same job, worse numbers. Most of your ${mt} calls (${m1}) come from Email 1.`;
+document.getElementById("foot").innerHTML=`Grade = warmth + effort combined (A best). <b>Warmth</b> = good replies ÷ sent; dots are relative to the best version. <b>Effort</b> = emails per good reply (green = cheapest). <b>Calls</b> show once per email step — a booking sits on the step, not the version, so Email 1's ${m1} are shared by A &amp; B and never split by guess. Live from Smartlead, since relaunch.`;
+</script>
+</body>
+</html>

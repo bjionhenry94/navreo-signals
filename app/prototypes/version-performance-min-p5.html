@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Versions + Combinations · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{--orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;--ink:#14110E;--ink-3:#6B6055;--brown-300:#C0B0A0;
+--cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;--line:#EBE1D5;--line-2:#DCC6AE;--amber:#8F6600;--amber-bg:#F8EAC4;
+--font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;--font-display:"Acid Grotesk","DM Sans",sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:900px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:25px;letter-spacing:-.01em;margin:2px 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:720px}
+.band td{background:var(--sunken);padding:10px 14px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);border-top:1px solid var(--line)}
+.band .tag{font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:none;color:var(--ink-3);background:var(--card);border:1px solid var(--line);padding:2px 7px;border-radius:999px;margin-left:8px}
+thead th{text-align:right;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);padding:12px 14px 9px;white-space:nowrap}
+thead th.l{text-align:left}
+tbody td{padding:13px 14px;text-align:right;font-variant-numeric:tabular-nums;border-top:1px solid var(--line);white-space:nowrap}
+tbody td.l{text-align:left}
+.name{font-family:var(--font-display);font-size:15px}
+.arrow{color:var(--brown-300);margin:0 4px;font-weight:700}
+.medal{display:inline-block;margin-left:8px;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--orange);padding:2px 7px;border-radius:999px;vertical-align:1px}
+.ftag{display:inline-block;margin-left:8px;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--amber);background:var(--amber-bg);padding:2px 7px;border-radius:999px;vertical-align:1px}
+.n{font-family:var(--font-display);font-size:15px}
+.win .n{color:var(--orange-600)}
+.r{font-size:11.5px;color:var(--ink-3);font-weight:600;margin-left:3px}
+.dot{color:var(--brown-300)}
+.win td:first-child{box-shadow:inset 3px 0 0 var(--orange)}
+.win{background:linear-gradient(90deg,rgba(255,77,0,.05),transparent)}
+.dim td:not(:first-child){color:var(--ink-3)}
+.dim .name{color:var(--ink-3)}
+.foot{padding:12px 16px;font-size:11px;color:var(--ink-3);line-height:1.55;background:var(--cream-50);border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Version performance</div>
+  <div class="h1">Versions, and the combinations they make</div>
+  <div class="card"><div class="tscroll"><table>
+    <thead><tr>
+      <th class="l">Version</th><th>Sent</th><th>Replies</th><th>Positives</th>
+      <th>Sent / positive</th><th>Meetings</th><th>Sent / meeting</th>
+    </tr></thead>
+    <tbody>
+      <tr class="band"><td class="l" colspan="7">Versions <span class="tag">live · meetings sit on the step</span></td></tr>
+      <tr class="win"><td class="l"><span class="name">A</span><span class="medal">best opener</span></td>
+        <td><span class="n">1,269</span></td><td><span class="n">20</span><span class="r">1.6%</span></td>
+        <td><span class="n">14</span><span class="r">1.1%</span></td><td>91</td>
+        <td><span class="n">13</span></td><td>194</td></tr>
+      <tr><td class="l"><span class="name">B</span></td>
+        <td><span class="n">1,259</span></td><td><span class="n">18</span><span class="r">1.4%</span></td>
+        <td><span class="n">9</span><span class="r">0.7%</span></td><td>140</td>
+        <td><span class="dot">·</span></td><td><span class="dot">·</span></td></tr>
+      <tr class="dim"><td class="l"><span class="name">Email 2</span><span class="ftag">follow-up</span></td>
+        <td><span class="n">1,757</span></td><td><span class="n">22</span><span class="r">1.3%</span></td>
+        <td><span class="n">13</span><span class="r">0.7%</span></td><td>135</td>
+        <td><span class="n">3</span></td><td>586</td></tr>
+      <tr class="band"><td class="l" colspan="7">Combinations <span class="tag">whole journey · shown because Email 2 has positives</span></td></tr>
+      <tr class="win"><td class="l"><span class="name">A<span class="arrow">→</span>Email 2</span><span class="medal">best path</span></td>
+        <td><span class="n">1,269</span></td><td class="dot">—</td>
+        <td><span class="n">22</span><span class="r">1.7%</span></td><td>58</td>
+        <td><span class="n">10</span></td><td>127</td></tr>
+      <tr><td class="l"><span class="name">B<span class="arrow">→</span>Email 2</span></td>
+        <td><span class="n">1,259</span></td><td class="dot">—</td>
+        <td><span class="n">14</span><span class="r">1.1%</span></td><td>90</td>
+        <td><span class="n">6</span></td><td>210</td></tr>
+    </tbody>
+  </table></div>
+    <div class="foot">Meetings &amp; Sent / meeting sit on the email step (shared by that step's versions) — Email 1's 13 show once, on A. Combinations count the whole path; their split is a preview until per-lead path-tracking is on.</div>
+  </div>
+</div>
+</body>
+</html>

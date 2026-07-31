@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch — Live stream</title>
+<link rel="stylesheet" href="launch-dashboard-base.css">
+<style>
+  /* scoped p3 styles — every atom lives in launch-dashboard-base.css */
+  .ld-app{max-width:860px; overflow-x:hidden}
+  .ld-theme{display:inline-flex; align-items:center; justify-content:center}
+  .ld-sub{display:flex; align-items:center; gap:8px}
+
+  /* ---- the feed --------------------------------------------------------- */
+  .feed{display:flex; flex-direction:column; gap:10px}
+  .feedline{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow)}
+  .feedline.open{border-color:var(--line-2)}
+
+  .feedhead{width:100%; display:flex; align-items:center; gap:14px; text-align:left;
+    background:transparent; border:none; border-radius:var(--radius);
+    padding:15px 16px; cursor:pointer; font:inherit; color:inherit}
+  .feedhead:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+
+  .linetext{flex:1 1 auto; min-width:0; line-height:1.35; white-space:normal}
+  .linename{font-weight:500; color:var(--ink)}
+  .linesep{color:var(--ink-3); margin:0 8px}
+  .linestat{color:var(--ink-2)}
+  .linepct{color:var(--ink); font-size:13px}
+
+  .rail{display:inline-flex; align-items:center; gap:6px; flex:0 0 auto}
+  .rail .stagedot{width:8px; height:8px}
+  .st-queued .stagedot{background:transparent; box-shadow:inset 0 0 0 1.6px var(--line-2)}
+
+  .chev{flex:0 0 auto; color:var(--ink-3); display:inline-flex; transition:transform .2s ease}
+  .feedline.open .chev{transform:rotate(90deg)}
+
+  /* ---- the in-place detail --------------------------------------------- */
+  .detail{background:transparent; border-top:1px solid var(--line); padding:2px 16px 18px}
+  .detail .backbtn{margin:12px 0 4px}
+  .detail .backbtn:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus); border-radius:8px}
+
+  .switcher{display:flex; gap:6px; overflow-x:auto; padding:4px 0 12px; -webkit-overflow-scrolling:touch}
+  .switcher::-webkit-scrollbar{height:0}
+  .stseg{flex:0 0 auto; display:inline-flex; align-items:center; gap:7px; cursor:pointer; white-space:nowrap;
+    background:transparent; border:1px solid transparent; border-radius:999px; padding:6px 11px; font:inherit}
+  .stseg .stagelabel{font-size:12.5px}
+  .stseg.selected{background:var(--bg-sunken); border-color:var(--line-2)}
+  .stseg:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+
+  .stagepanel{padding-top:2px}
+
+  /* targeting */
+  .chiprow{display:flex; flex-wrap:wrap; gap:7px; margin-bottom:10px}
+  .foundline{margin:14px 0 8px; color:var(--ink-2)}
+  .foundline .num{font-size:20px; color:var(--ink)}
+  .bar{height:7px; background:var(--bg-sunken); border:1px solid var(--line); border-radius:999px; overflow:hidden; max-width:560px}
+  .bar > i{display:block; height:100%; background:var(--st-done); border-radius:999px; animation:ld-fill .9s ease-out both}
+  .bar.active > i{background:var(--orange)}
+  @keyframes ld-barbreathe{0%,100%{opacity:.6} 50%{opacity:1}}
+  .bar.active{animation:ld-barbreathe 1.9s ease-in-out infinite}
+  @media (prefers-reduced-motion:reduce){ .bar.active{animation:none} .bar > i{animation:none} }
+
+  /* copy */
+  .mailframe{max-width:560px}
+
+  /* icebreaker */
+  .icelist{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; max-width:620px}
+  .icelist li{padding:11px 13px; background:var(--bg-sunken); border:1px solid var(--line); border-radius:10px; color:var(--ink-2)}
+
+  /* checks */
+  .checks{display:flex; flex-direction:column; gap:11px}
+  .checkrow{display:flex; align-items:center; gap:11px}
+  .checkrow .ico{width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto}
+  .checkrow .ico .stagedot{width:10px; height:10px}
+  .checkrow .lbl{color:var(--ink-2)}
+  .checkrow .lbl.muted{color:var(--ink-3)}
+
+  /* live */
+  .livewrap{display:flex; flex-direction:column; gap:16px; align-items:flex-start}
+  .livestatus{color:var(--ink-2)}
+  .livestatus .num{color:var(--ink)}
+  .switch{display:inline-flex; align-items:center; gap:11px; cursor:pointer; background:none; border:none; padding:0; font:inherit}
+  .switch:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus); border-radius:999px}
+  .track{width:48px; height:28px; border-radius:999px; background:var(--line-2); position:relative; transition:background .2s ease; flex:0 0 auto}
+  .thumb{position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.25); transition:transform .2s ease}
+  .switch.on .track{background:var(--orange)}
+  .switch.on .thumb{transform:translateX(20px)}
+  .switchlbl{color:var(--ink-2); font-weight:500}
+
+  /* queued placeholder */
+  .queued-empty{display:flex; align-items:center; gap:10px; color:var(--ink-3); padding:14px 0}
+  .queued-empty .stagedot{width:10px; height:10px}
+</style>
+</head>
+<body>
+
+<div class="ld-app">
+  <header class="ld-top">
+    <div>
+      <h1 class="ld-title">Launching for Navreo</h1>
+      <div class="ld-sub" id="ld-sub"></div>
+    </div>
+    <div class="ld-tools" id="ld-tools">
+      <button class="ld-theme" id="ld-theme" type="button" aria-label="Toggle dark mode"></button>
+    </div>
+  </header>
+  <main class="feed" id="feed"></main>
+</div>
+
+<script src="launch-dashboard-fixture.js"></script>
+<script>
+"use strict";
+(function(){
+  var LD = window.LD;
+  if(!LD || !LD.campaigns){ return; }
+  var stages = LD.stages;
+
+  var CHEV  = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
+  var BACK  = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
+  var CHECK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+  var MOON  = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+  var SUN   = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
+
+  function esc(s){
+    return String(s).replace(/[&<>"]/g, function(ch){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[ch];
+    });
+  }
+  function n(v){ return Number(v).toLocaleString('en-US'); }
+  function stateFor(c, i){ return i < c.active ? 'done' : (i === c.active ? 'active' : 'queued'); }
+
+  /* ---- header bits ------------------------------------------------------ */
+  var sub = document.getElementById('ld-sub');
+  var count = LD.campaigns.length;
+  sub.textContent = count + ' launches in motion · ' + (LD.updated || '');
+  if(LD.preview){
+    var pill = document.createElement('span');
+    pill.className = 'ld-preview';
+    pill.textContent = 'preview data';
+    var tools = document.getElementById('ld-tools');
+    tools.insertBefore(pill, tools.firstChild);
+  }
+  var themeBtn = document.getElementById('ld-theme');
+  function paintTheme(){
+    themeBtn.innerHTML = (document.documentElement.dataset.theme === 'dark') ? SUN : MOON;
+  }
+  themeBtn.addEventListener('click', function(){
+    if(document.documentElement.dataset.theme === 'dark'){ delete document.documentElement.dataset.theme; }
+    else { document.documentElement.dataset.theme = 'dark'; }
+    paintTheme();
+  });
+  paintTheme();
+
+  /* ---- collapsed line pieces -------------------------------------------- */
+  function railHTML(c){
+    var out = '';
+    for(var i=0; i<stages.length; i++){
+      var st = stateFor(c, i);
+      var breathe = st === 'active' ? ' breathe' : '';
+      out += '<span class="st-'+st+'"><span class="stagedot'+breathe+'"></span></span>';
+    }
+    return '<span class="rail" aria-hidden="true">'+out+'</span>';
+  }
+  function statHTML(c){
+    var st = stages[c.active];
+    if(st.key === 'live'){ return 'ready to send'; }
+    return esc(st.verb.toLowerCase()) + ' · <span class="num linepct">'+c.pct+'%</span>';
+  }
+  function switcherHTML(c){
+    return stages.map(function(s, i){
+      var st = stateFor(c, i);
+      var breathe = st === 'active' ? ' breathe' : '';
+      return '<button type="button" class="stseg st-'+st+'" data-i="'+i+'">'+
+        '<span class="stagedot'+breathe+'"></span>'+
+        '<span class="stagelabel">'+esc(s.label)+'</span></button>';
+    }).join('');
+  }
+
+  /* ---- stage detail panels ---------------------------------------------- */
+  function panelHTML(c, i){
+    var st = stages[i];
+    if(stateFor(c, i) === 'queued'){
+      return '<div class="queued-empty"><span class="st-queued"><span class="stagedot"></span></span> Not started yet</div>';
+    }
+    if(st.key === 'targeting' && c.targeting){ return targetingHTML(c, i); }
+    if(st.key === 'copy' && c.copy){ return copyHTML(c); }
+    if(st.key === 'icebreaker' && c.icebreaker){ return icebreakerHTML(c); }
+    if(st.key === 'checks' && c.checks){ return checksHTML(c); }
+    if(st.key === 'live' && c.live){ return liveHTML(c); }
+    return '<div class="queued-empty"><span class="st-queued"><span class="stagedot"></span></span> Not started yet</div>';
+  }
+  function targetingHTML(c, i){
+    var t = c.targeting;
+    var active = stateFor(c, i) === 'active';
+    var sig = t.signal.map(function(s){ return '<span class="chip on">'+esc(s)+'</span>'; }).join('');
+    var roles = t.roles.map(function(r){ return '<span class="chip">'+esc(r)+'</span>'; }).join('');
+    var pct = Math.max(0, Math.min(100, Math.round(t.found / t.target * 100)));
+    return '<div class="chiprow">'+sig+'</div>'+
+      '<div class="chiprow">'+roles+'</div>'+
+      '<div class="foundline">Found <span class="num">'+n(t.found)+'</span> of <span class="num">'+n(t.target)+'</span></div>'+
+      '<div class="bar'+(active ? ' active' : '')+'"><i style="width:'+pct+'%"></i></div>';
+  }
+  function copyHTML(c){
+    return '<div class="mailframe"><div class="mailhead">'+esc(c.copy.subject)+'</div>'+
+      '<div class="mailbody">'+esc(c.copy.preview)+'</div></div>';
+  }
+  function icebreakerHTML(c){
+    return '<ul class="icelist">'+c.icebreaker.samples.map(function(s){
+      return '<li>'+esc(s)+'</li>';
+    }).join('')+'</ul>';
+  }
+  function checksHTML(c){
+    return '<div class="checks">'+c.checks.items.map(function(it){
+      var ico, lbl = 'lbl';
+      if(it.state === 'pass'){ ico = '<span class="ico tick">'+CHECK+'</span>'; }
+      else if(it.state === 'run'){ ico = '<span class="ico"><span class="st-active"><span class="stagedot breathe"></span></span></span>'; }
+      else { ico = '<span class="ico"><span class="st-queued"><span class="stagedot"></span></span></span>'; lbl = 'lbl muted'; }
+      return '<div class="checkrow">'+ico+'<span class="'+lbl+'">'+esc(it.label)+'</span></div>';
+    }).join('')+'</div>';
+  }
+  function liveHTML(c){
+    var l = c.live;
+    return '<div class="livewrap">'+
+      '<div class="livestatus">Paused in Smartlead · '+esc(l.status)+' · <span class="num">'+n(l.sent)+'</span> sent</div>'+
+      '<button type="button" class="switch" aria-pressed="false">'+
+        '<span class="track"><span class="thumb"></span></span>'+
+        '<span class="switchlbl">Switch on</span>'+
+      '</button></div>';
+  }
+
+  /* ---- open / close / skip-to-stage ------------------------------------- */
+  var feed = document.getElementById('feed');
+
+  function selectStage(line, i){
+    line._sel = i;
+    var segs = line.querySelectorAll('.stseg');
+    Array.prototype.forEach.call(segs, function(seg){
+      var on = (+seg.getAttribute('data-i') === i);
+      seg.classList.toggle('selected', on);
+      if(on){ seg.setAttribute('aria-current', 'true'); } else { seg.removeAttribute('aria-current'); }
+    });
+    var panel = line.querySelector('.stagepanel');
+    panel.innerHTML = panelHTML(line._c, i);
+    var sw = panel.querySelector('.switch');
+    if(sw){
+      sw.addEventListener('click', function(){
+        var on = sw.classList.toggle('on');
+        sw.setAttribute('aria-pressed', on ? 'true' : 'false');
+        sw.querySelector('.switchlbl').textContent = on ? 'On' : 'Switch on';
+      });
+    }
+  }
+  function closeLine(line){
+    if(!line.classList.contains('open')){ return; }
+    line.classList.remove('open');
+    line.querySelector('.feedhead').setAttribute('aria-expanded', 'false');
+    line.querySelector('.detail').hidden = true;
+  }
+  function openLine(line){
+    Array.prototype.forEach.call(feed.children, function(o){ if(o !== line){ closeLine(o); } });
+    line.classList.add('open');
+    line.querySelector('.feedhead').setAttribute('aria-expanded', 'true');
+    line.querySelector('.detail').hidden = false;
+    selectStage(line, line._c.active);
+  }
+  function toggleLine(line){ line.classList.contains('open') ? closeLine(line) : openLine(line); }
+
+  /* ---- build the feed --------------------------------------------------- */
+  LD.campaigns.forEach(function(c, idx){
+    var line = document.createElement('article');
+    line.className = 'feedline';
+    line._c = c;
+    var did = 'ld-detail-'+idx;
+    line.innerHTML =
+      '<button type="button" class="feedhead" aria-expanded="false" aria-controls="'+did+'">'+
+        '<span class="linetext">'+
+          '<span class="linename">'+esc(c.name)+'</span>'+
+          '<span class="linesep" aria-hidden="true">—</span>'+
+          '<span class="linestat">'+statHTML(c)+'</span>'+
+        '</span>'+
+        railHTML(c)+
+        '<span class="chev" aria-hidden="true">'+CHEV+'</span>'+
+      '</button>'+
+      '<div class="detail" id="'+did+'" hidden>'+
+        '<button type="button" class="backbtn">'+BACK+'<span>Back</span></button>'+
+        '<div class="switcher">'+switcherHTML(c)+'</div>'+
+        '<div class="stagepanel"></div>'+
+      '</div>';
+    feed.appendChild(line);
+
+    var head = line.querySelector('.feedhead');
+    head.addEventListener('click', function(){ toggleLine(line); });
+    line.querySelector('.backbtn').addEventListener('click', function(){ closeLine(line); head.focus(); });
+    Array.prototype.forEach.call(line.querySelectorAll('.stseg'), function(seg){
+      seg.addEventListener('click', function(){ selectStage(line, +seg.getAttribute('data-i')); });
+    });
+  });
+})();
+</script>
+</body>
+</html>

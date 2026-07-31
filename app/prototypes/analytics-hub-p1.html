@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics P1 — The Briefing · Navreo</title>
+
+<!-- ════════════════════════════════════════════════════════════════════
+  PROTOTYPE 1 of 5 — "THE BRIEFING"
+  One centered ~760px column that reads top-to-bottom like a morning
+  brief written by a chief of staff. Bold first lines ARE the insights.
+  Self-contained: inline CSS + inline SVG + mock data. No JS required.
+  Only local asset refs: ../fonts/AcidGrotesk-Normal.otf, ../icons/*.png
+═════════════════════════════════════════════════════════════════════ -->
+
+<style>
+/* ── design tokens (verbatim from spec) ─────────────────────────────── */
+@font-face { font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight:400; font-style:normal; font-display:swap; }
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --radius:12px; --focus:0 0 0 3px rgba(255,77,0,.32);
+}
+
+/* ── base ───────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 14px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:none;box-shadow:var(--focus)}
+strong{font-weight:600}
+.num{font-variant-numeric:tabular-nums}
+
+/* ── prototype banner ───────────────────────────────────────────────── */
+.proto-banner{font-size:11px;color:var(--ink-3);background:var(--bg-sunken);border-bottom:1px solid var(--line);padding:7px 16px;text-align:center;letter-spacing:.02em}
+
+/* ── the reading column ─────────────────────────────────────────────── */
+.brief{width:760px;margin:0 auto;padding:0 0 64px}
+
+/* ── masthead + hero verdict ────────────────────────────────────────── */
+.mast{margin:48px 0 0;font-size:13px;color:var(--ink-3)}
+.mast strong{color:var(--ink);font-weight:700;letter-spacing:-.01em}
+.mast .dot{margin:0 8px;color:var(--brown-300)}
+h1.verdict{margin:24px 0 0;font-family:var(--font-display);font-weight:400;font-size:40px;line-height:1.16;letter-spacing:-0.03em}
+h1.verdict .up{color:var(--green)}
+.sub{margin:16px 0 0;max-width:42em;font-size:16px;line-height:1.6;color:var(--ink-2)}
+.funnel{display:flex;align-items:center;gap:16px;margin-top:24px;padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.funnel .f{display:flex;flex-direction:column;gap:2px}
+.funnel .fv{font-size:20px;font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.funnel .fl{font-size:11px;color:var(--ink-3)}
+.funnel .arr{color:var(--brown-300);font-size:14px;user-select:none}
+
+/* ── takeaway line (one per visual, ≤12 words) ──────────────────────── */
+.take{display:flex;gap:8px;align-items:baseline;margin:16px 0 0;padding-top:12px;border-top:1px solid var(--line);font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.45}
+.take .tk{color:var(--ink-3);flex-shrink:0}
+.take.bare{border-top:0;padding-top:0;margin-top:12px}
+
+/* ── section groups + eyebrow labels ────────────────────────────────── */
+.grp{margin-top:48px}
+h2.eyebrow{display:flex;align-items:center;gap:12px;margin:0;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3)}
+h2.eyebrow::after{content:"";flex:1;height:1px;background:var(--line)}
+.grp.good h2.eyebrow{color:var(--green)}
+.grp.bad h2.eyebrow{color:var(--red)}
+.grp.act h2.eyebrow{color:var(--orange-700)}
+.cards{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+
+/* ── story cards ────────────────────────────────────────────────────── */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:24px}
+h3.card-h{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1.35}
+.card-sub{margin:4px 0 0;font-size:12.5px;color:var(--ink-3)}
+.card-body{display:flex;gap:24px;margin-top:16px}
+.card-main{flex:1;min-width:0}
+.card-note{margin:12px 0 0;font-size:12.5px;color:var(--ink-3);line-height:1.5}
+.card-rail{width:150px;flex-shrink:0;text-align:right}
+.rn{font-size:26px;font-weight:700;line-height:1.1;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap}
+.rn.bad{color:var(--red)}
+.rl{margin-top:4px;font-size:11px;line-height:1.45;color:var(--ink-3)}
+
+/* ── svg chart text ─────────────────────────────────────────────────── */
+svg{display:block}
+svg text{font-family:var(--font-sans)}
+.lbl{font-size:11px;font-weight:600;fill:var(--ink-3)}
+.val{font-size:11px;font-weight:700;fill:var(--ink);font-variant-numeric:tabular-nums}
+
+/* ── horizontal bar-list rows (campaigns, openers) ──────────────────── */
+.bars{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+.brow{display:grid;grid-template-columns:1fr 180px 46px 106px;gap:12px;align-items:center;font-size:12.5px}
+.brow.no-mtg{grid-template-columns:1fr 180px 46px}
+.brow .bn{display:flex;align-items:center;gap:8px;min-width:0;color:var(--ink-2)}
+.brow .bn .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brow.win .bn{color:var(--ink);font-weight:600}
+.brow .br{text-align:right;font-weight:600;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.brow.win .br{color:var(--ink);font-weight:700}
+.brow.lose .br{color:var(--red);font-weight:700}
+.brow .bm{text-align:right;font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{flex-shrink:0;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:999px}
+.pill.best{background:var(--green-bg);color:var(--green)}
+.pill.fresh{background:var(--bg-sunken);color:var(--ink-3)}
+.pill.stop{background:var(--red-bg);color:var(--red)}
+
+/* ── proportion strips (who replies) ────────────────────────────────── */
+.strip + .strip{margin-top:16px}
+.strip-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.strip-cap{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+.strip-lead{font-size:12.5px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.strip svg{margin-top:6px}
+.strip-rest{margin-top:6px;font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+/* ── paired comparison rows (answer speed) ──────────────────────────── */
+.cmp{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+.cmp-row{display:flex;align-items:center;gap:12px;font-size:12.5px}
+.cmp-l{width:150px;flex-shrink:0;color:var(--ink-2)}
+.cmp-v{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* ── do-this-today action cards ─────────────────────────────────────── */
+.do-card{display:flex;align-items:center;gap:16px;padding:16px 24px}
+.do-n{width:26px;height:26px;flex-shrink:0;border-radius:999px;background:var(--bg-sunken);color:var(--ink-2);font-size:12.5px;font-weight:700;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.do-t{flex:1;min-width:0}
+h3.do-h{margin:0;font-size:15px;font-weight:700;letter-spacing:-.01em;line-height:1.35}
+.do-p{margin:2px 0 0;font-size:12.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.do-viz{flex-shrink:0}
+.do-card .btn{flex-shrink:0}
+
+/* ── landing section ────────────────────────────────────────────────── */
+.land-leg{display:flex;justify-content:space-between;gap:16px;margin-top:8px;font-size:12px}
+.land-leg .ok{color:var(--ink-2);font-weight:600}
+.land-leg .no{color:var(--ink-3)}
+.facts{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-size:12.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.facts strong{color:var(--ink-2);font-weight:600}
+.breakout{width:980px;margin:12px 0 0 calc((100% - 980px)/2)}
+
+/* ── footer ─────────────────────────────────────────────────────────── */
+.foot{margin-top:64px;border-top:1px solid var(--line);padding-top:24px;font-size:13px;color:var(--ink-2)}
+.foot strong{color:var(--ink);font-weight:700}
+.foot-sub{margin-top:6px;font-size:11.5px;color:var(--ink-3)}
+
+/* ── narrow safety (spec floor is 1200px; this is just a guard) ─────── */
+@media (max-width:1024px){
+  .brief{width:auto;padding:0 24px 64px}
+  .breakout{width:auto;margin-left:0}
+}
+</style>
+
+<!-- ── INBOX & DOMAIN MANAGER styles — VERBATIM from table-snippet.html.
+     Do not redesign, restyle or "improve". ─────────────────────────── -->
+<style>
+.ic8{display:inline-block;width:18px;height:18px;background-color:currentColor;flex-shrink:0;-webkit-mask:var(--icon) center / contain no-repeat;mask:var(--icon) center / contain no-repeat;vertical-align:-3px}
+.ictile{width:36px;height:36px;border-radius:10px;background:var(--bg-sunken);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ictile .ic8{width:18px;height:18px;color:var(--ink-2)}
+.btn{border:1px solid var(--line-2);background:transparent;color:var(--ink);border-radius:999px;padding:8px 16px;font:500 13px var(--font-sans);letter-spacing:-0.005em;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{background:var(--bg-sunken)}
+.btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
+.btn.primary:hover{background:var(--orange-600)}
+.btn.sm{padding:5px 12px;font-size:11.5px}
+.dlv-subtab-panel{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.dlv-subtab-head{display:flex;align-items:center;gap:9px;padding:14px 16px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line)}
+.dlv-subtab-head .hint{font-weight:500;font-size:12px;color:var(--ink-3)}
+.dlv-fold-body{padding:16px}
+.dlv-flowchips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.dlv-flowchip{font-family:var(--font-sans);font-size:13px;font-weight:600;padding:8px 14px;border:1px solid var(--line-2);border-radius:9px;background:var(--card);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.dlv-flowchip:hover{border-color:var(--ink-3)}
+.dlv-flowchip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.dlv-flowchip-n{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--bg-sunken);color:var(--ink-2)}
+.dlv-flowchip.on .dlv-flowchip-n{background:rgba(255,255,255,.18);color:#fff}
+.dlv-flowchip.warn:not(.on) .dlv-flowchip-n{background:var(--red-bg);color:#861E10}
+.dlv-mb-cap{font-size:10.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;align-self:center}
+.dlv-mb-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.dlv-mb-bar select,.dlv-mb-bar input[type=text],.dlv-mb-bar input[type=number]{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-mb-bar input[type=text]{flex:1;min-width:160px}
+.dlv-mb-count{font-size:11.5px;color:var(--ink-3)}
+.dlv-mb-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dlv-mb-scroll{max-height:420px;overflow:auto}
+table.dlv-mb{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dlv-mb th{position:sticky;top:0;background:var(--bg-sunken);text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;padding:9px 11px;z-index:1}
+table.dlv-mb td{padding:8px 11px;border-top:1px solid var(--line);vertical-align:middle}
+table.dlv-mb tr:hover td{background:var(--bg-sunken)}
+.dlv-mb-email{font-weight:600}
+.dlv-mb-dom{font-size:11px;color:var(--ink-3)}
+.dlv-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.dlv-tag.inactive{background:var(--amber-bg);color:#6B4A00}
+.dlv-tag.ok{background:var(--green-bg);color:#195C3F}
+.dlv-mgr-adv{display:inline-flex;align-items:center;gap:7px}
+.dlv-mgr-adv summary{font-size:11.5px;color:var(--ink-3);font-weight:600;cursor:pointer;list-style:none;padding:6px 4px;text-transform:uppercase;letter-spacing:.04em}
+.dlv-mgr-adv summary::-webkit-details-marker{display:none}
+.dlv-mgr-adv[open] summary{color:var(--ink)}
+.dlv-dl{font-size:11.5px;font-weight:600;color:var(--orange-700);text-decoration:none;cursor:pointer}
+.dlv-input{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-select{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+</style>
+</head>
+
+<body>
+
+<div class="proto-banner">Prototype 1 of 5 — The Briefing · mock data · not production</div>
+
+<main class="brief">
+
+  <!-- ══ MASTHEAD + VERDICT ═══════════════════════════════════════════ -->
+  <p class="mast"><strong>Analytics</strong><span class="dot">·</span>Saturday 26 July<span class="dot">·</span>Updated 8 minutes ago</p>
+
+  <h1 class="verdict">You booked 14 meetings this month.<br><span class="up">5 more than last month.</span></h1>
+
+  <p class="sub">18,420 emails went out in July. 512 people replied, 96 of them said
+  they&rsquo;re interested, and 14 booked a meeting &mdash; up from 9 in June.</p>
+
+  <!-- funnel strip: sent → replied → interested → meetings -->
+  <div class="funnel num" role="group" aria-label="This month, step by step">
+    <div class="f"><span class="fv">18,420</span><span class="fl">emails sent</span></div>
+    <span class="arr" aria-hidden="true">&rarr;</span>
+    <div class="f"><span class="fv">512</span><span class="fl">replied</span></div>
+    <span class="arr" aria-hidden="true">&rarr;</span>
+    <div class="f"><span class="fv">96</span><span class="fl">interested</span></div>
+    <span class="arr" aria-hidden="true">&rarr;</span>
+    <div class="f"><span class="fv">14</span><span class="fl">meetings booked</span></div>
+  </div>
+  <p class="take bare"><span class="tk" aria-hidden="true">&rarr;</span>About 3 in 100 people reply &mdash; healthy. Nothing to fix here.</p>
+
+  <!-- ══ GROUP 1 — WORKING WELL ═══════════════════════════════════════ -->
+  <section class="grp good">
+    <h2 class="eyebrow">Working well</h2>
+    <div class="cards">
+
+      <!-- Card: best campaign (Q3 — which campaigns are winning) -->
+      <article class="card">
+        <h3 class="card-h">&ldquo;SaaS founders &mdash; just hired sales&rdquo; is your best campaign.</h3>
+        <p class="card-sub">All 7 live campaigns, by replies per 100 emails.</p>
+        <div class="bars">
+          <div class="brow win">
+            <span class="bn"><span class="nm">SaaS founders &mdash; just hired sales</span><span class="pill best">Best</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="180" height="8" rx="4" fill="var(--ink)"/></svg>
+            <span class="br">4.2%</span><span class="bm">6 meetings</span>
+          </div>
+          <div class="brow">
+            <span class="bn"><span class="nm">Construction &mdash; new permits</span><span class="pill fresh">New</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="146" height="8" rx="4" fill="var(--brown-300)"/></svg>
+            <span class="br">3.4%</span><span class="bm">1 meeting</span>
+          </div>
+          <div class="brow">
+            <span class="bn"><span class="nm">E-commerce &mdash; new store openings</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="133" height="8" rx="4" fill="var(--brown-300)"/></svg>
+            <span class="br">3.1%</span><span class="bm">4 meetings</span>
+          </div>
+          <div class="brow">
+            <span class="bn"><span class="nm">Logistics &mdash; page followers</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="116" height="8" rx="4" fill="var(--brown-300)"/></svg>
+            <span class="br">2.7%</span><span class="bm">2 meetings</span>
+          </div>
+          <div class="brow">
+            <span class="bn"><span class="nm">Recruiters &mdash; engagement</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="116" height="8" rx="4" fill="var(--brown-300)"/></svg>
+            <span class="br">2.7%</span><span class="bm">1 meeting</span>
+          </div>
+          <div class="brow">
+            <span class="bn"><span class="nm">Fintech &mdash; funding news</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="111" height="8" rx="4" fill="var(--brown-300)"/></svg>
+            <span class="br">2.6%</span><span class="bm">1 meeting</span>
+          </div>
+          <div class="brow lose">
+            <span class="bn"><span class="nm">Agencies &mdash; ops leaders</span><span class="pill stop">Pause</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="17" height="8" rx="4" fill="var(--red)"/></svg>
+            <span class="br">0.4%</span><span class="bm">0 meetings</span>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Feed your winner first when you add fresh leads.</p>
+      </article>
+
+      <!-- Card: Tuesday story (Q5 — best send days) -->
+      <article class="card">
+        <h3 class="card-h">Tuesday gets you double the replies.</h3>
+        <div class="card-body">
+          <div class="card-main">
+            <svg width="340" height="100" viewBox="0 0 340 100" role="img" aria-label="Replies by send day: Monday 96, Tuesday 178, Wednesday 98, Thursday 89, Friday 41, weekend 10">
+              <line x1="0" y1="80.5" x2="340" y2="80.5" stroke="var(--line)"/>
+              <rect x="15"  y="48.7" width="30" height="31.3" rx="3" fill="var(--brown-300)"/>
+              <rect x="71"  y="22"   width="30" height="58"   rx="3" fill="var(--orange)"/>
+              <rect x="127" y="48.1" width="30" height="31.9" rx="3" fill="var(--brown-300)"/>
+              <rect x="183" y="51"   width="30" height="29"   rx="3" fill="var(--brown-300)"/>
+              <rect x="239" y="66.6" width="30" height="13.4" rx="3" fill="var(--brown-300)"/>
+              <rect x="295" y="76.7" width="30" height="3.3"  rx="1.5" fill="var(--brown-300)"/>
+              <text class="val" x="30"  y="42.7" text-anchor="middle">96</text>
+              <text class="val" x="86"  y="16"   text-anchor="middle">178</text>
+              <text class="val" x="254" y="60.6" text-anchor="middle">41</text>
+              <text class="lbl" x="30"  y="95" text-anchor="middle">Mon</text>
+              <text class="lbl" x="86"  y="95" text-anchor="middle">Tue</text>
+              <text class="lbl" x="142" y="95" text-anchor="middle">Wed</text>
+              <text class="lbl" x="198" y="95" text-anchor="middle">Thu</text>
+              <text class="lbl" x="254" y="95" text-anchor="middle">Fri</text>
+              <text class="lbl" x="310" y="95" text-anchor="middle">Sat+Sun</text>
+            </svg>
+          </div>
+          <div class="card-rail">
+            <div class="rn">178</div>
+            <div class="rl">replies came on Tuesdays &mdash; Mondays got 96</div>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Send your best stuff Tuesday.</p>
+      </article>
+
+      <!-- Card: winning opener (Q6 — which messages work) -->
+      <article class="card">
+        <h3 class="card-h">&ldquo;Quick question&hellip;&rdquo; beats &ldquo;Intro&hellip;&rdquo; almost 3 to 1.</h3>
+        <p class="card-sub">Replies per 100, by the first line of the email.</p>
+        <div class="bars">
+          <div class="brow no-mtg win">
+            <span class="bn"><span class="nm">&ldquo;Quick question about your new sales hire&rdquo;</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="180" height="8" rx="4" fill="var(--ink)"/></svg>
+            <span class="br">5.1%</span>
+          </div>
+          <div class="brow no-mtg">
+            <span class="bn"><span class="nm">&ldquo;Congrats on the new store&rdquo;</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="155" height="8" rx="4" fill="var(--brown-300)"/></svg>
+            <span class="br">4.4%</span>
+          </div>
+          <div class="brow no-mtg">
+            <span class="bn"><span class="nm">&ldquo;Saw you&rsquo;re hiring&rdquo;</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="134" height="8" rx="4" fill="var(--brown-300)"/></svg>
+            <span class="br">3.8%</span>
+          </div>
+          <div class="brow no-mtg lose">
+            <span class="bn"><span class="nm">&ldquo;Intro &mdash; how we help&rdquo;</span></span>
+            <svg width="180" height="10" viewBox="0 0 180 10" aria-hidden="true"><rect x="0" y="1" width="67" height="8" rx="4" fill="var(--red)"/></svg>
+            <span class="br">1.9%</span>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Kill the intro email.</p>
+      </article>
+
+      <!-- Card: who replies (Q4 — job type, company size, industry) -->
+      <article class="card">
+        <h3 class="card-h">Founders at 11&ndash;50-person companies are your buyers.</h3>
+        <div class="card-body">
+          <div class="card-main">
+            <div class="strip">
+              <div class="strip-top"><span class="strip-cap">Job title</span><span class="strip-lead">Founders &amp; CEOs &mdash; 37 of 96</span></div>
+              <svg width="420" height="10" viewBox="0 0 420 10" aria-hidden="true">
+                <rect x="0"     y="0" width="158.8" height="10" rx="2" fill="var(--ink)"/>
+                <rect x="160.8" y="0" width="98.7"  height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="261.5" y="0" width="64.4"  height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="327.9" y="0" width="51.5"  height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="381.4" y="0" width="38.6"  height="10" rx="2" fill="var(--brown-300)"/>
+              </svg>
+              <p class="strip-rest">Sales leaders 23 &middot; Marketing 15 &middot; Operations 12 &middot; Other 9</p>
+            </div>
+            <div class="strip">
+              <div class="strip-top"><span class="strip-cap">Company size</span><span class="strip-lead">11&ndash;50 people &mdash; 52%</span></div>
+              <svg width="420" height="10" viewBox="0 0 420 10" aria-hidden="true">
+                <rect x="0"     y="0" width="215.3" height="10" rx="2" fill="var(--ink)"/>
+                <rect x="217.3" y="0" width="115.9" height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="335.2" y="0" width="62.1"  height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="399.3" y="0" width="20.7"  height="10" rx="2" fill="var(--brown-300)"/>
+              </svg>
+              <p class="strip-rest">1&ndash;10 people 28% &middot; 51&ndash;200 15% &middot; 200+ 5%</p>
+            </div>
+            <div class="strip">
+              <div class="strip-top"><span class="strip-cap">Industry</span><span class="strip-lead">Agencies &mdash; 31%</span></div>
+              <svg width="420" height="10" viewBox="0 0 420 10" aria-hidden="true">
+                <rect x="0"     y="0" width="127.7" height="10" rx="2" fill="var(--ink)"/>
+                <rect x="129.7" y="0" width="111.2" height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="242.9" y="0" width="74.2"  height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="319.1" y="0" width="49.4"  height="10" rx="2" fill="var(--brown-300)"/>
+                <rect x="370.5" y="0" width="49.4"  height="10" rx="2" fill="var(--brown-300)"/>
+              </svg>
+              <p class="strip-rest">SaaS 27% &middot; E-commerce 18% &middot; Logistics 12% &middot; Other 12%</p>
+            </div>
+          </div>
+          <div class="card-rail">
+            <div class="rn">37 of 96</div>
+            <div class="rl">interested replies came from founders &amp; CEOs</div>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Point new campaigns at founders like these.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ══ GROUP 2 — NOT WORKING ════════════════════════════════════════ -->
+  <section class="grp bad">
+    <h2 class="eyebrow">Not working</h2>
+    <div class="cards">
+
+      <!-- Card: the dying campaign (Q3 — the one to pause) -->
+      <article class="card">
+        <h3 class="card-h">&ldquo;Agencies &mdash; ops leaders&rdquo; has stopped working.</h3>
+        <p class="card-sub">Replies per 100 emails, week by week.</p>
+        <div class="card-body">
+          <div class="card-main">
+            <svg width="320" height="92" viewBox="0 0 320 92" role="img" aria-label="Replies per 100 fell from 3.1 four weeks ago to 0.4 this week">
+              <line x1="0" y1="72.5" x2="320" y2="72.5" stroke="var(--line)"/>
+              <polygon points="16,72 16,22.4 110,43.2 204,57.6 298,65.6 298,72" fill="var(--red-bg)"/>
+              <polyline points="16,22.4 110,43.2 204,57.6 298,65.6" fill="none" stroke="var(--red)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="16"  cy="22.4" r="3.2" fill="var(--red)" stroke="#fff" stroke-width="1.5"/>
+              <circle cx="110" cy="43.2" r="3.2" fill="var(--red)" stroke="#fff" stroke-width="1.5"/>
+              <circle cx="204" cy="57.6" r="3.2" fill="var(--red)" stroke="#fff" stroke-width="1.5"/>
+              <circle cx="298" cy="65.6" r="3.2" fill="var(--red)" stroke="#fff" stroke-width="1.5"/>
+              <text class="val" x="16" y="13" text-anchor="start">3.1%</text>
+              <text class="val" x="298" y="55" text-anchor="end">0.4%</text>
+              <text class="lbl" x="16" y="88" text-anchor="start">4 weeks ago</text>
+              <text class="lbl" x="298" y="88" text-anchor="end">this week</text>
+            </svg>
+          </div>
+          <div class="card-rail">
+            <div class="rn bad">16</div>
+            <div class="rl">replies from 4,100 emails &mdash; and 0 meetings</div>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Pause this campaign today.</p>
+      </article>
+
+      <!-- Card: slow answers (Q5 — how fast you answer) -->
+      <article class="card">
+        <h3 class="card-h">Slow answers are costing you meetings.</h3>
+        <div class="card-body">
+          <div class="card-main">
+            <div class="cmp">
+              <div class="cmp-row">
+                <span class="cmp-l">Answered within 1 hour</span>
+                <svg width="150" height="12" viewBox="0 0 150 12" aria-hidden="true"><rect x="0" y="1" width="150" height="10" rx="4" fill="var(--bg-sunken)"/><rect x="0" y="1" width="93" height="10" rx="4" fill="var(--green)"/></svg>
+                <span class="cmp-v">62 in 100 become meetings</span>
+              </div>
+              <div class="cmp-row">
+                <span class="cmp-l">Answered after 4 hours</span>
+                <svg width="150" height="12" viewBox="0 0 150 12" aria-hidden="true"><rect x="0" y="1" width="150" height="10" rx="4" fill="var(--bg-sunken)"/><rect x="0" y="1" width="32" height="10" rx="4" fill="var(--red)"/></svg>
+                <span class="cmp-v">21 in 100 become meetings</span>
+              </div>
+            </div>
+            <p class="card-note">Only 24 of your 96 interested replies got an answer inside an hour.</p>
+          </div>
+          <div class="card-rail">
+            <div class="rn">4&thinsp;h&thinsp;20&thinsp;m</div>
+            <div class="rl">your average time to answer an interested reply</div>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Answer within the hour &mdash; three times more meetings.</p>
+      </article>
+
+      <!-- Card: lead runway (Q2 — do you have enough leads) -->
+      <article class="card">
+        <h3 class="card-h">Fresh leads run out on Aug 14 &mdash; 19 days away.</h3>
+        <div class="card-body">
+          <div class="card-main">
+            <svg width="420" height="44" viewBox="0 0 420 44" role="img" aria-label="19 days of fresh leads left, running out Aug 14">
+              <text class="lbl" x="0" y="12" text-anchor="start">Today &middot; Jul 26</text>
+              <text x="420" y="12" text-anchor="end"><tspan class="val">Aug 14</tspan><tspan class="lbl"> &middot; none left</tspan></text>
+              <rect x="0" y="22" width="420" height="12" rx="6" fill="var(--amber-line)"/>
+              <line x1="22.1"  y1="22" x2="22.1"  y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="44.2"  y1="22" x2="44.2"  y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="66.3"  y1="22" x2="66.3"  y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="88.4"  y1="22" x2="88.4"  y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="110.5" y1="22" x2="110.5" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="132.6" y1="22" x2="132.6" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="154.7" y1="22" x2="154.7" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="176.8" y1="22" x2="176.8" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="198.9" y1="22" x2="198.9" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="221.1" y1="22" x2="221.1" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="243.2" y1="22" x2="243.2" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="265.3" y1="22" x2="265.3" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="287.4" y1="22" x2="287.4" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="309.5" y1="22" x2="309.5" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="331.6" y1="22" x2="331.6" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="353.7" y1="22" x2="353.7" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="375.8" y1="22" x2="375.8" y2="34" stroke="#fff" stroke-width="2"/>
+              <line x1="397.9" y1="22" x2="397.9" y2="34" stroke="#fff" stroke-width="2"/>
+            </svg>
+            <p class="card-note">2,840 fresh leads left, and you use about 150 a day. Refills are ready:
+            1,240 signals found this month (520 hiring &middot; 430 engagement &middot; 290 news)
+            and 6 new campaigns added.</p>
+          </div>
+          <div class="card-rail">
+            <div class="rn">2,840</div>
+            <div class="rl">fresh leads still to contact</div>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Top up your leads this week.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ══ GROUP 3 — DO THIS TODAY ══════════════════════════════════════ -->
+  <section class="grp act">
+    <h2 class="eyebrow">Do this today</h2>
+    <div class="cards">
+
+      <article class="card do-card">
+        <span class="do-n" aria-hidden="true">1</span>
+        <div class="do-t">
+          <h3 class="do-h">Pause &ldquo;Agencies &mdash; ops leaders&rdquo;.</h3>
+          <p class="do-p">Down to 0.4 replies per 100 &mdash; 0 meetings from 4,100 emails.</p>
+        </div>
+        <svg class="do-viz" width="72" height="28" viewBox="0 0 72 28" aria-hidden="true">
+          <rect x="0"  y="4"    width="12" height="22"  rx="2" fill="var(--red)"/>
+          <rect x="18" y="13.2" width="12" height="12.8" rx="2" fill="var(--red)"/>
+          <rect x="36" y="19.6" width="12" height="6.4" rx="2" fill="var(--red)"/>
+          <rect x="54" y="23.2" width="12" height="2.8" rx="1.4" fill="var(--red)"/>
+        </svg>
+        <button class="btn sm primary" type="button">Pause campaign</button>
+      </article>
+
+      <article class="card do-card">
+        <span class="do-n" aria-hidden="true">2</span>
+        <div class="do-t">
+          <h3 class="do-h">Answer interested replies within the hour.</h3>
+          <p class="do-p">Fast answers become meetings 3 times more often &mdash; 62 in 100 vs 21.</p>
+        </div>
+        <svg class="do-viz" width="72" height="28" viewBox="0 0 72 28" aria-hidden="true">
+          <line x1="8" y1="26.5" x2="64" y2="26.5" stroke="var(--line)"/>
+          <rect x="16" y="4"    width="16" height="22"  rx="2" fill="var(--green)"/>
+          <rect x="40" y="18.5" width="16" height="7.5" rx="2" fill="var(--red)"/>
+        </svg>
+        <button class="btn sm" type="button">Open replies</button>
+      </article>
+
+      <article class="card do-card">
+        <span class="do-n" aria-hidden="true">3</span>
+        <div class="do-t">
+          <h3 class="do-h">Top up fresh leads before Aug 14.</h3>
+          <p class="do-p">2,840 left &middot; about 150 used a day &middot; 19 days to go.</p>
+        </div>
+        <svg class="do-viz" width="72" height="28" viewBox="0 0 72 28" aria-hidden="true">
+          <rect x="0" y="10" width="72" height="8" rx="4" fill="var(--amber-line)"/>
+          <line x1="18" y1="10" x2="18" y2="18" stroke="#fff" stroke-width="2"/>
+          <line x1="36" y1="10" x2="36" y2="18" stroke="#fff" stroke-width="2"/>
+          <line x1="54" y1="10" x2="54" y2="18" stroke="#fff" stroke-width="2"/>
+          <line x1="69" y1="6" x2="69" y2="22" stroke="var(--amber)" stroke-width="2"/>
+        </svg>
+        <button class="btn sm" type="button">Add leads</button>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ══ ARE YOUR EMAILS LANDING? ═════════════════════════════════════ -->
+  <section class="grp ask">
+    <h2 class="eyebrow">Are your emails landing?</h2>
+    <div class="cards">
+
+      <article class="card">
+        <h3 class="card-h">Yes &mdash; 96 of every 100 land in the inbox.</h3>
+        <div class="card-body">
+          <div class="card-main">
+            <svg width="632" height="12" viewBox="0 0 632 12" role="img" aria-label="96 of 100 emails land, 4 bounce or vanish">
+              <rect x="0" y="0" width="605" height="12" rx="4" fill="var(--green)"/>
+              <rect x="607" y="0" width="25" height="12" rx="4" fill="var(--red)"/>
+            </svg>
+            <div class="land-leg num">
+              <span class="ok">96 land</span>
+              <span class="no">4 bounce or vanish</span>
+            </div>
+            <div class="facts">
+              <span><strong>41 of 44</strong> inboxes healthy</span>
+              <span><strong>3</strong> domains resting &mdash; back Aug 2</span>
+              <span><strong>1</strong> mailbox not warming</span>
+              <span><strong>0</strong> need reconnecting</span>
+            </div>
+          </div>
+        </div>
+        <p class="take"><span class="tk" aria-hidden="true">&rarr;</span>Mostly healthy &mdash; rest 2 tired domains.</p>
+      </article>
+    </div>
+
+    <!-- ── INBOX & DOMAIN MANAGER — VERBATIM from table-snippet.html.
+         Internals untouched; only this breakout wrapper places it. ──── -->
+    <div class="breakout">
+<div class="dlv-subtab-panel" id="dlv-fold-manager">
+  <div class="dlv-subtab-head"><span class="ictile dlv-headic"><span class="ic8" style="--icon:url('../icons/mail.png')"></span></span>Inbox &amp; domain manager<span class="hint">2 domain(s) need warm-up → warm up · restore · reconnect</span></div>
+  <div class="dlv-fold-body">
+    <div class="dlv-flowchips" role="tablist">
+      <button class="dlv-flowchip on warn" role="tab" aria-selected="true" title="Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest">Below reply floor <span class="dlv-flowchip-n">2</span></button>
+      <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix.">Not warming <span class="dlv-flowchip-n">1</span></button>
+      <button class="dlv-flowchip" role="tab" aria-selected="false" title="Sends held while warming — the cap is 0 so no cold sends go out.">In warm-up <span class="dlv-flowchip-n">3</span></button>
+      <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes whose connection failed — silently sending nothing until reconnected">Needs reconnect <span class="dlv-flowchip-n">0</span></button>
+    </div>
+    <div class="dlv-mb-bar">
+      <span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" title="Reporting window the reply floor is judged over"><option selected>Last 7 days</option><option>Last 14 days</option><option>Last 30 days</option></select>
+      <span class="dlv-mb-count">Jul 19 → Jul 26</span>
+      <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search domain or mailbox…" value="">
+      <button class="btn sm" title="Re-pull manager data from Smartlead in the background">↻ Refresh</button>
+      <button class="btn sm primary" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>
+      <details class="dlv-mgr-adv"><summary>Advanced</summary>
+        <span class="dlv-mb-count">min sent</span><input class="dlv-input" style="width:78px" type="number" value="50" title="Only judge domains with at least this many sends in the window">
+        <span class="dlv-mb-count">flag if reply % under</span><input class="dlv-input" style="width:70px" type="number" step="0.1" value="1" title="Domains replying below this rate get flagged for warm-up">
+      </details>
+      <span class="dlv-mb-count" id="dlv-mgr-count">2 below the 1% floor · min 50 sent · last 7 days · 3 resting or recovering fleet-wide</span>
+      <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"><button class="btn sm">Warm up all (2)</button></span>
+    </div>
+    <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr><th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th></tr></thead><tbody id="dlv-mgr-body">
+      <tr><td><div class="dlv-mb-email">navreo-mail.com <span class="dlv-mb-dom">· 6 mbx</span></div><div class="dlv-mb-dom">Batch 4 · Batch 7</div></td>
+        <td style="text-align:right">412</td>
+        <td style="text-align:right">398</td>
+        <td style="text-align:right;color:var(--red);font-weight:700">0.24% <span class="dlv-mb-dom">(1)</span></td>
+        <td style="text-align:right">0.00%</td>
+        <td style="text-align:right">3.86%</td>
+        <td style="text-align:right"><button class="btn sm" title="Rests all 6 mailboxes on navreo-mail.com">Warm up domain</button></td></tr>
+      <tr><td><div class="dlv-mb-email">getnavreo.io <span class="dlv-mb-dom">· 5 mbx</span></div><div class="dlv-mb-dom">Batch 6</div></td>
+        <td style="text-align:right">388</td>
+        <td style="text-align:right">371</td>
+        <td style="text-align:right;color:var(--red);font-weight:700">0.52% <span class="dlv-mb-dom">(2)</span></td>
+        <td style="text-align:right">0.26%</td>
+        <td style="text-align:right">1.12%</td>
+        <td style="text-align:right"><button class="btn sm" title="Rests all 5 mailboxes on getnavreo.io">Warm up domain</button></td></tr>
+    </tbody></table></div></div>
+    <div style="margin-top:8px"><a class="dlv-dl">View full table</a></div>
+  </div>
+</div>
+    </div>
+    <!-- ── end verbatim manager panel ─────────────────────────────────── -->
+
+  </section>
+
+  <!-- ══ FOOTER ═══════════════════════════════════════════════════════ -->
+  <footer class="foot">
+    <p style="margin:0">That&rsquo;s the briefing. One date to remember:
+    <strong>fresh leads run out Aug 14 &mdash; 19 days from now.</strong></p>
+    <p class="foot-sub">July so far &middot; Updated 8 minutes ago &middot; Mock data</p>
+  </footer>
+
+</main>
+
+</body>
+</html>

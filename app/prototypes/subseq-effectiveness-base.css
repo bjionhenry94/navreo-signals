@@ -1,0 +1,93 @@
+/* Subsequence Effectiveness — shared base for subseq-effectiveness-p1..p3.html
+   Navreo design system (white variant). Self-contained: no API, no production writes.
+   Tokens mirror app/navreo.css; .ah component CSS mirrors app/deliverability.html. */
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap");
+
+:root{
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1;
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF; --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F;   --red-bg:#F7DCD5;   --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#F4F2EF;color:var(--ink);font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:34px 30px 80px}
+
+/* preview toggle — NOT part of the widget, just to compare states */
+.previewbar{display:flex;align-items:center;gap:12px;margin-bottom:26px;flex-wrap:wrap}
+.previewbar .lab{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+.seg{display:inline-flex;background:var(--bg-sunken);border:1px solid var(--line-2);border-radius:999px;padding:3px}
+.seg button{font:600 12.5px var(--font-sans);color:var(--ink-3);background:transparent;border:0;padding:7px 15px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--ink);color:#fff}
+
+/* ── lane 5 shell, from the live analytics page ── */
+.ah .lane{position:relative;padding-left:58px}
+.ah .node{position:absolute;left:1px;top:0;width:27px;height:27px;border-radius:50%;background:var(--card);border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:var(--ink-2)}
+.ah .lane-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px}
+.ah .lane-q{font-size:19px;font-weight:600;letter-spacing:-0.01em;margin:0}
+.ah .lane-tag{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+.ah .cards{display:grid;gap:14px}
+.ah .c233{grid-template-columns:2.1fr 2.5fr 2.7fr}
+.ah .acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.ah .card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.ah .card-kick .soft{text-transform:none;letter-spacing:0;font-weight:500}
+.ah .bignum{font-size:34px;font-weight:600;line-height:1;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
+.ah .bignum.warn{color:var(--amber)} .ah .bignum.bad{color:var(--red)} .ah .bignum.good{color:var(--green)}
+.ah .subline{font-size:12.5px;color:var(--ink-3)}
+.ah .num{font-variant-numeric:tabular-nums}
+.ah .take{margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:13px;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:baseline}
+.ah .take .arr{color:var(--brown-400);font-weight:400;flex-shrink:0}
+/* who's-replying bars */
+.ah .brows{display:flex;flex-direction:column;gap:9px}
+.ah .brow{display:grid;grid-template-columns:118px 1fr 42px;align-items:center;gap:10px;font-size:12.5px}
+.ah .brow .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .brow .lbl.strong{font-weight:600;color:var(--ink)}
+.ah .brow .val{text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.ah .fill.orange{background:var(--orange)}
+
+/* severity tones (shared) */
+.tone-green{color:var(--green)} .bg-green{background:var(--green)}
+.tone-amber{color:var(--amber)} .bg-amber{background:var(--amber)}
+.tone-red{color:var(--red)} .bg-red{background:var(--red)}
+
+/* shared plain-language status chip — one word a 16-yo gets, kills colour-only + "pts" */
+.m5-chip{font:700 10px var(--font-sans);letter-spacing:.03em;text-transform:uppercase;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.c-green{background:var(--green-bg);color:#195C3F} .c-amber{background:var(--amber-bg);color:#6B4A00} .c-red{background:var(--red-bg);color:#861E10}
+
+/* ═══ P1 · twin benchmark meters ═══ */
+.m5-meter+.m5-meter{margin-top:20px}
+.m5-mtop{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.m5-mlab{font-size:13px;font-weight:600;color:var(--ink)}
+.m5-right{display:flex;align-items:center;gap:8px}
+.m5-mval{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.m5-track{position:relative;height:13px;background:var(--bg-sunken);border-radius:7px;overflow:hidden}
+.m5-fill{position:absolute;left:0;top:0;bottom:0;border-radius:7px;transition:width .4s ease}
+.m5-gap{position:absolute;top:0;bottom:0;background:rgba(20,17,14,.06)}
+.m5-tick{position:absolute;top:0;bottom:0;width:3px;background:var(--ink);border-radius:2px}
+.m5-axis{position:relative;height:15px;margin-top:6px}
+.m5-ticklab{position:absolute;top:0;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--ink-2);white-space:nowrap}
+.m5-ticklab::before{content:"";position:absolute;top:-6px;left:50%;width:1px;height:4px;background:var(--ink-3)}
+
+/* ═══ P2 · one verdict + one proof ═══ */
+.m5-herorow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.m5-herolab{font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:-4px}
+.m5-sub2{font-size:12.5px;color:var(--ink-3)}
+.m5-proof{display:flex;align-items:center;gap:9px;margin-top:11px;padding-top:11px;border-top:1px dashed var(--line-2);font-size:13.5px;color:var(--ink-2)}
+.m5-proof b{font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
+
+/* ═══ P3 · gap-to-target scorecard ═══ */
+.m5-scrow{padding:13px 0}
+.m5-scrow+.m5-scrow{border-top:1px solid var(--line)}
+.m5-scline{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.m5-scname{font-size:13px;font-weight:600;color:var(--ink)}
+.m5-scnums{display:flex;align-items:baseline;gap:8px;margin-top:6px}
+.m5-scbig{font-size:27px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.m5-sctarget{font-size:11.5px;color:var(--ink-3)}
+
+@media(max-width:820px){.ah .c233{grid-template-columns:1fr}}

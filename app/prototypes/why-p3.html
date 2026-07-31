@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Why P3 - The chart is the why</title>
+<style>
+  :root {
+    --ink:#14110E; --ink2:#3A332C; --ink3:#6B6055; --white:#FFFFFF; --sunken:#F7F7F6;
+    --orange:#FF4D00; --orange6:#DB4100; --orange1:#FFE4D6; --danger:#C2371F; --ok:#1E7F4F;
+    --border:#ECECEA; --border2:#DDDDDA; --r:12px; --pill:999px;
+    --sans:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+  * { box-sizing:border-box; margin:0; }
+  .btrack,.bfill,.ctrack,.cfill,.ptrack,.pfill,.microbar,.microbar .f,.tick { display:block; }
+  body { font-family:var(--sans); background:var(--sunken); color:var(--ink); padding:28px; }
+  .lab { max-width:860px; margin:0 auto; }
+  .lab-tag { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--orange6); margin-bottom:4px; }
+  .lab-idea { font-size:15px; color:var(--ink2); margin-bottom:22px; }
+  .card { background:var(--white); border:1px solid var(--border); border-radius:var(--r); padding:18px 20px 16px; margin-bottom:18px; }
+  .top { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+  .badge { font-size:11px; font-weight:700; padding:3px 10px; border-radius:var(--pill); }
+  .badge.med { background:#FFF3D6; color:#8A6400; border:1px solid #F0DFAE; }
+  .badge.low { background:var(--sunken); color:var(--ink3); border:1px solid var(--border2); }
+  .owner { font-size:11px; font-weight:600; padding:3px 10px; border-radius:var(--pill); background:var(--sunken); color:var(--ink3); border:1px solid var(--border); }
+  .act { font-size:16.5px; font-weight:700; line-height:1.35; }
+  .sub { font-size:13.5px; color:var(--ink3); margin-top:3px; }
+  .whylbl { font-size:12px; font-weight:700; color:var(--orange6); margin:12px 0 10px; }
+  .btns { display:flex; gap:16px; align-items:center; margin-top:14px; }
+  .cta { background:var(--orange); color:#fff; border:none; font:700 13px var(--sans); padding:9px 16px; border-radius:var(--pill); }
+  .ghost { background:none; border:none; font:600 12.5px var(--sans); color:var(--ink3); }
+
+  .chart { padding:6px 0 0; }
+  .anno { display:inline-block; font-size:12.5px; font-weight:700; background:var(--ink); color:#fff; padding:4px 11px; border-radius:var(--pill); margin-bottom:12px; }
+  .anno.red { background:var(--danger); }
+  .crow { display:grid; grid-template-columns:70px 1fr 100px; gap:8px; align-items:center; font-size:12px; margin:5px 0; }
+  .clab { font-weight:700; color:var(--ink2); }
+  .clab.cut { color:var(--danger); }
+  .ctrack { height:9px; border-radius:5px; background:var(--sunken); overflow:hidden; }
+  .cfill { height:100%; border-radius:5px; background:var(--danger); opacity:.5; }
+  .cfill.orange { background:var(--orange); opacity:.85; }
+  .cnum { color:var(--ink3); text-align:right; font-variant-numeric:tabular-nums; }
+  .cnum b { color:var(--ink); }
+  .cnum b.zero { color:var(--danger); font-size:13px; }
+  .do { font-size:13.5px; font-weight:700; margin-top:10px; }
+  .range { position:relative; height:44px; margin:8px 0 0; }
+  .rline { position:absolute; top:26px; left:0; right:0; height:10px; border-radius:5px; background:linear-gradient(to right, #F3D8D2 0 45%, #DFF0E6 45% 100%); }
+  .rdot { position:absolute; top:22px; width:18px; height:18px; border-radius:50%; background:var(--danger); border:3px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.25); }
+  .rtag { position:absolute; top:0; font-size:11px; font-weight:700; transform:translateX(-50%); }
+  .rcap { display:flex; justify-content:space-between; font-size:11px; color:var(--ink3); margin-top:4px; }
+  .pinbar { position:relative; height:14px; border-radius:7px; background:var(--sunken); margin:26px 0 4px; }
+  .pinbar .pf { height:100%; width:50%; border-radius:7px; background:var(--orange); opacity:.85; }
+  .pinbar .ptag { position:absolute; top:-22px; left:50%; transform:translateX(-50%); font-size:11px; font-weight:700; background:var(--ink); color:#fff; padding:2px 8px; border-radius:var(--pill); white-space:nowrap; }
+  .pinbar .mark { position:absolute; top:-4px; bottom:-4px; left:90%; width:2px; background:var(--ink3); }
+  .pinbar .marktag { position:absolute; top:-22px; left:90%; transform:translateX(-50%); font-size:11px; font-weight:700; color:var(--ink3); }
+</style></head>
+<body><div class="lab">
+<p class="lab-tag">Prototype 3 of 5</p>
+<p class="lab-idea"><b>The chart is the why.</b> No paragraph at all. One annotated picture makes the case by itself.</p>
+<div class="card">
+  <div class="top"><span class="badge med">Medium</span><span class="owner">Yasir</span></div>
+  <p class="act">Drop the CRE vertical or rewrite all three openers, 2,633 Email 1 sends and nothing.</p>
+  <p class="sub">&rarr; 4,229 sends, zero positives at 82% through the list.</p>
+  <div class="whylbl">&#9662; Why?</div>
+  <div class="chart"><span class="anno">&#9679;&nbsp; All four emails: 0 yes</span>
+  <div class="crow"><span class="clab cut">Opener C</span><span class="ctrack"><span class="cfill" style="width:0%"></span></span><span class="cnum"><b class="zero">0 yes</b> / 882</span></div>
+  <div class="crow"><span class="clab cut">Opener B</span><span class="ctrack"><span class="cfill" style="width:0%"></span></span><span class="cnum"><b class="zero">0 yes</b> / 877</span></div>
+  <div class="crow"><span class="clab cut">Opener A</span><span class="ctrack"><span class="cfill" style="width:0%"></span></span><span class="cnum"><b class="zero">0 yes</b> / 874</span></div>
+  <div class="crow"><span class="clab cut">Follow-up</span><span class="ctrack"><span class="cfill" style="width:0%"></span></span><span class="cnum"><b class="zero">0 yes</b> / 1,596</span></div>
+  <p class="do">Rewrite them, or drop CRE.</p></div>
+  <div class="btns"><button class="cta">Copy prompt for Claude</button><button class="ghost">Assign to me</button><button class="ghost">Mark as completed</button><button class="ghost">Dismiss</button></div>
+</div><div class="card">
+  <div class="top"><span class="badge low">Low</span><span class="owner">Lilly</span></div>
+  <p class="act">Hold the refill here, 12,310 leads are only 50% through.</p>
+  <p class="sub">&rarr; 12,310 leads loaded, 50% of the two-email cycle sent.</p>
+  <div class="whylbl">&#9662; Why?</div>
+  <div class="chart">
+  <div class="pinbar"><div class="pf"></div><div class="ptag">You are here &middot; 50%</div><div class="mark"></div><div class="marktag">refill at 90%</div></div>
+  <div class="rcap"><span>0 sends</span><span>24,620 (2 per lead)</span></div>
+  <p class="do">Nothing to do yet.</p></div>
+  <div class="btns"><button class="cta">Copy prompt for Claude</button><button class="ghost">Assign to me</button><button class="ghost">Mark as completed</button><button class="ghost">Dismiss</button></div>
+</div><div class="card">
+  <div class="top"><span class="badge med">Medium</span><span class="owner">Yasir</span></div>
+  <p class="act">Audit the CRE list: 26 replies on 4,229 sends is 0.61%.</p>
+  <p class="sub">&rarr; Emails may not be arriving. Check deliverability before new copy.</p>
+  <div class="whylbl">&#9662; Why?</div>
+  <div class="chart"><span class="anno">&#9679;&nbsp; Replies are in the red zone</span>
+  <div class="range">
+    <span class="rtag" style="left:20%; color:var(--danger)">You &middot; 0.61%</span>
+    <span class="rtag" style="left:72%; color:var(--ok)">Healthy &middot; 1.5%+</span>
+    <div class="rline"></div><div class="rdot" style="left:calc(20% - 9px)"></div></div>
+  <div class="rcap"><span>0%</span><span>3%</span></div>
+  <p class="do">Check inboxes before new copy.</p></div>
+  <div class="btns"><button class="cta">Copy prompt for Claude</button><button class="ghost">Assign to me</button><button class="ghost">Mark as completed</button><button class="ghost">Dismiss</button></div>
+</div>
+</div></body></html>

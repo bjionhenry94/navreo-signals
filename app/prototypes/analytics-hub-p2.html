@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Analytics P2 — The Scoreboard · Navreo</title>
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   P2 "THE SCOREBOARD" — page styles
+   Design tokens below are pasted verbatim from the builder spec.
+═══════════════════════════════════════════════════════════════════════ */
+@font-face { font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight:400; font-style:normal; font-display:swap; }
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --radius:12px; --focus:0 0 0 3px rgba(255,77,0,.32);
+}
+
+/* ── base ───────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:400 14px/1.5 var(--font-sans);letter-spacing:-0.005em;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+[hidden]{display:none!important}
+b,strong{font-weight:600}
+
+/* ── prototype banner ───────────────────────────────────────────────── */
+.proto-banner{font-size:11px;color:var(--ink-3);background:var(--bg-sunken);border-bottom:1px solid var(--line);padding:7px 32px;letter-spacing:.01em}
+
+/* ── layout ─────────────────────────────────────────────────────────── */
+.wrap{max-width:1240px;margin:0 auto;padding:0 32px 72px}
+.section{margin-top:16px}
+
+/* ── page header ────────────────────────────────────────────────────── */
+.page-head{padding:36px 0 24px;display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+h1{font-family:var(--font-display);font-weight:400;letter-spacing:-0.03em;font-size:34px;line-height:1;margin:0}
+.datesub{font-size:12.5px;color:var(--ink-3);margin-top:9px}
+
+/* ── client filter chips (page header, top right) ───────────────────── */
+.client-row{display:flex;gap:6px;align-items:center;padding-bottom:3px}
+.cchip{appearance:none;border:1px solid var(--line-2);background:transparent;color:var(--ink-2);font:600 12.5px var(--font-sans);letter-spacing:-0.005em;padding:7px 15px;border-radius:999px;cursor:pointer}
+.cchip:hover{background:var(--bg-sunken)}
+.cchip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.cchip:focus-visible{outline:none;box-shadow:var(--focus)}
+
+/* ── per-widget date-range control ──────────────────────────────────── */
+.rangeseg{display:inline-flex;gap:2px;align-items:center}
+.rbtn{appearance:none;border:0;background:transparent;color:var(--ink-3);font:600 11px var(--font-sans);padding:4px 9px;border-radius:999px;cursor:pointer}
+.rbtn:hover{color:var(--ink)}
+.rbtn.on{background:var(--bg-sunken);color:var(--ink)}
+.rbtn:focus-visible{outline:none;box-shadow:var(--focus)}
+.head-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0}
+.tick-range{position:absolute;top:11px;right:14px}
+
+/* ── numbered actions (priority is explicit) ────────────────────────── */
+.tk.num::before{display:none}
+.tk-n{flex:0 0 16px;width:16px;height:16px;border-radius:5px;background:var(--ink);color:#fff;font:800 10px/16px var(--font-sans);text-align:center;margin-top:1px}
+.tk.bad .tk-n{background:var(--red)}
+.tk.warn .tk-n{background:var(--amber)}
+
+/* ── verdict teasers — every tab's insight before the click ─────────── */
+.teasers{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:26px}
+.teaser{appearance:none;text-align:left;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:11px 14px;font:400 12.5px/1.45 var(--font-sans);letter-spacing:-0.005em;color:var(--ink-2);cursor:pointer}
+.teaser:hover{border-color:var(--brown-300);background:var(--cream-50)}
+.teaser b{color:var(--ink)}
+.teaser .go{color:var(--orange-700);font-weight:700;white-space:nowrap}
+.teaser:focus-visible{outline:none;box-shadow:var(--focus)}
+
+/* ── fleet-wide note over the manager table ─────────────────────────── */
+.fleet-note{font-size:11px;color:var(--ink-3);margin:0 0 6px}
+
+/* ── takeaway line (the coach voice) ────────────────────────────────── */
+.tk{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;line-height:1.42;font-weight:600;color:var(--ink-2)}
+.tk::before{content:"";flex:0 0 8px;width:8px;height:8px;border-radius:2.5px;margin-top:4px;background:var(--brown-300)}
+.tk.good::before{background:var(--green)}
+.tk.warn::before{background:var(--amber)}
+.tk.bad::before{background:var(--red)}
+.tk.act::before{background:var(--orange)}
+
+/* ── hero stat tiles ────────────────────────────────────────────────── */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px 18px;display:flex;flex-direction:column;min-height:176px}
+.tile .lab{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3)}
+.numrow{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;margin-top:12px}
+.hero-num{font-family:var(--font-display);font-weight:400;letter-spacing:-0.03em;font-size:66px;line-height:.92;color:var(--ink);font-variant-numeric:tabular-nums}
+.hero-num.good{color:var(--green)}
+.hero-num.warn{color:var(--amber)}
+.hero-unit{font-family:var(--font-display);font-weight:400;letter-spacing:-0.02em;font-size:23px;color:var(--ink-3)}
+.chip{align-self:center;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.chip.good{background:var(--green-bg);color:#195C3F}
+.chip.warn{background:var(--amber-bg);color:#6B4A00}
+.tile .sub{font-size:12px;color:var(--ink-3);margin-top:10px;font-variant-numeric:tabular-nums}
+.tile .tk{margin-top:auto;padding-top:13px}
+
+/* ── generic card ───────────────────────────────────────────────────── */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px}
+.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:14px}
+.card-title{font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.card-sub{font-size:12px;color:var(--ink-3);margin-top:3px}
+.card-head .tk{max-width:440px;flex-shrink:0}
+.card-footrow{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:14px;padding-top:13px;border-top:1px solid var(--line);flex-wrap:wrap}
+.quietfacts{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+/* ── hero chart (replies by send day) ───────────────────────────────── */
+.chart-svg{display:block;width:100%;height:auto}
+.svg-num{font:600 12px var(--font-sans);fill:var(--ink-3);font-variant-numeric:tabular-nums}
+.svg-num-hot{font:700 15px var(--font-sans);fill:var(--orange-600);font-variant-numeric:tabular-nums}
+.svg-tag{font:600 12.5px var(--font-sans);fill:var(--orange-700)}
+.svg-day{font:500 11px var(--font-sans);fill:var(--ink-3)}
+.svg-day-hot{font:600 11px var(--font-sans);fill:var(--ink)}
+.chart-note{font-size:12px;color:var(--ink-3);margin-top:10px}
+
+/* ── answer-speed ticker strip ──────────────────────────────────────── */
+.ticker{display:flex;align-items:center;gap:26px;flex-wrap:wrap;position:relative;padding-top:30px}
+.tick-main{min-width:212px}
+.tick-num{font-size:27px;font-weight:700;letter-spacing:-0.015em;font-variant-numeric:tabular-nums;margin-top:6px;line-height:1}
+.tick-sub{font-size:12px;color:var(--ink-3);margin-top:6px}
+.tick-div{width:1px;align-self:stretch;background:var(--line)}
+.tick-bars{flex:1;min-width:360px;display:flex;flex-direction:column;gap:7px}
+.tbar{display:grid;grid-template-columns:160px 150px 1fr;align-items:center;gap:12px;font-size:12.5px}
+.tlab{color:var(--ink-2);font-weight:500}
+.ttrack{height:9px;border-radius:4px;background:var(--bg-sunken);overflow:hidden}
+.tfill{display:block;height:100%;border-radius:4px}
+.tfill.good{background:var(--green)}
+.tfill.bad{background:var(--red)}
+.tval{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.tick-note{font-size:12px;color:var(--ink-3);margin-top:3px}
+.tick-tk{max-width:255px}
+
+/* ── segmented tab control ──────────────────────────────────────────── */
+.seg{display:inline-flex;gap:4px;background:var(--bg-sunken);border:1px solid var(--line);border-radius:999px;padding:4px;margin-top:10px}
+.seg-btn{appearance:none;border:0;background:transparent;color:var(--ink-3);font:600 13px var(--font-sans);letter-spacing:-0.005em;padding:9px 20px;border-radius:999px;cursor:pointer}
+.seg-btn:hover{color:var(--ink)}
+.seg-btn.on{background:var(--ink);color:#fff}
+.seg-btn:focus-visible{outline:none;box-shadow:var(--focus)}
+.panel{margin-top:14px}
+
+/* ── campaigns ranked table ─────────────────────────────────────────── */
+table.ctab{width:100%;border-collapse:collapse;font-size:13px}
+.ctab th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;padding:8px 12px}
+.ctab th.r{text-align:right}
+.ctab td{padding:9px 12px;border-top:1px solid var(--line);vertical-align:middle}
+.ctab td.r{text-align:right;font-variant-numeric:tabular-nums}
+.ctab td.rank{color:var(--brown-400);font-size:11px;font-weight:600;width:26px;padding-right:0}
+.ctab td.cname{font-weight:600;color:var(--ink)}
+.ctab tbody tr:not(.dying):hover td{background:var(--bg-sunken)}
+.ctab tr.dying td{background:rgba(247,220,213,.42)}
+.ratecell{display:inline-flex;align-items:center;justify-content:flex-end;gap:10px}
+.rtrack{flex:0 0 64px;width:64px;height:8px;border-radius:4px;background:var(--bg-sunken);overflow:hidden}
+.rfill{display:block;height:100%;border-radius:4px;background:var(--ink-2)}
+.rfill.bad{background:var(--red)}
+.rate{font-weight:700;font-variant-numeric:tabular-nums;min-width:42px;text-align:right}
+.rate.best{color:#195C3F}
+.rate.bad{color:var(--red)}
+.pill{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.pill.win{background:var(--green-bg);color:#195C3F}
+.pill.new{background:var(--bg-sunken);color:var(--ink-2)}
+.pill.quiet{background:var(--bg-sunken);color:var(--ink-3)}
+.pill.dead{background:var(--red-bg);color:#861E10}
+
+/* ── dying-campaign flag row ────────────────────────────────────────── */
+.flag{display:flex;align-items:center;gap:18px;margin-top:14px;padding:13px 16px;border:1px solid var(--red-line);background:rgba(247,220,213,.35);border-radius:10px;flex-wrap:wrap}
+.flag-text{font-size:12.5px;color:var(--ink-2);flex:1;min-width:280px;font-variant-numeric:tabular-nums}
+.flag-text b{font-weight:600;color:var(--ink)}
+.flag .tk{max-width:300px}
+.flag .btn{margin-left:auto}
+.spark-lab{font:600 11px var(--font-sans);fill:var(--ink-3)}
+.spark-bad{font:700 11px var(--font-sans);fill:var(--red)}
+
+/* ── quiet facts strip (lead engine / answer speed) ─────────────────── */
+.strip{display:flex;align-items:center;gap:10px 26px;flex-wrap:wrap;background:var(--bg-sunken);border:1px solid var(--line);border-radius:var(--radius);padding:13px 18px;margin-top:16px;font-size:12.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.strip b{font-weight:700;color:var(--ink)}
+.strip .tk{margin-left:auto}
+
+/* ── proportion-bar rows (who replies / messages) ───────────────────── */
+.gh{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);margin:0 0 8px}
+.who-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 44px}
+.prow{display:grid;grid-template-columns:148px 1fr 86px;align-items:center;gap:12px;padding:6.5px 0}
+.prow .plab{font-size:12.5px;color:var(--ink-2);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prow.top .plab{color:var(--ink);font-weight:600}
+.ptrack{height:10px;border-radius:4px;background:var(--bg-sunken);overflow:hidden}
+.pfill{display:block;height:100%;border-radius:4px;background:var(--ink-2)}
+.prow.top .pfill{background:var(--orange)}
+.prow.worst .pfill{background:var(--red)}
+.pval{font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);font-weight:700}
+.pval small{font-weight:500;color:var(--ink-3);font-size:11.5px}
+.prow.worst .pval{color:var(--red)}
+.plab .pill{margin-left:8px}
+.msgs .prow{grid-template-columns:380px 1fr 64px}
+.msgs .prow.top .pval{color:var(--orange-600)}
+
+/* ── inbox landing verdict stats ────────────────────────────────────── */
+.ibx{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:4px}
+.ibx-num{font-size:29px;font-weight:700;letter-spacing:-0.02em;line-height:1;font-variant-numeric:tabular-nums}
+.ibx-num .of{font-size:15px;color:var(--ink-3);font-weight:600}
+.ibx-num.good{color:var(--green)}
+.ibx-num.warn{color:var(--amber)}
+.ibx-lab{font-size:12px;color:var(--ink-3);margin-top:6px}
+
+/* ── responsive (must not break at 1200px) ──────────────────────────── */
+@media (max-width:1280px){
+  .hero-num{font-size:56px}
+  .hero-unit{font-size:20px}
+  .prow{grid-template-columns:132px 1fr 80px}
+  .msgs .prow{grid-template-columns:350px 1fr 60px}
+}
+</style>
+
+<!-- ── styles (extracted from <style id="dlv-styles"> + navreo.css) ── -->
+<style>
+.ic8{display:inline-block;width:18px;height:18px;background-color:currentColor;flex-shrink:0;-webkit-mask:var(--icon) center / contain no-repeat;mask:var(--icon) center / contain no-repeat;vertical-align:-3px}
+.ictile{width:36px;height:36px;border-radius:10px;background:var(--bg-sunken);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ictile .ic8{width:18px;height:18px;color:var(--ink-2)}
+.btn{border:1px solid var(--line-2);background:transparent;color:var(--ink);border-radius:999px;padding:8px 16px;font:500 13px var(--font-sans);letter-spacing:-0.005em;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{background:var(--bg-sunken)}
+.btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
+.btn.primary:hover{background:var(--orange-600)}
+.btn.sm{padding:5px 12px;font-size:11.5px}
+.dlv-subtab-panel{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.dlv-subtab-head{display:flex;align-items:center;gap:9px;padding:14px 16px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line)}
+.dlv-subtab-head .hint{font-weight:500;font-size:12px;color:var(--ink-3)}
+.dlv-fold-body{padding:16px}
+.dlv-flowchips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.dlv-flowchip{font-family:var(--font-sans);font-size:13px;font-weight:600;padding:8px 14px;border:1px solid var(--line-2);border-radius:9px;background:var(--card);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.dlv-flowchip:hover{border-color:var(--ink-3)}
+.dlv-flowchip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.dlv-flowchip-n{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--bg-sunken);color:var(--ink-2)}
+.dlv-flowchip.on .dlv-flowchip-n{background:rgba(255,255,255,.18);color:#fff}
+.dlv-flowchip.warn:not(.on) .dlv-flowchip-n{background:var(--red-bg);color:#861E10}
+.dlv-mb-cap{font-size:10.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;align-self:center}
+.dlv-mb-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.dlv-mb-bar select,.dlv-mb-bar input[type=text],.dlv-mb-bar input[type=number]{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-mb-bar input[type=text]{flex:1;min-width:160px}
+.dlv-mb-count{font-size:11.5px;color:var(--ink-3)}
+.dlv-mb-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dlv-mb-scroll{max-height:420px;overflow:auto}
+table.dlv-mb{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dlv-mb th{position:sticky;top:0;background:var(--bg-sunken);text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;padding:9px 11px;z-index:1}
+table.dlv-mb td{padding:8px 11px;border-top:1px solid var(--line);vertical-align:middle}
+table.dlv-mb tr:hover td{background:var(--bg-sunken)}
+.dlv-mb-email{font-weight:600}
+.dlv-mb-dom{font-size:11px;color:var(--ink-3)}
+.dlv-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.dlv-tag.inactive{background:var(--amber-bg);color:#6B4A00}
+.dlv-tag.ok{background:var(--green-bg);color:#195C3F}
+.dlv-mgr-adv{display:inline-flex;align-items:center;gap:7px}
+.dlv-mgr-adv summary{font-size:11.5px;color:var(--ink-3);font-weight:600;cursor:pointer;list-style:none;padding:6px 4px;text-transform:uppercase;letter-spacing:.04em}
+.dlv-mgr-adv summary::-webkit-details-marker{display:none}
+.dlv-mgr-adv[open] summary{color:var(--ink)}
+.dlv-dl{font-size:11.5px;font-weight:600;color:var(--orange-700);text-decoration:none;cursor:pointer}
+.dlv-input{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-select{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+</style>
+</head>
+
+<body>
+<div class="proto-banner">Prototype 2 of 5 — The Scoreboard · mock data · not production</div>
+
+<div class="wrap">
+
+  <!-- ═══ page header ═══════════════════════════════════════════════ -->
+  <header class="page-head">
+    <div>
+      <h1>Analytics</h1>
+      <div class="datesub">Saturday 26 July · updated 8 minutes ago</div>
+    </div>
+    <div class="client-row" role="group" aria-label="Client filter">
+      <button class="cchip on" type="button" data-c="all" aria-pressed="true">All clients</button>
+      <button class="cchip" type="button" data-c="arnic" aria-pressed="false">Arnic</button>
+      <button class="cchip" type="button" data-c="qwintiq" aria-pressed="false">Qwintiq</button>
+    </div>
+  </header>
+
+  <!-- ═══ THE SCOREBOARD — 4 hero tiles ═════════════════════════════ -->
+  <section class="tiles" aria-label="Your month at a glance">
+
+    <article class="tile">
+      <div class="lab">Meetings booked · July</div>
+      <div class="numrow"><span class="hero-num" id="t-meet-num">14</span><span class="chip good" id="t-meet-chip">+5 vs last month</span></div>
+      <div class="sub" id="t-meet-sub">was 9 last month</div>
+      <div class="tk good" id="t-meet-tk">Up 5 on last month — keep doing what you&rsquo;re doing.</div>
+    </article>
+
+    <article class="tile">
+      <div class="lab">Replies</div>
+      <div class="numrow"><span class="hero-num" id="t-rep-num">3</span><span class="hero-unit">in 100</span></div>
+      <div class="sub" id="t-rep-sub">512 replies from 18,420 emails</div>
+      <div class="tk good" id="t-rep-tk">About 3 in 100 reply — healthy, nothing to change.</div>
+    </article>
+
+    <article class="tile">
+      <div class="lab">Leads</div>
+      <div class="numrow"><span class="hero-num warn" id="t-leads-num">19</span><span class="hero-unit">days left</span><span class="chip warn" id="t-leads-chip">out Aug 14</span></div>
+      <div class="sub" id="t-leads-sub">2,840 fresh leads · ~150 used a day</div>
+      <div class="tk warn num"><span class="tk-n n-leads">3</span><span id="t-leads-tk">Add fresh leads before Aug 14.</span></div>
+    </article>
+
+    <article class="tile">
+      <div class="lab">Emails landing</div>
+      <div class="numrow"><span class="hero-num good" id="t-land-num">96</span><span class="hero-unit">of 100</span></div>
+      <div class="sub">41 of 44 inboxes healthy</div>
+      <div class="tk good">Landing fine — rest the 2 tired domains.</div>
+    </article>
+
+  </section>
+
+  <!-- ═══ HERO CHART — replies by send day ══════════════════════════ -->
+  <section class="card section" aria-label="Replies by send day">
+    <div class="card-head">
+      <div>
+        <div class="card-title">Replies by send day</div>
+        <div class="card-sub">All 512 replies this month, by the day the email went out</div>
+      </div>
+      <div class="tk act">Tuesday gets double the replies — send your best stuff Tuesday.</div>
+    </div>
+    <svg class="chart-svg" viewBox="0 0 1160 276" role="img" aria-label="Bar chart of replies by send day: Monday 96, Tuesday 178, Wednesday 98, Thursday 89, Friday 41, weekend 10">
+      <line x1="10" y1="236.5" x2="1150" y2="236.5" stroke="var(--line)" stroke-width="1"></line>
+      <rect x="61"   y="141" width="88" height="95"  rx="4" fill="var(--ink)"></rect>
+      <rect x="251"  y="60"  width="88" height="176" rx="4" fill="var(--orange)"></rect>
+      <rect x="441"  y="139" width="88" height="97"  rx="4" fill="var(--ink)"></rect>
+      <rect x="631"  y="148" width="88" height="88"  rx="4" fill="var(--ink)"></rect>
+      <rect x="821"  y="195" width="88" height="41"  rx="4" fill="var(--ink)"></rect>
+      <rect x="1011" y="226" width="88" height="10"  rx="4" fill="var(--ink)"></rect>
+      <text class="svg-tag"     x="295"  y="28"  text-anchor="middle">Tuesday = double</text>
+      <text class="svg-num-hot" x="295"  y="50"  text-anchor="middle">178</text>
+      <text class="svg-num"     x="105"  y="131" text-anchor="middle">96</text>
+      <text class="svg-num"     x="485"  y="129" text-anchor="middle">98</text>
+      <text class="svg-num"     x="675"  y="138" text-anchor="middle">89</text>
+      <text class="svg-num"     x="865"  y="185" text-anchor="middle">41</text>
+      <text class="svg-num"     x="1055" y="216" text-anchor="middle">10</text>
+      <text class="svg-day"     x="105"  y="261" text-anchor="middle">Monday</text>
+      <text class="svg-day-hot" x="295"  y="261" text-anchor="middle">Tuesday</text>
+      <text class="svg-day"     x="485"  y="261" text-anchor="middle">Wednesday</text>
+      <text class="svg-day"     x="675"  y="261" text-anchor="middle">Thursday</text>
+      <text class="svg-day"     x="865"  y="261" text-anchor="middle">Friday</text>
+      <text class="svg-day"     x="1055" y="261" text-anchor="middle">Sat + Sun</text>
+    </svg>
+    <div class="chart-note">Friday is the waste day — 41 replies.</div>
+  </section>
+
+  <!-- ═══ ANSWER-SPEED TICKER (on the scoreboard, not buried) ═══════ -->
+  <section class="ticker card section" aria-label="How fast you answer">
+    <div class="tick-main">
+      <div class="gh" style="margin:0">How fast you answer</div>
+      <div class="tick-num">4 h 20 m</div>
+      <div class="tick-sub">average time to answer an interested reply</div>
+    </div>
+    <div class="tick-div"></div>
+    <div class="tick-bars">
+      <div class="tbar">
+        <span class="tlab">Answered within 1 hour</span>
+        <span class="ttrack"><span class="tfill good" style="width:62%"></span></span>
+        <span class="tval">62 of 100 become meetings</span>
+      </div>
+      <div class="tbar">
+        <span class="tlab">Answered after 4 hours</span>
+        <span class="ttrack"><span class="tfill bad" style="width:21%"></span></span>
+        <span class="tval">21 of 100 become meetings</span>
+      </div>
+      <div class="tick-note">Only 24 of your 96 interested replies got an answer inside the hour.</div>
+    </div>
+    <div class="tick-div"></div>
+    <div class="tick-tk">
+      <div class="tk warn">Answer within the hour — three times more meetings.</div>
+    </div>
+  </section>
+
+  <!-- ═══ SEGMENTED CONTROL — everything else one click deep ════════ -->
+  <div class="seg" role="tablist" aria-label="More detail">
+    <button class="seg-btn on" id="tab-campaigns" role="tab" aria-selected="true"  aria-controls="panel-campaigns" tabindex="0">Campaigns</button>
+    <button class="seg-btn"    id="tab-who"       role="tab" aria-selected="false" aria-controls="panel-who"       tabindex="-1">Who replies</button>
+    <button class="seg-btn"    id="tab-messages"  role="tab" aria-selected="false" aria-controls="panel-messages"  tabindex="-1">Messages</button>
+    <button class="seg-btn"    id="tab-inboxes"   role="tab" aria-selected="false" aria-controls="panel-inboxes"   tabindex="-1">Inboxes</button>
+  </div>
+
+  <!-- ═══ TAB 1 · CAMPAIGNS (default open) ══════════════════════════ -->
+  <section class="panel" id="panel-campaigns" role="tabpanel" aria-labelledby="tab-campaigns">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">7 live campaigns</div>
+          <div class="card-sub">Ranked by replies per 100 emails · July</div>
+        </div>
+        <div class="tk good">&ldquo;SaaS founders — just hired sales&rdquo; is winning — 6 meetings.</div>
+      </div>
+      <table class="ctab">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Campaign</th>
+            <th>Verdict</th>
+            <th class="r">Sent</th>
+            <th class="r">Replies</th>
+            <th class="r">Reply rate</th>
+            <th class="r">Interested</th>
+            <th class="r">Meetings</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="rank">1</td>
+            <td class="cname">SaaS founders — just hired sales</td>
+            <td><span class="pill win">Winning</span></td>
+            <td class="r">3,900</td>
+            <td class="r">164</td>
+            <td class="r"><span class="ratecell"><span class="rtrack"><span class="rfill" style="width:100%"></span></span><span class="rate best">4.2%</span></span></td>
+            <td class="r">41</td>
+            <td class="r"><b>6</b></td>
+          </tr>
+          <tr>
+            <td class="rank">2</td>
+            <td class="cname">Construction — new permits</td>
+            <td><span class="pill new">New this week</span></td>
+            <td class="r">1,720</td>
+            <td class="r">58</td>
+            <td class="r"><span class="ratecell"><span class="rtrack"><span class="rfill" style="width:81%"></span></span><span class="rate">3.4%</span></span></td>
+            <td class="r">8</td>
+            <td class="r">1</td>
+          </tr>
+          <tr>
+            <td class="rank">3</td>
+            <td class="cname">E-commerce — new store openings</td>
+            <td><span class="pill quiet">Steady</span></td>
+            <td class="r">2,800</td>
+            <td class="r">87</td>
+            <td class="r"><span class="ratecell"><span class="rtrack"><span class="rfill" style="width:74%"></span></span><span class="rate">3.1%</span></span></td>
+            <td class="r">22</td>
+            <td class="r">4</td>
+          </tr>
+          <tr>
+            <td class="rank">4</td>
+            <td class="cname">Logistics — page followers</td>
+            <td><span class="pill quiet">Steady</span></td>
+            <td class="r">2,300</td>
+            <td class="r">62</td>
+            <td class="r"><span class="ratecell"><span class="rtrack"><span class="rfill" style="width:64%"></span></span><span class="rate">2.7%</span></span></td>
+            <td class="r">14</td>
+            <td class="r">2</td>
+          </tr>
+          <tr>
+            <td class="rank">5</td>
+            <td class="cname">Recruiters — engagement</td>
+            <td><span class="pill quiet">Steady</span></td>
+            <td class="r">1,900</td>
+            <td class="r">51</td>
+            <td class="r"><span class="ratecell"><span class="rtrack"><span class="rfill" style="width:64%"></span></span><span class="rate">2.7%</span></span></td>
+            <td class="r">9</td>
+            <td class="r">1</td>
+          </tr>
+          <tr>
+            <td class="rank">6</td>
+            <td class="cname">Fintech — funding news</td>
+            <td><span class="pill quiet">Steady</span></td>
+            <td class="r">1,700</td>
+            <td class="r">44</td>
+            <td class="r"><span class="ratecell"><span class="rtrack"><span class="rfill" style="width:62%"></span></span><span class="rate">2.6%</span></span></td>
+            <td class="r">6</td>
+            <td class="r">1</td>
+          </tr>
+          <tr class="dying">
+            <td class="rank">7</td>
+            <td class="cname">Agencies — ops leaders</td>
+            <td><span class="pill dead">Stopped working</span></td>
+            <td class="r">4,100</td>
+            <td class="r">16</td>
+            <td class="r"><span class="ratecell"><span class="rtrack"><span class="rfill bad" style="width:10%"></span></span><span class="rate bad">0.4%</span></span></td>
+            <td class="r">2</td>
+            <td class="r">0</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="flag">
+        <svg width="190" height="44" viewBox="0 0 190 44" role="img" aria-label="Reply rate over the last 4 weeks: 3.1, 1.8, 0.9, 0.4 percent">
+          <text class="spark-lab" x="2" y="12">3.1%</text>
+          <polyline points="34,8 74,19 114,26 150,31" fill="none" stroke="var(--red)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          <circle cx="150" cy="31" r="3" fill="var(--red)"></circle>
+          <text class="spark-bad" x="160" y="35">0.4%</text>
+        </svg>
+        <div class="flag-text"><b>&ldquo;Agencies — ops leaders&rdquo;</b> slid from 3.1% to 0.4% in four weeks — replies fell every week.</div>
+        <div class="tk bad">This campaign stopped working — pause it.</div>
+        <button class="btn primary" type="button">Pause this campaign</button>
+      </div>
+    </div>
+
+    <div class="strip">
+      <span><b>1,240</b> signals found this month — 520 hiring · 430 engagement · 290 news</span>
+      <span><b>6</b> new campaigns added</span>
+      <span><b>2,840</b> fresh leads left</span>
+      <div class="tk">Plenty of new signals — top up leads before Aug 14.</div>
+    </div>
+  </section>
+
+  <!-- ═══ TAB 2 · WHO REPLIES ═══════════════════════════════════════ -->
+  <section class="panel" id="panel-who" role="tabpanel" aria-labelledby="tab-who" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Who replies</div>
+          <div class="card-sub">The 96 people who said they&rsquo;re interested — by job and company size</div>
+        </div>
+      </div>
+      <div class="who-grid">
+        <div>
+          <div class="gh">Job type</div>
+          <div class="prow top">
+            <span class="plab">Founders &amp; CEOs</span>
+            <span class="ptrack"><span class="pfill" style="width:100%"></span></span>
+            <span class="pval">37 <small>· 39%</small></span>
+          </div>
+          <div class="prow">
+            <span class="plab">Sales leaders</span>
+            <span class="ptrack"><span class="pfill" style="width:62%"></span></span>
+            <span class="pval">23 <small>· 24%</small></span>
+          </div>
+          <div class="prow">
+            <span class="plab">Marketing</span>
+            <span class="ptrack"><span class="pfill" style="width:41%"></span></span>
+            <span class="pval">15 <small>· 16%</small></span>
+          </div>
+          <div class="prow">
+            <span class="plab">Operations</span>
+            <span class="ptrack"><span class="pfill" style="width:32%"></span></span>
+            <span class="pval">12 <small>· 13%</small></span>
+          </div>
+          <div class="prow">
+            <span class="plab">Other</span>
+            <span class="ptrack"><span class="pfill" style="width:24%"></span></span>
+            <span class="pval">9 <small>· 9%</small></span>
+          </div>
+        </div>
+        <div>
+          <div class="gh">Company size</div>
+          <div class="prow top">
+            <span class="plab">11–50 people</span>
+            <span class="ptrack"><span class="pfill" style="width:100%"></span></span>
+            <span class="pval">52%</span>
+          </div>
+          <div class="prow">
+            <span class="plab">1–10 people</span>
+            <span class="ptrack"><span class="pfill" style="width:54%"></span></span>
+            <span class="pval">28%</span>
+          </div>
+          <div class="prow">
+            <span class="plab">51–200 people</span>
+            <span class="ptrack"><span class="pfill" style="width:29%"></span></span>
+            <span class="pval">15%</span>
+          </div>
+          <div class="prow">
+            <span class="plab">200+ people</span>
+            <span class="ptrack"><span class="pfill" style="width:10%"></span></span>
+            <span class="pval">5%</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-footrow">
+        <div class="tk act">Founders at 11–50-person companies are your buyers.</div>
+        <div class="quietfacts">Industries: Agencies 31% · SaaS 27% · E-commerce 18% · Logistics 12% · Other 12%</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ TAB 3 · MESSAGES ══════════════════════════════════════════ -->
+  <section class="panel" id="panel-messages" role="tabpanel" aria-labelledby="tab-messages" hidden>
+    <div class="card msgs">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Which first lines win</div>
+          <div class="card-sub">Replies per 100 emails, by the first line of the email</div>
+        </div>
+      </div>
+      <div class="prow top">
+        <span class="plab">&ldquo;Quick question about your new sales hire&rdquo;<span class="pill win">Winner</span></span>
+        <span class="ptrack"><span class="pfill" style="width:100%"></span></span>
+        <span class="pval">5.1%</span>
+      </div>
+      <div class="prow">
+        <span class="plab">&ldquo;Congrats on the new store&rdquo;</span>
+        <span class="ptrack"><span class="pfill" style="width:86%"></span></span>
+        <span class="pval">4.4%</span>
+      </div>
+      <div class="prow">
+        <span class="plab">&ldquo;Saw you&rsquo;re hiring&rdquo;</span>
+        <span class="ptrack"><span class="pfill" style="width:75%"></span></span>
+        <span class="pval">3.8%</span>
+      </div>
+      <div class="prow worst">
+        <span class="plab">&ldquo;Intro — how we help&rdquo;<span class="pill dead">Kill it</span></span>
+        <span class="ptrack"><span class="pfill" style="width:37%"></span></span>
+        <span class="pval">1.9%</span>
+      </div>
+      <div class="card-footrow">
+        <div class="tk act">&ldquo;Quick question&rdquo; beats &ldquo;Intro&rdquo; almost 3 to 1 — kill the intro email.</div>
+        <div class="quietfacts">Measured across all 18,420 emails this month</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ TAB 4 · INBOXES ═══════════════════════════════════════════ -->
+  <section class="panel" id="panel-inboxes" role="tabpanel" aria-labelledby="tab-inboxes" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Are your emails landing?</div>
+          <div class="card-sub">Where your emails end up, and the domains doing the sending</div>
+        </div>
+        <div class="tk good">Mostly healthy — rest 2 tired domains.</div>
+      </div>
+      <div class="ibx">
+        <div>
+          <div class="ibx-num good">96 <span class="of">of 100</span></div>
+          <div class="ibx-lab">emails land in the inbox — 4 bounce or vanish</div>
+        </div>
+        <div>
+          <div class="ibx-num">41 <span class="of">of 44</span></div>
+          <div class="ibx-lab">inboxes healthy</div>
+        </div>
+        <div>
+          <div class="ibx-num warn">2</div>
+          <div class="ibx-lab">domains need a rest — the two in the table below</div>
+        </div>
+      </div>
+      <div class="quietfacts" style="margin-top:14px">3 domains resting — due back Aug 2 · 1 mailbox not warming · 0 reconnects needed</div>
+    </div>
+
+    <!-- ─── Inbox & domain manager — pasted VERBATIM from table-snippet.html (do not edit) ─── -->
+    <div class="section">
+<!-- ── panel markup (floor flow selected, fixture data) ── -->
+<div class="dlv-subtab-panel" id="dlv-fold-manager">
+  <div class="dlv-subtab-head"><span class="ictile dlv-headic"><span class="ic8" style="--icon:url('../icons/mail.png')"></span></span>Inbox &amp; domain manager<span class="hint">2 domain(s) need warm-up → warm up · restore · reconnect</span></div>
+  <div class="dlv-fold-body">
+    <div class="dlv-flowchips" role="tablist">
+      <button class="dlv-flowchip on warn" role="tab" aria-selected="true" title="Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest">Below reply floor <span class="dlv-flowchip-n">2</span></button>
+      <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix.">Not warming <span class="dlv-flowchip-n">1</span></button>
+      <button class="dlv-flowchip" role="tab" aria-selected="false" title="Sends held while warming — the cap is 0 so no cold sends go out.">In warm-up <span class="dlv-flowchip-n">3</span></button>
+      <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes whose connection failed — silently sending nothing until reconnected">Needs reconnect <span class="dlv-flowchip-n">0</span></button>
+    </div>
+    <div class="dlv-mb-bar">
+      <span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" title="Reporting window the reply floor is judged over"><option selected>Last 7 days</option><option>Last 14 days</option><option>Last 30 days</option></select>
+      <span class="dlv-mb-count">Jul 19 → Jul 26</span>
+      <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search domain or mailbox…" value="">
+      <button class="btn sm" title="Re-pull manager data from Smartlead in the background">↻ Refresh</button>
+      <button class="btn sm primary" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>
+      <details class="dlv-mgr-adv"><summary>Advanced</summary>
+        <span class="dlv-mb-count">min sent</span><input class="dlv-input" style="width:78px" type="number" value="50" title="Only judge domains with at least this many sends in the window">
+        <span class="dlv-mb-count">flag if reply % under</span><input class="dlv-input" style="width:70px" type="number" step="0.1" value="1" title="Domains replying below this rate get flagged for warm-up">
+      </details>
+      <span class="dlv-mb-count" id="dlv-mgr-count">2 below the 1% floor · min 50 sent · last 7 days · 3 resting or recovering fleet-wide</span>
+      <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"><button class="btn sm">Warm up all (2)</button></span>
+    </div>
+    <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr><th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th></tr></thead><tbody id="dlv-mgr-body">
+      <tr><td><div class="dlv-mb-email">navreo-mail.com <span class="dlv-mb-dom">· 6 mbx</span></div><div class="dlv-mb-dom">Batch 4 · Batch 7</div></td>
+        <td style="text-align:right">412</td>
+        <td style="text-align:right">398</td>
+        <td style="text-align:right;color:var(--red);font-weight:700">0.24% <span class="dlv-mb-dom">(1)</span></td>
+        <td style="text-align:right">0.00%</td>
+        <td style="text-align:right">3.86%</td>
+        <td style="text-align:right"><button class="btn sm" title="Rests all 6 mailboxes on navreo-mail.com">Warm up domain</button></td></tr>
+      <tr><td><div class="dlv-mb-email">getnavreo.io <span class="dlv-mb-dom">· 5 mbx</span></div><div class="dlv-mb-dom">Batch 6</div></td>
+        <td style="text-align:right">388</td>
+        <td style="text-align:right">371</td>
+        <td style="text-align:right;color:var(--red);font-weight:700">0.52% <span class="dlv-mb-dom">(2)</span></td>
+        <td style="text-align:right">0.26%</td>
+        <td style="text-align:right">1.12%</td>
+        <td style="text-align:right"><button class="btn sm" title="Rests all 5 mailboxes on getnavreo.io">Warm up domain</button></td></tr>
+    </tbody></table></div></div>
+    <div style="margin-top:8px"><a class="dlv-dl">View full table</a></div>
+  </div>
+</div>
+    </div>
+    <!-- ─── end verbatim block ─── -->
+
+    <div class="strip">
+      <span>You answer interested replies in <b>4 h 20 m</b> on average — only <b>24 of 96</b> got an answer inside the hour.</span>
+      <div class="tk warn">Answer within the hour — three times more meetings.</div>
+    </div>
+  </section>
+
+</div><!-- /.wrap -->
+
+<script>
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.seg-btn'));
+  if (!tabs.length) { return; }
+
+  function activate(tab, moveFocus) {
+    tabs.forEach(function (t) {
+      var on = (t === tab);
+      t.classList.toggle('on', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.setAttribute('tabindex', on ? '0' : '-1');
+      var panel = document.getElementById(t.getAttribute('aria-controls'));
+      if (panel) { panel.hidden = !on; }
+    });
+    if (moveFocus) { tab.focus({ preventScroll: true }); }
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { activate(t, false); });
+    t.addEventListener('keydown', function (e) {
+      var i = tabs.indexOf(t), next = null;
+      if (e.key === 'ArrowRight') { next = tabs[(i + 1) % tabs.length]; }
+      else if (e.key === 'ArrowLeft') { next = tabs[(i - 1 + tabs.length) % tabs.length]; }
+      else if (e.key === 'Home') { next = tabs[0]; }
+      else if (e.key === 'End') { next = tabs[tabs.length - 1]; }
+      if (next) { e.preventDefault(); activate(next, true); }
+    });
+  });
+})();
+</script>
+</body>
+</html>

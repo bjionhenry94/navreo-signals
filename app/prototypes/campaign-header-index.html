@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaign header — 5 prototypes</title>
+<style>
+  @font-face {
+    font-family: "Acid Grotesk";
+    src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  :root {
+    --fg:#14110E; --fg-subtle:#6B6055; --border:#ECECEA; --sunken:#F7F7F6; --orange:#FF4D00;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif; color:var(--fg); background:#fff; padding:48px clamp(24px,6vw,96px); }
+  h1 { font-family:"Acid Grotesk","DM Sans",sans-serif; font-weight:400; font-size:30px; letter-spacing:-0.02em; margin:0 0 4px; }
+  .sub { color:var(--fg-subtle); font-size:14px; margin:0 0 28px; }
+  a.row { display:flex; align-items:baseline; gap:16px; padding:18px 4px; border-top:1px solid var(--border); text-decoration:none; color:inherit; }
+  a.row:last-of-type { border-bottom:1px solid var(--border); }
+  a.row:hover { background:var(--sunken); }
+  .pn { font-family:"Acid Grotesk","DM Sans",sans-serif; font-size:20px; width:44px; flex:none; }
+  .nm { font-weight:600; font-size:15px; width:220px; flex:none; }
+  .bet { color:var(--fg-subtle); font-size:13.5px; }
+  .go { margin-left:auto; color:var(--orange); font-weight:600; font-size:13px; }
+</style>
+</head>
+<body>
+  <h1>Campaign header — 5 prototypes</h1>
+  <p class="sub">Same data, same controls, five different bets on what a founder needs first.</p>
+  <a class="row" href="campaign-header-p1.html"><span class="pn">P1</span><span class="nm">Meetings, then the trail</span><span class="bet">Starts at 49 meetings, then walks back through what it took.</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-header-p2.html"><span class="pn">P2</span><span class="nm">Meetings first</span><span class="bet">One giant number that matters; the rest as quiet rows.</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-header-p3.html"><span class="pn">P3</span><span class="nm">One quiet strip</span><span class="bet">Everything in two slim bands; the campaign list is the star.</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-header-p4.html"><span class="pn">P4</span><span class="nm">Two questions</span><span class="bet">"How's it going?" then "Find a campaign."</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-header-p5.html"><span class="pn">P5</span><span class="nm">The verdict bar</span><span class="bet">A traffic light and a plain-words verdict before any number.</span><span class="go">Open →</span></a>
+</body>
+</html>

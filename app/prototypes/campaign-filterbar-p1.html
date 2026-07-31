@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F1 · No labels</title>
+<style>
+  @font-face {
+    font-family: "Acid Grotesk";
+    src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  :root {
+    color-scheme: light;
+    --nav-ink:#14110E; --nav-orange:#FF4D00;
+    --sunken:#F7F7F6; --track-bg:#EFEDEA;
+    --bg:#FFFFFF; --bg-elevated:#FFFFFF;
+    --fg:var(--nav-ink); --fg-muted:#3A332C; --fg-subtle:#6B6055;
+    --border:#ECECEA; --border-strong:#DDDDDA;
+    --chip-active-bg:var(--nav-ink); --chip-active-fg:#FFFFFF;
+    --font-sans:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --r-pill:999px; --r-lg:12px;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:var(--font-sans); color:var(--fg); background:var(--bg); font-size:15px; letter-spacing:-0.008em; -webkit-font-smoothing:antialiased; }
+  .cockpit { max-width:1180px; margin:0 auto; padding:36px clamp(18px,4vw,48px); }
+
+  .bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .search-wrap { position:relative; flex:0 1 230px; min-width:170px; }
+  .search-input { width:100%; padding:8px 13px 8px 32px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg); font-size:0.85rem; font-family:inherit; }
+  .search-input::placeholder { color:var(--fg-subtle); }
+  .search-icon { position:absolute; left:11px; top:50%; transform:translateY(-50%); width:14px; height:14px; color:var(--fg-subtle); pointer-events:none; }
+  .select { padding:8px 28px 8px 13px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg); font-size:0.82rem; font-weight:600; font-family:inherit; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6055' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 10px center; }
+  .chips { margin-top:10px; display:flex; gap:5px; flex-wrap:wrap; }
+  .chip { display:inline-flex; align-items:center; padding:7px 13px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg-muted); font-size:0.8rem; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .chip.is-active { background:var(--chip-active-bg); border-color:var(--chip-active-bg); color:var(--chip-active-fg); }
+
+  .ghost { margin-top:26px; opacity:0.4; pointer-events:none; }
+  .grow { border:1px solid var(--border); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:10px; display:flex; align-items:center; gap:16px; }
+  .gbar { height:11px; border-radius:6px; background:var(--track-bg); }
+  .gpill { width:74px; height:22px; border-radius:999px; background:var(--track-bg); flex:none; }
+</style>
+</head>
+<body>
+  <div class="cockpit">
+    <nav class="bar" aria-label="Filter campaigns">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" class="search-input" placeholder="Search…" aria-label="Search campaigns">
+      </div>
+      <select class="select" aria-label="Filter by client"><option>All clients</option></select>
+      <select class="select" aria-label="Filter by status"><option>Active (109)</option><option>All statuses</option><option>Paused</option><option>Completed</option><option>Draft</option><option>Archived</option></select>
+    </nav>
+    <div class="chips" role="group" aria-label="Choose a view">
+      <button class="chip is-active" type="button">All Priorities</button>
+      <button class="chip" type="button">Most meetings</button>
+      <button class="chip" type="button">Most positives</button>
+      <button class="chip" type="button">Most efficient</button>
+      <button class="chip" type="button">Most left to send</button>
+      <button class="chip" type="button">Biggest lists</button>
+    </div>
+    <div class="ghost">
+      <div class="grow"><div class="gbar" style="width:220px"></div><div class="gbar" style="width:90px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+      <div class="grow"><div class="gbar" style="width:260px"></div><div class="gbar" style="width:70px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+    </div>
+  </div>
+<script>
+  document.querySelectorAll(".chip").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".chip").forEach(function (x) { x.classList.remove("is-active"); });
+      b.classList.add("is-active");
+    });
+  });
+</script>
+</body>
+</html>

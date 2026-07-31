@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F3 · Just text</title>
+<style>
+  @font-face {
+    font-family: "Acid Grotesk";
+    src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  :root {
+    color-scheme: light;
+    --nav-ink:#14110E; --nav-orange:#FF4D00;
+    --sunken:#F7F7F6; --track-bg:#EFEDEA;
+    --bg:#FFFFFF; --bg-elevated:#FFFFFF;
+    --fg:var(--nav-ink); --fg-muted:#3A332C; --fg-subtle:#6B6055;
+    --border:#ECECEA; --border-strong:#DDDDDA;
+    --font-sans:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --r-lg:12px;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:var(--font-sans); color:var(--fg); background:var(--bg); font-size:15px; letter-spacing:-0.008em; -webkit-font-smoothing:antialiased; }
+  .cockpit { max-width:1180px; margin:0 auto; padding:36px clamp(18px,4vw,48px); }
+
+  .bar { display:flex; align-items:center; gap:22px; flex-wrap:wrap; }
+  .search { display:inline-flex; align-items:center; gap:8px; color:var(--fg-subtle); flex:0 1 220px; min-width:150px; border-bottom:1px solid transparent; padding:6px 0; }
+  .search:focus-within { border-bottom-color:var(--border-strong); }
+  .search svg { width:15px; height:15px; flex:none; }
+  .search input { border:none; outline:none; font:inherit; font-size:0.88rem; color:var(--fg); width:100%; background:none; }
+  .search input::placeholder { color:var(--fg-subtle); }
+  .spacer { flex:1 1 auto; }
+  .tsel { display:inline-flex; align-items:center; gap:5px; font-size:0.85rem; font-weight:600; color:var(--fg-muted); cursor:pointer; padding:6px 0; background:none; border:none; font-family:inherit; }
+  .tsel svg { width:11px; height:11px; color:var(--fg-subtle); }
+  .dot-sep { color:var(--border-strong); }
+
+  .views { margin-top:14px; display:flex; gap:24px; flex-wrap:wrap; }
+  .view { background:none; border:none; font-family:inherit; font-size:0.86rem; font-weight:500; color:var(--fg-subtle); cursor:pointer; padding:4px 0 7px; position:relative; }
+  .view:hover { color:var(--fg-muted); }
+  .view.is-active { color:var(--fg); font-weight:700; }
+  .view.is-active::after { content:""; position:absolute; left:0; right:0; bottom:0; height:2px; background:var(--fg); border-radius:2px; }
+
+  .ghost { margin-top:26px; opacity:0.4; pointer-events:none; }
+  .grow { border:1px solid var(--border); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:10px; display:flex; align-items:center; gap:16px; }
+  .gbar { height:11px; border-radius:6px; background:var(--track-bg); }
+  .gpill { width:74px; height:22px; border-radius:999px; background:var(--track-bg); flex:none; }
+</style>
+</head>
+<body>
+  <div class="cockpit">
+    <nav class="bar" aria-label="Filter campaigns">
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" placeholder="Search" aria-label="Search campaigns">
+      </label>
+      <span class="spacer"></span>
+      <button class="tsel" type="button" aria-label="Filter by client">All clients
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
+      <span class="dot-sep">·</span>
+      <button class="tsel" type="button" aria-label="Filter by status">Active (109)
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
+    </nav>
+    <div class="views" role="group" aria-label="Choose a view">
+      <button class="view is-active" type="button">All Priorities</button>
+      <button class="view" type="button">Most meetings</button>
+      <button class="view" type="button">Most positives</button>
+      <button class="view" type="button">Most efficient</button>
+      <button class="view" type="button">Most left to send</button>
+      <button class="view" type="button">Biggest lists</button>
+    </div>
+    <div class="ghost">
+      <div class="grow"><div class="gbar" style="width:220px"></div><div class="gbar" style="width:90px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+      <div class="grow"><div class="gbar" style="width:260px"></div><div class="gbar" style="width:70px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+    </div>
+  </div>
+<script>
+  document.querySelectorAll(".view").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".view").forEach(function (x) { x.classList.remove("is-active"); });
+      b.classList.add("is-active");
+    });
+  });
+</script>
+</body>
+</html>

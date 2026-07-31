@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glance &mdash; P4: Verdict + next step</title>
+<link rel="stylesheet" href="overview-hub-base.css">
+<style>
+  body { background:var(--sunken); margin:0; padding:44px clamp(18px,5vw,64px); font-family:var(--font-sans); color:var(--fg); }
+  .flag { font-size:0.72rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-subtle); margin:0 auto 16px; max-width:1000px; }
+  .flag b { color:var(--success); }
+  .card { background:var(--bg); border:1px solid var(--border); border-radius:var(--r-xl); padding:30px 34px; max-width:1000px; margin:0 auto; box-shadow:0 1px 2px rgba(20,17,14,0.04); }
+  .ct { display:flex; align-items:baseline; gap:10px; margin:0 0 16px; }
+  .ct h2 { font-family:var(--font-display); font-weight:400; font-size:1.15rem; letter-spacing:-0.01em; margin:0; }
+  .ginfo { display:inline; }
+  .ginfo > summary { list-style:none; cursor:pointer; width:16px; height:16px; border-radius:999px; border:1px solid var(--border-strong); color:var(--fg-subtle); font-size:0.66rem; font-style:italic; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .ginfo > summary::-webkit-details-marker { display:none; }
+  .ginfo[open] { display:block; margin-top:10px; }
+  .ginfo[open] > summary { margin-bottom:6px; }
+  .ginfo p { margin:0; font-size:0.8rem; color:var(--fg-subtle); line-height:1.5; max-width:66ch; }
+  .synced { margin-left:auto; font-size:0.72rem; color:var(--fg-subtle); }
+  .hpill { display:inline-flex; align-items:center; gap:6px; background:var(--success-bg); color:var(--success); font-size:0.78rem; font-weight:700; padding:4px 11px; border-radius:999px; }
+  .hpill::before { content:""; width:7px; height:7px; border-radius:999px; background:var(--success); }
+  .tnum { font-variant-numeric:tabular-nums; }
+  .vline { font-family:var(--font-display); font-weight:400; font-size:clamp(1.7rem,3.6vw,2.2rem); color:var(--success); letter-spacing:-0.02em; line-height:1; margin:12px 0 2px; }
+  .vsub { font-size:1rem; color:var(--fg-muted); margin:0; }
+  .vsub b { color:var(--success); font-weight:700; }
+  .oh { display:flex; gap:20px; align-items:flex-end; }
+  .oh .n { font-family:var(--font-display); font-weight:400; font-size:clamp(3rem,6.6vw,4.2rem); line-height:0.82; letter-spacing:-0.03em; color:var(--success); }
+  .oh .l { display:block; font-size:0.84rem; color:var(--fg-subtle); margin-top:9px; }
+  .oh-arrow { font-family:var(--font-display); font-size:1.8rem; color:var(--success); opacity:0.5; padding-bottom:18px; }
+
+  .g4-next { margin-top:22px; border-radius:var(--r-lg); background:var(--sunken); border-left:4px solid var(--success); padding:16px 20px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  .g4-next .k { font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--success); font-weight:700; margin:0 0 4px; }
+  .g4-next .m { font-family:var(--font-display); font-weight:400; font-size:1.3rem; letter-spacing:-0.02em; margin:0; color:var(--fg); }
+  .g4-prog { min-width:220px; flex:1; }
+  .g4-prog .lab { display:flex; justify-content:space-between; font-size:0.78rem; color:var(--fg-subtle); margin-bottom:7px; }
+  .g4-prog .lab b { color:var(--fg); font-family:var(--font-display); font-weight:400; }
+  .g4-prog .track { height:8px; border-radius:999px; background:var(--track-bg); overflow:hidden; }
+  .g4-prog .track i { display:block; height:100%; width:86.8%; background:var(--success); }
+
+</style>
+</head>
+<body>
+  <p class="flag">Glance redesign &middot; <b>P4</b> &mdash; Verdict + next step</p>
+  <div class="card">
+    <div class="ct"><h2>The campaign at a glance</h2><details class="ginfo"><summary aria-label="about these numbers">i</summary><p>Campaign-to-date, from the daily Smartlead sync (00:13). 14,586 sent, 156 replies (1.07%), 156 bounced (1.1%). Positives = Smartlead's interested mark. Of 7,713 people: 6,692 finished, 442 in progress, 579 unreachable. Contact record 7,713 vs Smartlead's 8,747 is a different counter (platform audience vs contact record), not a contradiction.</p></details><span class="synced">synced 00:13</span></div>
+
+    <span class="hpill">Working</span>
+    <p class="vline">It's working.</p>
+    <p class="vsub"><b>1 yes every 251 emails</b> &mdash; healthy, well under the worry line.</p>
+
+    <div class="oh" style="margin-top:16px">
+      <div><span class="n tnum">58</span><span class="l">said yes</span></div>
+      <span class="oh-arrow">&rarr;</span>
+      <div><span class="n tnum">8</span><span class="l">meetings booked</span></div>
+    </div>
+    <div class="g4-next">
+      <div><p class="k">Do this next</p><p class="m">Line up more leads.</p></div>
+      <div class="g4-prog">
+        <div class="lab"><span><b class="tnum">87%</b> of the list sent</span><span>nearly through</span></div>
+        <div class="track"><i></i></div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

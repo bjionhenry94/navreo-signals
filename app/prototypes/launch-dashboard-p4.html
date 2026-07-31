@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Launching for Navreo — Launch lanes</title>
+<link rel="stylesheet" href="launch-dashboard-base.css">
+<style>
+  /* ===== p4 "Launch lanes" — kanban of the launch, only new layout classes live here.
+     Tokens + atoms (.chip/.card/.btn/.mailframe/.backbtn/.stagedot/.st-*/.breathe/.tick…) come from base.css. */
+  body{overflow-x:hidden}
+  body.locked{overflow:hidden}
+
+  /* ---- lanes rail ---- */
+  .lanes{
+    display:flex; gap:12px; align-items:flex-start;
+    overflow-x:auto; overflow-y:visible;
+    padding:2px 2px 12px; margin:0 -2px;
+    scrollbar-width:thin; scrollbar-color:var(--line-2) transparent;
+  }
+  .lanes::-webkit-scrollbar{height:8px}
+  .lanes::-webkit-scrollbar-thumb{background:var(--line-2); border-radius:999px}
+  .lanes::-webkit-scrollbar-track{background:transparent}
+  .lane{flex:1 1 0; min-width:184px; display:flex; flex-direction:column; gap:9px}
+  .lane-head{display:flex; align-items:center; gap:8px; padding:0 4px}
+  .lane-name{font-size:12.5px; font-weight:500; color:var(--ink-2); letter-spacing:.01em}
+  .lane-step{font-family:var(--font-display); font-size:12px; color:var(--ink-3);
+    border:1px solid var(--line); border-radius:999px; min-width:19px; height:19px;
+    display:inline-flex; align-items:center; justify-content:center; padding:0 4px}
+  .lane-body{background:var(--bg-sunken); border:1px solid var(--line); border-radius:12px;
+    padding:9px; min-height:96px; display:flex; flex-direction:column; gap:9px}
+
+  /* ---- launch card in a lane ---- */
+  .lane-card{
+    text-align:left; width:100%; cursor:pointer; font:inherit;
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:12px 12px 13px; display:flex; flex-direction:column; gap:8px;
+    box-shadow:var(--shadow); transition:border-color .15s ease, transform .12s ease;
+  }
+  .lane-card:hover{border-color:var(--line-2); transform:translateY(-1px)}
+  .lane-card:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+  .lc-name{font-size:14px; font-weight:500; color:var(--ink); line-height:1.25}
+  .lc-cap{font-size:12px; color:var(--ink-3); line-height:1.3}
+  .lc-foot{display:flex; align-items:center; gap:8px; margin-top:1px}
+  .lc-pct{font-size:15px; color:var(--orange)}
+  .lc-bar{height:6px; border-radius:999px; background:var(--bg-sunken);
+    border:1px solid var(--line); overflow:hidden}
+  .lc-bar > i{display:block; height:100%; border-radius:999px; background:var(--orange)}
+
+  /* ---- overlay / stage detail ---- */
+  .ovl{position:fixed; inset:0; z-index:50; display:none}
+  .ovl.open{display:block}
+  .ovl-back{position:absolute; inset:0; background:rgba(20,17,14,.42)}
+  :root[data-theme="dark"] .ovl-back{background:rgba(0,0,0,.6)}
+  .ovl-panel{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:min(560px, calc(100% - 26px)); max-height:min(88vh, 780px);
+    background:var(--bg); border:1px solid var(--line); border-radius:16px;
+    box-shadow:var(--shadow); display:flex; flex-direction:column; overflow:hidden;
+    animation:ovl-in .18s ease-out;
+  }
+  @keyframes ovl-in{from{opacity:0; transform:translate(-50%,-48%) scale(.985)}}
+  .ovl-head{display:flex; align-items:center; gap:12px; padding:13px 16px; border-bottom:1px solid var(--line)}
+  .ovl-title{font-family:var(--font-display); font-size:18px; letter-spacing:-.01em; line-height:1.05}
+  .ovl-tag{margin-left:auto; flex:0 0 auto}
+  .backbtn:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus); border-radius:8px}
+
+  .switcher{display:flex; gap:6px; overflow-x:auto; padding:11px 16px; border-bottom:1px solid var(--line);
+    scrollbar-width:none}
+  .switcher::-webkit-scrollbar{display:none}
+  .seg{display:inline-flex; align-items:center; gap:7px; white-space:nowrap; flex:0 0 auto;
+    border:1px solid var(--line-2); background:var(--card); border-radius:999px;
+    padding:7px 12px; cursor:pointer; font:inherit; font-size:12.5px}
+  .seg .stagelabel{font-size:12.5px}
+  .seg[aria-selected="true"]{border-color:var(--ink); background:var(--bg-sunken)}
+  .seg:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+
+  .pane{padding:17px 16px 20px; overflow-y:auto; min-height:212px}
+
+  /* ---- targeting pane ---- */
+  .tgt-count{font-size:13.5px; color:var(--ink-2); margin-bottom:9px}
+  .tgt-count .num{font-size:22px; color:var(--ink); margin:0 1px}
+  .tgt-bar{height:9px; border-radius:999px; background:var(--bg-sunken);
+    border:1px solid var(--line); overflow:hidden; margin-bottom:16px}
+  .tgt-bar > i{display:block; height:100%; border-radius:999px; background:var(--green); animation:ld-fill .7s ease-out}
+  .tgt-bar.live > i{background:var(--orange); animation:ld-fill .7s ease-out, ld-fillpulse 1.9s ease-in-out .7s infinite}
+  @keyframes ld-fillpulse{0%,100%{opacity:.68} 50%{opacity:1}}
+  .grp + .grp{margin-top:14px}
+  .grp-lbl{font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-3); margin-bottom:8px}
+  .chips{display:flex; flex-wrap:wrap; gap:6px}
+
+  /* ---- copy pane ---- */
+  .mh-lbl{font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-3); margin-right:8px}
+  .mailhead{font-size:13px; color:var(--ink)}
+  .mailbody{line-height:1.55}
+
+  /* ---- icebreaker pane ---- */
+  .ib{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px}
+  .ib-row{background:var(--bg-sunken); border:1px solid var(--line); border-radius:10px;
+    padding:11px 13px; color:var(--ink-2); font-size:13px; line-height:1.5}
+
+  /* ---- checks pane ---- */
+  .checks{list-style:none; margin:0; padding:0}
+  .ck-row{display:flex; align-items:center; gap:11px; padding:11px 2px; border-bottom:1px solid var(--line)}
+  .ck-row:last-child{border-bottom:none}
+  .ck-mark{width:20px; flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center}
+  .ck-label{font-size:13.5px}
+  .ck-pass .ck-label{color:var(--ink-2)}
+  .ck-run  .ck-label{color:var(--ink)}
+  .ck-wait .ck-label{color:var(--ink-3)}
+
+  /* ---- live pane ---- */
+  .live-status{display:flex; align-items:center; gap:9px; color:var(--ink-2); font-size:13.5px; margin-bottom:20px}
+  .switch-wrap{display:flex; align-items:center; gap:12px}
+  .switch{width:48px; height:28px; border-radius:999px; border:1px solid var(--line-2);
+    background:var(--bg-sunken); position:relative; cursor:pointer; padding:0;
+    transition:background .18s ease, border-color .18s ease}
+  .switch-knob{position:absolute; top:2px; left:2px; width:22px; height:22px; border-radius:50%;
+    background:var(--card); box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .18s ease, background .18s ease}
+  .switch[aria-checked="true"]{background:var(--orange); border-color:transparent}
+  .switch[aria-checked="true"] .switch-knob{transform:translateX(20px); background:#fff}
+  .switch:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+  .switch-label{font-size:13.5px; font-weight:500; color:var(--ink-3)}
+  .switch[aria-checked="true"] ~ .switch-label{color:var(--ink)}
+
+  /* ---- queued placeholder ---- */
+  .queued{display:flex; flex-direction:column; align-items:center; justify-content:center; gap:11px;
+    min-height:170px; color:var(--ink-3); font-size:13.5px}
+  .queued .stagedot{width:11px; height:11px}
+
+  @media (prefers-reduced-motion:reduce){
+    .lc-bar>i,.tgt-bar>i,.tgt-bar.live>i{animation:none}
+    .ovl-panel{animation:none}
+    .lane-card:hover{transform:none}
+  }
+  @media (max-width:560px){
+    .ovl-panel{width:100%; height:100%; max-height:100%; left:0; top:0; transform:none;
+      border-radius:0; border:none; animation:none}
+    .ld-app{padding:22px 15px 64px}
+  }
+</style>
+</head>
+<body>
+  <div class="ld-app">
+    <header class="ld-top">
+      <div>
+        <h1 class="ld-title">Launching for Navreo</h1>
+        <div class="ld-sub" id="sub"></div>
+      </div>
+      <div class="ld-tools">
+        <span class="ld-preview">preview data</span>
+        <button class="ld-theme" id="themeBtn" type="button" aria-label="Switch to dark"></button>
+      </div>
+    </header>
+
+    <div class="lanes" id="lanes"></div>
+  </div>
+
+  <!-- stage detail overlay -->
+  <div class="ovl" id="ovl" aria-hidden="true">
+    <div class="ovl-back" id="ovlBack"></div>
+    <div class="ovl-panel" role="dialog" aria-modal="true" aria-labelledby="ovlTitle">
+      <div class="ovl-head">
+        <button class="backbtn" id="backBtn" type="button"></button>
+        <div class="ovl-title" id="ovlTitle"></div>
+        <span class="chip ovl-tag" id="ovlTag"></span>
+      </div>
+      <div class="switcher" id="switcher"></div>
+      <div class="pane" id="pane"></div>
+    </div>
+  </div>
+
+  <script src="launch-dashboard-fixture.js"></script>
+  <script>
+  (function(){
+    "use strict";
+    var LD = window.LD;
+    if(!LD || !Array.isArray(LD.campaigns) || !Array.isArray(LD.stages)){ return; }
+    var STAGES = LD.stages, CAMPS = LD.campaigns;
+
+    /* ---- tiny inline icons (no emoji, no external assets) ---- */
+    var ICON = {
+      check:'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 4.5l-7 7-3.5-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      back:'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      sun:'<svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/><g stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="10" y1="1.8" x2="10" y2="3.9"/><line x1="10" y1="16.1" x2="10" y2="18.2"/><line x1="1.8" y1="10" x2="3.9" y2="10"/><line x1="16.1" y1="10" x2="18.2" y2="10"/><line x1="4.2" y1="4.2" x2="5.7" y2="5.7"/><line x1="14.3" y1="14.3" x2="15.8" y2="15.8"/><line x1="15.8" y1="4.2" x2="14.3" y2="5.7"/><line x1="5.7" y1="14.3" x2="4.2" y2="15.8"/></g></svg>',
+      moon:'<svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M16.8 12.4A7 7 0 017.6 3.2 7 7 0 1016.8 12.4z" fill="currentColor"/></svg>'
+    };
+
+    function esc(v){ v = v==null?'':String(v);
+      return v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+    function fmt(n){ return typeof n==='number' ? n.toLocaleString('en-US') : esc(n); }
+    function clampPct(p){ p = Math.round(Number(p)||0); return Math.max(0, Math.min(100, p)); }
+    function rel(si, active){ return si<active ? 'done' : (si===active ? 'active' : 'queued'); }
+
+    /* ---- header sub ---- */
+    var sub = document.getElementById('sub');
+    if(sub){ sub.textContent = CAMPS.length + ' launches · ' + (LD.updated || ''); }
+
+    /* ---- build the five lanes, drop each campaign in its active lane ---- */
+    var lanesEl = document.getElementById('lanes');
+    STAGES.forEach(function(st, si){
+      var lane = document.createElement('div');
+      lane.className = 'lane';
+      lane.innerHTML =
+        '<div class="lane-head"><span class="lane-step">'+(si+1)+'</span>'+
+        '<span class="lane-name">'+esc(st.label)+'</span></div>'+
+        '<div class="lane-body" data-lane="'+si+'"></div>';
+      lanesEl.appendChild(lane);
+    });
+    var bodies = lanesEl.querySelectorAll('.lane-body');
+
+    CAMPS.forEach(function(c, ci){
+      var ai = clampPct(c.active) > 4 ? 4 : (Number(c.active)||0);
+      var body = bodies[ai];
+      if(!body) return;
+      var pct = clampPct(c.pct);
+      var card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'lane-card';
+      card.innerHTML =
+        '<div class="lc-name">'+esc(c.name)+'</div>'+
+        (c.caption ? '<div class="lc-cap">'+esc(c.caption)+'</div>' : '')+
+        '<div class="lc-foot st-active"><span class="stagedot breathe"></span>'+
+          '<span class="num lc-pct">'+pct+'%</span></div>'+
+        '<div class="lc-bar"><i style="width:'+pct+'%"></i></div>';
+      card.addEventListener('click', function(){ openDetail(ci, ai, card); });
+      body.appendChild(card);
+    });
+
+    /* ---- stage detail overlay ---- */
+    var ovl = document.getElementById('ovl');
+    var ovlBack = document.getElementById('ovlBack');
+    var ovlTitle = document.getElementById('ovlTitle');
+    var ovlTag = document.getElementById('ovlTag');
+    var switcher = document.getElementById('switcher');
+    var pane = document.getElementById('pane');
+    var backBtn = document.getElementById('backBtn');
+    backBtn.innerHTML = ICON.back + '<span>Back</span>';
+
+    var state = { ci:-1, si:0, trigger:null, segs:[] };
+
+    function openDetail(ci, si, trigger){
+      var c = CAMPS[ci]; if(!c) return;
+      state.ci = ci; state.si = si; state.trigger = trigger || null;
+      ovlTitle.textContent = c.name;
+      if(c.tag){ ovlTag.textContent = c.tag; ovlTag.style.display=''; } else { ovlTag.style.display='none'; }
+      buildSwitcher(c);
+      renderPane();
+      ovl.classList.add('open');
+      ovl.setAttribute('aria-hidden','false');
+      document.body.classList.add('locked');
+      backBtn.focus();
+    }
+    function closeDetail(){
+      ovl.classList.remove('open');
+      ovl.setAttribute('aria-hidden','true');
+      document.body.classList.remove('locked');
+      if(state.trigger && state.trigger.focus){ state.trigger.focus(); }
+      state.ci = -1;
+    }
+    function selectStage(si){
+      state.si = si;
+      state.segs.forEach(function(seg, i){ seg.setAttribute('aria-selected', i===si ? 'true':'false'); });
+      renderPane();
+      pane.scrollTop = 0;
+    }
+
+    function buildSwitcher(c){
+      switcher.innerHTML = '';
+      state.segs = [];
+      STAGES.forEach(function(st, si){
+        var r = rel(si, c.active);
+        var seg = document.createElement('button');
+        seg.type = 'button';
+        seg.className = 'seg st-'+r;
+        seg.setAttribute('aria-selected', si===state.si ? 'true':'false');
+        seg.innerHTML = '<span class="stagedot'+(r==='active'?' breathe':'')+'"></span>'+
+          '<span class="stagelabel">'+esc(st.label)+'</span>';
+        seg.addEventListener('click', function(){ selectStage(si); });
+        switcher.appendChild(seg);
+        state.segs.push(seg);
+      });
+    }
+
+    function renderPane(){
+      var c = CAMPS[state.ci]; if(!c){ return; }
+      var si = state.si, key = STAGES[si].key, r = rel(si, c.active), data = c[key];
+      if(r==='queued' || data==null){ pane.innerHTML = paneQueued(); return; }
+      if(key==='targeting'){ pane.innerHTML = paneTargeting(data, r); return; }
+      if(key==='copy'){ pane.innerHTML = paneCopy(data); return; }
+      if(key==='icebreaker'){ pane.innerHTML = paneIce(data); return; }
+      if(key==='checks'){ pane.innerHTML = paneChecks(data); return; }
+      if(key==='live'){ pane.innerHTML = paneLive(data); wireSwitch(); return; }
+      pane.innerHTML = paneQueued();
+    }
+
+    function paneTargeting(t, r){
+      var active = r==='active';
+      var found = Number(t.found)||0, target = Number(t.target)||0;
+      var w = target>0 ? Math.max(0, Math.min(100, Math.round(found/target*100))) : 0;
+      var count = active
+        ? '<span class="num">'+fmt(found)+'</span> of <span class="num">'+fmt(target)+'</span> found'
+        : '<span class="num">'+fmt(target)+'</span> found';
+      var signals = (t.signal||[]).map(function(s){
+        return '<span class="chip'+(active?' on':'')+'">'+esc(s)+'</span>'; }).join('');
+      var roles = (t.roles||[]).map(function(x){
+        return '<span class="chip">'+esc(x)+'</span>'; }).join('');
+      return '<div class="tgt-count">'+count+'</div>'+
+        '<div class="tgt-bar'+(active?' live':'')+'"><i style="width:'+w+'%"></i></div>'+
+        '<div class="grp"><div class="grp-lbl">Signals</div><div class="chips">'+signals+'</div></div>'+
+        '<div class="grp"><div class="grp-lbl">Roles</div><div class="chips">'+roles+'</div></div>';
+    }
+    function paneCopy(cp){
+      return '<div class="mailframe">'+
+        '<div class="mailhead"><span class="mh-lbl">Subject</span>'+esc(cp.subject)+'</div>'+
+        '<div class="mailbody">'+esc(cp.preview)+'</div></div>';
+    }
+    function paneIce(ib){
+      var rows = (ib.samples||[]).map(function(s){ return '<li class="ib-row">'+esc(s)+'</li>'; }).join('');
+      return '<ul class="ib">'+rows+'</ul>';
+    }
+    function paneChecks(ck){
+      var rows = (ck.items||[]).map(function(it){
+        var mark, cls;
+        if(it.state==='pass'){ mark = '<span class="tick">'+ICON.check+'</span>'; cls='ck-pass'; }
+        else if(it.state==='run'){ mark = '<span class="st-active"><span class="stagedot breathe"></span></span>'; cls='ck-run'; }
+        else { mark = '<span class="st-queued"><span class="stagedot"></span></span>'; cls='ck-wait'; }
+        return '<li class="ck-row '+cls+'"><span class="ck-mark">'+mark+'</span>'+
+          '<span class="ck-label">'+esc(it.label)+'</span></li>';
+      }).join('');
+      return '<ul class="checks">'+rows+'</ul>';
+    }
+    function paneLive(lv){
+      return '<div class="live-status"><span class="st-active"><span class="stagedot breathe"></span></span>'+
+        '<span>Paused in Smartlead · '+esc(lv.status)+' · <span class="num">'+fmt(lv.sent)+'</span> sent</span></div>'+
+        '<div class="switch-wrap">'+
+          '<button class="switch" id="liveSwitch" type="button" role="switch" aria-checked="false" aria-label="Switch this launch on">'+
+            '<span class="switch-knob"></span></button>'+
+          '<span class="switch-label" id="switchLabel">Switch on</span></div>';
+    }
+    function paneQueued(){
+      return '<div class="queued"><span class="st-queued"><span class="stagedot"></span></span>'+
+        '<span>Not started yet</span></div>';
+    }
+    function wireSwitch(){
+      var sw = document.getElementById('liveSwitch'), lbl = document.getElementById('switchLabel');
+      if(!sw) return;
+      sw.addEventListener('click', function(){
+        var on = sw.getAttribute('aria-checked')==='true';
+        sw.setAttribute('aria-checked', on ? 'false':'true');   // visual only — nothing sends
+        if(lbl) lbl.textContent = on ? 'Switch on' : 'On';
+      });
+    }
+
+    ovlBack.addEventListener('click', closeDetail);
+    backBtn.addEventListener('click', closeDetail);
+    document.addEventListener('keydown', function(e){
+      if(e.key==='Escape' && ovl.classList.contains('open')){ closeDetail(); }
+    });
+
+    /* ---- theme toggle (default light) ---- */
+    var themeBtn = document.getElementById('themeBtn');
+    function setTheme(t){
+      if(t==='dark'){ document.documentElement.setAttribute('data-theme','dark'); }
+      else { document.documentElement.removeAttribute('data-theme'); }
+      themeBtn.innerHTML = t==='dark' ? ICON.sun : ICON.moon;
+      themeBtn.setAttribute('aria-label', t==='dark' ? 'Switch to light' : 'Switch to dark');
+    }
+    themeBtn.addEventListener('click', function(){
+      var dark = document.documentElement.getAttribute('data-theme')==='dark';
+      setTheme(dark ? 'light' : 'dark');
+    });
+    setTheme('light');
+  })();
+  </script>
+</body>
+</html>

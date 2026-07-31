@@ -8130,6 +8130,70 @@ def _variant_paths(n: int) -> dict:
             "attributed": attributed, "booked": len(seen)}
 
 
+def _variant_paths_debug(n: int) -> dict:
+    """TEMP diagnostic: dump the raw variant bodies (incl deleted), the
+    per-step unique-shingle sizes, and the per-booker match trace so we can see
+    exactly WHERE attribution leaks. Gated behind auth via /api/cockpit/vpdebug."""
+    out = {"campaign_id": n, "steps": [], "bookers": []}
+    try:
+        sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"sequences: {e}"}
+    seqs = sraw if isinstance(sraw, list) else (
+        (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
+
+    def _norm(s):
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", re.sub(r"<[^>]+>", " ", s or "").lower())).strip()
+
+    def _shingles(t):
+        t = re.sub(r"\{\{[^}]*\}\}", " ", t or "")
+        t = re.sub(r"\{[^}]*\}", " ", t)
+        w = _norm(t).split()
+        return set(" ".join(w[i:i + 7]) for i in range(max(0, len(w) - 6)))
+
+    step_full, step_uniq = {}, {}
+    for s in seqs:
+        st = str(s.get("seq_number"))
+        vs, bodies = {}, {}
+        for v in (s.get("sequence_variants") or []):
+            lbl = v.get("variant_label")
+            if lbl is None:
+                continue
+            body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
+            vs[lbl] = _shingles(body)
+            bodies[lbl] = {"deleted": bool(v.get("is_deleted")),
+                           "nshingles": len(vs[lbl]),
+                           "body_norm_head": _norm(body)[:220]}
+        if not vs:
+            continue
+        step_full[st] = vs
+        step_uniq[st] = ({l: vs[l] for l in vs} if len(vs) == 1
+                         else {l: (vs[l] - set().union(*[vs[o] for o in vs if o != l])) for l in vs})
+        out["steps"].append({"step": st,
+                             "variants": {l: {**bodies[l], "nuniq": len(step_uniq[st][l])} for l in vs}})
+
+    def _score(body_norm, shset):
+        return sum(1 for p in shset if p and p in body_norm)
+
+    rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
+                     "&select=id,email,reply_body,rawbody:raw->>email_body"
+                     "&order=replied_at.asc")
+    seen = set()
+    for r in (rows if isinstance(rows, list) else []):
+        em = (r.get("email") or "").strip().lower()
+        if not em or em in seen:
+            continue
+        seen.add(em)
+        body = _norm(r.get("reply_body") or r.get("rawbody") or "")
+        trace = {"email": em, "steps": {}}
+        for st in step_full:
+            uniq_scores = {l: _score(body, step_uniq[st][l]) for l in step_uniq[st]}
+            full_scores = {l: _score(body, step_full[st][l]) for l in step_full[st]}
+            trace["steps"][st] = {"uniq": uniq_scores, "full": full_scores}
+        out["bookers"].append(trace)
+    return out
+
+
 def _cockpit_messaging(cid) -> dict:
     """Per-version table straight from Smartlead variant-statistics (the source
     of truth). Rows with a null seq_variant_id are inline step counters: kept
@@ -17584,6 +17648,13 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(_COCKPIT_SEQCOPY_SWR.get((q.get("id") or [""])[0]))
+        if path == "/api/cockpit/vpdebug":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                return self._json(_variant_paths_debug(int((q.get("id") or ["0"])[0])))
+            except Exception as e:  # noqa: BLE001
+                return self._json({"error": str(e)})
         if path == "/api/cockpit/live-status":
             # LIVE Smartlead status + completion% for the cockpit's visible
             # campaigns (?ids=1,2,3) — fresh /analytics, not the hourly cache.

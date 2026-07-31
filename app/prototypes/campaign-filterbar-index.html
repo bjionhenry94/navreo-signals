@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Filter bar — 5 minimal variations</title>
+<style>
+  @font-face {
+    font-family: "Acid Grotesk";
+    src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  :root { --fg:#14110E; --fg-subtle:#6B6055; --border:#ECECEA; --sunken:#F7F7F6; --orange:#FF4D00; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif; color:var(--fg); background:#fff; padding:48px clamp(24px,6vw,96px); }
+  h1 { font-family:"Acid Grotesk","DM Sans",sans-serif; font-weight:400; font-size:30px; letter-spacing:-0.02em; margin:0 0 4px; }
+  .sub { color:var(--fg-subtle); font-size:14px; margin:0 0 28px; }
+  a.row { display:flex; align-items:baseline; gap:16px; padding:18px 4px; border-top:1px solid var(--border); text-decoration:none; color:inherit; }
+  a.row:last-of-type { border-bottom:1px solid var(--border); }
+  a.row:hover { background:var(--sunken); }
+  .pn { font-family:"Acid Grotesk","DM Sans",sans-serif; font-size:20px; width:44px; flex:none; }
+  .nm { font-weight:600; font-size:15px; width:180px; flex:none; }
+  .bet { color:var(--fg-subtle); font-size:13.5px; }
+  .go { margin-left:auto; color:var(--orange); font-weight:600; font-size:13px; }
+</style>
+</head>
+<body>
+  <h1>Filter bar — 5 minimal variations</h1>
+  <p class="sub">Same controls in all five — search, client, status, six views. Different ways to make them quieter.</p>
+  <a class="row" href="campaign-filterbar-p1.html"><span class="pn">F1</span><span class="nm">No labels</span><span class="bet">CLIENT/STATUS captions cut — the pills say it themselves; everything tighter.</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-filterbar-p2.html"><span class="pn">F2</span><span class="nm">One dropdown</span><span class="bet">The six chips fold into one "All Priorities ▾" pill. One row, done.</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-filterbar-p3.html"><span class="pn">F3</span><span class="nm">Just text</span><span class="bet">No pills at all — plain words, underline marks the active view.</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-filterbar-p4.html"><span class="pn">F4</span><span class="nm">One object</span><span class="bet">Six chips fuse into a single segmented bar with shorter words.</span><span class="go">Open →</span></a>
+  <a class="row" href="campaign-filterbar-p5.html"><span class="pn">F5</span><span class="nm">On demand</span><span class="bet">Search + view up front; Client and Status live behind one "Filters" tap.</span><span class="go">Open →</span></a>
+</body>
+</html>

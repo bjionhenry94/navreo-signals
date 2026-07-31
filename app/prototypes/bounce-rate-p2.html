@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounce rate P2 — One sentence · Navreo</title>
+<link rel="stylesheet" href="bounce-rate-base.css">
+<style>
+  /* P2 — a sentence you can repeat out loud, then a picture that agrees with
+     it. Bet: the founder wants "am I in trouble?" answered in words first. */
+  .verdict{font-family:var(--font-display);font-size:24px;line-height:1.2;letter-spacing:-0.02em;margin:0}
+  .vsub{font-size:12.5px;color:var(--ink-3);line-height:1.5;margin-top:5px}
+
+  .bars{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+  .brow{display:grid;grid-template-columns:112px 1fr 50px;gap:11px;align-items:center}
+  .blab{font-size:11.5px;color:var(--ink-3)}
+  .btrack{height:20px;border-radius:5px;background:var(--bg-sunken);position:relative;overflow:hidden}
+  .btrack i{display:block;height:100%;border-radius:5px;background:var(--brown-300)}
+  .btrack.now i{background:var(--red)} .btrack.now.a i{background:var(--amber)} .btrack.now.g i{background:var(--green)}
+  /* white knockout, so the limit mark survives ON the filled bar — as dark ink
+     it vanished exactly where crossing it is the whole story */
+  .blim{position:absolute;top:0;bottom:0;width:2px;background:#fff;opacity:.9;
+        box-shadow:0 0 0 .5px rgba(20,17,14,.35)}
+  .brow.today .btrack{height:26px}
+  .bval{font-size:13px;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+  .brow.today .bval{font-family:var(--font-display);font-size:21px;letter-spacing:-0.02em}
+  .brow.today .blab{font-weight:600;color:var(--ink)}
+  /* the label lives ABOVE the bars, not inside a track — .btrack needs
+     overflow:hidden for its radius, which was clipping the caption away */
+  .limrow{display:grid;grid-template-columns:112px 1fr 50px;gap:11px;margin-bottom:2px}
+  .limrow .slot{position:relative;height:11px}
+  .limtag{position:absolute;top:0;font-size:9.5px;color:var(--ink-3);transform:translateX(-50%);white-space:nowrap}
+
+  .who{font-size:12.5px;color:var(--ink-2);line-height:1.55;padding-top:11px;border-top:1px solid var(--line)}
+  .who b{font-weight:600}
+</style>
+</head>
+<body>
+
+<section class="ah"><div class="lane">
+  <span class="node num">3</span>
+  <div class="lane-head">
+    <h2 class="lane-q">Are your emails landing?</h2>
+    <span class="lane-tag num">Whole fleet · Emails sent · 1,976,989</span>
+  </div>
+
+  <div class="cards">
+    <div class="ghost">
+      <div class="card-kick">Replies by the day we sent</div>
+      <div class="bars" style="flex:1;flex-direction:row;align-items:flex-end;gap:10px;padding:14px 0 0">
+        <i style="height:62%"></i><i style="height:60%"></i><i style="height:69%"></i><i style="height:68%"></i><i class="hi" style="height:88%"></i><i style="height:3%"></i>
+      </div>
+      <div class="subline">Tue is the quiet day.</div>
+      <div class="take"><span class="arr">→</span><span>Fri gets the most replies — send more on Fri.</span></div>
+      <div class="ghostnote">existing card — shown for context</div>
+    </div>
+
+    <!-- ── the widget ── -->
+    <div class="acard">
+      <div class="card-head">
+        <div class="card-kick">Emails that came back</div>
+        <div class="seg" role="group" aria-label="Date range">
+          <button data-d="7">7d</button><button data-d="14">14d</button><button data-d="30" class="on">30d</button>
+        </div>
+      </div>
+
+      <div>
+        <p class="verdict" id="verdict">–</p>
+        <div class="vsub" id="vsub">&nbsp;</div>
+      </div>
+
+      <div class="limrow">
+        <span></span>
+        <span class="slot"><span class="limtag" id="limtag">2% limit</span></span>
+        <span></span>
+      </div>
+
+      <div class="bars">
+        <div class="brow">
+          <span class="blab" id="lab-prev">A month ago</span>
+          <span class="btrack"><i id="bar-prev"></i><span class="blim" id="lim-prev"></span></span>
+          <span class="bval num" id="val-prev">–</span>
+        </div>
+        <div class="brow">
+          <span class="blab" id="lab-avg">Since then</span>
+          <span class="btrack"><i id="bar-avg"></i><span class="blim" id="lim-avg"></span></span>
+          <span class="bval num" id="val-avg">–</span>
+        </div>
+        <div class="brow today">
+          <span class="blab">Today</span>
+          <span class="btrack now" id="track-now"><i id="bar-now"></i><span class="blim" id="lim-now"></span></span>
+          <span class="bval num" id="val-now">–</span>
+        </div>
+      </div>
+
+      <div class="who" id="who">&nbsp;</div>
+
+      <div class="take"><span class="arr">→</span><span id="take">&nbsp;</span></div>
+    </div>
+  </div>
+
+  <div class="fleetnote">Whole sending fleet — all clients.</div>
+</div></section>
+
+<script src="bounce-rate-data.js"></script>
+<script>
+(function () {
+  var W = 30;
+
+  function render() {
+    var d = BR.delta(W), br = BR.breach(), t = BR.today();
+    var b = BR.band(t);
+
+    var v = document.getElementById("verdict");
+    // The first words a fast reader hits must not be reassuring when they
+    // aren't true. Today decides the verdict, not the window average.
+    v.textContent = t >= BR.LIMIT
+      ? "Over the limit — " + br.run + " days running."
+      : (d.diff > 0.1 ? "Under the limit, but climbing." : "Under the limit.");
+    v.className = "verdict " + b;
+
+    document.getElementById("vsub").textContent = t >= BR.LIMIT
+      ? "Above 2%, Google and Outlook start sending you to spam. Your last " +
+        W + " days average " + d.cur.toFixed(2) + "%."
+      : "Below 2% is the safe zone. Your last " + W + " days average " + d.cur.toFixed(2) + "%.";
+
+    // All three bars share one scale, and today's is the one that crosses the
+    // mark — the earlier version drew only averages, so the picture said
+    // "we're fine" while the sentence said the opposite.
+    var top = Math.max(t, d.cur, d.prev || 0, BR.LIMIT) * 1.2;
+    function set(bar, lim, val, x) {
+      document.getElementById(bar).style.width = (x == null ? 0 : x / top * 100).toFixed(1) + "%";
+      document.getElementById(lim).style.left  = (BR.LIMIT / top * 100).toFixed(1) + "%";
+      document.getElementById(val).textContent = x == null ? "–" : x.toFixed(2) + "%";
+    }
+    document.getElementById("limtag").style.left = (BR.LIMIT / top * 100).toFixed(1) + "%";
+    set("bar-prev", "lim-prev", "val-prev", d.prev);
+    set("bar-avg",  "lim-avg",  "val-avg",  d.cur);
+    set("bar-now",  "lim-now",  "val-now",  t);
+    document.getElementById("track-now").className = "btrack now " + b;
+    document.getElementById("val-now").className = "bval num " + b;
+    // "Previous 30 days" above "Last 30 days" is the same phrase twice to a
+    // normal reader — nobody could tell the two bars apart.
+    document.getElementById("lab-prev").textContent = "The " + W + " days before";
+    document.getElementById("lab-avg").textContent  = "Since then";
+
+    // Group by client: one client owning several bad lists is one phone call,
+    // not four separate jobs.
+    var cl = BR.byClient().filter(function (c) { return c.over > 0; });
+    var total = BR.totalBounced();
+    if (cl.length) {
+      var top1 = cl[0];
+      // Name the campaigns — "turn those 2 off" with no names sent the reader
+      // out of the widget to do the one thing it asked for. And "of it" had no
+      // antecedent, so say what the share is a share of.
+      document.getElementById("who").innerHTML =
+        "<b>" + top1.client + "</b> causes " + Math.round(top1.bounced / total * 100) +
+        "% of all the emails that come back — " + top1.badNames.join(" and ") + "." +
+        (cl.length > 1 ? " Then <b>" + cl[1].client + "</b> at " +
+          Math.round(cl[1].bounced / total * 100) + "%." : "") +
+        " <span style='color:var(--ink-3)'>(each client's whole list history, not the date filter above)</span>";
+      document.getElementById("take").textContent =
+        "Call " + top1.client + " — pause " + top1.badNames.join(" and ") +
+        ", get those addresses re-checked, then switch them back on.";
+    } else {
+      document.getElementById("who").textContent = "No campaign is over 2%.";
+      document.getElementById("take").textContent = "Nothing to do — keep sending.";
+    }
+  }
+
+  document.querySelectorAll(".seg button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".seg button").forEach(function (x) { x.classList.remove("on"); });
+      btn.classList.add("on"); W = +btn.dataset.d; render();
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance P4 — Where it leaks · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;
+  --cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F1E7DB;
+  --line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--red:#C2371F;--red-bg:#F8E1DA;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;--font-mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:860px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.01em;margin:2px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;gap:16px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.verdict{font-family:var(--font-display);font-size:18px;line-height:1.3;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:12px;padding:16px 20px;margin-bottom:18px}
+.verdict b{color:var(--orange-600)}
+.cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.fcol{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 16px}
+.fcol.win{border-color:var(--orange);box-shadow:0 0 0 1px var(--orange)}
+.fhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.fname{font-family:var(--font-display);font-size:17px}
+.fname small{display:block;font-family:var(--font-sans);font-size:11px;color:var(--ink-3);font-weight:600}
+.tag{font-size:9.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px}
+.tag.win{background:var(--orange);color:#fff}.tag.lose{background:var(--red-bg);color:var(--red)}.tag.mid{background:var(--sunken);color:var(--ink-2)}
+.stage{margin-bottom:4px}
+.stage .top-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:4px}
+.stage .sname{color:var(--ink-3);font-weight:600}
+.stage .snum{font-family:var(--font-display);font-size:16px}
+.fbar{height:22px;border-radius:6px;background:var(--sunken);overflow:hidden}
+.fbar i{display:block;height:100%;background:var(--brown-300);border-radius:6px}
+.fcol.win .fbar i{background:var(--orange)}
+.drop{font-size:10.5px;color:var(--ink-3);text-align:right;margin:3px 0 8px}
+.drop b{color:var(--red)}
+.calls{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin-top:14px}
+.calls-h{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:14px}
+.splitbar{height:30px;border-radius:8px;overflow:hidden;display:flex;background:var(--sunken)}
+.splitbar span{display:flex;align-items:center;padding:0 12px;font-size:12.5px;font-weight:700;color:#fff;white-space:nowrap}
+.calls-note{font-size:12px;color:var(--ink-3);margin-top:12px;line-height:1.5}
+.action{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--orange-100);border:1px solid var(--line-2);border-radius:14px;padding:15px 20px;margin-top:14px;flex-wrap:wrap}
+.action .txt{font-size:14px;font-weight:600}.action .txt span{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-top:2px}
+.btn{background:var(--orange);color:#fff;border:none;border-radius:999px;padding:10px 18px;font:600 13px var(--font-sans);cursor:pointer;white-space:nowrap}.btn:hover{background:var(--orange-600)}
+@media(max-width:640px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Version performance</div><div class="h1">Where it leaks</div></div>
+    <div class="chip">Live from Smartlead · since relaunch</div>
+  </div>
+  <div class="verdict" id="verdict"></div>
+  <div class="cols" id="cols"></div>
+  <div class="calls">
+    <div class="calls-h">…and where those replies turn into booked calls</div>
+    <div class="splitbar" id="callsbar"></div>
+    <p class="calls-note" id="callsnote"></p>
+    <div class="action" id="action"></div>
+  </div>
+</div>
+<script>
+const DATA={
+  versions:[
+    {step:1,label:"A",sent:1269,replies:20,positives:14,bounces:28},
+    {step:1,label:"B",sent:1259,replies:18,positives:9,bounces:28},
+    {step:2,label:"inline",inline:true,sent:1757,replies:22,positives:13,bounces:11}
+  ],
+  meetings:{total:16,by_step:{1:13,2:3}}
+};
+const nm=v=>v.inline?"Email 2":("Version "+v.label);
+const role=v=>v.inline?"the follow-up":"an Email 1 opener";
+const perPos=v=>v.positives>0?Math.round(v.sent/v.positives):null;
+const A=DATA.versions[0],B=DATA.versions[1],E2=DATA.versions[2];
+const m1=DATA.meetings.by_step[1]||0,m2=DATA.meetings.by_step[2]||0,mt=DATA.meetings.total;
+const pct=(n,d)=>d?n/d*100:0;
+
+const winner=(A.positives/A.sent>=B.positives/B.sent)?A:B, loser=winner===A?B:A;
+const maxSent=Math.max(...DATA.versions.map(v=>v.sent));
+const maxReplies=Math.max(...DATA.versions.map(v=>v.replies));
+const maxPos=Math.max(...DATA.versions.map(v=>v.positives));
+
+document.getElementById("cols").innerHTML=DATA.versions.map(v=>{
+  const isWin=v===winner, isLose=v===loser;
+  const tag=isWin?'<span class="tag win">winner</span>':isLose?'<span class="tag lose">leaks most</span>':'<span class="tag mid">follow-up</span>';
+  const stages=[
+    {n:"Sent",val:v.sent,w:pct(v.sent,maxSent)},
+    {n:"Replies",val:v.replies,w:pct(v.replies,maxReplies)},
+    {n:"Good replies",val:v.positives,w:pct(v.positives,maxPos)}
+  ];
+  let sh="";
+  stages.forEach((s,i)=>{
+    sh+=`<div class="stage"><div class="top-row"><span class="sname">${s.n}</span><span class="snum">${s.val.toLocaleString()}</span></div>
+      <div class="fbar"><i style="width:${Math.max(4,Math.min(100,s.w))}%"></i></div></div>`;
+    if(i<stages.length-1){const keep=pct(stages[i+1].val,s.val);
+      const lbl=i===0?`${keep.toFixed(1)}% wrote back`:`${Math.round(keep)}% of replies were good ones`;
+      sh+=`<div class="drop">↓ ${lbl}</div>`;}
+  });
+  sh+=`<div class="drop" style="text-align:left;color:var(--ink-2);font-weight:600">1 good reply per ${perPos(v)} sent</div>`;
+  return `<div class="fcol ${isWin?'win':''}"><div class="fhead"><div class="fname">${nm(v)}<small>${role(v)} · ${v.sent.toLocaleString()} sent</small></div>${tag}</div>${sh}</div>`;
+}).join("");
+
+const w1=Math.max(14,pct(m1,mt)),w2=Math.max(14,pct(m2,mt));
+document.getElementById("callsbar").innerHTML=
+  `<span style="width:${w1}%;background:var(--orange)">Email 1 · ${m1} calls</span>`+
+  `<span style="width:${w2}%;background:var(--brown-300);color:var(--ink)">Email 2 · ${m2} calls</span>`;
+document.getElementById("callsnote").innerHTML=
+  `A booked call sits on the email that got the reply, not the opener — so Email 1's <b>${m1}</b> calls come from A and B together, and we don't split them by guess. Between the two openers, pick the one whose funnel leaks least: <b>Version ${winner.label}</b> keeps more replies alive all the way to a good reply.`;
+document.getElementById("verdict").innerHTML=
+  `<b>Version ${winner.label}'s</b> funnel leaks the least — it turns sends into good replies far better than ${loser.label}. Most of your calls (${m1} of ${mt}) drop out of <b>Email 1</b>.`;
+document.getElementById("action").innerHTML=
+  `<div class="txt">Retire ${loser.label}; send more ${winner.label}.<span>${winner.label} = 1 good reply per ${perPos(winner)} · ${loser.label} = 1 per ${perPos(loser)}.</span></div><button class="btn">Do this</button>`;
+</script>
+</body>
+</html>

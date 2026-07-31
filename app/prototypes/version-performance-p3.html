@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance P3 — Effort dials · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;
+  --cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F1E7DB;
+  --line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--red:#C2371F;--red-bg:#F8E1DA;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;--font-mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:840px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.01em;margin:2px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;gap:16px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.verdict{font-family:var(--font-display);font-size:18px;line-height:1.3;background:var(--ink);color:var(--cream);border-radius:14px;padding:18px 22px;margin-bottom:18px}
+.verdict b{color:#FFB98F}
+.section-h{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:0 0 4px}
+.section-sub{font-size:13px;color:var(--ink-3);margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:14px}
+.dials{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.dial{flex:1;min-width:150px;text-align:center;padding:8px 6px;border-radius:14px}
+.dial.win{background:var(--orange-100)}
+.ring{position:relative;width:132px;height:132px;margin:0 auto 12px}
+.ring svg{transform:rotate(-90deg)}
+.ring .mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ring .num{font-family:var(--font-display);font-size:30px;line-height:1;letter-spacing:-.01em}
+.ring .unit{font-size:10.5px;color:var(--ink-3);font-weight:600;margin-top:3px;text-transform:uppercase;letter-spacing:.05em}
+.dname{font-family:var(--font-display);font-size:17px}
+.dmeta{font-size:12px;color:var(--ink-3);margin-top:2px}
+.badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:2px 9px;border-radius:999px;margin-top:8px}
+.badge.win{background:var(--orange);color:#fff}
+.badge.mid{background:var(--sunken);color:var(--ink-2)}
+.badge.lose{background:var(--red-bg);color:var(--red)}
+.legend{text-align:center;font-size:12.5px;color:var(--ink-3);margin-top:18px}
+.legend b{color:var(--ink-2)}
+.action{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--orange-100);border:1px solid var(--line-2);border-radius:14px;padding:16px 20px;margin-top:6px;flex-wrap:wrap}
+.action .txt{font-size:14px;font-weight:600}.action .txt span{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-top:2px}
+.btn{background:var(--orange);color:#fff;border:none;border-radius:999px;padding:10px 18px;font:600 13px var(--font-sans);cursor:pointer;white-space:nowrap}.btn:hover{background:var(--orange-600)}
+details{margin-top:8px;border-top:1px solid var(--line);padding-top:12px}
+summary{font-size:12.5px;color:var(--ink-3);cursor:pointer;font-weight:600;list-style:none}summary::-webkit-details-marker{display:none}summary::before{content:"›";margin-right:7px;display:inline-block}details[open] summary::before{transform:rotate(90deg)}
+details p{font-size:12.5px;color:var(--ink-3);margin-top:9px;line-height:1.55}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Version performance</div><div class="h1">Effort per win</div></div>
+    <div class="chip">Live from Smartlead · since relaunch</div>
+  </div>
+  <div class="verdict" id="verdict"></div>
+
+  <div class="card">
+    <div class="section-h">How many emails to earn ONE good reply</div>
+    <div class="section-sub">Fuller ring = fewer emails needed = the version working hardest for you.</div>
+    <div class="dials" id="posDials"></div>
+    <div class="legend" id="posLegend"></div>
+  </div>
+
+  <div class="card">
+    <div class="section-h">How many emails to book ONE call</div>
+    <div class="section-sub">By the email that got the reply — calls can't be pinned to a single opener, so this is per email step.</div>
+    <div class="dials" id="mtgDials"></div>
+    <div class="action" id="action"></div>
+    <details><summary>How the rings are drawn &amp; what we don't split</summary><p id="why"></p></details>
+  </div>
+</div>
+<script>
+const DATA={
+  versions:[
+    {step:1,label:"A",sent:1269,replies:20,positives:14,bounces:28},
+    {step:1,label:"B",sent:1259,replies:18,positives:9,bounces:28},
+    {step:2,label:"inline",inline:true,sent:1757,replies:22,positives:13,bounces:11}
+  ],
+  meetings:{total:16,by_step:{1:13,2:3}}
+};
+const FLOOR=300;
+const nm=v=>v.inline?"Email 2":("Version "+v.label);
+const perPos=v=>v.positives>0?Math.round(v.sent/v.positives):null;
+const A=DATA.versions[0],B=DATA.versions[1],E2=DATA.versions[2];
+const m1=DATA.meetings.by_step[1]||0,m2=DATA.meetings.by_step[2]||0,mt=DATA.meetings.total;
+const e1sent=A.sent+B.sent;
+
+function ring(fill,color){
+  const R=58,C=2*Math.PI*R,off=C*(1-fill);
+  return `<svg width="132" height="132" viewBox="0 0 132 132">
+    <circle cx="66" cy="66" r="${R}" fill="none" stroke="var(--sunken)" stroke-width="13"/>
+    <circle cx="66" cy="66" r="${R}" fill="none" stroke="${color}" stroke-width="13" stroke-linecap="round"
+      stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"/></svg>`;
+}
+// positives dials — fill = bestPerPos / thisPerPos
+const items=DATA.versions.map(v=>({name:nm(v),per:perPos(v),early:v.sent<FLOOR}));
+const best=Math.min(...items.filter(i=>!i.early).map(i=>i.per));
+const worst=Math.max(...items.filter(i=>!i.early).map(i=>i.per));
+document.getElementById("posDials").innerHTML=items.map(i=>{
+  const fill=i.early?0:best/i.per, isWin=i.per===best, isLose=i.per===worst;
+  const col=isWin?"var(--orange)":isLose?"var(--brown-300)":"var(--ink-2)";
+  const badge=i.early?'<span class="badge lose">too early</span>':isWin?'<span class="badge win">most efficient</span>':isLose?'<span class="badge lose">most emails needed</span>':'<span class="badge mid">middle</span>';
+  return `<div class="dial ${isWin?'win':''}"><div class="ring">${ring(fill,col)}
+    <div class="mid"><div class="num">${i.early?'–':i.per}</div><div class="unit">emails / reply</div></div></div>
+    <div class="dname">${i.name}</div><div class="dmeta">1 good reply per ${i.early?'—':i.per} sent</div>${badge}</div>`;
+}).join("");
+document.getElementById("posLegend").innerHTML=`<b>Version A</b> gets there in ${best} emails — the tightest of the three. The worst needs ${worst}, so A is up to ${(worst/best).toFixed(1)}× cheaper per good reply.`;
+
+// meetings dials (by step)
+const steps=[{name:"Email 1",per:Math.round(e1sent/m1),n:m1,sent:e1sent},{name:"Email 2",per:Math.round(E2.sent/m2),n:m2,sent:E2.sent}];
+const sbest=Math.min(...steps.map(s=>s.per));
+document.getElementById("mtgDials").innerHTML=steps.map(s=>{
+  const fill=sbest/s.per,isWin=s.per===sbest;
+  const col=isWin?"var(--orange)":"var(--brown-300)";
+  return `<div class="dial ${isWin?'win':''}"><div class="ring">${ring(fill,col)}
+    <div class="mid"><div class="num">${s.per}</div><div class="unit">emails / call</div></div></div>
+    <div class="dname">${s.name}</div><div class="dmeta">${s.n} calls from ${s.sent.toLocaleString()} sent</div>
+    ${isWin?'<span class="badge win">cheapest calls</span>':'<span class="badge mid">pricier</span>'}</div>`;
+}).join("");
+
+const winner=(A.positives/A.sent>=B.positives/B.sent)?A:B,loser=winner===A?B:A;
+document.getElementById("verdict").innerHTML=`<b>Version ${winner.label}</b> works hardest for the least — one good reply every ${perPos(winner)} emails, vs ${perPos(loser)} for ${loser.label}. And <b>Email 1</b> books calls ${Math.round((E2.sent/m2)/(e1sent/m1)*10)/10}× cheaper than Email 2.`;
+document.getElementById("action").innerHTML=`<div class="txt">Move ${loser.label}'s budget onto ${winner.label}.<span>Cheaper good replies feed the step that already books most of your calls.</span></div><button class="btn">Do this</button>`;
+document.getElementById("why").textContent=`A full ring = the cheapest version (fewest emails per win); every other ring is drawn relative to it, so the gaps are the real cost difference. Numbers are Smartlead's own since the sequence was last saved. Calls sit on the email that got the reply — Smartlead can't attribute a booking to a single opener, so the calls dial is per email step, and Email 1's ${m1} calls are never split between A and B.`;
+</script>
+</body>
+</html>

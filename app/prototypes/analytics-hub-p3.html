@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics P3 — The Funnel · Navreo</title>
+
+<!-- ── design tokens (verbatim from builder spec) ── -->
+<style>
+@font-face { font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight:400; font-style:normal; font-display:swap; }
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --radius:12px; --focus:0 0 0 3px rgba(255,77,0,.32);
+}
+</style>
+
+<!-- ── Inbox & domain manager styles — VERBATIM from production. Do not modify. ── -->
+<style>
+.ic8{display:inline-block;width:18px;height:18px;background-color:currentColor;flex-shrink:0;-webkit-mask:var(--icon) center / contain no-repeat;mask:var(--icon) center / contain no-repeat;vertical-align:-3px}
+.ictile{width:36px;height:36px;border-radius:10px;background:var(--bg-sunken);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ictile .ic8{width:18px;height:18px;color:var(--ink-2)}
+.btn{border:1px solid var(--line-2);background:transparent;color:var(--ink);border-radius:999px;padding:8px 16px;font:500 13px var(--font-sans);letter-spacing:-0.005em;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{background:var(--bg-sunken)}
+.btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
+.btn.primary:hover{background:var(--orange-600)}
+.btn.sm{padding:5px 12px;font-size:11.5px}
+.dlv-subtab-panel{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.dlv-subtab-head{display:flex;align-items:center;gap:9px;padding:14px 16px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line)}
+.dlv-subtab-head .hint{font-weight:500;font-size:12px;color:var(--ink-3)}
+.dlv-fold-body{padding:16px}
+.dlv-flowchips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.dlv-flowchip{font-family:var(--font-sans);font-size:13px;font-weight:600;padding:8px 14px;border:1px solid var(--line-2);border-radius:9px;background:var(--card);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.dlv-flowchip:hover{border-color:var(--ink-3)}
+.dlv-flowchip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.dlv-flowchip-n{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--bg-sunken);color:var(--ink-2)}
+.dlv-flowchip.on .dlv-flowchip-n{background:rgba(255,255,255,.18);color:#fff}
+.dlv-flowchip.warn:not(.on) .dlv-flowchip-n{background:var(--red-bg);color:#861E10}
+.dlv-mb-cap{font-size:10.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;align-self:center}
+.dlv-mb-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.dlv-mb-bar select,.dlv-mb-bar input[type=text],.dlv-mb-bar input[type=number]{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-mb-bar input[type=text]{flex:1;min-width:160px}
+.dlv-mb-count{font-size:11.5px;color:var(--ink-3)}
+.dlv-mb-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dlv-mb-scroll{max-height:420px;overflow:auto}
+table.dlv-mb{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dlv-mb th{position:sticky;top:0;background:var(--bg-sunken);text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;padding:9px 11px;z-index:1}
+table.dlv-mb td{padding:8px 11px;border-top:1px solid var(--line);vertical-align:middle}
+table.dlv-mb tr:hover td{background:var(--bg-sunken)}
+.dlv-mb-email{font-weight:600}
+.dlv-mb-dom{font-size:11px;color:var(--ink-3)}
+.dlv-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.dlv-tag.inactive{background:var(--amber-bg);color:#6B4A00}
+.dlv-tag.ok{background:var(--green-bg);color:#195C3F}
+.dlv-mgr-adv{display:inline-flex;align-items:center;gap:7px}
+.dlv-mgr-adv summary{font-size:11.5px;color:var(--ink-3);font-weight:600;cursor:pointer;list-style:none;padding:6px 4px;text-transform:uppercase;letter-spacing:.04em}
+.dlv-mgr-adv summary::-webkit-details-marker{display:none}
+.dlv-mgr-adv[open] summary{color:var(--ink)}
+.dlv-dl{font-size:11.5px;font-weight:600;color:var(--orange-700);text-decoration:none;cursor:pointer}
+.dlv-input{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-select{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+</style>
+
+<!-- ── page styles ── -->
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--ink);font:400 14px/1.5 var(--font-sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:inherit}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:none;box-shadow:var(--focus);border-radius:8px}
+.num{font-variant-numeric:tabular-nums}
+
+.proto-banner{font-size:11px;color:var(--ink-3);background:var(--bg-sunken);border-bottom:1px solid var(--line);padding:7px 28px;letter-spacing:.02em}
+
+.wrap{max-width:1240px;margin:0 auto;padding:0 32px 72px}
+
+/* ── page header: slim verdict line + client filter ── */
+.pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:36px 0 24px}
+h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
+.verdict{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
+.pagehead-right{display:flex;flex-direction:column;align-items:flex-end;gap:11px}
+.dateline{text-align:right;font-size:13px;color:var(--ink-3);line-height:1.6}
+.dateline b{font-weight:600;color:var(--ink-2)}
+.chips{display:flex;gap:8px}
+.chip{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;padding:7px 14px;border:1px solid var(--line-2);border-radius:999px;background:var(--card);color:var(--ink-2);cursor:pointer}
+.chip:hover{border-color:var(--ink-3)}
+.chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+
+/* ── hero cards (day-by-day graph · funnel) ── */
+.hero{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 28px 18px}
+.hero .subline{margin-top:4px}
+.hero .take{margin-top:12px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.kicker{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+
+/* per-widget date range control */
+.seg{display:inline-flex;gap:3px;flex-shrink:0}
+.seg button{font:600 11px/1 var(--font-sans);color:var(--ink-3);background:transparent;border:0;padding:4px 9px;border-radius:999px;cursor:pointer;letter-spacing:.01em}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--bg-sunken);color:var(--ink)}
+
+/* trend legend chips — the show/hide toggles */
+.lchips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 6px}
+.lchip{display:inline-flex;align-items:center;gap:7px;font:500 12px var(--font-sans);color:var(--ink);background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:6px 12px;cursor:pointer}
+.lchip:hover{border-color:var(--ink-3)}
+.lchip .sw{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.lchip b{font-weight:700}
+.lchip:not(.on){color:var(--ink-3)}
+.lchip:not(.on) .sw{filter:grayscale(1);opacity:.45}
+svg.trend{display:block;width:100%;height:auto;cursor:crosshair}
+.trend text{font-family:var(--font-sans)}
+.trendwrap{position:relative}
+.charttip{position:absolute;top:0;left:0;pointer-events:none;background:var(--card);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;font-size:11.5px;line-height:1.6;color:var(--ink-2);white-space:nowrap;z-index:5}
+.charttip b{display:block;font-size:11px;color:var(--ink);margin-bottom:2px}
+.charttip .row{display:flex;align-items:center;gap:6px}
+.charttip .row i{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.charttip .row .v{margin-left:auto;font-weight:600;color:var(--ink);padding-left:12px;font-variant-numeric:tabular-nums}
+
+/* ── the funnel (question 1) ── */
+svg.funnel{display:block;width:100%;height:auto}
+.funnel text{font-family:var(--font-sans)}
+.fnum{font-family:var(--font-display);font-size:26px;letter-spacing:-0.03em;fill:var(--ink);font-variant-numeric:tabular-nums}
+.fslab{fill:var(--ink);transition:y .45s ease,height .45s ease}
+a.fstage{cursor:pointer;text-decoration:none}
+a.fstage:hover .fslab{fill:var(--ink-2)}
+a.fstage:hover .fnum{fill:var(--ink-2)}
+.fribbon{fill:var(--cream-50);stroke:var(--line-2);stroke-width:1;transition:d .45s ease}
+.fribbon.leak{fill:var(--orange-100);stroke:var(--orange)}
+.frate{font-size:11.5px;fill:var(--ink-3)}
+.frate.leak{fill:var(--orange-700);font-weight:600}
+.fpill-r{fill:var(--orange)}
+.fpill-t{font-size:10px;font-weight:700;letter-spacing:.08em;fill:var(--cream)}
+.fleakline{stroke:var(--orange);stroke-width:1}
+.fnum,.frate{transition:opacity .17s ease}
+.funnel.swap .fnum,.funnel.swap .frate{opacity:0}
+
+/* fuel card — feeds the funnel, not a stage */
+.hero-flow{display:grid;grid-template-columns:264px 1fr;gap:8px 28px;align-items:center}
+.fuelcard{grid-row:1/3;align-self:center;display:block;text-decoration:none;background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:10px;padding:16px 18px}
+.fuelcard:hover{border-color:var(--amber)}
+.fuel-kick{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--amber)}
+.fuel-num{font-family:var(--font-display);font-size:38px;line-height:1.15;letter-spacing:-0.03em;color:var(--ink);margin-top:5px}
+.fuel-sub{font-size:12.5px;color:var(--ink-2);margin-top:2px}
+.fuel-sub b{font-weight:700;color:var(--amber)}
+.fuel-meter{height:6px;border-radius:3px;background:rgba(255,255,255,.72);margin:12px 0 9px;overflow:hidden}
+.fuel-meter i{display:block;height:100%;border-radius:3px;background:var(--amber);transition:width .45s ease}
+.fuel-out{font-size:12px;font-weight:600;color:var(--amber)}
+
+/* stage strip under the funnel */
+.stagestrip{grid-column:2;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);padding-top:12px}
+.stagecell{text-align:center;text-decoration:none;padding:2px 8px}
+.scname{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
+.scstat{margin-top:5px;font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:6px}
+.stagecell:hover .scstat{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot.amber{background:var(--amber)} .dot.green{background:var(--green)}
+.dot.red{background:var(--red)} .dot.mute{background:var(--brown-300)}
+
+/* the leak bar — the one orange moment, tied to the leak ribbon */
+.leakbar{margin-top:16px;background:var(--orange-100);border-radius:10px;padding:13px 18px;display:flex;align-items:center;gap:24px}
+.leakbar .lk-left{flex:1;min-width:0}
+.leak-head{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--orange-700)}
+.leak-body{margin-top:3px;font-size:13px;color:var(--ink-2)}
+.leak-fix{font-size:14px;font-weight:700;color:var(--orange-700);white-space:nowrap}
+
+/* ── lanes ── */
+.lanes{position:relative;margin-top:34px;display:flex;flex-direction:column;gap:36px}
+.lane{position:relative;padding-left:58px;scroll-margin-top:24px}
+.lane::before{content:"";position:absolute;left:14px;top:32px;bottom:-36px;width:1px;background:var(--line-2)}
+.lane:last-child::before{display:none}
+.node{position:absolute;left:1px;top:0;width:27px;height:27px;border-radius:50%;background:var(--card);border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:var(--ink-2)}
+.lane:target .node{border-color:var(--orange);color:var(--orange-600)}
+.lane-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px}
+.lane-q{font-size:19px;font-weight:600;letter-spacing:-0.01em}
+.lane-tag{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+
+.cards{display:grid;gap:14px}
+.c3{grid-template-columns:repeat(3,1fr)}
+.c23{grid-template-columns:2fr 3fr}
+.c32{grid-template-columns:3fr 2fr}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.bignum{font-size:34px;font-weight:600;line-height:1;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
+.bignum.warn{color:var(--amber)}
+.bignum small{font-size:15px;font-weight:500;letter-spacing:0;color:var(--ink-3)}
+.subline{font-size:12.5px;color:var(--ink-3)}
+.take{margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:13px;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:baseline}
+.take .arr{color:var(--brown-400);font-weight:400;flex-shrink:0}
+.take.side{margin:0;padding:0;border:0}
+.fleetnote{font-size:11px;color:var(--ink-3);margin:0 0 6px}
+
+.pill{display:inline-flex;align-items:center;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;letter-spacing:.02em}
+.pill.green{background:var(--green-bg);color:var(--green)}
+.pill.amber{background:var(--amber-bg);color:var(--amber)}
+.pill.red{background:var(--red-bg);color:var(--red)}
+.pill.mute{background:var(--bg-sunken);color:var(--ink-3)}
+
+/* mini bar rows */
+.brows{display:flex;flex-direction:column;gap:9px}
+.brow{display:grid;grid-template-columns:118px 1fr 42px;align-items:center;gap:10px;font-size:12.5px}
+.brow .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brow .lbl.strong{font-weight:600;color:var(--ink)}
+.brow .val{text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.fill.orange{background:var(--orange)}
+
+/* landing split bar */
+.split{display:flex;gap:2px;height:12px}
+.split .g{background:var(--green);border-radius:4px 2px 2px 4px;transition:flex-grow .35s ease}
+.split .r{background:var(--red);border-radius:2px 4px 4px 2px;transition:flex-grow .35s ease}
+.splitlbl{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-3);margin-top:6px}
+.splitlbl b{font-weight:600;color:var(--ink)}
+
+/* campaign ranking */
+.rank{display:flex;flex-direction:column}
+.rrow{display:grid;grid-template-columns:20px minmax(250px,286px) 1fr 46px 62px 58px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.rrow .idx{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.rname{font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;min-width:0}
+.rname .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rsub{font-size:11px;color:var(--ink-3);font-weight:400;margin-top:1px}
+.rrate,.rint,.rmtg{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.rint,.rmtg{color:var(--ink-2)}
+.rrate.bad{color:var(--red)}
+.rbar{height:8px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.rbar.bad{background:var(--red)}
+
+/* dying campaign strip */
+.dying{margin-top:4px;background:var(--red-bg);border-radius:9px;padding:11px 14px;display:flex;align-items:center;gap:16px}
+.dying .dcol{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.dying .dtxt{font-size:12.5px;color:var(--ink-2)}
+.dying .dfixrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dying .dfix{font-size:13px;font-weight:700;color:var(--red)}
+.dying .btn{background:var(--card);flex-shrink:0}
+
+/* openers */
+.orows{display:flex;flex-direction:column;gap:13px;flex:1;justify-content:space-evenly}
+.orow .otop{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;margin-bottom:5px}
+.orow .oq{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orow .oq.win{font-weight:600;color:var(--ink)}
+.orow .ov{font-weight:600;font-variant-numeric:tabular-nums}
+.orow .ov.bad{color:var(--red)}
+
+/* meetings lane */
+.meet{flex-direction:row;align-items:center;gap:36px}
+.meet .mleft{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.mcompare{display:flex;gap:22px;align-items:flex-end}
+.mcol{display:flex;flex-direction:column;align-items:center;gap:6px}
+.mcol .mv{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.mcol .mb{width:46px;border-radius:4px;transition:height .35s ease}
+.mcol .mb.past{background:var(--brown-300)}
+.mcol .mb.now{background:var(--ink)}
+.mcol .ml{font-size:11px;color:var(--ink-3)}
+.meet .take.side{max-width:300px;margin-left:auto}
+
+footer{margin-top:44px;text-align:center;font-size:11px;color:var(--ink-3)}
+
+/* Local shim only: the manager panel's mail icon loads via a CSS mask, which
+   Chrome fetches in CORS mode — blocked when the page is opened as file://.
+   Mirror the SAME icon as a data URI so it renders everywhere, offline included.
+   The verbatim panel styles + markup above are untouched. */
+#dlv-fold-manager .dlv-subtab-head .ic8{--icon:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEMUlEQVR42u2ayW4TQRCGv4knEEAsgYAE3AhiCXBhEVzhwvoMLGf2LbwA3FjyBhxYngAU9gdgP8GJ5QZIYBICIcFmmgPVUqnVM+PYYxuHLimynZnuqfrrr6qunoYgQYIECRIkSJAgQf5Lieq81oligrun4OUImD+NWGCAUR8LYo/hRox/DiyQ31EHGx4BI8BG+Yw0EHEGA/qAudOEAXGaE+OMQRVBKo0BUQckOat7JQuZrPwQOaGhjf4FfADmAV1A0mKD7TO/AUuBGR7DXTumBIAPkN/yYANUgavAkHyfLZ+tovQ4UAJOAIOK5on8v6Gq0AuUxdAEmAB+KsMTFR63gZVtoHw/cEvpkYhuRnSdUHqWxabc0PUBYIBPkkX1A6vCCAOMAcfVPN2KekX9dav5jwn1jehQdRyySXQ2RQEwAsySa4fltwVBJ8t7wBoVo10FxbqdZzVwVz2voowfBY7KfT1Kx0IAKAOL1PVVwLCjiAXim8OGuMFYt3JULWZc4O8IOLqEl4sGoFfRmxrYcB9YWycb9P1rhVlpXj/ihF6e/g0DEDkKZrFhrA42xCmxXsnwutUnahUAPmXz2DDgAFiU1+MG9G8YAHLYoDP0mNRsn+L6+3HldV1p0rxOuwHwGXFEDHbrswEeAOs8RgwIU4xnvTGmMnxeD9M2AKxBVrllwCsx4rd82rD4DpxU404owCrOmNfAcmV4VxP1b3gCa/xs4LzkhESxwFe+hj2xXlXjRoELwJwa+5e2AKCpvAl44uQB4/xVnLBwgfGNfQpszimrbQFAe+SMrMHdslUBTktZG3eu6/vGJQmekm7TnWcCOJuzodMyACLVda0QOmsPW++9BLapZ6wHHnq8/QjYoO7bCrxQTHCX3P1yX8nRqSUA6HZzP/A5ZbEyJPnAeit2Et934IeTEPV9s4ArKYusL8ABNa7UCgB0V9YHXEuJ6/fAPkc5nS90T7E6ZYGkx+yVOX354rroorvQpgDQp+7bDbxNUegmsCRvL84xsJShj2XDYuBGCuDvgD1qXOHN0IigOwO4nELJMnCoBqPSqkeW6LkOCv19IXcFmCm6FtoOfwK2A49TktJ9tStUatKGqc49/Z5ewSbdJ8AO4GNRACTApFqWatQngXMF9f717BEMig4+NkwWtSWWpCD9DNhS8O5PPfsFm2WR5GNmoQDoiS/JtlOrvJ7HhpnARcdRhQJgJ3oL7Jpiomu2aB12Am88ejcEgO3Jr8u+YF55o00veS0bFsn6RO9FNFwFvirKN2PLu+it8x7RObcK1Bq/icTZRNZ7tn9AKionJFMtKXlZd6Faxpp/+LyD4e9r/a6iANDnBUwHHfyYX8vZhjjHcP16fAF03OEIk3c+KAuA7rxXyx3AgsjzMqcmAIz0+NVpdETGhENS4ahcOCgZJEiQIEGCBAkSJEiQv/IHQixSDMJMnuIAAAAASUVORK5CYII=") !important}
+
+@media (max-width:1280px){
+  .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 58px 54px}
+  .brow{grid-template-columns:104px 1fr 42px}
+  .hero-flow{grid-template-columns:240px 1fr}
+}
+</style>
+</head>
+<body>
+
+<div class="proto-banner">Prototype 3 of 5 — The Funnel · mock data · not production</div>
+
+<div class="wrap">
+
+  <!-- ══ page header — slim verdict line ══ -->
+  <header class="pagehead">
+    <div>
+      <h1>Analytics</h1>
+      <div class="verdict">The pipeline works — one leak: answer interested replies faster.</div>
+    </div>
+    <div class="pagehead-right">
+      <div class="dateline"><b>Saturday 26 July</b><br>updated 8 minutes ago</div>
+      <div class="chips" role="group" aria-label="Client filter">
+        <button class="chip on" data-client="all" aria-pressed="true">All clients</button>
+        <button class="chip" data-client="arnic" aria-pressed="false">Arnic</button>
+        <button class="chip" data-client="qwintiq" aria-pressed="false">Qwintiq</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══ HERO — your month, day by day ══ -->
+  <section class="hero" aria-label="Your month, day by day">
+    <div class="card-head">
+      <span class="kicker">Your month · day by day</span>
+      <div class="seg" role="group" aria-label="Date range" data-seg="trend">
+        <button data-range="7d" aria-pressed="false">7d</button>
+        <button data-range="14d" aria-pressed="false">14d</button>
+        <button class="on" data-range="30d" aria-pressed="true">30d</button>
+      </div>
+    </div>
+    <div class="lchips" role="group" aria-label="Show or hide lines">
+      <button class="lchip" id="lc-sent" data-s="sent" aria-pressed="false"><i class="sw" style="background:#1971C2"></i>Sent <b class="num" id="lt-sent">18,420</b></button>
+      <button class="lchip on" id="lc-replies" data-s="replies" aria-pressed="true"><i class="sw" style="background:#7048E8"></i>Replies <b class="num" id="lt-replies">512</b></button>
+      <button class="lchip on" id="lc-interested" data-s="interested" aria-pressed="true"><i class="sw" style="background:#2F9E44"></i>Interested <b class="num" id="lt-interested">96</b></button>
+      <button class="lchip on" id="lc-meetings" data-s="meetings" aria-pressed="true"><i class="sw" style="background:#E8590C"></i>Meetings <b class="num" id="lt-meetings">14</b></button>
+      <button class="lchip on" id="lc-bounces" data-s="bounces" aria-pressed="true"><i class="sw" style="background:#E03131"></i>Bounces <b class="num" id="lt-bounces">280</b></button>
+    </div>
+    <div class="trendwrap">
+      <svg class="trend" id="trend-svg" viewBox="0 0 1120 264" role="img"
+           aria-label="Daily counts this month for replies, interested replies, meetings and bounces. Tuesdays spike about double; replies dip in the final ten days as Agencies — ops leaders fades."><line x1="40" y1="238.0" x2="1032" y2="238.0" stroke="var(--line)" stroke-width="1"/><text x="33" y="241.5" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">0</text><line x1="40" y1="181.5" x2="1032" y2="181.5" stroke="var(--line)" stroke-width="1"/><text x="33" y="185.0" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">15</text><line x1="40" y1="125.0" x2="1032" y2="125.0" stroke="var(--line)" stroke-width="1"/><text x="33" y="128.5" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">30</text><line x1="40" y1="68.5" x2="1032" y2="68.5" stroke="var(--line)" stroke-width="1"/><text x="33" y="72.0" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">45</text><line x1="40" y1="12.0" x2="1032" y2="12.0" stroke="var(--line)" stroke-width="1"/><text x="33" y="15.5" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">60</text><text x="40.0" y="256" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">Jun 27</text><text x="382.1" y="256" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">Jul 7</text><text x="621.5" y="256" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">Jul 14</text><text x="861.0" y="256" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">Jul 21</text><text x="1032.0" y="256" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">Jul 26</text><polyline points="40.0,200.3 74.2,230.5 108.4,230.5 142.6,140.1 176.8,53.4 211.0,140.1 245.2,147.6 279.4,204.1 313.7,234.2 347.9,230.5 382.1,143.8 416.3,57.2 450.5,143.8 484.7,151.4 518.9,207.9 553.1,238.0 587.3,230.5 621.5,151.4 655.7,72.3 689.9,147.6 724.1,155.1 758.3,207.9 792.6,238.0 826.8,230.5 861.0,158.9 895.2,94.9 929.4,158.9 963.6,166.4 997.8,207.9 1032.0,238.0" fill="none" stroke="#7048E8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><polyline points="40.0,226.7 74.2,238.0 108.4,238.0 142.6,219.2 176.8,200.3 211.0,219.2 245.2,219.2 279.4,230.5 313.7,238.0 347.9,234.2 382.1,219.2 416.3,204.1 450.5,219.2 484.7,222.9 518.9,230.5 553.1,238.0 587.3,238.0 621.5,222.9 655.7,207.9 689.9,222.9 724.1,226.7 758.3,230.5 792.6,238.0 826.8,238.0 861.0,226.7 895.2,211.6 929.4,222.9 963.6,226.7 997.8,230.5 1032.0,238.0" fill="none" stroke="#2F9E44" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><polyline points="40.0,238.0 74.2,238.0 108.4,238.0 142.6,238.0 176.8,234.2 211.0,238.0 245.2,238.0 279.4,238.0 313.7,238.0 347.9,238.0 382.1,238.0 416.3,234.2 450.5,234.2 484.7,230.5 518.9,238.0 553.1,238.0 587.3,238.0 621.5,238.0 655.7,234.2 689.9,230.5 724.1,230.5 758.3,238.0 792.6,238.0 826.8,238.0 861.0,238.0 895.2,230.5 929.4,230.5 963.6,238.0 997.8,238.0 1032.0,238.0" fill="none" stroke="#E8590C" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><polyline points="40.0,207.9 74.2,230.5 108.4,226.7 142.6,181.5 176.8,174.0 211.0,181.5 245.2,185.3 279.4,207.9 313.7,234.2 347.9,230.5 382.1,181.5 416.3,174.0 450.5,185.3 484.7,185.3 518.9,211.6 553.1,238.0 587.3,230.5 621.5,185.3 655.7,177.7 689.9,185.3 724.1,189.0 758.3,211.6 792.6,238.0 826.8,234.2 861.0,185.3 895.2,181.5 929.4,189.0 963.6,192.8 997.8,211.6 1032.0,238.0" fill="none" stroke="#E03131" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="1032.0" cy="238.0" r="3" fill="#7048E8"/><text x="1040.0" y="200.5" font-size="10.5" font-weight="600" fill="#7048E8">Replies</text><circle cx="1032.0" cy="238.0" r="3" fill="#2F9E44"/><text x="1040.0" y="213.5" font-size="10.5" font-weight="600" fill="#2F9E44">Interested</text><circle cx="1032.0" cy="238.0" r="3" fill="#E8590C"/><text x="1040.0" y="226.5" font-size="10.5" font-weight="600" fill="#E8590C">Meetings</text><circle cx="1032.0" cy="238.0" r="3" fill="#E03131"/><text x="1040.0" y="239.5" font-size="10.5" font-weight="600" fill="#E03131">Bounces</text></svg>
+      <div class="charttip" id="trend-tip" hidden></div>
+    </div>
+    <div class="subline">Every line is a count per day — bounces too: about 1.5 in 100 bounce.</div>
+    <div class="take"><span class="arr">→</span><span id="trend-take">Meetings are climbing — replies dipped as “Agencies” died.</span></div>
+  </section>
+
+  <!-- ══ LANES — six questions ══ -->
+  <div class="lanes">
+
+    <!-- ── 1 · WHERE CAN WE IMPROVE THE MOST? — the funnel ── -->
+    <section class="lane" id="lane-improve" aria-label="Where can we improve the most lane">
+      <span class="node num">1</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Where can we improve the most?</h2>
+        <span class="lane-tag num">Your pipeline · this month</span>
+      </div>
+      <div class="hero">
+        <div class="hero-flow">
+
+          <a class="fuelcard" href="#lane-leads">
+            <span class="fuel-kick">Fuel · fresh leads waiting</span>
+            <div class="fuel-num num" id="fuel-n">2,840</div>
+            <div class="fuel-sub num"><b id="fuel-days">19 days</b> of leads left · <span id="fuel-rate">about 150 used a day</span></div>
+            <div class="fuel-meter"><i id="fuel-fill" style="width:63%"></i></div>
+            <div class="fuel-out num" id="fuel-out">Out on Aug 14 — add a fresh list before then</div>
+          </a>
+
+          <svg class="funnel" id="funnel" viewBox="0 0 880 282" role="img"
+               aria-label="Pipeline this month: 18,420 emails sent, 512 replies, 96 interested, 14 meetings — each stage narrower than the last. Biggest leak is between interested and meetings.">
+
+            <!-- ribbons (drawn first, tucked 3px under the slabs) -->
+            <path class="fribbon" id="fr1" d="M143,54 C212,54 228,122 297,122 L297,178 C228,178 212,246 143,246 Z"/>
+            <path class="fribbon" id="fr2" d="M363,122 C432,122 448,134 517,134 L517,166 C448,166 432,178 363,178 Z"/>
+            <path class="fribbon leak" id="fr3" d="M583,134 C652,134 668,142 737,142 L737,158 C668,158 652,166 583,166 Z"/>
+
+            <!-- stage slabs + numbers (each links to its lane) -->
+            <a class="fstage" href="#lane-sent">
+              <title>Emails sent this month — jump to its lane</title>
+              <rect class="fslab" id="fs1" x="74" y="54" width="72" height="192" rx="4"/>
+              <text class="fnum num" id="fn1" x="110" y="42" text-anchor="middle">18,420</text>
+            </a>
+            <a class="fstage" href="#lane-replies">
+              <title>Replies this month — jump to its lane</title>
+              <rect class="fslab" id="fs2" x="294" y="122" width="72" height="56" rx="4"/>
+              <text class="fnum num" id="fn2" x="330" y="110" text-anchor="middle">512</text>
+            </a>
+            <a class="fstage" href="#lane-interested">
+              <title>Interested replies — jump to its lane</title>
+              <rect class="fslab" id="fs3" x="514" y="134" width="72" height="32" rx="4"/>
+              <text class="fnum num" id="fn3" x="550" y="122" text-anchor="middle">96</text>
+            </a>
+            <a class="fstage" href="#lane-meetings">
+              <title>Meetings booked — jump to its lane</title>
+              <rect class="fslab" id="fs4" x="734" y="142" width="72" height="16" rx="4"/>
+              <text class="fnum num" id="fn4" x="770" y="130" text-anchor="middle">14</text>
+            </a>
+
+            <!-- stage-to-stage, in plain English -->
+            <text class="frate num" x="110" y="268" text-anchor="middle">each lead gets about 6 emails</text>
+            <text class="frate num" id="fc1" x="220" y="234" text-anchor="middle">3 in 100 reply</text>
+            <text class="frate num" id="fc2" x="440" y="194" text-anchor="middle">about 1 in 5 is interested</text>
+            <text class="frate leak num" id="fc3" x="660" y="184" text-anchor="middle">only 1 in 7 becomes a meeting</text>
+
+            <!-- the leak marker -->
+            <rect class="fpill-r" x="606" y="78" width="108" height="22" rx="11"/>
+            <text class="fpill-t" x="660" y="93" text-anchor="middle">BIGGEST LEAK</text>
+            <line class="fleakline" x1="660" y1="104" x2="660" y2="130"/>
+          </svg>
+
+          <!-- stage strip: names + status, aligned under the slabs -->
+          <nav class="stagestrip" aria-label="Pipeline stages">
+            <a class="stagecell" href="#lane-sent">
+              <div class="scname">Emails sent</div>
+              <div class="scstat"><span class="dot green" id="ssd1"></span><span id="sss1">96 of 100 land</span></div>
+            </a>
+            <a class="stagecell" href="#lane-replies">
+              <div class="scname">Replies</div>
+              <div class="scstat"><span class="dot red" id="ssd2"></span><span id="sss2">1 campaign stopped working</span></div>
+            </a>
+            <a class="stagecell" href="#lane-interested">
+              <div class="scname">Interested</div>
+              <div class="scstat"><span class="dot mute" id="ssd3"></span><span id="sss3">founders reply most</span></div>
+            </a>
+            <a class="stagecell" href="#lane-meetings">
+              <div class="scname">Meetings</div>
+              <div class="scstat"><span class="dot green" id="ssd4"></span><span id="sss4">up 5 on last month</span></div>
+            </a>
+          </nav>
+        </div>
+
+        <!-- the leak, spelled out, with its fix -->
+        <div class="leakbar">
+          <div class="lk-left">
+            <div class="leak-head">Biggest leak — slow answers</div>
+            <div class="leak-body num" id="leak-body">You answer interested replies in 4 h 20 m on average — only 24 of 96 got a fast answer.
+            Answered within 1 hour, 62 in 100 become meetings; after 4 hours, only 21 in 100.</div>
+          </div>
+          <div class="leak-fix">Answer within the hour — three times more meetings.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 2 · FUEL — FRESH LEADS ── -->
+    <section class="lane" id="lane-leads" aria-label="Fresh leads lane">
+      <span class="node num">2</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Do you have enough leads?</h2>
+        <span class="lane-tag num">Fuel · Fresh leads · <span id="tag-leads">2,840</span></span>
+      </div>
+      <div class="cards c3">
+
+        <div class="card">
+          <div class="card-kick">Days of leads left</div>
+          <div class="bignum warn num" id="run-big">19<small> days</small></div>
+          <div class="subline num" id="run-sub">2,840 fresh leads left · about 150 used a day</div>
+          <svg viewBox="0 0 380 120" width="100%" role="img" id="run-svg" aria-label="Your leads run out on August 14">
+            <line x1="12" y1="96" x2="368" y2="96" stroke="var(--line)" stroke-width="1"/>
+            <polygon id="run-poly" points="12,20 330,96 12,96" fill="var(--amber-bg)"/>
+            <line id="run-line" x1="12" y1="20" x2="330" y2="96" stroke="var(--amber)" stroke-width="2"/>
+            <circle id="run-dot" cx="330" cy="96" r="3.5" fill="var(--amber)"/>
+            <text x="12" y="12" font-size="11" fill="var(--ink-3)" id="run-t0">today · 2,840 left</text>
+            <text id="run-t1" x="330" y="112" font-size="11" font-weight="600" fill="var(--amber)" text-anchor="middle">Aug 14 · 0 left</text>
+          </svg>
+          <div class="take"><span class="arr">→</span><span id="run-take">Add a fresh list before Aug 14.</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-kick">Signals found this month</div>
+          <div class="bignum num" id="sig-big">1,240</div>
+          <div class="brows" id="sig-rows">
+            <div class="brow"><span class="lbl">Hiring</span><div class="fill" style="width:100%"></div><span class="val num">520</span></div>
+            <div class="brow"><span class="lbl">Engagement</span><div class="fill" style="width:83%"></div><span class="val num">430</span></div>
+            <div class="brow"><span class="lbl">News</span><div class="fill" style="width:56%"></div><span class="val num">290</span></div>
+          </div>
+          <div class="take"><span class="arr">→</span>Plenty of signals — turn them into lead lists.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-kick">New campaigns this month</div>
+          <div class="bignum num" id="nc-big">6<small> added</small></div>
+          <div class="subline" id="nc-live">7 live right now</div>
+          <div class="subline" id="nc-latest">Latest: “Construction — new permits”, added this week.</div>
+          <div class="take"><span class="arr">→</span><span id="nc-take">Six new campaigns added — keep them coming.</span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── 3 · EMAILS SENT ── -->
+    <section class="lane" id="lane-sent" aria-label="Emails sent lane">
+      <span class="node num">3</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Are your emails landing?</h2>
+        <span class="lane-tag num">Funnel · Emails sent · <span id="tag-sent">18,420</span></span>
+      </div>
+      <div class="cards c23">
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-kick">Where your emails end up</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="landing">
+              <button class="on" data-range="24h" aria-pressed="true">24h</button>
+              <button data-range="7d" aria-pressed="false">7d</button>
+              <button data-range="30d" aria-pressed="false">30d</button>
+            </div>
+          </div>
+          <div class="bignum num" id="land-big">97<small> of 100 land</small></div>
+          <div>
+            <div class="split"><div class="g" id="land-g" style="flex:97"></div><div class="r" id="land-r" style="flex:3"></div></div>
+            <div class="splitlbl num"><span><b id="land-lg">97 land</b> in the inbox</span><span id="land-lr">3 bounce or vanish</span></div>
+          </div>
+          <div class="subline num" id="land-sent">412 sent in the last 24 hours</div>
+          <div class="subline num">41 of 44 inboxes healthy · 3 domains resting, back Aug 2 · 0 reconnects needed</div>
+          <div class="take"><span class="arr">→</span>Mostly healthy — rest 2 tired domains.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-kick">Replies by the day you send</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="week">
+              <button class="on" data-range="7d" aria-pressed="true">7d</button>
+              <button data-range="14d" aria-pressed="false">14d</button>
+              <button data-range="30d" aria-pressed="false">30d</button>
+            </div>
+          </div>
+          <svg viewBox="0 0 620 170" width="100%" role="img" id="week-svg" aria-label="Tuesday gets 41 replies, about double any other day">
+            <line x1="24" y1="134" x2="596" y2="134" stroke="var(--line)" stroke-width="1"/>
+            <rect x="48"  y="80"  width="44" height="54"  rx="4" fill="var(--ink)"/>
+            <rect x="144" y="34"  width="44" height="100" rx="4" fill="var(--orange)"/>
+            <rect x="240" y="78"  width="44" height="56"  rx="4" fill="var(--ink)"/>
+            <rect x="336" y="85"  width="44" height="49"  rx="4" fill="var(--ink)"/>
+            <rect x="432" y="112" width="44" height="22"  rx="4" fill="var(--ink)"/>
+            <rect x="528" y="129" width="44" height="5"   rx="3" fill="var(--ink)"/>
+            <text x="166" y="24"  font-size="12" font-weight="600" fill="var(--ink)" text-anchor="middle" class="num">41</text>
+            <text x="454" y="104" font-size="11" fill="var(--ink-3)" text-anchor="middle" class="num">9</text>
+            <text x="70"  y="152" font-size="11" fill="var(--ink-3)" text-anchor="middle">Mon</text>
+            <text x="166" y="152" font-size="11" font-weight="600" fill="var(--ink-2)" text-anchor="middle">Tue</text>
+            <text x="262" y="152" font-size="11" fill="var(--ink-3)" text-anchor="middle">Wed</text>
+            <text x="358" y="152" font-size="11" fill="var(--ink-3)" text-anchor="middle">Thu</text>
+            <text x="454" y="152" font-size="11" fill="var(--ink-3)" text-anchor="middle">Fri</text>
+            <text x="550" y="152" font-size="10" fill="var(--ink-3)" text-anchor="middle">Sat+Sun</text>
+          </svg>
+          <div class="subline">Friday is the quiet day.</div>
+          <div class="take"><span class="arr">→</span>Tuesday gets double the replies — send your best stuff Tuesday.</div>
+        </div>
+
+      </div>
+
+      <div style="margin-top:14px">
+        <div class="fleetnote">Whole sending fleet — all clients.</div>
+        <!-- Inbox & domain manager — VERBATIM from production. Do not modify. -->
+        <div class="dlv-subtab-panel" id="dlv-fold-manager">
+          <div class="dlv-subtab-head"><span class="ictile dlv-headic"><span class="ic8" style="--icon:url('../icons/mail.png')"></span></span>Inbox &amp; domain manager<span class="hint">2 domain(s) need warm-up → warm up · restore · reconnect</span></div>
+          <div class="dlv-fold-body">
+            <div class="dlv-flowchips" role="tablist">
+              <button class="dlv-flowchip on warn" role="tab" aria-selected="true" title="Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest">Below reply floor <span class="dlv-flowchip-n">2</span></button>
+              <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix.">Not warming <span class="dlv-flowchip-n">1</span></button>
+              <button class="dlv-flowchip" role="tab" aria-selected="false" title="Sends held while warming — the cap is 0 so no cold sends go out.">In warm-up <span class="dlv-flowchip-n">3</span></button>
+              <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes whose connection failed — silently sending nothing until reconnected">Needs reconnect <span class="dlv-flowchip-n">0</span></button>
+            </div>
+            <div class="dlv-mb-bar">
+              <span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" title="Reporting window the reply floor is judged over"><option selected>Last 7 days</option><option>Last 14 days</option><option>Last 30 days</option></select>
+              <span class="dlv-mb-count">Jul 19 → Jul 26</span>
+              <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search domain or mailbox…" value="">
+              <button class="btn sm" title="Re-pull manager data from Smartlead in the background">↻ Refresh</button>
+              <button class="btn sm primary" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>
+              <details class="dlv-mgr-adv"><summary>Advanced</summary>
+                <span class="dlv-mb-count">min sent</span><input class="dlv-input" style="width:78px" type="number" value="50" title="Only judge domains with at least this many sends in the window">
+                <span class="dlv-mb-count">flag if reply % under</span><input class="dlv-input" style="width:70px" type="number" step="0.1" value="1" title="Domains replying below this rate get flagged for warm-up">
+              </details>
+              <span class="dlv-mb-count" id="dlv-mgr-count">2 below the 1% floor · min 50 sent · last 7 days · 3 resting or recovering fleet-wide</span>
+              <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"><button class="btn sm">Warm up all (2)</button></span>
+            </div>
+            <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr><th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th></tr></thead><tbody id="dlv-mgr-body">
+              <tr><td><div class="dlv-mb-email">navreo-mail.com <span class="dlv-mb-dom">· 6 mbx</span></div><div class="dlv-mb-dom">Batch 4 · Batch 7</div></td>
+                <td style="text-align:right">412</td>
+                <td style="text-align:right">398</td>
+                <td style="text-align:right;color:var(--red);font-weight:700">0.24% <span class="dlv-mb-dom">(1)</span></td>
+                <td style="text-align:right">0.00%</td>
+                <td style="text-align:right">3.86%</td>
+                <td style="text-align:right"><button class="btn sm" title="Rests all 6 mailboxes on navreo-mail.com">Warm up domain</button></td></tr>
+              <tr><td><div class="dlv-mb-email">getnavreo.io <span class="dlv-mb-dom">· 5 mbx</span></div><div class="dlv-mb-dom">Batch 6</div></td>
+                <td style="text-align:right">388</td>
+                <td style="text-align:right">371</td>
+                <td style="text-align:right;color:var(--red);font-weight:700">0.52% <span class="dlv-mb-dom">(2)</span></td>
+                <td style="text-align:right">0.26%</td>
+                <td style="text-align:right">1.12%</td>
+                <td style="text-align:right"><button class="btn sm" title="Rests all 5 mailboxes on getnavreo.io">Warm up domain</button></td></tr>
+            </tbody></table></div></div>
+            <div style="margin-top:8px"><a class="dlv-dl">View full table</a></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 4 · REPLIES ── -->
+    <section class="lane" id="lane-replies" aria-label="Replies lane">
+      <span class="node num">4</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Which campaigns — and which messages — are winning?</h2>
+        <span class="lane-tag num">Funnel · Replies · <span id="tag-replies">512</span></span>
+      </div>
+      <div class="cards c32">
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-kick">Campaigns, best to worst</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="camps">
+              <button data-range="7d" aria-pressed="false">7d</button>
+              <button data-range="14d" aria-pressed="false">14d</button>
+              <button class="on" data-range="30d" aria-pressed="true">30d</button>
+            </div>
+          </div>
+          <div class="rank num">
+            <div id="rank-rows">
+              <div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">Reply rate</span><span style="text-align:right">Interested</span><span style="text-align:right">Meetings</span></div>
+
+              <div class="rrow">
+                <span class="idx">1</span>
+                <div><div class="rname"><span class="nm">SaaS founders — just hired sales</span><span class="pill green">Best</span></div><div class="rsub">3,900 sent · 164 replies</div></div>
+                <div class="rbar" style="width:100%"></div>
+                <span class="rrate">4.2%</span><span class="rint">39</span><span class="rmtg">6</span>
+              </div>
+              <div class="rrow">
+                <span class="idx">2</span>
+                <div><div class="rname"><span class="nm">Construction — new permits</span><span class="pill mute">New this week</span></div><div class="rsub">1,720 sent · 58 replies</div></div>
+                <div class="rbar" style="width:81%"></div>
+                <span class="rrate">3.4%</span><span class="rint">8</span><span class="rmtg">1</span>
+              </div>
+              <div class="rrow">
+                <span class="idx">3</span>
+                <div><div class="rname"><span class="nm">E-commerce — new store openings</span></div><div class="rsub">2,800 sent · 87 replies</div></div>
+                <div class="rbar" style="width:74%"></div>
+                <span class="rrate">3.1%</span><span class="rint">18</span><span class="rmtg">3</span>
+              </div>
+              <div class="rrow">
+                <span class="idx">4</span>
+                <div><div class="rname"><span class="nm">Logistics — page followers</span></div><div class="rsub">2,300 sent · 62 replies</div></div>
+                <div class="rbar" style="width:64%"></div>
+                <span class="rrate">2.7%</span><span class="rint">14</span><span class="rmtg">2</span>
+              </div>
+              <div class="rrow">
+                <span class="idx">5</span>
+                <div><div class="rname"><span class="nm">Recruiters — engagement</span></div><div class="rsub">1,900 sent · 51 replies</div></div>
+                <div class="rbar" style="width:64%"></div>
+                <span class="rrate">2.7%</span><span class="rint">9</span><span class="rmtg">1</span>
+              </div>
+              <div class="rrow">
+                <span class="idx">6</span>
+                <div><div class="rname"><span class="nm">Fintech — funding news</span></div><div class="rsub">1,700 sent · 44 replies</div></div>
+                <div class="rbar" style="width:62%"></div>
+                <span class="rrate">2.6%</span><span class="rint">6</span><span class="rmtg">1</span>
+              </div>
+              <div class="rrow">
+                <span class="idx">7</span>
+                <div><div class="rname"><span class="nm">Agencies — ops leaders</span></div><div class="rsub">4,100 sent · 16 replies</div></div>
+                <div class="rbar bad" style="width:10%"></div>
+                <span class="rrate bad">0.4%</span><span class="rint">2</span><span class="rmtg">0</span>
+              </div>
+            </div>
+
+            <div class="dying" id="dying">
+              <svg viewBox="0 0 150 40" width="150" height="40" role="img" aria-label="Reply rate slid from 3.1 percent to 0.4 percent over four weeks">
+                <polyline points="10,8 53,19.6 96,27.6 139,32" fill="none" stroke="var(--red)" stroke-width="1.5"/>
+                <circle cx="10" cy="8" r="2" fill="var(--red)"/><circle cx="53" cy="19.6" r="2" fill="var(--red)"/>
+                <circle cx="96" cy="27.6" r="2" fill="var(--red)"/><circle cx="139" cy="32" r="2.5" fill="var(--red)"/>
+                <text x="10" y="22" font-size="9.5" fill="var(--ink-3)" class="num">3.1%</text>
+                <text x="139" y="26" font-size="9.5" font-weight="700" fill="var(--red)" text-anchor="end" class="num">0.4%</text>
+              </svg>
+              <div class="dcol">
+                <span class="dtxt num">“Agencies — ops leaders” slid four weeks straight: 3.1% → 1.8% → 0.9% → 0.4%.</span>
+                <div class="dfixrow">
+                  <span class="dfix">This campaign stopped working — pause it.</span>
+                  <button class="btn sm">Pause campaign</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="take"><span class="arr">→</span><span id="rank-take">Launch more campaigns like “just hired sales”.</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-kick">Opening lines — what gets replies</div>
+            <div class="seg" role="group" aria-label="Date range" data-seg="openers">
+              <button data-range="14d" aria-pressed="false">14d</button>
+              <button class="on" data-range="30d" aria-pressed="true">30d</button>
+            </div>
+          </div>
+          <div class="orows num" id="open-rows">
+            <div class="orow">
+              <div class="otop"><span class="oq win">“Quick question about your new sales hire”</span><span class="ov">5.1%</span></div>
+              <div class="fill orange" style="width:100%"></div>
+            </div>
+            <div class="orow">
+              <div class="otop"><span class="oq">“Congrats on the new store”</span><span class="ov">4.4%</span></div>
+              <div class="fill" style="width:86%"></div>
+            </div>
+            <div class="orow">
+              <div class="otop"><span class="oq">“Saw you’re hiring”</span><span class="ov">3.8%</span></div>
+              <div class="fill" style="width:75%"></div>
+            </div>
+            <div class="orow">
+              <div class="otop"><span class="oq">“Intro — how we help”</span><span class="ov bad">1.9%</span></div>
+              <div class="fill" style="width:37%"></div>
+            </div>
+          </div>
+          <div class="take"><span class="arr">→</span>“Quick question” beats “Intro” almost 3 to 1 — kill the intro email.</div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── 5 · INTERESTED ── -->
+    <section class="lane" id="lane-interested" aria-label="Interested lane">
+      <span class="node num">5</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Who actually replies?</h2>
+        <span class="lane-tag num">Funnel · Interested · <span id="tag-int">96</span></span>
+      </div>
+      <div class="cards c3">
+
+        <div class="card">
+          <div class="card-kick">Job type <span style="text-transform:none;letter-spacing:0;font-weight:500">· of <span id="who-n">96</span> interested</span></div>
+          <div class="brows num" id="who-rows">
+            <div class="brow"><span class="lbl strong">Founders &amp; CEOs</span><div class="fill orange" style="width:100%"></div><span class="val num">37</span></div>
+            <div class="brow"><span class="lbl">Sales leaders</span><div class="fill" style="width:62%"></div><span class="val num">23</span></div>
+            <div class="brow"><span class="lbl">Marketing</span><div class="fill" style="width:41%"></div><span class="val num">15</span></div>
+            <div class="brow"><span class="lbl">Operations</span><div class="fill" style="width:32%"></div><span class="val num">12</span></div>
+            <div class="brow"><span class="lbl">Other</span><div class="fill" style="width:24%"></div><span class="val num">9</span></div>
+          </div>
+          <div class="take"><span class="arr">→</span>Founders at 11–50-person companies are your buyers.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-kick">Company size</div>
+          <div class="brows num" id="size-rows">
+            <div class="brow"><span class="lbl strong">11–50 people</span><div class="fill" style="width:100%"></div><span class="val num">52%</span></div>
+            <div class="brow"><span class="lbl">1–10</span><div class="fill" style="width:54%"></div><span class="val num">28%</span></div>
+            <div class="brow"><span class="lbl">51–200</span><div class="fill" style="width:29%"></div><span class="val num">15%</span></div>
+            <div class="brow"><span class="lbl">200+</span><div class="fill" style="width:10%"></div><span class="val num">5%</span></div>
+          </div>
+          <div class="take"><span class="arr">→</span>Small teams answer — 11–50 people is the sweet spot.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-kick">Industry</div>
+          <div class="brows num" id="ind-rows">
+            <div class="brow"><span class="lbl strong">Agencies</span><div class="fill" style="width:100%"></div><span class="val num">31%</span></div>
+            <div class="brow"><span class="lbl">SaaS</span><div class="fill" style="width:87%"></div><span class="val num">27%</span></div>
+            <div class="brow"><span class="lbl">E-commerce</span><div class="fill" style="width:58%"></div><span class="val num">18%</span></div>
+            <div class="brow"><span class="lbl">Logistics</span><div class="fill" style="width:39%"></div><span class="val num">12%</span></div>
+            <div class="brow"><span class="lbl">Other</span><div class="fill" style="width:39%"></div><span class="val num">12%</span></div>
+          </div>
+          <div class="take"><span class="arr">→</span><span id="ind-take">Agencies and SaaS lead — aim your lists there.</span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── 6 · MEETINGS ── -->
+    <section class="lane" id="lane-meetings" aria-label="Meetings lane">
+      <span class="node num">6</span>
+      <div class="lane-head">
+        <h2 class="lane-q">How many meetings did it book?</h2>
+        <span class="lane-tag num">Funnel · Meetings · <span id="tag-meet">14</span></span>
+      </div>
+      <div class="cards">
+        <div class="card meet">
+          <div class="mleft">
+            <div class="card-kick">Meetings booked this month</div>
+            <div class="bignum num" id="meet-big">14</div>
+            <span class="pill green num" id="meet-pill">up 5 from last month</span>
+            <div class="subline num" id="meet-src">6 of them came from “SaaS founders — just hired sales”</div>
+          </div>
+          <div class="mcompare num">
+            <div class="mcol"><span class="mv" id="meet-mv1">9</span><div class="mb past" id="meet-mb1" style="height:54px"></div><span class="ml">June</span></div>
+            <div class="mcol"><span class="mv" id="meet-mv2">14</span><div class="mb now" id="meet-mb2" style="height:84px"></div><span class="ml">July</span></div>
+          </div>
+          <div class="take side"><span class="arr">→</span><span id="meet-take">Up 5 — answer faster to push it higher.</span></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>Navreo · Analytics prototype · every number on this page is mock data</footer>
+
+</div>
+
+<script>
+/* ── hero line graph: pre-baked daily data + pure SVG builder ──
+   Window: last 30 days, Fri Jun 27 → Sat Jul 26 (today).
+   Per-client arrays are hand-tuned and sum EXACTLY to the month totals:
+   sent 10,300+8,120=18,420 · replies 258+254=512 · interested 55+41=96 ·
+   meetings 8+6=14 · bounces 165+115=280. "all" is the exact per-day sum. */
+var TREND_COL={sent:"#1971C2",replies:"#7048E8",interested:"#2F9E44",meetings:"#E8590C",bounces:"#E03131"};
+var TREND_NAME={sent:"Sent",replies:"Replies",interested:"Interested",meetings:"Meetings",bounces:"Bounces"};
+var TREND_ORDER=["sent","replies","interested","meetings","bounces"];
+var TREND_DATES=["Jun 27","Jun 28","Jun 29","Jun 30","Jul 1","Jul 2","Jul 3","Jul 4","Jul 5","Jul 6","Jul 7","Jul 8","Jul 9","Jul 10","Jul 11","Jul 12","Jul 13","Jul 14","Jul 15","Jul 16","Jul 17","Jul 18","Jul 19","Jul 20","Jul 21","Jul 22","Jul 23","Jul 24","Jul 25","Jul 26"];
+var TREND_FULL=["Fri Jun 27","Sat Jun 28","Sun Jun 29","Mon Jun 30","Tue Jul 1","Wed Jul 2","Thu Jul 3","Fri Jul 4","Sat Jul 5","Sun Jul 6","Mon Jul 7","Tue Jul 8","Wed Jul 9","Thu Jul 10","Fri Jul 11","Sat Jul 12","Sun Jul 13","Mon Jul 14","Tue Jul 15","Wed Jul 16","Thu Jul 17","Fri Jul 18","Sat Jul 19","Sun Jul 20","Mon Jul 21","Tue Jul 22","Wed Jul 23","Thu Jul 24","Fri Jul 25","Sat Jul 26"];
+var TREND={
+  arnic:{
+    sent:[272,14,18,548,590,546,534,276,12,16,552,596,550,538,268,10,18,540,584,538,526,264,10,18,536,588,542,522,262,12],
+    replies:[5,1,1,14,26,14,12,4,0,1,13,25,13,12,4,0,1,12,22,12,11,4,0,1,10,17,10,9,4,0],
+    interested:[2,0,0,3,6,3,3,1,0,0,3,5,3,2,1,0,0,2,5,2,2,1,0,0,2,4,2,2,1,0],
+    meetings:[0,0,0,0,1,0,0,0,0,0,0,0,1,1,0,0,0,0,1,1,1,0,0,0,0,1,1,0,0,0],
+    bounces:[5,1,2,9,10,9,8,5,1,1,9,10,8,8,4,0,1,8,9,8,8,4,0,1,8,9,8,7,4,0]
+  },
+  qwintiq:{
+    sent:[214,10,20,432,464,430,420,218,8,18,436,470,434,424,210,8,18,424,458,422,412,206,8,18,428,462,426,408,204,10],
+    replies:[5,1,1,12,23,12,12,5,1,1,12,23,12,11,4,0,1,11,22,12,11,4,0,1,11,21,11,10,4,0],
+    interested:[1,0,0,2,4,2,2,1,0,1,2,4,2,2,1,0,0,2,3,2,1,1,0,0,1,3,2,1,1,0],
+    meetings:[0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0],
+    bounces:[3,1,1,6,7,6,6,3,0,1,6,7,6,6,3,0,1,6,7,6,5,3,0,0,6,6,5,5,3,0]
+  },
+  all:{}
+};
+(function(){
+  var k,i,a,q,s;
+  for(k in TREND.arnic){
+    a=TREND.arnic[k]; q=TREND.qwintiq[k]; s=[];
+    for(i=0;i<a.length;i++){ s.push(a[i]+q[i]); }
+    TREND.all[k]=s;
+  }
+})();
+var TREND_GEO={ymax:60,n:30,off:0};
+function trendFmt(n){return String(n).replace(/\B(?=(\d{3})+(?!\d))/g,",");}
+function trendSlice(c,key,range){var a=TREND[c][key],n=range==="7d"?7:(range==="14d"?14:30);return a.slice(30-n);}
+function trendTotal(c,key,range){var a=trendSlice(c,key,range),s=0,i;for(i=0;i<a.length;i++){s+=a[i];}return s;}
+function buildTrendSvg(client,range,on){
+  var L=40,R=88,T=12,B=26,W=1120,H=264,pw=W-L-R,ph=H-T-B;
+  var n=range==="7d"?7:(range==="14d"?14:30), off=30-n;
+  var vis=[],i,j,k;
+  for(i=0;i<TREND_ORDER.length;i++){k=TREND_ORDER[i];if(on[k]){vis.push(k);}}
+  var max=1;
+  for(i=0;i<vis.length;i++){
+    var a0=trendSlice(client,vis[i],range);
+    for(j=0;j<a0.length;j++){ if(a0[j]>max){max=a0[j];} }
+  }
+  var ladder=[12,20,30,40,60,80,120,160,240,320,480,640,900,1200,1600,2000],ymax=2000;
+  for(i=0;i<ladder.length;i++){ if(ladder[i]>=max){ ymax=ladder[i]; break; } }
+  TREND_GEO={ymax:ymax,n:n,off:off};
+  function X(ii){return n===1?L:L+ii*pw/(n-1);}
+  function Y(v){return T+(1-v/ymax)*ph;}
+  var s="";
+  for(i=0;i<=4;i++){
+    var gv=ymax*i/4, gy=Y(gv);
+    s+='<line x1="'+L+'" y1="'+gy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+gy.toFixed(1)+'" stroke="var(--line)" stroke-width="1"/>';
+    s+='<text x="'+(L-7)+'" y="'+(gy+3.5).toFixed(1)+'" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">'+trendFmt(Math.round(gv))+'</text>';
+  }
+  var ticks=(n===7)?[0,2,4,6]:((n===14)?[0,4,9,13]:[0,10,17,24,29]);
+  for(i=0;i<ticks.length;i++){
+    s+='<text x="'+X(ticks[i]).toFixed(1)+'" y="'+(H-8)+'" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">'+TREND_DATES[off+ticks[i]]+'</text>';
+  }
+  var ends=[];
+  for(i=0;i<vis.length;i++){
+    k=vis[i];
+    var arr=trendSlice(client,k,range),pts="";
+    for(j=0;j<arr.length;j++){ pts+=(j?" ":"")+X(j).toFixed(1)+","+Y(arr[j]).toFixed(1); }
+    s+='<polyline points="'+pts+'" fill="none" stroke="'+TREND_COL[k]+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    ends.push({k:k,x:X(arr.length-1),y:Y(arr[arr.length-1])});
+  }
+  ends.sort(function(a,b){return a.y-b.y;});
+  var pos=[];
+  for(i=0;i<ends.length;i++){ pos.push(ends[i].y); }
+  for(i=1;i<pos.length;i++){ if(pos[i]<pos[i-1]+13){ pos[i]=pos[i-1]+13; } }
+  var over=(pos.length?pos[pos.length-1]:0)-(H-B-2);
+  if(over>0){
+    for(i=0;i<pos.length;i++){ pos[i]-=over; }
+    for(i=pos.length-2;i>=0;i--){ if(pos[i]>pos[i+1]-13){ pos[i]=pos[i+1]-13; } }
+  }
+  for(i=0;i<ends.length;i++){
+    s+='<circle cx="'+ends[i].x.toFixed(1)+'" cy="'+ends[i].y.toFixed(1)+'" r="3" fill="'+TREND_COL[ends[i].k]+'"/>';
+    s+='<text x="'+(ends[i].x+8).toFixed(1)+'" y="'+(pos[i]+3.5).toFixed(1)+'" font-size="10.5" font-weight="600" fill="'+TREND_COL[ends[i].k]+'">'+TREND_NAME[ends[i].k]+'</text>';
+  }
+  return s;
+}
+if(typeof module!=="undefined"&&module.exports){module.exports={TREND:TREND,TREND_ORDER:TREND_ORDER,buildTrendSvg:buildTrendSvg,trendTotal:trendTotal,trendFmt:trendFmt};}
+
+(function(){
+"use strict";
+var $=function(id){return document.getElementById(id);};
+
+/* ─────────────────────────────────────────────────────────────────────
+   Pre-baked datasets (fix-spec §B) — every displayed figure is literal.
+   ───────────────────────────────────────────────────────────────────── */
+var CAMPS={
+  saas:  {nm:"SaaS founders — just hired sales", sub:"3,900 sent · 164 replies", int:"39", mtg:"6", r:{"30d":"4.2","14d":"4.3","7d":"4.4"}},
+  constr:{nm:"Construction — new permits", sub:"1,720 sent · 58 replies", int:"8", mtg:"1", pill:"New this week", r:{"30d":"3.4","14d":"3.4","7d":"3.4"}},
+  ecom:  {nm:"E-commerce — new store openings", sub:"2,800 sent · 87 replies", int:"18", mtg:"3", r:{"30d":"3.1","14d":"3.1","7d":"3.0"}},
+  logi:  {nm:"Logistics — page followers", sub:"2,300 sent · 62 replies", int:"14", mtg:"2", r:{"30d":"2.7","14d":"2.7","7d":"2.6"}},
+  recr:  {nm:"Recruiters — engagement", sub:"1,900 sent · 51 replies", int:"9", mtg:"1", r:{"30d":"2.7","14d":"2.7","7d":"2.8"}},
+  fint:  {nm:"Fintech — funding news", sub:"1,700 sent · 44 replies", int:"6", mtg:"1", r:{"30d":"2.6","14d":"2.6","7d":"2.5"}},
+  agen:  {nm:"Agencies — ops leaders", sub:"4,100 sent · 16 replies", int:"2", mtg:"0", r:{"30d":"0.4","14d":"0.3","7d":"0.2"}}
+};
+
+var D={
+  all:{
+    trend:{take:"Meetings are climbing — replies dipped as “Agencies” died.",
+           aria:"Daily counts this month for replies, interested replies, meetings and bounces. Tuesdays spike about double; replies dip in the final ten days as Agencies — ops leaders fades."},
+    funnel:{nums:["18,420","512","96","14"],h:[192,56,32,16],
+            rates:["3 in 100 reply","about 1 in 5 is interested","only 1 in 7 becomes a meeting"],
+            aria:"Pipeline this month: 18,420 emails sent, 512 replies, 96 interested, 14 meetings — each stage narrower than the last. Biggest leak is between interested and meetings."},
+    fuel:{n:"2,840",days:"19 days",rate:"about 150 used a day",meter:63,out:"Out on Aug 14 — add a fresh list before then"},
+    strip:[["green","96 of 100 land"],["red","1 campaign stopped working"],["mute","founders reply most"],["green","up 5 on last month"]],
+    leak:"You answer interested replies in 4 h 20 m on average — only 24 of 96 got a fast answer. Answered within 1 hour, 62 in 100 become meetings; after 4 hours, only 21 in 100.",
+    tags:{leads:"2,840",sent:"18,420",replies:"512",int:"96",meet:"14"},
+    run:{big:"19",sub:"2,840 fresh leads left · about 150 used a day",x:330,lx:330,t0:"today · 2,840 left",t1:"Aug 14 · 0 left",take:"Add a fresh list before Aug 14.",aria:"Your leads run out on August 14"},
+    sig:{big:"1,240",rows:[["Hiring","520",100],["Engagement","430",83],["News","290",56]]},
+    nc:{big:"6",live:"7 live right now",latest:"Latest: “Construction — new permits”, added this week.",take:"Six new campaigns added — keep them coming."},
+    landing:{"24h":{n:97,miss:3,sent:"412 sent in the last 24 hours"},"7d":{n:96,miss:4},"30d":{n:96,miss:4}},
+    week:{"7d":{v:["22","41","23","20","9","2"],h:[54,100,56,49,22,5]},
+          "14d":{v:["45","83","46","42","19","5"],h:[54,100,55,51,23,6]},
+          "30d":{v:["96","178","98","89","41","10"],h:[54,100,55,50,23,6]}},
+    camps:["saas","constr","ecom","logi","recr","fint","agen"],dying:true,
+    rankTake:"Launch more campaigns like “just hired sales”.",
+    openers:{"30d":[["“Quick question about your new sales hire”","5.1%",100,"win"],["“Congrats on the new store”","4.4%",86,""],["“Saw you’re hiring”","3.8%",75,""],["“Intro — how we help”","1.9%",37,"bad"]],
+             "14d":[["“Quick question about your new sales hire”","5.4%",100,"win"],["“Congrats on the new store”","4.2%",78,""],["“Saw you’re hiring”","3.7%",69,""],["“Intro — how we help”","1.7%",31,"bad"]]},
+    who:{n:"96",
+         job:[["Founders & CEOs","37",100],["Sales leaders","23",62],["Marketing","15",41],["Operations","12",32],["Other","9",24]],
+         size:[["11–50 people","52%",100],["1–10","28%",54],["51–200","15%",29],["200+","5%",10]],
+         ind:[["Agencies","31%",100],["SaaS","27%",87],["E-commerce","18%",58],["Logistics","12%",39],["Other","12%",39]],
+         indTake:"Agencies and SaaS lead — aim your lists there."},
+    meet:{big:"14",pill:"up 5 from last month",src:"6 of them came from “SaaS founders — just hired sales”",
+          past:["9",54],now:["14",84],take:"Up 5 — answer faster to push it higher."}
+  },
+  arnic:{
+    trend:{take:"Meetings are climbing — replies dipped as “Agencies” died.",
+           aria:"Daily counts this month for Arnic: replies, interested replies, meetings and bounces. Tuesdays spike about double; replies dip in the final ten days as Agencies — ops leaders fades."},
+    funnel:{nums:["10,300","258","55","8"],h:[156,44,26,12],
+            rates:["2.5 in 100 reply","about 1 in 5 is interested","only 1 in 7 becomes a meeting"],
+            aria:"Pipeline this month for Arnic: 10,300 emails sent, 258 replies, 55 interested, 8 meetings — each stage narrower than the last. Biggest leak is between interested and meetings."},
+    fuel:{n:"1,640",days:"17 days",rate:"about 95 used a day",meter:57,out:"Out on Aug 13 — add a fresh list before then"},
+    strip:[["green","97 of 100 land"],["red","1 campaign stopped working"],["mute","founders reply most"],["green","up 3 on last month"]],
+    leak:"You answer interested replies in 3 h 50 m on average — only 16 of 55 got a fast answer. Answered within 1 hour, 62 in 100 become meetings; after 4 hours, only 21 in 100.",
+    tags:{leads:"1,640",sent:"10,300",replies:"258",int:"55",meet:"8"},
+    run:{big:"17",sub:"1,640 fresh leads left · about 95 used a day",x:296,lx:296,t0:"today · 1,640 left",t1:"Aug 13 · 0 left",take:"Add a fresh list before Aug 13.",aria:"Your leads run out on August 13"},
+    sig:{big:"720",rows:[["Hiring","300",100],["Engagement","250",83],["News","170",57]]},
+    nc:{big:"3",live:"3 live right now",latest:"Latest: “Logistics — page followers”, added this month.",take:"Three new campaigns added — keep them coming."},
+    landing:{"24h":{n:97,miss:3,sent:"231 sent in the last 24 hours"},"7d":{n:97,miss:3},"30d":{n:97,miss:3}},
+    week:{"7d":{v:["12","23","13","11","5","1"],h:[52,100,57,48,22,4]},
+          "14d":{v:["25","46","26","24","11","3"],h:[54,100,57,52,24,7]},
+          "30d":{v:["51","94","52","47","22","5"],h:[54,100,55,50,23,5]}},
+    camps:["saas","logi","agen"],dying:true,
+    rankTake:"Launch more campaigns like “just hired sales”.",
+    openers:{"30d":[["“Quick question about your new sales hire”","5.3%",100,"win"],["“Saw you’re hiring”","3.9%",74,""],["“Intro — how we help”","2.0%",38,"bad"]],
+             "14d":[["“Quick question about your new sales hire”","5.3%",100,"win"],["“Saw you’re hiring”","3.9%",74,""],["“Intro — how we help”","2.0%",38,"bad"]]},
+    who:{n:"55",
+         job:[["Founders & CEOs","24",100],["Sales leaders","13",54],["Operations","8",33],["Marketing","7",29],["Other","3",13]],
+         size:[["11–50 people","55%",100],["1–10","25%",45],["51–200","15%",27],["200+","5%",9]],
+         ind:[["SaaS","71%",100],["Logistics","25%",35],["Agencies","4%",6]],
+         indTake:"SaaS founders lead — aim your lists there."},
+    meet:{big:"8",pill:"up 3 from last month",src:"6 of them came from “SaaS founders — just hired sales”",
+          past:["5",30],now:["8",48],take:"Up 3 — answer faster to push it higher."}
+  },
+  qwintiq:{
+    trend:{take:"Meetings are climbing — Tuesday brings the most replies.",
+           aria:"Daily counts this month for Qwintiq: replies, interested replies, meetings and bounces. Tuesdays spike about double; the month holds steady."},
+    funnel:{nums:["8,120","254","41","6"],h:[144,42,22,10],
+            rates:["3.1 in 100 reply","about 1 in 6 is interested","only 1 in 7 becomes a meeting"],
+            aria:"Pipeline this month for Qwintiq: 8,120 emails sent, 254 replies, 41 interested, 6 meetings — each stage narrower than the last. Biggest leak is between interested and meetings."},
+    fuel:{n:"1,200",days:"22 days",rate:"about 55 used a day",meter:73,out:"Out on Aug 18 — add a fresh list before then"},
+    strip:[["green","95 of 100 land"],["green","all 4 campaigns steady"],["mute","founders reply most"],["green","up 2 on last month"]],
+    leak:"You answer interested replies in 5 h 10 m on average — only 8 of 41 got a fast answer. Answered within 1 hour, 62 in 100 become meetings; after 4 hours, only 21 in 100.",
+    tags:{leads:"1,200",sent:"8,120",replies:"254",int:"41",meet:"6"},
+    run:{big:"22",sub:"1,200 fresh leads left · about 55 used a day",x:336,lx:330,t0:"today · 1,200 left",t1:"Aug 18 · 0 left",take:"Add a fresh list before Aug 18.",aria:"Your leads run out on August 18"},
+    sig:{big:"520",rows:[["Hiring","220",100],["Engagement","190",86],["News","110",50]]},
+    nc:{big:"3",live:"4 live right now",latest:"Latest: “Construction — new permits”, added this week.",take:"Three new campaigns added — keep them coming."},
+    landing:{"24h":{n:95,miss:5,sent:"181 sent in the last 24 hours"},"7d":{n:95,miss:5},"30d":{n:95,miss:5}},
+    week:{"7d":{v:["10","18","10","9","4","1"],h:[56,100,56,50,22,6]},
+          "14d":{v:["20","37","20","18","8","2"],h:[54,100,54,49,22,5]},
+          "30d":{v:["45","84","46","42","19","5"],h:[54,100,55,50,23,6]}},
+    camps:["ecom","constr","recr","fint"],dying:false,
+    rankTake:"Launch more campaigns like “new permits”.",
+    openers:{"30d":[["“Quick question about your new sales hire”","4.8%",100,"win"],["“Congrats on the new store”","4.4%",92,""],["“Saw you’re hiring”","3.6%",75,""],["“Intro — how we help”","1.7%",35,"bad"]],
+             "14d":[["“Quick question about your new sales hire”","4.8%",100,"win"],["“Congrats on the new store”","4.4%",92,""],["“Saw you’re hiring”","3.6%",75,""],["“Intro — how we help”","1.7%",35,"bad"]]},
+    who:{n:"41",
+         job:[["Founders & CEOs","13",100],["Sales leaders","10",77],["Marketing","8",62],["Other","6",46],["Operations","4",31]],
+         size:[["11–50 people","48%",100],["1–10","32%",67],["51–200","15%",31],["200+","5%",10]],
+         ind:[["E-commerce","44%",100],["Recruiting","22%",50],["Construction","20%",45],["Fintech","14%",32]],
+         indTake:"E-commerce leads — aim your lists there."},
+    meet:{big:"6",pill:"up 2 from last month",src:"3 of them came from “E-commerce — new store openings”",
+          past:["4",24],now:["6",36],take:"Up 2 — answer faster to push it higher."}
+  }
+};
+
+var state={client:"all",trend:"30d",landing:"24h",week:"7d",camps:"30d",openers:"30d",
+           on:{sent:false,replies:true,interested:true,meetings:true,bounces:true}};
+
+/* ── funnel (geometry only — figures come from D) ── */
+var MID=150;
+function ribbon(x0,x1,t0,b0,t1,b1){
+  var a=x0+69,b=x0+85;
+  return "M"+x0+","+t0+" C"+a+","+t0+" "+b+","+t1+" "+x1+","+t1+
+         " L"+x1+","+b1+" C"+b+","+b1+" "+a+","+b0+" "+x0+","+b0+" Z";
+}
+function renderFunnel(){
+  var f=D[state.client].funnel,y=[],i;
+  for(i=0;i<4;i++){ y[i]=MID-f.h[i]/2; }
+  for(i=0;i<4;i++){
+    var s=$("fs"+(i+1));
+    s.setAttribute("y",y[i]); s.setAttribute("height",f.h[i]);
+    var t=$("fn"+(i+1));
+    t.setAttribute("y",y[i]-12); t.textContent=f.nums[i];
+  }
+  $("fr1").setAttribute("d",ribbon(143,297,y[0],y[0]+f.h[0],y[1],y[1]+f.h[1]));
+  $("fr2").setAttribute("d",ribbon(363,517,y[1],y[1]+f.h[1],y[2],y[2]+f.h[2]));
+  $("fr3").setAttribute("d",ribbon(583,737,y[2],y[2]+f.h[2],y[3],y[3]+f.h[3]));
+  for(i=1;i<=3;i++){ $("fc"+i).textContent=f.rates[i-1]; }
+  $("funnel").setAttribute("aria-label",f.aria);
+}
+
+/* ── hero trend graph ── */
+function renderTrend(){
+  var c=state.client,i,k;
+  $("trend-svg").innerHTML=buildTrendSvg(c,state.trend,state.on);
+  $("trend-svg").setAttribute("aria-label",D[c].trend.aria);
+  $("trend-take").textContent=D[c].trend.take;
+  for(i=0;i<TREND_ORDER.length;i++){
+    k=TREND_ORDER[i];
+    $("lt-"+k).textContent=trendFmt(trendTotal(c,k,state.trend));
+    var chip=$("lc-"+k);
+    chip.classList.toggle("on",!!state.on[k]);
+    chip.setAttribute("aria-pressed",state.on[k]?"true":"false");
+  }
+  hideTip();
+}
+function hideTip(){
+  var g=document.getElementById("tr-hov");
+  if(g){ g.parentNode.removeChild(g); }
+  $("trend-tip").hidden=true;
+}
+function trendMove(ev){
+  var svg=$("trend-svg"),r=svg.getBoundingClientRect();
+  if(!r.width){ return; }
+  var sx=(ev.clientX-r.left)*1120/r.width;
+  var n=TREND_GEO.n,off=TREND_GEO.off,L=40,Rp=88,T=12,B=26,pw=1120-L-Rp,ph=264-T-B;
+  var idx=Math.round((sx-L)/pw*(n-1));
+  if(idx<0){ idx=0; } if(idx>n-1){ idx=n-1; }
+  var X=n===1?L:L+idx*pw/(n-1);
+  var html='<line x1="'+X.toFixed(1)+'" y1="'+T+'" x2="'+X.toFixed(1)+'" y2="'+(T+ph)+'" stroke="var(--line-2)" stroke-width="1"/>',i,k;
+  var rows="";
+  for(i=0;i<TREND_ORDER.length;i++){
+    k=TREND_ORDER[i];
+    if(!state.on[k]){ continue; }
+    var v=TREND[state.client][k][off+idx];
+    var Y=T+(1-v/TREND_GEO.ymax)*ph;
+    html+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="3.5" fill="'+TREND_COL[k]+'" stroke="#fff" stroke-width="1.5"/>';
+    rows+='<div class="row"><i style="background:'+TREND_COL[k]+'"></i>'+TREND_NAME[k]+'<span class="v num">'+trendFmt(v)+'</span></div>';
+  }
+  var old=document.getElementById("tr-hov");
+  if(old){ old.parentNode.removeChild(old); }
+  svg.insertAdjacentHTML("beforeend",'<g id="tr-hov">'+html+"</g>");
+  var tip=$("trend-tip");
+  tip.innerHTML="<b>"+TREND_FULL[off+idx]+"</b>"+rows;
+  tip.hidden=false;
+  var wrap=svg.parentNode,ww=wrap.offsetWidth,px=X*r.width/1120;
+  var left=px+16;
+  if(left+tip.offsetWidth>ww-4){ left=px-16-tip.offsetWidth; }
+  if(left<4){ left=4; }
+  var top=(ev.clientY-r.top)-tip.offsetHeight/2;
+  if(top<0){ top=0; }
+  var maxTop=r.height-tip.offsetHeight;
+  if(maxTop>0&&top>maxTop){ top=maxTop; }
+  tip.style.left=left.toFixed(0)+"px";
+  tip.style.top=top.toFixed(0)+"px";
+}
+
+/* ── section renderers ── */
+function renderFuel(){
+  var f=D[state.client].fuel;
+  $("fuel-n").textContent=f.n;
+  $("fuel-days").textContent=f.days;
+  $("fuel-rate").textContent=f.rate;
+  $("fuel-fill").style.width=f.meter+"%";
+  $("fuel-out").textContent=f.out;
+}
+function renderStrip(){
+  var s=D[state.client].strip,i;
+  for(i=0;i<4;i++){
+    $("ssd"+(i+1)).className="dot "+s[i][0];
+    $("sss"+(i+1)).textContent=s[i][1];
+  }
+}
+function renderLeak(){ $("leak-body").textContent=D[state.client].leak; }
+function renderTags(){
+  var t=D[state.client].tags;
+  $("tag-leads").textContent=t.leads;
+  $("tag-sent").textContent=t.sent;
+  $("tag-replies").textContent=t.replies;
+  $("tag-int").textContent=t.int;
+  $("tag-meet").textContent=t.meet;
+}
+function renderRun(){
+  var r=D[state.client].run;
+  $("run-big").innerHTML=r.big+"<small> days</small>";
+  $("run-sub").textContent=r.sub;
+  $("run-poly").setAttribute("points","12,20 "+r.x+",96 12,96");
+  $("run-line").setAttribute("x2",r.x);
+  $("run-dot").setAttribute("cx",r.x);
+  $("run-t0").textContent=r.t0;
+  $("run-t1").textContent=r.t1;
+  $("run-t1").setAttribute("x",r.lx);
+  $("run-take").textContent=r.take;
+  $("run-svg").setAttribute("aria-label",r.aria);
+}
+function brows(rows,opt){
+  opt=opt||{};
+  var s="",i;
+  for(i=0;i<rows.length;i++){
+    s+='<div class="brow"><span class="lbl'+(opt.strong===i?" strong":"")+'">'+rows[i][0]+"</span>"+
+       '<div class="fill'+(opt.orange===i?" orange":"")+'" style="width:'+rows[i][2]+'%"></div>'+
+       '<span class="val num">'+rows[i][1]+"</span></div>";
+  }
+  return s;
+}
+function renderSig(){
+  var g=D[state.client].sig;
+  $("sig-big").textContent=g.big;
+  $("sig-rows").innerHTML=brows(g.rows);
+}
+function renderNC(){
+  var n=D[state.client].nc;
+  $("nc-big").innerHTML=n.big+"<small> added</small>";
+  $("nc-live").textContent=n.live;
+  $("nc-latest").textContent=n.latest;
+  $("nc-take").textContent=n.take;
+}
+function renderLanding(){
+  var L=D[state.client].landing[state.landing];
+  $("land-big").innerHTML=L.n+"<small> of 100 land</small>";
+  $("land-g").style.flex=String(L.n);
+  $("land-r").style.flex=String(L.miss);
+  $("land-lg").textContent=L.n+" land";
+  $("land-lr").textContent=L.miss+" bounce or vanish";
+  var se=$("land-sent");
+  if(L.sent){ se.style.display=""; se.textContent=L.sent; }
+  else{ se.style.display="none"; }
+}
+function renderWeek(){
+  var W=D[state.client].week[state.week];
+  var X=[48,144,240,336,432,528],names=["Mon","Tue","Wed","Thu","Fri","Sat+Sun"];
+  var s='<line x1="24" y1="134" x2="596" y2="134" stroke="var(--line)" stroke-width="1"/>',i;
+  for(i=0;i<6;i++){
+    var h=W.h[i],y=134-h;
+    s+='<rect x="'+X[i]+'" y="'+y+'" width="44" height="'+h+'" rx="'+(h<8?3:4)+'" fill="'+(i===1?"var(--orange)":"var(--ink)")+'"/>';
+  }
+  s+='<text x="166" y="'+(134-W.h[1]-10)+'" font-size="12" font-weight="600" fill="var(--ink)" text-anchor="middle" class="num">'+W.v[1]+"</text>";
+  s+='<text x="454" y="'+(134-W.h[4]-8)+'" font-size="11" fill="var(--ink-3)" text-anchor="middle" class="num">'+W.v[4]+"</text>";
+  for(i=0;i<6;i++){
+    var fx=X[i]+22;
+    if(i===1){ s+='<text x="'+fx+'" y="152" font-size="11" font-weight="600" fill="var(--ink-2)" text-anchor="middle">Tue</text>'; }
+    else{ s+='<text x="'+fx+'" y="152" font-size="'+(i===5?10:11)+'" fill="var(--ink-3)" text-anchor="middle">'+names[i]+"</text>"; }
+  }
+  $("week-svg").innerHTML=s;
+  $("week-svg").setAttribute("aria-label","Tuesday gets "+W.v[1]+" replies, about double any other day");
+}
+function renderCamps(){
+  var d=D[state.client],r=state.camps,ids=d.camps.slice(),i;
+  ids.sort(function(a,b){
+    var ra=parseFloat(CAMPS[a].r[r]),rb=parseFloat(CAMPS[b].r[r]);
+    if(rb!==ra){ return rb-ra; }
+    return d.camps.indexOf(a)-d.camps.indexOf(b);
+  });
+  var max=parseFloat(CAMPS[ids[0]].r[r]);
+  var head=r==="30d"?"Reply rate":"Replies per 100 · "+r;
+  var s='<div class="rrow rhead"><span></span><span>Campaign</span><span></span><span style="text-align:right">'+head+'</span><span style="text-align:right">Interested</span><span style="text-align:right">Meetings</span></div>';
+  for(i=0;i<ids.length;i++){
+    var cm=CAMPS[ids[i]],rate=parseFloat(cm.r[r]);
+    var w=Math.max(2,Math.round(rate/max*100)),bad=rate<1;
+    var pills=(i===0?'<span class="pill green">Best</span>':"")+(cm.pill?'<span class="pill mute">'+cm.pill+"</span>":"");
+    s+='<div class="rrow"><span class="idx">'+(i+1)+"</span>"+
+       '<div><div class="rname"><span class="nm">'+cm.nm+"</span>"+pills+'</div><div class="rsub">'+cm.sub+"</div></div>"+
+       '<div class="rbar'+(bad?" bad":"")+'" style="width:'+w+'%"></div>'+
+       '<span class="rrate'+(bad?" bad":"")+'">'+(r==="30d"?cm.r[r]+"%":cm.r[r])+"</span>"+
+       '<span class="rint">'+cm.int+'</span><span class="rmtg">'+cm.mtg+"</span></div>";
+  }
+  $("rank-rows").innerHTML=s;
+  $("dying").style.display=d.dying?"":"none";
+  $("rank-take").textContent=d.rankTake;
+}
+function renderOpeners(){
+  var rows=D[state.client].openers[state.openers],s="",i;
+  for(i=0;i<rows.length;i++){
+    var q=rows[i][0],v=rows[i][1],w=rows[i][2],cls=rows[i][3];
+    s+='<div class="orow"><div class="otop"><span class="oq'+(cls==="win"?" win":"")+'">'+q+"</span>"+
+       '<span class="ov'+(cls==="bad"?" bad":"")+'">'+v+"</span></div>"+
+       '<div class="fill'+(cls==="win"?" orange":"")+'" style="width:'+w+'%"></div></div>';
+  }
+  $("open-rows").innerHTML=s;
+}
+function renderWho(){
+  var w=D[state.client].who;
+  $("who-n").textContent=w.n;
+  $("who-rows").innerHTML=brows(w.job,{strong:0,orange:0});
+  $("size-rows").innerHTML=brows(w.size,{strong:0});
+  $("ind-rows").innerHTML=brows(w.ind,{strong:0});
+  $("ind-take").textContent=w.indTake;
+}
+function renderMeet(){
+  var m=D[state.client].meet;
+  $("meet-big").textContent=m.big;
+  $("meet-pill").textContent=m.pill;
+  $("meet-src").textContent=m.src;
+  $("meet-mv1").textContent=m.past[0];
+  $("meet-mb1").style.height=m.past[1]+"px";
+  $("meet-mv2").textContent=m.now[0];
+  $("meet-mb2").style.height=m.now[1]+"px";
+  $("meet-take").textContent=m.take;
+}
+
+function apply(){
+  renderTrend(); renderFuel(); renderStrip(); renderLeak(); renderTags();
+  renderRun(); renderSig(); renderNC(); renderLanding(); renderWeek();
+  renderCamps(); renderOpeners(); renderWho(); renderMeet();
+}
+
+/* ── wiring ── */
+var swapT=null;
+function setClient(c){
+  if(state.client===c){ return; }
+  state.client=c;
+  var btns=document.querySelectorAll(".chip"),i;
+  for(i=0;i<btns.length;i++){
+    var on=btns[i].getAttribute("data-client")===c;
+    btns[i].classList.toggle("on",on);
+    btns[i].setAttribute("aria-pressed",on?"true":"false");
+  }
+  var svg=$("funnel");
+  svg.classList.add("swap");
+  if(swapT){ clearTimeout(swapT); }
+  swapT=setTimeout(function(){ renderFunnel(); svg.classList.remove("swap"); swapT=null; },170);
+  apply();
+}
+document.querySelector(".chips").addEventListener("click",function(e){
+  var b=e.target.closest(".chip");
+  if(b){ setClient(b.getAttribute("data-client")); }
+});
+var SEGMAP={trend:["trend",renderTrend],landing:["landing",renderLanding],week:["week",renderWeek],camps:["camps",renderCamps],openers:["openers",renderOpeners]};
+var segs=document.querySelectorAll(".seg"),si;
+for(si=0;si<segs.length;si++){
+  (function(seg){
+    seg.addEventListener("click",function(e){
+      var b=e.target.closest("button");
+      if(!b){ return; }
+      var m=SEGMAP[seg.getAttribute("data-seg")];
+      state[m[0]]=b.getAttribute("data-range");
+      var bs=seg.querySelectorAll("button"),i;
+      for(i=0;i<bs.length;i++){
+        var on=bs[i]===b;
+        bs[i].classList.toggle("on",on);
+        bs[i].setAttribute("aria-pressed",on?"true":"false");
+      }
+      m[1]();
+    });
+  })(segs[si]);
+}
+document.querySelector(".lchips").addEventListener("click",function(e){
+  var b=e.target.closest(".lchip");
+  if(!b){ return; }
+  var k=b.getAttribute("data-s");
+  state.on[k]=!state.on[k];
+  renderTrend();
+});
+$("trend-svg").addEventListener("mousemove",trendMove);
+$("trend-svg").addEventListener("mouseleave",hideTip);
+
+renderFunnel();
+apply();
+})();
+</script>
+</body>
+</html>

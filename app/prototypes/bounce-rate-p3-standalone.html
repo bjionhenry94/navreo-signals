@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounce rate P3 — The call list · Navreo</title>
+<style>
+/* Bounce-rate prototypes — shared tokens + the lane-3 slot harness.
+   The widget is NOT a lane of its own: it drops into the empty second column
+   of lane 3 ("Are your emails landing?"), beside "Replies by the day we sent".
+   That column is .c23's 3fr — roughly 700x330 at the hub's 1240px max-width,
+   so every prototype is built to that box, not to a full-width lane. */
+
+
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055;
+  --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --light-200:#E8D7C4;
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F;   --red-bg:#F7DCD5;   --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --radius:12px;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-sans);
+     -webkit-font-smoothing:antialiased;padding:44px clamp(20px,5vw,64px) 80px}
+.num{font-variant-numeric:tabular-nums}
+
+/* ── harness: lane 3 exactly as the hub renders it ───────────────────── */
+.ah{max-width:1240px}
+.lane{position:relative;padding-left:58px}
+.lane::before{content:"";position:absolute;left:19px;top:-44px;bottom:-80px;width:1px;background:var(--line)}
+.node{position:absolute;left:0;top:-4px;width:38px;height:38px;border-radius:50%;
+      background:var(--bg);border:1px solid var(--line);display:grid;place-items:center;
+      font-size:13px;color:var(--ink-3);z-index:1}
+.lane-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+.lane-q{font-size:19px;font-weight:600;letter-spacing:-0.01em;margin:0}
+.lane-tag{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.cards{display:grid;gap:14px;grid-template-columns:2fr 3fr;align-items:stretch}
+.fleetnote{font-size:12.5px;color:var(--ink-3);margin-top:12px}
+
+/* the neighbour card, mocked so the fit is judged in context, not in isolation */
+.ghost{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+       padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.ghost .bars{flex:1;display:flex;align-items:flex-end;gap:10px;padding:14px 0 0}
+.ghost .bars i{flex:1;background:var(--ink);border-radius:3px 3px 0 0;display:block}
+.ghost .bars i.hi{background:var(--orange)}
+.ghostnote{font-size:11px;color:var(--brown-400);font-style:italic}
+
+/* ── the widget card itself ──────────────────────────────────────────── */
+.acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+       padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.card-kick .soft{text-transform:none;letter-spacing:0;font-weight:500}
+.subline{font-size:12.5px;color:var(--ink-3)}
+
+.seg{display:inline-flex;gap:3px;flex-shrink:0}
+.seg button{font:600 11px/1 var(--font-sans);color:var(--ink-3);background:transparent;border:0;
+            padding:5px 9px;border-radius:999px;cursor:pointer}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--bg-sunken);color:var(--ink)}
+.seg button:focus-visible{outline:0;box-shadow:0 0 0 3px rgba(255,77,0,.32)}
+
+.take{margin-top:auto;padding-top:11px;border-top:1px solid var(--line);
+      font-size:13px;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:baseline}
+.take .arr{color:var(--brown-400);font-weight:400;flex-shrink:0}
+
+/* status colour — red/amber/green mean ONE thing each: where you sit vs 2%.
+   Nothing else on these cards is allowed to use them. */
+.g{color:var(--green)} .a{color:var(--amber)} .r{color:var(--red)}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
+      padding:3px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.pill.g{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
+.pill.a{background:var(--amber-bg);border-color:var(--amber-line);color:var(--amber)}
+.pill.r{background:var(--red-bg);border-color:var(--red-line);color:var(--red)}
+/* the trend chip is deliberately NOT a status colour — "it moved" and
+   "you are over the limit" must not share a palette */
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;
+      padding:3px 8px;border-radius:999px;background:var(--bg-sunken);color:var(--ink-3);white-space:nowrap}
+
+@media (max-width:980px){
+  .cards{grid-template-columns:1fr}
+  .lane{padding-left:0}
+  .lane::before,.node{display:none}
+}
+
+</style>
+<style>
+  /* P3 — grouped by CLIENT, ranked by emails that came back. Bet: you don't
+     work a list of campaigns, you make a list of phone calls. */
+  /* No sparkline: at 514x26 it squashed 30 days into a 20:1 letterbox where the
+     trend and the 2% line collapsed onto each other. The space buys real type. */
+  .strip{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+  .snum{font-family:var(--font-display);font-size:34px;line-height:1;letter-spacing:-0.03em}
+  .stag{font-size:12.5px;color:var(--ink-3)}
+  .savg{font-size:12px;color:var(--ink-3);margin-top:3px}
+
+  .clients{display:flex;flex-direction:column}
+  /* one number column, not two — "55% of the problem" and "4.0%" sitting 10px
+     apart in the same tabular numerals read as a single garbled figure */
+  .crow{display:grid;grid-template-columns:1fr 96px;gap:12px;align-items:center;
+        padding:7px 0;border-top:1px solid var(--line)}
+  .cname{font-size:13.5px;font-weight:600}
+  .cwhat{font-size:11.5px;color:var(--ink-3);margin-top:2px;overflow:hidden;
+         text-overflow:ellipsis;white-space:nowrap}
+  .cpct{font-size:15px;font-weight:600;text-align:right;font-variant-numeric:tabular-nums;line-height:1.2}
+  .cpctlab{font-size:10px;color:var(--ink-3);text-align:right;font-weight:400;display:block}
+  .colhead{display:grid;grid-template-columns:1fr 96px;gap:12px;font-size:10px;
+           letter-spacing:.05em;text-transform:uppercase;color:var(--brown-400)}
+  .colhead span:last-child{text-align:right}
+</style>
+</head>
+<body>
+
+<section class="ah"><div class="lane">
+  <span class="node num">3</span>
+  <div class="lane-head">
+    <h2 class="lane-q">Are your emails landing?</h2>
+    <span class="lane-tag num">Whole fleet · Emails sent · 1,976,989</span>
+  </div>
+
+  <div class="cards">
+    <div class="ghost">
+      <div class="card-kick">Replies by the day we sent</div>
+      <div class="bars"><i style="height:62%"></i><i style="height:60%"></i><i style="height:69%"></i><i style="height:68%"></i><i class="hi" style="height:88%"></i><i style="height:3%"></i></div>
+      <div class="subline">Tue is the quiet day.</div>
+      <div class="take"><span class="arr">→</span><span>Fri gets the most replies — send more on Fri.</span></div>
+      <div class="ghostnote">existing card — shown for context</div>
+    </div>
+
+    <!-- ── the widget ── -->
+    <div class="acard">
+      <div class="card-head">
+        <div class="card-kick">Emails that came back</div>
+        <div class="seg" role="group" aria-label="Date range">
+          <button data-d="7">7d</button><button data-d="14">14d</button><button data-d="30" class="on">30d</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="strip">
+          <span class="snum num" id="snum">–</span>
+          <span class="stag" id="stag">today — more than 2 in 100 came back</span>
+        </div>
+        <div class="savg" id="savg">&nbsp;</div>
+      </div>
+
+      <div>
+        <div class="card-kick" style="margin-bottom:6px">Who to call
+          <span class="soft">· each client's whole list history, not the date filter above</span></div>
+        <div class="colhead"><span>Client</span><span>Worst list</span></div>
+      </div>
+      <div class="clients" id="clients"></div>
+
+      <div class="take"><span class="arr">→</span><span id="take">&nbsp;</span></div>
+    </div>
+  </div>
+
+  <div class="fleetnote">Whole sending fleet — all clients.</div>
+</div></section>
+
+<script>
+/* Bounce-rate prototypes — shared sample data.
+   Shape is verbatim what the live page already has in memory:
+     TRENDS.series  ← /api/deliverability-trends?days=60   (days[], sent[], bounce_pct[])
+     SCORE.campaigns ← /api/campaign-scorecard             ({id: {name, sent, bounced, status, workspace}})
+   Nothing new is fetched — every prototype slices these client-side (7/14/30),
+   matching the hub's client-filter ruling and its 30-day display cap.
+   60 days are held so the 30d view still has a previous 30d to compare against;
+   only 30 are ever drawn. */
+
+var BR = (function () {
+  var DAYS_HELD = 60;
+
+  // Deterministic jitter — stable screenshots, no Math.random.
+  var JIT = [0.04, -0.07, 0.11, -0.03, 0.08, -0.10, 0.02, 0.06, -0.05, 0.09,
+             -0.02, 0.05, -0.08, 0.03, 0.10, -0.06, 0.01, 0.07, -0.09, 0.04];
+
+  var days = [], sent = [], bounce = [];
+  var base = new Date(); base.setHours(0, 0, 0, 0);
+
+  for (var i = 0; i < DAYS_HELD; i++) {
+    var d = new Date(base.getTime() - (DAYS_HELD - 1 - i) * 86400000);
+    var dow = d.getDay(), weekend = (dow === 0 || dow === 6);
+    days.push(d.toISOString().slice(0, 10));
+
+    if (weekend) {                       // we barely send at weekends
+      sent.push(dow === 6 ? 40 : 0);
+      bounce.push(null);                 // no honest rate off ~40 sends
+      continue;
+    }
+    sent.push(7000 + ((i * 137) % 620));
+    // First 30 days steady ~1.1%. Last 30 drift upward, steepening in the
+    // final fortnight — the story the widget has to make visible.
+    var v = i < 30 ? 1.10 : 1.10 + Math.pow((i - 30) / 29, 1.7) * 1.65;
+    bounce.push(Math.round((v + JIT[i % JIT.length]) * 100) / 100);
+  }
+
+  var campaigns = {
+    "8801": { name: "ValSoft — Ops Directors Q3",         sent: 18420, bounced: 742, status: "ACTIVE" },
+    "8802": { name: "Arnic — Plant Managers (recontact)", sent: 12310, bounced: 431, status: "ACTIVE" },
+    "8803": { name: "Amplifyy — Founders, hiring signal", sent: 9840,  bounced: 118, status: "ACTIVE" },
+    "8804": { name: "Byteplus — CTOs, tech-stack",        sent: 15600, bounced: 156, status: "ACTIVE" },
+    "8805": { name: "INSEAD — Alumni programme leads",    sent: 6210,  bounced: 44,  status: "ACTIVE" },
+    "8806": { name: "ValSoft — CFO expansion",            sent: 11050, bounced: 508, status: "ACTIVE" },
+    "8807": { name: "Arnic — Maintenance heads",          sent: 8730,  bounced: 61,  status: "ACTIVE" },
+    "8808": { name: "Byteplus — Eng leaders, EU",         sent: 5480,  bounced: 27,  status: "ACTIVE" },
+    "8809": { name: "Amplifyy — Growth leads, funding",   sent: 4120,  bounced: 173, status: "ACTIVE" },
+    "8810": { name: "INSEAD — Exec-ed decision makers",   sent: 3960,  bounced: 19,  status: "ACTIVE" },
+    "8811": { name: "ValSoft — IT Directors, mid-market", sent: 2140,  bounced: 12,  status: "ACTIVE" },
+    "8812": { name: "Arnic — Procurement (test)",         sent: 380,   bounced: 31,  status: "ACTIVE" }
+  };
+
+  /* ── derivations every prototype shares ───────────────────────────── */
+
+  var MIN_SENT = 500;   // same floor the hub's campaign ranking already uses
+  var LIMIT    = 2.0;   // the number the fleet is judged against
+
+  function slice(n) {   // last n days, client-side
+    return { days: days.slice(-n), sent: sent.slice(-n), bounce: bounce.slice(-n) };
+  }
+
+  // Sent-weighted bounce % across a window — the honest fleet number.
+  // Weekend nulls (near-zero sends) are skipped, not counted as zero.
+  function weighted(w) {
+    var b = 0, s = 0;
+    for (var i = 0; i < w.days.length; i++) {
+      if (w.bounce[i] == null || !w.sent[i]) continue;
+      s += w.sent[i]; b += w.sent[i] * w.bounce[i] / 100;
+    }
+    return s ? b / s * 100 : null;
+  }
+
+  // This window vs the window immediately before it.
+  function delta(n) {
+    var cur = weighted(slice(n));
+    var prevRaw = { days: days.slice(-2 * n, -n), sent: sent.slice(-2 * n, -n), bounce: bounce.slice(-2 * n, -n) };
+    var prev = prevRaw.days.length ? weighted(prevRaw) : null;
+    return { cur: cur, prev: prev, diff: (cur != null && prev != null) ? cur - prev : null };
+  }
+
+  // A long window's average can sit under the limit while every recent day is
+  // over it — a green headline would be a false all-clear. This counts the
+  // trailing run of sending days at or above the limit so every prototype can
+  // say so out loud.
+  function breach() {
+    var run = 0, latest = null;
+    for (var i = days.length - 1; i >= 0; i--) {
+      if (bounce[i] == null) continue;            // skip weekends
+      if (latest == null) latest = bounce[i];
+      if (bounce[i] >= LIMIT) run++; else break;
+    }
+    return { run: run, latest: latest };
+  }
+
+  // Worst band between the window average and an active breach run, so the
+  // headline colour can never be greener than the last few days deserve.
+  function headlineBand(cur) {
+    var b = band(cur), br = breach();
+    if (br.run >= 3) { var lb = band(br.latest); if (RANK[lb] > RANK[b]) return lb; }
+    return b;
+  }
+
+  // Offending campaigns. NOTE: campaign bounced/sent is LIFETIME cumulative —
+  // the scorecard has no per-day campaign series — so this list is labelled
+  // "all time" everywhere it appears. Saying "last 7 days" would be a lie.
+  // Small lists are INCLUDED and flagged, not hidden. The 500-send floor was
+  // silently swallowing a 380-send campaign at 8.2% — the worst rate in the
+  // fleet — which is exactly the number someone needs to see.
+  function offenders() {
+    var out = [];
+    Object.keys(campaigns).forEach(function (id) {
+      var c = campaigns[id];
+      if (!c.sent) return;
+      out.push({ id: id, name: c.name, sent: c.sent, bounced: c.bounced,
+                 pct: c.bounced / c.sent * 100, small: c.sent < MIN_SENT });
+    });
+    return out.sort(function (a, b) { return b.pct - a.pct; });
+  }
+
+  // Ranked by bounces CAUSED, not by rate — ranking by rate puts a 173-bounce
+  // campaign above a 742-bounce one and points the reader at the smallest fire.
+  function byVolume() {
+    return offenders().sort(function (a, b) { return b.bounced - a.bounced; });
+  }
+
+  // Grouped by client (the name prefix before the em dash). One client can own
+  // several of the worst campaigns — that is one phone call, not four.
+  function byClient() {
+    var g = {};
+    offenders().forEach(function (o) {
+      var c = o.name.split("—")[0].trim();
+      g[c] = g[c] || { client: c, sent: 0, bounced: 0, camps: [] };
+      g[c].sent += o.sent; g[c].bounced += o.bounced; g[c].camps.push(o);
+    });
+    return Object.keys(g).map(function (k) {
+      var r = g[k];
+      r.pct  = r.sent ? r.bounced / r.sent * 100 : 0;   // blended — see r.worst
+      var bad = r.camps.filter(function (c) { return c.pct >= LIMIT; })
+                       .sort(function (a, b) { return b.pct - a.pct; });
+      r.over = bad.length;
+      // Blending a client's clean lists into its bad one repaints a 4.2% fire
+      // as 2.1% amber. The row must show — and name — the worst list.
+      r.worst = bad[0] || null;
+      r.badNames = bad.map(function (c) { return c.name.split("—").slice(1).join("—").trim(); });
+      return r;
+    }).sort(function (a, b) { return b.bounced - a.bounced; });
+  }
+
+  function totalBounced() {
+    return offenders().reduce(function (a, o) { return a + o.bounced; }, 0);
+  }
+
+  // Today's number — the one every reviewer said was missing. The window
+  // average answers "how was the month"; this answers "am I in trouble now".
+  function today() {
+    for (var i = days.length - 1; i >= 0; i--) if (bounce[i] != null) return bounce[i];
+    return null;
+  }
+
+  // Sparkline markup. The run of days at/over the limit is drawn in the alert
+  // colour and everything else stays neutral — colouring the whole line by
+  // today's mood retro-paints three healthy weeks as a problem.
+  function sparkSVG(w, h) {
+    var pts = [];
+    for (var i = 0; i < w.days.length; i++) if (w.bounce[i] != null) pts.push(i);
+    if (!pts.length) return { svg: "", lo: 0, hi: 0 };
+    var vals = pts.map(function (i) { return w.bounce[i]; });
+    var lo = Math.min(Math.min.apply(null, vals), LIMIT);
+    var hi = Math.max(Math.max.apply(null, vals), LIMIT);
+    var pad = Math.max((hi - lo) * 0.20, 0.10);
+    lo = Math.max(0, lo - pad); hi = hi + pad;
+    var n = w.days.length - 1 || 1;
+    var X = function (i) { return i / n * 100; };
+    var Y = function (v) { return 100 - (v - lo) / (hi - lo) * 100; };
+    var d = function (arr) {
+      return arr.map(function (i, k) { return (k ? "L" : "M") + X(i).toFixed(2) + " " + Y(w.bounce[i]).toFixed(2); }).join(" ");
+    };
+    // trailing run at/over the limit
+    var cut = pts.length;
+    while (cut > 0 && w.bounce[pts[cut - 1]] >= LIMIT) cut--;
+    var over = pts.slice(Math.max(0, cut - 1));   // one back, so the segments join
+    var alert = band(w.bounce[pts[pts.length - 1]]);
+
+    var svg =
+      '<line x1="0" y1="' + Y(LIMIT).toFixed(2) + '" x2="100" y2="' + Y(LIMIT).toFixed(2) + '" ' +
+        'stroke="var(--brown-300)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>' +
+      '<path d="' + d(pts) + '" fill="none" stroke="var(--brown-400)" stroke-width="1.75" ' +
+        'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>' +
+      (cut < pts.length
+        ? '<path d="' + d(over) + '" fill="none" stroke="' + col(alert) + '" stroke-width="2.25" ' +
+          'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
+        : "");
+    return { svg: svg, lo: lo, hi: hi, X: X, Y: Y, lastI: pts[pts.length - 1] };
+  }
+
+  var RANK = { g: 0, a: 1, r: 2 };
+  // The limit is the limit: at or over 2% is RED. Amber is the approach lane
+  // (1.5–2%), green is clear. This deliberately diverges from the hub's older
+  // <2 green / <3 amber / 3+ red banding — a card that prints "2% limit" and
+  // then paints six days over it amber is telling two different stories.
+  function band(p) { return p == null ? "g" : (p >= LIMIT ? "r" : (p >= LIMIT * 0.75 ? "a" : "g")); }
+  function col(b)  { return b === "r" ? "var(--red)" : (b === "a" ? "var(--amber)" : "var(--green)"); }
+  function pct(p)  { return p == null ? "–" : p.toFixed(2) + "%"; }
+  function n(v)    { return v.toLocaleString("en-US"); }
+  function shortName(s) { return s.length > 34 ? s.slice(0, 33) + "…" : s; }
+  function dayLabel(iso) {
+    var d = new Date(iso + "T00:00:00");
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  }
+
+  return { days: days, sent: sent, bounce: bounce, campaigns: campaigns,
+           LIMIT: LIMIT, MIN_SENT: MIN_SENT,
+           slice: slice, weighted: weighted, delta: delta, breach: breach,
+           headlineBand: headlineBand, offenders: offenders,
+           today: today, sparkSVG: sparkSVG, byVolume: byVolume,
+           byClient: byClient, totalBounced: totalBounced,
+           band: band, col: col, pct: pct, n: n,
+           shortName: shortName, dayLabel: dayLabel };
+})();
+
+</script>
+<script>
+(function () {
+  var W = 30;
+
+  function render() {
+    var w = BR.slice(W), d = BR.delta(W), br = BR.breach(), t = BR.today();
+    var b = BR.band(t);
+
+    var snum = document.getElementById("snum");
+    snum.textContent = t.toFixed(2) + "%"; snum.className = "snum num " + b;
+    document.getElementById("stag").textContent = t >= BR.LIMIT
+      ? "today — over the 2% limit, " + br.run + " days running"
+      : "today — under the 2% limit";
+    document.getElementById("savg").textContent =
+      "Above 2%, Google and Outlook start sending you to spam. Last " + W +
+      " days average " + d.cur.toFixed(2) + "%.";
+
+    // One row per CLIENT, ranked by emails that came back. Only clients with a
+    // campaign over the limit appear — healthy rows are not work.
+    var cl = BR.byClient().filter(function (c) { return c.over > 0; }).slice(0, 3);
+    var total = BR.totalBounced();
+    document.getElementById("clients").innerHTML = cl.map(function (c) {
+      // the WORST list's rate, never the client's blended average — blending
+      // repaints a 4.2% fire as 2.1%
+      var w2 = c.worst;
+      return '<div class="crow">' +
+        '<div><div class="cname">' + c.client + ' · ' +
+          Math.round(c.bounced / total * 100) + '% of the total</div>' +
+          '<div class="cwhat">' + c.badNames.join(", ") +
+          (w2.small ? ' <span style="color:var(--brown-400)">(small list)</span>' : '') +
+          '</div></div>' +
+        '<div><div class="cpct ' + BR.band(w2.pct) + '">' + w2.pct.toFixed(1) + '%' +
+          '<span class="cpctlab">' + BR.n(c.bounced) + ' came back</span></div></div>' +
+      '</div>';
+    }).join("") || '<div class="subline" style="padding-top:8px">No client is over 2%.</div>';
+
+    document.getElementById("take").textContent = cl.length
+      ? "Call " + cl[0].client + " — pause " + cl[0].badNames.join(" and ") +
+        ", get those addresses re-checked, then switch them back on."
+      : "Nothing over 2% — keep sending.";
+  }
+
+  document.querySelectorAll(".seg button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".seg button").forEach(function (x) { x.classList.remove("on"); });
+      btn.classList.add("on"); W = +btn.dataset.d; render();
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

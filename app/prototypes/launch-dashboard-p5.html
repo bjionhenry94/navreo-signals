@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch dashboard · Mission control</title>
+<link rel="stylesheet" href="launch-dashboard-base.css">
+<style>
+  /* ---- header ---- */
+  .ld-head-l{min-width:0}
+  @media(max-width:420px){ .ld-title{font-size:23px} .tile-name{font-size:15px}
+    .tile-top{gap:11px} .tile-meta{gap:10px} }
+
+  /* ---- BOARD: finished launches ride as one-line strips, in-flight ones fill the grid ---- */
+  .ld-board,.ld-ready{display:flex;flex-direction:column;gap:14px}
+  .ld-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+  @media(min-width:900px){
+    .ld-board,.ld-ready,.ld-grid{gap:20px}
+    .ld-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    /* an odd trailing tile fills the row rather than leaving a hole — and splits in two
+       so its rail is never drawn wider than a normal tile's */
+    .ld-grid .tile:last-child:nth-child(odd){grid-column:1 / -1;
+      display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:26px;align-items:start}
+    .ld-grid .tile:last-child:nth-child(odd) .rail{margin-top:0}
+  }
+
+  .tile{padding:18px 18px 20px;display:flex;flex-direction:column;gap:15px;cursor:pointer;
+    transition:box-shadow .2s ease, transform .2s ease, border-color .2s ease}
+  @media(min-width:900px){ .tile{padding:21px 22px 23px} }
+  .tile:hover{box-shadow:var(--shadow);transform:translateY(-2px);border-color:var(--line-2)}
+  .tile-head{display:flex;flex-direction:column;gap:15px;min-width:0}
+  .tile-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+  .tile-name{font-size:16px;font-weight:600;line-height:1.25;letter-spacing:-.01em;color:var(--ink);
+    min-width:0;overflow-wrap:break-word}
+
+  /* the audience size — the most concrete number a founder has */
+  .tile-net{flex:0 0 auto;display:flex;align-items:baseline;gap:5px;white-space:nowrap;line-height:1.2}
+  .tile-net .num{font-size:15px;color:var(--ink)}
+  .tile-net .netw{font-size:12px;color:var(--ink-3)}
+
+  /* the way in, said out loud — the whole tile opens, and the top row says so */
+  .tile-meta{display:flex;align-items:baseline;gap:13px;flex:0 0 auto}
+  .tile-open{display:inline-flex;align-items:center;gap:3px;font-size:12px;line-height:1.2;
+    color:var(--ink-3);white-space:nowrap;transition:color .2s ease}
+  .chev{display:inline-block;vertical-align:-3px;flex:0 0 auto;transition:transform .2s ease}
+  .tile:hover .tile-open,.tile:focus-visible .tile-open{color:var(--ink-2)}
+  .tile:hover .tile-open .chev,.strip:hover .strip-open .chev{transform:translateX(2px)}
+  .tile:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus)}
+
+  /* ---- hero: one phrase, one dot, one quiet receipt, one quiet next ---- */
+  .tile-mid{display:flex;flex-direction:column;gap:6px;min-width:0}
+  .hero{display:flex;align-items:flex-start;gap:9px;min-width:0}
+  .hero-dot{width:9px;height:9px;border-radius:50%;background:var(--orange);flex:0 0 auto;margin-top:6px}
+  .hero-line{font-size:15px;line-height:1.4;letter-spacing:-.01em;min-width:0}
+  .hero-verb{color:var(--orange);font-weight:500}
+  .hero-tail{color:var(--ink-3)}
+  /* the within-step measure sits under the milestone so it can never be read as the whole launch */
+  .hero-pct{display:block;font-size:12px;line-height:1.45;color:var(--ink-3)}
+  .hero.ready .hero-dot{background:var(--green)}
+  .hero.ready .hero-verb{color:var(--green)}
+  .tile-subject,.tile-next{font-size:12px;line-height:1.45;color:var(--ink-3);padding-left:18px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ---- ready strip: a finished launch is one line and one control ---- */
+  .strip{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:11px 18px;
+    padding:13px 16px;cursor:pointer;transition:box-shadow .2s ease, border-color .2s ease}
+  @media(min-width:900px){ .strip{padding:14px 20px} }
+  .strip:hover{box-shadow:var(--shadow);border-color:var(--line-2)}
+  .strip-l{display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto}
+  .strip-dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex:0 0 auto}
+  .strip-name{font-size:15px;font-weight:600;line-height:1.25;letter-spacing:-.01em;color:var(--ink);min-width:0}
+  .strip-open{appearance:none;border:0;background:none;padding:0;margin:0;cursor:pointer;text-align:left;
+    font:inherit;font-size:inherit;font-weight:inherit;letter-spacing:inherit;color:inherit;overflow-wrap:break-word}
+  .strip-open .chev{color:var(--ink-3);margin-left:5px}
+  .strip-open:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus);border-radius:6px}
+  .strip-r{display:flex;align-items:center;gap:14px;flex:0 0 auto}
+  .strip-state{font-size:13px;color:var(--green)}
+  .strip.on .strip-state{color:var(--orange)}
+  .strip .switch{margin:-6px -6px -6px 0}
+
+  /* ---- rail: dots + progress track + labels ---- */
+  .rail{display:flex;flex-direction:column;gap:3px}
+  .tile .rail{margin-top:auto}
+  .raildots{position:relative;display:flex;align-items:center}
+  .track{position:absolute;left:10%;right:10%;top:50%;transform:translateY(-50%);height:3px;border-radius:3px;background:var(--line-2)}
+  .track-done,.track-cur{position:absolute;top:0;height:100%;border-radius:3px}
+  .track-done{left:0;background:var(--green)}
+  .track-cur{background:var(--orange)}
+  .dotbtn{appearance:none;border:0;background:none;cursor:pointer;flex:1;min-width:0;display:flex;
+    justify-content:center;align-items:center;padding:9px 0;position:relative;z-index:1}
+  .dotbtn .stagedot{width:11px;height:11px;box-shadow:0 0 0 3px var(--card);transition:transform .15s ease}
+  .dotbtn:hover .stagedot{transform:scale(1.35)}
+  .dotbtn:focus-visible{outline:none}
+  .dotbtn:focus-visible .stagedot{box-shadow:0 0 0 3px var(--card),0 0 0 6px var(--focus)}
+  .dotbtn.viewing .stagedot{box-shadow:0 0 0 3px var(--card),0 0 0 4px var(--ink-3)}
+  .raillabels{display:flex}
+  .raillabel{flex:1;min-width:0;padding:0 2px;text-align:center}
+  .raillabel .stagelabel{display:block;font-size:11px;line-height:1.4;letter-spacing:-.02em;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .raillabel.viewing .stagelabel{color:var(--ink);font-weight:600}
+
+  /* ---- detail takeover ---- */
+  .ld-detail{display:block}
+  .detail-wrap{max-width:660px;margin:0 auto}
+  .backbtn{margin-bottom:14px}
+  .backbtn:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus);border-radius:8px}
+  .detail-head{padding:18px 18px 20px;margin-bottom:20px}
+  .dh-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:11px}
+  .dh-name{font-size:19px;font-weight:600;letter-spacing:-.01em;min-width:0;overflow-wrap:break-word}
+  .detail-head .hero{margin-bottom:18px}
+
+  /* targeting */
+  .found{font-size:14px;color:var(--ink-3);margin-bottom:9px}
+  .found .num{font-size:21px;color:var(--ink);margin:0 1px}
+  .bar{height:8px;border-radius:8px;background:var(--bg-sunken);border:1px solid var(--line);margin-bottom:20px;position:relative}
+  .bar-fill{display:block;height:100%;border-radius:8px;position:relative;animation:ld-fill .9s ease both}
+  .fill-active{background:var(--orange)}
+  .fill-done{background:var(--green)}
+  .bar-tip{position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:11px;height:11px;border-radius:50%;background:var(--orange);box-shadow:0 0 0 3px var(--bg)}
+  .grp{margin-bottom:15px}
+  .grp-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin-bottom:8px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+
+  /* copy */
+  .mailframe{margin-bottom:4px}
+  .mh-label{color:var(--ink-3);margin-right:7px;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  .mailhead{font-weight:500;color:var(--ink)}
+  .mailbody{line-height:1.55}
+
+  /* icebreaker */
+  .icelist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .iceline{background:var(--bg-sunken);border:1px solid var(--line);border-radius:10px;padding:11px 13px;color:var(--ink-2);font-size:13px;line-height:1.5}
+
+  /* checks */
+  .checklist{list-style:none;margin:0;padding:0}
+  .checkrow{display:flex;align-items:center;gap:12px;padding:12px 2px;border-bottom:1px solid var(--line)}
+  .checkrow:last-child{border-bottom:none}
+  .ck{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .ck-dot{width:12px;height:12px;border-radius:50%;background:currentColor}
+  .waiting .ck-dot{width:11px;height:11px;background:none;border:2px solid currentColor}
+  .ck-label{font-size:14px;color:var(--ink-2)}
+  .ck-wait{color:var(--ink-3)}
+
+  /* live */
+  .live{display:flex;flex-direction:column;gap:20px;align-items:flex-start}
+  .ls-title{font-size:17px;font-weight:500;color:var(--ink)}
+  .ls-sub{color:var(--ink-3);margin-top:4px}
+  .ls-sub .num{color:var(--ink-2)}
+  .switch{appearance:none;border:0;background:none;cursor:pointer;font:inherit;display:inline-flex;align-items:center;gap:12px;padding:6px;margin:-6px;border-radius:10px}
+  .switch:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus)}
+  .switch-track{width:46px;height:27px;border-radius:999px;background:var(--line-2);position:relative;transition:background .2s ease;flex:0 0 auto}
+  .switch-knob{position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:left .2s ease}
+  .switch.on .switch-track{background:var(--orange)}
+  .switch.on .switch-knob{left:22px}
+  .switch-label{font-weight:500;color:var(--ink-2)}
+
+  /* placeholder (queued) */
+  .placeholder{display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;
+    border:1px dashed var(--line-2);border-radius:12px;padding:36px 18px;color:var(--ink-3)}
+  .ph-dot{width:11px;height:11px;border-radius:50%;background:var(--line-2)}
+  .ph-text{font-size:14px}
+
+  /* the disclosure lives at the bottom, not at the top */
+  .ld-foot{margin-top:32px;padding-top:15px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+
+  @media (prefers-reduced-motion:reduce){ .bar-fill{animation:none}
+    .tile,.strip,.switch-track,.switch-knob,.chev,.tile-open{transition:none} }
+</style>
+</head>
+<body>
+  <div class="ld-app">
+    <header class="ld-top">
+      <div class="ld-head-l">
+        <h1 class="ld-title">Launching for Navreo</h1>
+        <div class="ld-sub" id="subline"></div>
+      </div>
+      <div class="ld-tools">
+        <button class="ld-theme" id="themeBtn" aria-label="Switch to dark mode"></button>
+      </div>
+    </header>
+    <main id="view" class="ld-board"></main>
+    <footer class="ld-foot" id="foot">Launch progress is preview data — nothing sends from this page</footer>
+  </div>
+
+  <script src="launch-dashboard-fixture.js"></script>
+  <script>
+  (function(){
+    var LD = window.LD;
+    var view = document.getElementById('view');
+    var root = document.documentElement;
+    var themeBtn = document.getElementById('themeBtn');
+    if(!LD || !LD.campaigns){ view.innerHTML = '<p style="color:var(--ink-3)">No launch data.</p>'; return; }
+
+    /* the only mutable state on the page: which finished launch the client has flipped on */
+    var switched = {};
+
+    var MOON='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>';
+    var SUN='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>';
+    var BACK='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
+    var CHECK='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+    var CHEV='<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+
+    function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+    function nf(n){ return Number(n).toLocaleString('en-US'); }
+    /* lowercase the sentence, not the proper nouns inside it */
+    function lc(s){ s=String(s); return s.charAt(0).toLowerCase()+s.slice(1); }
+    /* the sending tool is our vendor, not the client's vocabulary — the board speaks plain English */
+    function plain(s){ return String(s).replace(/\s*\bin\s+Smartlead\b/gi,' to send').replace(/\s*\bSmartlead\b/gi,''); }
+    function state(c,i){ return i<c.active?'done': i===c.active?'active':'queued'; }
+    function stCls(s){ return s==='done'?'st-done': s==='active'?'st-active':'st-queued'; }
+    /* a launch parked on the LIVE stage is finished, not in progress — it goes green and still */
+    function isReady(c){ return !!(LD.stages[c.active] && LD.stages[c.active].key==='live'); }
+
+    function rail(c, viewing){
+      var last=LD.stages.length-1, ready=isReady(c);
+      var greenW = c.active/last*100;
+      var orangeW = (c.active<last && !ready) ? c.pct/last : 0;
+      var dots='', labels='';
+      for(var i=0;i<LD.stages.length;i++){
+        var s=state(c,i); if(ready && s==='active') s='done';
+        var cls=stCls(s), br=(s==='active'?' breathe':''), vw=(viewing===i?' viewing':'');
+        var lb=plain(LD.stages[i].label);
+        dots += '<button type="button" class="dotbtn '+cls+vw+'" data-c="'+esc(c.id)+'" data-i="'+i+'" aria-label="'+esc(lb)+', '+s+'"><span class="stagedot'+br+'"></span></button>';
+        labels += '<span class="raillabel '+cls+vw+'"><span class="stagelabel">'+esc(lb)+'</span></span>';
+      }
+      return '<div class="rail"><div class="raildots"><span class="track"><span class="track-done" style="width:'+greenW+'%"></span><span class="track-cur" style="left:'+greenW+'%;width:'+orangeW+'%"></span></span>'+dots+'</div><div class="raillabels">'+labels+'</div></div>';
+    }
+
+    /* the audience size — same object on the tile, the strip and the detail head */
+    function net(c){
+      if(!c.net) return '';
+      return '<span class="tile-net"><span class="num">'+nf(c.net)+'</span><span class="netw">people</span></span>';
+    }
+    /* the milestone, in words the rail agrees with */
+    function milestone(c){ return 'step '+(c.active+1)+' of '+LD.stages.length; }
+    /* how far through THAT step — never a whole-launch number */
+    function stepPct(c){
+      if(isReady(c)) return null;
+      var p=c.pct;
+      if(typeof p!=='number' || !(p>0) || p>=100) return null;
+      return Math.round(p);
+    }
+    /* what is happening right now, as one phrase — the tail is a milestone, so it matches the rail */
+    function hero(c){
+      var s=LD.stages[c.active], ready=isReady(c), p=stepPct(c);
+      return '<div class="hero'+(ready?' ready':'')+'">'
+        + '<span class="hero-dot'+(ready?'':' breathe')+'"></span>'
+        + '<span class="hero-line"><span class="hero-verb">'+esc(plain(s.verb))+'</span>'
+        + (ready?'':'<span class="hero-tail"> · '+milestone(c)+'</span>')
+        + (p===null?'':'<span class="hero-pct">'+p+'% of this step</span>')
+        + '</span></div>';
+    }
+    /* one receipt without a click — named by type, because a subject and a filter are not the same thing */
+    function receipt(c){
+      if(c.copy && c.copy.subject) return '<div class="tile-subject">Subject: “'+esc(c.copy.subject)+'”</div>';
+      if(c.targeting && c.targeting.signal && c.targeting.signal.length) return '<div class="tile-subject">Looking for: “'+esc(c.targeting.signal[0])+'”</div>';
+      return '';
+    }
+    /* what happens next, and when */
+    function nextline(c){
+      var nx=LD.stages[c.active+1];
+      if(!nx || !c.eta) return '';
+      return '<div class="tile-next">Next: '+esc(lc(plain(nx.verb)))+' · '+esc(c.eta)+'</div>';
+    }
+    /* visual state only — this never sends, and it says so wherever it appears */
+    function switchBtn(c){
+      var on=!!switched[c.id];
+      return '<button type="button" class="switch'+(on?' on':'')+'" role="switch" data-c="'+esc(c.id)+'"'
+        + ' aria-checked="'+(on?'true':'false')+'" aria-label="Switch on — preview only, nothing sends">'
+        + '<span class="switch-track"><span class="switch-knob"></span></span>'
+        + '<span class="switch-label">'+(on?'On':'Switch on')+'</span></button>';
+    }
+    /* the honest word for a preview toggle, used by the strip and by the live pane */
+    function switchState(on){ return on?'Switched on · preview':'Ready to send'; }
+
+    function tile(c){
+      var s=LD.stages[c.active];
+      var lbl=c.name+' — '+plain(s.verb)+(isReady(c)?'':', '+milestone(c))+'. Open launch';
+      return '<section class="tile card" role="button" tabindex="0" aria-label="'+esc(lbl)+'"'
+        + ' data-c="'+esc(c.id)+'" data-active="'+c.active+'">'
+        + '<div class="tile-head">'
+        +   '<div class="tile-top"><h2 class="tile-name">'+esc(c.name)+'</h2>'
+        +     '<div class="tile-meta">'+net(c)+'<span class="tile-open" aria-hidden="true">Open'+CHEV+'</span></div>'
+        +   '</div>'
+        +   '<div class="tile-mid">'+hero(c)+receipt(c)+nextline(c)+'</div>'
+        + '</div>'
+        + rail(c,-1)
+        + '</section>';
+    }
+    /* a finished launch has nowhere to go — one line, and the control that fires it */
+    function strip(c){
+      var on=!!switched[c.id];
+      return '<section class="strip card'+(on?' on':'')+'" data-c="'+esc(c.id)+'" data-active="'+c.active+'">'
+        + '<div class="strip-l"><span class="strip-dot"></span>'
+        +   '<h2 class="strip-name"><button type="button" class="strip-open">'+esc(c.name)+CHEV+'</button></h2>'
+        +   net(c)
+        + '</div>'
+        + '<div class="strip-r"><span class="strip-state">'+switchState(on)+'</span>'+switchBtn(c)+'</div>'
+        + '</section>';
+    }
+
+    function renderGrid(){
+      var flight=[], ready=[], html='';
+      for(var i=0;i<LD.campaigns.length;i++){ (isReady(LD.campaigns[i])?ready:flight).push(LD.campaigns[i]); }
+      /* the work that still needs attention leads, closest-to-live first; the finished shelf sits under it */
+      flight.sort(function(a,b){ return (b.active-a.active) || ((b.pct||0)-(a.pct||0)); });
+      if(flight.length) html += '<div class="ld-grid">'+flight.map(tile).join('')+'</div>';
+      if(ready.length) html += '<div class="ld-ready">'+ready.map(strip).join('')+'</div>';
+      view.className='ld-board';
+      view.innerHTML = html;
+      window.scrollTo(0,0);
+    }
+
+    /* ---- stage detail builders ---- */
+    function placeholder(){
+      return '<div class="placeholder"><span class="ph-dot"></span><span class="ph-text">Not started yet</span></div>';
+    }
+    function targeting(c,s){
+      var t=c.targeting, pct=Math.round(t.found/t.target*100), active=(s==='active');
+      var sig=t.signal.map(function(x){ return '<span class="chip'+(active?' on':'')+'">'+esc(x)+'</span>'; }).join('');
+      var roles=t.roles.map(function(x){ return '<span class="chip">'+esc(x)+'</span>'; }).join('');
+      return '<div class="found">Found <span class="num">'+nf(t.found)+'</span> of <span class="num">'+nf(t.target)+'</span></div>'
+        + '<div class="bar"><span class="bar-fill '+(active?'fill-active':'fill-done')+'" style="width:'+pct+'%">'+(active?'<span class="bar-tip breathe"></span>':'')+'</span></div>'
+        + '<div class="grp"><div class="grp-label">Signals</div><div class="chips">'+sig+'</div></div>'
+        + '<div class="grp"><div class="grp-label">Roles</div><div class="chips">'+roles+'</div></div>';
+    }
+    function copy(d){
+      return '<div class="mailframe"><div class="mailhead"><span class="mh-label">Subject</span>'+esc(d.subject)+'</div><div class="mailbody">'+esc(d.preview)+'</div></div>';
+    }
+    function ice(d){
+      return '<ul class="icelist">'+d.samples.map(function(x){ return '<li class="iceline">'+esc(x)+'</li>'; }).join('')+'</ul>';
+    }
+    function checks(d){
+      var rows=d.items.map(function(it){
+        if(it.state==='pass') return '<li class="checkrow"><span class="ck tick">'+CHECK+'</span><span class="ck-label">'+esc(it.label)+'</span></li>';
+        if(it.state==='run') return '<li class="checkrow"><span class="ck running"><span class="ck-dot breathe"></span></span><span class="ck-label">'+esc(it.label)+'</span></li>';
+        return '<li class="checkrow"><span class="ck waiting"><span class="ck-dot"></span></span><span class="ck-label ck-wait">'+esc(it.label)+'</span></li>';
+      }).join('');
+      return '<ul class="checklist">'+rows+'</ul>';
+    }
+    function liveTitle(on){ return on?'Switched on — preview only':'Paused, ready to send'; }
+    function liveSub(on,sent){ return on?'nothing sent yet':'<span class="num">'+nf(sent)+'</span> sent'; }
+    function live(c,d){
+      var on=!!switched[c.id], sent=(d && d.sent)||0;
+      return '<div class="live"><div class="live-status" id="liveStatus" data-sent="'+sent+'">'
+        + '<div class="ls-title">'+liveTitle(on)+'</div>'
+        + '<div class="ls-sub">'+liveSub(on,sent)+'</div>'
+        + '</div>'+switchBtn(c)+'</div>';
+    }
+
+    function body(c,i){
+      var stage=LD.stages[i], s=state(c,i), data=c[stage.key];
+      if(s==='queued' || !data) return placeholder();
+      if(stage.key==='targeting') return targeting(c,s);
+      if(stage.key==='copy') return copy(data);
+      if(stage.key==='icebreaker') return ice(data);
+      if(stage.key==='checks') return checks(data);
+      if(stage.key==='live') return live(c,data);
+      return placeholder();
+    }
+
+    function openStage(cid,i){
+      var c=null;
+      for(var k=0;k<LD.campaigns.length;k++){ if(LD.campaigns[k].id===cid){ c=LD.campaigns[k]; break; } }
+      if(!c) return;
+      view.className='ld-detail';
+      view.innerHTML = '<div class="detail-wrap">'
+        + '<button class="backbtn" id="backBtn">'+BACK+'<span>All launches</span></button>'
+        + '<div class="detail-head card">'
+        +   '<div class="dh-top"><h2 class="dh-name">'+esc(c.name)+'</h2>'+net(c)+'</div>'
+        +   hero(c)
+        +   rail(c,i)
+        + '</div>'
+        + '<div class="detail-body">'+body(c,i)+'</div>'
+        + '</div>';
+      window.scrollTo(0,0);
+    }
+
+    function toggleSwitch(sw){
+      var cid=sw.dataset.c, on=!switched[cid];
+      switched[cid]=on;
+      sw.setAttribute('aria-checked', on?'true':'false');
+      sw.classList.toggle('on', on);
+      var lab=sw.querySelector('.switch-label'); if(lab) lab.textContent = on?'On':'Switch on';
+      var st=sw.closest('.strip');
+      if(st){
+        st.classList.toggle('on', on);
+        var word=st.querySelector('.strip-state'); if(word) word.textContent = switchState(on);
+      }
+      var ls=document.getElementById('liveStatus');
+      if(ls){
+        ls.querySelector('.ls-title').textContent = liveTitle(on);
+        ls.querySelector('.ls-sub').innerHTML = liveSub(on, ls.dataset.sent||0);
+      }
+    }
+
+    /* one delegated handler survives every re-render of #view */
+    view.addEventListener('click', function(e){
+      var sw=e.target.closest('.switch'); if(sw){ toggleSwitch(sw); return; }
+      var dot=e.target.closest('.dotbtn'); if(dot){ openStage(dot.dataset.c, +dot.dataset.i); return; }
+      if(e.target.closest('#backBtn')){ renderGrid(); return; }
+      var card=e.target.closest('.tile,.strip'); if(card){ openStage(card.dataset.c, +card.dataset.active); return; }
+    });
+
+    /* a tile is a button, so it answers to a button's keys — the stage dots keep their own */
+    view.addEventListener('keydown', function(e){
+      if(e.key!=='Enter' && e.key!==' ' && e.key!=='Spacebar') return;
+      var t=e.target;
+      if(!t || !t.classList || !t.classList.contains('tile')) return;
+      e.preventDefault();
+      openStage(t.dataset.c, +t.dataset.active);
+    });
+
+    function setTheme(t){
+      root.dataset.theme=t;
+      themeBtn.innerHTML = (t==='dark')?SUN:MOON;
+      themeBtn.setAttribute('aria-label', (t==='dark')?'Switch to light mode':'Switch to dark mode');
+    }
+    themeBtn.addEventListener('click', function(){ setTheme(root.dataset.theme==='dark'?'light':'dark'); });
+
+    function subline(){
+      var flight=0, ready=0;
+      for(var i=0;i<LD.campaigns.length;i++){ if(isReady(LD.campaigns[i])) ready++; else flight++; }
+      var parts=[];
+      if(flight) parts.push(flight+' launch'+(flight===1?'':'es')+' in flight');
+      if(ready) parts.push(ready+' ready to send');
+      parts.push('updated '+LD.updated);
+      return parts.join(' · ');
+    }
+
+    document.getElementById('subline').textContent = subline();
+    if(!LD.preview){ document.getElementById('foot').style.display='none'; }
+    setTheme('light');
+    renderGrid();
+  })();
+  </script>
+</body>
+</html>

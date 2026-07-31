@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch dashboard · Pipeline stepper</title>
+<link rel="stylesheet" href="launch-dashboard-base.css">
+<style>
+/* ===== p1 · Pipeline stepper — layout only; colour/motion tokens come from base ===== */
+.ld-theme{display:inline-flex;align-items:center;justify-content:center}
+
+/* breathing for progress fills: opacity only, anchored, no distortion (reduced-motion guarded).
+   Same 1.8s period as base .breathe so the dot and the fill inhale together. */
+@keyframes p1-glow{0%,100%{opacity:.55}50%{opacity:1}}
+.pulse{animation:p1-glow 1.8s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.pulse{animation:none}}
+
+/* ---- rows ---- */
+.rows{display:flex;flex-direction:column;gap:12px}
+.row{display:flex;align-items:center;gap:22px;flex-wrap:wrap;padding:15px 18px}
+.row-id{flex:1 1 200px;min-width:0}
+.row-name{display:block;text-align:left;font-family:var(--font-display);font-size:19px;letter-spacing:-.015em;color:var(--ink);background:none;border:0;padding:0;margin:0;cursor:pointer;line-height:1.14}
+.row-name:hover{text-decoration:underline}
+.row-name:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus);border-radius:6px}
+.row-cap{color:var(--ink-3);font-size:12.5px;margin-top:4px}
+
+/* what is HAPPENING, in plain English — the active stage's verb + its % */
+.row-now{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:8px;font-size:14px;line-height:1.3}
+.row-now .stagedot{width:8px;height:8px}
+.row-verb{color:var(--ink)}
+.row-now-sep,.row-now-pct{color:var(--ink-3)}
+
+.row-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.row-net{font-size:15px;color:var(--ink)}
+.net-label{color:var(--ink-3);font-size:12px}
+
+/* ---- the 5-segment track: ONE segmented bar, not five meters ---- */
+.track{flex:1.7 1 300px;min-width:0;display:flex;align-items:flex-start;gap:11px;padding-top:12px}
+.segs{flex:1 1 auto;min-width:0;display:flex;gap:3px}
+.track-pct{flex:0 0 44px;text-align:right;font-size:15px;color:var(--ink-2);line-height:1;padding-top:3px}
+
+.seg{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;background:none;border:0;padding:5px 2px 4px;cursor:pointer;border-radius:8px}
+.seg:hover{background:var(--bg-sunken)}
+.seg:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus)}
+/* zero height in flow — only the ACTIVE segment gets a marker, and it overhangs */
+.seg-top{position:absolute;left:0;right:0;top:-12px;height:12px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.seg-top .stagedot{width:7px;height:7px}
+
+.seg-bar{height:10px;background:var(--line);overflow:hidden}
+.seg:first-child .seg-bar{border-radius:999px 0 0 999px}
+.seg:last-child .seg-bar{border-radius:0 999px 999px 0}
+.seg-fill{display:block;height:100%;width:0;background:var(--st-queued)}
+.st-done .seg-fill{background:var(--st-done)}
+.st-active .seg-fill{background:var(--st-active)}
+
+.seg-cap{display:block;margin-top:8px;min-width:0}
+.seg .stagelabel{display:block;font-size:11px;line-height:1.2;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg:hover .stagelabel{color:var(--ink)}
+
+/* ---- detail ---- */
+.backbtn{margin:0 0 16px}
+.backbtn:hover{color:var(--ink)}
+.detail-head{margin-bottom:18px}
+.detail-name{font-family:var(--font-display);font-size:22px;letter-spacing:-.02em;line-height:1.12}
+.detail-head .row-meta{margin-top:9px}
+.detail-head .row-net{font-size:17px}
+
+.navwrap{overflow-x:auto;margin-bottom:16px;padding-bottom:2px}
+.navstep{display:flex;gap:8px;min-width:min-content}
+.navseg{flex:0 0 auto;display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:8px 14px;cursor:pointer}
+.navseg .stagelabel{font-size:12.5px;white-space:nowrap}
+.navseg:hover{border-color:var(--line-2)}
+.navseg.here{background:var(--bg-sunken);border-color:var(--line-2)}
+.navseg:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus)}
+
+.stagepanel{padding:20px}
+.panel-eyebrow{font-size:12px;color:var(--ink-3);margin-bottom:16px}
+
+/* targeting */
+.tgt-count{margin-bottom:11px;color:var(--ink-3);font-size:14px;display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+.tgt-count .num{font-size:27px;color:var(--ink)}
+.fillbar{height:8px;border-radius:999px;background:var(--bg-sunken);overflow:hidden;margin-bottom:20px}
+.fillbar .fill{display:block;height:100%;border-radius:999px;background:var(--st-done)}
+.fillbar.is-active .fill{background:var(--st-active)}
+.chips-group{display:flex;flex-direction:column;gap:11px}
+.chips-row{display:flex;flex-wrap:wrap;gap:7px}
+
+/* copy */
+.stagepanel .mailhead{color:var(--ink);font-weight:500}
+
+/* first line */
+.ib-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px}
+.ib-item{position:relative;padding:11px 14px 11px 18px;background:var(--bg-sunken);border:1px solid var(--line);border-radius:10px;color:var(--ink-2);font-size:13px;line-height:1.4}
+.ib-item::before{content:"";position:absolute;left:7px;top:11px;bottom:11px;width:3px;border-radius:2px;background:var(--st-done)}
+.ib-list.is-active .ib-item::before{background:var(--st-active)}
+
+/* checks */
+.chk-list{list-style:none;margin:0;padding:0}
+.chk-item{display:flex;align-items:center;gap:11px;padding:11px 4px;border-bottom:1px solid var(--line)}
+.chk-item:last-child{border-bottom:0}
+.chk-mark{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+.pdot{width:9px;height:9px;border-radius:50%;background:currentColor}
+.pdot.hollow{background:transparent;border:1.6px solid currentColor}
+.chk-label{color:var(--ink-2);font-size:13.5px}
+
+/* live */
+.live-status{display:flex;align-items:center;gap:9px;color:var(--ink-2);font-size:14px;flex-wrap:wrap}
+.live-status .num{color:var(--ink)}
+.live-ready{display:inline-flex}
+.switch{display:inline-flex;align-items:center;gap:12px;background:none;border:0;cursor:pointer;padding:9px 0;margin-top:20px;color:var(--ink-2);font:inherit;font-weight:500}
+.switch-track{width:46px;height:27px;border-radius:999px;background:var(--line-2);position:relative;transition:background .18s ease;flex:0 0 auto}
+.switch-knob{position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:left .18s ease}
+.switch.on .switch-track{background:var(--orange)}
+.switch.on .switch-knob{left:22px}
+.switch:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus);border-radius:999px}
+
+/* queued placeholder */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:38px 16px;text-align:center}
+.empty-ring{color:var(--st-queued)}
+.empty-title{color:var(--ink-2);font-family:var(--font-display);font-size:16px}
+.empty-sub{color:var(--ink-3);font-size:12.5px}
+
+/* 375px: track = 315px → 267px of segments → 51px each, every label on one line */
+@media (max-width:560px){
+  .ld-app{padding:20px 14px 64px}
+  .row{gap:14px;padding:14px 15px}
+  .track{gap:8px}
+  .track-pct{flex:0 0 40px;font-size:14px}
+  .seg{padding:5px 0 4px}
+  .seg .stagelabel{font-size:10.5px}
+  .stagepanel{padding:16px}
+  .detail-name{font-size:20px}
+}
+</style>
+</head>
+<body>
+<div class="ld-app">
+  <header class="ld-top">
+    <div>
+      <h1 class="ld-title">Launching for Navreo</h1>
+      <div class="ld-sub" id="ld-sub"></div>
+    </div>
+    <div class="ld-tools">
+      <span class="ld-preview">preview data</span>
+      <button class="ld-theme" id="themeBtn" type="button" aria-label="Switch to dark mode"></button>
+    </div>
+  </header>
+  <main id="stage"></main>
+</div>
+
+<script src="launch-dashboard-fixture.js"></script>
+<script>
+(function(){
+  var LD = window.LD || {stages:[],campaigns:[],updated:""};
+  var stageEl = document.getElementById('stage');
+  var subEl   = document.getElementById('ld-sub');
+  var themeBtn= document.getElementById('themeBtn');
+
+  var view='rows', ci=0, si=0;
+
+  var ICON = {
+    back :'<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l-5 6 5 6"/></svg>',
+    check:'<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg>',
+    ring :'<svg class="empty-ring" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 3"><circle cx="12" cy="12" r="9"/></svg>',
+    moon :'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.4A8 8 0 0 1 9.6 4 7 7 0 1 0 20 14.4z"/></svg>',
+    sun  :'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M4.7 4.7l1.6 1.6M17.7 17.7l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.7 19.3l1.6-1.6M17.7 6.3l1.6-1.6"/></svg>'
+  };
+
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function fmt(n){return Number(n).toLocaleString('en-US');}
+  function state(c,i){return i<c.active?'done':(i===c.active?'active':'queued');}
+
+  /* ONE formula. The segment fills and the overall number are the same arithmetic,
+     so the figure can never disagree with the picture. */
+  function stageFill(c,i){
+    var st=state(c,i);
+    return st==='done' ? 100 : (st==='active' ? (+c.pct||0) : 0);
+  }
+  function overall(c){
+    var n = LD.stages.length || 1, sum = 0;
+    for(var i=0;i<n;i++) sum += stageFill(c,i)/100;
+    return Math.max(0, Math.min(100, Math.round(sum/n*100)));
+  }
+
+  /* ---------- rows view ---------- */
+  function segHTML(idx,c,i){
+    var st=state(c,i), lab=LD.stages[i].label, w=stageFill(c,i);
+    var says = st==='done' ? 'done' : (st==='active' ? 'in progress, '+w+'%' : 'not started');
+    var top  = st==='active' ? '<span class="seg-top"><span class="stagedot breathe"></span></span>' : '';
+    var fillCls = 'seg-fill'+(st==='active'?' pulse':'');
+    return '<button type="button" class="seg st-'+st+'" data-open data-ci="'+idx+'" data-si="'+i+'" aria-label="'+esc(lab)+' — '+says+'">'
+      + top
+      + '<span class="seg-bar"><span class="'+fillCls+'" style="width:'+w+'%"></span></span>'
+      + '<span class="seg-cap"><span class="stagelabel">'+esc(lab)+'</span></span>'
+      + '</button>';
+  }
+
+  function renderRows(){
+    var html = LD.campaigns.map(function(c,idx){
+      var track = LD.stages.map(function(s,i){return segHTML(idx,c,i);}).join('');
+      var now   = LD.stages[c.active] || LD.stages[LD.stages.length-1] || {verb:''};
+      var ov    = overall(c);
+      return '<article class="row card">'
+        + '<div class="row-id">'
+          + '<button type="button" class="row-name" data-open data-ci="'+idx+'" data-si="'+c.active+'">'+esc(c.name)+'</button>'
+          + '<div class="row-cap">'+esc(c.caption)+'</div>'
+          + '<div class="row-now st-active">'
+            + '<span class="stagedot breathe"></span>'
+            + '<span class="row-verb">'+esc(now.verb)+'</span>'
+            + '<span class="row-now-sep">·</span>'
+            + '<span class="num row-now-pct">'+stageFill(c,c.active)+'%</span>'
+          + '</div>'
+          + '<div class="row-meta"><span class="num row-net">'+fmt(c.net)+'</span><span class="net-label">people</span><span class="chip">'+esc(c.tag)+'</span></div>'
+        + '</div>'
+        + '<div class="track" role="group" aria-label="'+esc(c.name)+' — launch '+ov+'% complete">'
+          + '<div class="segs">'+track+'</div>'
+          + '<span class="num track-pct">'+ov+'%</span>'
+        + '</div>'
+      + '</article>';
+    }).join('');
+    stageEl.innerHTML = '<div class="rows">'+html+'</div>';
+  }
+
+  /* ---------- stage bodies ---------- */
+  function bodyTargeting(c,st){
+    var t=c.targeting, p=Math.round(t.found/t.target*100);
+    var fill='<span class="fill'+(st==='active'?' pulse':'')+'" style="width:'+p+'%"></span>';
+    var sig=t.signal.map(function(s){return '<span class="chip on">'+esc(s)+'</span>';}).join('');
+    var rol=t.roles.map(function(r){return '<span class="chip">'+esc(r)+'</span>';}).join('');
+    return '<div class="tgt-count"><span class="num">'+fmt(t.found)+'</span><span>of '+fmt(t.target)+' found</span></div>'
+      + '<div class="fillbar'+(st==='active'?' is-active':'')+'">'+fill+'</div>'
+      + '<div class="chips-group"><div class="chips-row">'+sig+'</div><div class="chips-row">'+rol+'</div></div>';
+  }
+  function bodyCopy(c){
+    var m=c.copy;
+    return '<div class="mailframe"><div class="mailhead">'+esc(m.subject)+'</div><div class="mailbody">'+esc(m.preview)+'</div></div>';
+  }
+  function bodyIce(c,st){
+    var items=c.icebreaker.samples.map(function(x){return '<li class="ib-item">'+esc(x)+'</li>';}).join('');
+    return '<ul class="ib-list'+(st==='active'?' is-active':'')+'">'+items+'</ul>';
+  }
+  function bodyChecks(c){
+    var items=c.checks.items.map(function(it){
+      var mark, cls;
+      if(it.state==='pass'){cls='tick';mark=ICON.check;}
+      else if(it.state==='run'){cls='running';mark='<span class="pdot breathe"></span>';}
+      else{cls='waiting';mark='<span class="pdot hollow"></span>';}
+      return '<li class="chk-item"><span class="chk-mark '+cls+'">'+mark+'</span><span class="chk-label">'+esc(it.label)+'</span></li>';
+    }).join('');
+    return '<ul class="chk-list">'+items+'</ul>';
+  }
+  function bodyLive(c){
+    var l=c.live;
+    return '<div class="live-status"><span class="live-ready tick">'+ICON.check+'</span>'
+      + '<span>Paused in Smartlead · '+esc(l.status)+' · <span class="num">'+fmt(l.sent)+'</span> sent</span></div>'
+      + '<button type="button" class="switch" data-switch role="switch" aria-checked="false" aria-label="Switch this campaign on">'
+      + '<span class="switch-track"><span class="switch-knob"></span></span><span class="switch-text">Switch on</span></button>';
+  }
+  function bodyEmpty(def){
+    return '<div class="empty">'+ICON.ring
+      + '<div class="empty-title">Not started yet</div>'
+      + '<div class="empty-sub">'+esc(def.verb)+'</div></div>';
+  }
+
+  function stageBody(c,i){
+    var st=state(c,i), def=LD.stages[i];
+    if(st==='queued') return bodyEmpty(def);
+    switch(def.key){
+      case 'targeting':  return bodyTargeting(c,st);
+      case 'copy':       return bodyCopy(c);
+      case 'icebreaker': return bodyIce(c,st);
+      case 'checks':     return bodyChecks(c);
+      case 'live':       return bodyLive(c);
+    }
+    return '';
+  }
+
+  /* ---------- detail view ---------- */
+  function renderDetail(){
+    var c=LD.campaigns[ci], def=LD.stages[si];
+    var nav=LD.stages.map(function(s,i){
+      var s2=state(c,i);
+      var dot='<span class="stagedot'+(s2==='active'?' breathe':'')+'"></span>';
+      return '<button type="button" class="navseg st-'+s2+(i===si?' here':'')+'" data-stage="'+i+'" aria-current="'+(i===si?'step':'false')+'">'
+        + dot + '<span class="stagelabel">'+esc(s.label)+'</span></button>';
+    }).join('');
+    stageEl.innerHTML =
+        '<button type="button" class="backbtn" data-back>'+ICON.back+'All launches</button>'
+      + '<div class="detail-head"><h2 class="detail-name">'+esc(c.name)+'</h2>'
+        + '<div class="row-meta"><span class="num row-net">'+fmt(c.net)+'</span><span class="net-label">people</span><span class="chip">'+esc(c.tag)+'</span></div></div>'
+      + '<div class="navwrap"><div class="navstep">'+nav+'</div></div>'
+      + '<section class="stagepanel card"><div class="panel-eyebrow">'+esc(def.verb)+'</div>'+stageBody(c,si)+'</section>';
+  }
+
+  function render(){ view==='rows' ? renderRows() : renderDetail(); }
+
+  /* ---------- interactions (delegated) ---------- */
+  stageEl.addEventListener('click', function(e){
+    var el = (e.target && e.target.closest) ? e.target : null;
+    if(!el) return;
+    var back=el.closest('[data-back]');
+    if(back){ view='rows'; render(); window.scrollTo(0,0); return; }
+    var tab=el.closest('[data-stage]');
+    if(tab){ si=+tab.getAttribute('data-stage'); renderDetail(); return; }
+    var sw=el.closest('[data-switch]');
+    if(sw){ var on=sw.classList.toggle('on'); sw.setAttribute('aria-checked', on?'true':'false'); return; }
+    var open=el.closest('[data-open]');
+    if(open){ ci=+open.getAttribute('data-ci'); si=+open.getAttribute('data-si'); view='detail'; render(); window.scrollTo(0,0); return; }
+  });
+
+  /* ---------- theme ---------- */
+  function setTheme(t){
+    document.documentElement.dataset.theme=t;
+    themeBtn.innerHTML = (t==='dark') ? ICON.sun : ICON.moon;
+    themeBtn.setAttribute('aria-label', (t==='dark') ? 'Switch to light mode' : 'Switch to dark mode');
+  }
+  themeBtn.addEventListener('click', function(){
+    setTheme(document.documentElement.dataset.theme==='dark' ? 'light' : 'dark');
+  });
+
+  /* ---------- init ---------- */
+  if(subEl) subEl.textContent = LD.campaigns.length+' launches in flight · '+(LD.updated||'');
+  setTheme('light');
+  render();
+})();
+</script>
+</body>
+</html>

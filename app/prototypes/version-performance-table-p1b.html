@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — P1 adapted · Opener test + sequence · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;
+  --cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;
+  --line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--green-bg:#E4F1EA;--red:#C2371F;--red-bg:#F8E1DA;--amber:#8F6600;--amber-bg:#F8EAC4;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;--font-mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:900px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.01em;margin:2px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:16px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.verdict{display:flex;align-items:flex-start;gap:14px;font-family:var(--font-display);font-size:17px;line-height:1.32;background:var(--ink);color:var(--cream);border-radius:12px;padding:16px 20px;margin-bottom:14px}
+.verdict .dot{flex:0 0 auto;width:9px;height:9px;border-radius:999px;background:var(--orange);box-shadow:0 0 0 4px rgba(255,77,0,.25);margin-top:7px}
+.verdict b{color:#FFB98F}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px;min-width:560px}
+thead th{text-align:right;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);padding:14px 16px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+thead th.l{text-align:left}
+tr.grp td{background:var(--sunken);padding:11px 16px;border-bottom:1px solid var(--line)}
+.grphead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.grphead .name{font-family:var(--font-display);font-size:15px}
+.grphead .name small{font-family:var(--font-sans);font-size:11px;color:var(--ink-3);font-weight:600;margin-left:8px}
+.callbadge{display:inline-flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:5px 12px;font-size:12px}
+.callbadge b{font-family:var(--font-display);font-size:15px;color:var(--orange-600)}
+.callbadge.assist b{color:var(--ink-2)}
+tbody td{padding:14px 16px;text-align:right;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--line)}
+tbody td.l{text-align:left}
+tr.ver td:first-child{padding-left:30px;position:relative}
+tr.ver.win td:first-child::before{content:"";position:absolute;left:16px;top:50%;transform:translateY(-50%);width:4px;height:22px;border-radius:2px;background:var(--orange)}
+tr.ver.win{background:linear-gradient(90deg,rgba(255,77,0,.05),transparent)}
+tr.ver.lose td{color:var(--ink-3)}
+tr.ver.assist td:first-child{padding-left:30px}
+.vlabel{font-weight:700}
+.pill{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;margin-left:8px}
+.pill.win{background:var(--orange);color:#fff}.pill.cut{background:var(--red-bg);color:var(--red)}
+.pill.assist{background:var(--amber-bg);color:var(--amber)}
+.posv{font-family:var(--font-display);font-size:17px}
+.win .posv{color:var(--orange-600)}
+.rate{font-size:12px;color:var(--ink-3);font-weight:600;margin-left:2px}
+.lose .rate{color:var(--brown-300)}
+/* assist explainer */
+.assistbox{padding:16px 18px;background:var(--amber-bg);border-top:1px solid var(--line)}
+.assistbox h4{font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--amber);margin-bottom:6px}
+.assistbox p{font-size:13px;color:#5c4a1e;line-height:1.55}
+.assistbox b{color:#3f3413}
+/* locked preview */
+.locked{padding:16px 18px;border-top:1px solid var(--line);background:var(--cream-50)}
+.locked .lh{font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.locked .lh .lk{font-size:13px}
+.lrow{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:12px;padding:11px 12px;border:1px dashed var(--line-2);border-radius:10px;margin-bottom:8px;background:repeating-linear-gradient(45deg,var(--card),var(--card) 10px,var(--cream-50) 10px,var(--cream-50) 20px)}
+.lrow .path{font-family:var(--font-display);font-size:16px}
+.lrow .calc{font-size:12.5px;color:var(--ink-3)}
+.lrow .calc b{color:var(--ink-2)}
+.lrow .val{font-size:12px;font-weight:700;color:var(--brown-300);white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.locked .cap{font-size:12px;color:var(--ink-3);margin-top:4px;line-height:1.5}
+.locked .cap b{color:var(--ink-2)}
+.act{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;background:var(--orange-100);border-top:1px solid var(--line-2);flex-wrap:wrap}
+.act .txt{font-size:14px;font-weight:600}.act .txt span{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-top:2px}
+.btn{background:var(--orange);color:#fff;border:none;border-radius:999px;padding:10px 18px;font:600 13px var(--font-sans);cursor:pointer;white-space:nowrap}.btn:hover{background:var(--orange-600)}
+.foot{padding:13px 18px;font-size:11.5px;color:var(--ink-3);line-height:1.6;background:var(--cream-50);border-top:1px solid var(--line)}
+.foot b{color:var(--ink-2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Version performance</div><div class="h1">The opener test, then the sequence</div></div>
+    <div class="chip">Live from Smartlead · since relaunch</div>
+  </div>
+  <div class="verdict"><span class="dot"></span><span id="vtext"></span></div>
+  <div class="card">
+    <div class="tscroll">
+    <table>
+      <thead><tr>
+        <th class="l">Step / Version</th><th>Sent</th><th>Replies</th><th>Positives &middot; rate</th><th>1 per</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+
+    <div class="assistbox">
+      <h4>Why Email 2 isn't "the winner"</h4>
+      <p id="assisttext"></p>
+    </div>
+
+    <div class="locked">
+      <div class="lh"><span class="lk">&#128274;</span> The winner, done right — follow each opener's people to the end</div>
+      <div id="lrows"></div>
+      <div class="cap" id="lockedcap"></div>
+    </div>
+
+    <div class="act" id="act"></div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+<script>
+const DATA={
+  versions:[
+    {step:1,label:"A",sent:1269,replies:20,positives:14,bounces:28},
+    {step:1,label:"B",sent:1259,replies:18,positives:9,bounces:28},
+    {step:2,label:"inline",inline:true,sent:1757,replies:22,positives:13,bounces:11}
+  ],
+  meetings:{total:16,by_step:{1:13,2:3}}
+};
+const FLOOR=300;
+const perPos=v=>v.positives>0?Math.round(v.sent/v.positives):null;
+const warm=v=>v.positives/v.sent*100;
+const m1=DATA.meetings.by_step[1]||0,m2=DATA.meetings.by_step[2]||0,mt=DATA.meetings.total;
+
+// steps grouped; a variant winner is chosen ONLY within a step with >1 version.
+const steps={};DATA.versions.forEach(v=>{(steps[v.step]=steps[v.step]||[]).push(v);});
+const openerStep=Object.keys(steps).sort((a,b)=>a-b)[0];
+const openers=steps[openerStep];
+const winner=[...openers].sort((a,b)=>warm(b)-warm(a))[0];
+const loser=[...openers].sort((a,b)=>warm(a)-warm(b))[0];
+
+function posCell(v){return `<span class="posv">${v.positives}</span><span class="rate">&middot; ${warm(v).toFixed(1)}%</span>`;}
+
+let html="";
+Object.keys(steps).sort((a,b)=>a-b).forEach((sk,gi)=>{
+  const vs=steps[sk], calls=DATA.meetings.by_step[sk]||0, isOpenerGroup=(gi===0);
+  const stepSent=vs.reduce((s,v)=>s+v.sent,0);
+  const groupName=isOpenerGroup?`Email ${sk} — the opener test`:`Email ${sk} — the follow-up`;
+  const groupSub=isOpenerGroup?`${vs.length} version${vs.length>1?'s':''}, same people · a fair A/B`:`only emails people the openers didn't close`;
+  const badge=isOpenerGroup
+    ? `<span class="callbadge"><b>${calls}</b> calls booked</span>`
+    : `<span class="callbadge assist"><b>${calls}</b> calls &middot; assisted</span>`;
+  html+=`<tr class="grp"><td class="l" colspan="5"><div class="grphead">
+    <div class="name">${groupName}<small>${groupSub}</small></div>${badge}</div></td></tr>`;
+  vs.forEach(v=>{
+    const early=v.sent<FLOOR;
+    let cls="",pill="";
+    if(isOpenerGroup){
+      if(early){cls="lose";pill='<span class="pill cut">too early</span>';}
+      else if(v===winner){cls="win";pill='<span class="pill win">better opener</span>';}
+      else if(v===loser){cls="lose";pill='<span class="pill cut">cut</span>';}
+    } else {
+      cls="assist";pill='<span class="pill assist">assisted</span>';
+    }
+    const label=v.inline?"inline":v.label;
+    html+=`<tr class="ver ${cls}">
+      <td class="l"><span class="vlabel">${label}</span>${pill}</td>
+      <td>${v.sent.toLocaleString()}</td>
+      <td>${v.replies}</td>
+      <td>${early?'<span class="rate">too early</span>':posCell(v)}</td>
+      <td>${early?'<span class="rate">early</span>':'1 / '+perPos(v)}</td>
+    </tr>`;
+  });
+});
+document.getElementById("tbody").innerHTML=html;
+
+document.getElementById("vtext").innerHTML=
+  `<b>Version ${winner.label} wins the opener test</b> — ${winner.positives} good replies (${warm(winner).toFixed(1)}%) vs ${loser.label}'s ${loser.positives} (${warm(loser).toFixed(1)}%). `+
+  `We don't crown a step: Email 2's replies come only from people the openers didn't close, so it <b>builds on</b> Email 1 — and which opener set up each one, we can't yet see.`;
+
+document.getElementById("assisttext").innerHTML=
+  `Everyone Email 2 reaches first got an opener (A or B) and didn't reply. So its <b>${m2} calls</b> and ${DATA.versions[2].positives} good replies were <b>set up</b> by an opener — the credit is shared. An opener can look weak on its own and still tee up most of Email 2's wins (one good reply up top, but the one that primed twenty later). Until we can see which opener each Email 2 replier saw, that credit stays unsplit — so read the A-vs-B call above as <b>provisional</b>, not final.`;
+
+// locked "real answer" preview — the shape the per-lead trace would fill in
+document.getElementById("lrows").innerHTML=openers.map(v=>{
+  const label=v.inline?"inline":v.label;
+  return `<div class="lrow">
+    <div class="path">${label}</div>
+    <div class="calc">Its own good replies <b>(${v.positives})</b> + the Email 2 replies ${label} set up <b>(?)</b> = its true score</div>
+    <div class="val">&#128274; needs the trace</div>
+  </div>`;
+}).join("");
+document.getElementById("lockedcap").innerHTML=
+  `This fills in the moment we wire the <b>per-lead trace</b> — which opener each replier saw before they converted. Then the winner is decided on the <b>whole journey</b>, not the first reply, and a quiet opener that feeds Email 2 finally gets its credit.`;
+
+document.getElementById("act").innerHTML=
+  `<div class="txt">Keep ${winner.label}, retire ${loser.label} — provisionally.<span>Wire the per-lead trace before you cut, so an opener that quietly feeds Email 2 isn't killed for a low direct count.</span></div><button class="btn">Wire the trace</button>`;
+document.getElementById("foot").innerHTML=
+  `<b>Positives &middot; rate</b> = good replies and good-replies&divide;sent (Smartlead's interested mark). <b>1 per</b> = emails per good reply (lower is better). <b>Calls</b> sit on the email step that got the reply, shown once per step; Email 1's ${m1} are shared by A &amp; B and never split by guess. Since relaunch.`;
+</script>
+</body>
+</html>

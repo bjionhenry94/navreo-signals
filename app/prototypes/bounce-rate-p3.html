@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounce rate P3 — The call list · Navreo</title>
+<link rel="stylesheet" href="bounce-rate-base.css">
+<style>
+  /* P3 — grouped by CLIENT, ranked by emails that came back. Bet: you don't
+     work a list of campaigns, you make a list of phone calls. */
+  /* No sparkline: at 514x26 it squashed 30 days into a 20:1 letterbox where the
+     trend and the 2% line collapsed onto each other. The space buys real type. */
+  .strip{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+  .snum{font-family:var(--font-display);font-size:34px;line-height:1;letter-spacing:-0.03em}
+  .stag{font-size:12.5px;color:var(--ink-3)}
+  .savg{font-size:12px;color:var(--ink-3);margin-top:3px}
+
+  .clients{display:flex;flex-direction:column}
+  /* one number column, not two — "55% of the problem" and "4.0%" sitting 10px
+     apart in the same tabular numerals read as a single garbled figure */
+  .crow{display:grid;grid-template-columns:1fr 96px;gap:12px;align-items:center;
+        padding:7px 0;border-top:1px solid var(--line)}
+  .cname{font-size:13.5px;font-weight:600}
+  .cwhat{font-size:11.5px;color:var(--ink-3);margin-top:2px;overflow:hidden;
+         text-overflow:ellipsis;white-space:nowrap}
+  .cpct{font-size:15px;font-weight:600;text-align:right;font-variant-numeric:tabular-nums;line-height:1.2}
+  .cpctlab{font-size:10px;color:var(--ink-3);text-align:right;font-weight:400;display:block}
+  .colhead{display:grid;grid-template-columns:1fr 96px;gap:12px;font-size:10px;
+           letter-spacing:.05em;text-transform:uppercase;color:var(--brown-400)}
+  .colhead span:last-child{text-align:right}
+</style>
+</head>
+<body>
+
+<section class="ah"><div class="lane">
+  <span class="node num">3</span>
+  <div class="lane-head">
+    <h2 class="lane-q">Are your emails landing?</h2>
+    <span class="lane-tag num">Whole fleet · Emails sent · 1,976,989</span>
+  </div>
+
+  <div class="cards">
+    <div class="ghost">
+      <div class="card-kick">Replies by the day we sent</div>
+      <div class="bars"><i style="height:62%"></i><i style="height:60%"></i><i style="height:69%"></i><i style="height:68%"></i><i class="hi" style="height:88%"></i><i style="height:3%"></i></div>
+      <div class="subline">Tue is the quiet day.</div>
+      <div class="take"><span class="arr">→</span><span>Fri gets the most replies — send more on Fri.</span></div>
+      <div class="ghostnote">existing card — shown for context</div>
+    </div>
+
+    <!-- ── the widget ── -->
+    <div class="acard">
+      <div class="card-head">
+        <div class="card-kick">Emails that came back</div>
+        <div class="seg" role="group" aria-label="Date range">
+          <button data-d="7">7d</button><button data-d="14">14d</button><button data-d="30" class="on">30d</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="strip">
+          <span class="snum num" id="snum">–</span>
+          <span class="stag" id="stag">today — more than 2 in 100 came back</span>
+        </div>
+        <div class="savg" id="savg">&nbsp;</div>
+      </div>
+
+      <div>
+        <div class="card-kick" style="margin-bottom:6px">Who to call
+          <span class="soft">· each client's whole list history, not the date filter above</span></div>
+        <div class="colhead"><span>Client</span><span>Worst list</span></div>
+      </div>
+      <div class="clients" id="clients"></div>
+
+      <div class="take"><span class="arr">→</span><span id="take">&nbsp;</span></div>
+    </div>
+  </div>
+
+  <div class="fleetnote">Whole sending fleet — all clients.</div>
+</div></section>
+
+<script src="bounce-rate-data.js"></script>
+<script>
+(function () {
+  var W = 30;
+
+  function render() {
+    var w = BR.slice(W), d = BR.delta(W), br = BR.breach(), t = BR.today();
+    var b = BR.band(t);
+
+    var snum = document.getElementById("snum");
+    snum.textContent = t.toFixed(2) + "%"; snum.className = "snum num " + b;
+    document.getElementById("stag").textContent = t >= BR.LIMIT
+      ? "today — over the 2% limit, " + br.run + " days running"
+      : "today — under the 2% limit";
+    document.getElementById("savg").textContent =
+      "Above 2%, Google and Outlook start sending you to spam. Last " + W +
+      " days average " + d.cur.toFixed(2) + "%.";
+
+    // One row per CLIENT, ranked by emails that came back. Only clients with a
+    // campaign over the limit appear — healthy rows are not work.
+    var cl = BR.byClient().filter(function (c) { return c.over > 0; }).slice(0, 3);
+    var total = BR.totalBounced();
+    document.getElementById("clients").innerHTML = cl.map(function (c) {
+      // the WORST list's rate, never the client's blended average — blending
+      // repaints a 4.2% fire as 2.1%
+      var w2 = c.worst;
+      return '<div class="crow">' +
+        '<div><div class="cname">' + c.client + ' · ' +
+          Math.round(c.bounced / total * 100) + '% of the total</div>' +
+          '<div class="cwhat">' + c.badNames.join(", ") +
+          (w2.small ? ' <span style="color:var(--brown-400)">(small list)</span>' : '') +
+          '</div></div>' +
+        '<div><div class="cpct ' + BR.band(w2.pct) + '">' + w2.pct.toFixed(1) + '%' +
+          '<span class="cpctlab">' + BR.n(c.bounced) + ' came back</span></div></div>' +
+      '</div>';
+    }).join("") || '<div class="subline" style="padding-top:8px">No client is over 2%.</div>';
+
+    document.getElementById("take").textContent = cl.length
+      ? "Call " + cl[0].client + " — pause " + cl[0].badNames.join(" and ") +
+        ", get those addresses re-checked, then switch them back on."
+      : "Nothing over 2% — keep sending.";
+  }
+
+  document.querySelectorAll(".seg button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".seg button").forEach(function (x) { x.classList.remove("on"); });
+      btn.classList.add("on"); W = +btn.dataset.d; render();
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch dashboard — 5 prototypes · Navreo</title>
+<link rel="stylesheet" href="launch-dashboard-base.css">
+<style>
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; margin-top:8px}
+  a.proto{display:flex; flex-direction:column; gap:10px; text-decoration:none; color:inherit;
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:18px 18px 16px}
+  a.proto:hover{border-color:var(--line-2)}
+  a.proto:focus-visible{outline:none; box-shadow:0 0 0 3px var(--focus)}
+  .pno{font-family:var(--font-display); font-size:13px; color:var(--ink-3); letter-spacing:.02em}
+  .pname{font-family:var(--font-display); font-size:21px; letter-spacing:-.02em; line-height:1.05}
+  .pdesc{font-size:13px; color:var(--ink-3); line-height:1.5}
+  .open{margin-top:2px; font-size:12.5px; color:var(--orange); font-weight:500}
+  .foot{margin-top:26px; color:var(--ink-3); font-size:12px}
+</style>
+</head>
+<body>
+<div class="ld-app">
+  <div class="ld-top">
+    <div>
+      <div class="ld-title">Launch dashboard — five ways to watch it go live.</div>
+      <div class="ld-sub">The strategy board rebuilt as a live launch view. Same 5 real campaigns, five visual grammars. Pick a winner.</div>
+    </div>
+    <div class="ld-tools">
+      <span class="ld-preview">preview data</span>
+      <button class="ld-theme" id="themeBtn" aria-label="Toggle theme">Dark</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <a class="proto" href="launch-dashboard-p1.html">
+      <span class="pno">01</span><span class="pname">Pipeline stepper</span>
+      <span class="pdesc">Each campaign a row; five stages fill left to right; the live one glows.</span>
+      <span class="open">Open →</span>
+    </a>
+    <a class="proto" href="launch-dashboard-p2.html">
+      <span class="pno">02</span><span class="pname">Progress ring</span>
+      <span class="pdesc">Each campaign a ring that fills; tap a segment to jump into that stage.</span>
+      <span class="open">Open →</span>
+    </a>
+    <a class="proto" href="launch-dashboard-p3.html">
+      <span class="pno">03</span><span class="pname">Live stream</span>
+      <span class="pdesc">A breathing feed of what's happening right now, line by line.</span>
+      <span class="open">Open →</span>
+    </a>
+    <a class="proto" href="launch-dashboard-p4.html">
+      <span class="pno">04</span><span class="pname">Launch lanes</span>
+      <span class="pdesc">Kanban columns; campaigns move right as they get closer to live.</span>
+      <span class="open">Open →</span>
+    </a>
+    <a class="proto" href="launch-dashboard-p5.html">
+      <span class="pno">05</span><span class="pname">Mission control</span>
+      <span class="pdesc">One big tile per campaign; every launch's state at a glance.</span>
+      <span class="open">Open →</span>
+    </a>
+  </div>
+
+  <div class="foot">Navreo launch-dashboard lab · 27 July 2026 · preview data (real campaign names + numbers, mocked launch state).</div>
+</div>
+<script>
+  var b=document.getElementById('themeBtn');
+  b.addEventListener('click',function(){
+    var d=document.documentElement.dataset.theme==='dark';
+    document.documentElement.dataset.theme=d?'light':'dark';
+    b.textContent=d?'Dark':'Light';
+  });
+</script>
+</body>
+</html>

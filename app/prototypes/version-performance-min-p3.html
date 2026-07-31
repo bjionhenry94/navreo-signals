@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Min P3 · Combination cards · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{--orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;--ink:#14110E;--ink-3:#6B6055;--brown-300:#C0B0A0;
+--cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;--line:#EBE1D5;--line-2:#DCC6AE;
+--font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;--font-display:"Acid Grotesk","DM Sans",sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:720px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:25px;letter-spacing:-.01em;margin:2px 0 20px}
+.sect{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.tag{font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:2px 7px;border-radius:999px}
+.openers{display:flex;gap:10px;margin-bottom:24px}
+.opill{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 15px;display:flex;align-items:baseline;justify-content:space-between}
+.opill.win{border-color:var(--orange);background:var(--orange-100)}
+.opill .l{font-family:var(--font-display);font-size:16px}
+.opill .r{font-variant-numeric:tabular-nums;color:var(--ink-3);font-size:13px}
+.opill .r b{font-family:var(--font-display);font-size:16px;color:var(--ink)}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.combo{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;position:relative}
+.combo.win{border-color:var(--orange);box-shadow:0 0 0 1px var(--orange)}
+.combo .path{font-family:var(--font-display);font-size:19px;margin-bottom:2px}
+.combo .path .a{color:var(--brown-300);margin:0 5px;font-size:16px}
+.combo .win-tag{position:absolute;top:18px;right:18px;font-size:9.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--orange);padding:2px 9px;border-radius:999px}
+.combo .people{font-size:12px;color:var(--ink-3);margin-bottom:18px}
+.calls{font-family:var(--font-display);font-size:48px;line-height:1;letter-spacing:-.02em}
+.win .calls{color:var(--orange-600)}
+.calls-l{font-size:13px;color:var(--ink-3);margin:4px 0 16px}
+.pos{font-size:13px;color:var(--ink-3);border-top:1px solid var(--line);padding-top:12px}
+.pos b{font-family:var(--font-display);font-size:16px;color:var(--ink)}
+@media(max-width:560px){.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Version performance</div>
+  <div class="h1">The two paths to a call</div>
+
+  <div class="sect">The openers <span class="tag">live · A/B test</span></div>
+  <div class="openers">
+    <div class="opill win"><span class="l">A</span><span class="r"><b>14</b> positives · 1.1%</span></div>
+    <div class="opill"><span class="l">B</span><span class="r"><b>9</b> positives · 0.7%</span></div>
+  </div>
+
+  <div class="sect">Combinations <span class="tag">whole journey</span></div>
+  <div class="cards">
+    <div class="combo win">
+      <span class="win-tag">best path</span>
+      <div class="path">A<span class="a">→</span>Email 2</div>
+      <div class="people">1,269 people took this path</div>
+      <div class="calls">10</div><div class="calls-l">calls booked</div>
+      <div class="pos"><b>22</b> good replies along the way</div>
+    </div>
+    <div class="combo">
+      <div class="path">B<span class="a">→</span>Email 2</div>
+      <div class="people">1,259 people took this path</div>
+      <div class="calls">6</div><div class="calls-l">calls booked</div>
+      <div class="pos"><b>14</b> good replies along the way</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

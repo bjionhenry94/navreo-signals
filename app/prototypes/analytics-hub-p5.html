@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics P5 — The Coach · Navreo</title>
+<style>
+/* ════════════════════════════════════════════════════════════════════
+   ANALYTICS HUB — PROTOTYPE 5 OF 5 — "THE COACH"
+   A prioritised to-do list from a coach who read all your data.
+   Self-contained: inline CSS + SVG + data. Zero JS. Mock fixture data.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── design tokens (verbatim from builder spec) ── */
+@font-face { font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype"); font-weight:400; font-style:normal; font-display:swap; }
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-300:#C0B0A0; --brown-400:#A89684;
+  --cream:#F9F0E7; --cream-50:#FCF7F1; --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF;
+  --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
+  --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
+  --red:#C2371F; --red-bg:#F7DCD5; --red-line:#EFC7BB;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --radius:12px; --focus:0 0 0 3px rgba(255,77,0,.32);
+}
+
+/* ── base ── */
+* { box-sizing:border-box; }
+html, body { margin:0; padding:0; }
+body {
+  background:var(--bg); color:var(--ink);
+  font:400 14px/1.5 var(--font-sans);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+.wrap { max-width:1240px; margin:0 auto; padding:0 32px; }
+svg { display:block; max-width:100%; }
+.num-tab { font-variant-numeric:tabular-nums; }
+
+/* ── prototype banner ── */
+.proto-banner {
+  font-size:11px; color:var(--ink-3); background:var(--bg-sunken);
+  border-bottom:1px solid var(--line); padding:7px 0; letter-spacing:.01em;
+}
+
+/* ── page head ── */
+.page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; padding:36px 0 22px; }
+h1 { font:400 40px/1 var(--font-display); letter-spacing:-.03em; margin:0; }
+.dateline { font-size:13px; color:var(--ink-3); padding-bottom:4px; }
+.dateline .sep { margin:0 7px; color:var(--line-2); }
+
+/* ── state of play strip ── */
+.play {
+  display:flex; align-items:baseline; flex-wrap:wrap; row-gap:12px;
+  border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+  padding:16px 0;
+}
+.fact { display:flex; align-items:baseline; gap:10px; padding:0 28px; border-left:1px solid var(--line); white-space:nowrap; }
+.fact:first-child { border-left:none; padding-left:0; }
+.fact .k { font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
+.fact .v { font:400 25px/1 var(--font-display); letter-spacing:-.03em; color:var(--ink); font-variant-numeric:tabular-nums; }
+.fact .s { font-size:12px; color:var(--ink-3); }
+.fact .s.good { color:var(--green); font-weight:600; }
+.fact .s.warn { color:var(--amber); font-weight:600; }
+
+/* ── section rows ── */
+.secrow { display:flex; align-items:baseline; justify-content:space-between; gap:24px; margin:30px 0 14px; }
+.seclabel { font-size:11px; font-weight:600; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3); }
+.sectake { font-size:13px; font-weight:600; color:var(--ink-2); }
+
+/* ── fix cards (the ranked list) ── */
+details.fix {
+  background:var(--card); border:1px solid var(--line);
+  border-radius:var(--radius); margin-bottom:14px;
+}
+details.fix > summary {
+  display:grid; grid-template-columns:88px 1fr auto; gap:0 20px; align-items:center;
+  padding:20px 28px; cursor:pointer; list-style:none; border-radius:var(--radius);
+}
+details.fix > summary::-webkit-details-marker { display:none; }
+details.fix > summary::marker { content:""; }
+details.fix > summary:hover { background:var(--cream-50); }
+details.fix > summary:focus-visible { outline:none; box-shadow:var(--focus); }
+details.fix[open] > summary { border-radius:var(--radius) var(--radius) 0 0; }
+.fixnum {
+  font:400 44px/1 var(--font-display); letter-spacing:-.03em;
+  color:var(--brown-300); font-variant-numeric:tabular-nums;
+}
+details.fix.first .fixnum { color:var(--orange); }  /* the one orange focal moment */
+.fixhead { min-width:0; }
+.fixhead .headline { font-size:19px; font-weight:600; letter-spacing:-.01em; color:var(--ink); line-height:1.25; }
+.fixside { text-align:right; }
+.fixside .win { font-size:13.5px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
+.fixside .see {
+  display:flex; align-items:center; justify-content:flex-end; gap:6px;
+  font-size:11.5px; color:var(--ink-3); margin-top:4px;
+}
+.chev { transition:transform .15s ease; color:var(--ink-3); }
+details.fix[open] .chev { transform:rotate(180deg); }
+details.fix .when-open { display:none; }
+details.fix[open] .when-open { display:inline; }
+details.fix[open] .when-closed { display:none; }
+
+/* ── fix card body (the evidence) ── */
+.fixbody { border-top:1px solid var(--line); padding:22px 28px 24px 136px; }
+.ev { display:flex; gap:40px; align-items:flex-start; flex-wrap:wrap; }
+.evcol { min-width:0; }
+.cap { font-size:11.5px; color:var(--ink-3); margin:0 0 10px; }
+.microtake { font-size:12.5px; font-weight:600; color:var(--ink-2); margin-top:10px; }
+.stats { display:flex; flex-direction:column; gap:14px; min-width:210px; }
+.stat .sv { font-size:15.5px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
+.stat .sk { font-size:11.5px; color:var(--ink-3); margin-top:1px; }
+.take {
+  margin-top:20px; padding-top:12px; border-top:1px solid var(--line);
+  font-size:13.5px; font-weight:600; color:var(--ink);
+}
+.take::before { content:"→  "; color:var(--ink-3); font-weight:400; }
+.factline { font-size:12.5px; color:var(--ink-2); margin:2px 0 16px; }
+.factline b { font-weight:600; font-variant-numeric:tabular-nums; }
+.factline .dot { margin:0 8px; color:var(--line-2); }
+
+/* ── what's already working strip ── */
+.work {
+  border:1px solid var(--line); border-radius:var(--radius); background:var(--card);
+  padding:24px 28px; display:grid; grid-template-columns:1.15fr 1fr 1fr 1fr; gap:36px;
+}
+.workcol .wk { font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); margin-bottom:10px; }
+.bestname { font-size:15px; font-weight:600; letter-spacing:-.005em; color:var(--ink); line-height:1.3; }
+.bestsub { font-size:12.5px; color:var(--ink-3); margin:6px 0 12px; font-variant-numeric:tabular-nums; }
+.tag { display:inline-block; font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+.tag.good { background:var(--green-bg); color:#195C3F; }
+
+/* ── footer ── */
+.foot {
+  margin-top:34px; border-top:1px solid var(--line);
+  padding:18px 0 44px; display:flex; justify-content:space-between; gap:24px;
+  font-size:11.5px; color:var(--ink-3);
+}
+
+/* ── 1200px safety ── */
+@media (max-width:1280px) {
+  .work { grid-template-columns:1.15fr 1fr 1fr 1fr; gap:28px; }
+  .fact { padding:0 20px; }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   INBOX & DOMAIN MANAGER — VERBATIM styles from the shared table snippet.
+   renderManagerPanel() + paintFloorRows(). Pasted untouched per spec.
+   ════════════════════════════════════════════════════════════════════ */
+.ic8{display:inline-block;width:18px;height:18px;background-color:currentColor;flex-shrink:0;-webkit-mask:var(--icon) center / contain no-repeat;mask:var(--icon) center / contain no-repeat;vertical-align:-3px}
+.ictile{width:36px;height:36px;border-radius:10px;background:var(--bg-sunken);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ictile .ic8{width:18px;height:18px;color:var(--ink-2)}
+.btn{border:1px solid var(--line-2);background:transparent;color:var(--ink);border-radius:999px;padding:8px 16px;font:500 13px var(--font-sans);letter-spacing:-0.005em;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{background:var(--bg-sunken)}
+.btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
+.btn.primary:hover{background:var(--orange-600)}
+.btn.sm{padding:5px 12px;font-size:11.5px}
+.dlv-subtab-panel{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.dlv-subtab-head{display:flex;align-items:center;gap:9px;padding:14px 16px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line)}
+.dlv-subtab-head .hint{font-weight:500;font-size:12px;color:var(--ink-3)}
+.dlv-fold-body{padding:16px}
+.dlv-flowchips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.dlv-flowchip{font-family:var(--font-sans);font-size:13px;font-weight:600;padding:8px 14px;border:1px solid var(--line-2);border-radius:9px;background:var(--card);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.dlv-flowchip:hover{border-color:var(--ink-3)}
+.dlv-flowchip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.dlv-flowchip-n{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--bg-sunken);color:var(--ink-2)}
+.dlv-flowchip.on .dlv-flowchip-n{background:rgba(255,255,255,.18);color:#fff}
+.dlv-flowchip.warn:not(.on) .dlv-flowchip-n{background:var(--red-bg);color:#861E10}
+.dlv-mb-cap{font-size:10.5px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;align-self:center}
+.dlv-mb-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.dlv-mb-bar select,.dlv-mb-bar input[type=text],.dlv-mb-bar input[type=number]{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-mb-bar input[type=text]{flex:1;min-width:160px}
+.dlv-mb-count{font-size:11.5px;color:var(--ink-3)}
+.dlv-mb-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dlv-mb-scroll{max-height:420px;overflow:auto}
+table.dlv-mb{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dlv-mb th{position:sticky;top:0;background:var(--bg-sunken);text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;padding:9px 11px;z-index:1}
+table.dlv-mb td{padding:8px 11px;border-top:1px solid var(--line);vertical-align:middle}
+table.dlv-mb tr:hover td{background:var(--bg-sunken)}
+.dlv-mb-email{font-weight:600}
+.dlv-mb-dom{font-size:11px;color:var(--ink-3)}
+.dlv-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.dlv-tag.inactive{background:var(--amber-bg);color:#6B4A00}
+.dlv-tag.ok{background:var(--green-bg);color:#195C3F}
+.dlv-mgr-adv{display:inline-flex;align-items:center;gap:7px}
+.dlv-mgr-adv summary{font-size:11.5px;color:var(--ink-3);font-weight:600;cursor:pointer;list-style:none;padding:6px 4px;text-transform:uppercase;letter-spacing:.04em}
+.dlv-mgr-adv summary::-webkit-details-marker{display:none}
+.dlv-mgr-adv[open] summary{color:var(--ink)}
+.dlv-dl{font-size:11.5px;font-weight:600;color:var(--orange-700);text-decoration:none;cursor:pointer}
+.dlv-input{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+.dlv-select{font-family:var(--font-sans);font-size:12.5px;border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;background:var(--card);color:var(--ink)}
+</style>
+</head>
+<body>
+
+<!-- ── prototype banner ── -->
+<div class="proto-banner"><div class="wrap">Prototype 5 of 5 — The Coach · mock data · not production</div></div>
+
+<div class="wrap">
+
+  <!-- ── page head ── -->
+  <header class="page-head">
+    <h1>Analytics</h1>
+    <div class="dateline">Saturday 26 July<span class="sep">·</span>updated 8 minutes ago</div>
+  </header>
+
+  <!-- ── state of play: one calm line of four facts ── -->
+  <section class="play" aria-label="State of play">
+    <div class="fact">
+      <span class="k">Meetings</span>
+      <span class="v">14</span>
+      <span class="s good">↑ 5 vs last month</span>
+    </div>
+    <div class="fact">
+      <span class="k">Replies</span>
+      <span class="v">3 in 100</span>
+      <span class="s num-tab">512 of 18,420 emails</span>
+    </div>
+    <div class="fact">
+      <span class="k">Landing</span>
+      <span class="v">96 of 100</span>
+      <span class="s num-tab">41 of 44 inboxes healthy</span>
+    </div>
+    <div class="fact">
+      <span class="k">Leads</span>
+      <span class="v">19 days</span>
+      <span class="s warn">out on Aug 14</span>
+    </div>
+  </section>
+
+  <!-- ── the fix list ── -->
+  <div class="secrow">
+    <span class="seclabel">Your fix list — biggest win first</span>
+    <span class="sectake">Up 5 meetings on last month — these six fixes add more.</span>
+  </div>
+
+  <!-- ═══ 01 · Answer interested replies within the hour ═══ -->
+  <details class="fix first" open>
+    <summary>
+      <span class="fixnum">01</span>
+      <span class="fixhead"><span class="headline">Answer interested replies within the hour</span></span>
+      <span class="fixside">
+        <span class="win">+3 meetings a month</span>
+        <span class="see">
+          <span class="when-closed">See the numbers</span><span class="when-open">Hide the numbers</span>
+          <svg class="chev" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true"><path d="M1 1l4.5 4L10 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+      </span>
+    </summary>
+    <div class="fixbody">
+      <div class="ev">
+        <div class="evcol">
+          <p class="cap">What happens to an interested reply, by answer speed</p>
+          <svg width="460" height="118" viewBox="0 0 460 118" role="img" aria-label="Answered within 1 hour: 62 in 100 turn into meetings. Answered after 4 hours: 21 in 100." style="font-family:var(--font-sans)">
+            <text x="0" y="15" font-size="12" fill="var(--ink-2)">Answered within 1 hour</text>
+            <rect x="0" y="24" width="300" height="16" rx="4" fill="var(--bg-sunken)"/>
+            <rect x="0" y="24" width="186" height="16" rx="4" fill="var(--orange)"/>
+            <text x="194" y="36" font-size="12.5" font-weight="600" fill="var(--ink)">62 in 100 turn into meetings</text>
+            <text x="0" y="71" font-size="12" fill="var(--ink-2)">Answered after 4 hours</text>
+            <rect x="0" y="80" width="300" height="16" rx="4" fill="var(--bg-sunken)"/>
+            <rect x="0" y="80" width="63" height="16" rx="4" fill="var(--ink)"/>
+            <text x="71" y="92" font-size="12.5" font-weight="600" fill="var(--ink)">21 in 100</text>
+          </svg>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="sv">4 h 20 m</div><div class="sk">your average answer speed</div></div>
+          <div class="stat"><div class="sv">24 of 96</div><div class="sk">interested replies answered within the hour</div></div>
+          <div class="stat"><div class="sv">96</div><div class="sk">interested replies this month</div></div>
+        </div>
+      </div>
+      <p class="take">Answer within the hour — three times more meetings.</p>
+    </div>
+  </details>
+
+  <!-- ═══ 02 · Pause "Agencies — ops leaders" ═══ -->
+  <details class="fix">
+    <summary>
+      <span class="fixnum">02</span>
+      <span class="fixhead"><span class="headline">Pause “Agencies — ops leaders”</span></span>
+      <span class="fixside">
+        <span class="win">Stops 4,100 wasted emails</span>
+        <span class="see">
+          <span class="when-closed">See the numbers</span><span class="when-open">Hide the numbers</span>
+          <svg class="chev" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true"><path d="M1 1l4.5 4L10 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+      </span>
+    </summary>
+    <div class="fixbody">
+      <div class="ev">
+        <div class="evcol">
+          <p class="cap">Replies per 100 emails · last 4 weeks</p>
+          <svg width="320" height="112" viewBox="0 0 320 112" role="img" aria-label="Replies slid from 3.1 per 100 to 0.4 per 100 over four weeks" style="font-family:var(--font-sans)">
+            <line x1="20" y1="90" x2="290" y2="90" stroke="var(--line)"/>
+            <polyline points="20,16 110,44 200,63 290,74" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="20" cy="16" r="3" fill="var(--ink)"/>
+            <circle cx="110" cy="44" r="3" fill="var(--ink)"/>
+            <circle cx="200" cy="63" r="3" fill="var(--ink)"/>
+            <circle cx="290" cy="74" r="4" fill="var(--red)"/>
+            <text x="20" y="9" font-size="11" fill="var(--ink-3)" class="num-tab">3.1%</text>
+            <text x="290" y="64" font-size="12" font-weight="700" fill="var(--red)" text-anchor="end" class="num-tab">0.4%</text>
+            <text x="20" y="106" font-size="11" fill="var(--ink-3)">4 weeks ago</text>
+            <text x="290" y="106" font-size="11" fill="var(--ink-3)" text-anchor="end">this week</text>
+          </svg>
+          <div class="stats" style="margin-top:18px">
+            <div class="stat"><div class="sv">4,100</div><div class="sk">emails sent</div></div>
+            <div class="stat"><div class="sv">16</div><div class="sk">replies — only 2 interested</div></div>
+            <div class="stat"><div class="sv">0</div><div class="sk">meetings booked</div></div>
+          </div>
+        </div>
+        <div class="evcol">
+          <p class="cap">All 7 live campaigns · replies per 100 · meetings booked</p>
+          <svg width="560" height="236" viewBox="0 0 560 236" role="img" aria-label="Ranked list of all seven campaigns by replies per 100 emails" style="font-family:var(--font-sans)">
+            <text x="0" y="21" font-size="12" fill="var(--ink-2)">SaaS founders — just hired sales</text>
+            <rect x="222" y="11" width="168" height="12" rx="4" fill="var(--ink)"/>
+            <text x="398" y="21" font-size="11.5" font-weight="600" fill="var(--ink-3)" class="num-tab">4.2%</text>
+            <text x="560" y="21" font-size="11.5" font-weight="600" fill="var(--green)" text-anchor="end">6 meetings · best</text>
+            <text x="0" y="53" font-size="12" fill="var(--ink-2)">Construction — new permits <tspan fill="var(--ink-3)" font-size="10.5">· new</tspan></text>
+            <rect x="222" y="43" width="136" height="12" rx="4" fill="var(--ink)"/>
+            <text x="366" y="53" font-size="11.5" fill="var(--ink-3)" class="num-tab">3.4%</text>
+            <text x="560" y="53" font-size="11.5" fill="var(--ink-3)" text-anchor="end">1 meeting</text>
+            <text x="0" y="85" font-size="12" fill="var(--ink-2)">E-commerce — new store openings</text>
+            <rect x="222" y="75" width="124" height="12" rx="4" fill="var(--ink)"/>
+            <text x="354" y="85" font-size="11.5" fill="var(--ink-3)" class="num-tab">3.1%</text>
+            <text x="560" y="85" font-size="11.5" fill="var(--ink-3)" text-anchor="end">4 meetings</text>
+            <text x="0" y="117" font-size="12" fill="var(--ink-2)">Logistics — page followers</text>
+            <rect x="222" y="107" width="108" height="12" rx="4" fill="var(--ink)"/>
+            <text x="338" y="117" font-size="11.5" fill="var(--ink-3)" class="num-tab">2.7%</text>
+            <text x="560" y="117" font-size="11.5" fill="var(--ink-3)" text-anchor="end">2 meetings</text>
+            <text x="0" y="149" font-size="12" fill="var(--ink-2)">Recruiters — engagement</text>
+            <rect x="222" y="139" width="108" height="12" rx="4" fill="var(--ink)"/>
+            <text x="338" y="149" font-size="11.5" fill="var(--ink-3)" class="num-tab">2.7%</text>
+            <text x="560" y="149" font-size="11.5" fill="var(--ink-3)" text-anchor="end">1 meeting</text>
+            <text x="0" y="181" font-size="12" fill="var(--ink-2)">Fintech — funding news</text>
+            <rect x="222" y="171" width="104" height="12" rx="4" fill="var(--ink)"/>
+            <text x="334" y="181" font-size="11.5" fill="var(--ink-3)" class="num-tab">2.6%</text>
+            <text x="560" y="181" font-size="11.5" fill="var(--ink-3)" text-anchor="end">1 meeting</text>
+            <text x="0" y="213" font-size="12" fill="var(--ink-2)">Agencies — ops leaders</text>
+            <rect x="222" y="203" width="16" height="12" rx="4" fill="var(--red)"/>
+            <text x="246" y="213" font-size="11.5" font-weight="700" fill="var(--red)" class="num-tab">0.4%</text>
+            <text x="560" y="213" font-size="11.5" font-weight="600" fill="var(--red)" text-anchor="end">0 meetings</text>
+          </svg>
+          <p class="microtake">Everything else is fine — only this one needs pausing.</p>
+        </div>
+      </div>
+      <p class="take">This campaign stopped working — pause it.</p>
+    </div>
+  </details>
+
+  <!-- ═══ 03 · Send your best stuff on Tuesday ═══ -->
+  <details class="fix">
+    <summary>
+      <span class="fixnum">03</span>
+      <span class="fixhead"><span class="headline">Send your best stuff on Tuesday</span></span>
+      <span class="fixside">
+        <span class="win">Double the replies</span>
+        <span class="see">
+          <span class="when-closed">See the numbers</span><span class="when-open">Hide the numbers</span>
+          <svg class="chev" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true"><path d="M1 1l4.5 4L10 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+      </span>
+    </summary>
+    <div class="fixbody">
+      <div class="ev">
+        <div class="evcol">
+          <p class="cap">Replies by send day · this month</p>
+          <svg width="360" height="152" viewBox="0 0 360 152" role="img" aria-label="Replies by weekday: Monday 96, Tuesday 178, Wednesday 98, Thursday 89, Friday 41" style="font-family:var(--font-sans)">
+            <line x1="8" y1="122" x2="352" y2="122" stroke="var(--line)"/>
+            <rect x="14" y="70" width="40" height="52" rx="4" fill="var(--ink)"/>
+            <rect x="76" y="26" width="40" height="96" rx="4" fill="var(--orange)"/>
+            <rect x="138" y="69" width="40" height="53" rx="4" fill="var(--ink)"/>
+            <rect x="200" y="74" width="40" height="48" rx="4" fill="var(--ink)"/>
+            <rect x="262" y="100" width="40" height="22" rx="4" fill="var(--ink)"/>
+            <text x="34" y="63" font-size="11" fill="var(--ink-3)" text-anchor="middle" class="num-tab">96</text>
+            <text x="96" y="18" font-size="12.5" font-weight="700" fill="var(--ink)" text-anchor="middle" class="num-tab">178</text>
+            <text x="158" y="62" font-size="11" fill="var(--ink-3)" text-anchor="middle" class="num-tab">98</text>
+            <text x="220" y="67" font-size="11" fill="var(--ink-3)" text-anchor="middle" class="num-tab">89</text>
+            <text x="282" y="93" font-size="11" fill="var(--ink-3)" text-anchor="middle" class="num-tab">41</text>
+            <text x="34" y="140" font-size="11" fill="var(--ink-3)" text-anchor="middle">Mon</text>
+            <text x="96" y="140" font-size="11" font-weight="600" fill="var(--ink)" text-anchor="middle">Tue</text>
+            <text x="158" y="140" font-size="11" fill="var(--ink-3)" text-anchor="middle">Wed</text>
+            <text x="220" y="140" font-size="11" fill="var(--ink-3)" text-anchor="middle">Thu</text>
+            <text x="282" y="140" font-size="11" fill="var(--ink-3)" text-anchor="middle">Fri</text>
+          </svg>
+          <p class="microtake" style="font-weight:400;color:var(--ink-3)">+10 more replies came on weekends.</p>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="sv">178</div><div class="sk">Tuesday — your best day</div></div>
+          <div class="stat"><div class="sv">41</div><div class="sk">Friday — your quietest day</div></div>
+          <div class="stat"><div class="sv">512</div><div class="sk">replies this month in total</div></div>
+        </div>
+      </div>
+      <p class="take">Tuesday gets double the replies — send your best stuff Tuesday.</p>
+    </div>
+  </details>
+
+  <!-- ═══ 04 · Kill the "Intro" email ═══ -->
+  <details class="fix">
+    <summary>
+      <span class="fixnum">04</span>
+      <span class="fixhead"><span class="headline">Kill the “Intro” email</span></span>
+      <span class="fixside">
+        <span class="win">Three times more replies</span>
+        <span class="see">
+          <span class="when-closed">See the numbers</span><span class="when-open">Hide the numbers</span>
+          <svg class="chev" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true"><path d="M1 1l4.5 4L10 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+      </span>
+    </summary>
+    <div class="fixbody">
+      <div class="ev">
+        <div class="evcol">
+          <p class="cap">Replies per 100 emails, by first line</p>
+          <svg width="560" height="184" viewBox="0 0 560 184" role="img" aria-label="Openers ranked: Quick question 5.1 per 100, Congrats on the new store 4.4, Saw you're hiring 3.8, Intro 1.9" style="font-family:var(--font-sans)">
+            <text x="0" y="13" font-size="12" fill="var(--ink-2)">“Quick question about your new sales hire”</text>
+            <rect x="0" y="19" width="357" height="13" rx="4" fill="var(--orange)"/>
+            <text x="365" y="30" font-size="12" font-weight="700" fill="var(--ink)" class="num-tab">5.1% <tspan fill="var(--green)" font-weight="600" font-size="11">· your winner</tspan></text>
+            <text x="0" y="58" font-size="12" fill="var(--ink-2)">“Congrats on the new store”</text>
+            <rect x="0" y="64" width="308" height="13" rx="4" fill="var(--ink)"/>
+            <text x="316" y="75" font-size="12" font-weight="600" fill="var(--ink)" class="num-tab">4.4%</text>
+            <text x="0" y="103" font-size="12" fill="var(--ink-2)">“Saw you’re hiring”</text>
+            <rect x="0" y="109" width="266" height="13" rx="4" fill="var(--ink)"/>
+            <text x="274" y="120" font-size="12" font-weight="600" fill="var(--ink)" class="num-tab">3.8%</text>
+            <text x="0" y="148" font-size="12" fill="var(--ink-2)">“Intro — how we help”</text>
+            <rect x="0" y="154" width="133" height="13" rx="4" fill="var(--brown-300)"/>
+            <text x="141" y="165" font-size="12" font-weight="700" fill="var(--red)" class="num-tab">1.9% <tspan font-weight="600" font-size="11">· the one to kill</tspan></text>
+          </svg>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="sv">5.1 in 100</div><div class="sk">reply to “Quick question…”</div></div>
+          <div class="stat"><div class="sv">1.9 in 100</div><div class="sk">reply to “Intro — how we help”</div></div>
+          <div class="stat"><div class="sv">Almost 3 to 1</div><div class="sk">the gap between them</div></div>
+        </div>
+      </div>
+      <p class="take">“Quick question” beats “Intro” almost 3 to 1 — kill the intro email.</p>
+    </div>
+  </details>
+
+  <!-- ═══ 05 · Top up leads before Aug 14 ═══ -->
+  <details class="fix">
+    <summary>
+      <span class="fixnum">05</span>
+      <span class="fixhead"><span class="headline">Top up leads before Aug 14</span></span>
+      <span class="fixside">
+        <span class="win">19 days of leads left</span>
+        <span class="see">
+          <span class="when-closed">See the numbers</span><span class="when-open">Hide the numbers</span>
+          <svg class="chev" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true"><path d="M1 1l4.5 4L10 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+      </span>
+    </summary>
+    <div class="fixbody">
+      <div class="ev">
+        <div class="evcol">
+          <p class="cap">Your lead runway · each block is one day</p>
+          <svg width="560" height="92" viewBox="0 0 560 92" role="img" aria-label="19 days of leads left, out on August 14" style="font-family:var(--font-sans)">
+            <text x="0" y="16" font-size="12.5" font-weight="600" fill="var(--ink)" class="num-tab">2,840 fresh leads left</text>
+            <text x="547" y="16" font-size="11" fill="var(--ink-3)" text-anchor="end" class="num-tab">about 150 used a day</text>
+            <rect x="0" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="29" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="58" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="87" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="116" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="145" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="174" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="203" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="232" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="261" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="290" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="319" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="348" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="377" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="406" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="435" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="464" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="493" y="30" width="25" height="16" rx="3" fill="var(--ink)"/>
+            <rect x="522" y="30" width="25" height="16" rx="3" fill="var(--red)"/>
+            <text x="0" y="68" font-size="11" fill="var(--ink-3)">today, Sat 26 Jul</text>
+            <text x="547" y="68" font-size="12" font-weight="700" fill="var(--red)" text-anchor="end">Aug 14 — out of leads</text>
+          </svg>
+        </div>
+        <div class="evcol">
+          <p class="cap">Fresh leads keep arriving</p>
+          <svg width="250" height="86" viewBox="0 0 250 86" role="img" aria-label="Signals found this month: hiring 520, engagement 430, news 290" style="font-family:var(--font-sans)">
+            <text x="0" y="13" font-size="11.5" fill="var(--ink-2)">Hiring</text>
+            <rect x="92" y="4" width="140" height="9" rx="3" fill="var(--ink)"/>
+            <text x="0" y="41" font-size="11.5" fill="var(--ink-2)">Engagement</text>
+            <rect x="92" y="32" width="116" height="9" rx="3" fill="var(--ink)"/>
+            <text x="0" y="69" font-size="11.5" fill="var(--ink-2)">News</text>
+            <rect x="92" y="60" width="78" height="9" rx="3" fill="var(--ink)"/>
+            <text x="238" y="13" font-size="11.5" fill="var(--ink-3)" text-anchor="end" class="num-tab">520</text>
+            <text x="214" y="41" font-size="11.5" fill="var(--ink-3)" text-anchor="end" class="num-tab">430</text>
+            <text x="176" y="69" font-size="11.5" fill="var(--ink-3)" text-anchor="end" class="num-tab">290</text>
+          </svg>
+          <div class="stats" style="margin-top:16px">
+            <div class="stat"><div class="sv">1,240</div><div class="sk">signals found this month</div></div>
+            <div class="stat"><div class="sv">6</div><div class="sk">new campaigns added this month</div></div>
+          </div>
+          <p class="microtake">Plenty more where they came from.</p>
+        </div>
+      </div>
+      <p class="take">19 days of leads left — top up before Aug 14.</p>
+    </div>
+  </details>
+
+  <!-- ═══ 06 · Rest 2 tired domains ═══ -->
+  <details class="fix">
+    <summary>
+      <span class="fixnum">06</span>
+      <span class="fixhead"><span class="headline">Rest 2 tired domains</span></span>
+      <span class="fixside">
+        <span class="win">Keeps 96 of 100 landing</span>
+        <span class="see">
+          <span class="when-closed">See the numbers</span><span class="when-open">Hide the numbers</span>
+          <svg class="chev" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true"><path d="M1 1l4.5 4L10 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+      </span>
+    </summary>
+    <div class="fixbody">
+      <div class="ev">
+        <div class="evcol">
+          <p class="cap">Where your emails end up</p>
+          <svg width="420" height="58" viewBox="0 0 420 58" role="img" aria-label="96 of every 100 emails land; 4 bounce or vanish" style="font-family:var(--font-sans)">
+            <text x="0" y="14" font-size="12.5" font-weight="700" fill="var(--ink)" class="num-tab">96 land</text>
+            <text x="404" y="14" font-size="11.5" font-weight="600" fill="var(--red)" text-anchor="end" class="num-tab">4 bounce or vanish</text>
+            <rect x="0" y="24" width="386" height="14" rx="4" fill="var(--green)"/>
+            <rect x="388" y="24" width="16" height="14" rx="4" fill="var(--red)"/>
+            <text x="0" y="54" font-size="11" fill="var(--ink-3)">of every 100 emails you send</text>
+          </svg>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="sv">41 of 44</div><div class="sk">inboxes healthy</div></div>
+          <div class="stat"><div class="sv">3 resting</div><div class="sk">domains due back Aug 2</div></div>
+          <div class="stat"><div class="sv">1 not warming · 0 reconnects</div><div class="sk">everything else is quiet</div></div>
+        </div>
+      </div>
+      <p class="take">Mostly healthy — rest 2 tired domains.</p>
+      <div style="margin-top:18px">
+
+        <!-- ════════════════════════════════════════════════════════════
+          INBOX & DOMAIN MANAGER — VERBATIM markup from the shared table snippet.
+          renderManagerPanel() + paintFloorRows(). Pasted untouched per spec.
+        ═════════════════════════════════════════════════════════════════ -->
+        <div class="dlv-subtab-panel" id="dlv-fold-manager">
+          <div class="dlv-subtab-head"><span class="ictile dlv-headic"><span class="ic8" style="--icon:url('../icons/mail.png')"></span></span>Inbox &amp; domain manager<span class="hint">2 domain(s) need warm-up → warm up · restore · reconnect</span></div>
+          <div class="dlv-fold-body">
+            <div class="dlv-flowchips" role="tablist">
+              <button class="dlv-flowchip on warn" role="tab" aria-selected="true" title="Domains whose reply rate fell under the floor over the selected window — candidates for warm-up rest">Below reply floor <span class="dlv-flowchip-n">2</span></button>
+              <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix.">Not warming <span class="dlv-flowchip-n">1</span></button>
+              <button class="dlv-flowchip" role="tab" aria-selected="false" title="Sends held while warming — the cap is 0 so no cold sends go out.">In warm-up <span class="dlv-flowchip-n">3</span></button>
+              <button class="dlv-flowchip" role="tab" aria-selected="false" title="Mailboxes whose connection failed — silently sending nothing until reconnected">Needs reconnect <span class="dlv-flowchip-n">0</span></button>
+            </div>
+            <div class="dlv-mb-bar">
+              <span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" title="Reporting window the reply floor is judged over"><option selected>Last 7 days</option><option>Last 14 days</option><option>Last 30 days</option></select>
+              <span class="dlv-mb-count">Jul 19 → Jul 26</span>
+              <input class="dlv-input" style="flex:1;min-width:160px" type="text" placeholder="Search domain or mailbox…" value="">
+              <button class="btn sm" title="Re-pull manager data from Smartlead in the background">↻ Refresh</button>
+              <button class="btn sm primary" title="Set daily cap by reply-rate tier on Outlook/Azure mailboxes">Caps by reply rate</button>
+              <details class="dlv-mgr-adv"><summary>Advanced</summary>
+                <span class="dlv-mb-count">min sent</span><input class="dlv-input" style="width:78px" type="number" value="50" title="Only judge domains with at least this many sends in the window">
+                <span class="dlv-mb-count">flag if reply % under</span><input class="dlv-input" style="width:70px" type="number" step="0.1" value="1" title="Domains replying below this rate get flagged for warm-up">
+              </details>
+              <span class="dlv-mb-count" id="dlv-mgr-count">2 below the 1% floor · min 50 sent · last 7 days · 3 resting or recovering fleet-wide</span>
+              <span id="dlv-mgr-bulk" style="margin-left:auto;display:flex;gap:7px;align-items:center"><button class="btn sm">Warm up all (2)</button></span>
+            </div>
+            <div class="dlv-mb-wrap"><div class="dlv-mb-scroll"><table class="dlv-mb"><thead><tr><th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th></tr></thead><tbody id="dlv-mgr-body">
+              <tr><td><div class="dlv-mb-email">navreo-mail.com <span class="dlv-mb-dom">· 6 mbx</span></div><div class="dlv-mb-dom">Batch 4 · Batch 7</div></td>
+                <td style="text-align:right">412</td>
+                <td style="text-align:right">398</td>
+                <td style="text-align:right;color:var(--red);font-weight:700">0.24% <span class="dlv-mb-dom">(1)</span></td>
+                <td style="text-align:right">0.00%</td>
+                <td style="text-align:right">3.86%</td>
+                <td style="text-align:right"><button class="btn sm" title="Rests all 6 mailboxes on navreo-mail.com">Warm up domain</button></td></tr>
+              <tr><td><div class="dlv-mb-email">getnavreo.io <span class="dlv-mb-dom">· 5 mbx</span></div><div class="dlv-mb-dom">Batch 6</div></td>
+                <td style="text-align:right">388</td>
+                <td style="text-align:right">371</td>
+                <td style="text-align:right;color:var(--red);font-weight:700">0.52% <span class="dlv-mb-dom">(2)</span></td>
+                <td style="text-align:right">0.26%</td>
+                <td style="text-align:right">1.12%</td>
+                <td style="text-align:right"><button class="btn sm" title="Rests all 5 mailboxes on getnavreo.io">Warm up domain</button></td></tr>
+            </tbody></table></div></div>
+            <div style="margin-top:8px"><a class="dlv-dl">View full table</a></div>
+          </div>
+        </div>
+        <!-- ═══ end verbatim manager panel ═══ -->
+
+      </div>
+    </div>
+  </details>
+
+  <!-- ── what's already working ── -->
+  <div class="secrow">
+    <span class="seclabel">What’s already working</span>
+    <span class="sectake">Founders at 11–50-person companies are your buyers.</span>
+  </div>
+  <section class="work" aria-label="What is already working">
+    <div class="workcol">
+      <div class="wk">Best campaign</div>
+      <div class="bestname">SaaS founders — just hired sales</div>
+      <div class="bestsub">4.2 replies per 100 · 6 meetings this month</div>
+      <span class="tag good">Keep it running</span>
+    </div>
+    <div class="workcol">
+      <div class="wk">Who replies · of 96 interested</div>
+      <svg width="236" height="132" viewBox="0 0 236 132" role="img" aria-label="Interested replies by job type: Founders and CEOs 37, Sales leaders 23, Marketing 15, Operations 12, Other 9" style="font-family:var(--font-sans)">
+        <text x="0" y="9" font-size="11" font-weight="600" fill="var(--ink)">Founders &amp; CEOs · <tspan class="num-tab">37</tspan></text>
+        <rect x="0" y="13" width="118" height="8" rx="3" fill="var(--orange)"/>
+        <text x="0" y="35" font-size="11" fill="var(--ink-2)">Sales leaders · <tspan class="num-tab">23</tspan></text>
+        <rect x="0" y="39" width="71" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="61" font-size="11" fill="var(--ink-2)">Marketing · <tspan class="num-tab">15</tspan></text>
+        <rect x="0" y="65" width="47" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="87" font-size="11" fill="var(--ink-2)">Operations · <tspan class="num-tab">12</tspan></text>
+        <rect x="0" y="91" width="37" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="113" font-size="11" fill="var(--ink-2)">Other · <tspan class="num-tab">9</tspan></text>
+        <rect x="0" y="117" width="28" height="8" rx="3" fill="var(--ink)"/>
+      </svg>
+    </div>
+    <div class="workcol">
+      <div class="wk">Company size</div>
+      <svg width="236" height="106" viewBox="0 0 236 106" role="img" aria-label="Interested replies by company size: 11 to 50 people 52 percent, 1 to 10 people 28 percent, 51 to 200 people 15 percent, over 200 people 5 percent" style="font-family:var(--font-sans)">
+        <text x="0" y="9" font-size="11" font-weight="600" fill="var(--ink)">11–50 people · <tspan class="num-tab">52%</tspan></text>
+        <rect x="0" y="13" width="109" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="35" font-size="11" fill="var(--ink-2)">1–10 people · <tspan class="num-tab">28%</tspan></text>
+        <rect x="0" y="39" width="59" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="61" font-size="11" fill="var(--ink-2)">51–200 people · <tspan class="num-tab">15%</tspan></text>
+        <rect x="0" y="65" width="32" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="87" font-size="11" fill="var(--ink-2)">200+ people · <tspan class="num-tab">5%</tspan></text>
+        <rect x="0" y="91" width="11" height="8" rx="3" fill="var(--ink)"/>
+      </svg>
+    </div>
+    <div class="workcol">
+      <div class="wk">Industry</div>
+      <svg width="236" height="132" viewBox="0 0 236 132" role="img" aria-label="Interested replies by industry: Agencies 31 percent, SaaS 27 percent, E-commerce 18 percent, Logistics 12 percent, Other 12 percent" style="font-family:var(--font-sans)">
+        <text x="0" y="9" font-size="11" fill="var(--ink-2)">Agencies · <tspan class="num-tab">31%</tspan></text>
+        <rect x="0" y="13" width="96" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="35" font-size="11" fill="var(--ink-2)">SaaS · <tspan class="num-tab">27%</tspan></text>
+        <rect x="0" y="39" width="84" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="61" font-size="11" fill="var(--ink-2)">E-commerce · <tspan class="num-tab">18%</tspan></text>
+        <rect x="0" y="65" width="56" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="87" font-size="11" fill="var(--ink-2)">Logistics · <tspan class="num-tab">12%</tspan></text>
+        <rect x="0" y="91" width="37" height="8" rx="3" fill="var(--ink)"/>
+        <text x="0" y="113" font-size="11" fill="var(--ink-2)">Other · <tspan class="num-tab">12%</tspan></text>
+        <rect x="0" y="117" width="37" height="8" rx="3" fill="var(--ink)"/>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ── footer ── -->
+  <footer class="foot">
+    <span>Prototype 5 of 5 — The Coach · mock data</span>
+    <span>Navreo · Saturday 26 July · updated 8 minutes ago</span>
+  </footer>
+
+</div>
+
+</body>
+</html>

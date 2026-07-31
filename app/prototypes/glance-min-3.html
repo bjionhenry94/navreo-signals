@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glance &mdash; P3: Wins funnel</title>
+<link rel="stylesheet" href="overview-hub-base.css">
+<style>
+  body { background:var(--sunken); margin:0; padding:44px clamp(18px,5vw,64px); font-family:var(--font-sans); color:var(--fg); }
+  .flag { font-size:0.72rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-subtle); margin:0 auto 16px; max-width:1000px; }
+  .flag b { color:var(--success); }
+  .card { background:var(--bg); border:1px solid var(--border); border-radius:var(--r-xl); padding:30px 34px; max-width:1000px; margin:0 auto; box-shadow:0 1px 2px rgba(20,17,14,0.04); }
+  .ct { display:flex; align-items:baseline; gap:10px; margin:0 0 16px; }
+  .ct h2 { font-family:var(--font-display); font-weight:400; font-size:1.15rem; letter-spacing:-0.01em; margin:0; }
+  .ginfo { display:inline; }
+  .ginfo > summary { list-style:none; cursor:pointer; width:16px; height:16px; border-radius:999px; border:1px solid var(--border-strong); color:var(--fg-subtle); font-size:0.66rem; font-style:italic; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .ginfo > summary::-webkit-details-marker { display:none; }
+  .ginfo[open] { display:block; margin-top:10px; }
+  .ginfo[open] > summary { margin-bottom:6px; }
+  .ginfo p { margin:0; font-size:0.8rem; color:var(--fg-subtle); line-height:1.5; max-width:66ch; }
+  .synced { margin-left:auto; font-size:0.72rem; color:var(--fg-subtle); }
+  .hpill { display:inline-flex; align-items:center; gap:6px; background:var(--success-bg); color:var(--success); font-size:0.78rem; font-weight:700; padding:4px 11px; border-radius:999px; }
+  .hpill::before { content:""; width:7px; height:7px; border-radius:999px; background:var(--success); }
+  .tnum { font-variant-numeric:tabular-nums; }
+  .vline { font-family:var(--font-display); font-weight:400; font-size:clamp(1.7rem,3.6vw,2.2rem); color:var(--success); letter-spacing:-0.02em; line-height:1; margin:12px 0 2px; }
+  .vsub { font-size:1rem; color:var(--fg-muted); margin:0; }
+  .vsub b { color:var(--success); font-weight:700; }
+  .oh { display:flex; gap:20px; align-items:flex-end; }
+  .oh .n { font-family:var(--font-display); font-weight:400; font-size:clamp(3rem,6.6vw,4.2rem); line-height:0.82; letter-spacing:-0.03em; color:var(--success); }
+  .oh .l { display:block; font-size:0.84rem; color:var(--fg-subtle); margin-top:9px; }
+  .oh-arrow { font-family:var(--font-display); font-size:1.8rem; color:var(--success); opacity:0.5; padding-bottom:18px; }
+
+  .g3-sub { font-size:1.1rem; color:var(--fg); margin:2px 0 16px; }
+  .g3-sub b { color:var(--success); font-weight:700; }
+  .g3-flow { display:flex; align-items:stretch; gap:0; }
+  .g3-node { text-align:center; padding:16px 6px; border-radius:var(--r-lg); background:var(--sunken); display:flex; flex-direction:column; justify-content:center; }
+  .g3-node.small { flex:0.7 1 0; opacity:0.68; }
+  .g3-node.win { flex:1.15 1 0; background:var(--success-bg); }
+  .g3-node .n { font-family:var(--font-display); font-weight:400; letter-spacing:-0.02em; line-height:1; }
+  .g3-node.small .n { font-size:clamp(1.3rem,3vw,1.7rem); color:var(--fg-muted); }
+  .g3-node.win .n { font-size:clamp(2.1rem,5vw,3rem); color:var(--success); }
+  .g3-node .l { display:block; font-size:0.74rem; color:var(--fg-subtle); margin-top:5px; }
+  .g3-link { flex:0 0 auto; display:flex; align-items:center; padding:0 10px; color:var(--border-strong); font-size:1rem; }
+  .g3-foot { margin-top:16px; font-size:0.82rem; color:var(--fg-subtle); display:flex; align-items:center; gap:12px; }
+  .g3-foot .aud { flex:1; height:7px; border-radius:999px; overflow:hidden; background:var(--track-bg); }
+  .g3-foot .aud i { height:100%; display:block; background:var(--success); width:86.8%; }
+  @media (max-width:680px){ .g3-flow{ flex-wrap:wrap; gap:8px; } .g3-link{ transform:rotate(90deg); } .g3-node{ flex:1 1 40% !important; } }
+
+</style>
+</head>
+<body>
+  <p class="flag">Glance redesign &middot; <b>P3</b> &mdash; Wins funnel</p>
+  <div class="card">
+    <div class="ct"><h2>The campaign at a glance</h2><details class="ginfo"><summary aria-label="about these numbers">i</summary><p>Campaign-to-date, from the daily Smartlead sync (00:13). 14,586 sent, 156 replies (1.07%), 156 bounced (1.1%). Positives = Smartlead's interested mark. Of 7,713 people: 6,692 finished, 442 in progress, 579 unreachable. Contact record 7,713 vs Smartlead's 8,747 is a different counter (platform audience vs contact record), not a contradiction.</p></details><span class="synced">synced 00:13</span></div>
+
+    <span class="hpill">Working</span>
+    <p class="vline">It's working.</p>
+    <p class="g3-sub"><b>1 yes every 251 emails</b> &mdash; healthy, well under the worry line.</p>
+    <div class="g3-flow">
+      <div class="g3-node small"><span class="n tnum">14,586</span><span class="l">Sent</span></div>
+      <div class="g3-link">&#9656;</div>
+      <div class="g3-node small"><span class="n tnum">156</span><span class="l">Replied</span></div>
+      <div class="g3-link">&#9656;</div>
+      <div class="g3-node win"><span class="n tnum">58</span><span class="l">Said yes</span></div>
+      <div class="g3-link">&#9656;</div>
+      <div class="g3-node win"><span class="n tnum">8</span><span class="l">Meetings</span></div>
+    </div>
+    <div class="g3-foot"><span><b class="tnum" style="font-family:var(--font-display);color:var(--fg)">87%</b> of the list sent</span><span class="aud"><i></i></span></div>
+
+  </div>
+</body>
+</html>

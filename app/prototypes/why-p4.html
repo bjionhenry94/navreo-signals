@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Why P4 - Verdict receipt</title>
+<style>
+  :root {
+    --ink:#14110E; --ink2:#3A332C; --ink3:#6B6055; --white:#FFFFFF; --sunken:#F7F7F6;
+    --orange:#FF4D00; --orange6:#DB4100; --orange1:#FFE4D6; --danger:#C2371F; --ok:#1E7F4F;
+    --border:#ECECEA; --border2:#DDDDDA; --r:12px; --pill:999px;
+    --sans:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+  * { box-sizing:border-box; margin:0; }
+  .btrack,.bfill,.ctrack,.cfill,.ptrack,.pfill,.microbar,.microbar .f,.tick { display:block; }
+  body { font-family:var(--sans); background:var(--sunken); color:var(--ink); padding:28px; }
+  .lab { max-width:860px; margin:0 auto; }
+  .lab-tag { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--orange6); margin-bottom:4px; }
+  .lab-idea { font-size:15px; color:var(--ink2); margin-bottom:22px; }
+  .card { background:var(--white); border:1px solid var(--border); border-radius:var(--r); padding:18px 20px 16px; margin-bottom:18px; }
+  .top { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+  .badge { font-size:11px; font-weight:700; padding:3px 10px; border-radius:var(--pill); }
+  .badge.med { background:#FFF3D6; color:#8A6400; border:1px solid #F0DFAE; }
+  .badge.low { background:var(--sunken); color:var(--ink3); border:1px solid var(--border2); }
+  .owner { font-size:11px; font-weight:600; padding:3px 10px; border-radius:var(--pill); background:var(--sunken); color:var(--ink3); border:1px solid var(--border); }
+  .act { font-size:16.5px; font-weight:700; line-height:1.35; }
+  .sub { font-size:13.5px; color:var(--ink3); margin-top:3px; }
+  .whylbl { font-size:12px; font-weight:700; color:var(--orange6); margin:12px 0 10px; }
+  .btns { display:flex; gap:16px; align-items:center; margin-top:14px; }
+  .cta { background:var(--orange); color:#fff; border:none; font:700 13px var(--sans); padding:9px 16px; border-radius:var(--pill); }
+  .ghost { background:none; border:none; font:600 12.5px var(--sans); color:var(--ink3); }
+
+  .receipt { border:1px solid var(--border); border-radius:12px; overflow:hidden; background:var(--white); }
+  .rrow { display:flex; gap:12px; align-items:baseline; padding:11px 16px 11px 14px; border-left:3px solid transparent; }
+  .rrow + .rrow { border-top:1px dashed var(--border); }
+  .rrow.bad { border-left-color:var(--danger); } .rrow.good { border-left-color:var(--ok); }
+  .rnum { font-size:20px; font-weight:700; min-width:78px; font-variant-numeric:tabular-nums; }
+  .rrow.bad .rnum { color:var(--danger); } .rrow.good .rnum { color:var(--ok); }
+  .rtxt { font-size:13px; color:var(--ink3); font-weight:600; }
+  .sum { display:flex; gap:10px; align-items:center; padding:13px 16px; background:var(--orange1); font-size:14.5px; font-weight:700; color:var(--ink); }
+  .sum .arrow { color:var(--orange6); font-size:16px; }
+</style></head>
+<body><div class="lab">
+<p class="lab-tag">Prototype 4 of 5</p>
+<p class="lab-idea"><b>Verdict receipt.</b> Big numbers stack up to one orange bottom line: the decision.</p>
+<div class="card">
+  <div class="top"><span class="badge med">Medium</span><span class="owner">Yasir</span></div>
+  <p class="act">Drop the CRE vertical or rewrite all three openers, 2,633 Email 1 sends and nothing.</p>
+  <p class="sub">&rarr; 4,229 sends, zero positives at 82% through the list.</p>
+  <div class="whylbl">&#9662; Why?</div>
+  <div class="receipt"><div class="rrow "><span class="rnum">4,229</span><span class="rtxt">emails sent</span></div><div class="rrow bad"><span class="rnum">0</span><span class="rtxt">people said yes</span></div><div class="rrow bad"><span class="rnum">82%</span><span class="rtxt">of the list already sent</span></div><div class="sum"><span class="arrow">&#8594;</span>Zero from 4,229 is past saving. Change the pitch.</div></div>
+  <div class="btns"><button class="cta">Copy prompt for Claude</button><button class="ghost">Assign to me</button><button class="ghost">Mark as completed</button><button class="ghost">Dismiss</button></div>
+</div><div class="card">
+  <div class="top"><span class="badge low">Low</span><span class="owner">Lilly</span></div>
+  <p class="act">Hold the refill here, 12,310 leads are only 50% through.</p>
+  <p class="sub">&rarr; 12,310 leads loaded, 50% of the two-email cycle sent.</p>
+  <div class="whylbl">&#9662; Why?</div>
+  <div class="receipt"><div class="rrow good"><span class="rnum">50%</span><span class="rtxt">of the list still to go</span></div><div class="rrow good"><span class="rnum">13</span><span class="rtxt">said yes so far</span></div><div class="rrow good"><span class="rnum">2</span><span class="rtxt">meetings booked</span></div><div class="sum"><span class="arrow">&#8594;</span>Working fine. Refill at 90%, not now.</div></div>
+  <div class="btns"><button class="cta">Copy prompt for Claude</button><button class="ghost">Assign to me</button><button class="ghost">Mark as completed</button><button class="ghost">Dismiss</button></div>
+</div><div class="card">
+  <div class="top"><span class="badge med">Medium</span><span class="owner">Yasir</span></div>
+  <p class="act">Audit the CRE list: 26 replies on 4,229 sends is 0.61%.</p>
+  <p class="sub">&rarr; Emails may not be arriving. Check deliverability before new copy.</p>
+  <div class="whylbl">&#9662; Why?</div>
+  <div class="receipt"><div class="rrow bad"><span class="rnum">26</span><span class="rtxt">replies from 4,229 emails</span></div><div class="rrow bad"><span class="rnum">0.61%</span><span class="rtxt">reply rate</span></div><div class="rrow "><span class="rnum">1.5%</span><span class="rtxt">is the healthy reply rate</span></div><div class="sum"><span class="arrow">&#8594;</span>Fix inbox placement before touching the copy.</div></div>
+  <div class="btns"><button class="cta">Copy prompt for Claude</button><button class="ghost">Assign to me</button><button class="ghost">Mark as completed</button><button class="ghost">Dismiss</button></div>
+</div>
+</div></body></html>

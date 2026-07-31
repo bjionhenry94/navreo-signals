@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance P2 — The race · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;
+  --cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;
+  --line:#EBE1D5;--line-2:#DCC6AE;--green:#2E7D5B;--red:#C2371F;--red-bg:#F8E1DA;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;--font-mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:760px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.01em;margin:2px 0 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;gap:16px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:5px 11px;border-radius:999px}
+.verdict{font-family:var(--font-display);font-size:18px;line-height:1.3;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--orange);border-radius:12px;padding:16px 20px;margin-bottom:16px}
+.verdict b{color:var(--orange-600)}
+.switch{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.sw{font:600 13px var(--font-sans);padding:8px 15px;border-radius:999px;border:1px solid var(--line-2);background:var(--card);color:var(--ink-2);cursor:pointer}
+.sw.on{background:var(--ink);color:var(--cream);border-color:var(--ink)}
+.metric-title{font-size:13px;font-weight:600;color:var(--ink-3);margin-bottom:16px}
+.metric-title b{color:var(--ink)}
+.lane{display:flex;align-items:center;gap:14px;margin-bottom:15px}
+.lane .name{width:88px;flex:0 0 88px;text-align:right;font-family:var(--font-display);font-size:15px}
+.lane .name small{display:block;font-family:var(--font-sans);font-size:10.5px;color:var(--ink-3);font-weight:600}
+.bar-wrap{flex:1;position:relative;background:var(--sunken);border-radius:9px;height:38px;overflow:hidden}
+.bar{height:100%;border-radius:9px;background:var(--brown-300);display:flex;align-items:center;transition:width .5s cubic-bezier(.2,.7,.2,1)}
+.bar.win{background:var(--orange)}
+.bar.lose{background:#E7C7BC}
+.bar .v{font-weight:800;font-size:15px;padding:0 13px;white-space:nowrap;color:#fff}
+.bar.lose .v{color:var(--red)}
+.bar.win .v{color:#fff}
+.flag{font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:2px 8px;border-radius:999px;margin-left:8px}
+.flag.win{background:var(--orange);color:#fff}
+.flag.lose{background:var(--red-bg);color:var(--red)}
+.flag.early{background:var(--sunken);color:var(--ink-3);border:1px dashed var(--line-2)}
+.lane.ghost .bar-wrap{background:repeating-linear-gradient(45deg,var(--cream-50),var(--cream-50) 8px,var(--sunken) 8px,var(--sunken) 16px);border:1px dashed var(--line-2)}
+.lane.ghost .name{color:var(--brown-300)}
+.lane.ghost .bar{background:transparent}
+.lane.ghost .ghosttxt{font-size:12px;color:var(--ink-3);padding-left:14px;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin-top:4px}
+.action{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--orange-100);border:1px solid var(--line-2);border-radius:14px;padding:15px 20px;margin-top:18px;flex-wrap:wrap}
+.action .txt{font-size:14px;font-weight:600}
+.action .txt span{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-top:2px}
+.btn{background:var(--orange);color:#fff;border:none;border-radius:999px;padding:10px 18px;font:600 13px var(--font-sans);cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--orange-600)}
+details{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+summary{font-size:12.5px;color:var(--ink-3);cursor:pointer;font-weight:600;list-style:none}
+summary::-webkit-details-marker{display:none}summary::before{content:"›";margin-right:7px;display:inline-block}details[open] summary::before{transform:rotate(90deg)}
+details p{font-size:12.5px;color:var(--ink-3);margin-top:9px;line-height:1.55}
+@media(max-width:560px){.lane .name{width:64px;flex-basis:64px;font-size:13px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Version performance</div><div class="h1">The race</div></div>
+    <div class="chip">Live from Smartlead · since relaunch</div>
+  </div>
+  <div class="verdict" id="verdict"></div>
+  <div class="switch" id="switch"></div>
+  <div class="card">
+    <div class="metric-title" id="mtitle"></div>
+    <div id="lanes"></div>
+    <div class="action" id="action"></div>
+    <details><summary>How to read this &amp; what we don't split</summary><p id="why"></p></details>
+  </div>
+</div>
+<script>
+const DATA={
+  versions:[
+    {step:1,label:"A",sent:1269,replies:20,positives:14,bounces:28},
+    {step:1,label:"B",sent:1259,replies:18,positives:9,bounces:28},
+    {step:2,label:"inline",inline:true,sent:1757,replies:22,positives:13,bounces:11}
+  ],
+  meetings:{total:16,by_step:{1:13,2:3}}
+};
+const FLOOR=300;
+const nm=v=>v.inline?"Email 2":("Ver "+v.label);
+const sub=v=>v.inline?"the follow-up":"Email 1 opener";
+const perPos=v=>v.positives>0?Math.round(v.sent/v.positives):null;
+const A=DATA.versions[0],B=DATA.versions[1],E2=DATA.versions[2];
+const m1=DATA.meetings.by_step[1]||0,m2=DATA.meetings.by_step[2]||0,mt=DATA.meetings.total;
+
+const METRICS={
+  positives:{label:"Good replies",title:"Good replies won <b>— the replies you actually want</b>",
+    rows:()=>DATA.versions.map(v=>({name:nm(v),sub:sub(v),val:v.positives,txt:v.positives,early:v.sent<FLOOR})),
+    higherBetter:true,crown:true},
+  warm:{label:"Warm rate",title:"Warm reply rate <b>— how often a send turns into a good reply</b>",
+    rows:()=>DATA.versions.map(v=>({name:nm(v),sub:sub(v),val:v.positives/v.sent*100,txt:(v.positives/v.sent*100).toFixed(1)+"%",early:v.sent<FLOOR})),
+    higherBetter:true,crown:true},
+  meetings:{label:"Calls booked",title:"Calls booked <b>— by the email that got the reply</b>",
+    rows:()=>[{name:"Email 1",sub:"A + B together",val:m1,txt:m1},{name:"Email 2",sub:"the follow-up",val:m2,txt:m2}],
+    higherBetter:true,crown:true,step:true},
+  sent:{label:"Emails sent",title:"Emails sent <b>— the fairness check</b>",
+    rows:()=>DATA.versions.map(v=>({name:nm(v),sub:sub(v),val:v.sent,txt:v.sent.toLocaleString(),early:false})),
+    higherBetter:true,crown:false}
+};
+let cur="positives";
+
+function render(){
+  const M=METRICS[cur];
+  document.getElementById("mtitle").innerHTML=M.title;
+  let rows=M.rows();
+  const scored=rows.filter(r=>!r.early);
+  const max=Math.max(...rows.map(r=>r.val),1);
+  const best=M.crown?Math.max(...scored.map(r=>r.val)):null;
+  const worst=M.crown&&scored.length>1?Math.min(...scored.map(r=>r.val)):null;
+  let html=rows.map(r=>{
+    const w=Math.max(8,r.val/max*100);
+    let cls="",flag="";
+    if(r.early){cls="lose";flag='<span class="flag early">too early</span>';}
+    else if(M.crown&&r.val===best){cls="win";flag='<span class="flag win">'+(M.step?'most calls':'winner')+'</span>';}
+    else if(M.crown&&!M.step&&r.val===worst){cls="lose";flag='<span class="flag lose">losing</span>';}
+    return `<div class="lane"><div class="name">${r.name}<small>${r.sub}</small></div>
+      <div class="bar-wrap"><div class="bar ${cls}" style="width:${w}%"><span class="v">${r.txt}</span></div></div>${flag}</div>`;
+  }).join("");
+  // ghost challenger lane (empty / small-sample demo) only on version metrics
+  if(!M.step) html+=`<div class="lane ghost"><div class="name">Ver C<small>not started</small></div>
+    <div class="bar-wrap"><span class="ghosttxt">Start a challenger — reads "too early" until ~300 sends</span></div>
+    <span class="flag early">＋ new</span></div>`;
+  document.getElementById("lanes").innerHTML=html;
+}
+document.getElementById("switch").innerHTML=Object.keys(METRICS).map(k=>
+  `<button class="sw ${k==='positives'?'on':''}" data-k="${k}">${METRICS[k].label}</button>`).join("");
+document.getElementById("switch").onclick=e=>{const b=e.target.closest(".sw");if(!b)return;
+  cur=b.dataset.k;document.querySelectorAll(".sw").forEach(s=>s.classList.toggle("on",s===b));render();};
+
+// verdict + action stay constant (the truth doesn't change with the chart)
+const winner=(A.positives/A.sent>=B.positives/B.sent)?A:B, loser=winner===A?B:A;
+document.getElementById("verdict").innerHTML=
+  `Your calls come from <b>Email 1</b> (${m1} of ${mt}). Between the two openers, <b>Version ${winner.label}</b> is winning — flip a chip to see it on every measure.`;
+document.getElementById("action").innerHTML=
+  `<div class="txt">Retire ${loser.label}, send more ${winner.label}.<span>${winner.label} needs ${perPos(winner)} emails per good reply; ${loser.label} needs ${perPos(loser)}.</span></div><button class="btn">Do this</button>`;
+document.getElementById("why").textContent=
+  `Bars are Smartlead's live numbers since the sequence was last saved. Calls booked are shown by the email that got the reply, not the version — Smartlead can't tell us which opener a caller saw, so Email 1's ${m1} calls are never split between A and B by guess. Pick the winning opener on Good replies and Warm rate instead; Emails sent is here only to prove A and B got a fair, equal test.`;
+render();
+</script>
+</body>
+</html>

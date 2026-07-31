@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview Hub &mdash; P2: Traffic lights</title>
+<link rel="stylesheet" href="overview-hub-base.css">
+<style>
+  body { background:var(--bg); }
+  .hub-wrap { max-width:var(--max-w-page); margin:0 auto; padding:28px var(--gutter) 90px; }
+  .proto-flag { font-size:0.72rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-subtle); margin:0 0 14px; }
+  .proto-flag b { color:var(--nav-orange-600); }
+  /* trimmed-prose disclosure for "the whole picture" */
+  .wp-reconcile { display:inline; }
+  .wp-reconcile > summary { display:inline; cursor:pointer; color:var(--nav-orange-600); font-weight:700; list-style:none; }
+  .wp-reconcile > summary::-webkit-details-marker { display:none; }
+  .wp-reconcile[open] { display:block; margin-top:6px; color:var(--fg-muted); }
+
+  .g2-verdict { font-family:var(--font-display); font-size:clamp(1.4rem,3vw,1.9rem); letter-spacing:-0.02em; color:var(--fg); margin:2px 0 14px; }
+  .g2-verdict b { color:var(--danger); font-weight:400; }
+  .g2-next { display:block; background:var(--sunken); border-left:4px solid var(--nav-orange); border-radius:var(--r-md); padding:14px 16px; margin:0 0 18px; font-size:1rem; font-weight:700; color:var(--nav-orange-600); }
+  .g2-rows { display:flex; flex-direction:column; }
+  .g2-row { display:grid; grid-template-columns:14px 150px 1fr auto; gap:16px; align-items:center; padding:15px 4px; border-top:1px solid var(--border); }
+  .g2-row:first-child { border-top:0; }
+  .g2-row.lead { border-left:4px solid var(--danger); padding-left:12px; }
+  .g2-dot { width:14px; height:14px; border-radius:999px; }
+  .g2-dot.red{ background:var(--danger);} .g2-dot.amber{ background:var(--warning);} .g2-dot.green{ background:var(--success);}
+  .g2-k { font-weight:700; font-size:0.92rem; }
+  .g2-row.lead .g2-k { font-size:1rem; }
+  .g2-read { color:var(--fg-muted); font-size:0.9rem; }
+  .g2-n { font-family:var(--font-display); font-size:1.5rem; letter-spacing:-0.02em; text-align:right; }
+  .g2-row.lead .g2-n { font-size:2rem; color:var(--danger); }
+  .g2-n.red{ color:var(--danger);} .g2-n.amber{ color:var(--warning);} .g2-n.green{ color:var(--fg);}
+  @media (max-width:640px){ .g2-row{ grid-template-columns:14px 1fr auto; } .g2-read{ grid-column:2 / -1; } }
+
+</style>
+</head>
+<body>
+<div class="cockpit">
+  <div class="hub-wrap">
+    <p class="proto-flag">Overview hub &middot; <b>P2</b> &mdash; Traffic lights</p>
+
+    <article class="campaign-page" data-cid="3421811">
+      <a href="#" class="back-link">&larr; Campaigns</a>
+      <div class="campaign-header-main">
+        <div class="progress-dial" role="img" aria-label="51% of the list has finished the sequence">
+          <div class="dial-ring"><svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+            <circle cx="32" cy="32" r="26" class="dial-track"></circle>
+            <circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="163.36" stroke-dashoffset="80" transform="rotate(-90 32 32)"></circle>
+          </svg><span class="dial-value tnum">51%</span></div>
+        </div>
+        <div><h1 class="campaign-title">Social and Environmental &mdash; Soft</h1>
+        <p class="campaign-subtitle">KRG &middot; campaign 3421811</p></div>
+        <div class="campaign-header-right">
+          <div class="campaign-run-row"><span class="campaign-run-status">Runs in Smartlead &middot; active</span>
+          <a class="action-link" href="#" target="_blank" rel="noopener">Open in Smartlead</a></div>
+        </div>
+      </div>
+      <nav class="campaign-tabs" aria-label="Campaign sections">
+        <a href="#" class="campaign-tab is-active" data-tab="overview">Overview</a>
+        <a href="#" class="campaign-tab" data-tab="messaging">Messaging</a>
+        <a href="#" class="campaign-tab" data-tab="leads">Leads <span class="tab-count tnum">(6,879)</span></a>
+      </nav>
+      <div class="campaign-page-body">
+        <div class="tab-panel" data-tab="overview">
+
+          <div class="ov-card">
+            <div class="card-title">The campaign at a glance</div>
+            <p class="g2-verdict">Nothing's landing yet &mdash; <b>0 people have said yes.</b></p>
+            <p class="g2-next">&#8594; Do this next: change the first email before the last 6,720 send.</p>
+            <div class="g2-rows">
+              <div class="g2-row lead"><span class="g2-dot red"></span><span class="g2-k">Said yes</span><span class="g2-read">No one is interested yet &mdash; this is the problem to fix.</span><span class="g2-n red tnum">0</span></div>
+              <div class="g2-row"><span class="g2-dot red"></span><span class="g2-k">Replies</span><span class="g2-read">Below the 1 in 100 we want to see.</span><span class="g2-n red tnum">0.9%</span></div>
+              <div class="g2-row"><span class="g2-dot amber"></span><span class="g2-k">Didn't arrive</span><span class="g2-read">A few emails bounced back &mdash; a little high.</span><span class="g2-n amber tnum">3.6%</span></div>
+              <div class="g2-row"><span class="g2-dot green"></span><span class="g2-k">Sending</span><span class="g2-read">Going out fine &mdash; 51% of the list done.</span><span class="g2-n green tnum">7,171</span></div>
+            </div>
+          </div>
+
+          <div class="ov-card"><div class="card-title">The whole picture</div>
+            <p class="card-subtitle">Two things are dragging it down.
+              <details class="wp-reconcile"><summary>why two numbers?</summary>
+              The glance above counts the campaign's whole life (7,171 sent, newest sync). The read below was written at this morning's crunch (7,038 sent) &mdash; a different window, not a contradiction.</details>
+            </p>
+            <div class="campaign-widget-grid">
+              <div class="book-widget book-widget--compact">
+                <div class="nvz"><span class="nvz-hero is-red">0.9%</span>
+                  <div class="nvz-chart">
+                    <div class="nvz-gauge"><span class="gfill" style="width:60%"></span><span class="gthr" style="left:66%"></span></div>
+                    <div class="nvz-cap">reply rate &mdash; under the 1% we want</div>
+                  </div>
+                </div>
+                <p class="book-line">63 replies from 7,038 sends.</p>
+                <p class="action-payoff">Check who's on the list before the last 6,720 emails go out.</p>
+                <details class="nvz-why"><summary></summary>
+                  <p class="footnote-line">list audit &middot; owner: Lilly</p>
+                  <p class="footnote-line">Under 1% replying has two usual causes: the wrong people, or the mail not landing. Bounce is 3.6%. KRG's workspace, so this is a question for the client.</p>
+                </details>
+              </div>
+              <div class="book-widget book-widget--compact">
+                <div class="nvz"><span class="nvz-hero is-red">0</span>
+                  <div class="nvz-chart">
+                    <div class="nvz-hbars"><span style="width:100%"></span><span style="width:58%"></span></div>
+                    <div class="nvz-cap">0 positives from 3,285 follow-ups</div>
+                  </div>
+                </div>
+                <p class="book-line">The follow-up (Email 2) is as dry as both openers.</p>
+                <p class="action-payoff">Replace the Soft follow-up too.</p>
+                <details class="nvz-why"><summary></summary>
+                  <p class="footnote-line">version fix &middot; owner: Bjion</p>
+                  <p class="footnote-line">3,285 sends, 19 replies, no positives &mdash; nearly half the campaign. KRG's own account, so the edit is Bjion's call in KRG's Smartlead UI.</p>
+                </details>
+              </div>
+            </div>
+          </div>
+
+          <div class="ov-card"><div class="card-title">Suggested actions</div>
+            <div class="actions-section">
+              <div class="action-card">
+                <span class="action-num" aria-hidden="true">1</span>
+                <div class="action-body">
+                  <div class="action-top"><span class="badge badge--red">High</span> <span class="owner-chip">Bjion</span>
+                    <a class="opt-smartlead" href="#" target="_blank" rel="noopener">Open in Smartlead &#8599;</a></div>
+                  <p class="action-how">Retire the &ldquo;Quick one&rdquo; opener on the Soft twin &mdash; 3,753 sends across A and B for no positives.</p>
+                  <p class="action-payoff">Both variants run the same subject as the Hard twin, so it&rsquo;s one angle tested twice.</p>
+                  <details class="opt-why"><summary>Why?</summary>
+                    <div class="why-hero"><span class="why-hero-n why-hero--bad">0</span><span class="why-hero-cap">said yes, from 3,753 opener sends. Variants A (1,880) and B (1,873) are both empty.</span></div>
+                    <p class="why-move">&#8594; Retire the opener.</p>
+                  </details>
+                  <div class="action-buttons">
+                    <button type="button" class="copy-prompt">Copy prompt for Claude</button>
+                    <button type="button" class="action-state-btn">Assign to me</button>
+                    <button type="button" class="action-state-btn">Mark as completed</button>
+                    <button type="button" class="action-state-btn">Dismiss</button>
+                  </div>
+                </div>
+              </div>
+              <div class="action-card">
+                <span class="action-num" aria-hidden="true">2</span>
+                <div class="action-body">
+                  <div class="action-top"><span class="badge badge--red">High</span> <span class="owner-chip">Lilly</span>
+                    <a class="opt-smartlead" href="#" target="_blank" rel="noopener">Open in Smartlead &#8599;</a></div>
+                  <p class="action-how">Check who is enrolled on the Soft twin before the remaining 6,720 sends go out at 0.9% replies.</p>
+                  <p class="action-payoff">Wrong people or mail not landing &mdash; the list check is the cheaper one to rule out first.</p>
+                  <details class="opt-why"><summary>Why?</summary>
+                    <div class="why-hero"><span class="why-hero-n why-hero--bad">0.9%</span><span class="why-hero-cap">reply rate. Bounce is 3.6%, high enough to be part of the story.</span></div>
+                    <p class="why-move">&#8594; Audit the list.</p>
+                  </details>
+                  <div class="action-buttons">
+                    <button type="button" class="copy-prompt">Copy prompt for Claude</button>
+                    <button type="button" class="action-state-btn">Assign to me</button>
+                    <button type="button" class="action-state-btn">Mark as completed</button>
+                    <button type="button" class="action-state-btn">Dismiss</button>
+                  </div>
+                </div>
+              </div>
+              <div class="action-card">
+                <span class="action-num" aria-hidden="true">3</span>
+                <div class="action-body">
+                  <div class="action-top"><span class="badge badge--red">High</span> <span class="owner-chip">Bjion</span>
+                    <a class="opt-smartlead" href="#" target="_blank" rel="noopener">Open in Smartlead &#8599;</a></div>
+                  <p class="action-how">Replace the Soft follow-up too &mdash; 3,285 sends returned 19 replies and no positives.</p>
+                  <p class="action-payoff">The follow-up is nearly half the campaign&rsquo;s sends and just as dry as the openers.</p>
+                  <details class="opt-why"><summary>Why?</summary>
+                    <div class="why-hero"><span class="why-hero-n why-hero--bad">0</span><span class="why-hero-cap">positives from 3,285 follow-up sends.</span></div>
+                    <p class="why-move">&#8594; Rewrite Email 2.</p>
+                  </details>
+                  <div class="action-buttons">
+                    <button type="button" class="copy-prompt">Copy prompt for Claude</button>
+                    <button type="button" class="action-state-btn">Assign to me</button>
+                    <button type="button" class="action-state-btn">Mark as completed</button>
+                    <button type="button" class="action-state-btn">Dismiss</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ov-card"><div class="card-title">Warm replies, receipts</div>
+            <p class="card-subtitle">No warm replies yet. When someone says yes, the five most recent show up here.</p>
+          </div>
+
+        </div>
+      </div>
+    </article>
+
+  </div>
+</div>
+</body>
+</html>

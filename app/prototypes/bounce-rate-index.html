@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounce rate — 3 prototypes</title>
+<style>
+  @font-face { font-family:"Acid Grotesk"; src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+               font-weight:400; font-style:normal; font-display:swap; }
+  :root{--fg:#14110E;--fg-subtle:#6B6055;--border:#ECECEA;--sunken:#F7F7F6;--orange:#FF4D00}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;color:var(--fg);
+       background:#fff;padding:48px clamp(24px,6vw,96px)}
+  h1{font-family:"Acid Grotesk","DM Sans",sans-serif;font-weight:400;font-size:30px;letter-spacing:-0.02em;margin:0 0 4px}
+  .sub{color:var(--fg-subtle);font-size:14px;margin:0 0 28px;max-width:64ch;line-height:1.55}
+  a.row{display:flex;align-items:baseline;gap:16px;padding:18px 4px;border-top:1px solid var(--border);
+        text-decoration:none;color:inherit}
+  a.row:last-of-type{border-bottom:1px solid var(--border)}
+  a.row:hover{background:var(--sunken)}
+  .pn{font-family:"Acid Grotesk","DM Sans",sans-serif;font-size:20px;width:44px;flex:none}
+  .nm{font-weight:600;font-size:15px;width:190px;flex:none}
+  .bet{color:var(--fg-subtle);font-size:13.5px}
+  .go{margin-left:auto;color:var(--orange);font-weight:600;font-size:13px}
+  .note{margin-top:30px;font-size:13px;color:var(--fg-subtle);line-height:1.65;max-width:74ch}
+  .note h3{color:var(--fg);font-size:13px;margin:20px 0 6px;text-transform:uppercase;letter-spacing:.06em}
+  code{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;background:var(--sunken);padding:1px 5px;border-radius:4px}
+  ul{padding-left:18px;margin:6px 0}
+</style>
+</head>
+<body>
+  <h1>Bounce rate — 3 prototypes</h1>
+  <p class="sub">Built for the empty right-hand column of lane 3 (“Are your emails landing?”), beside
+     “Replies by the day we sent”. Each page shows the widget <em>in that slot</em>, with the neighbour
+     card mocked alongside, so the fit is judged in context.</p>
+
+  <a class="row" href="bounce-rate-p1.html">
+    <span class="pn">P1</span><span class="nm">Today first</span>
+    <span class="bet">Today’s number is the hero, the 30-day average is small print. Trend, then the campaigns.</span>
+    <span class="go">Open →</span>
+  </a>
+  <a class="row" href="bounce-rate-p2.html">
+    <span class="pn">P2</span><span class="nm">One sentence</span>
+    <span class="bet">A verdict you can repeat out loud, then three bars where today’s crosses the limit.</span>
+    <span class="go">Open →</span>
+  </a>
+  <a class="row" href="bounce-rate-p3.html">
+    <span class="pn">P3</span><span class="nm">The call list</span>
+    <span class="bet">Grouped by client, ranked by emails that came back. One call, not four jobs.</span>
+    <span class="go">Open →</span>
+  </a>
+
+  <div class="note">
+    <h3>The slot</h3>
+    Lane 3 is <code>.cards.c23</code> = <code>2fr 3fr</code>. The replies card holds the 2fr column; these
+    are built for the empty 3fr one — roughly <strong>700 × 330</strong> at the hub’s 1240px max-width.
+
+    <h3>Data contract</h3>
+    Nothing new is fetched. The trend is <code>/api/deliverability-trends</code>
+    (<code>series.days / sent / bounce_pct</code>), sliced client-side to 7 / 14 / 30 and sent-weighted.
+    The campaigns are <code>/api/campaign-scorecard</code> (<code>sent</code>, <code>bounced</code>),
+    floored at 500 sends — the floor the hub’s campaign ranking already uses.
+
+    <h3>What round 1 changed</h3>
+    Five non-technical reviewers scored the first cut; none reached 9/10. What they changed:
+    <ul>
+      <li><strong>Today is the hero, not the average.</strong> All five said the 30-day average (1.70%,
+          under the limit) buried today’s 2.79%. “I walk away relieved — exactly the wrong outcome.”</li>
+      <li><strong>Ranked by emails that came back, not by rate.</strong> Rate order put a 173-bounce
+          campaign above a 742-bounce one.</li>
+      <li><strong>Grouped by client (P2, P3).</strong> ValSoft owns 2 of the worst 4 and 55% of all
+          bounces — one phone call, which no prototype said before.</li>
+      <li><strong>Healthy rows cut, jargon cut</strong> — “pt”, “sent-weighted”, “re-verify”,
+          “throttled”, “508 / 11,050” all replaced with plain English.</li>
+      <li><strong>One colour, one meaning.</strong> Red/amber/green now mean only “where you sit vs 2%”;
+          the trend chip is neutral grey.</li>
+    </ul>
+
+    <h3>Known limit</h3>
+    The scorecard stores <em>lifetime</em> bounced/sent per campaign with no per-day series, so the
+    campaign and client figures do not follow the 7/14/30 toggle — the toggle moves the trend and the
+    average only. Every prototype labels this inline rather than in fine print. Making the list windowed
+    needs a per-campaign daily series that does not exist in the data layer yet.
+  </div>
+</body>
+</html>

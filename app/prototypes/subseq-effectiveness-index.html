@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Follow-up effectiveness — 3 prototypes</title>
+<link rel="stylesheet" href="subseq-effectiveness-base.css">
+<style>
+.gwrap{max-width:1120px;margin:0 auto;padding:40px 30px 90px}
+.ghead h1{font-size:26px;font-weight:700;letter-spacing:-0.02em;margin:0 0 6px}
+.ghead p{font-size:14px;color:var(--ink-3);margin:0 0 4px;max-width:70ch}
+.gcard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-top:26px}
+.gcard h2{font-size:17px;font-weight:700;margin:0 0 3px;display:flex;align-items:baseline;gap:10px}
+.gcard h2 .p{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--orange-700);background:var(--orange-100);padding:3px 9px;border-radius:6px}
+.gcard .pitch{font-size:13.5px;color:var(--ink-2);margin:0 0 16px}
+.shots{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.shot{border:1px solid var(--line-2);border-radius:10px;overflow:hidden;background:#F4F2EF;text-decoration:none;display:block}
+.shot img{display:block;width:100%;height:auto}
+.shot .cap{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);padding:8px 12px;border-top:1px solid var(--line)}
+.openrow{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap}
+.openrow a{font:600 12.5px var(--font-sans);color:var(--ink);text-decoration:none;border:1px solid var(--line-2);border-radius:999px;padding:7px 14px}
+.openrow a:hover{background:var(--bg-sunken)}
+@media(max-width:720px){.shots{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="gwrap">
+  <div class="ghead">
+    <h1>How effective are our automated follow-ups?</h1>
+    <p>Three ways to draw the new third card for the “Who actually replies?” section — the one wedged in on the right, next to <b>Who’s replying</b> and <b>How fast we answer</b>.</p>
+    <p>Benchmarks: <b>positive replies</b> to the follow-ups should clear <b>12.5%</b>, booked calls <b>5%</b>. Under either → the follow-up copy needs a fix. Each shot below shows an off-benchmark client (left) and a healthy one (right). <b>Panel winner: P3</b> (5/5 favourite).</p>
+  </div>
+
+  <div class="gcard">
+    <h2><span class="p">P1</span> Benchmark meters</h2>
+    <p class="pitch">Two bars that either reach the target line or fall short. You <i>see</i> the problem — you don’t read it.</p>
+    <div class="shots">
+      <a class="shot" href="subseq-effectiveness-p1.html?s=off"><img src="subseq-effectiveness-p1.png" alt="P1 off-benchmark"><span class="cap">Off-benchmark</span></a>
+      <a class="shot" href="subseq-effectiveness-p1.html?s=ok"><img src="subseq-effectiveness-p1-healthy.png" alt="P1 healthy"><span class="cap">Healthy</span></a>
+    </div>
+    <div class="openrow"><a href="subseq-effectiveness-p1.html">Open P1 (interactive) →</a></div>
+  </div>
+
+  <div class="gcard">
+    <h2><span class="p">P2</span> One verdict, one proof</h2>
+    <p class="pitch">A single big number in the family of “7 h 51 m” — the booked-call rate, coloured by health — with the reply rate underneath as the proof.</p>
+    <div class="shots">
+      <a class="shot" href="subseq-effectiveness-p2.html?s=off"><img src="subseq-effectiveness-p2.png" alt="P2 off-benchmark"><span class="cap">Off-benchmark</span></a>
+      <a class="shot" href="subseq-effectiveness-p2.html?s=ok"><img src="subseq-effectiveness-p2-healthy.png" alt="P2 healthy"><span class="cap">Healthy</span></a>
+    </div>
+    <div class="openrow"><a href="subseq-effectiveness-p2.html">Open P2 (interactive) →</a></div>
+  </div>
+
+  <div class="gcard">
+    <h2><span class="p">P3</span> Gap-to-target scorecard <span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--green);background:var(--green-bg);padding:3px 9px;border-radius:6px">Panel winner</span></h2>
+    <p class="pitch">Each number with a plain-word status — <b>On target / Just under / Well under</b> — and one line naming the weak link and the exact follow-up to rewrite. No charts to decode, no jargon.</p>
+    <div class="shots">
+      <a class="shot" href="subseq-effectiveness-p3.html?s=off"><img src="subseq-effectiveness-p3.png" alt="P3 off-benchmark"><span class="cap">Off-benchmark</span></a>
+      <a class="shot" href="subseq-effectiveness-p3.html?s=ok"><img src="subseq-effectiveness-p3-healthy.png" alt="P3 healthy"><span class="cap">Healthy</span></a>
+    </div>
+    <div class="openrow"><a href="subseq-effectiveness-p3.html">Open P3 (interactive) →</a></div>
+  </div>
+</div>
+</body>
+</html>

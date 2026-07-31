@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P4 · Two questions</title>
+<style>
+  @font-face {
+    font-family: "Acid Grotesk";
+    src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  :root {
+    color-scheme: light;
+    --nav-white:#FFFFFF; --nav-ink:#14110E; --nav-ink-2:#3A332C; --nav-ink-3:#6B6055;
+    --nav-orange:#FF4D00; --nav-orange-100:#FFE4D6; --nav-orange-600:#DB4100;
+    --sunken:#F7F7F6; --track-bg:#EFEDEA; --series-orange:#E8590C;
+    --bg:var(--nav-white); --bg-elevated:var(--nav-white);
+    --fg:var(--nav-ink); --fg-muted:var(--nav-ink-2); --fg-subtle:var(--nav-ink-3);
+    --success:#2E7D5B; --danger:#C2371F;
+    --border:#ECECEA; --border-strong:#DDDDDA;
+    --chip-active-bg:var(--nav-ink); --chip-active-fg:var(--nav-white);
+    --font-sans:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --font-display:"Acid Grotesk","DM Sans","Helvetica Neue",sans-serif;
+    --r-pill:999px; --r-lg:12px;
+  }
+  * { box-sizing:border-box; }
+  html { background:var(--bg); }
+  body { margin:0; font-family:var(--font-sans); color:var(--fg); font-size:15px; line-height:1.45; letter-spacing:-0.008em; -webkit-font-smoothing:antialiased; }
+  .app { display:flex; min-height:100vh; }
+  .rail { width:64px; flex-shrink:0; border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; padding:16px 0; gap:6px; }
+  .rail .logo { width:36px; height:36px; border-radius:10px; background:var(--fg); color:var(--bg); display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-size:19px; }
+  .rail .ni { width:40px; height:40px; border-radius:11px; display:flex; align-items:center; justify-content:center; color:var(--fg-subtle); }
+  .rail .ni.on { background:var(--sunken); color:var(--fg); }
+  .rail .ni svg { width:19px; height:19px; }
+  main { flex:1; min-width:0; }
+  .cockpit { max-width:1180px; margin:0 auto; padding:32px clamp(18px,4vw,48px) 64px; }
+  .tnum { font-variant-numeric:tabular-nums; }
+
+  .qhead { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .q { font-family:var(--font-display); font-weight:400; font-size:22px; letter-spacing:-0.02em; }
+  .qask { font-size:11px; color:var(--fg-subtle); font-weight:600; letter-spacing:.02em; }
+  .q .link-why { color:var(--nav-orange); cursor:pointer; white-space:nowrap; }
+  .q .link-why:hover { color:var(--nav-orange-600); }
+  .qwrap { display:flex; flex-direction:column; gap:2px; }
+  .qsub { font-size:12px; color:var(--fg-subtle); font-weight:600; }
+  .live-meta { display:inline-flex; align-items:center; gap:8px; margin-left:auto; font-size:0.74rem; color:var(--fg-subtle); }
+  .live-dot { width:8px; height:8px; border-radius:50%; background:#2f9e44; }
+  .live-refresh { border:none; background:none; color:var(--fg-subtle); font-size:0.74rem; font-weight:600; cursor:pointer; font-family:inherit; padding:0; text-decoration:underline; }
+  .win { display:flex; gap:6px; }
+  .win button { font:inherit; font-size:12px; cursor:pointer; border:1px solid var(--border); background:transparent; color:inherit; border-radius:999px; padding:3px 10px; }
+  .win button.is-active { background:var(--chip-active-bg); color:var(--chip-active-fg); border-color:var(--chip-active-bg); }
+
+  .tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:14px; }
+  .tile { background:var(--sunken); border-radius:var(--r-lg); padding:14px 16px 12px; }
+  .tile .lab { font-size:11.5px; color:var(--fg-subtle); text-transform:uppercase; letter-spacing:.04em; font-weight:700; }
+  .tile .num { font-size:24px; font-weight:700; margin-top:3px; }
+  .tile .spark { margin-top:10px; line-height:0; }
+  .tile .spark svg { width:100%; height:34px; display:block; }
+  .tile.hi { background:var(--fg); color:#F9F0E7; }
+  .tile.hi .lab { color:rgba(249,240,231,0.65); }
+  .tile.hi .num { font-family:var(--font-display); font-weight:400; font-size:42px; margin-top:0; line-height:1.05; }
+  .tile.hi .delta.up { color:#5BBF94; }
+  .delta { font-size:11.5px; font-weight:600; margin-top:8px; }
+  .delta.up { color:var(--success); } .delta.down { color:var(--danger); } .delta.flat { color:var(--fg-subtle); font-weight:500; }
+
+  .find { margin-top:24px; }
+  .findrow { margin-top:12px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .search-wrap { position:relative; flex:0 1 280px; min-width:180px; }
+  .search-input { width:100%; padding:9px 14px 9px 34px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg); font-size:0.85rem; font-family:inherit; }
+  .search-input::placeholder { color:var(--fg-subtle); }
+  .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); width:14px; height:14px; color:var(--fg-subtle); pointer-events:none; }
+  .spacer { flex:1 1 auto; }
+  .picker { display:inline-flex; align-items:center; gap:8px; }
+  .picker-label { font-size:0.72rem; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:var(--fg-subtle); }
+  .select { width:172px; padding:8px 30px 8px 13px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg); font-size:0.82rem; font-weight:600; font-family:inherit; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6055' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 11px center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chips { margin-top:12px; display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:9px 15px; border-radius:var(--r-pill); border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--fg-muted); font-size:0.82rem; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .chip.is-active { background:var(--chip-active-bg); border-color:var(--chip-active-bg); color:var(--chip-active-fg); }
+
+  .ghost { margin-top:26px; opacity:0.4; pointer-events:none; }
+  .grow { border:1px solid var(--border); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:10px; display:flex; align-items:center; gap:16px; }
+  .gbar { height:11px; border-radius:6px; background:var(--track-bg); }
+  .gpill { width:74px; height:22px; border-radius:999px; background:var(--track-bg); flex:none; }
+  @media (max-width: 900px) { .tiles { grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="logo">N</div>
+    <div class="ni on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
+    <div class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/></svg></div>
+    <div class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v12H8l-4 4z"/></svg></div>
+    <div class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+  </aside>
+  <main><div class="cockpit">
+
+    <div class="qhead">
+      <span class="qwrap">
+        <span class="qask">All campaigns together</span>
+        <span class="q">Pretty good — more meetings, <span class="link-why">fewer replies →</span></span>
+      </span>
+      <span class="live-meta"><span class="live-dot"></span>Live · Data from moments ago<button class="live-refresh" type="button">Refresh</button></span>
+      <div class="win" role="group" aria-label="Window">
+        <button type="button">7d</button><button type="button">14d</button><button type="button" class="is-active">30d</button>
+      </div>
+    </div>
+
+    <div class="tiles">
+      <div class="tile hi">
+        <div class="lab">Meetings booked</div>
+        <div class="num tnum">49</div>
+        <div class="spark" data-vals="2,3,3,1,4,3,0,2,4,4,1,0,3,4,1,2,0,3,1,4,2,2" data-color="#E8590C" data-line="#F9F0E7"></div>
+        <div class="delta up">▲ 1 vs last week</div>
+      </div>
+      <div class="tile">
+        <div class="lab">Reply rate</div>
+        <div class="num tnum">1.42%</div>
+        <div class="spark" data-vals="1.35,1.42,1.5,1.62,1.71,1.55,1.4,1.38,1.42,1.44,1.4,1.42,1.39,1.41,1.37,1.33,1.28,1.31,1.36,1.33,1.38,1.42" data-color="#2F9E44"></div>
+        <div class="delta down">▼ 0.2 vs last week</div>
+      </div>
+      <div class="tile">
+        <div class="lab">Emails sent</div>
+        <div class="num tnum">286,588</div>
+        <div class="spark" data-vals="12.9,13.1,12.4,12.6,12.2,12.5,12.9,13.4,12.8,12.3,12.4,12.6,12.1,11.8,12,11.6,12.3,11.2,11.9,12.4,13,14.6" data-color="#1971C2"></div>
+        <div class="delta flat">▲ 6,475 vs last week</div>
+      </div>
+      <div class="tile">
+        <div class="lab">Emails for one yes</div>
+        <div class="num tnum">1,433</div>
+        <div class="spark" data-vals="1520,1490,1310,1180,1260,1400,1380,1340,1300,1360,1330,1310,1350,1290,1320,1300,1280,1300,1460,1330,1300,1433" data-color="#7048E8"></div>
+        <div class="delta down">▲ 104 vs last week</div>
+      </div>
+    </div>
+
+    <div class="find">
+      <div class="qhead"><span class="q">Find a campaign</span></div>
+      <nav class="findrow" aria-label="Filter campaigns">
+        <div class="search-wrap">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" class="search-input" placeholder="Search a campaign or client…" aria-label="Search campaigns">
+        </div>
+        <span class="spacer"></span>
+        <label class="picker"><span class="picker-label">Client</span>
+          <select class="select"><option>All clients</option></select></label>
+        <label class="picker"><span class="picker-label">Status</span>
+          <select class="select"><option>Active (109)</option><option>All statuses</option><option>Paused</option><option>Completed</option><option>Draft</option><option>Archived</option></select></label>
+      </nav>
+      <div class="chips" role="group" aria-label="Choose a view">
+        <button class="chip is-active" type="button">All Priorities</button>
+        <button class="chip" type="button">Most meetings</button>
+        <button class="chip" type="button">Most positives</button>
+        <button class="chip" type="button">Most efficient</button>
+        <button class="chip" type="button">Most left to send</button>
+        <button class="chip" type="button">Biggest lists</button>
+      </div>
+    </div>
+
+    <div class="ghost">
+      <div class="grow"><div class="gbar" style="width:220px"></div><div class="gbar" style="width:90px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+      <div class="grow"><div class="gbar" style="width:260px"></div><div class="gbar" style="width:70px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+      <div class="grow"><div class="gbar" style="width:190px"></div><div class="gbar" style="width:110px"></div><span style="flex:1"></span><div class="gpill"></div></div>
+    </div>
+
+  </div></main>
+</div>
+<script>
+  document.querySelectorAll(".spark").forEach(function (el) {
+    var vals = el.getAttribute("data-vals").split(",").map(Number);
+    var color = el.getAttribute("data-color");
+    var W = 220, H = 40, P = 3;
+    var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+    if (max === min) max = min + 1;
+    var pts = vals.map(function (v, i) {
+      var x = P + (i / (vals.length - 1)) * (W - 2 * P);
+      var y = H - P - ((v - min) / (max - min)) * (H - 2 * P);
+      return [x, y];
+    });
+    var avg = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+    var ay = H - P - ((avg - min) / (max - min)) * (H - 2 * P);
+    var last = pts[pts.length - 1];
+    var line = el.getAttribute("data-line") || "#3A332C";
+    var thr = el.getAttribute("data-line") ? "#F9F0E7" : "#6B6055";
+    el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+      '<line x1="0" y1="' + ay + '" x2="' + W + '" y2="' + ay + '" stroke="' + thr + '" stroke-opacity="0.4" stroke-dasharray="3 4" stroke-width="1"/>' +
+      '<polyline points="' + pts.map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ") + '" fill="none" stroke="' + line + '" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>' +
+      '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="3.4" fill="' + color + '"/></svg>';
+  });
+  document.querySelectorAll(".win button, .chip").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var group = b.classList.contains("chip") ? ".chip" : ".win button";
+      document.querySelectorAll(group).forEach(function (x) { x.classList.remove("is-active"); });
+      b.classList.add("is-active");
+    });
+  });
+</script>
+</body>
+</html>

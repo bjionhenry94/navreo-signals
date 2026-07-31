@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version performance — Min P2 · Path bars · Navreo</title>
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{--orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;--ink:#14110E;--ink-3:#6B6055;--brown-300:#C0B0A0;
+--cream:#F9F0E7;--cream-50:#FCF7F1;--card:#FFFFFF;--sunken:#F4ECE2;--line:#EBE1D5;--line-2:#DCC6AE;
+--font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;--font-display:"Acid Grotesk","DM Sans",sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.4;padding:40px 20px}
+.wrap{max-width:640px;margin:0 auto}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.h1{font-family:var(--font-display);font-size:25px;letter-spacing:-.01em;margin:2px 0 22px}
+.sect{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.tag{font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);background:var(--sunken);border:1px solid var(--line);padding:2px 7px;border-radius:999px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:22px}
+.opnrow{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:14px}
+.opnrow:last-child{margin-bottom:0}
+.opnrow .nm{font-family:var(--font-display);font-size:16px;width:22px}
+.opnrow .track{flex:1;height:14px;border-radius:7px;background:var(--sunken);overflow:hidden}
+.opnrow .track i{display:block;height:100%;border-radius:7px}
+.opnrow .v{width:96px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-3)}
+.opnrow .v b{color:var(--ink);font-family:var(--font-display);font-size:15px}
+.pathrow{margin-bottom:18px}
+.pathrow:last-child{margin-bottom:0}
+.pathhead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px}
+.pathname{font-family:var(--font-display);font-size:18px}
+.pathname .a{color:var(--brown-300);margin:0 5px;font-size:15px}
+.medal{font-size:9.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--orange);padding:2px 8px;border-radius:999px;margin-left:8px;vertical-align:2px}
+.callsn{font-family:var(--font-display);font-size:15px}
+.callsn small{font-family:var(--font-sans);font-size:12px;color:var(--ink-3);font-weight:600}
+.pbar{height:34px;border-radius:9px;background:var(--sunken);overflow:hidden;display:flex;align-items:center}
+.pbar i{height:100%;border-radius:9px;display:flex;align-items:center;padding:0 14px;color:#fff;font-family:var(--font-display);font-size:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Version performance</div>
+  <div class="h1">Which path books the calls</div>
+
+  <div class="sect">The openers <span class="tag">live · A/B test</span></div>
+  <div class="card">
+    <div class="opnrow"><span class="nm">A</span><span class="track"><i style="width:100%;background:var(--orange)"></i></span><span class="v"><b>14</b> · 1.1%</span></div>
+    <div class="opnrow"><span class="nm">B</span><span class="track"><i style="width:64%;background:var(--brown-300)"></i></span><span class="v"><b>9</b> · 0.7%</span></div>
+  </div>
+
+  <div class="sect">Combinations · calls booked <span class="tag">whole journey</span></div>
+  <div class="card">
+    <div class="pathrow">
+      <div class="pathhead"><span class="pathname">A<span class="a">→</span>Email 2<span class="medal">best path</span></span><span class="callsn">10 <small>calls · 22 positives</small></span></div>
+      <div class="pbar"><i style="width:100%;background:var(--orange)">10</i></div>
+    </div>
+    <div class="pathrow">
+      <div class="pathhead"><span class="pathname">B<span class="a">→</span>Email 2</span><span class="callsn">6 <small>calls · 14 positives</small></span></div>
+      <div class="pbar"><i style="width:60%;background:var(--brown-300)">6</i></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
