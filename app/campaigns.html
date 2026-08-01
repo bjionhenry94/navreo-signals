@@ -5244,7 +5244,7 @@
         };
         var cardText = grab([".action-how", ".action-payoff"]) + "\u0001" + grab([".why-verdict", ".why-hero-cap"]);
         whyBreakdownFetch(d.getAttribute("data-why-cid")).then(function (rows) {
-          box.innerHTML = whyDigestHTML(Array.isArray(rows) ? rows : null, d.getAttribute("data-why-v") === "1", cardText || "");
+          box.innerHTML = whyDigestHTML(Array.isArray(rows) ? rows : null, d.getAttribute("data-why-v") === "1", cardText || "", d.getAttribute("data-why-ik") || "");
         });
       });
     });
@@ -5312,8 +5312,13 @@
        count from everywhere, so comparison variants the note names get bars. */
     var parts = (cardText || "").split("\u0001");
     var head = parts[0] || "", m, vars = {}, emails = {};
-    var reV = /\bVar(?:iant)?\s+([A-Z])\b/g, reE = /\bEmail\s+(\d+)\b/g;
-    while ((m = reV.exec(cardText || ""))) vars[m[1]] = 1;
+    /* case-insensitive + enumeration-aware: "variants A and B", "Var E / F",
+       "var C, D and E" all resolve to their letters (the old pattern only hit
+       a literal capitalised "Var X", so most prose cards got no bars) */
+    var reV = /\bvar(?:iant)?s?\s+([A-Z](?:\s*(?:,|and|&|\+|\/)\s*[A-Z])*)\b/gi, reE = /\bEmail\s+(\d+)\b/g;
+    while ((m = reV.exec(cardText || ""))) {
+      m[1].split(/[^A-Za-z]+/).forEach(function (w) { if (w.length === 1) vars[w.toUpperCase()] = 1; });
+    }
     while ((m = reE.exec(head))) emails[m[1]] = 1;
     return { vars: vars, emails: emails, anyVar: Object.keys(vars).length > 0, anyEmail: Object.keys(emails).length > 0 };
   }
@@ -5332,6 +5337,9 @@
         if (named) vs.push(v);
       });
     });
+    /* a variant card that names no specific variant/step shows the whole
+       split — winners-first sort + slice below still cap it at 5 bars */
+    if (!tok.anyVar && !tok.anyEmail) vs = all.slice();
     if (tok.anyVar) {
       /* variant letters repeat across email steps ("Var B" exists on Email 1
          and Email 2): resolve to ONE step - a step the card names that holds
@@ -5406,12 +5414,17 @@
     if (showCut && named.every(function (v) { return (v.flags || []).indexOf("failing") !== -1; })) line += ", flagged for replacement";
     return esc(line + ".");
   }
-  function whyDigestHTML(rows, hasVerdict, cardText) {
-    /* Lazy layer = per-variant bars only, and only when the card itself
-       names a variant or email step. Everything textual on the expander is
-       already rendered from the card's own payload (one source of truth). */
+  /* insight kinds with nothing per-variant behind them — the only cards
+     allowed to open a Why? without bars (owner ruling 01 Aug 2026) */
+  var WHY_NONVARIANT = { "list-audit": 1, "unanswered-positives": 1, "lifecycle": 1, "weekly-pulse": 1 };
+  function whyDigestHTML(rows, hasVerdict, cardText, ik) {
+    /* Lazy layer = per-variant bars. Named variants/steps trim the bars to
+       what the card cites; a variant-kind card that names none shows the
+       whole split. Non-variant kinds (and campaigns with no variant rows at
+       all) stay bar-free. Everything textual on the expander is already
+       rendered from the card's own payload (one source of truth). */
     var tok = whyCardTokens(cardText);
-    var vs = (tok.anyVar || tok.anyEmail) ? whyHarvestVariants(rows, tok) : [];
+    var vs = (tok.anyVar || tok.anyEmail || !WHY_NONVARIANT[ik || ""]) ? whyHarvestVariants(rows, tok) : [];
     var showCut = /\b(scrap|replace|kill|retire|drop|cut|swap|remove)\b/i.test(cardText || "");
     if (!vs.length) return hasVerdict ? "" : '<p class="why-empty">No further findings behind this one.</p>';
     return (hasVerdict ? "" : '<p class="why-verdict">' + whyVariantVerdict(vs, showCut) + "</p>") + whyBarsHTML(vs, showCut);
