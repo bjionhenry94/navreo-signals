@@ -4858,16 +4858,33 @@ def _poll_monitor_workspaces(since: str, summary: dict) -> None:
                 print(f"[setter] monitor poll intake error {ws} {email}/{cid}: {e}", file=sys.stderr)
 
 
+_LAST_SWEEP_DONE = {"t": 0.0}  # in-process stamp of the last COMPLETED sweep
+_SWEEP_FRESH_S = 120           # page-load kicks inside this window are duplicates
+
+
 def run_poll() -> dict:
     """Sweeps recent core-four `replies` rows across EVERY campaign in the
     workspace (owner ruling 2026-07-14: a positive must reach the queue even
     on a campaign with no agent assigned yet), skips anything already
     queued, and runs process_reply (agented) or the agentless intake
-    (unassigned) on up to 15 per tick. Never raises."""
+    (unassigned) on up to 15 per tick. Never raises.
+
+    Throttle: every setter.html open POSTs /api/setter/poll, and the pg_cron
+    tick already sweeps every 5 min — a completed sweep <120s ago makes this
+    call pure duplicate Smartlead load (~2 calls per processed reply). The
+    stamp is in-process only (a skip must never advance any freshness stamp,
+    or steady page traffic would starve real sweeps); a deploy resets it, so
+    the first post-boot call always sweeps."""
     summary = {"checked": 0, "queued": 0, "auto_sent": 0, "needs_review": 0, "no_action": 0,
                "errors": 0, "agentless": 0, "uncategorised": 0, "auto_resolved": 0, "redriven": 0}
     try:
         if not _SB:
+            return summary
+        # RENDER-gated: local dev and the test harness drive run_poll directly
+        # and must never be throttled (RENDER is the codebase's prod marker).
+        age = _time.time() - _LAST_SWEEP_DONE["t"]
+        if os.environ.get("RENDER") and age < _SWEEP_FRESH_S:
+            summary["skipped_fresh_s"] = round(age)
             return summary
         agents = _load_agents()
         settings = _load_settings()
@@ -4997,6 +5014,7 @@ def run_poll() -> dict:
         # docstring). Last, so the navreo positive sweep always spends its cap
         # first. Never sends — _is_monitor_ws forces these dry everywhere.
         _poll_monitor_workspaces(since, summary)
+        _LAST_SWEEP_DONE["t"] = _time.time()  # completed sweeps only — a crash must retry next call
     except Exception as e:  # noqa: BLE001 - run_poll itself must never raise
         summary["errors"] += 1
         print(f"[setter] run_poll crashed: {e}", file=sys.stderr)

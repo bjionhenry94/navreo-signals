@@ -585,67 +585,6 @@ def preview_people(p: dict) -> dict:
             "total_people": total, "sample": people[:12]}
 
 
-def tam_map(p: dict) -> dict:
-    """The structured lilly-strategy moment: probe the same ICP through
-    every sourcing lens IN PARALLEL and return real counts per angle.
-    Deterministic: same probes, same order, bounded wait (~8s).
-
-    Probes (page-1 only): company filter (1cr) · true people count (1cr)
-    · lookalike universe (1cr) · hiring now (free). Repeat runs are free.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    company_filters: dict = {}
-    if p.get("keywords"):
-        company_filters["company_keywords"] = {"include": p["keywords"], "include_company_description": True}
-    if p.get("industries"):
-        company_filters["company_industry"] = {"include": p["industries"]}
-    if p.get("headcount"):
-        company_filters["company_headcount_range"] = p["headcount"]
-    if p.get("countries"):
-        company_filters["company_location_search"] = {"include": p["countries"]}
-
-    def probe_companies():
-        if not company_filters:
-            return None
-        r = prospeo_search(company_filters)
-        return r.get("total_companies") if r.get("ok") else None
-
-    def probe_people():
-        r = preview_people({**p, "domains": []})
-        return r.get("total_people") if r.get("ok") else None
-
-    def probe_lookalike():
-        icp_text = (p.get("keywords") or [""])[0] or " ".join(p.get("industries") or [])
-        if not icp_text:
-            return None
-        r = preview_lookalike({"icp_text": icp_text, "tier": "T2",
-                               "headcount": p.get("headcount"), "countries": p.get("countries")})
-        return r.get("total_companies") if r.get("ok") else None
-
-    def probe_hiring():
-        codes = country_codes(p.get("countries") or [])[0] or ["US"]
-        try:
-            r = preview_hiring({"job_titles": p.get("titles") or [], "countries": codes,
-                                "min_emp": 11, "max_emp": 500, "days": 14})
-            return r.get("total_companies") if r.get("ok") else None
-        except Exception:  # noqa: BLE001
-            return None
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futs = {k: ex.submit(fn) for k, fn in {
-            "companies": probe_companies, "people": probe_people,
-            "lookalike": probe_lookalike, "hiring": probe_hiring,
-        }.items()}
-        out = {k: f.result() for k, f in futs.items()}
-
-    return {"ok": True, "angles": {
-        "companies": {"companies": out["companies"], "people": out["people"]},
-        "hiring": {"companies": out["hiring"]},
-        "lookalike": {"companies": out["lookalike"]},
-    }}
-
-
 
 
 # business-name + person-name fields per table: normalised at ingest via the
@@ -886,7 +825,7 @@ def ws_key_for_campaign(campaign_id) -> str:
     return ws_key(ws_for_campaign(campaign_id))
 
 
-def api_workspaces_list() -> dict:
+def _workspaces_list_compute() -> dict:
     """Settings page list. Raw keys NEVER leave the server — masked to last 4."""
     rows = ws_all(refresh=True)
     tallies: dict = {}
@@ -905,6 +844,14 @@ def api_workspaces_list() -> dict:
                     "key_masked": "env key" if wid == "navreo"
                                   else (("…" + raw[-4:]) if raw else "missing")})
     return {"workspaces": out}
+
+
+def api_workspaces_list() -> dict:
+    """60s SWR over _workspaces_list_compute (cache layer step 3, 2026-08-02):
+    every settings/setter load used to pay ws_all(refresh=True) plus a full
+    campaign_scorecard scan inline. Payload shape unchanged; add/delete clear
+    the cache so registry changes show on the very next read."""
+    return _WORKSPACES_LIST_SWR.get()
 
 
 def api_workspaces_add(p: dict):
@@ -938,6 +885,7 @@ def api_workspaces_add(p: dict):
                               "status": "enabled"}, prefer="return=minimal")
     _ws_campaign_cache.clear()
     ws_all(refresh=True)
+    _WORKSPACES_LIST_SWR.clear()  # the Settings list must show the new workspace now
     log_activity("/api/workspaces", {"id": slug, "campaigns_seen": len(camps)},
                  action="create", entity="workspace", entity_id=slug)
     return {"ok": True, "id": slug, "name": name, "campaigns_seen": len(camps)}, 200
@@ -981,6 +929,7 @@ def api_workspaces_delete(p: dict):
         res = {"note": "purge committed; the per-table count report timed out"}
     _ws_campaign_cache.clear()
     ws_all(refresh=True)
+    _WORKSPACES_LIST_SWR.clear()  # the Settings list must drop the purged workspace now
     log_activity("/api/workspaces/delete", {"id": slug, "deleted": res},
                  action="delete", entity="workspace", entity_id=slug)
     return {"ok": True, "id": slug, "deleted": res}, 200
@@ -1004,10 +953,8 @@ _ACTIVITY_META = {  # endpoint → (action, entity); anything absent logs as-is
     "/api/qa-history": ("create", "qa_run"),
     "/api/campaign-drafts": ("create", "campaign_draft"),
     "/api/campaign-drafts/update": ("update", "campaign_draft"),
-    "/api/campaign-drafts/duplicate": ("duplicate", "campaign_draft"),
     "/api/campaign-drafts/restore": ("restore", "campaign_draft"),
     "/api/campaign-drafts/purge": ("delete", "campaign_draft"),
-    "/api/tam-map": ("preview", "tam"),
     "/api/strategy-map": ("preview", "strategy"),
     "/api/verify-campaign": ("verify", "campaign"),
     "/api/verify-remove": ("remove_leads", "campaign"),
@@ -1923,8 +1870,17 @@ def strategy_map_result(job: str) -> dict:
 # insight_key='wizard_run') so no new table is needed.
 _STRATEGY_ENGINE_FIELDS = ("vector", "probe", "netting", "pull_spec")
 
+# 20s memo (cache layer step 3, 2026-08-02): every open strategy tab polls
+# GET /api/strategy/run every ~5s and each poll paid two Supabase reads.
+# Plain dict, no SWR needed — strategy_run_post/strategy_focus_post zero the
+# ts so a new run (or a chat focus move) shows on the very next poll.
+_STRATEGY_RUN_MEMO = {"ts": 0.0, "payload": None}
+
 
 def strategy_run_get() -> dict:
+    if _STRATEGY_RUN_MEMO["payload"] is not None and \
+            (time.time() - _STRATEGY_RUN_MEMO["ts"]) < 20:
+        return _STRATEGY_RUN_MEMO["payload"]
     rows = sb("GET", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_run"
                      "&status=eq.live&select=payload,generated_at"
                      "&order=generated_at.desc&limit=1") or []
@@ -1944,7 +1900,9 @@ def strategy_run_get() -> dict:
     if frow and isinstance(frow[0].get("payload"), dict):
         focus = dict(frow[0]["payload"])
         focus["ts"] = frow[0].get("generated_at")
-    return {"run": run, "updated": rows[0].get("generated_at"), "focus": focus}
+    out = {"run": run, "updated": rows[0].get("generated_at"), "focus": focus}
+    _STRATEGY_RUN_MEMO.update(ts=time.time(), payload=out)
+    return out
 
 
 _STRATEGY_FOCUS_VIEWS = ("board", "targeting", "emails", "opener", "checks", "building", "signoff")
@@ -1969,6 +1927,9 @@ def strategy_focus_post(p: dict) -> dict:
     if not row or not row.get("generated_at"):
         msg = ins.get("message") if isinstance(ins, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
+    # the run payload carries focus too — bust the 20s memo so the open board
+    # follows the chat's focus move on its very next poll
+    _STRATEGY_RUN_MEMO.update(ts=0.0, payload=None)
     return {"ok": True, "ts": row["generated_at"]}
 
 
@@ -1994,21 +1955,8 @@ def strategy_run_post(p: dict) -> dict:
     if not row or not row.get("generated_at"):
         msg = ins.get("message") if isinstance(ins, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
+    _STRATEGY_RUN_MEMO.update(ts=0.0, payload=None)  # a new run shows on the next poll
     return {"ok": True, "updated": row["generated_at"]}
-
-
-def suggest_location(p: dict) -> dict:
-    """Free Prospeo location autocomplete — normalizes free-typed geos."""
-    q = (p.get("q") or "").strip()
-    if not q:
-        return {"ok": False, "message": "Empty query"}
-    data = http_json("POST", "https://api.prospeo.io/search-suggestions",
-                     {"X-KEY": KEYS["PROSPEO_API_KEY"]}, {"location_search": q})
-    suggestions = [
-        {"name": s.get("name"), "type": s.get("type")}
-        for s in (data.get("location_suggestions") or [])
-    ]
-    return {"ok": True, "suggestions": suggestions[:6]}
 
 
 def preview_lookalike(p: dict) -> dict:
@@ -2069,10 +2017,11 @@ def read_json_list(path: Path, strict: bool = False) -> list:
 # stale payload back immediately and a single background thread is kicked off
 # to recompute it fresh (a per-entry `refreshing` flag stops duplicate
 # refreshes from concurrent requests during the same stale window). Only a
-# cache with NO payload at all (first request ever, or right after
-# _clear_ui_caches() empties it) pays the synchronous cost — which is exactly
-# the "never serve stale after a mutation" requirement, since clearing sets
-# payload back to None.
+# cache with NO payload at all (first request ever) pays the synchronous cost.
+# After a mutation, _clear_ui_caches() marks every SWR cache STALE via
+# mark_stale() (ts 0, payload kept) instead of wiping it — the next GET serves
+# instantly and one background refresh brings it current, so a write never
+# forces a blocking cold compute on the reader that follows it.
 class _SWRCache:
     """SWR wrapper around a zero-arg `compute()` returning a payload.
     `is_degraded(payload)` marks a payload as unfit to cache/serve-as-stale
@@ -2132,6 +2081,13 @@ class _SWRCache:
         with self.lock:
             self.ts = 0.0
             self.payload = None
+
+    def mark_stale(self):
+        """Post-mutation invalidation without the cold-read cliff (cache layer,
+        2026-08-02): keep the payload, zero its timestamp — the next get()
+        serves the stale payload instantly and kicks ONE background refresh."""
+        with self.lock:
+            self.ts = 0.0
 
 
 class _SWRKeyedCache:
@@ -2248,6 +2204,15 @@ class _SWRKeyedCache:
         with self.lock:
             self.entries.clear()
 
+    def mark_stale(self):
+        """Zero every entry's ts, keep the payloads (cache layer, 2026-08-02):
+        the next get() per key serves its stale payload instantly with one
+        background refresh, instead of paying a cold compute after a wipe.
+        Negative entries expire immediately (ts 0 > neg_ttl) and recompute."""
+        with self.lock:
+            for e in self.entries.values():
+                e["ts"] = 0.0
+
     def invalidate_id(self, cid):
         """Drop every entry whose key names this campaign id (keys are single
         ids or comma-joined id lists) — used after a status write so the very
@@ -2263,6 +2228,15 @@ class _SWRKeyedCache:
             # fence the single-id key even if nothing was cached under it yet
             self.fence[cid] = now
 
+
+# /api/workspaces (settings/setter loads): 60s SWR over the uncached
+# ws_all(refresh=True) + campaign_scorecard tally (cache layer step 3,
+# 2026-08-02). Constructed here because _SWRCache is only defined above;
+# api_workspaces_list (~:830) resolves this global at call time.
+_WORKSPACES_LIST_SWR = _SWRCache(
+    _workspaces_list_compute, 60,
+    is_degraded=lambda p: not isinstance(p, dict) or not p.get("workspaces"),
+    name="workspaces-list")
 
 _SOURCES_TTL_S = 30
 
@@ -2443,26 +2417,6 @@ def api_leads(campaign_id: str) -> list:
     if not campaign_id:
         return []
     return _LEADS_SWR.get(campaign_id)
-
-
-def _compute_leads_batch(key: str) -> list:
-    wanted_set = set(key.split(","))
-    srcs = [d for d in _cached_read_drafts() if str(d.get("campaign_id")) in wanted_set]
-    return _leads_for_sources(srcs) if srcs else []
-
-
-_LEADS_BATCH_SWR = _SWRKeyedCache(_compute_leads_batch, _LEADS_TTL_S, name="leads-batch")
-
-
-def api_leads_batch(campaign_ids: str) -> list:
-    """Leads for MANY campaigns in one shot — the dashboard needs every campaign's
-    leads to draw the activity chart; a single read_drafts + one Supabase query
-    replaces the old N-calls-one-per-campaign waterfall. Same 30s TTL SWR cache as
-    api_leads, keyed by the sorted id set."""
-    wanted = sorted({c.strip() for c in (campaign_ids or "").split(",") if c.strip()})
-    if not wanted:
-        return []
-    return _LEADS_BATCH_SWR.get(",".join(wanted))
 
 
 # ── Source kinds: signal vs fixed list ──────────────────────────────────────
@@ -2668,22 +2622,23 @@ def api_lead_counts() -> dict:
 
 
 def _clear_ui_caches():
-    """Invalidate every UI-facing read cache (G2). Mutations (approve/skip a
-    lead, push, edit a campaign, ...) must be visible on the very next GET, not
-    masked by up-to-30s-stale cached payloads. Called ONCE at the top of each
-    write-dispatch entry point (do_POST, do_PATCH), before any handler runs.
-    Clearing an _SWRCache/_SWRKeyedCache drops its payload entirely (not just
-    the timestamp), so the very next GET after a mutation is guaranteed to do
-    a synchronous read-through — SWR only ever serves a stale payload when one
-    already exists, and clear() removes it."""
-    _SOURCES_SWR.clear()
-    _CAMPAIGN_DRAFTS_SWR.clear()
-    _CLIENTS_SWR.clear()
-    _LEAD_COUNTS_SWR.clear()
-    _LEADS_SWR.clear()
-    _LEADS_BATCH_SWR.clear()
-    _DRAFTS_READ_SWR.clear()
-    _NOTIFICATIONS_SWR.clear()
+    """Mark every UI-facing read cache STALE (G2, reworked 2026-08-02).
+    Mutations (approve/skip a lead, push, edit a campaign, ...) used to WIPE
+    these caches (payload=None), so the very next GET paid a blocking cold
+    compute on the request thread. mark_stale() keeps each payload but zeroes
+    its timestamp: the next GET serves instantly (stale) and one background
+    refresh brings it current within seconds — the SWR classes already treat
+    ts=0 as "serve stale, refresh in background". Called ONCE at the top of
+    each write-dispatch entry point (do_POST, do_PATCH), before any handler
+    runs. Any plain-dict cache added to this list later should keep its own
+    existing invalidation behaviour."""
+    _SOURCES_SWR.mark_stale()
+    _CAMPAIGN_DRAFTS_SWR.mark_stale()
+    _CLIENTS_SWR.mark_stale()
+    _LEAD_COUNTS_SWR.mark_stale()
+    _LEADS_SWR.mark_stale()
+    _DRAFTS_READ_SWR.mark_stale()
+    _NOTIFICATIONS_SWR.mark_stale()
 
 
 NOTIFICATION_STATUSES = ("new", "acknowledged", "actioned", "dismissed", "approved")
@@ -3957,55 +3912,6 @@ def api_list_pull_for_list(q: dict) -> tuple:
     return 200, {"pull": rows[0] if rows else None}
 
 
-def api_list_pull_campaigns(q: dict) -> tuple:
-    """GET /api/list_pulls/campaigns?pull_id=<id> — the campaigns this pull's
-    leads were pushed into, aggregated by campaign (total leads + last date),
-    newest first. Powers the "Campaigns" subsection of the resume panel."""
-    from urllib.parse import quote
-    pull_id = (q.get("pull_id") or [""])[0].strip()
-    if not pull_id:
-        return 400, {"ok": False, "message": "pull_id is required"}
-    rows = sb("GET", f"list_pull_campaigns?pull_id=eq.{quote(pull_id, safe='')}"
-                     "&select=campaign_id,campaign_name,rows,at&order=at.desc")
-    if not isinstance(rows, list):
-        return 503, _LISTS_DB_DOWN
-    # Aggregate by campaign in Python (PostgREST can't group+order this shape
-    # without a view); key on campaign_id when present, else the name.
-    agg: dict = {}
-    order: list = []
-    for r in rows:
-        key = r.get("campaign_id") or r.get("campaign_name") or ""
-        if key not in agg:
-            agg[key] = {"campaign_id": r.get("campaign_id"),
-                        "campaign_name": r.get("campaign_name"),
-                        "total": 0, "last_at": r.get("at")}
-            order.append(key)
-        agg[key]["total"] += r.get("rows") or 0
-        if (r.get("at") or "") > (agg[key]["last_at"] or ""):
-            agg[key]["last_at"] = r.get("at")
-    # `rows` already came back newest-first, so first-seen order preserves it.
-    return 200, {"campaigns": [agg[k] for k in order]}
-
-
-def api_list_pulls_by_campaign(q: dict) -> tuple:
-    """GET /api/list_pulls/by_campaign?campaign_id=<id>|campaign_name=<name> —
-    reverse lookup: the pull/list rows whose leads filled a given campaign.
-    No dedicated UI yet, but the linkage is queryable."""
-    from urllib.parse import quote
-    cid = (q.get("campaign_id") or [""])[0].strip()
-    cname = (q.get("campaign_name") or [""])[0].strip()
-    if not cid and not cname:
-        return 400, {"ok": False, "message": "campaign_id or campaign_name is required"}
-    filt = (f"campaign_id=eq.{quote(cid, safe='')}" if cid
-            else f"campaign_name=eq.{quote(cname, safe='')}")
-    rows = sb("GET", f"list_pull_campaigns?{filt}"
-                     "&select=pull_id,list_id,campaign_id,campaign_name,rows,at"
-                     "&order=at.desc")
-    if not isinstance(rows, list):
-        return 503, _LISTS_DB_DOWN
-    return 200, {"links": rows}
-
-
 def api_list_pulls_push_summary(q: dict) -> tuple:
     """GET /api/list_pulls/push_summary[?list_id=<id>] — where each list's
     leads have been pushed, aggregated list_id -> platform -> campaigns. ONE
@@ -4640,6 +4546,36 @@ JOBS_LOCK = threading.Lock()
 VERIFY_RESULTS: dict = {}  # campaign_id (str) -> lead-level verify detail, this-session only
 _LEAD_COUNT_CACHE: dict = {}  # campaign_id (str) -> (total_leads, fetched_at); 1h TTL (see handler)
 _TAG_NAMES_SWR: dict = {"names": None, "ts": 0.0}  # Smartlead tag names; 1h TTL, stale-on-error
+
+
+def _lead_counts_persist():
+    """Persist the whole lead-count cache (cache layer step 3, 2026-08-02):
+    the cold /api/campaign-lead-counts sweep measured 4.3s and up to 25
+    Smartlead calls, so a deploy must not re-pay it. Fired in a daemon thread
+    after any request that fetched at least one fresh count."""
+    snap = {str(k): [v[0], v[1]] for k, v in dict(_LEAD_COUNT_CACHE).items()
+            if isinstance(v, tuple) and v[0] is not None}
+    if snap:
+        _blob_snapshot_save("lead_counts_v1", {"counts": snap})
+
+
+def _lead_counts_restore():
+    """Boot restore for the lead-count cache, ages preserved. Entries already
+    past the 1h TTL are still useful (serve-stale semantics are fine for lead
+    counts): they come back with ts = now - TTL + 300 — five more minutes of
+    service while request-path refreshes replace them naturally."""
+    if _LEAD_COUNT_CACHE:
+        return
+    snap = _blob_snapshot_load("lead_counts_v1") or {}
+    now = time.time()
+    for cid, v in (snap.get("counts") or {}).items():
+        try:
+            n, ts = int(v[0]), float(v[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if now - ts >= 3600:
+            ts = now - 3600 + 300
+        _LEAD_COUNT_CACHE.setdefault(str(cid), (n, ts))
 
 
 def _warm_tag_names():
@@ -6788,21 +6724,20 @@ def campaign_readonly(p: dict) -> dict:
             data = data["data"]
         if not isinstance(data, dict):
             data = {}
-        cls = data.get("campaign_lead_stats") if isinstance(data.get("campaign_lead_stats"), dict) else {}
-        positives = data.get("positive_reply_count")
-        if positives is None:
-            positives = data.get("positiveReplyCount")
-        if positives is None:
-            positives = cls.get("interested")
+        # ONE analytics parser (consolidation 2026-08-02): the positives
+        # fallback ladder + count coercion live in _parse_smartlead_analytics —
+        # this response keeps its exact historical fields (name is the one
+        # field the shared parser doesn't carry, read off the same envelope).
+        m = _parse_smartlead_analytics(data)
         return {"platform": "smartlead", "id": cid,
                 "name": data.get("name") or data.get("campaign_name"),
-                "status": data.get("status"),
-                "sent": _sc_int(data.get("sent_count") or data.get("sent")),
-                "replied": _sc_int(data.get("reply_count") or data.get("replied")),
-                "positives": _sc_int(positives),
-                "bounced": _sc_int(data.get("bounce_count")),
-                "total": _sc_int(cls.get("total") or data.get("total_count")),
-                "completed": _sc_int(cls.get("completed"))}
+                "status": m.get("status"),
+                "sent": m["sent"],
+                "replied": m["replied"],
+                "positives": m["positives"],
+                "bounced": m["bounced"],
+                "total": m["total"],
+                "completed": m["completed"]}
     if platform == "heyreach":
         rows = sb("GET", f"heyreach_campaigns?heyreach_id=eq.{cid}&order=snapshot_date.desc&limit=1") or []
         payload = (rows[0].get("payload") if rows and isinstance(rows, list) else {}) or {}
@@ -6881,6 +6816,26 @@ def campaign_platform_leads(p: dict) -> dict:
                         "linkedin": prof.get("profileUrl") or ""})
         return {"platform": "heyreach", "id": cid, "leads": out, "total": total, "offset": offset, "limit": limit}
     return {"error": "unknown platform", "leads": [], "total": None}
+
+
+def _campaign_platform_leads_cached(key: str) -> dict:
+    """SWR compute for /api/campaign-platform-leads. Key is
+    'platform,id,offset,limit' (comma-joined so invalidate_id's split-on-comma
+    matches the campaign id element; offset is in the key so a page-2 request
+    can never be served page-1's cached rows — both live callers use offset=0,
+    so the effective key matches the (platform,id,limit) spec)."""
+    platform, cid, offset, limit = key.split(",", 3)
+    return campaign_platform_leads({"platform": platform, "id": cid,
+                                    "offset": offset, "limit": limit})
+
+
+# Every open of optimise.html / the campaigns Leads tab paid one live platform
+# call with zero caching (cache layer step 3, 2026-08-02). 300s keyed SWR,
+# 30s negative TTL so a platform outage isn't recomputed per request.
+_PLATFORM_LEADS_SWR = _SWRKeyedCache(
+    _campaign_platform_leads_cached, 300,
+    is_degraded=lambda p: not isinstance(p, dict) or bool(p.get("error")),
+    name="platform-leads", neg_ttl=30)
 
 
 def campaign_leads_export_csv(q: dict) -> tuple:
@@ -7028,23 +6983,6 @@ def campaign_repliers(q: dict) -> dict:
             counts.append({"category": cat_name, "n": n_cat})
     return {"platform": "smartlead", "id": cid, "leads": out, "total": len(out),
             "categories": counts}
-
-
-def campaign_add_runs(q: dict) -> dict:
-    """GET /api/campaign-add-runs — the campaign's gated add-run history from
-    list_upload_qa_runs, newest first: the on-page trace of when leads were
-    last added, how many survived the gate, and under which source."""
-    cid = ((q.get("id") or [""])[0] or "").strip()
-    if not cid:
-        return {"error": "id is required", "runs": []}
-    rows = sb("GET", f"list_upload_qa_runs?campaign_id=eq.{cid}"
-                     "&select=id,run_at,campaign_name,list_source,rows_in,rows_uploaded,verdict"
-                     "&order=run_at.desc&limit=5")
-    if not isinstance(rows, list):
-        return {"runs": [], "degraded": True}
-    return {"runs": [{"at": r.get("run_at"), "source": r.get("list_source") or r.get("campaign_name") or "",
-                      "rows_in": r.get("rows_in"), "uploaded": r.get("rows_uploaded"),
-                      "verdict": r.get("verdict") or ""} for r in rows]}
 
 
 def campaign_lead_lookup(q: dict) -> dict:
@@ -7216,6 +7154,24 @@ def _inject_demo_analytics_hub(p):
             "meetings_monthly": mm}
 
 
+def _strip_demo_analytics_hub(p):
+    """Response-layer demo gate (2026-08-02): with the Settings toggle OFF no
+    demo label may surface on the analytics hub. The hub RPC aggregates by
+    campaign-name keyword, so a real 'acme'-named campaign row put an Acme
+    chip on the page after the label-truth fix. Strips every _DEMO_CLIENT_LABELS
+    label from the clients list and from the top-level keys of series/weekday/
+    latency/meetings_monthly; __all and campaign_clients stay untouched."""
+    if show_demo_clients() or not isinstance(p, dict):
+        return p
+    out = dict(p)
+    if isinstance(p.get("clients"), list):
+        out["clients"] = [c for c in p["clients"] if c not in _DEMO_CLIENT_LABELS]
+    for k in ("series", "weekday", "latency", "meetings_monthly"):
+        if isinstance(p.get(k), dict):
+            out[k] = {kk: vv for kk, vv in p[k].items() if kk not in _DEMO_CLIENT_LABELS}
+    return out
+
+
 def _inject_demo_campaigns(payload: dict) -> dict:
     """Append the demo Acme campaigns to the campaigns-unified list when the toggle is
     ON — on a shallow copy so the SWR cache is never mutated."""
@@ -7337,6 +7293,7 @@ def perf_daily(p: dict) -> dict:
     camp_raw = p.get("campaign")
     campaign = str(camp_raw).strip() if camp_raw not in (None, "", "all", "All") else None
     src_ids = _campaign_source_ids(campaign) if campaign else None
+    cw_sent: dict = {}  # fleet-sent override map, filled in the fleet branch below
 
     # DB-side aggregation (rpc/…_v2) = one exact row per day, no client-side
     # pagination. p_source_ids scopes leads_added to the campaign's sources.
@@ -7414,6 +7371,22 @@ def perf_daily(p: dict) -> dict:
             reply_rate = [_rm.get(d) for d in dates]
             bounce_rate = [_bm.get(d) for d in dates]
             positives = bounded(pos_m)
+        # Fleet SENT truth (consolidation 2026-08-02): fleet_daily_stats is
+        # navreo-workspace-only, but the client-windows sweep already carries
+        # an every-workspace daily sent line (series.__all — the same series
+        # the analytics page draws). When that blob is warm, its days override
+        # the navreo-only numbers day-for-day; days outside its 30-day window
+        # (and a cold blob) keep the fleet_daily_stats fallback. Weekend
+        # stripping below applies unchanged.
+        try:
+            _cw = _CLIENT_WIN.get("data") or {}
+            _cw_all = (_cw.get("series") or {}).get("__all") or {}
+            cw_sent = {d: v for d, v in zip(_cw.get("days") or [], _cw_all.get("sent") or [])
+                       if v is not None}
+        except Exception:  # noqa: BLE001 — the override is best-effort, never a 500
+            cw_sent = {}
+        if cw_sent:
+            sent = [cw_sent.get(d, sent[i]) for i, d in enumerate(dates)]
     leads_added = bounded(la_m)
     meetings = bounded(mtg_m)
 
@@ -7434,7 +7407,11 @@ def perf_daily(p: dict) -> dict:
             "meetings": meetings, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
             "labels": {
                 "sent": ("Emails sent/day (this campaign — sent_messages archive)"
-                         if campaign else "Emails sent/day (whole fleet — Smartlead day-wise, stored daily in Supabase fleet_daily_stats)"),
+                         if campaign else
+                         ("Emails sent/day (whole fleet, every workspace — client-windows day-wise sweep; "
+                          "days older than its 30-day window are Navreo-workspace fleet_daily_stats)"
+                          if cw_sent else
+                          "Emails sent/day (Navreo workspace — Smartlead day-wise, stored daily in Supabase fleet_daily_stats)")),
                 "leads_added": ("Leads added/day (signal_leads — this campaign's sources)"
                                 if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
                 "positives": ("Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)"
@@ -7460,44 +7437,12 @@ _PERF_DAILY_SWR = _SWRKeyedCache(
     name="perf-daily")
 
 
-# ── Campaign scorecard (Smartlead-style per-campaign performance) ──────────
-# Powers the campaigns-list scorecard: for every signal campaign that sends to
-# a real Smartlead campaign, its live Smartlead numbers (sent / reply / positive
-# / bounce / completion). Meetings is the ONE metric Smartlead's /analytics call
-# doesn't return, so it's read from the optimiser_notifications cache (the same
-# {Call Booked, Meeting Request} category count build_notifications already
-# computes) and left null — the UI gates it, never fakes it — when a campaign
-# isn't covered there. Every number is Smartlead's own; nothing is invented.
-_CAMPAIGN_SCORECARD_TTL_S = 600  # like _OUTREACH_DESTS: the live per-campaign
-# /analytics fetches are the slow part; 10-min SWR keeps repaints instant and
-# respects Smartlead's shared 200/min budget (only a handful of campaigns).
-
-
+# ── Campaign scorecard shared helpers ───────────────────────────────────────
 def _sc_int(v) -> int:
     try:
         return int(float(v))
     except (TypeError, ValueError):
         return 0
-
-
-def _scorecard_smartlead_ids() -> list:
-    """Unique Smartlead campaign ids referenced by non-deleted signal campaigns,
-    in first-seen order. A draft points at Smartlead via
-    destination.smartlead_campaign_id (or, for a legacy type=='smartlead' doc,
-    its campaign_id)."""
-    drafts, _failed = _cached_campaign_drafts()
-    ids, seen = [], set()
-    for d in (drafts or []):
-        if d.get("deleted_at"):
-            continue
-        dest = d.get("destination") or {}
-        sl = dest.get("smartlead_campaign_id") or (
-            d.get("campaign_id") if d.get("type") == "smartlead" else None)
-        sl = str(sl) if sl else ""
-        if sl and sl not in seen:
-            seen.add(sl)
-            ids.append(sl)
-    return ids
 
 
 def _reply_archive_meetings(sl_ids: list | None = None, workspace: str | None = "navreo") -> dict | None:
@@ -7530,66 +7475,6 @@ def _reply_archive_meetings(sl_ids: list | None = None, workspace: str | None = 
             seen.add((k, e))
             out[k] = out.get(k, 0) + 1
     return out
-
-
-def _scorecard_meetings(sl_ids: list) -> dict:
-    """{sl_id: meetings} for the covered ids — distinct booked leads from the
-    reply archive (was the optimiser_notifications snapshot, which no pullable
-    source could reconcile against). A successful read fills 0 for covered ids
-    with no bookings — a real zero; an unreachable archive returns {} so the
-    UI gates the tile."""
-    if not sl_ids:
-        return {}
-    got = _reply_archive_meetings(sl_ids)
-    if got is None:
-        return {}
-    return {str(s): got.get(str(s), 0) for s in sl_ids}
-
-
-def _compute_campaign_scorecard() -> dict:
-    """{ generated_at, campaigns: {sl_id: {..metrics..}}, degraded: bool }.
-    Per campaign, straight from Smartlead /analytics: sent, replied, positives,
-    bounced, completed, total (lead stats). meetings from the optimiser cache or
-    None. Rates are computed by the UI from these raw counts so the collective
-    strip can re-derive them from summed numerators/denominators."""
-    from datetime import datetime, timezone
-    sl_ids = _scorecard_smartlead_ids()
-    meetings = _scorecard_meetings(sl_ids)
-    camps, degraded = {}, False
-    for sl in sl_ids:
-        try:
-            data = _smartlead_json("GET", f"/campaigns/{sl}/analytics") or {}
-        except Exception as e:  # noqa: BLE001 — one bad id must not blank the whole board
-            print(f"[scorecard] analytics fetch failed for {sl}: {e}", file=sys.stderr)
-            degraded = True
-            continue
-        if isinstance(data, list):
-            data = data[0] if data else {}
-        if isinstance(data, dict) and isinstance(data.get("data"), dict):
-            data = data["data"]
-        if not isinstance(data, dict):
-            data = {}
-        cls = data.get("campaign_lead_stats") if isinstance(data.get("campaign_lead_stats"), dict) else {}
-        positives = data.get("positive_reply_count")
-        if positives is None:
-            positives = data.get("positiveReplyCount")
-        if positives is None:
-            positives = cls.get("interested")
-        camps[sl] = {
-            "sent": _sc_int(data.get("sent_count") or data.get("sent")),
-            "replied": _sc_int(data.get("reply_count") or data.get("replied")),
-            "positives": _sc_int(positives),
-            "bounced": _sc_int(data.get("bounce_count")),
-            "completed": _sc_int(cls.get("completed")),
-            "total": _sc_int(cls.get("total") or data.get("total_count")),
-            "status": data.get("status"),
-            "meetings": meetings.get(sl),  # int, or None -> UI gates it
-        }
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "campaigns": camps,
-        "degraded": degraded,
-    }
 
 
 # ── All-campaign scorecard (background-synced, Supabase-cached) ─────────────
@@ -7703,6 +7588,10 @@ def _scorecard_sync_all():
                              "status": m.get("status") or c.get("status"),
                              "sent": m["sent"], "replied": m["replied"], "positives": m["positives"],
                              "bounced": m["bounced"], "completed": m["completed"], "total": m["total"],
+                             # ONE client-label authority (consolidation 2026-08-02):
+                             # the synced row carries the same label every UI
+                             # surface computes, so readers stop re-deriving it.
+                             "client": _client_win_label(wid, c.get("name") or ""),
                              "updated_at": _now_iso()})
                 done += 1
                 if len(rows) >= 100:  # flush in batches so partial progress is visible
@@ -7828,10 +7717,10 @@ def _subseq_stats_loop():
 
 def _all_campaign_scorecard() -> dict:
     """The cached scorecard for EVERY campaign — one Supabase read. Keyed by
-    str(smartlead_campaign_id), same shape as _compute_campaign_scorecard so the
-    UI is unchanged. Meetings merged from the optimiser cache. HeyReach campaigns
+    str(smartlead_campaign_id), same shape the UI has always consumed.
+    Meetings merged from the optimiser cache. HeyReach campaigns
     get their LinkedIn progress counts (people/replied) from the snapshot table."""
-    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status,sent,replied,positives,bounced,completed,total")
+    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status,sent,replied,positives,bounced,completed,total,client")
     camps = {}
     for r in (rows or []):
         sid = str(r.get("smartlead_campaign_id"))
@@ -7840,6 +7729,9 @@ def _all_campaign_scorecard() -> dict:
         if _client_hidden(_client_win_label(r.get("workspace") or "navreo", r.get("name") or "")):
             continue
         camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total", "status")}
+        # the hourly sync stamps the one authoritative client label on each row
+        # (backfilled column); surfaces read it instead of re-deriving
+        camps[sid]["client"] = r.get("client")
         # name was selected but never returned, so every campaign the crunch had
         # not written up rendered as "Campaign <id>". The list is the whole
         # inventory now, so the synced name is the only title most rows get.
@@ -7915,12 +7807,6 @@ def _scorecard_seed_from_snapshot() -> None:
             if _CAMPAIGN_SCORECARD_ALL_SWR.payload is None:
                 _CAMPAIGN_SCORECARD_ALL_SWR.payload = snap
                 _CAMPAIGN_SCORECARD_ALL_SWR.ts = 0.0
-
-
-_CAMPAIGN_SCORECARD_SWR = _SWRCache(
-    _compute_campaign_scorecard, _CAMPAIGN_SCORECARD_TTL_S,
-    is_degraded=lambda p: not isinstance(p, dict) or not p.get("campaigns"),
-    name="campaign-scorecard")
 
 
 # ── Cockpit (campaigns.html) render-layer endpoints ────────────────────────
@@ -8412,62 +8298,6 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
             "removed": removed, "removed_versions": len(removed_groups)}
 
 
-def _variant_paths_debug(n: int, email: str = "") -> dict:
-    """TEMP diagnostic: dump the raw variant bodies (incl deleted), the
-    per-step unique-shingle sizes, and the per-booker match trace so we can see
-    exactly WHERE attribution leaks. Gated behind auth via /api/cockpit/vpdebug."""
-    if email:
-        # Raw dump of one lead's Smartlead record + message-history so we can see
-        # whether the SENT items carry a variant id/label (exact attribution).
-        from urllib.parse import quote
-        lr = _smartlead_json("GET", f"/leads/?email={quote(email)}")
-        lead = lr.get("lead") if isinstance(lr, dict) and isinstance(lr.get("lead"), dict) else (
-            lr[0] if isinstance(lr, list) and lr else lr)
-        lid = lead.get("id") if isinstance(lead, dict) else None
-        hr = _smartlead_json("GET", f"/campaigns/{n}/leads/{lid}/message-history") if lid else None
-        hist = (hr.get("history") if isinstance(hr, dict) else hr) or []
-        sent = [{k: (str(v)[:120] if k in ("email_body", "body", "subject") else v)
-                 for k, v in m.items()} for m in hist
-                if isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT"]
-        return {"campaign_id": n, "email": email, "lead_id": lid,
-                "lead_keys": sorted(lead.keys()) if isinstance(lead, dict) else None,
-                "sent_items": sent}
-    out = {"campaign_id": n, "steps": [], "bookers": []}
-    try:
-        sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"sequences: {e}"}
-    seqs = sraw if isinstance(sraw, list) else (
-        (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
-    step_clusters = _vp_cluster_steps(seqs)
-    for st in sorted(step_clusters):
-        out["steps"].append({"step": st, "clusters": [
-            {"key": cl["key"], "labels": cl["labels"], "rep": cl["rep"],
-             "nshingles": len(cl["shset"]), "ndistinct": len(cl["dist"])}
-            for cl in step_clusters[st]]})
-
-    rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
-                     "&select=id,email,reply_body,rawbody:raw->>email_body"
-                     "&order=replied_at.asc")
-    seen = set()
-    for r in (rows if isinstance(rows, list) else []):
-        em = (r.get("email") or "").strip().lower()
-        if not em or em in seen:
-            continue
-        seen.add(em)
-        body = _vp_norm(r.get("reply_body") or r.get("rawbody") or "")
-        matched = {}
-        for st in step_clusters:
-            cl = _vp_match_cluster(body, step_clusters[st])
-            matched[st] = cl["key"] if cl else None
-        out["bookers"].append({"email": em, "matched": matched,
-                               "nshingles": len(_vp_shingles(body))})
-    result = _variant_paths(n)
-    out["result"] = {k: result.get(k) for k in
-                     ("by_variant", "combinations", "attributed", "booked", "removed", "removed_versions")}
-    return out
-
-
 def _booked_meeting_steps(n: int, lookup_budget: int = 0):
     """Meetings by STEP from the reply archive (Call Booked — one per PERSON,
     so the table's total always equals the overview tile). The webhook's
@@ -8783,11 +8613,74 @@ def _cockpit_live_status(ids_csv: str) -> dict:
             "requested": len(ids), "resolved": len(out)}
 
 
+# Deploy-warm last-good snapshot (cache layer step 3, 2026-08-02): a cold
+# live-status sweep is up to 150 Smartlead calls and fires on every
+# campaigns.html load, so the first post-deploy visitor paid it inline. Each
+# successful compute merges {key: {payload, ts}} into ONE persisted blob,
+# capped to the 8 most recent keys by ts; _boot_warmup seeds the SWR from it
+# with ts=0 — instant stale serve + one background refresh per key (same
+# pattern as _ah_seed_from_snapshot).
+_COCKPIT_LIVE_SNAP: dict = {}   # in-memory mirror of the persisted blob
+_COCKPIT_LIVE_SNAP_LOCK = threading.Lock()
+
+
+def _cockpit_live_snapshot_save(key: str, payload: dict) -> None:
+    with _COCKPIT_LIVE_SNAP_LOCK:
+        if not _COCKPIT_LIVE_SNAP:  # first save this boot: merge the previous blob
+            prev = _blob_snapshot_load("cockpit_live_status_v1") or {}
+            _COCKPIT_LIVE_SNAP.update(
+                {str(k): v for k, v in prev.items()
+                 if isinstance(v, dict) and isinstance(v.get("payload"), dict)})
+        _COCKPIT_LIVE_SNAP[str(key)] = {"payload": payload, "ts": time.time()}
+        while len(_COCKPIT_LIVE_SNAP) > 8:
+            oldest = min(_COCKPIT_LIVE_SNAP,
+                         key=lambda k: _COCKPIT_LIVE_SNAP[k].get("ts") or 0)
+            _COCKPIT_LIVE_SNAP.pop(oldest, None)
+        blob = dict(_COCKPIT_LIVE_SNAP)
+    _blob_snapshot_save("cockpit_live_status_v1", blob)
+
+
+def _cockpit_live_status_compute(key: str) -> dict:
+    """SWR compute wrapper: every successful sweep also lands in the persisted
+    last-good snapshot so the next deploy boots warm."""
+    payload = _cockpit_live_status(key)
+    if isinstance(payload, dict) and payload.get("campaigns"):
+        try:
+            _cockpit_live_snapshot_save(key, payload)
+        except Exception as e:  # noqa: BLE001 — persistence must never fail a sweep
+            print(f"[cockpit-live] snapshot save failed: {e}", file=sys.stderr)
+    return payload
+
+
 _COCKPIT_LIVE_STATUS_SWR = _SWRKeyedCache(
-    _cockpit_live_status, 45,  # short: fresh-from-Smartlead, but a 45s shield stops toggle-stampede
+    _cockpit_live_status_compute, 45,  # short: fresh-from-Smartlead, but a 45s shield stops toggle-stampede
     is_degraded=lambda p: not isinstance(p, dict) or not p.get("campaigns"),
     name="cockpit-live-status",
     neg_ttl=15)  # an outage sweep is remembered 15s instead of recomputed per request
+
+_CLS_SNAP_SEEDED = False
+
+
+def _cockpit_live_seed_from_snapshot() -> None:
+    """One-time after boot: seed the live-status SWR from the persisted
+    last-good snapshot (ts 0 → instant stale serve + one bg refresh per key)."""
+    global _CLS_SNAP_SEEDED
+    if _CLS_SNAP_SEEDED:
+        return
+    _CLS_SNAP_SEEDED = True
+    snap = _blob_snapshot_load("cockpit_live_status_v1") or {}
+    good = {str(k): v for k, v in snap.items()
+            if isinstance(v, dict) and isinstance(v.get("payload"), dict)
+            and v["payload"].get("campaigns")} if isinstance(snap, dict) else {}
+    if not good:
+        return
+    with _COCKPIT_LIVE_SNAP_LOCK:
+        for k, v in good.items():
+            _COCKPIT_LIVE_SNAP.setdefault(k, v)
+    with _COCKPIT_LIVE_STATUS_SWR.lock:
+        for k, v in good.items():
+            _COCKPIT_LIVE_STATUS_SWR.entries.setdefault(
+                k, {"ts": 0.0, "payload": v["payload"], "refreshing": False})
 
 
 # ── Set live / Pause / Stop from the campaign header ────────────────────────
@@ -8841,32 +8734,6 @@ def api_campaign_status(p: dict) -> tuple:
     rec = (fresh.get("campaigns") or {}).get(str(cid)) if isinstance(fresh, dict) else None
     return {"ok": True, "campaign_id": cid, "requested": status,
             "live": rec, "smartlead_response": sl}, 200
-
-
-# ── Collective last-30-days top line (homepage strip) ──────────────────────
-# The strip above the campaign list is a LAST-30-DAYS window, not all-time.
-# Everything is one DB round-trip via rpc/collective_30d:
-#  - sent / replies / positives / bounces + reply% / bounce% come from the latest
-#    mailbox_stats_daily snapshot's per-mailbox trailing-30d columns (Smartlead's
-#    OWN numbers — same source + definitions as the deliverability graph, so the
-#    strip's reply/bounce rates match the graph's health verdict exactly);
-#  - meetings from the dated meetings table (booked_at, last 30d);
-#  - signals_sourced from signal_leads.pulled_at (last 30d).
-# Nothing is invented; a failed read degrades to a labelled empty strip.
-def _collective_30d() -> dict:
-    r = sb("POST", "rpc/collective_30d", {})
-    if isinstance(r, list):                 # defensive: some PostgREST shapes wrap
-        r = r[0] if r else None
-    if isinstance(r, dict) and "collective_30d" in r:   # select-style wrapping
-        r = r.get("collective_30d")
-    if not isinstance(r, dict) or r.get("sent") is None:
-        return {"error": "Supabase read failed"}
-    return r
-
-
-_COLLECTIVE_30D_SWR = _SWRCache(_collective_30d, 300,
-                                is_degraded=lambda p: not (isinstance(p, dict) and p.get("sent") is not None),
-                                name="collective-30d")
 
 
 # ── Analytics hub (app/deliverability.html) ────────────────────────────────
@@ -9069,8 +8936,12 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rep = sb("GET", f"replies?replied_at=gte.{since}"
-                    "&select=smartlead_campaign_id,email,category&limit=20000")
+    # sb_get_all, not a capped single read: Supabase clips a plain query at
+    # 1,000 rows, and the old fixed 20k limit was still one un-paginated
+    # request — the archive is past both, so page through it (same
+    # filters/columns as before).
+    rep = sb_get_all(f"replies?replied_at=gte.{since}"
+                     "&select=smartlead_campaign_id,email,category")
     if not isinstance(rep, list):
         return {"ok": False, "error": "replies read failed"}
     by_camp: dict = {}
@@ -9420,15 +9291,12 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             "lines": len(lines), "who_n": n_pos, "offers": len(offers)}
 
 
-# ── tier1-live-ship Step 2: campaign detail insights, hiring-signal campaign
-# ideas, and recontact. Hard rules baked into every function below:
+# ── tier1-live-ship Step 2: campaign detail insights and recontact. Hard
+# rules baked into every function below:
 #   - nothing here activates a campaign or sends anything (drafts + QA-gate only)
 #   - Smartlead sequence-save NEVER targets an id that already had sequences
 #     (see execute_disable_variant_action's docstring at ~2553 for the one
-#     existing-campaign exception; _create_smartlead_shell_from_god is the
-#     other, and only ever targets a campaign this same call just created)
-#   - idea generation is hiring-signal only, and only ever runs from an
-#     explicit POST (never on a GET/page load)
+#     existing-campaign exception)
 WORKSPACE_TAG = "navreo"  # sent_messages/replies/contact_history/campaigns tag
                           # (matches setter.py's WORKSPACE) - every query below
                           # scopes to it explicitly
@@ -9461,8 +9329,7 @@ _IN_PROGRESS_STATUSES = {"INPROGRESS", "STARTED", "PAUSED"}
 def _campaign_draft_ids_for_sl(sid) -> set:
     """draft ids whose destination points at this Smartlead campaign - same
     join _campaign_source_ids (~5559) does, factored out so campaign-insights
-    and campaign-ideas can share it (both need the full source dicts, not
-    just ids)."""
+    can reuse it (it needs the full source dicts, not just ids)."""
     sid = str(sid)
     drafts, _failed = _cached_campaign_drafts()
     return {str(d.get("id")) for d in (drafts or [])
@@ -9665,435 +9532,7 @@ def api_campaign_insights(p: dict) -> dict:
     return _CAMPAIGN_INSIGHTS_SWR.get(sid)
 
 
-# ── 2. Campaign ideas: on-demand, hiring-signal only, never on page load ────
-CAMPAIGN_IDEA_SCHEMA = {
-    "type": "object", "additionalProperties": False,
-    "properties": {"ideas": {"type": "array", "items": {
-        "type": "object", "additionalProperties": False,
-        "properties": {
-            "title": {"type": "string"},
-            "job_titles": {"type": "array", "items": {"type": "string"}},
-            "dm_titles": {"type": "array", "items": {"type": "string"}},
-            "lead_magnet": {"type": "string"},
-            "rationale": {"type": "string"},
-            "icebreaker": {"type": "string"},
-        },
-        "required": ["title", "job_titles", "dm_titles", "lead_magnet", "rationale", "icebreaker"],
-    }}},
-    "required": ["ideas"],
-}
-
-
-def _campaign_ideas_context(sid: str) -> dict:
-    """Client/ICP context for idea generation, all derived server-side from
-    the campaign's own client + any hiring source it already runs - no
-    frontend wizard state involved (this is a pure backend feature)."""
-    draft = _campaign_primary_draft(sid)
-    client: dict = {}
-    if draft and draft.get("client_id"):
-        clients, _failed = _cached_clients()
-        client = next((c for c in (clients or []) if c.get("id") == draft["client_id"]), None) or {}
-    campaign_name = (draft or {}).get("name")
-    if not campaign_name:
-        campaign_name = campaign_readonly({"platform": "smartlead", "id": sid}).get("name")
-    sources = _campaign_sources_full(sid) if draft else []
-    existing = [f"{s.get('mechanism') or s.get('type') or 'signal'}: {s.get('name')}"
-               for s in sources if s.get("name")]
-    hiring_src = next((s for s in sources if (s.get("mechanism") or s.get("type")) == "hiring"), None)
-    cfg = {**((hiring_src or {}).get("config") or {}), **((hiring_src or {}).get("params") or {})}
-    return {
-        "campaign_id": sid, "campaign_name": campaign_name,
-        "client_name": client.get("name") or "", "client_description": client.get("description") or "",
-        "client_offer": client.get("offer") or "", "existing": existing,
-        "countries": cfg.get("countries") or [], "headcount": cfg.get("headcount") or [],
-        "dm_titles": cfg.get("dm_titles") or (hiring_src or {}).get("titles") or [],
-    }
-
-
-def _generate_campaign_ideas(ctx: dict, exclude_titles: list, max_credits: int) -> list:
-    """Reuses _suggest_llm (~933) - the same minimal-effort JSON-schema
-    completion the wizard's Generate-more buttons use - constrained to
-    hiring-signal ideas only. Sizing reuses preview_hiring (~359, FREE
-    TheirStack blurred preview - the same probe strategy_map's Stage 2 uses
-    at ~1554), so idea generation spends zero paid-provider credits;
-    max_credits only bounds how many of those free probes one call makes."""
-    key = KEYS.get("OPENAI_API_KEY")
-    if not key:
-        return []
-    bits = []
-    if ctx.get("client_name"):
-        bits.append(f"Client: {ctx['client_name']}")
-    if ctx.get("client_description"):
-        bits.append(f"What they do: {ctx['client_description']}")
-    if ctx.get("client_offer"):
-        bits.append(f"What is being sold (only propose signals that indicate need for THIS): {ctx['client_offer']}")
-    if ctx.get("campaign_name"):
-        bits.append(f"This existing campaign: {ctx['campaign_name']}")
-    if ctx.get("existing"):
-        bits.append("Already running on this campaign (do not repeat or propose a close variant): "
-                    + "; ".join(ctx["existing"]))
-    if exclude_titles:
-        bits.append("Already suggested before - propose genuinely different ideas, not close variants: "
-                    + "; ".join(t for t in exclude_titles if t))
-    system = ("You are the campaign-ideation engine of a cold-email agency, generating HIRING-SIGNAL "
-             "ideas ONLY. A hiring-signal idea fires when a target company posts a live job opening for "
-             "a specific role - that open role is the buying signal. Every idea needs job_titles (the "
-             "roles being hired for, which indicate need for the offer) and dm_titles (the decision-makers "
-             "to actually email at that company - e.g. Founder, Head of Sales - never the role being "
-             "hired). Plain English, no jargon, no em dashes.")
-    user = (("\n".join(bits) if bits else
-            "No client context is available - reason from a generic B2B hiring-signal angle.")
-           + "\n\nGenerate exactly 3 NEW hiring-signal campaign ideas.")
-    try:
-        out = _suggest_llm(key, system, user, "hiring_ideas", CAMPAIGN_IDEA_SCHEMA)
-    except Exception as e:  # noqa: BLE001 — generation is best-effort; caller reports "try again"
-        print(f"[campaign-ideas] generation failed: {e}", file=sys.stderr)
-        return []
-
-    codes, _unmapped = country_codes(ctx.get("countries") or [])
-    codes = codes or ["US"]
-    lo, hi = emp_range(ctx.get("headcount"))
-    probes_left = max(0, max_credits)
-    result = []
-    import hashlib
-    for it in (out.get("ideas") or [])[:3]:
-        title = (it.get("title") or "").strip()
-        job_titles = [t.strip() for t in (it.get("job_titles") or []) if str(t).strip()]
-        if not title or not job_titles:
-            continue
-        dm_titles = ([t.strip() for t in (it.get("dm_titles") or []) if str(t).strip()]
-                    or ctx.get("dm_titles") or [])
-        dm_per_month = None
-        if probes_left > 0:
-            try:
-                r = preview_hiring({"job_titles": job_titles, "countries": codes,
-                                    "min_emp": lo, "max_emp": hi, "days": 30})
-                probes_left -= 1
-                companies = r.get("total_companies")
-                # gate fallback: companies-with-signal/mo x 2.5 titles, estimate=true
-                if isinstance(companies, int):
-                    dm_per_month = round(companies * 2.5)
-            except Exception:  # noqa: BLE001 — sizing is best-effort, never blocks the idea
-                pass
-        idea_id = hashlib.md5(f"{ctx['campaign_id']}|{title.lower()}".encode()).hexdigest()[:12]
-        result.append({
-            "id": idea_id, "title": title, "mechanism": "hiring-signal",
-            "lead_magnet": (it.get("lead_magnet") or "").strip(),
-            "rationale": (it.get("rationale") or "").strip(),
-            "dm_per_month": dm_per_month, "estimate": True,
-            "job_titles": job_titles, "dm_titles": dm_titles,
-            "icebreaker": ensure_hiring_vars(it.get("icebreaker") or HIRING_ICE_DEFAULT),
-        })
-    return result
-
-
-def _campaign_ideas_job_worker(job: dict, sid: str, more: bool, max_credits: int):
-    _job_started(job)
-    try:
-        ctx = _campaign_ideas_context(sid)
-        exclude_titles = []
-        if more:
-            prev = sb("GET", f"campaign_idea_suggestions?campaign_id=eq.{sid}&select=idea")
-            if isinstance(prev, list):
-                exclude_titles = [(r.get("idea") or {}).get("title") for r in prev
-                                  if isinstance(r.get("idea"), dict) and (r.get("idea") or {}).get("title")]
-        ideas = _generate_campaign_ideas(ctx, exclude_titles, max_credits)
-        if not ideas:
-            job["counts"] = {"ideas": [],
-                             "message": "Could not generate ideas right now - check OPENAI_API_KEY, or try again."}
-            _job_finished(job, "done")
-            return
-        now = _now_iso()
-        rows = [{"id": i["id"], "campaign_id": sid, "idea": i, "status": "suggested", "created_at": now}
-               for i in ideas]
-        res = sb("POST", "campaign_idea_suggestions?on_conflict=id", rows,
-                prefer="resolution=merge-duplicates,return=minimal")
-        persisted = _tier1_write_ok(res)
-        job["counts"] = {"ideas": ideas, "persisted": persisted}
-        if not persisted:
-            job["counts"]["warning"] = ("Ideas generated but could not be saved - the "
-                                        "campaign_idea_suggestions table may not exist yet. Apply "
-                                        "migrations/tier1_idea_suggestions.sql, then try again.")
-        _job_finished(job, "done")
-    except Exception as e:  # noqa: BLE001
-        _job_finished(job, "failed", str(e)[:300])
-
-
-def api_campaign_ideas_start(p: dict):
-    sid = str(p.get("campaign_id") or "").strip()
-    if not sid:
-        return {"error": "missing_campaign_id"}, 400
-    more = bool(p.get("more"))
-    try:
-        max_credits = max(1, min(200, int(p.get("max_credits") or 50)))
-    except (TypeError, ValueError):
-        max_credits = 50
-    with _JOB_CREATE_LOCK:
-        if _campaign_has_active_job(sid):
-            return {"error": "already_active",
-                   "message": "This campaign already has a task running - wait for it to finish."}, 409
-        job = _new_job("campaign_ideas", "Suggest campaign ideas", sid, mode=("more" if more else "first"))
-        _enqueue_job(_campaign_ideas_job_worker, job, (job, sid, more, max_credits))
-    return {"job_id": job["id"]}, 202
-
-
-def api_campaign_ideas_get(p: dict):
-    """Pure read - NEVER triggers generation (generation only ever happens
-    inside api_campaign_ideas_start, reached only via POST)."""
-    sid = str(p.get("campaign_id") or "").strip()
-    if not sid:
-        return {"status": "idle", "ideas": []}
-    with JOBS_LOCK:
-        running = [j for j in JOBS.values() if str(j.get("campaign_id")) == sid
-                  and j.get("kind") == "campaign_ideas" and j.get("status") in ("queued", "running")]
-    status = running[-1]["status"] if running else "idle"
-    rows = sb("GET", f"campaign_idea_suggestions?campaign_id=eq.{sid}&status=neq.dismissed"
-                     "&order=created_at.desc")
-    if not isinstance(rows, list):
-        return {"status": status, "ideas": [],
-               "error": "campaign_idea_suggestions table unavailable - apply "
-                        "migrations/tier1_idea_suggestions.sql"}
-    return {"status": status, "ideas": [r["idea"] for r in rows if isinstance(r.get("idea"), dict)]}
-
-
-def api_campaign_ideas_dismiss(p: dict):
-    sid = str(p.get("campaign_id") or "").strip()
-    iid = str(p.get("idea_id") or "").strip()
-    if not sid or not iid:
-        return {"ok": False, "message": "campaign_id and idea_id are required"}, 400
-    res = sb("PATCH", f"campaign_idea_suggestions?id=eq.{iid}&campaign_id=eq.{sid}", {"status": "dismissed"})
-    if not _tier1_write_ok(res):
-        return {"ok": False, "message": "Could not save - the campaign_idea_suggestions table may not "
-                                       "exist yet, or the database is unreachable."}, 503
-    log_activity("/api/campaign-ideas/dismiss", p, action="dismiss", entity="campaign_idea", entity_id=iid)
-    return {"ok": True}, 200
-
-
-def _patch_campaign_draft(cid: str, **fields) -> bool:
-    """Set arbitrary fields on ONE campaign_drafts doc by id - same whole-list
-    read/patch/write pattern update_campaign_draft (~8333) uses for its
-    whitelisted fields; this covers fields that function doesn't expose
-    (e.g. needs_shell)."""
-    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
-    found = False
-    for d in drafts:
-        if d.get("id") == cid:
-            d.update(fields)
-            found = True
-    if found:
-        write_drafts(drafts, CAMPAIGN_DRAFTS)
-    return found
-
-
-def _idea_add_default_dm_titles(idea: dict) -> list:
-    return idea.get("dm_titles") or ["Founder", "CEO", "VP of Sales", "Head of Sales"]
-
-
-def _idea_add_plan(sid: str, idea: dict, mode: str, test_cap: int) -> dict:
-    """The dry-run plan - what api_campaign_ideas_add would do, without doing
-    any of it. Same shape whether dry_run is true or not."""
-    draft = _campaign_primary_draft(sid)
-    plan = {"mode": mode, "test_cap": test_cap, "idea_title": idea.get("title"),
-           "target_smartlead_campaign_id": sid,
-           "draft_id": (draft or {}).get("id") or f"camp-sl-{sid}",
-           "draft_exists": bool(draft),
-           "source_config": {
-               "type": "hiring", "mechanism": "hiring", "name": idea.get("title") or "Hiring signal idea",
-               "titles": _idea_add_default_dm_titles(idea),
-               "params": {"job_titles": idea.get("job_titles") or [], "days": 30, "leads_per_day": test_cap},
-           }}
-    if mode == "existing":
-        plan["will_create_source_on_existing_campaign"] = True
-        plan["note"] = (f"Creates a hiring source on the existing campaign and pulls up to {test_cap} "
-                        f"leads. Leads land as drafts and go through the normal QA gate - nothing sends.")
-    else:
-        god = KEYS.get("GOD_TEMPLATE_SL_ID") or os.environ.get("GOD_TEMPLATE_SL_ID")
-        plan["will_duplicate_campaign"] = True
-        plan["god_template_sl_id"] = god
-        plan["will_create_smartlead_shell"] = bool(god)
-        plan["needs_shell"] = not bool(god)
-        plan["note"] = ((f"Duplicates the campaign draft, attaches a new hiring source, creates a "
-                         f"Smartlead DRAFT campaign, and copies sequences from campaign {god} onto it "
-                         f"only - the template itself is never written to.") if god else
-                        "Duplicates the campaign draft and attaches a new hiring source. "
-                        "GOD_TEMPLATE_SL_ID is not set, so no Smartlead shell is created - "
-                        "the new draft is marked needs_shell.")
-    return plan
-
-
-def _create_smartlead_shell_from_god(god_sl_id: str, name: str) -> dict:
-    """Creates ONE new Smartlead DRAFT campaign and copies the God-template's
-    sequence onto it. This and execute_disable_variant_action (~2553) are the
-    only two places in this file that call Smartlead's sequences endpoint -
-    that one is the sanctioned exception for an EXISTING campaign (id-carrying
-    + post-verify, never destroys history); this one is safe by construction
-    because the target campaign was JUST created by this same call and has no
-    sequence yet, so there is no history to lose and no ids to preserve. It
-    NEVER writes to god_sl_id or any other pre-existing campaign, and never
-    sets any campaign active (Smartlead campaigns are created in DRAFT status)."""
-    if not KEYS.get("SMARTLEAD_API_KEY"):
-        return {"ok": False, "message": "SMARTLEAD_API_KEY is not configured on this server"}
-    created = _smartlead_json("POST", "/campaigns/create", {"name": (name or "New campaign")[:190]})
-    new_id = created.get("id") if isinstance(created, dict) else None
-    if not new_id:
-        return {"ok": False, "message": "Smartlead did not return a new campaign id",
-               "smartlead_response": created}
-    if str(new_id) == str(god_sl_id):
-        # Cannot happen in practice - Smartlead always mints a fresh id - but this
-        # is exactly the invariant that must never be violated, so refuse outright.
-        return {"ok": False, "message": "Smartlead returned the template's own id - refusing to touch it"}
-    template = _smartlead_json("GET", f"/campaigns/{god_sl_id}/sequences")
-    steps = template if isinstance(template, list) else (
-        template.get("data") or template.get("sequences") or [] if isinstance(template, dict) else [])
-    if not steps:
-        return {"ok": True, "smartlead_campaign_id": new_id, "sequences_copied": 0,
-               "message": "Shell created; the God-template has no sequences to copy"}
-    body = []
-    for s in steps:
-        step = {"seq_number": s.get("seq_number")}
-        delay = (s.get("seq_delay_details") or {}).get("delayInDays")
-        if delay is not None:
-            step["seq_delay_details"] = {"delay_in_days": delay}
-        if s.get("subject") is not None:
-            step["subject"] = s.get("subject")
-        if s.get("email_body") is not None:
-            step["email_body"] = s.get("email_body")
-        variants = [v for v in (s.get("sequence_variants") or []) if not v.get("is_deleted")]
-        if variants:
-            step["seq_variants"] = [
-                {"variant_label": v.get("variant_label"), "subject": v.get("subject"),
-                 "email_body": v.get("email_body"),
-                 "variant_distribution_percentage": v.get("variant_distribution_percentage")}
-                for v in variants]
-        body.append(step)
-    # ONLY the campaign this call just created - never god_sl_id, never any
-    # other existing id (mirrors the HARD CONSTRAINT at ~2419).
-    save_res = _smartlead_json("POST", f"/campaigns/{new_id}/sequences", {"sequences": body})
-    return {"ok": True, "smartlead_campaign_id": new_id, "sequences_copied": len(body),
-           "smartlead_save_response": save_res,
-           # Smartlead's public API has no separate sub-sequence resource distinct
-           # from these steps as of this build - nothing further is known to copy.
-           # Flagged as a known gap rather than silently skipped.
-           "sub_sequences_copied": None}
-
-
-def _apply_idea_add_existing(sid: str, idea: dict, test_cap: int) -> dict:
-    draft = _campaign_primary_draft(sid)
-    if draft:
-        draft_id = draft["id"]
-    else:
-        ro = campaign_readonly({"platform": "smartlead", "id": sid})
-        r = save_campaign_draft({"id": f"camp-sl-{sid}",
-                                 "destination": {"platform": "smartlead", "smartlead_campaign_id": sid},
-                                 "name": ro.get("name") or f"Smartlead campaign {sid}"})
-        draft_id = r.get("id") or f"camp-sl-{sid}"
-    src_doc = {
-        "type": "hiring", "mechanism": "hiring", "name": idea.get("title") or "Hiring signal idea",
-        "campaign_id": draft_id, "active": True, "titles": _idea_add_default_dm_titles(idea),
-        "params": {"job_titles": idea.get("job_titles") or [], "days": 30, "leads_per_day": test_cap},
-        "icebreaker": ensure_hiring_vars(idea.get("icebreaker") or HIRING_ICE_DEFAULT),
-    }
-    r = save_draft(src_doc)
-    if not r.get("ok"):
-        return {"ok": False, "message": r.get("message") or "Could not create the source.", "draft_id": draft_id}
-    source_id = r["id"]
-    pull = pull_source({"id": source_id})
-    log_activity("/api/campaign-ideas/add", {"campaign_id": sid, "idea_id": idea.get("id"),
-                "mode": "existing", "source_id": source_id, "test_cap": test_cap},
-                action="add_idea", entity="source", entity_id=source_id)
-    return {"ok": True, "draft_id": draft_id, "source_id": source_id,
-           "pull": {"ok": pull.get("ok"), "message": pull.get("message"),
-                     "leads": len(pull.get("prospects") or [])}}
-
-
-def _apply_idea_add_new(sid: str, idea: dict, test_cap: int) -> dict:
-    draft = _campaign_primary_draft(sid)
-    if not draft:
-        ro = campaign_readonly({"platform": "smartlead", "id": sid})
-        r = save_campaign_draft({"id": f"camp-sl-{sid}",
-                                 "destination": {"platform": "smartlead", "smartlead_campaign_id": sid},
-                                 "name": ro.get("name") or f"Smartlead campaign {sid}"})
-        draft = {"id": r.get("id") or f"camp-sl-{sid}"}
-    dup = duplicate_campaign_draft({"id": draft["id"]})
-    if not dup.get("ok"):
-        return {"ok": False, "message": dup.get("message") or "Could not duplicate the campaign."}
-    new_draft_id = dup["id"]
-    # the duplicate inherited the ORIGINAL's destination (still pointing at sid) -
-    # clear it immediately so this new, unlinked draft never gets mistaken for a
-    # source of the campaign it was copied from (see _campaign_draft_ids_for_sl).
-    _patch_campaign_draft(new_draft_id, destination={})
-    src_doc = {
-        "type": "hiring", "mechanism": "hiring", "name": idea.get("title") or "Hiring signal idea",
-        "campaign_id": new_draft_id, "active": True, "titles": _idea_add_default_dm_titles(idea),
-        "params": {"job_titles": idea.get("job_titles") or [], "days": 30, "leads_per_day": test_cap},
-        "icebreaker": ensure_hiring_vars(idea.get("icebreaker") or HIRING_ICE_DEFAULT),
-    }
-    r = save_draft(src_doc)
-    source_id = r.get("id") if r.get("ok") else None
-    god = KEYS.get("GOD_TEMPLATE_SL_ID") or os.environ.get("GOD_TEMPLATE_SL_ID")
-    shell = None
-    if god:
-        shell = _create_smartlead_shell_from_god(god, dup.get("name") or idea.get("title") or "New campaign")
-        if shell.get("ok"):
-            update_campaign_draft({"id": new_draft_id,
-                                   "destination": {"platform": "smartlead",
-                                                    "smartlead_campaign_id": shell["smartlead_campaign_id"]}})
-        else:
-            _patch_campaign_draft(new_draft_id, needs_shell=True, shell_error=shell.get("message"))
-    else:
-        _patch_campaign_draft(new_draft_id, needs_shell=True)
-    log_activity("/api/campaign-ideas/add", {"campaign_id": sid, "idea_id": idea.get("id"), "mode": "new",
-                "new_draft_id": new_draft_id, "source_id": source_id, "test_cap": test_cap},
-                action="add_idea", entity="campaign_draft", entity_id=new_draft_id)
-    return {"ok": True, "draft_id": new_draft_id, "source_id": source_id, "shell": shell}
-
-
-def _campaign_idea_add_worker(job: dict, sid: str, idea: dict, mode: str, dry_run: bool, test_cap: int):
-    _job_started(job)
-    try:
-        plan = _idea_add_plan(sid, idea, mode, test_cap)
-        if dry_run:
-            job["counts"] = {"plan": plan, "dry_run": True}
-            _job_finished(job, "done")
-            return
-        result = (_apply_idea_add_existing(sid, idea, test_cap) if mode == "existing"
-                 else _apply_idea_add_new(sid, idea, test_cap))
-        job["counts"] = {"plan": plan, "result": result}
-        _job_finished(job, "done")
-    except Exception as e:  # noqa: BLE001
-        _job_finished(job, "failed", str(e)[:300])
-
-
-def api_campaign_ideas_add(p: dict):
-    sid = str(p.get("campaign_id") or "").strip()
-    iid = str(p.get("idea_id") or "").strip()
-    mode = p.get("mode")
-    dry_run = bool(p.get("dry_run"))
-    try:
-        test_cap = max(1, min(500, int(p.get("test_cap") or 25)))
-    except (TypeError, ValueError):
-        test_cap = 25
-    if not sid or not iid:
-        return {"error": "missing_campaign_id_or_idea_id"}, 400
-    if mode not in ("existing", "new"):
-        return {"error": "unknown_mode", "message": 'mode must be "existing" or "new"'}, 400
-    rows = sb("GET", f"campaign_idea_suggestions?id=eq.{iid}&campaign_id=eq.{sid}&limit=1")
-    if not isinstance(rows, list) or not rows:
-        return {"error": "idea_not_found",
-               "message": "That idea was not found - it may have been dismissed, or the suggestion "
-                          "table isn't available (apply migrations/tier1_idea_suggestions.sql)."}, 404
-    idea = rows[0].get("idea") or {}
-    with _JOB_CREATE_LOCK:
-        if not dry_run and _campaign_has_active_job(sid):
-            return {"error": "already_active",
-                   "message": "This campaign already has a task running - wait for it to finish."}, 409
-        job = _new_job("campaign_idea_add", f"Add idea to campaign: {idea.get('title') or iid}", sid,
-                      mode=mode, dry_run=dry_run, max_new=test_cap)
-        _enqueue_job(_campaign_idea_add_worker, job, (job, sid, idea, mode, dry_run, test_cap))
-    return {"job_id": job["id"]}, 202
-
-
-# ── 3. Recontact: sibling scan + eligibility buckets + draft creation ──────
+# ── 2. Recontact: sibling scan + eligibility buckets + draft creation ──────
 _RECONTACT_NAME_STOP = {"the", "a", "an", "and", "of", "for", "to", "campaign", "email",
                         "cold", "outreach", "v1", "v2", "test", "copy"}
 
@@ -11594,8 +11033,10 @@ def stage_trigify_engagers(src: dict, cfg: dict, days: int = ENG_BACKFILL_DAYS,
     searches = [t.get("search_id") for t in (eng.get("trigify") or []) if t.get("search_id")]
     if not searches:
         return 0
-    seen = sb("GET", f"engagement_events?source_id=eq.{src['id']}"
-                     "&select=post_url,engager_linkedin_url&limit=20000") or []
+    # paginated (sb_get_all): a plain query clips at 1,000 rows, and a clipped
+    # dedupe set re-stages events that already exist
+    seen = sb_get_all(f"engagement_events?source_id=eq.{src['id']}"
+                      "&select=post_url,engager_linkedin_url")
     if not isinstance(seen, list):
         return 0  # a failed read would look like "nothing staged yet" and re-stage everything
     seen_pair = {(r.get("post_url"), r.get("engager_linkedin_url")) for r in seen}
@@ -13192,41 +12633,6 @@ def duplicate_source(p: dict) -> dict:
     return {"ok": True, "id": s["id"], "name": s["name"]}
 
 
-def duplicate_campaign_draft(p: dict) -> dict:
-    """Duplicate a whole campaign: the campaign draft plus every one of its live
-    sources (targeting retained), under fresh ids, so it launches identically."""
-    from datetime import datetime
-    import uuid, copy
-    cid = p.get("id")
-    drafts = read_json_list(CAMPAIGN_DRAFTS, strict=True)
-    orig = next((d for d in drafts if d.get("id") == cid), None)
-    if not orig:
-        return {"ok": False, "message": "Campaign not found - refresh and try again."}
-    new = copy.deepcopy(orig)
-    new_id = f"cdraft-{uuid.uuid4().hex[:8]}"
-    new["id"] = new_id
-    new["name"] = _copy_name(orig.get("name"))
-    new["created_at"] = datetime.now().isoformat(timespec="seconds")
-    new.pop("deleted_at", None)
-    drafts.append(new)
-    CAMPAIGN_DRAFTS.parent.mkdir(parents=True, exist_ok=True)
-    write_drafts(drafts, CAMPAIGN_DRAFTS)
-    all_srcs = read_drafts(strict=True)
-    originals = [s for s in all_srcs
-                 if str(s.get("campaign_id")) == str(cid) and not s.get("deleted_at")]
-    new_srcs = []
-    for src in originals:
-        s = _clone_source_dict(src, new_campaign_id=new_id)
-        s["id"] = f"draft-{uuid.uuid4().hex[:8]}"
-        new_srcs.append(s)
-    if new_srcs:
-        all_srcs.extend(new_srcs)
-        write_sources(new_srcs)  # only the clones are new — leave the originals alone
-        for s in new_srcs:
-            sb_sync_source(s)
-    return {"ok": True, "id": new_id, "name": new["name"], "sources": len(new_srcs)}
-
-
 _CAMP_KEY_RE = re.compile(r"^camp-(sl|hr)-[A-Za-z0-9_]+$")
 
 
@@ -13830,8 +13236,6 @@ ROUTES = {
     "/api/preview/companies": preview_companies,
     "/api/preview/lookalike": preview_lookalike,
     "/api/preview/people": preview_people,
-    "/api/suggest-location": suggest_location,
-    "/api/tam-map": tam_map,
     "/api/strategy-map": strategy_map_start,
     "/api/clients": save_client,
     "/api/client-prefill": client_prefill,
@@ -13845,7 +13249,6 @@ ROUTES = {
     "/api/trigify-webhook": trigify_webhook,
     "/api/qa-history": save_qa_run,
     "/api/campaign-drafts": save_campaign_draft,
-    "/api/campaign-drafts/duplicate": duplicate_campaign_draft,
     "/api/campaign-drafts/update": update_campaign_draft,
     "/api/campaign-drafts/restore": restore_campaign_draft,
     "/api/campaign-drafts/purge": purge_campaign_draft,
@@ -14852,6 +14255,12 @@ def _deliv_trends_build(days: int) -> dict:
                       + int(sn.get("dkim_miss") or 0) + int(sn.get("dmarc_miss") or 0)
                       + int(sn.get("blacklisted") or 0))
         cur += _dtmod.timedelta(days=1)
+    if not by_daymonth or not any(sent):
+        # http_json returns a parsed 4xx body (e.g. a 429 note) rather than
+        # raising, which left raw=[] and built a structurally valid all-zero
+        # month that then cached AND persisted as fresh (panel round-1 HIGH).
+        # This fleet sends every weekday — an empty/zero window is an outage.
+        raise RuntimeError("smartlead day-wise returned no usable rows")
     return {"series": {"days": days_out, "sent": sent, "reply_pct": reply_pct,
                        "bounce_pct": bounce_pct, "issues": issues},
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
@@ -15128,14 +14537,26 @@ def _client_win_build():
     series = {}
     start30 = end - _dtmod.timedelta(days=29)
     days_out = [(start30 + _dtmod.timedelta(days=i)).isoformat() for i in range(30)]
-    for ws in [w.get("id") for w in ws_enabled() if w.get("id")]:
-        try:
-            key = ws_key(ws)
-            if not key:
+    daywise_errs = []
+    ws_ids = [w.get("id") for w in ws_enabled() if w.get("id")]
+    for attempt in (1, 2):   # one retry pass — boot-time 429s killed the navreo
+        failed = []          # lines and the page's daily bars for a whole TTL
+        for ws in ws_ids:
+            if ws in series:
                 continue
-            series[ws] = _daywise_series(key, days_out, start30.isoformat(), end.isoformat())
-        except Exception as e:  # noqa: BLE001 — one workspace failing must not void the rest
-            print(f"[client-win] day-wise {ws} failed: {e}", file=sys.stderr)
+            try:
+                key = ws_key(ws)
+                if not key:
+                    continue
+                series[ws] = _daywise_series(key, days_out, start30.isoformat(), end.isoformat())
+            except Exception as e:  # noqa: BLE001 — one workspace failing must not void the rest
+                failed.append(ws)
+                if attempt == 2:
+                    daywise_errs.append(f"day-wise {ws}: {type(e).__name__}: {str(e)[:100]}")
+                print(f"[client-win] day-wise {ws} failed (attempt {attempt}): {e}", file=sys.stderr)
+        if not failed:
+            break
+        time.sleep(5)   # let the boot-warm Smartlead burst drain before retrying
     out_series = {}
     for ws, s in series.items():
         if ws != "navreo":  # navreo's own line rides the __all sum, as before
@@ -15165,6 +14586,7 @@ def _client_win_build():
                 out_series[cl] = _daywise_series(
                     nav_key, days_out, start30.isoformat(), end.isoformat(), campaign_ids=ids)
             except Exception as e:  # noqa: BLE001 — fall back to the estimate below
+                daywise_errs.append(f"day-wise client {cl}: {type(e).__name__}: {str(e)[:100]}")
                 print(f"[client-win] day-wise client {cl} failed: {e}", file=sys.stderr)
     # Navreo-workspace daily series still exposed under a reserved key as the
     # estimate fallback (used only if a shared client's scoped call above failed).
@@ -15250,10 +14672,23 @@ def _client_win_build():
     # hardcoded list of its own.
     ws_labels = {_client_win_label(w["id"], None): w["id"]
                  for w in ws_enabled() if w.get("id") and w["id"] != "navreo"}
+    # Completeness gate (panel round-1 HIGH, seen live 2026-08-01): when the
+    # day-wise layer lost a workspace (boot-time 429s), series.__all summed to
+    # ~10% of the verified window total and the page drew wrong daily bars,
+    # funnel replies and rate — stamped fresh. A materially short series never
+    # ships: the FE falls back to fleet trends / window pills, which are honest.
+    win_sent = (windows.get("30", {}).get("__all") or {}).get("sent") or 0
+    ser_sent = sum((out_series.get("__all") or {}).get("sent", [])[-30:])
+    if win_sent and ser_sent < 0.8 * win_sent:
+        daywise_errs.append(f"series dropped: incomplete ({ser_sent} vs window {win_sent})")
+        print(f"[client-win] daily series dropped as incomplete: {ser_sent} vs {win_sent}",
+              file=sys.stderr)
+        out_series = {}
     data = {"days": days_out, "series": out_series, "windows": windows,
             "campaigns": campaigns, "ws_labels": ws_labels,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
             "_debug": {"candidates": len(cands), "calls": calls, "errors": errs,
+                       "daywise_errors": daywise_errs,
                        "sample": sample, "secs": int(time.time() - t0)}}
     print(f"[client-win] built: {len(cands)} candidates, {calls} calls, "
           f"errs={errs[:2]} {int(time.time() - t0)}s", flush=True)
@@ -15476,7 +14911,14 @@ def who_replies_get(client: str, days: int) -> tuple[dict, int]:
     with _WHO_LOCK:
         ent = _WHO_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _WHO_TTL_S:
-            return ent["data"], 200
+            # boot race (panel round-1): the warmup computed this payload before
+            # the subseq loop's first pass, caching subseq:null for the whole
+            # TTL while the follow-ups card said "fills in after the next sync".
+            # Once subseq stats exist for this client, a null-subseq cache entry
+            # is expired instead of served.
+            stale_subseq = ent["data"].get("subseq") is None and _SUBSEQ_STATS.get(client)
+            if not stale_subseq:
+                return ent["data"], 200
     try:
         data = _who_replies_compute(client, days)
     except Exception as e:  # noqa: BLE001
@@ -16665,7 +16107,7 @@ AUTH_SESSION_DAYS = 30
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
                     "/app/offer.html", "/app/setter-train.html", "/app/shell.js", "/app/roi-calculator.html"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
-_AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email",
+_AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/cron/reply-caps",
                      # A cron path must appear in BOTH this set and the token-gate
@@ -17004,8 +16446,7 @@ Fixing rules: change as little as possible, NEVER change the mechanism, keep eve
 
 def _offer_llm(site: dict, audience: str = "", seed: dict | None = None):
     """Run the gpt-5-mini generation for a fetched site. Returns (status, body).
-    Blocking and slow (up to ~2 min) - callers run it either synchronously
-    (offer_generate, for curl/tests) or in a background thread (offer_start).
+    Blocking and slow (up to ~2 min) - offer_generate runs it synchronously.
     audience: optional plain-English description of who the business sells to,
     typed by the visitor. When given, every offer and opener is aimed at it.
     seed: optional {"mechanism","name","opener"} from a "More like this" click -
@@ -17296,82 +16737,6 @@ def offer_email(p: dict, ip: str):
             err = f"{type(e).__name__}: {str(e)[:120]}"
             print(f"OFFER EMAIL attempt {attempt} failed: {err}")
     return 502, {"ok": False, "message": "Couldn't write that email just now. Please try again in a moment."}
-
-
-# ── Async offer jobs ─────────────────────────────────────────────────────────
-# Generation takes 40-130s (gpt-5-mini reasoning), which exceeds the Render
-# proxy's request timeout, so heavy sites 502. offer_start returns a job id in a
-# few seconds (just the site fetch) and runs the LLM in a daemon thread;
-# offer_result is polled by the browser. Every HTTP request stays short.
-# Jobs live in memory only (nothing persisted) with a short TTL sweep.
-_OFFER_JOBS: dict = {}
-_OFFER_JOBS_LOCK = threading.Lock()
-_OFFER_JOB_TTL_S = 900  # a finished result is claimable for 15 min
-
-
-def _offer_job_run(job_id: str, site: dict, audience: str = ""):
-    status, body = 502, {"ok": False, "message":
-                         "The offer generator hit a problem and couldn't finish. Please try again."}
-    try:
-        status, body = _offer_llm(site, audience)
-    except Exception as e:  # noqa: BLE001 — never let a thread die silently
-        print(f"OFFER JOB {job_id} crashed: {type(e).__name__}: {str(e)[:120]}")
-    with _OFFER_JOBS_LOCK:
-        job = _OFFER_JOBS.get(job_id)
-        if job is not None:
-            if body.get("ok"):
-                job.update(status="done", domain=body["domain"], audience=body.get("audience", ""),
-                           site_name=body["site_name"], offers=body["offers"], ts=time.time())
-            else:
-                job.update(status="error", message=body.get("message")
-                           or "Something went wrong. Please try again.", ts=time.time())
-
-
-def offer_start(p: dict, ip: str):
-    """Kick off a generation. Fast: rate-check, fetch the site, spawn the LLM in
-    a thread, return a job id. Returns (status, body)."""
-    refusal = _offer_rate_check(ip, "try")
-    if refusal:
-        return 429, {"ok": False, "message": refusal}
-    try:
-        site = _offer_fetch_site(p.get("url") or "")
-    except ValueError as e:
-        return 400, {"ok": False, "message": str(e)}
-    refusal = _offer_rate_check(ip, "gen")
-    if refusal:
-        return 429, {"ok": False, "message": refusal}
-    if not KEYS.get("OPENAI_API_KEY"):
-        return 502, {"ok": False, "message": "The offer generator isn't configured right now. Please try again later."}
-    import uuid
-    job_id = uuid.uuid4().hex
-    now = time.time()
-    with _OFFER_JOBS_LOCK:
-        # prune expired / bound memory
-        for jid in [j for j, v in _OFFER_JOBS.items() if now - v.get("ts", now) > _OFFER_JOB_TTL_S]:
-            _OFFER_JOBS.pop(jid, None)
-        if len(_OFFER_JOBS) > 500:
-            _OFFER_JOBS.clear()
-        _OFFER_JOBS[job_id] = {"status": "running", "ts": now}
-    threading.Thread(target=_offer_job_run, args=(job_id, site, p.get("audience") or ""), daemon=True).start()
-    return 200, {"ok": True, "job_id": job_id}
-
-
-def offer_result(p: dict):
-    """Poll a job. Always returns 200 with JSON so the browser never has to
-    parse a gateway HTML page. Returns (status, body)."""
-    job_id = str(p.get("job_id") or "")
-    with _OFFER_JOBS_LOCK:
-        job = _OFFER_JOBS.get(job_id)
-        job = dict(job) if job else None
-    if job is None:
-        return 200, {"ok": False, "status": "error",
-                     "message": "That result expired. Please make your offers again."}
-    if job["status"] == "running":
-        return 200, {"ok": True, "status": "running"}
-    if job["status"] == "error":
-        return 200, {"ok": False, "status": "error", "message": job.get("message")}
-    return 200, {"ok": True, "status": "done", "domain": job["domain"],
-                 "audience": job.get("audience", ""), "site_name": job["site_name"], "offers": job["offers"]}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -18020,10 +17385,6 @@ class Handler(SimpleHTTPRequestHandler):
                 off = (q.get("offset") or ["0"])[0]
                 return self._json(_leads_page_for_campaign(cid, int(off) if off.lstrip("-").isdigit() else 0, int(lim)))
             return self._json(api_leads(cid))
-        if path == "/api/leads-batch":
-            from urllib.parse import parse_qs, urlparse
-            q = parse_qs(urlparse(self.path).query)
-            return self._json(api_leads_batch((q.get("campaign_ids") or [""])[0]))
         if path == "/api/signals/daily":
             # Deliverability page's fleet-wide signal-velocity chart (25 Jul 2026).
             out = _SIGNALS_DAILY_SWR.get()
@@ -18140,17 +17501,16 @@ class Handler(SimpleHTTPRequestHandler):
                 (q.get("start") or [None])[0],
                 (q.get("end") or [None])[0],
                 _pcamp)))
-        if path == "/api/collective-30d":
-            # Homepage strip's LAST-30-DAYS top line (sent/reply/positives/meetings/
-            # signals) — one cheap DB round-trip via rpc/collective_30d, SWR-cached.
-            return self._json(_COLLECTIVE_30D_SWR.get())
         if path == "/api/analytics-hub":
             # Analytics hub page: client-splittable daily series + weekday +
             # setter speed + monthly meetings, one round trip (analytics_hub_v1).
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             _ah_seed_from_snapshot()
-            return self._json(_inject_demo_analytics_hub(_ANALYTICS_HUB_SWR.get((q.get("days") or ["30"])[0])))
+            # demo gate both ways: strip demo labels when the toggle is OFF,
+            # splice Acme in when it's ON (each is a no-op in the other state)
+            return self._json(_inject_demo_analytics_hub(_strip_demo_analytics_hub(
+                _ANALYTICS_HUB_SWR.get((q.get("days") or ["30"])[0]))))
         if path == "/api/cockpit/insights":
             # Cockpit render layer: what Claude wrote on the morning crunch
             # (live unexpired campaign_insights) + the graded track record.
@@ -18184,14 +17544,6 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(_COCKPIT_SEQCOPY_SWR.get((q.get("id") or [""])[0]))
-        if path == "/api/cockpit/vpdebug":
-            from urllib.parse import parse_qs, urlparse
-            q = parse_qs(urlparse(self.path).query)
-            try:
-                return self._json(_variant_paths_debug(
-                    int((q.get("id") or ["0"])[0]), (q.get("email") or [""])[0]))
-            except Exception as e:  # noqa: BLE001
-                return self._json({"error": str(e)})
         if path == "/api/cockpit/live-status":
             # LIVE Smartlead status + completion% for the cockpit's visible
             # campaigns (?ids=1,2,3) — fresh /analytics, not the hourly cache.
@@ -18199,12 +17551,13 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self._json(_COCKPIT_LIVE_STATUS_SWR.get((q.get("ids") or [""])[0]))
         if path == "/api/campaign-platform-leads":
-            # One page of a campaign's real platform leads for the detail Leads tab.
+            # One page of a campaign's real platform leads for the detail Leads
+            # tab. 300s keyed SWR — see _PLATFORM_LEADS_SWR.
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            return self._json(campaign_platform_leads({
-                "platform": (q.get("platform") or [""])[0], "id": (q.get("id") or [""])[0],
-                "offset": (q.get("offset") or ["0"])[0], "limit": (q.get("limit") or ["50"])[0]}))
+            key = ",".join(((q.get("platform") or [""])[0], (q.get("id") or [""])[0],
+                            (q.get("offset") or ["0"])[0], (q.get("limit") or ["50"])[0]))
+            return self._json(_PLATFORM_LEADS_SWR.get(key))
         if path == "/api/campaign-readonly":
             # Read-only live snapshot of ONE external campaign (not set up in
             # this tool), so clicking it on the homepage opens a view instead of
@@ -18220,12 +17573,6 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self._json(api_campaign_insights({"platform": (q.get("platform") or [""])[0],
                                                       "id": (q.get("id") or [""])[0]}))
-        if path == "/api/campaign-ideas":
-            # Pure read - generation only ever happens via POST (see
-            # api_campaign_ideas_start). Excludes dismissed ideas.
-            from urllib.parse import parse_qs, urlparse
-            q = parse_qs(urlparse(self.path).query)
-            return self._json(api_campaign_ideas_get({"campaign_id": (q.get("campaign_id") or [""])[0]}))
         if path == "/api/recontact/scan":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -18245,7 +17592,9 @@ class Handler(SimpleHTTPRequestHandler):
                                "on_render": _ON_RENDER,
                                "uptime_seconds": round(time.time() - _BOOT_AT)})
         if path == "/api/settings/ui":
-            return self._json({"ok": True, **_ui_prefs(force=True)})
+            # respect the 30s TTL (hot path); the Settings save POST busts it
+            # via _ui_prefs_set, so a toggle still shows on the next read
+            return self._json({"ok": True, **_ui_prefs()})
         if path == "/api/jobs":
             # Memory first (live progress), then union in durable app_jobs rows
             # that aren't in memory (recent history + jobs from before a restart).
@@ -18267,6 +17616,7 @@ class Handler(SimpleHTTPRequestHandler):
             ids = [s for s in (parse_qs(urlparse(self.path).query).get("ids") or [""])[0]
                    .split(",") if s.strip()][:25]
             out = {}
+            fetched_fresh = False  # any new count → persist the cache (survives deploys)
             budget_t0 = time.time()  # hard handler budget: a Smartlead brown-out
             # must not hold a UI repaint (and a server thread) for minutes —
             # unfinished ids return null; the UI already renders "unknown" and
@@ -18310,7 +17660,10 @@ class Handler(SimpleHTTPRequestHandler):
                         pass
                 if n is not None:
                     _LEAD_COUNT_CACHE[cid] = (n, time.time())
+                    fetched_fresh = True
                 out[cid] = n
+            if fetched_fresh:  # off-thread: the snapshot write must not hold the repaint
+                threading.Thread(target=_lead_counts_persist, daemon=True).start()
             return self._json({"counts": out})
         if path == "/api/verify-status":
             from urllib.parse import parse_qs, urlparse
@@ -18409,9 +17762,6 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
             return self._json(body, status)
-        if path == "/api/mailbox-settings-policy":
-            # The recommended settings themselves — no fleet read, no cache.
-            return self._json({"ok": True, "policy": MAILBOX_SETTINGS_POLICY}, 200)
         if path == "/api/mailbox-settings-audit":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -18437,16 +17787,6 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             status, body = api_list_pull_for_list(q)
-            return self._json(body, status)
-        if path == "/api/list_pulls/campaigns":
-            from urllib.parse import parse_qs, urlparse
-            q = parse_qs(urlparse(self.path).query)
-            status, body = api_list_pull_campaigns(q)
-            return self._json(body, status)
-        if path == "/api/list_pulls/by_campaign":
-            from urllib.parse import parse_qs, urlparse
-            q = parse_qs(urlparse(self.path).query)
-            status, body = api_list_pulls_by_campaign(q)
             return self._json(body, status)
         if path == "/api/list_pulls/push_summary":
             from urllib.parse import parse_qs, urlparse
@@ -18487,10 +17827,6 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(campaign_repliers(q))
-        if path == "/api/campaign-add-runs":
-            from urllib.parse import parse_qs, urlparse
-            q = parse_qs(urlparse(self.path).query)
-            return self._json(campaign_add_runs(q))
         if path == "/api/campaign-leads-csv":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -18591,7 +17927,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json_with_cookie(
                 {"ok": True, "email": email},
                 _session_cookie(_mint_session(email), AUTH_SESSION_DAYS * 86400))
-        if path in ("/api/offer/generate", "/api/offer/start", "/api/offer/result", "/api/offer/email"):
+        if path in ("/api/offer/generate", "/api/offer/email"):
             # Public offer maker — no session, no drafts_lock (slow LLM call must
             # never block the app), no persistence of the visitor's URL. Rate
             # limits are enforced inside the handlers. /generate is the synchronous
@@ -18605,11 +17941,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             ip = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip() \
                 or self.client_address[0]
-            if path == "/api/offer/start":
-                status, body = offer_start(p, ip)
-            elif path == "/api/offer/result":
-                status, body = offer_result(p)
-            elif path == "/api/offer/email":
+            if path == "/api/offer/email":
                 status, body = offer_email(p, ip)
             else:
                 status, body = offer_generate(p, ip)
@@ -18755,34 +18087,6 @@ class Handler(SimpleHTTPRequestHandler):
                                    "message": "Superseded by outlook-reply-caps "
                                               "(provider-scoped, workspace-aware)."}, 200)
 
-            if path == "/api/cron/reply-caps-legacy-disabled":
-                def _reply_caps_bg():
-                    try:
-                        p = _deliv_backend_json_retry("POST", "reply-caps?mode=preview", timeout=150)
-                        n = int((p or {}).get("mailboxesToChange") or 0)
-                        if (isinstance(p, dict) and p.get("error")) or n == 0:
-                            log_activity("/api/cron/reply-caps",
-                                         payload={"changed": 0, "skipped": True,
-                                                  "reason": (p or {}).get("error") or "nothing to change"},
-                                         actor="cron", action="reply-caps", entity="deliverability")
-                            return
-                        # Apply is a LONG mutation (2,000+ box writes ran past
-                        # 170s on 2026-07-25) — one attempt with a wide budget,
-                        # never the retry wrapper: re-firing a timed-out apply
-                        # stacks concurrent sweeps on the backend.
-                        j = _deliv_backend_json("POST", "reply-caps?mode=apply", timeout=600)
-                        log_activity("/api/cron/reply-caps",
-                                     payload={"changed": (j or {}).get("changed"),
-                                              "failed": (j or {}).get("failed"),
-                                              "domains": (p or {}).get("domains"),
-                                              "tierCount": (p or {}).get("tierCount")},
-                                     actor="cron", action="reply-caps", entity="deliverability")
-                        _deliv_bundle_start(force=True)  # badges reflect the new caps now
-                    except Exception as e:  # noqa: BLE001 — a failed run must be visible, not fatal
-                        log_activity("/api/cron/reply-caps", payload={"error": str(e)[:200]},
-                                     actor="cron", action="reply-caps", entity="deliverability")
-                threading.Thread(target=_reply_caps_bg, daemon=True).start()
-                return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/outlook-reply-caps":
                 # The Outlook/Azure half of cap tiering (owner ruling 2026-07-28).
                 # The retirement note at /api/cron/reply-caps has named this path
@@ -18993,32 +18297,6 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(body, status)
         if path == "/api/jobs/dismiss-finished":
             return self._json(dismiss_finished_jobs())
-        if path == "/api/campaign-ideas":
-            # Starts an async job (JOBS/app_jobs pattern) - never generates
-            # synchronously, and never on a GET (see api_campaign_ideas_get).
-            length = int(self.headers.get("Content-Length") or 0)
-            try:
-                payload = json.loads(self._post_body.decode() or "{}")
-            except ValueError:
-                return self._json({"error": "invalid_json"}, 400)
-            body, status = api_campaign_ideas_start(payload)
-            return self._json(body, status)
-        if path == "/api/campaign-ideas/dismiss":
-            length = int(self.headers.get("Content-Length") or 0)
-            try:
-                payload = json.loads(self._post_body.decode() or "{}")
-            except ValueError:
-                return self._json({"error": "invalid_json"}, 400)
-            body, status = api_campaign_ideas_dismiss(payload)
-            return self._json(body, status)
-        if path == "/api/campaign-ideas/add":
-            length = int(self.headers.get("Content-Length") or 0)
-            try:
-                payload = json.loads(self._post_body.decode() or "{}")
-            except ValueError:
-                return self._json({"error": "invalid_json"}, 400)
-            body, status = api_campaign_ideas_add(payload)
-            return self._json(body, status)
         if path == "/api/recontact/buckets":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -19413,9 +18691,9 @@ def _boot_warmup():
             fn()
         except Exception as e:  # noqa: BLE001 - warm-up must never crash the server
             print(f"[warmup] {name} failed: {e}")
-    # Per-campaign leads + the dashboard's batch call: keyed SWR caches, so the
-    # first visitor to any campaign detail (or the list's chart) after a boot
-    # would otherwise pay the one cold multi-second Supabase read per key.
+    # Per-campaign leads: keyed SWR cache, so the first visitor to any campaign
+    # detail after a boot would otherwise pay the one cold multi-second
+    # Supabase read per key.
     try:
         counts = api_lead_counts()
         cids = sorted(c for c in counts if not str(c).startswith("_"))
@@ -19424,13 +18702,6 @@ def _boot_warmup():
                 api_leads(cid)
             except Exception as e:  # noqa: BLE001
                 print(f"[warmup] leads {cid} failed: {e}")
-        # the list view requests leads-batch for the sorted NON-deleted id set —
-        # warm that exact key so the dashboard chart is instant on first paint
-        drafts, _ = _cached_campaign_drafts()
-        live = sorted(str(d.get("id")) for d in (drafts or [])
-                      if d.get("id") and not d.get("deleted_at"))
-        if live:
-            api_leads_batch(",".join(live))
     except Exception as e:  # noqa: BLE001
         print(f"[warmup] leads sweep failed: {e}")
     # Deliverability page caches: restore the persisted audit/bundle blobs
@@ -19441,6 +18712,11 @@ def _boot_warmup():
     for name, fn in (
         ("deliv-audit-restore", _deliv_audit_restore),
         ("deliv-bundle-restore", _deliv_bundle_restore),
+        # lead-counts + cockpit live-status: restore/seed the persisted
+        # snapshots so post-deploy loads skip the Smartlead sweeps (cache
+        # layer step 3, 2026-08-02).
+        ("lead-counts-restore", _lead_counts_restore),
+        ("cockpit-live-seed", _cockpit_live_seed_from_snapshot),
         ("deliv-trends", lambda: deliv_trends_get(30)),
         # Analytics page (deliverability.html): warm every payload it boots on
         # so even the FIRST post-deploy viewer paints all sections <2s. The hub
