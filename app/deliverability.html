@@ -1792,6 +1792,11 @@ function renderRank() {
   setStamp("rank-stamp", win && win.length ? (CW && CW.asof) : (SCORE && SCORE.asof), 6);
   if (win && win.length) {
     var rows = win.filter(function (r) {
+      // Demo rows never rank in the whole-book leaderboard: the __all totals
+      // exclude them, so letting them place under "All" was a lie. There is
+      // no client-side demo registry — "Acme" is the literal demo label
+      // (clientOfName's demo mapping). Under the Acme chip they still show.
+      if (state.client === "All" && r.client === "Acme") return false;
       return r.sent >= minSent && (state.client === "All" || r.client === state.client);
     }).map(function (r) {
       var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
@@ -2547,7 +2552,10 @@ function boot() {
   j("/api/campaigns-unified").then(function (d) { UNI = d; scheduleRender(); }, function () {});
   jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
   j("/api/sources?slim=1").then(function (d) { SRC = d; scheduleRender(); }, function () {});
-  j("/api/deliverability/_audit").then(function (d) { AUDIT = d; scheduleRender(); }, function () {});
+  // jShared: deliverability-tab.js's initial audit GET reuses this boot
+  // promise instead of issuing a second identical /_audit request per page
+  // view (its refresh/poll paths keep their own fetches).
+  jShared("/api/deliverability/_audit").then(function (d) { AUDIT = d; scheduleRender(); }, function () {});
   j("/api/collisions").then(function (d) { COLL = d && !d.error ? d : null; scheduleRender(); }, function () {});
   j("/api/client-windows").then(function (d) {
     if (d && !d.building && d.windows) { CW = d; scheduleRender(); }

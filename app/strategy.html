@@ -252,6 +252,9 @@ async function fetchRun(){
     lastFP=fp;
   }catch(e){/* keep last good board */}
 }
-fetchRun();setInterval(fetchRun,5000);
+fetchRun();
+// hidden tabs skip the 5s poll — the visibilitychange re-fetch below catches
+// the board up the moment the tab is shown again
+setInterval(()=>{ if (document.hidden) return; fetchRun(); },5000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)fetchRun();});
 </script></body></html>

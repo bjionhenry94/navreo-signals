@@ -185,6 +185,21 @@ function pickPrimary(rows){
   })[0];
 }
 
+/* Display-only merge-tag cleanup (house rule: never show raw tags).
+   "{{first_name}}" -> "First name", and leftover BARE snake_case artifacts
+   ("Hi first_name, ...") collapse the same way. Used ONLY when painting
+   variant names/labels/copy on this page - never on any payload sent
+   anywhere (the only outbound call here is markDone's status PATCH). */
+function humanField(f){
+  const t=String(f||"").replace(/[{}]/g,"").trim().replace(/_+/g," ").trim();
+  return t ? t.charAt(0).toUpperCase()+t.slice(1).toLowerCase() : "";
+}
+function humanTags(s){
+  return String(s==null?"":s)
+    .replace(/\{\{\s*([^{}]+?)\s*\}\}/g,(m,f)=>humanField(f))
+    .replace(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g,(m,f)=>humanField(f));
+}
+
 function cleanWhy(detail){
   // drop the header line + "Priority:" line, keep the bullet sentences as plain prose
   const lines=(detail||"").split(/\n+/).map(s=>s.trim()).filter(Boolean)
@@ -200,7 +215,7 @@ function barsFrom(variants){
      .filter(v=>v.sent>0).sort((a,b)=>b.rate-a.rate).slice(0,3);
   if(!vs.length) return "";
   const max=vs[0].rate||1;
-  const shortLabel=(a,i)=>{ const s=(a||"").split("/")[0].trim(); return s? s.slice(0,26) : ("Version "+String.fromCharCode(65+i)); };
+  const shortLabel=(a,i)=>{ const s=humanTags((a||"").split("/")[0].trim()); return s? s.slice(0,26) : ("Version "+String.fromCharCode(65+i)); };
   const rows=vs.map((v,i)=>`<div class="vbar"><span class="vb-l">${v.win?("<b>"+esc(shortLabel(v.label,i))+"</b>"):esc(shortLabel(v.label,i))}</span>`
      +`<div class="vb-t"><div class="vb-f${v.win?" win":""}" style="width:${Math.max(8,Math.round(v.rate/max*100))}%"></div></div>`
      +`<span class="vb-v">${esc(ratio(v.sent,v.rep))}</span></div>`).join("");
@@ -211,7 +226,7 @@ function messagingTable(variants){
   if(!(variants&&variants.length)) return `<p class="card-sub" style="margin-top:14px">No per-version breakdown yet for this campaign.</p>`;
   const rows=variants.map(v=>{
     const win=(v.flags||[]).includes("winner");
-    const label=(v.angle||"").split("/")[0].trim().slice(0,30) || ("Email "+(v.email||""));
+    const label=humanTags((v.angle||"").split("/")[0].trim()).slice(0,30) || ("Email "+(v.email||""));
     return `<tr class="${win?"win":""}"><td>Email ${esc(v.email)}</td>`
       +`<td>${win?("<b>"+esc(label)+"</b> · winner"):esc(label)}</td>`
       +`<td class="tnum">${fmt(v.sent)}</td><td class="tnum">${fmt(v.replies)}</td>`
@@ -227,7 +242,7 @@ function sequenceView(variants){
   if(!e1.length) return "";
   const pills=e1.map((v,i)=>`<button class="vpill${i===0?" on":""}${(v.flags||[]).includes("winner")?" win":""}" onclick="showVariant('V${i}',this)">${String.fromCharCode(65+i)}</button>`).join("");
   const copies=e1.map((v,i)=>{
-    const parts=(v.angle||"").split("/"); const subj=(parts.shift()||"").trim(); const body=parts.join("/").trim();
+    const parts=(v.angle||"").split("/"); const subj=humanTags((parts.shift()||"").trim()); const body=humanTags(parts.join("/").trim());
     return `<div class="v-copy${i? " hidden":""}" data-v="V${i}"><div class="seq-subj"><b>Subject:</b> ${esc(subj)||"—"}</div>`
       +`<div class="seq-body">${esc(body)||"(full body lives in Smartlead)"}</div></div>`;
   }).join("");
@@ -238,16 +253,21 @@ function sequenceView(variants){
 }
 
 function leadsTable(leads, sent){
+  // three states: "loading" (fetch still in flight - the card never waits on
+  // it), null (fetch failed or hit the 8s timeout), or an array of leads.
+  const shell=(body)=>`<div class="card"><div class="card-title">Who's in this campaign</div>`
+    +`<div class="card-sub">The live audience, straight from Smartlead. Showing the first few of ${fmt(sent)}.</div>`
+    +`<table class="tbl" style="margin-top:16px"><thead><tr><th>Name</th><th>Role &amp; company</th><th>Status</th></tr></thead>`
+    +`<tbody>${body}</tbody></table></div>`;
+  if(leads==="loading") return shell('<tr><td colspan="3" class="lead-sub">Loading the live audience from Smartlead…</td></tr>');
+  if(leads===null) return shell('<tr><td colspan="3" class="lead-sub">Couldn\'t load the live audience right now — it lives in Smartlead.</td></tr>');
   const rows=(leads||[]).slice(0,6).map(L=>{
     const name=((L.first_name||"")+" "+(L.last_name||"")).trim()|| (L.name||"—");
     const co=L.company_name||L.company||""; const title=L.title||L.job_title||"";
-    const st=(L.status||"Emailed"); 
+    const st=(L.status||"Emailed");
     return `<tr><td class="lead-name">${esc(name)}</td><td class="lead-sub">${esc((title?title+" · ":"")+co)}</td><td><span class="st sent">${esc(String(st).replace(/_/g," "))}</span></td></tr>`;
   }).join("");
-  return `<div class="card"><div class="card-title">Who's in this campaign</div>`
-    +`<div class="card-sub">The live audience, straight from Smartlead. Showing the first few of ${fmt(sent)}.</div>`
-    +`<table class="tbl" style="margin-top:16px"><thead><tr><th>Name</th><th>Role &amp; company</th><th>Status</th></tr></thead>`
-    +`<tbody>${rows||'<tr><td colspan="3" class="lead-sub">Live audience loads from Smartlead.</td></tr>'}</tbody></table></div>`;
+  return shell(rows||'<tr><td colspan="3" class="lead-sub">Live audience loads from Smartlead.</td></tr>');
 }
 
 function render(r, leads){
@@ -332,8 +352,31 @@ async function markDone(nid){
   }catch(e){ btn.disabled=false; toast("Couldn't mark done — try again"); }
 }
 
+/* Platform-leads fetch, decoupled from first paint (panel round-1: the cold
+   fetch measured 12s and a hang pinned the loader forever). Resolves to an
+   array of leads, or null on any failure / on the ~8s abort - the card is
+   already on screen either way, only the leads grid hydrates late. */
+function fetchLeadsFor(campaignId){
+  const ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(()=>{ try{ ctrl.abort(); }catch(e){} }, 8000) : null;
+  return fetch(`/api/campaign-platform-leads?platform=smartlead&id=${encodeURIComponent(campaignId)}&offset=0&limit=6`,
+      {cache:"no-store", signal: ctrl?ctrl.signal:undefined})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>{ if(d==null) return null; return Array.isArray(d)?d:(d.leads||d.data||[]); })
+    .catch(()=>null)
+    .finally(()=>{ if(timer) clearTimeout(timer); });
+}
+function hydrateLeads(row, leads){
+  const panel=document.querySelector('.tab-panel[data-tab="leads"]');
+  if(!panel) return; // page has since re-rendered into an error/empty state
+  panel.innerHTML = leadsTable(leads, row.sent||0);
+}
+
 async function boot(){
   if(!CID && !NID){ $("app").innerHTML=emptyState("Open this page with ?c=<campaign id> (or ?nid=<optimisation id>)."); return; }
+  // ?c= in the URL -> the leads fetch starts NOW, in parallel with the
+  // notifications fetch. First paint never blocks on it.
+  let leadsP = CID ? fetchLeadsFor(CID) : null;
   try{
     const url = NID ? `/api/notifications?id=${encodeURIComponent(NID)}` : `/api/notifications?campaign_id=${encodeURIComponent(CID)}`;
     let data = await fetch(url,{cache:"no-store"}).then(r=>r.json());
@@ -341,10 +384,13 @@ async function boot(){
     rows = rows.filter(r=>(r.status||"new")==="new" || NID);
     if(!rows.length){ $("app").innerHTML=emptyState(); return; }
     const row=pickPrimary(rows);
-    let leads=[];
-    try{ leads = await fetch(`/api/campaign-platform-leads?platform=smartlead&id=${encodeURIComponent(row.campaign_id)}&offset=0&limit=6`,{cache:"no-store"}).then(r=>r.ok?r.json():[]); }catch(e){}
-    leads = Array.isArray(leads)?leads:(leads.leads||leads.data||[]);
-    $("app").innerHTML = render(row, leads);
+    // nid-only open (or a primary row from a different campaign than ?c=):
+    // fire the leads fetch for the row we actually picked.
+    if(!leadsP || (CID && String(row.campaign_id)!==String(CID))) leadsP = fetchLeadsFor(row.campaign_id);
+    // Render the card as soon as notifications lands - the leads grid shows a
+    // loading placeholder and hydrates when (if) the parallel fetch resolves.
+    $("app").innerHTML = render(row, "loading");
+    leadsP.then(leads=>hydrateLeads(row, leads));
   }catch(e){ $("app").innerHTML=emptyState("Couldn't load this optimisation ("+esc(e.message||e)+")."); }
 }
 boot();

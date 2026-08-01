@@ -354,7 +354,7 @@ async function pollRetrainOnce() {
   restoreViewAfterRefresh(prevCaseId);
 }
 
-/* ── Fetch helper (same shape as setter.html / setter-grade.html) ────────── */
+/* ── Fetch helper (same shape as setter.html) ────────────────────────────── */
 async function fetchJson(url, opts) {
   try {
     const res = await fetch(url, opts);

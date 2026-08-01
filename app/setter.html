@@ -909,10 +909,36 @@ let currentAgentEnabled = true;
 let selectedCampaignIds = new Set();
 
 /* ── Send gate (2026-07-17) state ─────────────────────────────────────── */
-// campaignId (string) -> {subsequences:[{id,name}]} once fetched, or the
-// string "failed" (endpoint error - fail open, gate never shows for that
-// campaign this session). undefined = not fetched yet.
+// campaignId (string) -> the IN-FLIGHT fetch PROMISE while the lookup is
+// running, then {subsequences:[{id,name}]} once it lands. undefined = not
+// fetched yet. Memoizing the promise (not just the result) closes the
+// renderDetail + row-hydration re-render race that fired the same GET twice
+// per cold row selection (a cold pair could double-502, panel round-1). A
+// failed lookup still fails OPEN for the row that asked (gate torn down,
+// Approve unlocks) but EVICTS the cache entry so a later selection retries —
+// same evict-on-rejection pattern as deliverability.html's jShared.
 const SUBSEQ_CACHE = {};
+function subseqPending(v) { return !!(v && typeof v.then === "function"); }
+// One in-flight promise per campaign. Resolves to {subsequences:[...]} (also
+// settled into the cache as the plain value) or to "failed" (cache evicted).
+function fetchSubsequences(cid) {
+  if (SUBSEQ_CACHE[cid] === undefined) {
+    SUBSEQ_CACHE[cid] = fetchJson(`/api/setter/subsequences?campaign_id=${encodeURIComponent(cid)}`)
+      .then((res) => {
+        if (res.ok && res.data && Array.isArray(res.data.subsequences)) {
+          const val = { subsequences: res.data.subsequences };
+          SUBSEQ_CACHE[cid] = val; // settle to the plain value for the sync readers
+          return val;
+        }
+        delete SUBSEQ_CACHE[cid]; // evict so a later selection retries
+        return "failed";
+      }, () => {
+        delete SUBSEQ_CACHE[cid]; // rejection — evict so a later selection retries
+        return "failed";
+      });
+  }
+  return SUBSEQ_CACHE[cid];
+}
 // rowId (string) -> {choice:"push", subSequenceId, name} | {choice:"none"}
 const GATE_SELECTION = {};
 let unresolvedRows = [];
@@ -2229,6 +2255,11 @@ function ageBadgeHtml(row) {
    dropdown's options come LIVE from Smartlead via /api/setter/categories -
    never a hardcoded list. */
 let UNCAT_ONLY = (location.hash || "").replace("#", "") === "uncategorised";
+// Holds the IN-FLIGHT fetch PROMISE (not just the result): renderDetail and
+// the row-hydration re-render race the empty cache on a cold row selection
+// and used to fire the same GET twice (a cold pair could double-502, panel
+// round-1). On failure the cache is EVICTED so a later call retries — same
+// evict-on-rejection pattern as deliverability.html's jShared.
 let CATEGORIES_CACHE = null;
 
 function isUncategorised(row) {
@@ -2236,13 +2267,19 @@ function isUncategorised(row) {
   return !s || s === "Uncategorizable by Ai";
 }
 
-async function fetchCategories() {
+function fetchCategories() {
   if (CATEGORIES_CACHE) return CATEGORIES_CACHE;
-  const res = await fetchJson("/api/setter/categories");
-  if (res.ok && Array.isArray(res.data.categories) && res.data.categories.length) {
-    CATEGORIES_CACHE = res.data.categories;
-  }
-  return CATEGORIES_CACHE || [];
+  CATEGORIES_CACHE = fetchJson("/api/setter/categories").then((res) => {
+    if (res.ok && Array.isArray(res.data.categories) && res.data.categories.length) {
+      return res.data.categories;
+    }
+    CATEGORIES_CACHE = null; // bad/empty payload — evict so the next call retries
+    return [];
+  }, () => {
+    CATEGORIES_CACHE = null; // rejection — evict so the next call retries
+    return [];
+  });
+  return CATEGORIES_CACHE;
 }
 
 async function hydrateUncatBanner() {
@@ -2726,9 +2763,12 @@ function renderDetail(row) {
   // Cache miss painted an empty placeholder - loadSendGate fills + wires it.
   if (needsComposerActions(row) && row.smartlead_campaign_id) {
     const cid = row.smartlead_campaign_id;
-    if (SUBSEQ_CACHE[cid] && SUBSEQ_CACHE[cid] !== "failed") {
+    const cached = SUBSEQ_CACHE[cid];
+    if (cached && cached !== "failed" && !subseqPending(cached)) {
       wireSendGateEvents(document.getElementById(`gate-${row.id}`), row);
-    } else if (SUBSEQ_CACHE[cid] === undefined) {
+    } else if (cached === undefined || subseqPending(cached)) {
+      // not fetched yet OR already in flight from the racing render — either
+      // way loadSendGate awaits the ONE shared promise (no second GET).
       loadSendGate(row);
     }
   }
@@ -3541,7 +3581,9 @@ function sendGateHtml(row) {
   const cid = row.smartlead_campaign_id;
   if (!cid) return "";
   const cached = SUBSEQ_CACHE[cid];
-  if (cached === undefined) return `<div class="send-gate" id="gate-${esc(row.id)}"></div>`;
+  // not fetched yet OR fetch still in flight -> placeholder; loadSendGate
+  // fills it once the ONE shared promise lands.
+  if (cached === undefined || subseqPending(cached)) return `<div class="send-gate" id="gate-${esc(row.id)}"></div>`;
   if (cached === "failed") return "";
   return sendGateChipsHtml(row, cached.subsequences || []);
 }
@@ -3609,15 +3651,13 @@ async function loadSendGate(row) {
   if (!needsComposerActions(row)) return;
   const cid = row.smartlead_campaign_id;
   if (!cid) { updateApproveButton(row.id); return; }
-  if (SUBSEQ_CACHE[cid] === undefined) {
-    const res = await fetchJson(`/api/setter/subsequences?campaign_id=${encodeURIComponent(cid)}`);
-    SUBSEQ_CACHE[cid] = (res.ok && res.data && Array.isArray(res.data.subsequences))
-      ? { subsequences: res.data.subsequences } : "failed";
-  }
+  // fetchSubsequences memoizes the in-flight promise per campaign — a racing
+  // second caller awaits the SAME request instead of firing another GET.
+  // (await also handles the already-settled plain-value cache hit.)
+  const cached = await fetchSubsequences(cid);
   if (String(selectedRowId) !== String(row.id)) return;  // moved on already
   const el = document.getElementById(`gate-${row.id}`);
   if (!el) return;
-  const cached = SUBSEQ_CACHE[cid];
   if (cached === "failed") {
     el.remove();
   } else {

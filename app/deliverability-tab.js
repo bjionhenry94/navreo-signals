@@ -903,11 +903,19 @@
     if (!opts.polling) paintPage();
   }
 
+  // ONLY the very first loadAudit call may consume the host page's boot fetch
+  // (shared-fetch registry in deliverability.html, same consume-shared pattern
+  // as loadTrends) — /_audit used to be requested twice per page view (host
+  // boot + engine mount). Every later call (stale re-check, refresh paths) and
+  // the poll keep their own fetches.
+  let auditSharedConsumed = false;
   async function loadAudit() {
     if (DATA.audit.loading || DATA.audit.polling) return;
     DATA.audit.loading = true;
+    const shared = !auditSharedConsumed && window.__ahFetch && window.__ahFetch["/api/deliverability/_audit"];
+    auditSharedConsumed = true;
     try {
-      const r = await apiGet("_audit", { timeout: 20000 });
+      const r = shared ? await shared : await apiGet("_audit", { timeout: 20000 });
       handleAuditResult(r, {});
     } catch (e) {
       enterAuditFailSample((e && e.message) || "network error");

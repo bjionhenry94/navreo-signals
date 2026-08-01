@@ -17,6 +17,7 @@ Run:  python3 app/server.py [port]     (default 7901)
 """
 
 import contextlib
+import copy
 import threading
 import json
 import os
@@ -700,7 +701,13 @@ def sb_get_all(path: str, page_size: int = 1000):
     page_size (works without needing to read the Content-Range response
     header, which http_json/sb don't currently surface). Returns None if any
     page fails outright - a Supabase outage must be visible to callers as a
-    failure, not silently truncated into a partial-looking success."""
+    failure, not silently truncated into a partial-looking success.
+
+    CALLER CONTRACT: offset pagination is only deterministic with an ORDER BY —
+    without one Postgres may shuffle rows across pages (dup/skip) under
+    concurrent writes. Any query that can exceed one page should carry
+    `&order=<pk>`. No default is injected here because not every table has an
+    `id` column (campaign_scorecard keys on smartlead_campaign_id)."""
     out: list = []
     offset = 0
     while True:
@@ -1820,7 +1827,7 @@ def strategy_map_start(p: dict) -> dict:
     import hashlib
     import threading
     import uuid
-    if p.get("sync"):  # harnesses (scenario_test etc.) that want the old shape
+    if p.get("sync"):  # sync callers (CLI/scripted) that want the old blocking shape
         return strategy_map(p)
     # cache fast-path: identical brief already computed -> answer immediately
     cache_key = hashlib.md5(json.dumps({k: v for k, v in p.items() if k != "force"}, sort_keys=True).encode()).hexdigest()[:16]
@@ -1872,15 +1879,34 @@ _STRATEGY_ENGINE_FIELDS = ("vector", "probe", "netting", "pull_spec")
 
 # 20s memo (cache layer step 3, 2026-08-02): every open strategy tab polls
 # GET /api/strategy/run every ~5s and each poll paid two Supabase reads.
-# Plain dict, no SWR needed — strategy_run_post/strategy_focus_post zero the
-# ts so a new run (or a chat focus move) shows on the very next poll.
-_STRATEGY_RUN_MEMO = {"ts": 0.0, "payload": None}
+# Plain dict, no SWR needed — strategy_run_post/strategy_focus_post bust it
+# so a new run (or a chat focus move) shows on the very next poll.
+# Thread-safety hardening (tester panel round 1, 2026-08-02): the memo is
+# swapped as ONE dict object under a module lock (never two separate item
+# writes a reader could interleave), and a generation counter fences the
+# bust: a compute already in flight when a bust ran snapshots the OLDER
+# generation and refuses to store — so a bust can never be undone by a
+# straggler re-storing the old run with a fresh ts.
+_STRATEGY_RUN_MEMO_LOCK = threading.Lock()
+_STRATEGY_RUN_MEMO = {"ts": 0.0, "payload": None}  # swapped whole, under the lock
+_STRATEGY_RUN_GEN = 0
+
+
+def _strategy_run_memo_bust() -> None:
+    """Drop the memo AND advance the generation (see fence note above)."""
+    global _STRATEGY_RUN_MEMO, _STRATEGY_RUN_GEN
+    with _STRATEGY_RUN_MEMO_LOCK:
+        _STRATEGY_RUN_GEN += 1
+        _STRATEGY_RUN_MEMO = {"ts": 0.0, "payload": None}
 
 
 def strategy_run_get() -> dict:
-    if _STRATEGY_RUN_MEMO["payload"] is not None and \
-            (time.time() - _STRATEGY_RUN_MEMO["ts"]) < 20:
-        return _STRATEGY_RUN_MEMO["payload"]
+    global _STRATEGY_RUN_MEMO
+    with _STRATEGY_RUN_MEMO_LOCK:
+        memo = _STRATEGY_RUN_MEMO
+        gen = _STRATEGY_RUN_GEN
+    if memo["payload"] is not None and (time.time() - memo["ts"]) < 20:
+        return memo["payload"]
     rows = sb("GET", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_run"
                      "&status=eq.live&select=payload,generated_at"
                      "&order=generated_at.desc&limit=1") or []
@@ -1901,7 +1927,13 @@ def strategy_run_get() -> dict:
         focus = dict(frow[0]["payload"])
         focus["ts"] = frow[0].get("generated_at")
     out = {"run": run, "updated": rows[0].get("generated_at"), "focus": focus}
-    _STRATEGY_RUN_MEMO.update(ts=time.time(), payload=out)
+    # store only if no bust ran while we were computing (generation fence);
+    # ts+payload land as ONE object swap so readers never see a torn memo.
+    # (An empty run — the `not rows` return above — is deliberately never
+    # memoized, same as before.)
+    with _STRATEGY_RUN_MEMO_LOCK:
+        if _STRATEGY_RUN_GEN == gen:
+            _STRATEGY_RUN_MEMO = {"ts": time.time(), "payload": out}
     return out
 
 
@@ -1929,7 +1961,7 @@ def strategy_focus_post(p: dict) -> dict:
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
     # the run payload carries focus too — bust the 20s memo so the open board
     # follows the chat's focus move on its very next poll
-    _STRATEGY_RUN_MEMO.update(ts=0.0, payload=None)
+    _strategy_run_memo_bust()
     return {"ok": True, "ts": row["generated_at"]}
 
 
@@ -1955,7 +1987,7 @@ def strategy_run_post(p: dict) -> dict:
     if not row or not row.get("generated_at"):
         msg = ins.get("message") if isinstance(ins, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
-    _STRATEGY_RUN_MEMO.update(ts=0.0, payload=None)  # a new run shows on the next poll
+    _strategy_run_memo_bust()  # a new run shows on the next poll
     return {"ok": True, "updated": row["generated_at"]}
 
 
@@ -2034,6 +2066,10 @@ class _SWRCache:
         self.is_degraded = is_degraded
         self.name = name
         self.lock = threading.Lock()
+        # cold-path compute lock (tester panel round 1, 2026-08-02): dedups
+        # concurrent first-ever computes — see get(). Separate from self.lock,
+        # which is only ever held for cheap field reads/writes.
+        self.compute_lock = threading.Lock()
         self.ts = 0.0
         self.payload = None
         self.refreshing = False
@@ -2069,13 +2105,26 @@ class _SWRCache:
                 threading.Thread(target=self._refresh_bg, daemon=True).start()
             return payload
         # no payload cached at all -> synchronous read-through (first call, or
-        # right after _clear_ui_caches() cleared this entry)
-        payload = self.compute()
-        if not self.is_degraded(payload):
+        # right after _clear_ui_caches() cleared this entry). In-flight dedup
+        # (tester panel round 1, 2026-08-02): N concurrent cold callers used
+        # to EACH run the full compute synchronously — a thundering herd on a
+        # 0.5-CPU box. Double-checked locking: the first cold caller computes
+        # under compute_lock; the rest block on it, re-check payload, and
+        # serve what the winner stored, so exactly one compute runs. A
+        # degraded result is still returned once and never stored (the next
+        # caller finds payload None and retries for real, same as before);
+        # warm/stale semantics above are untouched.
+        with self.compute_lock:
             with self.lock:
-                self.ts = time.time()
-                self.payload = payload
-        return payload
+                payload = self.payload
+            if payload is not None:
+                return payload
+            payload = self.compute()
+            if not self.is_degraded(payload):
+                with self.lock:
+                    self.ts = time.time()
+                    self.payload = payload
+            return payload
 
     def clear(self):
         with self.lock:
@@ -2644,8 +2693,10 @@ def _clear_ui_caches():
 NOTIFICATION_STATUSES = ("new", "acknowledged", "actioned", "dismissed", "approved")
 # "approved" (tier1-live-ship Step 5 gap closure, 2026-07-14): the DB's status
 # CHECK constraint was widened to add it (see app/optimiser_notifications.sql's
-# v3 note above the constraint for the widen pattern) so the notifications.html
+# v3 note above the constraint for the widen pattern) so an optimisations UI
 # Approve button on a replace_variants row's drafted-fix card can PATCH a real,
+# (the standalone notifications page that used this was removed 2026-08-02;
+# the flow stays for the API/skill callers pending the orphan-endpoint audit)
 # durable status instead of the old "reuse acknowledged" workaround.
 _NOTIFICATION_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}  # unranked/None sorts last
 
@@ -2667,7 +2718,7 @@ NOTIFICATIONS_CLIENT_ALIASES = {
 # fix" on a replace_variants row) rather than a several-KB text column, so
 # there's no payload-weight reason to slim it out. Including it lets the
 # initial list render a drafted replacement immediately on page load without
-# a second per-row fetch — see notifications.html's replacementFixHTML.
+# a second per-row fetch (was notifications.html's replacementFixHTML; page removed 2026-08-02).
 NOTIFICATIONS_SLIM_SELECT = (
     "id,campaign_id,campaign_name,client,client_id,finding_type,section,"
     "block_number,priority,title,detail,suggested_action,action_type,"
@@ -2793,7 +2844,7 @@ def update_notification_status(nid: str, status: str) -> dict:
 
 # ── draft-fix (tier1-live-ship Step 5 gap closure, 2026-07-14) ──────────────
 # On-demand LLM draft of the FULL replacement email for a replace_variants
-# row's flagged variant. The click on notifications.html's "Draft the fix"
+# row's flagged variant. The click on the optimisations UI's "Draft the fix"
 # button IS the credit-control gate — this machinery must never be called
 # from api_notifications()/_compute_notifications_list() or any other list/
 # compute path, only from the POST route below.
@@ -2838,7 +2889,7 @@ def _parsed_variants_list(row: dict) -> list | None:
 
 
 def _flagged_variant_for_row(row: dict, variants: list) -> dict | None:
-    """Mirrors notifications.html's flaggedVariantFor(n) exactly (same
+    """Mirrors the retired notifications page's flaggedVariantFor(n) exactly (same
     failing/off flag logic, same title-match-else-worst-first fallback) so
     the server never drafts a fix for a different variant than the one the
     Why-expander names on screen."""
@@ -3214,20 +3265,62 @@ def _redistribute_variant_shares(others: list, target_pct: int) -> dict:
     return floors
 
 
-def _build_disable_variant_payload(sequences: list, target_seq_id, target_variant_id, new_pcts: dict) -> list:
-    """Remap a fresh GET /campaigns/{id}/sequences response (list of steps,
-    each with `sequence_variants`) into the POST /campaigns/{id}/sequences
-    body shape - carrying every id through untouched and changing ONLY the
-    distribution percentages named in new_pcts (target -> 0, everyone else
-    per _redistribute_variant_shares). Every step is included (not just the
-    target one) so no other step is dropped/recreated by the save. Field-name
-    remap per 2026-07-09 draft experiments (GET names != POST names):
+class SequenceActionRefused(Exception):
+    """A mutate_fn (or the pre-flight fetch) refused the action with a clean
+    HTTP answer — carries (status, body) so callers return it verbatim.
+    NOTHING has been written to Smartlead when this is raised."""
+    def __init__(self, status: int, body: dict):
+        super().__init__(body.get("message") or "refused")
+        self.status = status
+        self.body = body
+
+
+class SequenceIdGuardError(Exception):
+    """The mutate_fn's output would DROP a pre-existing step/variant id.
+    Raised BEFORE the POST — Smartlead is untouched. This is the loud-fail
+    the 2026-07-09 draft experiments demanded: an id-less save recreates
+    variants and purges their stats."""
+
+
+class SequenceSaveDriftError(Exception):
+    """The post-save re-fetch shows a pre-existing id missing (or the
+    action-specific verify failed). The POST already happened — callers must
+    surface 'check Smartlead', never retry silently."""
+
+
+def _sequence_steps_from(resp) -> list:
+    """Normalise a GET /campaigns/{id}/sequences response to the step list."""
+    if isinstance(resp, list):
+        return resp
+    if isinstance(resp, dict):
+        inner = resp.get("data") or resp.get("sequences") or []
+        return inner if isinstance(inner, list) else []
+    return []
+
+
+def _sequence_id_set(steps: list) -> dict:
+    """{'seqs': [...], 'variants': [...]} — every id present, as sorted strings."""
+    return {"seqs": sorted(str(s.get("id")) for s in steps if s.get("id") is not None),
+            "variants": sorted(str(v.get("id")) for s in steps
+                               for v in (s.get("sequence_variants") or [])
+                               if v.get("id") is not None)}
+
+
+def _sequence_post_payload(steps: list) -> list:
+    """Remap GET-shape steps (each with `sequence_variants`) into the POST
+    /campaigns/{id}/sequences body shape — every id echoed, every step and
+    variant included so nothing is dropped/recreated by the save. Field-name
+    remap per the 2026-07-09 draft experiments (GET names != POST names):
     sequence_variants -> seq_variants, delayInDays -> delay_in_days (inside
-    seq_delay_details). Never touches subject/email_body anywhere."""
+    seq_delay_details). A variant WITHOUT an id is allowed through — that is
+    how a new challenger variant is appended — but existing ids always ride."""
     out = []
-    for s in sequences:
+    for s in steps:
         step = {"id": s.get("id"), "seq_number": s.get("seq_number")}
-        delay = (s.get("seq_delay_details") or {}).get("delayInDays")
+        delay_details = s.get("seq_delay_details") or {}
+        delay = delay_details.get("delayInDays")
+        if delay is None:
+            delay = delay_details.get("delay_in_days")
         if delay is not None:
             step["seq_delay_details"] = {"delay_in_days": delay}
         if s.get("subject") is not None:
@@ -3238,20 +3331,598 @@ def _build_disable_variant_payload(sequences: list, target_seq_id, target_varian
         if variants:
             seq_variants = []
             for v in variants:
-                vid = v.get("id")
-                variant = {"id": vid, "variant_label": v.get("variant_label")}
+                variant = {"variant_label": v.get("variant_label")}
+                if v.get("id") is not None:
+                    variant["id"] = v.get("id")
                 if v.get("subject") is not None:
                     variant["subject"] = v.get("subject")
                 if v.get("email_body") is not None:
                     variant["email_body"] = v.get("email_body")
-                if s.get("id") == target_seq_id and vid in new_pcts:
-                    variant["variant_distribution_percentage"] = new_pcts[vid]
-                elif v.get("variant_distribution_percentage") is not None:
+                if v.get("variant_distribution_percentage") is not None:
                     variant["variant_distribution_percentage"] = v.get("variant_distribution_percentage")
                 seq_variants.append(variant)
             step["seq_variants"] = seq_variants
         out.append(step)
     return out
+
+
+def save_sequence_ids_intact(campaign_id: int, mutate_fn, api_key: str | None = None,
+                             http=None, verify_fn=None) -> dict:
+    """THE one door to Smartlead's sequences-save endpoint. Every sequence
+    write in this platform routes through here — no other code path may POST
+    /campaigns/{id}/sequences (grep-enforced by the variant-action-wire loop).
+
+    Contract (the proven id-intact recipe, memory smartlead-variant-edit-recipe):
+      1. FRESH GET of the campaign's sequences — never a stale snapshot.
+      2. mutate_fn(steps) edits a deep copy in place (or returns a new list).
+         It is the ONLY thing a caller supplies; it never sees the transport.
+         It may raise SequenceActionRefused(status, body) to abort cleanly.
+      3. ID GUARD (pre-POST): every step id and variant id present in the
+         fresh GET must still be present after the mutate. A dropped id
+         raises SequenceIdGuardError and NOTHING is sent. Appending a new
+         id-less variant is allowed.
+      4. POST the FULL sequence back — every step, every variant, ids echoed,
+         delayInDays -> delay_in_days (in _sequence_post_payload).
+      5. POST-VERIFY: re-GET; every pre-existing id must still be there (new
+         ids may have appeared). verify_fn(steps_after), when given, must
+         return truthy for the action-specific outcome (e.g. target at 0%).
+         Failure raises SequenceSaveDriftError — the caller says "check
+         Smartlead", never silent-retries.
+
+    `http` is injectable for the unit tests (defaults to http_json)."""
+    call = http or http_json
+    key = api_key or ws_key_for_campaign(campaign_id)
+    seq_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={key}"
+
+    steps_before = _sequence_steps_from(call("GET", seq_url, {}))
+    if not steps_before:
+        raise SequenceActionRefused(404, {
+            "ok": False, "message": "could not load campaign sequences from Smartlead"})
+    before_ids = _sequence_id_set(steps_before)
+
+    work = copy.deepcopy(steps_before)
+    returned = mutate_fn(work)
+    steps_new = returned if isinstance(returned, list) else work
+
+    after_mutate_ids = _sequence_id_set(steps_new)
+    missing_seqs = [i for i in before_ids["seqs"] if i not in after_mutate_ids["seqs"]]
+    missing_vars = [i for i in before_ids["variants"] if i not in after_mutate_ids["variants"]]
+    if missing_seqs or missing_vars:
+        raise SequenceIdGuardError(
+            f"mutate_fn dropped ids (steps {missing_seqs} variants {missing_vars}) — refusing to save")
+
+    payload = _sequence_post_payload(steps_new)
+    sl_resp = call("POST", seq_url, {}, {"sequences": payload})
+
+    steps_after = _sequence_steps_from(call("GET", seq_url, {}))
+    after_ids = _sequence_id_set(steps_after)
+    lost_seqs = [i for i in before_ids["seqs"] if i not in after_ids["seqs"]]
+    lost_vars = [i for i in before_ids["variants"] if i not in after_ids["variants"]]
+    print(f"[save_sequence_ids_intact] campaign={campaign_id} before_ids={before_ids} "
+          f"after_ids={after_ids} smartlead_response={sl_resp}")
+    if lost_seqs or lost_vars:
+        raise SequenceSaveDriftError(
+            f"id drift after save (steps {lost_seqs} variants {lost_vars}) — variant history may be affected")
+    if verify_fn is not None and not verify_fn(steps_after):
+        raise SequenceSaveDriftError("save did not take — post-save state failed verification")
+
+    return {"ok": True, "steps_before": steps_before, "steps_after": steps_after,
+            "before_ids": before_ids, "after_ids": after_ids, "sl_resp": sl_resp}
+
+
+# ── step/variant lookup + distribution utilities (shared by every action) ──
+
+def _find_step(steps: list, email_num: int):
+    return next((s for s in steps if int(s.get("seq_number") or 0) == int(email_num)), None)
+
+
+def _find_variant(step: dict, variant_label: str):
+    return next((v for v in (step.get("sequence_variants") or [])
+                 if str(v.get("variant_label") or "").strip().lower()
+                 == str(variant_label or "").strip().lower()), None)
+
+
+def _pct_of(v) -> int:
+    try:
+        return int(v.get("variant_distribution_percentage") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _active_variants(step: dict) -> list:
+    """[{'id','pct'}] for every non-deleted variant with a >0 share."""
+    out = []
+    for v in (step.get("sequence_variants") or []):
+        if v.get("is_deleted"):
+            continue
+        pct = _pct_of(v)
+        if pct > 0:
+            out.append({"id": v.get("id"), "pct": pct})
+    return out
+
+
+def _even_shares(n: int) -> list:
+    """n integer shares summing exactly to 100, largest remainders first."""
+    base, rem = divmod(100, n)
+    return [base + (1 if i < rem else 0) for i in range(n)]
+
+
+def _apply_step_pcts(steps: list, email_num: int, pcts_by_id: dict) -> None:
+    """Set variant_distribution_percentage on one step from {variant_id: pct}."""
+    step = _find_step(steps, email_num)
+    if step is None:
+        return
+    for v in (step.get("sequence_variants") or []):
+        if v.get("id") in pcts_by_id:
+            v["variant_distribution_percentage"] = pcts_by_id[v.get("id")]
+
+
+def _variant_pct_in(steps: list, email_num: int, variant_id) -> int | None:
+    step = _find_step(steps, email_num)
+    if step is None:
+        return None
+    v = next((x for x in (step.get("sequence_variants") or []) if x.get("id") == variant_id), None)
+    return None if v is None else _pct_of(v)
+
+
+def _disable_variant_pcts(steps: list, email_num: int, variant_label: str,
+                          smartlead_url, result: dict) -> dict:
+    """Guards + new distribution for disabling one variant (target -> 0,
+    others per _redistribute_variant_shares). Raises SequenceActionRefused on
+    any guard, mirroring the pre-helper behaviour byte for byte. Side-fills
+    `result` (pcts / target_pct / target_id) for the caller's receipt."""
+    step = _find_step(steps, email_num)
+    if step is None:
+        raise SequenceActionRefused(404, {
+            "ok": False, "message": f"email {email_num} not found in this campaign's sequences",
+            "smartlead_url": smartlead_url})
+    target = _find_variant(step, variant_label)
+    if target is None:
+        raise SequenceActionRefused(404, {
+            "ok": False, "message": f"variant {variant_label} not found on Email {email_num}",
+            "smartlead_url": smartlead_url})
+    target_pct = _pct_of(target)
+    if target.get("is_deleted") or target_pct <= 0:
+        raise SequenceActionRefused(400, {
+            "ok": False, "message": "this variant already has 0% distribution - nothing to disable",
+            "smartlead_url": smartlead_url})
+    active = _active_variants(step)
+    if len(active) < 2:
+        raise SequenceActionRefused(400, {
+            "ok": False,
+            "message": "fewer than 2 active variants on this step - refusing to disable the last one",
+            "smartlead_url": smartlead_url})
+    others = [a for a in active if a["id"] != target.get("id")]
+    new_pcts = _redistribute_variant_shares(others, target_pct)
+    new_pcts[target.get("id")] = 0
+    result["pcts"] = new_pcts
+    result["target_pct"] = target_pct
+    result["target_id"] = target.get("id")
+    return new_pcts
+
+
+# ── direct variant actions (Messaging-tab toggle, cockpit cards) ──────────
+# POST /api/campaigns/{cid}/variant-action — the notification-row-less door
+# for P2/P5/P6: same guards, same helper, same confirm contract as the
+# notifications execute path, keyed on step+label instead of a row title.
+
+_VARIANT_ACTION_CONFIRM = {"disable": "DISABLE", "enable": "ENABLE",
+                           "scale_winner": "SCALE", "even_split": "SPLIT"}
+
+
+def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
+    action = str(payload.get("action") or "").strip()
+    want = _VARIANT_ACTION_CONFIRM.get(action)
+    if not want:
+        return 400, {"ok": False, "message": f"unknown action (allowed: {sorted(_VARIANT_ACTION_CONFIRM)})"}
+    if payload.get("confirm") != want:
+        return 400, {"ok": False, "message": f'confirmation required: send {{"confirm":"{want}"}}'}
+    try:
+        campaign_id = int(str(cid).strip())
+        email_num = int(payload.get("email"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign id and email must be numeric"}
+    variant_label = str(payload.get("variant_label") or "").strip()
+    if action in ("disable", "enable", "scale_winner") and not variant_label:
+        return 400, {"ok": False, "message": "variant_label is required for this action"}
+
+    receipt = {"pcts_before": {}, "pcts_after": {}, "labels": {}}
+
+    def _mutate(steps):
+        step = _find_step(steps, email_num)
+        if step is None:
+            raise SequenceActionRefused(404, {
+                "ok": False, "message": f"email {email_num} not found in this campaign's sequences"})
+        variants = [v for v in (step.get("sequence_variants") or []) if not v.get("is_deleted")]
+        receipt["pcts_before"] = {v.get("id"): _pct_of(v) for v in variants}
+        receipt["labels"] = {v.get("id"): v.get("variant_label") for v in variants}
+
+        if action == "disable":
+            result = {}
+            new_pcts = _disable_variant_pcts(steps, email_num, variant_label, None, result)
+            _apply_step_pcts(steps, email_num, new_pcts)
+            receipt["target_id"] = result["target_id"]
+        elif action == "enable":
+            target = _find_variant(step, variant_label)
+            if target is None or target.get("is_deleted"):
+                raise SequenceActionRefused(404, {
+                    "ok": False, "message": f"variant {variant_label} not found (or deleted) on Email {email_num}"})
+            if _pct_of(target) > 0:
+                raise SequenceActionRefused(400, {
+                    "ok": False, "message": "this variant is already receiving traffic - nothing to switch on"})
+            live = _active_variants(step) + [{"id": target.get("id"), "pct": 0}]
+            shares = _even_shares(len(live))
+            new_pcts = {m["id"]: shares[i] for i, m in enumerate(live)}
+            _apply_step_pcts(steps, email_num, new_pcts)
+            receipt["target_id"] = target.get("id")
+        elif action == "scale_winner":
+            target = _find_variant(step, variant_label)
+            if target is None or target.get("is_deleted"):
+                raise SequenceActionRefused(404, {
+                    "ok": False, "message": f"variant {variant_label} not found (or deleted) on Email {email_num}"})
+            if _pct_of(target) <= 0:
+                raise SequenceActionRefused(400, {
+                    "ok": False, "message": "this variant is switched off - switch it on before scaling it"})
+            new_pcts = {v.get("id"): (100 if v.get("id") == target.get("id") else 0) for v in variants}
+            _apply_step_pcts(steps, email_num, new_pcts)
+            receipt["target_id"] = target.get("id")
+        else:  # even_split
+            if len(variants) < 2:
+                raise SequenceActionRefused(400, {
+                    "ok": False, "message": "fewer than 2 variants on this step - nothing to split"})
+            shares = _even_shares(len(variants))
+            new_pcts = {v.get("id"): shares[i] for i, v in enumerate(variants)}
+            _apply_step_pcts(steps, email_num, new_pcts)
+        receipt["pcts_after"] = new_pcts
+        return steps
+
+    def _verify(steps_after):
+        step = _find_step(steps_after, email_num)
+        if step is None:
+            return False
+        got = {v.get("id"): _pct_of(v) for v in (step.get("sequence_variants") or [])}
+        return all(got.get(k) == p for k, p in receipt["pcts_after"].items())
+
+    try:
+        saved = save_sequence_ids_intact(campaign_id, _mutate, verify_fn=_verify)
+    except SequenceActionRefused as e:
+        return e.status, e.body
+    except SequenceIdGuardError as e:
+        return 500, {"ok": False, "message": f"refused before saving: {e}"}
+    except SequenceSaveDriftError:
+        return 500, {"ok": False,
+                      "message": "save verification failed - variant history may be affected, check Smartlead"}
+    except Exception as e:  # noqa: BLE001 — clean JSON, never a bare 500 page
+        return 502, {"ok": False, "message": f"Smartlead call failed: {str(e)[:200]}"}
+
+    by_label = {str(receipt["labels"].get(k)): v for k, v in receipt["pcts_after"].items()}
+    return 200, {"ok": True, "executed": action, "campaign_id": campaign_id, "email": email_num,
+                 "before": {str(receipt["labels"].get(k)): v for k, v in receipt["pcts_before"].items()},
+                 "after": by_label, "ids_intact": True}
+
+
+# ── P7: draft a challenger variant (preview first, write only on approve) ──
+
+CHALLENGER_COMPONENTS = ("problem", "offer", "social_proof")
+
+CHALLENGER_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        # Verbatim spans out of the base email body: the server does every
+        # substitution itself, so unselected components stay byte-identical
+        # (same contract as DRAFT_FIX_SCHEMA's old_sentence/changed_sentence).
+        "swaps": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "component": {"type": "string", "enum": list(CHALLENGER_COMPONENTS)},
+                    "old_text": {"type": "string"},
+                    "new_text": {"type": "string"},
+                },
+                "required": ["component", "old_text", "new_text"],
+            },
+        },
+    },
+    "required": ["swaps"],
+}
+
+
+def api_campaign_draft_challenger(cid: str, payload: dict) -> tuple:
+    """POST /api/campaigns/{cid}/draft-challenger — PREVIEW ONLY, no write.
+    body: {email, base_label, change: ["problem", ...]}. Drafts a challenger
+    from the base variant's live copy: the selected components are rewritten,
+    everything else stays byte-identical (server-side verbatim substitution).
+    When only "problem" is selected the model may ALSO return one offer swap,
+    strictly for coherence with the new problem statement (the owner's
+    ruling: offer wording may change slightly so it still makes sense).
+    Returns the drafted copy + the distribution plan for the add step."""
+    try:
+        campaign_id = int(str(cid).strip())
+        email_num = int(payload.get("email"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign id and email must be numeric"}
+    base_label = str(payload.get("base_label") or "").strip()
+    change = [c for c in (payload.get("change") or ["problem"]) if c in CHALLENGER_COMPONENTS]
+    if not change:
+        change = ["problem"]
+    key = KEYS.get("OPENAI_API_KEY")
+    if not key:
+        return 503, {"ok": False, "message": "OPENAI_API_KEY missing from ~/.navreo-keys.env"}
+
+    api_key = ws_key_for_campaign(campaign_id)
+    seq_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={api_key}"
+    steps = _sequence_steps_from(http_json("GET", seq_url, {}))  # READ-ONLY fetch
+    step = _find_step(steps, email_num)
+    if step is None:
+        return 404, {"ok": False, "message": f"email {email_num} not found in this campaign's sequences"}
+    base = _find_variant(step, base_label) if base_label else None
+    base_subject = (base.get("subject") if base else None) or step.get("subject") or ""
+    base_body = (base.get("email_body") if base else None) or step.get("email_body") or ""
+    if not base_body.strip():
+        return 400, {"ok": False, "message": "the base variant has no email body in Smartlead to draft from"}
+
+    labels = {str(v.get("variant_label") or "").strip().upper()
+              for v in (step.get("sequence_variants") or [])}
+    next_label = next((chr(c) for c in range(ord("A"), ord("Z") + 1) if chr(c) not in labels), "Z")
+
+    # Distribution plan (shown in the confirm sheet, applied by add-variant):
+    # the challenger REPLACES the base variant's traffic when the base is
+    # live; if the base is already off, everyone active + newcomer go even.
+    plan = {"mode": "takeover", "base_label": base_label or None}
+    base_pct = _pct_of(base) if base else 0
+    if base is not None and base_pct > 0:
+        plan["pcts"] = {base_label: 0, next_label: base_pct}
+        plan["note"] = (f"Version {next_label} takes over Version {base_label}'s {base_pct}% share; "
+                        f"Version {base_label} stops sending (kept, not deleted). Other versions untouched.")
+    else:
+        n = len(_active_variants(step)) + 1
+        shares = _even_shares(n)
+        plan = {"mode": "even", "pcts_even": shares,
+                "note": f"All {n} live versions (including the new one) share traffic evenly."}
+
+    parts = ("an icebreaker/opening personalisation line, a problem-statement paragraph, an offer "
+             "(with any social proof woven near it), and a call to action (CTA)")
+    todo = {"problem": "the problem-statement paragraph",
+            "offer": "the offer wording",
+            "social_proof": "the social-proof line(s) (client names, results, numbers used as proof)"}
+    selected = ", ".join(todo[c] for c in change)
+    coherence = ""
+    if "problem" in change and "offer" not in change:
+        coherence = (" You MAY additionally return ONE swap with component=offer, ONLY if the existing "
+                     "offer wording no longer reads naturally after the new problem statement - keep such "
+                     "an adjustment minimal (a few words), never a new offer.")
+    system = (
+        "You draft a CHALLENGER variant of a cold email for a B2B outbound agency. The email has, in "
+        f"order: {parts}. Rewrite ONLY: {selected}.{coherence} For every rewrite return one swap: "
+        "old_text copied CHARACTER FOR CHARACTER from the current body (a paraphrase makes the swap "
+        "fail), and new_text as its replacement - plain English, no em dashes, 45-70 words for a "
+        "problem statement, and any merge tags like {{first_name}} or spintax like {a|b} in the "
+        "surrounding email preserved exactly if needed. Components NOT selected must not appear as "
+        "swaps (except the one permitted coherence offer tweak). Never touch the icebreaker or CTA."
+    )
+    user = f"Current subject: {base_subject}\n\nCurrent full email body:\n{base_body}"
+    try:
+        out = _suggest_llm(key, system, user, "challenger", CHALLENGER_SCHEMA)
+    except Exception as e:  # noqa: BLE001
+        return 502, {"ok": False, "message": f"draft generation failed: {str(e)[:300]}"}
+
+    allowed = set(change) | ({"offer"} if ("problem" in change and "offer" not in change) else set())
+    body_html = base_body
+    applied = []
+    for swap in (out.get("swaps") or []):
+        comp = swap.get("component")
+        if comp not in allowed:
+            continue
+        old_t = (swap.get("old_text") or "").strip()
+        new_t = (swap.get("new_text") or "").strip()
+        if not old_t or not new_t:
+            continue
+        replaced = _replace_verbatim_or_normalized(body_html, old_t, new_t)
+        if replaced is None:
+            return 502, {"ok": False,
+                          "message": f"draft could not isolate the {comp} span in the live copy - try again"}
+        body_html = replaced
+        applied.append({"component": comp, "old_text": old_t, "new_text": new_t})
+    if not applied:
+        return 502, {"ok": False, "message": "draft generation returned no usable rewrite - try again"}
+
+    subject = base_subject
+    for swap in applied:  # subject only ever changes by quoting a swapped span
+        if swap["old_text"] and swap["old_text"] in subject:
+            subject = subject.replace(swap["old_text"], swap["new_text"], 1)
+
+    log_activity(f"/api/campaigns/{campaign_id}/draft-challenger",
+                 {"email": email_num, "base": base_label, "change": change},
+                 action="draft", entity="campaign", entity_id=str(campaign_id))
+    return 200, {"ok": True, "draft": {
+        "campaign_id": campaign_id, "email": email_num, "base_label": base_label or None,
+        "next_label": next_label, "subject": subject, "body_html": body_html,
+        "swaps": applied, "plan": plan, "model": SUGGEST_MODEL}}
+
+
+def api_campaign_add_variant(cid: str, payload: dict) -> tuple:
+    """POST /api/campaigns/{cid}/add-variant {email, base_label, subject,
+    body_html, confirm:"ADD"} — appends the APPROVED challenger as a brand-new
+    variant via the one shared helper. Every pre-existing id is echoed and
+    guard-checked; the newcomer rides id-less and gets its id from Smartlead.
+    Distribution: base live -> challenger takes the base's share, base -> 0
+    (kept, not deleted); base off/absent -> even split across live + new."""
+    if payload.get("confirm") != "ADD":
+        return 400, {"ok": False, "message": 'confirmation required: send {"confirm":"ADD"}'}
+    try:
+        campaign_id = int(str(cid).strip())
+        email_num = int(payload.get("email"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign id and email must be numeric"}
+    body_html = payload.get("body_html") or ""
+    if not str(body_html).strip():
+        return 400, {"ok": False, "message": "body_html is required - draft the challenger first"}
+    subject = payload.get("subject")
+    base_label = str(payload.get("base_label") or "").strip()
+
+    receipt = {}
+
+    def _mutate(steps):
+        step = _find_step(steps, email_num)
+        if step is None:
+            raise SequenceActionRefused(404, {
+                "ok": False, "message": f"email {email_num} not found in this campaign's sequences"})
+        labels = {str(v.get("variant_label") or "").strip().upper()
+                  for v in (step.get("sequence_variants") or [])}
+        new_label = next((chr(c) for c in range(ord("A"), ord("Z") + 1) if chr(c) not in labels), None)
+        if new_label is None:
+            raise SequenceActionRefused(400, {"ok": False, "message": "no free variant letter left on this step"})
+        base = _find_variant(step, base_label) if base_label else None
+        base_pct = _pct_of(base) if base is not None and not base.get("is_deleted") else 0
+        new_variant = {"variant_label": new_label, "email_body": body_html}
+        if subject is not None:
+            new_variant["subject"] = subject
+        if base_pct > 0:
+            new_variant["variant_distribution_percentage"] = base_pct
+            base["variant_distribution_percentage"] = 0
+        else:
+            live = _active_variants(step)
+            shares = _even_shares(len(live) + 1)
+            for i, m in enumerate(live):
+                _apply_step_pcts(steps, email_num, {m["id"]: shares[i]})
+            new_variant["variant_distribution_percentage"] = shares[-1]
+        step.setdefault("sequence_variants", []).append(new_variant)
+        receipt.update(new_label=new_label, base_pct=base_pct,
+                       new_pct=new_variant["variant_distribution_percentage"])
+        return steps
+
+    def _verify(steps_after):
+        step = _find_step(steps_after, email_num)
+        if step is None:
+            return False
+        newcomer = _find_variant(step, receipt.get("new_label"))
+        return newcomer is not None and newcomer.get("id") is not None
+
+    try:
+        saved = save_sequence_ids_intact(campaign_id, _mutate, verify_fn=_verify)
+    except SequenceActionRefused as e:
+        return e.status, e.body
+    except SequenceIdGuardError as e:
+        return 500, {"ok": False, "message": f"refused before saving: {e}"}
+    except SequenceSaveDriftError:
+        return 500, {"ok": False,
+                      "message": "save verification failed - variant history may be affected, check Smartlead"}
+    except Exception as e:  # noqa: BLE001
+        return 502, {"ok": False, "message": f"Smartlead call failed: {str(e)[:200]}"}
+
+    step_after = _find_step(saved["steps_after"], email_num)
+    newcomer = _find_variant(step_after, receipt["new_label"]) if step_after else None
+    log_activity(f"/api/campaigns/{campaign_id}/add-variant",
+                 {"email": email_num, "label": receipt.get("new_label"), "base": base_label},
+                 action="add_variant", entity="campaign", entity_id=str(campaign_id))
+    return 200, {"ok": True, "executed": "add_variant", "campaign_id": campaign_id,
+                 "email": email_num, "new_label": receipt.get("new_label"),
+                 "new_variant_id": newcomer.get("id") if newcomer else None,
+                 "took_over_pct": receipt.get("base_pct") or 0,
+                 "new_pct": receipt.get("new_pct"),
+                 "base_label": base_label or None, "ids_intact": True}
+
+
+# ── P3: apply an already-drafted copy fix to the SAME variant id ──────────
+
+def api_notification_apply_fix(nid: str, payload: dict) -> tuple:
+    """POST /api/notifications/{id}/apply-fix {confirm:"APPLY"} — writes the
+    row's cached draft_fix (subject + body_html from /draft-fix) onto the
+    flagged variant IN PLACE via the shared helper: same variant id, same
+    history. The old fixwarn advice ("paste manually or stats reset") is
+    retired by construction - the id-echoing save keeps the counters."""
+    if payload.get("confirm") != "APPLY":
+        return 400, {"ok": False, "message": 'confirmation required: send {"confirm":"APPLY"}'}
+    rows = sb("GET", f"optimiser_notifications?id=eq.{nid}")
+    if not isinstance(rows, list) or not rows:
+        return 404, {"ok": False, "message": "notification not found"}
+    row = rows[0]
+    smartlead_url = row.get("smartlead_url")
+    if row.get("action_type") != "replace_variants":
+        return 400, {"ok": False, "message": "apply-fix only applies to replace_variants rows",
+                      "smartlead_url": smartlead_url}
+    draft = row.get("draft_fix")
+    if not isinstance(draft, dict) or not (draft.get("body_html") or "").strip():
+        return 400, {"ok": False, "message": "no drafted fix on this row yet - draft the fix first",
+                      "smartlead_url": smartlead_url}
+    variants = _parsed_variants_list(row)
+    flagged = _flagged_variant_for_row(row, variants) if variants else None
+    if not flagged:
+        return 400, {"ok": False, "message": "could not identify the flagged variant on this row",
+                      "smartlead_url": smartlead_url}
+    try:
+        campaign_id = int(row.get("campaign_id"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign_id is not numeric"}
+    email_num = flagged.get("email")
+    variant_label = flagged.get("variant")
+    receipt = {}
+
+    def _mutate(steps):
+        step = _find_step(steps, email_num)
+        if step is None:
+            raise SequenceActionRefused(404, {
+                "ok": False, "message": f"email {email_num} not found in this campaign's sequences",
+                "smartlead_url": smartlead_url})
+        if variant_label:
+            target = _find_variant(step, variant_label)
+            if target is None:
+                raise SequenceActionRefused(404, {
+                    "ok": False, "message": f"variant {variant_label} not found on Email {email_num}",
+                    "smartlead_url": smartlead_url})
+            receipt["variant_id"] = target.get("id")
+            target["email_body"] = draft["body_html"]
+            # Subject: only ever set an explicit override when the drafted
+            # subject differs from what this variant currently resolves to -
+            # a variant inheriting the step subject keeps inheriting it.
+            effective = target.get("subject") if target.get("subject") is not None else step.get("subject")
+            new_subject = (draft.get("subject") or "").strip()
+            if target.get("subject") is not None or new_subject != (effective or "").strip():
+                target["subject"] = new_subject
+        else:
+            receipt["variant_id"] = None
+            step["email_body"] = draft["body_html"]
+            if (draft.get("subject") or "").strip() != (step.get("subject") or "").strip():
+                step["subject"] = (draft.get("subject") or "").strip()
+        return steps
+
+    def _verify(steps_after):
+        step = _find_step(steps_after, email_num)
+        if step is None:
+            return False
+        if variant_label:
+            target = _find_variant(step, variant_label)
+            return target is not None and target.get("id") == receipt.get("variant_id") \
+                and (target.get("email_body") or "") == draft["body_html"]
+        return (step.get("email_body") or "") == draft["body_html"]
+
+    try:
+        saved = save_sequence_ids_intact(campaign_id, _mutate, verify_fn=_verify)
+    except SequenceActionRefused as e:
+        body = dict(e.body)
+        body.setdefault("smartlead_url", smartlead_url)
+        return e.status, body
+    except SequenceIdGuardError as e:
+        return 500, {"ok": False, "message": f"refused before saving: {e}",
+                      "smartlead_url": smartlead_url}
+    except SequenceSaveDriftError:
+        return 500, {"ok": False,
+                      "message": "save verification failed - variant history may be affected, check Smartlead",
+                      "smartlead_url": smartlead_url}
+    except Exception as e:  # noqa: BLE001
+        return 502, {"ok": False, "message": f"Smartlead call failed: {str(e)[:200]}"}
+
+    try:
+        updated = update_notification_status(nid, "actioned")
+    except Exception as e:  # noqa: BLE001 — Smartlead already saved
+        updated = {"error": str(e)[:200]}
+    log_activity(f"/api/notifications/{nid}/apply-fix", {"campaign_id": campaign_id},
+                 action="apply_fix", entity="notification", entity_id=nid)
+    return 200, {"ok": True, "executed": "apply_fix", "campaign_id": campaign_id,
+                 "email": email_num, "variant": variant_label,
+                 "variant_id": receipt.get("variant_id"), "ids_intact": True,
+                 "notification": updated}
 
 
 def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
@@ -3330,89 +4001,39 @@ def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
     except (TypeError, ValueError):
         return 400, {"ok": False, "message": "campaign_id is not numeric"}
 
-    api_key = ws_key_for_campaign(campaign_id)  # federated: owner workspace's key
-    seq_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={api_key}"
+    result = {"pcts": {}, "target_pct": 0, "target_id": None}
 
-    before = http_json("GET", seq_url, {})
-    before_steps = before if isinstance(before, list) else (
-        before.get("data") or before.get("sequences") or [] if isinstance(before, dict) else [])
-    if not before_steps:
-        return 404, {"ok": False, "message": "could not load campaign sequences from Smartlead",
-                      "smartlead_url": smartlead_url}
+    def _mutate(steps):
+        # Same guards as the pre-helper implementation, moved inside the
+        # mutate so they run against the helper's OWN fresh GET (one fetch,
+        # no decide-on-stale-state window).
+        new_pcts = _disable_variant_pcts(steps, email_num, variant_label, smartlead_url, result)
+        _apply_step_pcts(steps, email_num, new_pcts)
+        return steps
 
-    target_step = next((s for s in before_steps if int(s.get("seq_number") or 0) == email_num), None)
-    if target_step is None:
-        return 404, {"ok": False, "message": f"email {email_num} not found in this campaign's sequences",
-                      "smartlead_url": smartlead_url}
+    def _verify(steps_after):
+        pct = _variant_pct_in(steps_after, email_num, result["target_id"])
+        return pct == 0
 
-    step_variants = target_step.get("sequence_variants") or []
-    target_variant = next(
-        (v for v in step_variants
-         if str(v.get("variant_label") or "").strip().lower() == variant_label.lower()),
-        None)
-    if target_variant is None:
-        return 404, {"ok": False,
-                      "message": f"variant {variant_label} not found on Email {email_num}",
-                      "smartlead_url": smartlead_url}
-
-    target_pct = target_variant.get("variant_distribution_percentage")
     try:
-        target_pct = int(target_pct)
-    except (TypeError, ValueError):
-        target_pct = 0
-    if target_variant.get("is_deleted") or target_pct <= 0:
-        return 400, {"ok": False, "message": "this variant already has 0% distribution - nothing to disable",
+        saved = save_sequence_ids_intact(campaign_id, _mutate, verify_fn=_verify)
+    except SequenceActionRefused as e:
+        body = dict(e.body)
+        body.setdefault("smartlead_url", smartlead_url)
+        return e.status, body
+    except SequenceIdGuardError as e:
+        return 500, {"ok": False, "message": f"refused before saving: {e}",
                       "smartlead_url": smartlead_url}
-
-    active = []
-    for v in step_variants:
-        if v.get("is_deleted"):
-            continue
-        try:
-            pct = int(v.get("variant_distribution_percentage") or 0)
-        except (TypeError, ValueError):
-            pct = 0
-        if pct > 0:
-            active.append({"id": v.get("id"), "pct": pct})
-    if len(active) < 2:
-        return 400, {"ok": False,
-                      "message": "fewer than 2 active variants on this step - refusing to disable the last one",
-                      "smartlead_url": smartlead_url}
-
-    others = [a for a in active if a["id"] != target_variant.get("id")]
-    new_pcts = _redistribute_variant_shares(others, target_pct)
-    new_pcts[target_variant.get("id")] = 0
-
-    before_ids = {"seqs": sorted(str(s.get("id")) for s in before_steps),
-                  "variants": sorted(str(v.get("id")) for s in before_steps for v in (s.get("sequence_variants") or []))}
-
-    post_body = _build_disable_variant_payload(before_steps, target_step.get("id"), target_variant.get("id"), new_pcts)
-    save_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={api_key}"
-    sl_resp = http_json("POST", save_url, {}, {"sequences": post_body})
-
-    after = http_json("GET", seq_url, {})
-    after_steps = after if isinstance(after, list) else (
-        after.get("data") or after.get("sequences") or [] if isinstance(after, dict) else [])
-    after_ids = {"seqs": sorted(str(s.get("id")) for s in after_steps),
-                 "variants": sorted(str(v.get("id")) for s in after_steps for v in (s.get("sequence_variants") or []))}
-    after_target_step = next((s for s in after_steps if int(s.get("seq_number") or 0) == email_num), None)
-    after_target_variant = next(
-        (v for v in (after_target_step.get("sequence_variants") or []) if v.get("id") == target_variant.get("id")),
-        None) if after_target_step else None
-    after_target_pct = after_target_variant.get("variant_distribution_percentage") if after_target_variant else None
-
-    print(f"[disable_variant] campaign={campaign_id} email={email_num} variant={variant_label} "
-          f"before_ids={before_ids} after_ids={after_ids} before_pct={target_pct} after_pct={after_target_pct} "
-          f"new_pcts={new_pcts} smartlead_response={sl_resp}")
-
-    if before_ids != after_ids:
+    except SequenceSaveDriftError:
         return 500, {"ok": False,
                       "message": "id drift detected - variant history may be affected, check Smartlead",
                       "smartlead_url": smartlead_url}
-    if after_target_pct is None or int(after_target_pct or 0) != 0:
-        return 500, {"ok": False,
-                      "message": "save did not take - variant is not at 0% after saving, check Smartlead",
-                      "smartlead_url": smartlead_url}
+
+    new_pcts = result["pcts"]
+    target_pct = result["target_pct"]
+    print(f"[disable_variant] campaign={campaign_id} email={email_num} variant={variant_label} "
+          f"before_ids={saved['before_ids']} after_ids={saved['after_ids']} before_pct={target_pct} "
+          f"new_pcts={new_pcts}")
 
     try:
         updated = update_notification_status(nid, "actioned")
@@ -7201,7 +7822,8 @@ def _inject_demo_scorecard(payload: dict) -> dict:
         camps[c["id"]] = {"sent": c["sent"], "replied": c["replied"], "positives": c["positives"],
                           "bounced": c["bounced"], "completed": c["completed"], "total": c["total"],
                           "status": c["status"], "name": c["name"], "workspace": "navreo",
-                          "ws_label": "", "meetings": c.get("meetings"), "demo": True}
+                          "ws_label": "", "meetings": c.get("meetings"), "demo": True,
+                          "client": "Acme"}  # label authority parity — demo rows must not read as Navreo
     return {**payload, "campaigns": camps}
 
 
@@ -7379,10 +8001,24 @@ def perf_daily(p: dict) -> dict:
         # (and a cold blob) keep the fleet_daily_stats fallback. Weekend
         # stripping below applies unchanged.
         try:
+            # Panel fix (BE-2 HIGH, 2026-08-02): after a restart nothing had
+            # restored the blob before this read, so every post-boot perf-daily
+            # silently degraded to Navreo-only numbers (9-18% undercount) until
+            # someone opened the analytics page. The restore is a no-op when warm.
+            _client_win_restore()
             _cw = _CLIENT_WIN.get("data") or {}
             _cw_all = (_cw.get("series") or {}).get("__all") or {}
             cw_sent = {d: v for d, v in zip(_cw.get("days") or [], _cw_all.get("sent") or [])
                        if v is not None}
+            # Completeness gate (panel FE-1, 2026-08-02): the builder deletes
+            # incomplete series before persisting, but a restored older blob
+            # has no such guarantee — mirror deliverability.html's cwTrusted gate:
+            # refuse a daily line whose sum is materially short of the same
+            # blob's verified 30d window total (a 429-burst sweep once shipped
+            # ~10% of the true fleet as a plausible-looking series).
+            _w30 = ((_cw.get("windows") or {}).get("30") or {}).get("__all") or {}
+            if _w30.get("sent") and sum(v or 0 for v in cw_sent.values()) < 0.8 * _w30["sent"]:
+                cw_sent = {}
         except Exception:  # noqa: BLE001 — the override is best-effort, never a 500
             cw_sent = {}
         if cw_sent:
@@ -7393,14 +8029,30 @@ def perf_daily(p: dict) -> dict:
     # Weekends off: the fleet doesn't send Sat/Sun, so those days are dead air
     # (0 sent, a few stray replies) that saw-tooths every trend line. The series
     # is weekdays only — the chart joins Fri→Mon directly; nothing is invented.
+    # COUNT series (meetings/positives/leads) must not lose weekend events,
+    # though — a Saturday-booked call is still a booked call (panel fix BE-2,
+    # 2026-08-02: displayed meetings summed 13 vs 14 truth). Roll Sat/Sun
+    # counts into the following Monday so totals stay exact; RATE series and
+    # sent keep the plain strip (weekend rates are noise on ~0 sends).
     last_synced = max([d for d in dates if sent_m.get(d, 0)], default=None)
     keep = [i for i in range(ndays) if (start + _td(days=i)).weekday() < 5]
 
     def wkd(a):
         return [a[i] for i in keep]
-    dates = wkd(dates)
-    sent, positives, reply_rate, bounce_rate = wkd(sent), wkd(positives), wkd(reply_rate), wkd(bounce_rate)
-    leads_added, meetings = wkd(leads_added), wkd(meetings)
+
+    def wkd_roll(a):
+        out, carry = list(a), 0
+        for i in range(ndays):
+            if (start + _td(days=i)).weekday() >= 5:
+                carry += out[i] or 0
+            elif carry and (start + _td(days=i)).weekday() == 0:
+                out[i] = (out[i] or 0) + carry
+                carry = 0
+        return [out[i] for i in keep]
+    dates_kept = wkd(dates)
+    sent, reply_rate, bounce_rate = wkd(sent), wkd(reply_rate), wkd(bounce_rate)
+    positives, leads_added, meetings = wkd_roll(positives), wkd_roll(leads_added), wkd_roll(meetings)
+    dates = dates_kept
 
     return {"days": dates, "campaign": campaign,
             "sent": sent, "leads_added": leads_added, "positives": positives,
@@ -7416,7 +8068,7 @@ def perf_daily(p: dict) -> dict:
                                 if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
                 "positives": ("Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)"
                               if campaign else "Positive replies/day (whole fleet — Smartlead day-wise positive replies, stored in fleet_daily_stats)"),
-                "meetings": "Meetings/day (people whose first Call Booked / Meeting Request reply landed that day — one per person)",
+                "meetings": "Meetings/day (people whose first Call Booked reply landed that day — one per person; weekend bookings roll into Monday)",
                 "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
                                if campaign else "Reply rate % (whole fleet — Smartlead day-wise replies÷sent, stored in fleet_daily_stats)"),
                 "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise bounced÷sent, stored in fleet_daily_stats)"},
@@ -7715,6 +8367,14 @@ def _subseq_stats_loop():
         time.sleep(_SUBSEQ_SYNC_INTERVAL_S)
 
 
+# 60s persist floor (tester panel round 1, 2026-08-02): every compute used to
+# rewrite the full ~126KB snapshot blob — up to once per 120s TTL window and
+# more under mark_stale() bursts. Same shape as setter.py's
+# _persist_queue_resp throttle: at most one write per minute, best-effort.
+_SC_SNAP_PERSIST_MIN_S = 60.0
+_SC_SNAP_PERSIST_LAST = [0.0]
+
+
 def _all_campaign_scorecard() -> dict:
     """The cached scorecard for EVERY campaign — one Supabase read. Keyed by
     str(smartlead_campaign_id), same shape the UI has always consumed.
@@ -7778,7 +8438,8 @@ def _all_campaign_scorecard() -> dict:
     if not asof:
         asof = (_blob_snapshot_load("scorecard_sync_ts") or {}).get("ts")
     out = {"campaigns": camps, "heyreach": hr, "asof": asof}
-    if camps:
+    if camps and (time.time() - _SC_SNAP_PERSIST_LAST[0]) >= _SC_SNAP_PERSIST_MIN_S:
+        _SC_SNAP_PERSIST_LAST[0] = time.time()
         _blob_snapshot_save("campaign_scorecard_all", out)
     return out
 
@@ -7793,7 +8454,10 @@ _SC_SNAP_SEEDED = False
 def _scorecard_seed_from_snapshot() -> None:
     """One-time after boot: seed the scorecard read-SWR from its persisted
     snapshot (stale, ts 0) so a request racing the boot warmer's compute
-    serves instantly instead of waiting on it."""
+    serves instantly instead of waiting on it. Age-bounded 24h (tester panel
+    round 1, 2026-08-02, same rule as setter.py's queue-memo restore): after
+    a long spin-down "stale then rebuilt" is the design, unbounded staleness
+    is not — a too-old snapshot means a cold compute, not a days-old paint."""
     global _SC_SNAP_SEEDED
     if _SC_SNAP_SEEDED:
         return
@@ -7801,7 +8465,7 @@ def _scorecard_seed_from_snapshot() -> None:
     with _CAMPAIGN_SCORECARD_ALL_SWR.lock:
         if _CAMPAIGN_SCORECARD_ALL_SWR.payload is not None:
             return
-    snap = _blob_snapshot_load("campaign_scorecard_all")
+    snap = _blob_snapshot_load_aged("campaign_scorecard_all", _SNAP_SEED_MAX_AGE_S)
     if snap and snap.get("campaigns"):
         with _CAMPAIGN_SCORECARD_ALL_SWR.lock:
             if _CAMPAIGN_SCORECARD_ALL_SWR.payload is None:
@@ -8622,20 +9286,30 @@ def _cockpit_live_status(ids_csv: str) -> dict:
 # pattern as _ah_seed_from_snapshot).
 _COCKPIT_LIVE_SNAP: dict = {}   # in-memory mirror of the persisted blob
 _COCKPIT_LIVE_SNAP_LOCK = threading.Lock()
+# 60s persist floor (tester panel round 1, 2026-08-02): every successful
+# sweep used to rewrite the whole blob. The in-memory mirror still updates on
+# every sweep — a floored save just skips the Supabase write, and the next
+# unfloored save persists the fully-merged mirror, so nothing is lost.
+_COCKPIT_LIVE_SNAP_PERSIST_MIN_S = 60.0
+_COCKPIT_LIVE_SNAP_PERSIST_LAST = [0.0]
 
 
 def _cockpit_live_snapshot_save(key: str, payload: dict) -> None:
+    now = time.time()
     with _COCKPIT_LIVE_SNAP_LOCK:
         if not _COCKPIT_LIVE_SNAP:  # first save this boot: merge the previous blob
             prev = _blob_snapshot_load("cockpit_live_status_v1") or {}
             _COCKPIT_LIVE_SNAP.update(
                 {str(k): v for k, v in prev.items()
                  if isinstance(v, dict) and isinstance(v.get("payload"), dict)})
-        _COCKPIT_LIVE_SNAP[str(key)] = {"payload": payload, "ts": time.time()}
+        _COCKPIT_LIVE_SNAP[str(key)] = {"payload": payload, "ts": now}
         while len(_COCKPIT_LIVE_SNAP) > 8:
             oldest = min(_COCKPIT_LIVE_SNAP,
                          key=lambda k: _COCKPIT_LIVE_SNAP[k].get("ts") or 0)
             _COCKPIT_LIVE_SNAP.pop(oldest, None)
+        if (now - _COCKPIT_LIVE_SNAP_PERSIST_LAST[0]) < _COCKPIT_LIVE_SNAP_PERSIST_MIN_S:
+            return  # floored: mirror updated above, Supabase write skipped
+        _COCKPIT_LIVE_SNAP_PERSIST_LAST[0] = now
         blob = dict(_COCKPIT_LIVE_SNAP)
     _blob_snapshot_save("cockpit_live_status_v1", blob)
 
@@ -8663,15 +9337,22 @@ _CLS_SNAP_SEEDED = False
 
 def _cockpit_live_seed_from_snapshot() -> None:
     """One-time after boot: seed the live-status SWR from the persisted
-    last-good snapshot (ts 0 → instant stale serve + one bg refresh per key)."""
+    last-good snapshot (ts 0 → instant stale serve + one bg refresh per key).
+    Age-bounded 24h per KEY (tester panel round 1, 2026-08-02, same rule as
+    setter.py's queue-memo restore): each entry carries its own epoch `ts`
+    from _cockpit_live_snapshot_save — an entry older than the bound, or with
+    a missing/unparseable ts, is treated as too old and never seeded."""
     global _CLS_SNAP_SEEDED
     if _CLS_SNAP_SEEDED:
         return
     _CLS_SNAP_SEEDED = True
     snap = _blob_snapshot_load("cockpit_live_status_v1") or {}
+    cutoff = time.time() - _SNAP_SEED_MAX_AGE_S
     good = {str(k): v for k, v in snap.items()
             if isinstance(v, dict) and isinstance(v.get("payload"), dict)
-            and v["payload"].get("campaigns")} if isinstance(snap, dict) else {}
+            and v["payload"].get("campaigns")
+            and isinstance(v.get("ts"), (int, float)) and v["ts"] >= cutoff} \
+        if isinstance(snap, dict) else {}
     if not good:
         return
     with _COCKPIT_LIVE_SNAP_LOCK:
@@ -8763,6 +9444,35 @@ def _blob_snapshot_load(cache_id: str) -> dict | None:
     try:
         rows = sb("GET", f"deliverability_audit_cache?id=eq.{cache_id}&select=blob")
         if rows and isinstance(rows[0].get("blob"), dict):
+            return rows[0]["blob"]
+    except Exception as e:  # noqa: BLE001
+        print(f"[snap:{cache_id}] restore failed: {e}", file=sys.stderr)
+    return None
+
+
+# Seed age bound (tester panel round 1, 2026-08-02): mirrors setter.py's
+# _QUEUE_RESP_RESTORE_MAX_AGE_S — after a long Render spin-down a snapshot
+# can be days old, and "stale then rebuilt" was never meant to paint that.
+_SNAP_SEED_MAX_AGE_S = 24 * 3600.0
+
+
+def _blob_snapshot_load_aged(cache_id: str, max_age_s: float) -> dict | None:
+    """_blob_snapshot_load, but a blob whose row `ts` (the ISO stamp
+    _blob_snapshot_save always writes) is older than max_age_s — or missing /
+    unparseable, which the save path never produces — is treated as absent."""
+    try:
+        rows = sb("GET", f"deliverability_audit_cache?id=eq.{cache_id}&select=blob,ts")
+        if rows and isinstance(rows[0].get("blob"), dict):
+            try:
+                saved = _dtmod.datetime.fromisoformat(
+                    str(rows[0].get("ts") or "").replace("Z", "+00:00"))
+                if saved.tzinfo is None:
+                    saved = saved.replace(tzinfo=_dtmod.timezone.utc)
+                age = time.time() - saved.timestamp()
+            except (TypeError, ValueError):
+                return None  # no trustworthy stamp → too old by definition
+            if age > max_age_s:
+                return None
             return rows[0]["blob"]
     except Exception as e:  # noqa: BLE001
         print(f"[snap:{cache_id}] restore failed: {e}", file=sys.stderr)
@@ -8941,7 +9651,7 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     # request — the archive is past both, so page through it (same
     # filters/columns as before).
     rep = sb_get_all(f"replies?replied_at=gte.{since}"
-                     "&select=smartlead_campaign_id,email,category")
+                     "&select=smartlead_campaign_id,email,category&order=id")
     if not isinstance(rep, list):
         return {"ok": False, "error": "replies read failed"}
     by_camp: dict = {}
@@ -11036,7 +11746,7 @@ def stage_trigify_engagers(src: dict, cfg: dict, days: int = ENG_BACKFILL_DAYS,
     # paginated (sb_get_all): a plain query clips at 1,000 rows, and a clipped
     # dedupe set re-stages events that already exist
     seen = sb_get_all(f"engagement_events?source_id=eq.{src['id']}"
-                      "&select=post_url,engager_linkedin_url")
+                      "&select=post_url,engager_linkedin_url&order=id")
     if not isinstance(seen, list):
         return 0  # a failed read would look like "nothing staged yet" and re-stage everything
     seen_pair = {(r.get("post_url"), r.get("engager_linkedin_url")) for r in seen}
@@ -13216,9 +13926,14 @@ def _setter_poll_bg():
         return  # a prior sweep is still running — skip this one
     try:
         summary = setter.run_poll()
+        # A throttled skip must not write setter_poll_done: that row feeds the
+        # UI's "Last checked X ago" and would claim a check that never ran
+        # (panel FE-2, 2026-08-02). Log it distinctly so the ledger stays honest.
+        action = "setter_poll_skipped" if summary.get("skipped_fresh_s") is not None \
+            else "setter_poll_done"
         sb("POST", "app_activity_log",
            {"actor": "cron", "endpoint": "/api/setter/poll",
-            "action": "setter_poll_done", "entity": "setter_queue", "payload": summary})
+            "action": action, "entity": "setter_queue", "payload": summary})
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[setter-poll] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",
@@ -17538,10 +18253,20 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             _ah_seed_from_snapshot()
+            # key normalisation (tester panel round 1, 2026-08-02): the SWR
+            # used to key on the RAW days string, so ?days=030 / ?days=45 /
+            # ?days=abc each minted their own cache entry and compute. Clamp
+            # first (int → 7..30 → str, junk → "30") and use the clamped
+            # value for BOTH the cache key and the compute arg.
+            _d = (q.get("days") or ["30"])[0]
+            try:
+                _d = str(max(7, min(30, int(_d))))
+            except (TypeError, ValueError):
+                _d = "30"
             # demo gate both ways: strip demo labels when the toggle is OFF,
             # splice Acme in when it's ON (each is a no-op in the other state)
             return self._json(_inject_demo_analytics_hub(_strip_demo_analytics_hub(
-                _ANALYTICS_HUB_SWR.get((q.get("days") or ["30"])[0]))))
+                _ANALYTICS_HUB_SWR.get(_d))))
         if path == "/api/cockpit/insights":
             # Cockpit render layer: what Claude wrote on the morning crunch
             # (live unexpired campaign_insights) + the graded track record.
@@ -17578,9 +18303,20 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/cockpit/live-status":
             # LIVE Smartlead status + completion% for the cockpit's visible
             # campaigns (?ids=1,2,3) — fresh /analytics, not the hourly cache.
+            # Lazy seed (tester panel round 1, 2026-08-02): one-shot/cheap,
+            # same as the scorecard/hub routes above — a campaigns.html load
+            # that beats _boot_warmup must serve the persisted snapshot, not
+            # pay the ≤150-call Smartlead sweep inline.
+            _cockpit_live_seed_from_snapshot()
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
-            return self._json(_COCKPIT_LIVE_STATUS_SWR.get((q.get("ids") or [""])[0]))
+            # key normalisation: the SWR used to key on the RAW ids CSV, so
+            # "2,1", "1,2" and "1, 2," each minted their own ≤150-call sweep.
+            # Split, strip, drop empties, dedupe, sort, rejoin — the same
+            # normalised CSV feeds both the cache key and the compute.
+            _raw = (q.get("ids") or [""])[0]
+            _ids = ",".join(sorted({t.strip() for t in _raw.split(",") if t.strip()}))
+            return self._json(_COCKPIT_LIVE_STATUS_SWR.get(_ids))
         if path == "/api/campaign-platform-leads":
             # One page of a campaign's real platform leads for the detail Leads
             # tab. 300s keyed SWR — see _PLATFORM_LEADS_SWR.
@@ -17928,19 +18664,6 @@ class Handler(SimpleHTTPRequestHandler):
     }
 
     def do_POST(self):
-        # Mark-stale must run AFTER the mutating handler too (panel fix BE-1,
-        # 2026-08-02): the pre-dispatch call below lets a concurrent reader kick
-        # a background refresh that reads PRE-write state and re-caches it with
-        # a fresh ts for a full TTL. The post-dispatch pass in `finally` costs a
-        # lock + ts=0 per cache and restores the "next read converges" contract.
-        _p = self.path.split("?")[0]
-        try:
-            return self._do_post_dispatch()
-        finally:
-            if _p not in self._CLEAR_CACHE_EXEMPT_POST and self._authed_email():
-                _clear_ui_caches()
-
-    def _do_post_dispatch(self):
         if not self._drain_request_body():
             return
         path = self.path.split("?")[0]
@@ -18305,6 +19028,35 @@ class Handler(SimpleHTTPRequestHandler):
             # ledger with a "draft" entry that generated nothing new — the
             # actual generation is already logged inside api_notification_draft_fix.
             return self._json(body, status)
+        if path.startswith("/api/notifications/") and path.endswith("/apply-fix") and \
+                len(path) > len("/api/notifications/") + len("/apply-fix"):
+            nid = path[len("/api/notifications/"):-len("/apply-fix")]
+            try:
+                payload = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            log_activity(path, payload, action="apply_fix", entity="notification", entity_id=nid)
+            status, body = api_notification_apply_fix(nid, payload)
+            return self._json(body, status)
+        # variant-action-wire routes: /api/campaigns/{cid}/(variant-action|
+        # draft-challenger|add-variant). All three sit behind the session gate
+        # above; the two writers additionally demand their typed confirm token
+        # and route through save_sequence_ids_intact (the one sequences door).
+        if path.startswith("/api/campaigns/"):
+            _va_rest = path[len("/api/campaigns/"):]
+            for _va_suffix, _va_fn in (("/variant-action", api_campaign_variant_action),
+                                        ("/draft-challenger", api_campaign_draft_challenger),
+                                        ("/add-variant", api_campaign_add_variant)):
+                if _va_rest.endswith(_va_suffix) and len(_va_rest) > len(_va_suffix):
+                    cid = _va_rest[:-len(_va_suffix)]
+                    try:
+                        payload = json.loads(self._post_body.decode() or "{}")
+                    except ValueError:
+                        return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+                    log_activity(path, {k: v for k, v in payload.items() if k != "body_html"},
+                                 action=_va_suffix.strip("/"), entity="campaign", entity_id=cid)
+                    status, body = _va_fn(cid, payload)
+                    return self._json(body, status)
         if path.startswith("/api/jobs/") and path.endswith("/cancel"):
             jid = path[len("/api/jobs/"):-len("/cancel")]
             with JOBS_LOCK:
@@ -18681,12 +19433,6 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": False, "message": str(e)[:300]}, 200)
 
     def do_PATCH(self):
-        try:
-            return self._do_patch_dispatch()
-        finally:
-            _clear_ui_caches()  # post-write pass — same BE-1 race as do_POST
-
-    def _do_patch_dispatch(self):
         if not self._drain_request_body():
             return
         _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it
