@@ -689,7 +689,14 @@ function j(url) {
 // (three true double-fetches per page view, audit 2026-08-02).
 window.__ahFetch = window.__ahFetch || {};
 function jShared(url) {
-  if (!window.__ahFetch[url]) window.__ahFetch[url] = j(url);
+  // evict on rejection: a cached rejected promise made the Retry button a
+  // no-op for trends/insights/signals until a full reload (panel round-1)
+  if (!window.__ahFetch[url]) {
+    window.__ahFetch[url] = j(url).catch(function (e) {
+      delete window.__ahFetch[url];
+      throw e;
+    });
+  }
   return window.__ahFetch[url];
 }
 
@@ -819,6 +826,18 @@ function fleetSeries() {  // {sent[], bounces[], rate[]} aligned to HUB.days, fr
 /* ── client-windows (/api/client-windows): per-client sent/replies/bounces
    for the exact 7/14/30 windows, plus true daily lines for clients that map
    1:1 to a Smartlead workspace (Asteri, KRG) and for the all-client sum. ── */
+// Panel round-1 HIGH: a boot-time 429 burst once shipped a client-windows
+// daily series covering ~10% of the true fleet — the page drew wrong bars,
+// funnel replies and rate, stamped fresh. The server now drops incomplete
+// series; this gate also refuses any cached/old blob whose __all daily sum
+// is materially short of the verified window total.
+function cwDailyOk() {
+  if (!CW || !CW.series || !CW.series.__all) return false;
+  var w = CW.windows && CW.windows["30"] && CW.windows["30"].__all;
+  if (!w || !w.sent) return true;   // nothing to check against
+  var sum = (CW.series.__all.sent || []).reduce(function (a, b) { return a + (b || 0); }, 0);
+  return sum >= 0.5 * w.sent;
+}
 function cwFor(client) {  // {sent,replied,bounced} for a client over state.range
   var w = CW && CW.windows && CW.windows[String(state.range)];
   return (w && w[client === "All" ? "__all" : client]) || null;
@@ -832,7 +851,7 @@ function rateMinSent() { return state.client === "All" ? 1000 : 100; }
 // share of the window total — the window total stays exact, only the daily
 // SHAPE is estimated (Bjion: per-day sent per client is super important).
 function sentDailyFull() {
-  if (!CW || !CW.series) return null;
+  if (!CW || !CW.series || !cwDailyOk()) return null;
   var key = state.client === "All" ? "__all" : state.client;
   var s = CW.series[key];
   if (s && s.sent) return s.sent;
@@ -854,7 +873,7 @@ function sentDailyEstimated() {
   return !!(CW && CW.series && !(CW.series[key] && CW.series[key].sent) && sentDailyFull());
 }
 function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none exists
-  var s = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
+  var s = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
   if (!s) return null;
   if (k === "sent") return s.sent;
   if (k === "bounces") return s.bounced;
@@ -898,7 +917,7 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     // KRG, All) — the archive misses client-workspace replies (38 vs 116 on
     // Asteri, caught by the 2026-07-28 testers). Navreo-ws clients keep the
     // archive, which is complete for them.
-    var ws = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
+    var ws = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
     if (ws && ws.replied) return ws.replied;
   }
   var s = HUB && HUB.series && HUB.series[ckey()];
@@ -1326,7 +1345,10 @@ function renderFunnel() {
     var sl = $("fs" + (i + 1));
     sl.setAttribute("y", y[i]); sl.setAttribute("height", h[i]);
     var t = $("fn" + (i + 1));
-    t.setAttribute("y", y[i] - 12); t.textContent = fmtN(nums[i]);
+    t.setAttribute("y", y[i] - 12);
+    // interested/meetings come only from the hub RPC — while it is missing
+    // they are UNKNOWN, and an en-dash is honest where a hard 0 was a lie
+    t.textContent = (i >= 2 && !(HUB && HUB.series)) ? "–" : fmtN(nums[i]);
   }
   $("fr1").setAttribute("d", ribbon(143, 297, y[0], y[0] + h[0], y[1], y[1] + h[1]));
   $("fr2").setAttribute("d", ribbon(363, 517, y[1], y[1] + h[1], y[2], y[2] + h[2]));
@@ -1443,44 +1465,6 @@ function renderLeakbar(leak, v) {
     bar.style.display = "none"; return;
   }
   bar.style.display = "";
-}
-function renderStrip(v) {
-  // 1 · do emails land — the SELECTED CLIENT's bounce over the selected
-  // range (the fleet number under a client chip contradicted the chart's
-  // per-client caption on the same screen — 2026-07-28 testers)
-  var landPct = null;
-  var cwL = cwFor(state.client);
-  if (cwL && cwL.sent > 0) landPct = Math.max(0, Math.min(100, Math.round(100 - cwL.bounced / cwL.sent * 100)));
-  else { var land = landStats(state.range); if (land) landPct = land.pct; }
-  set("ssd1", "sss1", landPct != null ? (landPct >= 95 ? "green" : landPct >= 90 ? "amber" : "red") : "mute",
-      landPct != null ? landPct + " of 100 land · " + rangeLabel() : "–");
-  // 2 · campaigns that stopped working (optimiser decision verdicts)
-  var dead = decisionRows().length;
-  set("ssd2", "sss2", dead > 0 ? "red" : "green",
-      dead > 0 ? dead + (dead === 1 ? " campaign stopped working" : " campaigns stopped working") : "campaigns steady");
-  // 3 · positives waiting for an answer (book weekly stats). The whole-book
-  // waiting count next to a client's own zero read as a contradiction — on a
-  // client view this tile shows THAT client's interested count instead.
-  var wk = bookRow("weekly");
-  var waiting = wk && wk.stats && wk.stats.waiting;
-  if (state.client !== "All") {
-    set("ssd3", "sss3", v.pos > 0 ? "green" : "mute",
-        fmtN(v.pos) + " interested · " + rangeLabel());
-  } else {
-    set("ssd3", "sss3", waiting > 0 ? "amber" : "mute",
-        waiting > 0 ? fmtN(waiting) + " waiting for an answer" : fmtN(v.pos) + " interested so far");
-  }
-  // 4 · meetings over the selected window vs the window before (range-aware,
-  // so it matches the funnel and section 6 under the same toggle — the old
-  // calendar-month tile contradicted them, 2026-07-28 testers)
-  var mtg = seriesFor("meetings") || [];
-  if (mtg.length) {
-    var R = state.range, m1 = halfSum(mtg, R);
-    var havePrior = mtg.length >= R * 2, m0 = havePrior ? halfSum(mtg, R * 2) - m1 : null;
-    var d = m0 == null ? 0 : m1 - m0;
-    set("ssd4", "sss4", m0 == null ? "mute" : d > 0 ? "green" : d < 0 ? "amber" : "mute",
-        fmtN(m1) + " in the last " + R + " days" + (m0 == null ? "" : " · " + (d > 0 ? "up " + d : d < 0 ? "down " + (-d) : "level")));
-  } else set("ssd4", "sss4", "mute", "–");
 }
 function set(dotId, txtId, cls, txt) { $(dotId).className = "dot " + cls; $(txtId).textContent = txt; }
 function renderTags(v) {
@@ -1611,24 +1595,6 @@ function renderNC() {
 }
 
 /* ── lane 3: landing + weekday ── */
-function landStats(daysBack) {
-  if (!TRENDS || !TRENDS.series || !TRENDS.series.days.length) return null;
-  var d = TRENDS.series.days, sArr = TRENDS.series.sent, bArr = TRENDS.series.bounce_pct;
-  var idxs = [];
-  for (var i = d.length - 1; i >= 0 && idxs.length < daysBack; i--) {
-    if (daysBack === 1) { if ((sArr[i] || 0) > 0) { idxs.push(i); break; } }
-    else idxs.push(i);
-  }
-  var sent = 0, bounced = 0;
-  idxs.forEach(function (ii) {
-    var s = sArr[ii] || 0;
-    sent += s;
-    if (bArr[ii] != null) bounced += s * bArr[ii] / 100;
-  });
-  if (!sent) return null;
-  var pct = Math.max(0, Math.min(100, Math.round(100 - bounced / sent * 100)));
-  return { pct: pct, sent: sent, lastDay: d[idxs[0]] };
-}
 // Fleet reply rate, day by day. A quiet day is not a rate — under WK_MIN_SENT
 // the day is a gap in the line, not a zero.
 var WK_MIN_SENT = 200;
@@ -1637,7 +1603,7 @@ function weekSeries(n) {
   // client-windows); the fleet trends line is the fallback — renderWeek says
   // which one is on screen so a client view never silently reads fleet-wide.
   var out = { days: [], rate: [], sent: [], scope: "fleet" };
-  var cs = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
+  var cs = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
   if (cs && CW.days && CW.days.length) {
     var min = state.client === "All" ? WK_MIN_SENT : 50;
     var from0 = Math.max(0, CW.days.length - n);
@@ -1824,7 +1790,7 @@ function renderRank() {
       return (b.mtg - a.mtg) || (b.pos - a.pos) || ((b.replied / b.sent) - (a.replied / a.sent));
     });
     var top = rows.slice(0, 8);
-    $("rank-scope").textContent = "· " + rangeLabel();
+    $("rank-scope").textContent = "· " + rangeLabel() + " · positives & meetings all-time";
     var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
     top.forEach(function (c, i) {
       var scLT = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
@@ -1866,6 +1832,7 @@ function renderRank() {
   });
   var topLT = rowsLT.slice(0, 8);
   $("rank-scope").textContent = "· all time — the " + rangeLabel() + " view is warming up";
+  if (SCORE && !SCORE.asof) { var _rs = $("rank-stamp"); _rs.textContent = "freshness unknown"; _rs.classList.add("stale"); }
   var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
   topLT.forEach(function (c, i) {
     var cost = campCost(c.id);
@@ -1950,13 +1917,21 @@ function renderOffer() {
 /* ── lane 5: who replies + waiting ── */
 // live per-client × range payload from /api/who-replies (see ensureWho)
 var WHO = null, WHO_KEY = null;
+var WHO_INFLIGHT = null;
 function ensureWho() {
   var kk = state.client + "|" + state.range;
   if (WHO_KEY === kk) { renderWho(); return; }
   renderWho();   // paint a loading/previous state immediately
+  if (WHO_INFLIGHT === kk) return;   // boot renders re-enter per payload arrival
+  WHO_INFLIGHT = kk;
   j("/api/who-replies?client=" + encodeURIComponent(state.client) + "&days=" + state.range)
-    .then(function (d) { if (d && !d.error) { WHO = d; WHO_KEY = kk; renderWho(); } })
-    .catch(function () { /* leave the previous view */ });
+    .then(function (d) {
+      if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null;
+      // a slow response for a filter the user already left must not clobber
+      // the current view (out-of-order race stranded the cards at Loading…)
+      if (d && !d.error && kk === state.client + "|" + state.range) { WHO = d; WHO_KEY = kk; renderWho(); }
+    })
+    .catch(function () { if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null; });
 }
 function renderWho() {
   var p = (WHO_KEY === state.client + "|" + state.range) ? WHO : null;
@@ -2184,7 +2159,7 @@ function renderBounce() {
   setStamp("bnc-stamp", (TRENDS && TRENDS.asof) || (CW && CW.asof), 6);
   var big = $("bnc-big");
   // daily bounce % for the selected client when a true series exists
-  var cs = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
+  var cs = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
   var days = [], bp = [];
   if (cs && CW.days && CW.days.length) {
     days = CW.days.slice(-state.range);
@@ -2290,9 +2265,9 @@ function renderBounce() {
   $("bnc-rows").innerHTML = rows.length
     ? rows.slice(0, 3).map(function (r) {
         return '<div class="bnc-row">' +
-          '<span class="bnc-name">' + r.label +
+          '<span class="bnc-name">' + escq(r.label) +
             (state.client === "All" && r.client && r.label.indexOf(r.client) < 0
-              ? ' <span class="bnc-small">' + r.client + '</span>' : '') +
+              ? ' <span class="bnc-small">' + escq(r.client) + '</span>' : '') +
             (!r.active ? ' <span class="bnc-small">finished</span>' : '') +
             (r.small ? ' <span class="bnc-small">small list — treat as a hint</span>' : '') + '</span>' +
           '<span class="bnc-came">' + r.bounced.toLocaleString("en-US") + ' came back</span>' +
