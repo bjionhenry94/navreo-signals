@@ -271,6 +271,12 @@
 .ah .dtwarn-copy.copied{background:var(--card);color:var(--amber)}
 @media(max-width:640px){.ah .dtwarn{flex-direction:column;align-items:stretch}
   .ah .dtwarn-copy{width:100%}}
+/* Freshness stamps — every card says when its numbers were computed. Amber =
+   past the freshness budget: stale data may render, never silently as-if-live. */
+.ah .stamp{font:500 10.5px/1.5 var(--font-sans);color:var(--ink-3);
+  letter-spacing:0;text-transform:none;white-space:nowrap}
+.ah .stamp.stale{color:var(--amber);font-weight:600}
+.ah .dtwarn-sub.stale{color:var(--amber)}
 </style>
 </head>
 <body>
@@ -306,7 +312,7 @@
   <!-- ══ HERO — your month, day by day ══ -->
   <section class="hero" aria-label="Your month, day by day">
     <div class="card-head">
-      <span class="kicker" id="hero-kick">Day by day · last 30 days</span>
+      <span class="kicker" id="hero-kick">Day by day · last 30 days</span> <span class="stamp" id="hero-stamp"></span>
       <button class="wkndtog" id="ah-weekend" type="button" aria-pressed="false" title="Weekends are near-zero sending days">Hide weekends</button>
     </div>
     <div class="lchips" id="ah-lchips" role="group" aria-label="Show or hide lines"></div>
@@ -326,7 +332,7 @@
       <span class="node num">1</span>
       <div class="lane-head">
         <h2 class="lane-q">Where can we improve the most?</h2>
-        <span class="lane-tag num" id="tag-pipeline">Your pipeline</span>
+        <span class="lane-tag num" id="tag-pipeline">Your pipeline</span> <span class="stamp" id="funnel-stamp"></span>
       </div>
       <div class="hero">
         <div class="hero-flow">
@@ -396,7 +402,7 @@
       <div class="cards c3">
 
         <div class="acard">
-          <div class="card-kick" id="run-kick">Days of leads left</div>
+          <div class="card-kick" id="run-kick">Days of leads left</div><span class="stamp" id="run-stamp"></span>
           <div class="bignum warn num" id="run-big">–</div>
           <div class="subline num" id="run-sub">&nbsp;</div>
           <svg viewBox="0 0 380 120" width="100%" role="img" id="run-svg" aria-label="Lead runway">
@@ -411,14 +417,14 @@
         </div>
 
         <div class="acard">
-          <div class="card-kick"><span id="sig-kick">New people found</span> <span style="text-transform:none;letter-spacing:0;font-weight:500">· whole fleet</span></div>
+          <div class="card-kick"><span id="sig-kick">New people found</span> <span style="text-transform:none;letter-spacing:0;font-weight:500">· whole fleet</span> <span class="stamp" id="sig-stamp"></span></div>
           <div class="bignum num" id="sig-big">–</div>
           <div class="brows" id="sig-rows"></div>
           <div class="take"><span class="arr">→</span><span id="sig-take">&nbsp;</span></div>
         </div>
 
         <div class="acard">
-          <div class="card-kick" id="nc-kick">New campaigns</div>
+          <div class="card-kick" id="nc-kick">New campaigns</div><span class="stamp" id="nc-stamp"></span>
           <div class="bignum num" id="nc-big">–</div>
           <div class="subline" id="nc-live">&nbsp;</div>
           <div class="subline" id="nc-latest">&nbsp;</div>
@@ -455,7 +461,7 @@
 
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick" id="week-kick">Reply rate over time</div>
+            <div class="card-kick" id="week-kick">Reply rate over time</div><span class="stamp" id="week-stamp"></span>
           </div>
           <div class="trendwrap" style="margin-top:0">
             <svg viewBox="0 0 620 170" width="100%" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
@@ -471,7 +477,7 @@
              chips. -->
         <div class="acard bounce">
           <div class="card-head">
-            <div class="card-kick">Emails that came back</div>
+            <div class="card-kick">Emails that came back <span class="stamp" id="bnc-stamp"></span></div>
           </div>
 
           <div class="bnc-hero num" id="bnc-big">–</div>
@@ -516,7 +522,7 @@
 
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">Campaigns, best to worst <span style="text-transform:none;letter-spacing:0;font-weight:500" id="rank-scope">· all time</span></div>
+            <div class="card-kick">Campaigns, best to worst <span style="text-transform:none;letter-spacing:0;font-weight:500" id="rank-scope">· all time</span> <span class="stamp" id="rank-stamp"></span></div>
           </div>
           <div class="rank num">
             <div id="rank-rows"></div>
@@ -539,7 +545,7 @@
              did: same question shape, one level up — the ask beats the wording. -->
         <div class="acard">
           <div class="card-head">
-            <div class="card-kick">What is the offer? <span id="offer-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· whole book</span></div>
+            <div class="card-kick">What is the offer? <span id="offer-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· whole book</span> <span class="stamp" id="offer-stamp"></span></div>
           </div>
           <div id="offer-rows"><div class="subline">Reading the offer off each campaign's copy…</div></div>
           <div class="subline" id="offer-sub">&nbsp;</div>
@@ -558,19 +564,19 @@
       </div>
       <div class="cards c23">
         <div class="acard">
-          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title · whole book</span></div>
+          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title · whole book</span> <span class="stamp" id="who-stamp"></span></div>
           <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
           <div class="subline" id="who-size" style="margin-top:8px">&nbsp;</div>
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
         </div>
         <div class="acard">
-          <div class="card-kick">How fast we answer <span id="wait-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· interested replies · benchmark 15 min</span></div>
+          <div class="card-kick">How fast we answer <span id="wait-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· interested replies · benchmark 15 min</span> <span class="stamp" id="wait-stamp"></span></div>
           <div class="bignum num" id="wait-big">–</div>
           <div class="subline" id="wait-sub">&nbsp;</div>
           <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
         </div>
         <div class="acard">
-          <div class="card-kick">How effective are our follow-ups <span id="subseq-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· automated subsequences</span></div>
+          <div class="card-kick">How effective are our follow-ups <span id="subseq-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· automated subsequences</span> <span class="stamp" id="subseq-stamp"></span></div>
           <div id="subseq-body"><div class="subline">Fills in after the next follow-up sync.</div></div>
           <div class="take" id="subseq-take-row" style="display:none"><span class="arr">→</span><span id="subseq-take"></span></div>
         </div>
@@ -587,7 +593,7 @@
       <div class="cards">
         <div class="acard meet">
           <div class="mleft">
-            <div class="card-kick" id="meet-kick">Meetings booked this month</div>
+            <div class="card-kick" id="meet-kick">Meetings booked this month</div><span class="stamp" id="meet-stamp"></span>
             <div class="bignum num" id="meet-big">–</div>
             <span class="apill mute num" id="meet-pill">&nbsp;</span>
             <div class="subline num" id="meet-src">&nbsp;</div>
@@ -647,6 +653,28 @@ var $ = function (id) { return document.getElementById(id); };
 var escq = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
 var fmtN = function (n) { return (n == null || isNaN(n)) ? "–" : Math.round(n).toLocaleString("en-GB"); };
 var getOrd = function (d) { return d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th"; };
+// ── Freshness stamps ── every card carries "updated X ago" from its payload's
+// real timestamp (asof / generated_at). Past-budget ages go amber (.stale):
+// stale data may render, but never silently as-if-live.
+function ageH(iso) {
+  if (!iso) return null;
+  var t = Date.parse(iso);
+  return isNaN(t) ? null : (Date.now() - t) / 36e5;
+}
+function setStamp(id, iso, budgetH) {
+  var el = $(id);
+  if (!el) return;
+  var h = ageH(iso);
+  var txt = "";
+  if (h != null) {
+    h = Math.max(0, h);
+    txt = h < 1 ? "updated " + Math.max(1, Math.round(h * 60)) + " min ago"
+        : h < 48 ? "updated " + Math.round(h) + " h ago"
+                 : "updated " + Math.round(h / 24) + " days ago";
+  }
+  el.textContent = txt;
+  el.classList.toggle("stale", h != null && h > (budgetH || 6));
+}
 
 function j(url) {
   return fetch(url, { credentials: "same-origin" }).then(function (r) {
@@ -729,6 +757,14 @@ function bookRow(kind) {  // live book-scope insight payload by kind/key
   for (var i = 0; i < INS.insights.length; i++) {
     var r = INS.insights[i];
     if (r.scope === "book" && (r.insight_key === kind || (r.payload && r.payload.kind === kind))) return r.payload;
+  }
+  return null;
+}
+function bookRowTs(kind) {  // the row's OWN generated_at — feeds its stamp
+  if (!INS || !INS.insights) return null;
+  for (var i = 0; i < INS.insights.length; i++) {
+    var r = INS.insights[i];
+    if (r.scope === "book" && (r.insight_key === kind || (r.payload && r.payload.kind === kind))) return r.generated_at || null;
   }
   return null;
 }
@@ -991,6 +1027,7 @@ function renderTrend() {
   renderLegend();
   $("hero-kick").textContent = "Day by day · " + rangeLabel() +
     (state.client === "All" ? "" : " · " + state.client);
+  setStamp("hero-stamp", (CW && CW.asof) || (HUB && HUB.asof), 6);
   // Axis = the hub's day list, or client-windows' aligned day list while the hub
   // RPC is still in flight. Either one lets the chart draw; only when BOTH are
   // missing do we show the loading frame.
@@ -1285,7 +1322,8 @@ function renderFunnel() {
   $("tag-pipeline").textContent = "Your pipeline · " +
     (v.empty ? rangeLabel() + " — no sending yet"
              : v.win ? rangeLabel()
-                     : "all time — the " + rangeLabel() + " view is warming up, ~2 min");
+                     : "all time — the " + rangeLabel() + " view is warming up (first build takes a few minutes)");
+  setStamp("funnel-stamp", (CW && CW.asof) || (HUB && HUB.asof), 6);
   var r1 = v.sent ? v.rep / v.sent : 0, r2 = v.rep ? v.pos / v.rep : 0, r3 = v.pos ? v.mtg / v.pos : 0;
   // "each lead gets ~N emails" is a lifetime property of the sequences — it
   // has no meaning inside a 7/14/30 window, so it only shows in fallback mode
@@ -1471,6 +1509,7 @@ function renderRunway(v) {
   // The lane-1 FUEL card was removed (duplicated this lane) — this now drives
   // only lane 2's runway (run-*).
   var isAll = state.client === "All";
+  setStamp("run-stamp", CW && CW.asof, 6);
   // Per-client daily send rate (Bjion 2026-07-28: "works for all clients but
   // not individual"). Fleet keeps its tested weekday average; a client's rate
   // comes from ITS window sent ÷ the weekdays in the window — the sweep has
@@ -1511,6 +1550,7 @@ function renderRunway(v) {
 function renderSignals() {
   if (!SIG || !SIG.all) { $("sig-big").textContent = "–"; return; }
   $("sig-kick").textContent = "New people found · " + rangeLabel();
+  setStamp("sig-stamp", SIG && SIG.asof, 6);
   var total = slice(SIG.all).reduce(function (a, b) { return a + (b || 0); }, 0);
   $("sig-big").textContent = fmtN(total);
   var mech = {};
@@ -1536,6 +1576,7 @@ function renderSignals() {
 function renderNC() {
   if (!UNI || !UNI.rows) { $("nc-big").textContent = "–"; return; }
   $("nc-kick").textContent = "New campaigns · " + rangeLabel();
+  setStamp("nc-stamp", UNI && UNI.asof, 6);
   var cut = Date.now() - state.range * 864e5;
   var added = 0, live = 0, latest = null;
   UNI.rows.forEach(function (r) {
@@ -1638,6 +1679,7 @@ function weekHide() { var g = document.getElementById("wk-hov"); if (g) g.parent
 function renderWeek() {
   var d = weekSeries(state.range);
   $("week-kick").textContent = "Reply rate over time · " + rangeLabel();
+  setStamp("week-stamp", d.scope === "fleet" ? (TRENDS && TRENDS.asof) : (CW && CW.asof), 6);
   var pts = [];
   for (var i = 0; i < d.rate.length; i++) if (d.rate[i] != null) pts.push(i);
   if (pts.length < 2) {
@@ -1752,6 +1794,7 @@ function renderRank() {
   // fallback (while the sweep is still building).
   var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
   var minSent = Math.max(100, state.range * 15);
+  setStamp("rank-stamp", win && win.length ? (CW && CW.asof) : (SCORE && SCORE.asof), 6);
   if (win && win.length) {
     var rows = win.filter(function (r) {
       return r.sent >= minSent && (state.client === "All" || r.client === state.client);
@@ -1851,6 +1894,7 @@ function renderDying() {
 // each campaign's live sequence copy). Rate per offer group, best first.
 function renderOffer() {
   var p = bookRow("offer");
+  setStamp("offer-stamp", bookRowTs("offer"), 24);
   var box = $("offer-rows");
   // Show ONLY the selected client's offers — never the whole-book table under
   // a client chip (that mislabelled the fleet's numbers as KRG's, Bjion
@@ -1905,6 +1949,9 @@ function ensureWho() {
 function renderWho() {
   var p = (WHO_KEY === state.client + "|" + state.range) ? WHO : null;
   var scope = state.client === "All" ? "whole book" : state.client;
+  setStamp("who-stamp", p && p.asof, 6);
+  setStamp("wait-stamp", p && p.asof, 6);
+  setStamp("subseq-stamp", p && p.asof, 6);
   // ── left box: who's replying (role mix + company size), per client+range ──
   var named = (p && p.named) || 0;
   var roleRows = (p && p.buckets) || [];
@@ -2004,6 +2051,7 @@ function renderMeet() {
   // funnel's "MEETINGS · N" under the same range toggle (the calendar-month
   // card did, seen by three rounds of testers 2026-07-28).
   var mtg = seriesFor("meetings") || [];
+  setStamp("meet-stamp", HUB && HUB.asof, 6);
   var R = state.range;
   var t = halfSum(mtg, R);
   var havePrior = mtg.length >= R * 2;
@@ -2025,7 +2073,7 @@ function renderMeet() {
   $("meet-mb1").style.height = Math.max(6, Math.round(pv / max * 84)) + "px";
   $("meet-mv2").textContent = fmtN(t);
   $("meet-mb2").style.height = Math.max(6, Math.round(t / max * 84)) + "px";
-  var lat = HUB.latency && HUB.latency[ckey()];
+  var lat = HUB && HUB.latency && HUB.latency[ckey()];
   $("meet-take").textContent = (t === 0)
     ? "No meetings" + (state.client === "All" ? "" : " for " + state.client) + " in the " + rangeLabel() + " — fix the biggest leak above first."
     : (d >= 0
@@ -2121,6 +2169,7 @@ function bncRows() {
 
 function renderBounce() {
   var s = TRENDS && TRENDS.series;
+  setStamp("bnc-stamp", (TRENDS && TRENDS.asof) || (CW && CW.asof), 6);
   var big = $("bnc-big");
   // daily bounce % for the selected client when a true series exists
   var cs = CW && CW.series && CW.series[state.client === "All" ? "__all" : state.client];
@@ -2280,6 +2329,8 @@ function renderCollision() {
   } else { when = COLL.run_date || ""; }
   if (when) sub += "  ·  " + (live ? "confirmed live · " + when : "approx · " + when + " (confirming live)");
   $("dtwarn-sub").textContent = sub;
+  var collAge = ageH(live ? COLL.run_at : (COLL.run_date || null));
+  $("dtwarn-sub").classList.toggle("stale", collAge != null && collAge > 24);
 
   _dtPrompt = buildCollPrompt(all, n, pc);
   bar.classList.add("on");

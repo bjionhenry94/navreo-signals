@@ -6754,6 +6754,7 @@ def _compute_campaigns_unified(refresh: bool = False) -> dict:
     out["rows"] = sl_rows + hr_rows + (out.pop("unlinked", []) or [])
     out["smartlead_count"] = len(sl_rows)
     out["heyreach_count"] = len(hr_rows)
+    out["asof"] = _dtmod.datetime.utcnow().isoformat() + "Z"
     return out
 
 
@@ -7713,8 +7714,14 @@ def _scorecard_sync_all():
             sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id", rows,
                prefer="resolution=merge-duplicates,return=minimal")
         print(f"[scorecard-sync] refreshed {done} campaigns in {int(time.time() - t0)}s", flush=True)
+        global _SCORECARD_SYNC_TS
+        _SCORECARD_SYNC_TS = _dtmod.datetime.utcnow().isoformat() + "Z"
+        _blob_snapshot_save("scorecard_sync_ts", {"ts": _SCORECARD_SYNC_TS})
     finally:
         _SCORECARD_SYNC_LOCK.release()
+
+
+_SCORECARD_SYNC_TS = None  # ISO stamp of the last completed full sync pass
 
 
 def _scorecard_sync_loop():
@@ -7873,7 +7880,12 @@ def _all_campaign_scorecard() -> dict:
                 "status": p.get("status")}
     except Exception:  # noqa: BLE001
         pass
-    return {"campaigns": camps, "heyreach": hr}
+    # honest freshness: asof = when the hourly sync last completed a full pass
+    # (restored from its snapshot row after a deploy so the stamp survives)
+    asof = _SCORECARD_SYNC_TS
+    if not asof:
+        asof = (_blob_snapshot_load("scorecard_sync_ts") or {}).get("ts")
+    return {"campaigns": camps, "heyreach": hr, "asof": asof}
 
 
 _CAMPAIGN_SCORECARD_ALL_SWR = _SWRCache(_all_campaign_scorecard, 120,
@@ -8839,6 +8851,33 @@ _COLLECTIVE_30D_SWR = _SWRCache(_collective_30d, 300,
 # answer speed, meetings by calendar month, and the campaign→client map.
 # Fleet sent/bounce stay on /api/deliverability-trends (no client dimension
 # exists for them anywhere). SQL lives in app/migrations/analytics_hub_v1.sql.
+# ── Deploy-warm snapshots for the analytics page's heavy payloads ───────────
+# A deploy wipes the in-memory SWR caches, so the first analytics-page load
+# after one paid the full compute (30-70s hub RPC on a busy Supabase, 3-4s
+# trends). Persist each successful compute into deliverability_audit_cache
+# (the table client-windows already restores from); after a boot the snapshot
+# is seeded stale (ts 0) so it serves in milliseconds while one background
+# refresh brings it current.
+def _blob_snapshot_save(cache_id: str, blob: dict) -> None:
+    try:
+        sb("POST", "deliverability_audit_cache?on_conflict=id",
+           {"id": cache_id, "blob": blob,
+            "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001 — persistence is best-effort
+        print(f"[snap:{cache_id}] persist failed: {e}", file=sys.stderr)
+
+
+def _blob_snapshot_load(cache_id: str) -> dict | None:
+    try:
+        rows = sb("GET", f"deliverability_audit_cache?id=eq.{cache_id}&select=blob")
+        if rows and isinstance(rows[0].get("blob"), dict):
+            return rows[0]["blob"]
+    except Exception as e:  # noqa: BLE001
+        print(f"[snap:{cache_id}] restore failed: {e}", file=sys.stderr)
+    return None
+
+
 def _analytics_hub_cached(days) -> dict:
     try:
         n = max(7, min(30, int(days or 30)))
@@ -8851,6 +8890,8 @@ def _analytics_hub_cached(days) -> dict:
         r = r.get("analytics_hub_v1")
     if not isinstance(r, dict) or not r.get("days"):
         return {"error": "Supabase read failed"}
+    if n == 30:
+        _blob_snapshot_save("analytics_hub_30", r)
     return r
 
 
@@ -8858,6 +8899,26 @@ _ANALYTICS_HUB_SWR = _SWRKeyedCache(
     _analytics_hub_cached, 600,
     is_degraded=lambda p: not isinstance(p, dict) or bool(p.get("error")),
     name="analytics-hub")
+
+_AH_SNAP_SEEDED = False
+
+
+def _ah_seed_from_snapshot() -> None:
+    """One-time after boot: seed the hub SWR from the persisted snapshot
+    (stale, ts 0) so the first page load serves instantly instead of paying
+    the RPC on the request thread."""
+    global _AH_SNAP_SEEDED
+    if _AH_SNAP_SEEDED:
+        return
+    _AH_SNAP_SEEDED = True
+    with _ANALYTICS_HUB_SWR.lock:
+        if "30" in _ANALYTICS_HUB_SWR.entries:
+            return
+    snap = _blob_snapshot_load("analytics_hub_30")
+    if snap:
+        with _ANALYTICS_HUB_SWR.lock:
+            _ANALYTICS_HUB_SWR.entries.setdefault(
+                "30", {"ts": 0.0, "payload": snap, "refreshing": False})
 
 
 # ── Analytics hub book insights (messaging league + who-replies) ────────────
@@ -9317,6 +9378,12 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             "data_fingerprint": fp, "generated_by": "cron-analytics-hub",
             "status": "live", "expires_at": expires})
         written.append(ikey)
+    if offer_payload is None:
+        # the offer card silently kept a days-old row whenever this branch hit
+        # (copy crawl came back with <2 offers) — say so loudly so staleness is
+        # a log line, not a mystery; the UI stamps the row's own generated_at
+        print(f"[analytics-hub] offer rebuild yielded {len(offers)} offer(s) — "
+              "keeping the existing live row", file=sys.stderr)
     try:
         _COCKPIT_INSIGHTS_SWR.ts = 0  # the hub reads /api/cockpit/insights — serve fresh rows now
     except Exception:  # noqa: BLE001
@@ -13301,6 +13368,19 @@ def _cron_pull_bg():
         _analytics_hub_insights_refresh()
     except Exception as e:  # noqa: BLE001
         print(f"[analytics-hub] insight refresh failed: {e}", file=sys.stderr)
+    try:
+        # analytics-page freshness ride-along: the client-windows rebuild used
+        # to be request-kicked only, so over a quiet stretch the page's windowed
+        # numbers rotted up to 30h (seen 2026-08-01, +5-7% off the true window).
+        # Ticking the getters here bounds staleness at ~TTL + one tick even
+        # with zero visitors; each call is serve-stale + one bg thread, never a
+        # request-path compute (OOM rail: no in-process heavy sweeps beyond
+        # these existing paced builders).
+        client_windows_get()
+        _ANALYTICS_HUB_SWR.get("30")
+        deliv_trends_get(30)
+    except Exception as e:  # noqa: BLE001
+        print(f"[analytics-hub] freshness ride-along failed: {e}", file=sys.stderr)
 
 
 # ── HeyReach daily snapshot (pg_cron → pg_net → POST /api/cron/heyreach-sync) ─
@@ -14749,30 +14829,59 @@ def _deliv_trends_build(days: int) -> dict:
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
 
 
+def _deliv_trends_refresh_bg(days: int) -> None:
+    try:
+        data = _deliv_trends_build(days)
+    except Exception as e:  # noqa: BLE001 — keep serving the stale copy
+        print(f"[trends] background rebuild failed: {e}", file=sys.stderr)
+        with _DELIV_TRENDS_LOCK:
+            _DELIV_TRENDS_BUILDING.discard(days)
+        return
+    with _DELIV_TRENDS_LOCK:
+        _DELIV_TRENDS_BUILDING.discard(days)
+        _DELIV_TRENDS[days] = {"data": data, "ts": time.time()}
+    if days == 30:
+        _blob_snapshot_save("deliv_trends_30", data)
+
+
 def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
     days = max(7, min(90, days))
     with _DELIV_TRENDS_LOCK:
         ent = _DELIV_TRENDS.get(days)
-        if ent and (time.time() - ent["ts"]) < _DELIV_TRENDS_TTL_S:
+    if ent is None and days == 30:
+        # deploy-warm restore: serve the persisted snapshot stale (ts 0) and
+        # let the background rebuild bring it current
+        snap = _blob_snapshot_load("deliv_trends_30")
+        if snap:
+            with _DELIV_TRENDS_LOCK:
+                ent = _DELIV_TRENDS.setdefault(30, {"data": snap, "ts": 0.0})
+    if ent:
+        if (time.time() - ent["ts"]) < _DELIV_TRENDS_TTL_S:
             return ent["data"], 200
-        if days in _DELIV_TRENDS_BUILDING:
-            # a concurrent request is already building this window — serve the
-            # stale copy if one exists rather than duplicating the Smartlead call
-            if ent:
-                return ent["data"], 200
+        # stale: serve immediately, kick exactly one background rebuild — the
+        # 3-4s Smartlead day-wise call never sits on the request thread once
+        # any copy exists (same SWR semantics as every other cache here)
+        kick = False
+        with _DELIV_TRENDS_LOCK:
+            if days not in _DELIV_TRENDS_BUILDING:
+                _DELIV_TRENDS_BUILDING.add(days)
+                kick = True
+        if kick:
+            threading.Thread(target=_deliv_trends_refresh_bg, args=(days,), daemon=True).start()
+        return ent["data"], 200
+    with _DELIV_TRENDS_LOCK:
         _DELIV_TRENDS_BUILDING.add(days)
     try:
         data = _deliv_trends_build(days)
-    except Exception as e:  # noqa: BLE001 — serve stale over erroring if we have one
+    except Exception as e:  # noqa: BLE001 — nothing cached yet, surface the error
         with _DELIV_TRENDS_LOCK:
             _DELIV_TRENDS_BUILDING.discard(days)
-            ent = _DELIV_TRENDS.get(days)
-            if ent:
-                return ent["data"], 200
         return {"error": "trends_unavailable", "message": str(e)[:200]}, 502
     with _DELIV_TRENDS_LOCK:
         _DELIV_TRENDS_BUILDING.discard(days)
         _DELIV_TRENDS[days] = {"data": data, "ts": time.time()}
+    if days == 30:
+        _blob_snapshot_save("deliv_trends_30", data)
     return data, 200
 
 
@@ -15330,7 +15439,8 @@ def _who_replies_compute(client: str, days: int) -> dict:
         subseq = None
     return {"client": client, "days": days, "n": n_pos, "named": named,
             "buckets": [[k, v] for k, v in blist], "sizes": slist,
-            "size_named": sum(size_buckets.values()), "speed": speed, "subseq": subseq}
+            "size_named": sum(size_buckets.values()), "speed": speed, "subseq": subseq,
+            "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
 
 
 def who_replies_get(client: str, days: int) -> tuple[dict, int]:
@@ -18010,6 +18120,7 @@ class Handler(SimpleHTTPRequestHandler):
             # setter speed + monthly meetings, one round trip (analytics_hub_v1).
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
+            _ah_seed_from_snapshot()
             return self._json(_inject_demo_analytics_hub(_ANALYTICS_HUB_SWR.get((q.get("days") or ["30"])[0])))
         if path == "/api/cockpit/insights":
             # Cockpit render layer: what Claude wrote on the morning crunch
