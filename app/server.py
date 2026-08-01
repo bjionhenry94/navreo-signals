@@ -19423,6 +19423,8 @@ def _boot_warmup():
         ("campaigns-unified", lambda: _CAMPAIGNS_UNIFIED_SWR.get()),
         ("signals-daily", lambda: _SIGNALS_DAILY_SWR.get()),
         ("who-replies", lambda: who_replies_get("All", 30)),
+        ("campaign-scorecard", lambda: _CAMPAIGN_SCORECARD_ALL_SWR.get()),
+        ("cockpit-insights", lambda: _COCKPIT_INSIGHTS_SWR.get()),
         ("restore-mailboxes", _restore_mailboxes),
         ("restore-sweep", _restore_sweep_start),
         ("restore-reminders", _restore_reminders),
