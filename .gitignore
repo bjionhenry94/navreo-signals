@@ -7,3 +7,4 @@ app/data/*.json
 app/data/.drafts.lock
 .DS_Store
 base/
+app/prototypes/
