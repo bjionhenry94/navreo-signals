@@ -9283,8 +9283,12 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     # meetings come from the scorecard, so a client with no meetings (KRG)
     # correctly gets "–" per meeting — same basis as the campaigns table
     # (Bjion 2026-07-29). One scorecard read covers everything.
+    # NO `meetings` in this select: campaign_scorecard has no such column, and
+    # selecting it 400s the read → 0 rows → 0 offers → the offer card silently
+    # served its last good row for days (root cause found 2026-08-02). Meetings
+    # are overridden from the reply archive below anyway.
     all_sc = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,name,workspace,"
-                        "sent,replied,positives,meetings") or []
+                        "sent,replied,positives") or []
     sc_by_id = {str(r.get("smartlead_campaign_id")): r for r in all_sc}
     lead_ids = [str(cid) for cid, _n in sorted(by_camp.items(), key=lambda kv: -kv[1])[:40]]
     per_client_top: dict = {}
