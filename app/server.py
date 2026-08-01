@@ -7499,7 +7499,7 @@ def _scorecard_smartlead_ids() -> list:
     return ids
 
 
-def _reply_archive_meetings(sl_ids: list | None = None) -> dict | None:
+def _reply_archive_meetings(sl_ids: list | None = None, workspace: str | None = "navreo") -> dict | None:
     """{smartlead_campaign_id: meetings} from the reply archive. A meeting is a
     PERSON: each distinct lead with at least one Call Booked reply counts once,
     however many rows their thread produced (per-row counting showed "5
@@ -7507,10 +7507,13 @@ def _reply_archive_meetings(sl_ids: list | None = None) -> dict | None:
     ruling 2026-07-30): a Meeting Request is not a meeting until the call is
     actually booked. Auditable by construction: anyone can re-count the same
     rows. Returns None when the archive is unreachable so callers gate rather
-    than show false zeros."""
+    than show false zeros. workspace=None counts every workspace — for
+    surfaces that mix client campaigns in (the offer table's per-client
+    groups); Navreo-own surfaces keep the default."""
     from urllib.parse import quote
-    q = ("replies?select=smartlead_campaign_id,email&workspace=eq.navreo"
-         "&category=eq.Call%20Booked")
+    q = "replies?select=smartlead_campaign_id,email&category=eq.Call%20Booked&order=id"
+    if workspace:
+        q += f"&workspace=eq.{quote(workspace, safe='')}"
     if sl_ids:
         ors = ",".join(str(s) for s in sl_ids)
         q += f"&smartlead_campaign_id=in.({quote(ors, safe=',')})"
@@ -9219,7 +9222,11 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
     # reply archive (Call Booked ONLY, owner ruling 2026-07-30) so this table
     # obeys the rule no matter what the external writer stamps. None (archive
     # unreachable) falls back to the scorecard column rather than showing 0s.
-    _cb_meet = _reply_archive_meetings([c for c in cand_ids if str(c).isdigit()])
+    # workspace=None: cand_ids deliberately mixes in each client's top
+    # campaigns (incl. own-workspace clients), and a navreo-only archive read
+    # reported a structural 0 meetings for every one of them (panel fix
+    # 2026-08-01). Per-campaign ids keep each count in its own column.
+    _cb_meet = _reply_archive_meetings([c for c in cand_ids if str(c).isdigit()], workspace=None)
     per_group_agg: dict = {}
     for cid in cand_ids:
         row = sc_by_id.get(str(cid))

@@ -136,6 +136,8 @@ class FakeSB:
     def _match_eq(value, op_value):
         if op_value == "is.null":
             return value is None
+        if op_value == "not.is.null":
+            return value is not None
         if op_value.startswith("eq."):
             # PostgREST booleans are lowercase (eq.false); Python str(False)
             # is "False" - compare case-insensitively for the boolean literals.
@@ -9203,6 +9205,63 @@ def test_async_send_start_joins_running_job():
             setter._REDRAFT_JOBS.pop("job-runn1", None)
 
 
+def test_send_claim_stamps_updated_at():
+    """The claim must carry updated_at (no DB trigger exists): without it the
+    reaper and the recency gate read INTAKE age as claim age — the round-1
+    panel's critical finding."""
+    sb, http = fresh_setter()
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=4)).isoformat(timespec="seconds")
+    sb.queue.append(_sendable_row(820, mid="m-claim", updated_at=old))
+    setter._send_reply(sb.queue[0], {}, "Re: hi", "<p>hi</p>")
+    check("send claim: updated_at moves off the intake stamp when the claim lands",
+         sb.queue[0].get("updated_at") != old, sb.queue[0].get("updated_at"))
+    check("send claim: the send completed", sb.queue[0].get("status") == "sent", sb.queue[0])
+
+
+def test_followup_preserves_original_sent_record():
+    """A follow-up must never overwrite the FIRST reply's sent_at/sent_body —
+    they are the only durable record of what went out and when."""
+    sb, http = fresh_setter()
+    first_at = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=setter.DOUBLE_SEND_WINDOW_MIN + 5)).isoformat(timespec="seconds")
+    sb.queue.append(_sendable_row(821, mid="m-fu", status="sent",
+                                  sent_at=first_at, sent_body="<p>the original</p>", updated_at=first_at))
+    status, resp = setter.route_queue_action({"id": 821, "action": "send_followup",
+                                              "body": "<p>one more</p>"})
+    row = sb.queue[0]
+    check("follow-up: goes through outside the window", status == 200 and resp.get("ok") is True, (status, resp))
+    check("follow-up: original sent_at survives", row.get("sent_at") == first_at, row.get("sent_at"))
+    check("follow-up: original sent_body survives", row.get("sent_body") == "<p>the original</p>", row.get("sent_body"))
+    sends = [c for c in http.smartlead_calls if "reply-email-thread" in c[1]]
+    check("follow-up: exactly one Smartlead post", len(sends) == 1, len(sends))
+
+
+def test_stranded_followup_claim_restores_to_sent():
+    """A 'sending' claim taken from an already-SENT row (interrupted
+    follow-up) must reap back to sent, never needs_review — dropping it there
+    re-armed Approve on a thread whose first reply already went out."""
+    sb, http = fresh_setter()
+    old = (dt.datetime.now(dt.timezone.utc)
+           - dt.timedelta(minutes=setter.SENDING_STALE_MIN + 5)).isoformat(timespec="seconds")
+    sb.queue.append(_sendable_row(822, mid="m-fu-stuck", status="sending",
+                                  sent_at=old, updated_at=old))
+    setter._redrive_stranded_claims([], {}, {"errors": 0})
+    row = sb.queue[0]
+    check("follow-up reaper: interrupted follow-up claim restores to sent",
+         row.get("status") == "sent" and "follow-up" in (row.get("error") or ""), row)
+
+
+def test_recent_send_block_ignores_test_rows():
+    """A dry test send stamps sent_at without any real email — its phantom
+    recency must not block a genuine send."""
+    sb, http = fresh_setter()
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    sb.queue.append(_sendable_row(823, mid="m-test", status="sent", sent_at=now_iso, is_test=True))
+    sb.queue.append(_sendable_row(824, mid="m-real"))
+    status, resp = setter.route_queue_action({"id": 824, "action": "send"})
+    check("recency gate: a test row's phantom send never blocks a real one",
+         status == 200 and resp.get("ok") is True, (status, resp))
+
+
 def test_stranded_sending_claim_reaped_to_needs_review():
     sb, http = fresh_setter()
     old = (dt.datetime.now(dt.timezone.utc)
@@ -9491,6 +9550,10 @@ if __name__ == "__main__":
     test_recent_send_block_allows_after_window()
     test_async_send_start_joins_running_job()
     test_stranded_sending_claim_reaped_to_needs_review()
+    test_send_claim_stamps_updated_at()
+    test_followup_preserves_original_sent_record()
+    test_stranded_followup_claim_restores_to_sent()
+    test_recent_send_block_ignores_test_rows()
     test_agent_adoption_busts_the_read_caches()
     test_redraft_async_job_returns_immediately_and_reports_its_result()
 

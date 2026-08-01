@@ -83,6 +83,11 @@
 .il-rail { display: none; }
 .inbox-shell.list-collapsed .il-rail { display: flex; flex-direction: column; align-items: center; padding-top: 8px; }
 .inbox-shell.list-collapsed .il-resizer { display: none; }
+@media (max-width: 900px) {
+  /* Collapse/resize are desktop-only (the JS also refuses to apply the
+     collapsed class at this width — this hides the controls). */
+  .il-collapse-btn, .il-resizer { display: none !important; }
+}
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .il-search input {
   width: 100%; border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 13px;
@@ -744,7 +749,7 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
           <input type="text" id="inboxSearch" placeholder="Search name, email, campaign, reply…">
           <div class="il-search-notes">
             <span class="small muted">&uarr;&darr; to move between replies</span>
-            <span class="small muted" id="searchAllNote" style="display:none">searching all replies</span>
+            <span class="small muted" id="searchAllNote" style="display:none">searching this filter only</span>
             <button type="button" class="il-collapse-btn" id="listCollapseBtn" title="Minimise the conversations list">&#171;</button>
           </div>
           <select class="client-filter-sel il-client-filter" id="clientFilterSel" title="Filter by client"></select>
@@ -1241,18 +1246,26 @@ function showDetailError(msg) {
   el.textContent = msg;
   el.style.display = "block";
 }
+function clearDetailError() {
+  const el = document.getElementById("detailErrBanner");
+  if (el) el.style.display = "none";
+}
 
 /* ── Load ──────────────────────────────────────────────── */
 async function loadAgentsAndCampaigns() {
   // campaigns-unified + clients ride along in the same parallel batch (Change
   // 3): they power campaignClientMap, not AGENTS/CAMPAIGNS, but there's no
   // reason to wait for them separately or block the page on either one.
+  // Same timeout+retry armour as the queue prefetch (panel fix 2026-08-01):
+  // these are idempotent reads, and a restart-window 502 on the agents call
+  // used to paint "Autopilot OFF" as fact with no self-heal.
+  const _ro = { _timeoutMs: 15000, _retries: 1 };
   const [agentsRes, campaignsRes, unifiedRes, clientsRes, workspacesRes] = await Promise.all([
-    fetchJson("/api/setter/agents"),
-    fetchJson("/api/setter/campaigns"),
-    fetchJson("/api/campaigns-unified"),
-    fetchJson("/api/clients"),
-    fetchJson("/api/workspaces"),
+    fetchJson("/api/setter/agents", _ro),
+    fetchJson("/api/setter/campaigns", _ro),
+    fetchJson("/api/campaigns-unified", _ro),
+    fetchJson("/api/clients", _ro),
+    fetchJson("/api/workspaces", _ro),
   ]);
   if (agentsRes.ok) {
     AGENTS = agentsRes.data.agents || [];
@@ -1302,16 +1315,28 @@ async function loadAgentsAndCampaigns() {
    payload: tombstoned ids (sent / dismissed / filed) are dropped from any
    incoming payload, and overridden rows (fresh redraft, recategorise, sent
    state) are merged over their stale twins — until the server catches up. */
-const ROW_TOMBSTONES = {};   // id -> expiry ms epoch
+const ROW_TOMBSTONES = {};   // id -> {until: ms epoch, keepFor: status|null}
 const ROW_OVERRIDES = {};    // id -> {row, at}
 const MUTATION_SHIELD_MS = 65000;   // > 3x the server's SWR TTL
-function tombstoneRow(id) { if (id != null) ROW_TOMBSTONES[String(id)] = Date.now() + MUTATION_SHIELD_MS; }
+// keepFor names the status pill where the row SHOULD now live ("sent",
+// "dismissed") — the tombstone drops it from every OTHER pill's stale payload
+// but keeps it (override-merged) under its new pill and under All. A bare
+// tombstone (keepFor null) drops it everywhere (converted rows: the id is
+// dead). Panel fix 2026-08-01: the v1 tombstone dropped just-sent replies
+// from the Sent pill for 65s.
+function tombstoneRow(id, keepFor) {
+  if (id != null) ROW_TOMBSTONES[String(id)] = { until: Date.now() + MUTATION_SHIELD_MS, keepFor: keepFor || null };
+}
 function overrideRow(row) { if (row && row.id != null) ROW_OVERRIDES[String(row.id)] = { row: row, at: Date.now() }; }
 function reconcileQueuePayload(rows) {
   const now = Date.now();
-  Object.keys(ROW_TOMBSTONES).forEach((k) => { if (ROW_TOMBSTONES[k] < now) delete ROW_TOMBSTONES[k]; });
+  Object.keys(ROW_TOMBSTONES).forEach((k) => { if (ROW_TOMBSTONES[k].until < now) delete ROW_TOMBSTONES[k]; });
   Object.keys(ROW_OVERRIDES).forEach((k) => { if (now - ROW_OVERRIDES[k].at > MUTATION_SHIELD_MS) delete ROW_OVERRIDES[k]; });
-  return (rows || []).filter((r) => !(String(r.id) in ROW_TOMBSTONES)).map((r) => {
+  return (rows || []).filter((r) => {
+    const t = ROW_TOMBSTONES[String(r.id)];
+    if (!t) return true;
+    return t.keepFor != null && (!currentStatus || currentStatus === t.keepFor);
+  }).map((r) => {
     const ov = ROW_OVERRIDES[String(r.id)];
     return ov ? Object.assign({}, r, ov.row) : r;
   });
@@ -1346,10 +1371,20 @@ async function _loadQueueInner(prefetch) {
   _queueLoading = false;
   if (res.ok) {
     QUEUE_ROWS = reconcileQueuePayload(res.data.rows || []);
-    KPIS = res.data.kpis || {};
+    // Counter shield (panel fix 2026-08-01): the rows are shielded from the
+    // stale payload but the counters were replaced wholesale, so the pill
+    // bounced back to the pre-action number ~1s after every Approve/Dismiss.
+    // While any local mutation is still under shield, keep the locally
+    // adjusted counters; the server catches up within the shield window.
+    if (!Object.keys(ROW_TOMBSTONES).length && !Object.keys(ROW_OVERRIDES).length) {
+      KPIS = res.data.kpis || {};
+    }
     LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
     renderLastChecked();
-    clearError();
+    // Only clear a banner THIS loader owns — wiping someone else's error
+    // (e.g. "Couldn't load setter agents") hid real failures.
+    const eb = document.getElementById("errBanner");
+    if (eb && /^Couldn't refresh the queue/.test(eb.textContent || "")) clearError();
   } else {
     // KEEP the last good rows (owner report 2026-07-28: a 502 window used to
     // blank every conversation - the error reload wiped QUEUE_ROWS and
@@ -1363,7 +1398,10 @@ async function _loadQueueInner(prefetch) {
     showError("Couldn't refresh the queue: " + res.error +
       (QUEUE_ROWS.length ? " - showing the last loaded conversations." : ""));
   }
-  if (!_allRowsLoaded) ALL_ROWS = QUEUE_ROWS;  // provisional corpus until hydrate lands
+  // A COPY, not an alias (panel fix 2026-08-01): shared row objects keep the
+  // cross-pill mutations cheap, but tray-opened shells are pushed into
+  // ALL_ROWS and an alias leaked them straight into the active pill's list.
+  if (!_allRowsLoaded) ALL_ROWS = QUEUE_ROWS.slice();
   renderKpis();
   renderQueueFilters();
   renderClientFilter();
@@ -1500,8 +1538,17 @@ function renderUnresolvedTray() {
   // Keep the reviewer's place (bounce fix 2026-08-01): the wholesale
   // innerHTML swap zeroed the tray's scroll on every render — every action,
   // every 60s reload — which is most of the reported "UI bounces around".
+  // An OPEN subsequence picker survives the swap too: the 60s reload used to
+  // collapse it mid-choice (panel fix 2026-08-01).
   const keepScroll = body.scrollTop;
+  const openPickers = Array.from(body.querySelectorAll(".tray-row-picker"))
+    .filter((p) => p.style.display !== "none")
+    .map((p) => ({ id: p.id, html: p.innerHTML }));
   body.innerHTML = sortedTrayRows().map(trayRowHtml).join("");
+  openPickers.forEach((p) => {
+    const el = document.getElementById(p.id);
+    if (el) { el.innerHTML = p.html; el.style.display = "block"; wireTrayPickerChips(el); }
+  });
   body.scrollTop = keepScroll;
   wireUnresolvedTrayEvents(body);
 }
@@ -1703,6 +1750,13 @@ async function retroFollowupDismiss(id, btn) {
   // fetch can't make the click feel like it failed.
   loadUnresolvedTray();
 }
+function wireTrayPickerChips(picker) {
+  picker.querySelectorAll(".sg-picker-chip").forEach((chip) => chip.addEventListener("click", () => {
+    const cid = chip.getAttribute("data-id");
+    const addBtn = document.querySelector(`.sg-add[data-id="${CSS.escape(String(cid))}"]`);
+    if (addBtn) doTrayAdd(addBtn, chip.getAttribute("data-sub-id"));
+  }));
+}
 function renderTrayPicker(id, subs) {
   const picker = document.getElementById(`sgPicker-${id}`);
   if (!picker) return;
@@ -1711,10 +1765,7 @@ function renderTrayPicker(id, subs) {
     <div class="sg-chips">${(subs || []).map((s) =>
       `<button type="button" class="chip sg-picker-chip" data-id="${esc(id)}" data-sub-id="${esc(s.id)}">${esc(s.name || "Follow-up")}</button>`
     ).join("")}</div>`;
-  picker.querySelectorAll(".sg-picker-chip").forEach((chip) => chip.addEventListener("click", () => {
-    const addBtn = document.querySelector(`.sg-add[data-id="${CSS.escape(String(id))}"]`);
-    if (addBtn) doTrayAdd(addBtn, chip.getAttribute("data-sub-id"));
-  }));
+  wireTrayPickerChips(picker);
 }
 function doTrayAdd(btn, subSequenceId) {
   const id = btn.getAttribute("data-id");
@@ -1805,9 +1856,15 @@ function renderQueueFilters() {
   // TEST needs-review rows are added in, so the badge always matches what the
   // eye sees in the list below it.
   const testNeeds = visibleInboxRows().filter((r) => r.is_test && r.status === "needs_review").length;
+  // Monitor-workspace rows render in the list but the server's counts are
+  // deliberately navreo-only — fold the visible client rows into the badge
+  // the same way test rows are, so the number matches the eye again
+  // (panel fix 2026-08-01: "Needs review (19)" over a 25-row list).
+  const clientNeeds = QUEUE_ROWS.filter((r) => !r.is_test && r.status === "needs_review"
+    && (r.workspace || "navreo") !== "navreo").length;
   wrap.innerHTML = FILTER_PILLS.map((p) => {
     let n = counts[p.count];
-    if (typeof n === "number" && p.key === "needs_review") n += testNeeds;
+    if (typeof n === "number" && p.key === "needs_review") n += testNeeds + clientNeeds;
     const badge = (typeof n === "number") ? ` <b class="n">${fmt(n)}</b>` : "";
     return `<button type="button" class="chip ${p.key === currentStatus ? "on" : ""}" data-status="${esc(p.key)}">${esc(p.label)}${badge}</button>`;
   }).join("");
@@ -2123,7 +2180,29 @@ async function applyRecategorise() {
   if (hint) hint.textContent = act === "converted"
     ? `Marked '${name}' - moved into the normal flow, drafting now.`
     : `Marked '${name}' - removed from the Setter.`;
-  selectedRowId = (act === "converted" && res.data.new_id) ? res.data.new_id : null;
+  // Same shield the sidebar control got (panel fix 2026-08-01): without the
+  // tombstone the stale reload kept the row on screen and the reviewer
+  // repeated the action.
+  const oldId = selectedRowId;
+  if (act === "converted" && res.data.new_id) {
+    tombstoneRow(oldId);
+    delete ROW_OVERRIDES[String(oldId)];
+    const nr = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(res.data.new_id)}`, { _retries: 1 });
+    if (nr.ok && nr.data && nr.data.row) {
+      ALL_ROWS.push(nr.data.row);
+      overrideRow(nr.data.row);
+      selectRow(res.data.new_id);
+    } else {
+      selectedRowId = null;
+    }
+  } else {
+    tombstoneRow(oldId, "dismissed");
+    delete ROW_OVERRIDES[String(oldId)];
+    const gone = QUEUE_ROWS.findIndex((r) => String(r.id) === String(oldId));
+    if (gone >= 0) QUEUE_ROWS.splice(gone, 1);
+    selectedRowId = null;
+    renderQueue();
+  }
   await loadQueue();
 }
 
@@ -2166,9 +2245,18 @@ function inboxItemHtml(row) {
   </div>`;
 }
 
+let _mobileListScrollY = 0;
 function selectRow(id) {
   selectedRowId = id;
   document.getElementById("inboxShell").classList.add("mobile-detail");
+  // On phones the DOCUMENT scrolls (the panes are height:auto), so opening a
+  // reply from deep in the list left the page scrolled ~2000px into the
+  // conversation. Land at the top; backToInbox restores the list position
+  // (panel fix 2026-08-01).
+  if (window.matchMedia("(max-width: 900px)").matches) {
+    _mobileListScrollY = window.scrollY;
+    window.scrollTo(0, 0);
+  }
   document.querySelectorAll(".inbox-item").forEach((item) => {
     item.classList.toggle("selected", item.getAttribute("data-id") === String(id));
   });
@@ -2185,6 +2273,7 @@ function selectRow(id) {
 
 function backToInbox() {
   document.getElementById("inboxShell").classList.remove("mobile-detail");
+  if (window.matchMedia("(max-width: 900px)").matches) window.scrollTo(0, _mobileListScrollY);
 }
 
 /* ── Right pane: conversation / composer ───────────────── */
@@ -2233,8 +2322,14 @@ function applyListSidebarState() {
     collapsed = localStorage.getItem(LIST_COLLAPSED_KEY) === "1";
   } catch { /* ignore */ }
   if (w && w >= LIST_W_MIN && w <= LIST_W_MAX) shell.style.setProperty("--il-w", w + "px");
-  shell.classList.toggle("list-collapsed", collapsed);
+  // Collapse is a DESKTOP affordance: at phone widths the list IS the page,
+  // so a desktop-persisted collapse rendered a 30px sliver and nothing else
+  // (panel fix 2026-08-01). The stored preference survives untouched — it
+  // just doesn't apply below the mobile breakpoint.
+  const mobile = window.matchMedia("(max-width: 900px)").matches;
+  shell.classList.toggle("list-collapsed", collapsed && !mobile);
 }
+window.addEventListener("resize", applyListSidebarState);
 function wireListSidebar() {
   const shell = document.getElementById("inboxShell");
   const left = shell && shell.querySelector(".inbox-left");
@@ -2474,15 +2569,21 @@ function renderDetail(row) {
     let done = false;
     try { await navigator.clipboard.writeText(addr); done = true; } catch { /* fallback below */ }
     if (!done) {
+      // The textarea fallback steals focus — restore the caret owner so a
+      // half-written draft doesn't lose its cursor (panel fix 2026-08-01).
+      const hadFocus = document.activeElement;
       const tmp = document.createElement("textarea");
       tmp.value = addr; document.body.appendChild(tmp); tmp.select();
-      try { document.execCommand("copy"); done = true; } catch { /* give up quietly */ }
+      try { done = document.execCommand("copy"); } catch { /* reported below */ }
       tmp.remove();
+      if (hadFocus && hadFocus.focus) hadFocus.focus();
     }
     if (done) {
       copyBtn.classList.add("copied");
       copyBtn.innerHTML = "&#10003;";
       setTimeout(() => { copyBtn.classList.remove("copied"); copyBtn.innerHTML = ICON_COPY; }, 1500);
+    } else {
+      protoNote("Couldn't copy automatically - select the address and copy it manually");
     }
   });
   // Restore the reader's place BEFORE wiring (wireDetailEvents only centres
@@ -2819,6 +2920,7 @@ async function hydrateCategoryOptions(sel, row) {
    server-side) when the reply is opened, then re-render ONLY the quick-links
    row so it links the stored profile - a category pick in progress is never
    lost. */
+const LEAD_CONTACT_TRIED = new Set();
 async function hydrateLeadContact(row) {
   if (!row || row.is_test) return;
   const haveLi = row.lead_linkedin || row.linkedin_url || row.linkedin;
@@ -2827,6 +2929,11 @@ async function hydrateLeadContact(row) {
   const haveSite = (row.company_domain && !FREEMAIL_RE.test(row.company_domain)) || row.company_website;
   const haveMap = row.lead_map_id;
   if (haveLi && haveSite && haveMap) return;
+  // Negative cache (panel fix 2026-08-01): a lead with NO LinkedIn re-fired
+  // this on every repaint forever — once per row per page-life is enough
+  // (the server caches per email+campaign for an hour anyway).
+  if (LEAD_CONTACT_TRIED.has(String(row.id))) return;
+  LEAD_CONTACT_TRIED.add(String(row.id));
   const res = await fetchJson(`/api/setter/lead-contact?id=${encodeURIComponent(row.id)}`);
   if (!res.ok || !res.data) return;
   let changed = false;
@@ -2930,20 +3037,45 @@ async function applyCategory(block, override) {
     // ~20s stale cache, so the row visibly survived its own filing). Same
     // optimistic shape as doDismiss, plus the tombstone so the stale payload
     // can't resurrect it, plus an auto-advance to the next conversation.
-    tombstoneRow(rowId);
+    // The advance is computed against the VISIBLE (filtered) list, captured
+    // BEFORE the removal — indexing the unfiltered array skipped a
+    // conversation whenever a search/lens/client filter was active, and the
+    // list itself must repaint in the advance arm too (panel fix 2026-08-01).
+    const filedRow = QUEUE_ROWS.find((r) => String(r.id) === String(rowId));
+    const visBefore = visibleInboxRows();
+    const vIdx = visBefore.findIndex((r) => String(r.id) === String(rowId));
+    tombstoneRow(rowId, "dismissed");
+    delete ROW_OVERRIDES[String(rowId)];
     const idx = QUEUE_ROWS.findIndex((r) => String(r.id) === String(rowId));
     const prevStatus = idx >= 0 ? QUEUE_ROWS[idx].status : null;
     if (idx >= 0) QUEUE_ROWS.splice(idx, 1);
     const counts = KPIS.counts || {};
-    if (prevStatus && typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
-    if (prevStatus === "needs_review" && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
-    const next = visibleInboxRows()[Math.min(Math.max(idx, 0), Math.max(visibleInboxRows().length - 1, 0))];
-    renderKpis(); renderQueueFilters();
+    const isTestRow = !!(filedRow && filedRow.is_test);
+    if (!isTestRow && prevStatus && typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
+    if (!isTestRow && prevStatus === "needs_review" && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
+    const next = vIdx >= 0 ? (visBefore[vIdx + 1] || visBefore[vIdx - 1]) : null;
+    renderKpis(); renderQueueFilters(); renderQueue();
     if (next) { selectRow(next.id); } else { selectedRowId = null; renderQueue(); }
     protoNote(`Filed as ${name}`);
   } else if (act === "converted") {
     tombstoneRow(rowId);   // the old id is gone; the reply lives under new_id
-    selectedRowId = (res.data && res.data.new_id) || null;
+    delete ROW_OVERRIDES[String(rowId)];
+    // Adopt the NEW row before the (stale) reload — the reload's payload
+    // cannot contain new_id yet, and pointing selectedRowId at an unloaded
+    // id blanked the pane and lost the selection (panel fix 2026-08-01).
+    const newId = res.data && res.data.new_id;
+    if (newId) {
+      const nr = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(newId)}`, { _retries: 1 });
+      if (nr.ok && nr.data && nr.data.row) {
+        ALL_ROWS.push(nr.data.row);
+        overrideRow(nr.data.row);
+        selectRow(newId);
+      } else {
+        selectedRowId = null;
+      }
+    } else {
+      selectedRowId = null;
+    }
   } else if (act === "relabelled" || act === "relabelled_sent") {
     // Reflect the label immediately on the live row and shield it from the
     // stale reload; the pane's category pill repaints from it.
@@ -2959,9 +3091,13 @@ async function applyCategory(block, override) {
     // re-query the fresh one before writing the confirmation.
     const freshHint = document.querySelector("#leadPanel .lp-cat-hint") || hint;
     if (freshHint) {
-      freshHint.textContent = (act === "relabelled_sent" && res.data && res.data.removed_from_followup)
-        ? "Category updated - removed from the follow-up reminder."
-        : "Category updated.";
+      // The server's detail is load-bearing for monitor workspaces ("Labelled
+      // in the tool only — never written to the client's Smartlead") — a bare
+      // "Category updated." implied a write that deliberately didn't happen.
+      freshHint.textContent = (res.data && res.data.detail)
+        || ((act === "relabelled_sent" && res.data && res.data.removed_from_followup)
+          ? "Category updated - removed from the follow-up reminder."
+          : "Category updated.");
     }
   }
   loadUnresolvedTray();
@@ -3376,6 +3512,11 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Enter") {
+    // A focused BUTTON keeps its native Enter activation (panel fix
+    // 2026-08-01): without this, Enter on e.g. the lead-panel toggle SENT
+    // THE REPLY instead of toggling the panel — an irreversible surprise.
+    const a = document.activeElement;
+    if (a && a.tagName === "BUTTON" && !a.classList.contains("sg-chip")) return;
     const btn = document.querySelector(`.qc-send[data-id="${CSS.escape(String(selectedRowId))}"]`);
     if (btn && !btn.disabled) { e.preventDefault(); doSend(btn); }
   }
@@ -3752,6 +3893,9 @@ function applyDraftLink(id) {
   EDITED_DRAFTS[id] = draftEl.innerHTML;
   queueDraftSave(id);
   closeLinkBar(id);
+  // A successful link clears any earlier "highlight the words…" complaint —
+  // nothing else repaints this banner while the draft keeps focus.
+  clearDetailError();
 }
 
 /* Auto-save (owner ask 2026-07-16): EDITED_DRAFTS is browser memory only, so a
@@ -3859,11 +4003,13 @@ async function doSend(btn) {
     [qRow, aRow].forEach((r) => { if (r) { r.status = "sent"; r.sent_at = now; r.sent_body = sentBody; } });
     row._sendState = "inflight";   // in-pane state, not just a toast (2026-08-01)
     // Shield: a stale queue payload arriving mid-send must not resurrect
-    // this row in the list (tombstone) — the pane keeps the live object.
-    tombstoneRow(id);
+    // this row under Needs review — but the reply must still appear under
+    // Sent/All (keepFor), merged with the sent-state override.
+    tombstoneRow(id, "sent");
+    overrideRow(row);
     if (qIdx >= 0 && currentStatus && currentStatus !== "sent") QUEUE_ROWS.splice(qIdx, 1);
-    if (typeof counts[prev.status] === "number") counts[prev.status] -= 1;
-    if (typeof counts.sent === "number") counts.sent += 1;
+    if (!row.is_test && typeof counts[prev.status] === "number") counts[prev.status] -= 1;
+    if (!row.is_test && typeof counts.sent === "number") counts.sent += 1;
     if (prev.status === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
     renderKpis(); renderQueueFilters(); renderQueue();
     if (String(selectedRowId) === String(id)) renderDetail(row);
@@ -3878,6 +4024,7 @@ async function doSend(btn) {
     // Roll the optimistic state back: same objects, same index, same counts.
     if (row && prev) {
       delete ROW_TOMBSTONES[String(id)];
+      delete ROW_OVERRIDES[String(id)];
       delete row._sendState;
       [qRow, aRow].forEach((r) => { if (r) { r.status = prev.status; r.sent_at = prev.sent_at; r.sent_body = prev.sent_body; } });
       if (qRow && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
@@ -3907,7 +4054,8 @@ async function doSend(btn) {
   protoNote("Reply sent");
   delete EDITED_DRAFTS[id];
   delete GATE_SELECTION[id];
-  loadUnresolvedTray();
+  // No tray fetch here: the loadQueue() below already refreshes it — the
+  // pair cost two identical /subsequence/unresolved GETs per send.
   // If this approve carried an edit and training is on, the learner may turn
   // it into a standing rule ~40s from now. Watch for it and SAY SO - the
   // tester panel's core finding (2026-07-17, 5/5 startled) was that a silent
@@ -4292,14 +4440,16 @@ async function doDraftAnyway(btn) {
   }
   clearError();
   delete EDITED_DRAFTS[id];
+  const rrow = res.data && res.data.row;
+  applyRedraftedRow(id, rrow);
   // The redraft re-runs the decision gate, and a no_action verdict keeps NO
   // draft (owner ruling 2026-07-16, mirrors the pipeline) - say why nothing
-  // appeared instead of silently doing nothing.
-  const rrow = res.data && res.data.row;
+  // appeared instead of silently doing nothing. Shown AFTER the repaint
+  // (panel fix 2026-08-01): applyRedraftedRow's renderDetail rebuilds the
+  // banner hidden, so the old order erased this message before anyone saw it.
   if (rrow && !rrow.draft_body) {
     showDetailError("No draft kept: " + (rrow.decision_reason || "the agent decided no reply is needed."));
   }
-  applyRedraftedRow(id, rrow);
   loadQueue();
 }
 
@@ -4333,12 +4483,19 @@ async function doDismiss(btn) {
   const hadCounts = { prev: counts[prevStatus], dis: counts.dismissed };
   if (qRow) qRow.status = "dismissed";
   if (aRow) aRow.status = "dismissed";
+  // Shield (panel fix 2026-08-01): dismiss was the ONE mutation with no
+  // tombstone, so a stale queue payload — or a live override from an earlier
+  // regen/relabel on this row — resurrected it into Needs review. The
+  // override is deleted for the same reason: it would force the pre-dismiss
+  // status back over the server's fresh dismissed row.
+  tombstoneRow(id, "dismissed");
+  delete ROW_OVERRIDES[String(id)];
   // The dismissed row only leaves the list when the active pill excludes it -
   // on "Dismissed"/"All" (or during a cross-pill search) it stays put and the
   // re-render flips its visible status instead.
   if (qIdx >= 0 && currentStatus && currentStatus !== "dismissed") QUEUE_ROWS.splice(qIdx, 1);
-  if (typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
-  if (typeof counts.dismissed === "number") counts.dismissed += 1;
+  if (!row.is_test && typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
+  if (!row.is_test && typeof counts.dismissed === "number") counts.dismissed += 1;
   if (prevStatus === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
   renderKpis(); renderQueueFilters(); renderQueue();
   protoNote("Dismissed");
@@ -4354,6 +4511,7 @@ async function doDismiss(btn) {
   btn.disabled = false;
   if (!res.ok) {
     // Roll the optimistic state back: same objects, same index, same counts.
+    delete ROW_TOMBSTONES[String(id)];
     if (qRow) qRow.status = prevStatus;
     if (aRow) aRow.status = prevStatus;
     if (qIdx >= 0 && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
@@ -4404,9 +4562,14 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
    null if it hasn't landed inside timeoutMs (the sweep keeps running - we
    just stop blocking the button on it). */
 async function waitForPollDone(before, timeoutMs) {
+  // Backed-off like runSendJob (panel fix 2026-08-01): the flat 2s loop
+  // spent up to 45 status GETs per page load per tab when the sweep no-op'd.
   const deadline = Date.now() + timeoutMs;
+  const BACKOFF = [2000, 2000, 3000, 5000];
+  let tick = 0;
   while (Date.now() < deadline) {
-    await sleep(2000);
+    await sleep(tick < BACKOFF.length ? BACKOFF[tick] : 8000);
+    tick++;
     const res = await fetchJson("/api/setter/poll/status");
     if (res.ok && res.data && res.data.last_done && res.data.last_done !== before) return res.data;
   }
@@ -4427,20 +4590,12 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   const note = document.getElementById("searchAllNote");
   const searching = !!inboxSearchQuery.trim();
   if (note) note.style.display = searching ? "inline" : "none";
-  // A live search spans every pill, so make sure the full cross-pill corpus
-  // is loaded. hydrateAllRows is single-flight and re-renders when it lands,
-  // so an early keystroke's matches fill in. The note doubles as the loader
-  // while the corpus is still on its way (loader ruling 2026-07-16).
-  if (searching && !_allRowsLoaded) {
-    if (note) note.innerHTML = `<span class="btnspin"></span> loading all replies…`;
-    hydrateAllRows().then(() => { if (note) note.textContent = "searching all replies"; });
-  } else if (note && searching) {
-    note.textContent = "searching all replies";
-  }
-  // While a search spans every filter, the highlighted pill isn't what's on
-  // screen - dim the pill row so the two can't visually contradict.
-  const pills = document.getElementById("queueFilters");
-  if (pills) pills.style.opacity = searching ? "0.45" : "";
+  // Honest copy (panel fix 2026-08-01): the all-statuses corpus was trimmed
+  // away 2026-07-29, so search only ever covers the LOADED pill — the old
+  // "searching all replies" note (and the pill-row dim that reinforced it)
+  // taught the reviewer the opposite and made missing conversations read as
+  // non-existent.
+  if (note && searching) note.textContent = "searching this filter only";
   renderInboxList();
   renderKpis();
 });
@@ -5087,6 +5242,12 @@ function threadKey(t) {
 }
 async function refreshThreadFor(row, isRepoll) {
   if (!row || row.is_test) return;
+  // Per-row throttle (panel fix 2026-08-01): renderDetail calls this on
+  // EVERY repaint, and one Approve repaints three times — each call was a
+  // /thread GET. The server's snapshot is cache-first anyway; 10s is fresh.
+  const nowMs = Date.now();
+  if (!isRepoll && row._threadFetchedAt && nowMs - row._threadFetchedAt < 10000) return;
+  row._threadFetchedAt = nowMs;
   // Cache-first (perf ruling 2026-07-30): the endpoint now answers instantly
   // from the stored snapshot (one indexed Supabase read) and re-hydrates from
   // Smartlead in the background, so every open may take it - the old 60s
@@ -5118,7 +5279,11 @@ async function refreshThreadFor(row, isRepoll) {
       const r = (list || []).find((x) => String(x.id) === String(row.id));
       if (r) r.thread = fresh;
     });
-    if (String(selectedRowId) === String(row.id)) {
+    if (String(selectedRowId) === String(row.id) && !isTypingIn(row.id)) {
+      // Typing guard (panel fix 2026-08-01): this was the ONE repaint path
+      // without it, and it fires on every open — a background thread refresh
+      // landing mid-sentence collapsed the follow-up/feedback boxes and ate
+      // the typed text.
       const live = currentDetailRowObj();
       // Never repaint from a detached stale object: prefer the object the
       // pane is actually showing (it carries the newest draft), grafting the
