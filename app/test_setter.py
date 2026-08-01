@@ -139,6 +139,10 @@ class FakeSB:
             return value is None
         if op_value == "not.is.null":
             return value is not None
+        if op_value == "not.is.true":
+            return value is not True   # matches False AND NULL, like PostgREST
+        if op_value == "not.is.false":
+            return value is not False
         if op_value.startswith("eq."):
             # PostgREST booleans are lowercase (eq.false); Python str(False)
             # is "False" - compare case-insensitively for the boolean literals.
@@ -181,6 +185,12 @@ class FakeSB:
             return self._queue_table(method, params, body, prefer)
         if table == "companies":
             return self._companies_table(params)
+        if table == "campaigns":
+            rows = getattr(self, "campaigns_rows", [])
+            cid = params.get("smartlead_campaign_id", "")
+            if cid:
+                rows = [r for r in rows if self._match_eq(r.get("smartlead_campaign_id"), cid)]
+            return copy.deepcopy(rows)
         if table == "replies":
             if method == "PATCH":
                 for r in self.replies:
@@ -1835,8 +1845,15 @@ def test_subsequence_no_queue_row_route_resolves_by_email_and_pushes():
     # This route never has a smartlead_lead_id to work with (no queue row) -
     # resolution must fall back to matching by email alone.
     _subsequence_fixture(sb, http, email="standalone@x.com", lead_id=None, map_id=555111)
+    # The push route is fail-CLOSED (panel fix 2026-08-01): the campaigns
+    # table must confirm navreo ownership or the write is refused.
+    sb.campaigns_rows = [{"smartlead_campaign_id": 3591996, "workspace": "navreo"}]
 
     status, resp = setter.route_subsequence_push({"campaign_id": 3591996, "email": "standalone@x.com"})
+
+    s403, r403 = setter.route_subsequence_push({"campaign_id": 999999, "email": "standalone@x.com"})
+    check("no-queue-row push: an UNCONFIRMED campaign is refused (fail-closed)",
+         s403 == 403, (s403, r403))
 
     check("no-queue-row push: 200 status", status == 200, (status, resp))
     check("no-queue-row push: added_to_subsequence=true in response", resp.get("added_to_subsequence") is True, resp)
