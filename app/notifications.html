@@ -584,12 +584,6 @@ function safeGetActiveClient() {
 function safeResolveClientId(row, clients) {
   return (typeof resolveClientId === "function") ? resolveClientId(row, clients) : null;
 }
-async function safeFetchClientsForSwitcher() {
-  return (typeof fetchClientsForSwitcher === "function") ? fetchClientsForSwitcher() : [];
-}
-function safeDedupeClients(clients) {
-  return (typeof dedupeClients === "function") ? dedupeClients(clients) : (clients || []);
-}
 /* Fully local — deliberately does not call the shell.js fetchJsonWithRetry at
    all, so this page has no runtime dependency on it: fetch + ok-check + one
    retry on failure. */
@@ -2536,14 +2530,9 @@ updateBackToTop();
 try {
   loadNotifications();
   loadFreshness();
-  (async () => {
-    try {
-      clientsList = safeDedupeClients(await safeFetchClientsForSwitcher());
-      draw();
-    } catch (e) {
-      console.warn("client switcher bootstrap failed", e);
-    }
-  })();
+  // (client-switcher bootstrap removed 2026-08-02: it awaited a shell.js
+  // fetchClientsForSwitcher that has never existed — clientsList stayed []
+  // on every load, so this was a guaranteed no-op round of async work)
   window.addEventListener("navreo:client-changed", () => loadNotifications());
 } catch (e) {
   console.warn("notifications bootstrap failed", e);
