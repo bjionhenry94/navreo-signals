@@ -256,25 +256,19 @@ class FakeSB:
             self.queue.append(row)
             return [copy.deepcopy(row)]
         if method == "PATCH":
-            if "id" in params:
-                val = params.get("id", "")
-                target_id = None
-                if val.startswith("eq."):
-                    try:
-                        target_id = int(val[3:])
-                    except ValueError:
-                        target_id = val[3:]
-                for r in self.queue:
-                    if str(r.get("id")) == str(target_id):
-                        r.update(body or {})
-                return []
-            # Filtered bulk PATCH (e.g. the agent-save adoption sweep:
-            # agent_id=is.null&status=eq.needs_review&is_test=eq.false&
-            # smartlead_campaign_id=in.(...)) - update every matching row,
-            # PostgREST-style.
+            # PostgREST semantics for real: EVERY predicate in the query
+            # string gates the update (a conditional claim like
+            # `id=eq.X&status=eq.needs_review` must miss when the status
+            # already moved), and `return=representation` answers with the
+            # rows actually updated — an empty list IS the lost-race signal
+            # the send claim relies on.
+            updated = []
             for r in self.queue:
                 if self._queue_row_matches(r, params):
                     r.update(body or {})
+                    updated.append(r)
+            if "representation" in (prefer or ""):
+                return copy.deepcopy(updated)
             return []
         if method == "DELETE":
             self.queue = [r for r in self.queue if not self._queue_row_matches(r, params)]
@@ -9098,6 +9092,133 @@ def test_categories_route_serves_smartlead_list_cached():
     setter._CATEGORY_CACHE["at"] = 0.0
 
 
+# ── categoriser fixtures (step 9, 2026-08-01) ───────────────────────────────
+# The categoriser is the gpt-4o-mini step in Make scenario 9251436 — outside
+# this repo — so the committed regression anchor is the labelled fixture set
+# plus scripts/eval_categoriser.py (network, run manually). This test keeps
+# the fixture file itself honest: present, big enough, valid labels.
+
+def test_categoriser_fixture_set_is_wellformed():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "fixtures", "categoriser_fixtures.json")
+    data = json.load(open(path))
+    cases = data.get("cases") or []
+    check("categoriser fixtures: at least 20 labelled cases", len(cases) >= 20, len(cases))
+    valid = {"Interested", "Meeting Request", "Call Booked", "Information Request",
+             "Out Of Office", "Wrong Person", "Not Interested", "Do Not Contact"}
+    bad = [c.get("id") for c in cases
+           if not c.get("reply") or not c.get("expected") or not set(c["expected"]) <= valid]
+    check("categoriser fixtures: every case has a reply and valid expected labels", bad == [], bad)
+    mr_traps = [c for c in cases if "Meeting Request" not in c["expected"]
+                and ("meeting" in (c.get("note") or "").lower() or "MR" in (c.get("note") or ""))]
+    check("categoriser fixtures: the false-Meeting-Request traps are present", len(mr_traps) >= 3,
+         [c.get("id") for c in mr_traps])
+
+
+# ── double-send protection (owner ruling 2026-08-01) ────────────────────────
+
+def _sendable_row(rid, email="dup@x.com", mid="m-dup", status="needs_review", **extra):
+    row = {"id": rid, "workspace": "navreo", "smartlead_campaign_id": 111,
+           "lead_email": email, "message_id": mid, "status": status,
+           "draft_body": "<p>hi</p>", "draft_subject": "Re: hi", "reply_subject": "hi",
+           "reply_body": "hello", "replied_at": "2026-07-01T00:00:00+00:00",
+           "email_stats_id": "st-1", "smartlead_lead_id": 7, "is_test": False}
+    row.update(extra)
+    return row
+
+
+def test_send_claim_loser_aborts_without_smartlead():
+    """The durable claim: a second request whose row already moved to
+    'sending' in Supabase must abort BEFORE any Smartlead call."""
+    sb, http = fresh_setter()
+    sb.queue.append(_sendable_row(801, status="sending"))
+    # The in-memory copy this request holds still believes needs_review —
+    # exactly the lost-race shape (the other tab's claim landed first).
+    stale_copy = _sendable_row(801, status="needs_review")
+    result = setter._send_reply(stale_copy, {}, "Re: hi", "<p>hi</p>")
+    check("send claim: the race loser reports not-ok + already_in_flight",
+         result.get("ok") is False and result.get("already_in_flight") is True, result)
+    sends = [c for c in http.smartlead_calls if "reply-email-thread" in c[1]]
+    check("send claim: the race loser never posts to Smartlead", sends == [], http.smartlead_calls)
+    check("send claim: nothing was persisted for the loser (row still 'sending')",
+         sb.queue[0].get("status") == "sending", sb.queue[0])
+
+
+def test_send_route_409_while_sending():
+    sb, http = fresh_setter()
+    sb.queue.append(_sendable_row(802, status="sending"))
+    status, resp = setter.route_queue_action({"id": 802, "action": "send"})
+    check("send route: a row mid-send answers 409, not a second send",
+         status == 409 and "already being sent" in (resp.get("error") or ""), (status, resp))
+
+
+def test_recent_send_block_rejects_second_email_inside_window():
+    """Owner ruling verbatim: two emails to the same person inside 10 minutes
+    aren't allowed — even across DIFFERENT queue rows (re-intake dupes)."""
+    sb, http = fresh_setter()
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    sb.queue.append(_sendable_row(803, mid="m-one", status="sent", sent_at=now_iso))
+    sb.queue.append(_sendable_row(804, mid="m-two"))
+    status, resp = setter.route_queue_action({"id": 804, "action": "send"})
+    check("recency gate: second send to the same lead inside the window is 429",
+         status == 429 and (resp.get("error") or "").startswith("Blocked"), (status, resp))
+    sends = [c for c in http.smartlead_calls if "reply-email-thread" in c[1]]
+    check("recency gate: the blocked send never reaches Smartlead", sends == [], http.smartlead_calls)
+    check("recency gate: send_followup honours the same window",
+         setter.route_queue_action({"id": 803, "action": "send_followup",
+                                    "body": "<p>one more</p>"})[0] == 429)
+
+
+def test_recent_send_block_allows_after_window():
+    sb, http = fresh_setter()
+    old_iso = (dt.datetime.now(dt.timezone.utc)
+               - dt.timedelta(minutes=setter.DOUBLE_SEND_WINDOW_MIN + 2)).isoformat(timespec="seconds")
+    sb.queue.append(_sendable_row(805, mid="m-one", status="sent", sent_at=old_iso, updated_at=old_iso))
+    sb.queue.append(_sendable_row(806, mid="m-two"))
+    status, resp = setter.route_queue_action({"id": 806, "action": "send"})
+    check("recency gate: a send outside the window goes through",
+         status == 200 and (resp.get("ok") is True), (status, resp))
+    sends = [c for c in http.smartlead_calls if "reply-email-thread" in c[1]]
+    check("recency gate: exactly one Smartlead post for the allowed send", len(sends) == 1, sends)
+
+
+def test_async_send_start_joins_running_job():
+    """Double-click: the second async START must join the first job, not mint
+    a second one."""
+    sb, http = fresh_setter()
+    qid = "807"
+    with setter._REDRAFT_JOBS_LOCK:
+        setter._REDRAFT_JOBS["job-runn1"] = {"state": "running", "at": setter._time.time()}
+    with setter._SEND_INFLIGHT_LOCK:
+        setter._SEND_INFLIGHT[qid] = "job-runn1"
+    try:
+        status, resp = setter.route_queue_action({"id": 807, "action": "send", "async": True})
+        check("async dedupe: second START answers 202 with the SAME running job",
+             status == 202 and resp.get("job_id") == "job-runn1" and resp.get("deduped") is True,
+             (status, resp))
+    finally:
+        with setter._SEND_INFLIGHT_LOCK:
+            setter._SEND_INFLIGHT.pop(qid, None)
+        with setter._REDRAFT_JOBS_LOCK:
+            setter._REDRAFT_JOBS.pop("job-runn1", None)
+
+
+def test_stranded_sending_claim_reaped_to_needs_review():
+    sb, http = fresh_setter()
+    old = (dt.datetime.now(dt.timezone.utc)
+           - dt.timedelta(minutes=setter.SENDING_STALE_MIN + 5)).isoformat(timespec="seconds")
+    fresh = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    sb.queue.append(_sendable_row(808, mid="m-old", status="sending", updated_at=old))
+    sb.queue.append(_sendable_row(809, mid="m-new", status="sending", updated_at=fresh))
+    setter._redrive_stranded_claims([], {}, {"errors": 0})
+    by_id = {r["id"]: r for r in sb.queue}
+    check("sending reaper: a stale 'sending' claim returns to needs_review with an honest error",
+         by_id[808].get("status") == "needs_review"
+         and "interrupted" in (by_id[808].get("error") or ""), by_id[808])
+    check("sending reaper: a FRESH in-flight claim is left alone",
+         by_id[809].get("status") == "sending", by_id[809])
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
@@ -9364,6 +9485,12 @@ if __name__ == "__main__":
     # Registered LAST on purpose: it calls _save_agent, whose adoption path now
     # busts the read caches and spawns rewarm threads. Those land in whatever
     # test is running next and break the round-trip COUNT assertions.
+    test_send_claim_loser_aborts_without_smartlead()
+    test_send_route_409_while_sending()
+    test_recent_send_block_rejects_second_email_inside_window()
+    test_recent_send_block_allows_after_window()
+    test_async_send_start_joins_running_job()
+    test_stranded_sending_claim_reaped_to_needs_review()
     test_agent_adoption_busts_the_read_caches()
     test_redraft_async_job_returns_immediately_and_reports_its_result()
 

@@ -9223,9 +9223,12 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             a["sent"] += sent
             a["replies"] += row.get("replied") or 0
             a["pos"] += row.get("positives") or 0
-            # archive CB-only count wins; scorecard column only when unreachable
-            a["meet"] += (_cb_meet.get(str(cid), 0) if isinstance(_cb_meet, dict)
-                          else row.get("meetings") or 0)
+            # archive CB-only count wins. NEVER fall back to the scorecard
+            # column: it is externally written with the old Call Booked +
+            # Meeting Request definition, so an archive hiccup would silently
+            # reinstate the over-count (owner ruling 2026-08-01 re-affirming
+            # 2026-07-30: a meeting is Call Booked, nothing else).
+            a["meet"] += _cb_meet.get(str(cid), 0) if isinstance(_cb_meet, dict) else 0
             a["meet_sent"] += sent
             a["camps"].append(row.get("name") or cid)
 
@@ -18370,6 +18373,15 @@ class Handler(SimpleHTTPRequestHandler):
         # deliberately uncached) — a triage click-storm must not cold-start
         # every UI SWR cache for the whole team
         "/api/cockpit/assignments",
+        # Setter actions mutate ONLY setter_queue, and the setter's own read
+        # caches are stale-marked by _bust_read_caches inside _apply_patch.
+        # Before this exemption, every send AND every 800ms draft-autosave
+        # hard-cleared eight unrelated SWR caches (sources, campaign drafts,
+        # clients, leads…), forcing cold reads on the next Campaigns page
+        # load — pure CPU burn on the 0.5-CPU box at the worst moment
+        # (efficiency fix 2026-08-01).
+        "/api/setter/queue/action", "/api/setter/queue/redraft",
+        "/api/setter/queue/recategorise",
     }
 
     def do_POST(self):
@@ -19264,6 +19276,10 @@ def _boot_warmup():
         # fragile moment. Pre-build the exact buffer the UI's first request
         # asks for; queue_response's SWR path then serves stale-instantly
         # forever after.
+        # Restore-first (queue-502 fix 2026-08-01): the last persisted buffer
+        # lands in the memo in one small read, so a request racing this very
+        # warmup gets instant bytes; the prebuild below then rebuilds truth.
+        ("setter-queue-restore", setter.restore_queue_memo_from_store),
         ("setter-queue", lambda: setter.queue_response(
             {"status": ["needs_review"], "limit": ["200"], "fields": ["list"]}, True)),
     ):

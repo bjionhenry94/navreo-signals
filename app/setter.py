@@ -1390,6 +1390,30 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     call_ask = str(reply.get("call_ask") or "").strip()
     if call_ask in ("required", "only_if_relevant", "avoid"):
         payload["call_ask"] = call_ask
+    # The lead's timezone, when known (owner report 2026-08-01: "even when the
+    # AI knows their timezone, it still doesn't surface or suggest a time, or
+    # say why it didn't"). DRAFT_SYSTEM has always said "when you know the
+    # lead's timezone, convert each proposed time into it" — but the payload
+    # never carried the timezone, so that branch could never fire. Live slots
+    # arrive already lead-local (pick_slots converts); this makes
+    # instruction-listed times and any scheduling language lead-local too,
+    # and turns a silent no-time draft into an explained one.
+    tz_name = str(reply.get("timezone") or classification.get("timezone_guess") or "").strip()
+    if tz_name:
+        payload["lead_timezone"] = tz_name
+        try:
+            from zoneinfo import ZoneInfo
+            payload["lead_local_now"] = _dt.datetime.now(ZoneInfo(tz_name)).strftime(
+                "%A, %d %B %Y, %H:%M")
+        except Exception:  # noqa: BLE001 - an unresolvable zone just means no local clock
+            pass
+        payload["timezone_directive"] = (
+            "lead_timezone is this lead's IANA timezone and lead_local_now is their clock right "
+            "now. Every time you propose - a live slot, or a literal availability list from the "
+            "instructions - must be stated in the lead's own timezone with a clear zone label; "
+            "convert it yourself when the source is written in another zone. If scheduling is on "
+            "the table but you end up proposing no concrete time, explain why in feedback_note "
+            "(for example: no live availability was supplied) - never skip the time silently.")
     # Thread continuity (multi-turn autonomy): when the reply dict carries the
     # recent thread text (hydrate_lead already collects it - norm[-6:] - the
     # caller just needs to pass it through), give the drafter that context so
@@ -1748,7 +1772,7 @@ def _sl_lead_map_id_by_email(campaign_id, lead_email: str):
     if not campaign_id or not email:
         return None
     try:
-        resp = _sl_get("/leads/", {"email": email})
+        resp = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
         if not isinstance(resp, dict):
             return None
         memberships = resp.get("lead_campaign_data")
@@ -1855,7 +1879,10 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
     message-history usage, defensively (Smartlead's exact wrapper shape isn't
     pinned). Returns (ok, data, error)."""
     try:
-        lead_resp = _sl_get("/leads/", {"email": email})
+        # campaign_id kwarg is load-bearing: /leads/ carries no campaign in its
+        # path, so without it the key resolver falls back to the navreo key and
+        # every client-workspace lead reads as "not found" (federation fix).
+        lead_resp = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
         lead = None
         if isinstance(lead_resp, dict):
             lead = lead_resp.get("lead") if isinstance(lead_resp.get("lead"), dict) else lead_resp
@@ -2828,6 +2855,66 @@ def _resolve_stats_id(row: dict):
     return str(sid), ""
 
 
+# ── double-send protection (owner ruling 2026-08-01: "two emails sent in a
+# space of 10 minutes shouldn't actually be allowed") ────────────────────────
+# Three layers, because each one covers a hole the others can't:
+#   1. _SEND_INFLIGHT — a second async send START for the same row id joins
+#      the FIRST job instead of minting a new one (double-click, two tabs on
+#      one row). Process-local, so…
+#   2. the conditional claim in _send_reply — a one-round-trip PATCH
+#      `id=eq.X&status=eq.<current>` → status 'sending'. Whoever loses the
+#      race gets an empty representation back and aborts WITHOUT posting to
+#      Smartlead. Durable: survives multi-tab, restarts, and the sync path.
+#   3. _recent_send_block — a lead-level recency gate: any OTHER row for the
+#      same lead email sent (or in flight) inside the window rejects the send
+#      outright. Catches re-intake duplicates the row-level guards can't see.
+_SEND_INFLIGHT_LOCK = threading.Lock()
+_SEND_INFLIGHT: dict = {}    # str(queue row id) -> job_id of the running send
+DOUBLE_SEND_WINDOW_MIN = float(os.environ.get("SETTER_DOUBLE_SEND_WINDOW_MIN", "10"))
+# A 'sending' claim whose worker died with the process must not strand the row
+# invisible forever — after this many minutes the poll reaper returns it to
+# needs_review with an honest error.
+SENDING_STALE_MIN = 15.0
+
+
+def _recent_send_block(row: dict):
+    """Human-readable reason when another outbound email went to this lead
+    within DOUBLE_SEND_WINDOW_MIN, else None. Recency is computed in Python
+    (not a gte. filter) so clock-skewed rows and the test fake behave the
+    same as PostgREST. Never raises — a lookup failure never blocks a send."""
+    email = str(row.get("lead_email") or "").strip().lower()
+    if not email or not _SB:
+        return None
+    try:
+        got = _SB("GET", f"{QUEUE_TABLE}?lead_email=eq.{quote(email, safe='')}"
+                         f"&status=in.(sent,auto_sent,sending)"
+                         f"&select=id,status,sent_at,updated_at,workspace"
+                         f"&order=updated_at.desc&limit=10")
+        if not isinstance(got, list):
+            return None
+        now = _dt.datetime.now(_dt.timezone.utc)
+        for r in got:
+            if not isinstance(r, dict) or str(r.get("id")) == str(row.get("id")):
+                continue
+            if (r.get("workspace") or WORKSPACE) != (row.get("workspace") or WORKSPACE):
+                continue
+            stamp = r.get("sent_at") if r.get("status") in ("sent", "auto_sent") else r.get("updated_at")
+            try:
+                age_min = (now - _parse_iso(stamp)).total_seconds() / 60.0
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if r.get("status") == "sending" and age_min > SENDING_STALE_MIN:
+                continue   # a stranded claim is not a real in-flight send
+            if 0 <= age_min < DOUBLE_SEND_WINDOW_MIN:
+                verb = "is being sent" if r.get("status") == "sending" else "was sent"
+                return (f"Blocked: an email {verb} to {email} "
+                        f"{int(age_min)} min ago — two emails to the same person inside "
+                        f"{int(DOUBLE_SEND_WINDOW_MIN)} minutes aren't allowed. Nothing was sent.")
+    except Exception:  # noqa: BLE001 - the gate must never break a legitimate send
+        return None
+    return None
+
+
 def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: bool = False,
                 success_status: str = "sent") -> dict:
     """Sends (or stub-sends) one reply. Returns {"ok": bool, "row": <patch dict>}.
@@ -2858,6 +2945,23 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
                 pass
         patch["sent_via"] = "dry_run"
         return {"ok": True, "row": patch}
+    # Durable send claim (double-send fix 2026-08-01): flip the row to
+    # 'sending' with the CURRENT status as the predicate — one conditional
+    # PATCH whose empty representation means another request already claimed
+    # it (or the status moved under us). The loser aborts before any
+    # Smartlead call; every failure path below overwrites 'sending' back to
+    # needs_review, success overwrites it to sent. Nothing is persisted for
+    # the loser — the message rides only in the response row.
+    if _SB and row.get("id") is not None:
+        cur = str(row.get("status") or "")
+        claimed = _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{row.get('id')}"
+                               f"&status=eq.{quote(cur, safe='')}",
+                      {"status": "sending"}, "return=representation")
+        if isinstance(claimed, list) and not claimed:
+            return {"ok": False, "already_in_flight": True,
+                    "row": {"error": "This reply is already being sent by another request — "
+                                     "nothing was sent twice."}}
+        row["status"] = "sending"
     stats_id, sid_err = _resolve_stats_id(row)
     if not stats_id:
         patch = {"status": "needs_review", "error": sid_err}
@@ -3006,7 +3110,7 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                     d = draft_reply(
                         {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
                          "body": row.get("reply_body"), "first_outbound": first_outbound,
-                         "thread_text": thread_text},
+                         "thread_text": thread_text, "timezone": tz},
                         snapshot, classification, slots, slot_status,
                         sender_first=_sender_first_for(snapshot))
                     draft_html = d.get("html")
@@ -3543,6 +3647,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             d = draft_reply(
                 {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text,
                  "first_outbound": first_outbound, "thread_text": thread_text,
+                 "timezone": row.get("timezone"),
                  "call_ask": call_ask_for(classification, body_text, thread_text,
                                           first_touch=_inbound_turns <= 1)},
                 agent, classification, slots, slot_status, sender_first, regen_feedback=mem_digest)
@@ -4419,6 +4524,22 @@ def _redrive_stranded_claims(agents: list, settings: dict, summary: dict) -> Non
     """
     if not _SB:
         return
+    # Sibling reaper for stranded SEND claims (double-send fix 2026-08-01): a
+    # row flipped to 'sending' whose worker died with the process would sit in
+    # no pill forever. After SENDING_STALE_MIN it returns to needs_review with
+    # an honest error — the reviewer must verify the thread in Smartlead
+    # before retrying, because "claim written, worker dead" cannot tell us
+    # whether the mail left.
+    try:
+        s_cut = (_dt.datetime.now(_dt.timezone.utc)
+                 - _dt.timedelta(minutes=SENDING_STALE_MIN)).isoformat()
+        _SB("PATCH", f"{QUEUE_TABLE}?status=eq.sending"
+                     f"&updated_at=lt.{quote(s_cut, safe='')}",
+            {"status": "needs_review",
+             "error": "A send was interrupted mid-flight (server restart). Check the thread "
+                      "in Smartlead before re-sending — the email may already have gone out."})
+    except Exception as e:  # noqa: BLE001 - reaping is best-effort
+        print(f"[setter] redrive: sending-claim sweep failed: {e}", file=sys.stderr)
     cutoff = (_dt.datetime.now(_dt.timezone.utc)
               - _dt.timedelta(seconds=_REDRIVE_AFTER_SECS)).isoformat()
     try:
@@ -4865,11 +4986,12 @@ def route_categories_get(_params):
         return 500, {"error": str(e)[:300]}
 
 
-def _sl_lead_id_by_email(email: str):
+def _sl_lead_id_by_email(email: str, campaign_id=None):
     """The categoriser's own lookup (GET /leads/?email=) - returns the global
-    Smartlead lead id, or None."""
+    Smartlead lead id, or None. campaign_id routes the lookup to the owning
+    workspace's key (the path alone carries no campaign for the resolver)."""
     try:
-        got = _sl_get("/leads/", {"email": email})
+        got = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
         if isinstance(got, dict) and got.get("id") is not None:
             return got.get("id")
     except Exception:  # noqa: BLE001
@@ -4898,7 +5020,7 @@ def route_queue_recategorise(payload):
         cat_name = str(payload.get("category_name") or "").strip()
         if not qid or cat_id is None or not cat_name:
             return 400, {"error": "id, category_id and category_name are required"}
-        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&workspace=eq.{WORKSPACE}&select=*") if _SB else None
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&{_list_ws_filter()}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
@@ -4913,8 +5035,10 @@ def route_queue_recategorise(payload):
         # "update lead category" / "mark unqualified"): was_uncat only steers
         # the disposition below, it is no longer a gate.
         was_uncat = _is_uncategorised_value(row.get("category"))
-        if not row.get("is_test"):
-            lead_id = row.get("smartlead_lead_id") or _sl_lead_id_by_email(row.get("lead_email") or "")
+        row_ws = row.get("workspace") or WORKSPACE
+        if not row.get("is_test") and not _is_monitor_ws(row_ws):
+            lead_id = row.get("smartlead_lead_id") or _sl_lead_id_by_email(
+                row.get("lead_email") or "", campaign_id=row.get("smartlead_campaign_id"))
             if not lead_id:
                 return 502, {"error": "Couldn't resolve this lead in Smartlead, so the category "
                                       "wasn't written anywhere. Nothing was changed."}
@@ -4924,10 +5048,15 @@ def route_queue_recategorise(payload):
             except Exception as e:  # noqa: BLE001 - Smartlead write failed: change nothing locally
                 return 502, {"error": f"Smartlead rejected the category write: {str(e)[:200]}. "
                                       f"Nothing was changed."}
+        # Monitor-only workspaces skip the Smartlead write entirely (their
+        # category ids belong to a different account, and monitor-only means we
+        # never write to a client's Smartlead) - the label still lands in
+        # `replies` + the queue row below, which is what every tool surface reads.
+        if not row.get("is_test"):
             mid = str(row.get("source_message_id") or row.get("message_id") or "")
             if mid:
                 try:
-                    _SB("PATCH", f"replies?workspace=eq.{WORKSPACE}"
+                    _SB("PATCH", f"replies?workspace=eq.{quote(str(row_ws), safe='')}"
                                  f"&smartlead_campaign_id=eq.{row.get('smartlead_campaign_id')}"
                                  f"&smartlead_message_id=eq.{quote(mid, safe='')}",
                         {"category": cat_name})
@@ -5540,7 +5669,7 @@ def _fresh_categories_for(rows: list) -> dict:
         # blows the request line.
         quoted = ",".join('"' + m.replace('"', "") + '"' for m in mids[:50])
         in_list = quote(quoted, safe='",')
-        got = _SB("GET", f"replies?workspace=eq.{WORKSPACE}"
+        got = _SB("GET", f"replies?{_list_ws_filter()}"
                          f"&smartlead_message_id=in.({in_list})"
                          f"&select=smartlead_message_id,category&limit=100")
         if isinstance(got, list):
@@ -5577,7 +5706,7 @@ def route_subsequence_unresolved(_params):
         cols = ("id,lead_email,lead_first_name,lead_last_name,company_domain,reply_body,"
                 "sent_at,smartlead_campaign_id,subsequence_decision,added_to_subsequence,"
                 "category,message_id,source_message_id,workspace,agent_id")
-        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&status=in.(sent,auto_sent)"
+        rows = _SB("GET", f"{QUEUE_TABLE}?{_list_ws_filter()}&status=in.(sent,auto_sent)"
                           f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select={cols}")
         if not isinstance(rows, list):
             # sb() answers None on a failed fetch (it is best-effort by
@@ -6562,8 +6691,10 @@ def _kick_queue_resp_rebuild(memo_key, params):
                 return
             raw = json.dumps(body).encode()
             gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
-            _QUEUE_RESP_MEMO[memo_key] = (_queue_resp_etag(status_q, limit),
-                                          len(raw), gz, _time.time())
+            ent_new = (_queue_resp_etag(status_q, limit), len(raw), gz, _time.time())
+            _QUEUE_RESP_MEMO[memo_key] = ent_new
+            if memo_key == ("needs_review", 200):
+                _persist_queue_resp(ent_new)
         except Exception as e:  # noqa: BLE001 - must never raise, but NEVER silently:
             # a permanently-failing rebuild is indistinguishable from a healthy
             # one, and the max-stale ceiling is the only other safety net (F1).
@@ -6627,6 +6758,69 @@ def route_queue_get(params):
         return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
+
+
+# ── queue buffer persistence (queue-502 fix 2026-08-01) ─────────────────────
+# The memo above is process memory, and the box restarts 5-20x/day (deploys +
+# OOM), so the very first /api/setter/queue after every boot paid the full
+# cold build inline — the residual "Couldn't refresh the queue: 502". Persist
+# the ONE buffer the UI's first request always asks for (needs_review/200)
+# into the same generic KV table the deliverability page already uses for
+# exactly this reason, and restore it before the first cold build. The
+# restored buffer serves instantly (its etag can't match, so the SWR leg
+# rebuilds truth in the background).
+_QUEUE_RESP_STORE_ID = "setter_queue_resp_v1"
+_QUEUE_RESP_PERSIST_MIN_S = 60.0     # throttle: at most one ~300KB write/min
+_QUEUE_RESP_PERSIST_LAST = [0.0]
+_QUEUE_RESP_RESTORE_TRIED = [False]
+
+
+def _persist_queue_resp(ent) -> None:
+    """Best-effort write of the needs_review/200 buffer to Supabase. Never
+    raises; throttled so mutation bursts don't turn into write storms."""
+    now = _time.time()
+    if not _SB or (now - _QUEUE_RESP_PERSIST_LAST[0]) < _QUEUE_RESP_PERSIST_MIN_S:
+        return
+    _QUEUE_RESP_PERSIST_LAST[0] = now
+    try:
+        import base64
+        _SB("POST", "deliverability_audit_cache?on_conflict=id",
+            {"id": _QUEUE_RESP_STORE_ID,
+             "blob": {"etag": ent[0], "raw_len": ent[1],
+                      "gz_b64": base64.b64encode(ent[2]).decode(), "saved_at": now},
+             "ts": _dt.datetime.now(_dt.timezone.utc).isoformat()},
+            prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001 - persistence is a bonus, never a blocker
+        print(f"[setter] queue memo persist failed: {e}", file=sys.stderr)
+
+
+def restore_queue_memo_from_store() -> bool:
+    """One-shot per process: pull the last persisted queue buffer into the
+    memo so a fresh boot serves bytes instantly instead of paying the cold
+    build on the request path. Called from server.py's _boot_warmup AND
+    lazily by queue_response if a request beats the warmup. Never raises."""
+    if _QUEUE_RESP_RESTORE_TRIED[0] or not _SB:
+        return False
+    _QUEUE_RESP_RESTORE_TRIED[0] = True
+    try:
+        import base64
+        rows = _SB("GET", f"deliverability_audit_cache?id=eq.{_QUEUE_RESP_STORE_ID}&select=blob")
+        blob = rows[0].get("blob") if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+        if isinstance(blob, str):
+            blob = json.loads(blob)
+        if not isinstance(blob, dict) or not blob.get("gz_b64"):
+            return False
+        gz = base64.b64decode(blob["gz_b64"])
+        key = ("needs_review", 200)
+        if key not in _QUEUE_RESP_MEMO:
+            # at=now keeps it inside the max-stale ceiling; the saved etag
+            # can't match the live one, so the SWR leg rebuilds immediately.
+            _QUEUE_RESP_MEMO[key] = (str(blob.get("etag") or "restored"),
+                                     int(blob.get("raw_len") or len(gz)), gz, _time.time())
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[setter] queue memo restore failed: {e}", file=sys.stderr)
+        return False
 
 
 def _queue_resp_etag(status: str, limit: int) -> str:
@@ -6699,6 +6893,13 @@ def queue_response(params, accept_gzip: bool):
         # which is exactly the request that outlived the proxy timeout or
         # starved /healthz right after a mutation bust.
         _kick_queue_resp_rebuild(memo_key, params)
+    if not ent and restore_queue_memo_from_store():
+        # A request beat _boot_warmup to a fresh process: the persisted
+        # buffer from before the restart serves NOW, and the SWR kick below
+        # rebuilds truth off the request path — no cold inline build.
+        ent = _QUEUE_RESP_MEMO.get(memo_key)
+        if ent:
+            _kick_queue_resp_rebuild(memo_key, params)
     if not ent or over_ceiling:
         # Cold boot (no buffer), or the buffer aged past the hard ceiling
         # (panel fix, F1/H3: background rebuilds can fail silently - lock
@@ -6736,6 +6937,8 @@ def queue_response(params, accept_gzip: bool):
                 # mid-build.
                 ent = (_queue_resp_etag(status_q, limit), len(raw), gz, _time.time())
                 _QUEUE_RESP_MEMO[memo_key] = ent
+                if memo_key == ("needs_review", 200):
+                    _persist_queue_resp(ent)
     raw_len, gz = ent[1], ent[2]
     if accept_gzip and raw_len >= 512:
         return 200, "gzip", gz
@@ -6795,7 +6998,7 @@ def route_queue_row_get(params):
         qid = _qp(params, "id", "")
         if not qid:
             return 400, {"error": "id is required"}
-        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&workspace=eq.{WORKSPACE}&select=*") if _SB else None
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&{_list_ws_filter()}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
@@ -6871,10 +7074,12 @@ def route_thread_get(params):
         qid = _qp(params, "id", "")
         if not qid:
             return 400, {"error": "id is required"}
-        # workspace scope + quoted id (hardening 2026-07-30: this was the one
-        # row read with neither; route_queue_row_get has both)
+        # Federated scope + quoted id: the LIST shows every enabled workspace,
+        # so the per-row read must too — a navreo-only pin here 404'd every
+        # client-workspace conversation open (the 'history doesn't work on
+        # client conversations' report).
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{_q(str(qid), safe='')}"
-                          f"&workspace=eq.{WORKSPACE}&select=*") if _SB else None
+                          f"&{_list_ws_filter()}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
@@ -6955,7 +7160,7 @@ def route_lead_contact_get(params):
         except Exception:  # noqa: BLE001 - Supabase miss just falls through to Smartlead
             pass
         try:
-            resp = _sl_get("/leads/", {"email": email})
+            resp = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
             if isinstance(resp, dict):
                 out["linkedin"] = out["linkedin"] or (resp.get("linkedin_profile") or "").strip()
                 out["website"] = out["website"] or (resp.get("website") or "").strip()
@@ -7064,18 +7269,39 @@ def route_queue_action(payload):
             # behaviour is byte-for-byte unchanged.
             inner = {k: v for k, v in payload.items() if k != "async"}
             job_id = uuid.uuid4().hex[:16]
+            # Double-click / two-tab dedupe (2026-08-01): a second send START
+            # for a row whose send job is still running JOINS that job — same
+            # job_id back, one Smartlead post. The durable claim in
+            # _send_reply covers what this process-local map can't (restarts,
+            # a second instance); this map covers the START-burst window the
+            # claim can't (both requests 202 before either worker runs).
+            with _SEND_INFLIGHT_LOCK:
+                existing = _SEND_INFLIGHT.get(qid)
+            if existing:
+                with _REDRAFT_JOBS_LOCK:
+                    ent = _REDRAFT_JOBS.get(existing)
+                if ent and ent.get("state") == "running":
+                    return 202, {"job_id": existing, "state": "running", "deduped": True}
 
             def _send_job_worker():
                 try:
                     status, body = route_queue_action(inner)
                 except Exception as e:  # noqa: BLE001 - a worker must never die silently
                     status, body = 500, {"error": str(e)[:300]}
+                # Result FIRST, then release the inflight slot — a joiner
+                # arriving between the two must find the finished job, never
+                # a gap that mints a second real send.
                 with _REDRAFT_JOBS_LOCK:
                     _REDRAFT_JOBS[job_id] = {"state": "done" if status == 200 else "error",
                                              "status": status, "body": body, "at": _time.time()}
+                with _SEND_INFLIGHT_LOCK:
+                    if _SEND_INFLIGHT.get(qid) == job_id:
+                        _SEND_INFLIGHT.pop(qid, None)
             with _REDRAFT_JOBS_LOCK:
                 _redraft_jobs_gc()
                 _REDRAFT_JOBS[job_id] = {"state": "running", "at": _time.time()}
+            with _SEND_INFLIGHT_LOCK:
+                _SEND_INFLIGHT[qid] = job_id
             threading.Thread(target=_send_job_worker, daemon=True,
                              name="setter-send").start()
             return 202, {"job_id": job_id, "state": "running"}
@@ -7190,9 +7416,14 @@ def route_queue_action(payload):
         if action == "send":
             if row.get("status") in ("sent", "auto_sent"):
                 return 409, {"error": "This reply was already sent."}
+            if row.get("status") == "sending":
+                return 409, {"error": "This reply is already being sent — wait for it to finish."}
             if _is_monitor_ws(row.get("workspace")):
                 return 403, {"error": "This workspace is monitor-only (federation test) — "
                                       "sending is disabled here. Reply in Smartlead directly."}
+            block = _recent_send_block(row)
+            if block:
+                return 429, {"error": block}
             agent = _load_agent(row.get("agent_id")) or {}
             subject = payload.get("subject_override") or row.get("draft_subject") or f"Re: {row.get('reply_subject') or ''}"
             body_html = payload.get("body_override") or row.get("draft_body") or ""
@@ -7231,7 +7462,11 @@ def route_queue_action(payload):
                     elif choice == "push":
                         _apply_patch(row, {"subsequence_decision": "pushing"})
                         _subsequence_choice_async(row, sub_choice.get("sub_sequence_id"))
-            return 200, {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
+            out = {"ok": result.get("ok"), "row": {**row, **(result.get("row") or {})}}
+            err = (result.get("row") or {}).get("error")
+            if not result.get("ok") and err:
+                out["error"] = err
+            return 200, out
         if action == "send_followup":
             # A sent thread is not a closed thread (owner ask 2026-07-28):
             # another email can go into the same Smartlead thread, from the
@@ -7243,6 +7478,9 @@ def route_queue_action(payload):
             if _is_monitor_ws(row.get("workspace")):
                 return 403, {"error": "This workspace is monitor-only (federation test) — "
                                       "sending is disabled here. Reply in Smartlead directly."}
+            block = _recent_send_block(row)
+            if block:
+                return 429, {"error": block}
             body_html = payload.get("body") or ""
             if not _TAG_RE.sub(" ", body_html).strip():
                 return 400, {"error": "body is required"}

@@ -1,0 +1,260 @@
+{
+ "note": "Labelled regression fixtures for the Make categoriser (scenario 9251436). Real archived replies except entries marked synthetic. expected = acceptable labels (first entry is the preferred one). Run scripts/eval_categoriser.py to score.",
+ "cases": [
+  {
+   "id": "lisa@pionair.net",
+   "reply": "Hi Jane, Yes a call on the 3rd would work. I am eastern time",
+   "expected": [
+    "Meeting Request"
+   ],
+   "note": "explicit day agreed, tz given"
+  },
+  {
+   "id": "tom@zinkt.com",
+   "reply": "Hi I’m interested in this can we meet on Wednesday at 16:00 gmt please Tom Swinbourne CEO",
+   "expected": [
+    "Meeting Request"
+   ],
+   "note": "proposes exact slot"
+  },
+  {
+   "id": "gary@bolledrinks.com",
+   "reply": "Happy to talk - feel free to find some time https://meetings.hubspot.com/gary-read Gary Read CEO | BOLLE UK/WhatsApp: +44 7497 425825 US/SMS: +1 415 420 9044 Book a meeting https://meetings.hubspot.com/gary-read On Thu, Jul 30, 2026 at 3:07",
+   "expected": [
+    "Meeting Request"
+   ],
+   "note": "body-authored 'find some time' + their link"
+  },
+  {
+   "id": "andrew@packdigital.com",
+   "reply": "Sure where are you based what time?",
+   "expected": [
+    "Meeting Request"
+   ],
+   "note": "asks what time"
+  },
+  {
+   "id": "r@arcads.ai",
+   "reply": "Sure! Here is my calendly: https://calendly.com/arcads/30min Lmk if you don't see time that works Romain Torres",
+   "expected": [
+    "Meeting Request"
+   ],
+   "note": "sends their calendly in the body text"
+  },
+  {
+   "id": "indulge@ariandulge.com",
+   "reply": "Hi Kevin, I can get on a call to know further details. Arian Dulge is not on Amazon, and if we were to start, what should the brand expect and how will your team help? Is there a link to book the call? Regards, Geetika From: Kevin Dormer Sent: Tuesday, 28 July 2026 09:27:00 To: Arian Dulge Subject: beauty and skincare on Amazon Hi Arian Dulge team, I reached out some time back after coming across your beauty and skincare, and checked Amazon again this week, you're still not on there, is that right? If we could get Arian Dulge live and growing on Amazon end to end, from listings and ads to your",
+   "expected": [
+    "Meeting Request"
+   ],
+   "note": "asks for booking link"
+  },
+  {
+   "id": "royalecoproducts@gmail.com",
+   "reply": "Hello Kevin, Yes I have a lot of different greeting cards and i have a total of 25 different Eco friendly stationery products that need more awareness. Yes, I'm looking forward to hearing from you and a call. Best, Jinal Amin Founder/ Inventor Roy",
+   "expected": [
+    "Interested"
+   ],
+   "note": "willing/looking forward, but no scheduling invitation yet"
+  },
+  {
+   "id": "finn@fractionalclients.com",
+   "reply": "Hi Bjion, I found your email in my spam folder. Happy to hop on a call to show you how to improve deliverability. I'm ex-Dell and Apple so happy to give a second set of eyes on your overall marketing strategy if you're not seeing the results you wan",
+   "expected": [
+    "Not Interested"
+   ],
+   "note": "counter-pitch: THEY sell deliverability to US"
+  },
+  {
+   "id": "buthaina@senzone.com",
+   "reply": "Dear Kevin, Thank you for your email and for reaching out. I appreciate the information you shared. I will review it and get back to you by next week regarding the possibility of scheduling a meeting. Kind Regards, Buthaina",
+   "expected": [
+    "Interested"
+   ],
+   "note": "will consider scheduling later - invitation not yet made"
+  },
+  {
+   "id": "eric@tendersoftware.com",
+   "reply": "Thank you doctor. Here is a photo of the injury. Should I make an appointment? [image001.png]",
+   "expected": [
+    "Not Interested",
+    "Do Not Contact"
+   ],
+   "note": "mis-sent/confused content about a medical appointment - not OUR meeting"
+  },
+  {
+   "id": "synthetic-signature-decline",
+   "reply": "Thanks but we're all set on this side. Best, Dana Wells VP Marketing | Acme Foods Book time with me: https://calendly.com/dana-wells/30min | +1 415 555 0100",
+   "expected": [
+    "Not Interested"
+   ],
+   "note": "decline whose SIGNATURE carries a booking link - must not read as MR",
+   "synthetic": true
+  },
+  {
+   "id": "natalie@noeassociates.com",
+   "reply": "Thank you for your email. I am on annual leave on Monday 3rd August, with limited access to my emails. I will respond to you upon my return to the office. Please call the office for Abby or Tay if urgent. Many thanks, Natalie",
+   "expected": [
+    "Out Of Office"
+   ],
+   "note": "OOO with 'please call the office if urgent' - boilerplate, not MR"
+  },
+  {
+   "id": "max@frameworks.space",
+   "reply": "I'm currently away from the office with scant access to emails, returning Monday 3rd August. For anything urgent please call 0203 581 5752. Max",
+   "expected": [
+    "Out Of Office"
+   ],
+   "note": "OOO with urgent phone number"
+  },
+  {
+   "id": "amaury@breadagency.com.au",
+   "reply": "Hi there, I'm currently in Europe. I will check my emails regularly but please expect a delay in my responses. If it's urgent, feel free to WhatsApp me or reach out to our General Manager Em (emelie@breadagency.com.au [emelie@breadagency.com.au]) or my business partner Mary (mary@breadagency.com.au [mary@breadagency.com.au]). Thank you for your understanding, Amo",
+   "expected": [
+    "Out Of Office"
+   ],
+   "note": "OOO with WhatsApp invite"
+  },
+  {
+   "id": "qualitywindowksa@gmail.com",
+   "reply": "Okay you can send SABU JOSEPH Quality Window Trading Service. Co P.O.Box.9856 - Dammam-32241 Kingdom Of Saudi Arabia. Tel- 013 8052322",
+   "expected": [
+    "Information Request"
+   ],
+   "note": "consent to receive"
+  },
+  {
+   "id": "arjun@zync.ai",
+   "reply": "Sure. Send it across.",
+   "expected": [
+    "Information Request"
+   ],
+   "note": "'Sure. Send it across.'"
+  },
+  {
+   "id": "zack@ovationup.com",
+   "reply": "who have you worked with in the restaurant tech space? Zack Oates Founder & CEO Watch a 2-min Demo Now! w: Ovationup.com p: 973.945.7898 Choose extraordinary; ordinary will always be waiting.",
+   "expected": [
+    "Information Request"
+   ],
+   "note": "question back: who have you worked with"
+  },
+  {
+   "id": "jen@mainelove.com",
+   "reply": "Always open to learning! Please share Jen Millard CEO & Co-Founder Jen@mainelove.com (m): 207.776.3021 mainelove.com .",
+   "expected": [
+    "Information Request"
+   ],
+   "note": "please share"
+  },
+  {
+   "id": "sharon@astreabeauty.com",
+   "reply": "Hi Jane, Thank you for your email. We have onboarded with an agency for Amazon. But we are open to better explorations. Please do send over the short read, would love to go though. Regards, Sharon N On Thu, 30 Jul 2026 at 8:13 PM, Jane Smithson <j",
+   "expected": [
+    "Interested",
+    "Information Request"
+   ],
+   "note": "has agency but open + asks for the read - genuinely dual"
+  },
+  {
+   "id": "terry@behavioralelements.com",
+   "reply": "Too soon in the process, Henry. We are in revamp mode. Scale mode is a 2027 thing. Thank you.",
+   "expected": [
+    "Interested",
+    "Not Interested"
+   ],
+   "note": "timing objection - 2027"
+  },
+  {
+   "id": "alex@frontal.so",
+   "reply": "Hey Roman, We haven't started Google Ads yet but I want to spend the free credits from Google. What would be your strategy for Frontal? Best, Alex",
+   "expected": [
+    "Interested",
+    "Information Request"
+   ],
+   "note": "engaged question about strategy"
+  },
+  {
+   "id": "angelica@nucleoresearch.com",
+   "reply": "Hi, We are not interested, thank you.",
+   "expected": [
+    "Not Interested"
+   ],
+   "note": "plain decline"
+  },
+  {
+   "id": "herbalplantasia@gmail.com",
+   "reply": "Hi, Sorry, What's you mean ? I'm not understand. Thank you. Emp ในวันที่ ศุกร์ 31 ก.ค. 2026 เวลา 21:24 Jane Smithson เขียนว่า: Hi Herbal Plantasia team, If my last email wasn't quite right, we've put together a sho",
+   "expected": [
+    "Not Interested"
+   ],
+   "note": "confused, no intent"
+  },
+  {
+   "id": "jorge.rey@huxleymed.com",
+   "reply": "Please do not contact me again Sent from my iPhone > On Jul 31, 2026, at 3:22 PM, Bjion Henry wrote:",
+   "expected": [
+    "Do Not Contact"
+   ],
+   "note": "do not contact me again"
+  },
+  {
+   "id": "vincent.disneur@fusegenie.com",
+   "reply": "Unsubscribe.",
+   "expected": [
+    "Do Not Contact"
+   ],
+   "note": "unsubscribe"
+  },
+  {
+   "id": "kendra.gale@theweeksgroup.org",
+   "reply": "You have no clue what our business does. PLEASE REMOVE",
+   "expected": [
+    "Do Not Contact"
+   ],
+   "note": "hostile + remove"
+  },
+  {
+   "id": "erutter@engrain.com",
+   "reply": "Please be advised that Elliot Rutter is no longer with Engrain. For immediate assistance, please direct your inquiry to Brent Steiner at brent@engrain.com We appreciate your understanding and look forward to assisting you. Sincerely, Engrain",
+   "expected": [
+    "Wrong Person"
+   ],
+   "note": "no longer with company, replacement named"
+  },
+  {
+   "id": "kody.bakos@verticalcomputers.c",
+   "reply": "",
+   "expected": [
+    "Wrong Person"
+   ],
+   "note": "domain moved, resend notice"
+  },
+  {
+   "id": "hola@dulceafro.com",
+   "reply": "Hi Kevin I'd love to see an Amazon growth breakdown. I just scheduled the meeting. Best regards Alexandra Lopez A",
+   "expected": [
+    "Call Booked"
+   ],
+   "note": "I just scheduled the meeting"
+  },
+  {
+   "id": "read@achilleshr.com",
+   "reply": "Thanks for the video, that time on Wednesday works if you want to send an invite. Read Read Egger Co-Founder & CEO AchillesHR 210-241-1397",
+   "expected": [
+    "Call Booked",
+    "Meeting Request"
+   ],
+   "note": "time works, send an invite"
+  },
+  {
+   "id": "kor.foekens@oxycom.com",
+   "reply": "Yes, sounds good. Friday 11.00 in the morning Dutch time? Met vriendelijke groet, best regards, mit Freundlichen Grüssen, Kor Foekens Commercial Director kor.foekens@oxycom.com Mobile: +31 613 757 978 Office: +31 572 349 400 ww",
+   "expected": [
+    "Meeting Request",
+    "Call Booked"
+   ],
+   "note": "accepts + proposes Friday 11.00"
+  }
+ ]
+}

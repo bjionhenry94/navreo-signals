@@ -33,6 +33,7 @@ AS $function$
     'meetings',         (select count(distinct (smartlead_campaign_id, lower(email)))
                            from replies
                           where category = 'Call Booked'
+                            and workspace = 'navreo'
                             and replied_at >= now() - interval '30 days'),
     'signals_sourced',  (select count(*) from signal_leads where pulled_at >= now() - interval '30 days')
   ) from fleet;

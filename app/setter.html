@@ -70,7 +70,19 @@
   .main > * { flex: 0 0 auto; }
   .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 380px; }
 }
-.inbox-left { width: 340px; flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+.inbox-left { width: var(--il-w, 340px); flex-shrink: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; position: relative; }
+/* Drag-resize + collapse for the conversations list (owner ask 2026-08-01).
+   The handle is a slim strip over the right border; collapsed mode shrinks
+   the pane to a 30px rail with one expand button. Both persist. */
+.il-resizer { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 30; }
+.il-resizer:hover, .il-resizer.dragging { background: var(--accent-soft, rgba(43,98,217,.18)); }
+.il-collapse-btn { border: none; background: none; cursor: pointer; color: var(--ink-3, #9aa3b2); padding: 4px 6px; border-radius: 6px; flex-shrink: 0; }
+.il-collapse-btn:hover { color: var(--ink-1, #222); background: var(--bg-2, #f0f2f5); }
+.inbox-shell.list-collapsed .inbox-left { width: 30px; min-width: 30px; overflow: hidden; }
+.inbox-shell.list-collapsed .inbox-left > *:not(.il-rail) { display: none !important; }
+.il-rail { display: none; }
+.inbox-shell.list-collapsed .il-rail { display: flex; flex-direction: column; align-items: center; padding-top: 8px; }
+.inbox-shell.list-collapsed .il-resizer { display: none; }
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .il-search input {
   width: 100%; border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 13px;
@@ -393,6 +405,16 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .qc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
 .qc-test-chip { background: var(--ink); color: var(--cream); }
 
+/* Send-state banner: persistent in-pane confirmation (2026-08-01) */
+.send-confirm { font-size: 13px; font-weight: 600; padding: 10px 14px; border-radius: 8px; margin: 10px 0; }
+.send-confirm.inflight { background: var(--accent-soft, #eef4ff); color: var(--accent, #2b62d9); }
+.send-confirm.ok { background: #e8f7ee; color: #1d7a43; }
+/* Copy-email affordance in the sticky top bar (2026-08-01) */
+.dh-copy { display: inline-flex; align-items: center; border: none; background: none; padding: 2px;
+  cursor: pointer; color: var(--ink-3, #9aa3b2); border-radius: 5px; flex-shrink: 0; }
+.dh-copy svg { width: 14px; height: 14px; }
+.dh-copy:hover { color: var(--ink-1, #222); background: var(--bg-2, #f0f2f5); }
+.dh-copy.copied { color: #1d7a43; }
 .sent-line { font-size: 12.5px; padding: 9px 13px; border-radius: 8px; margin: 10px 0; line-height: 1.5; }
 .sent-line.auto_sent { background: var(--green-bg); color: #195C3F; }
 .sent-line.sent { background: var(--bg-sunken); color: var(--ink-2); }
@@ -723,12 +745,15 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
           <div class="il-search-notes">
             <span class="small muted">&uarr;&darr; to move between replies</span>
             <span class="small muted" id="searchAllNote" style="display:none">searching all replies</span>
+            <button type="button" class="il-collapse-btn" id="listCollapseBtn" title="Minimise the conversations list">&#171;</button>
           </div>
           <select class="client-filter-sel il-client-filter" id="clientFilterSel" title="Filter by client"></select>
         </div>
         <div class="il-test-note small muted" id="testOnlyNote" style="display:none"></div>
         <div class="il-list" id="inboxList"><div class="empty"><span class="btnspin"></span> Loading replies…</div></div>
         <div class="il-pager" id="inboxPager" style="display:none"></div>
+        <div class="il-rail"><button type="button" class="il-collapse-btn" id="listExpandBtn" title="Show the conversations list">&#187;</button></div>
+        <div class="il-resizer" id="listResizer" title="Drag to resize"></div>
       </div>
       <div class="inbox-right" id="inboxRight"></div>
       <div class="lead-panel" id="leadPanel" style="display:none"></div>
@@ -1268,6 +1293,30 @@ async function loadAgentsAndCampaigns() {
    while one is in flight at most ONE trailing refresh queues behind it (so a
    mutation's refresh still sees post-mutation data - never dropped, never
    stacked). */
+/* ── local-mutation shield (stale-cache fix 2026-08-01) ────────────────────
+   The queue GET is served from a ~20s stale-while-revalidate cache, so the
+   reload that follows EVERY action (send, regen, recategorise, dismiss) is
+   guaranteed to carry pre-mutation rows on its first pass. That is the whole
+   family of "it resurrected the old draft / the row came back / I had to do
+   it twice" reports. The shield makes the local mutation outrank the stale
+   payload: tombstoned ids (sent / dismissed / filed) are dropped from any
+   incoming payload, and overridden rows (fresh redraft, recategorise, sent
+   state) are merged over their stale twins — until the server catches up. */
+const ROW_TOMBSTONES = {};   // id -> expiry ms epoch
+const ROW_OVERRIDES = {};    // id -> {row, at}
+const MUTATION_SHIELD_MS = 65000;   // > 3x the server's SWR TTL
+function tombstoneRow(id) { if (id != null) ROW_TOMBSTONES[String(id)] = Date.now() + MUTATION_SHIELD_MS; }
+function overrideRow(row) { if (row && row.id != null) ROW_OVERRIDES[String(row.id)] = { row: row, at: Date.now() }; }
+function reconcileQueuePayload(rows) {
+  const now = Date.now();
+  Object.keys(ROW_TOMBSTONES).forEach((k) => { if (ROW_TOMBSTONES[k] < now) delete ROW_TOMBSTONES[k]; });
+  Object.keys(ROW_OVERRIDES).forEach((k) => { if (now - ROW_OVERRIDES[k].at > MUTATION_SHIELD_MS) delete ROW_OVERRIDES[k]; });
+  return (rows || []).filter((r) => !(String(r.id) in ROW_TOMBSTONES)).map((r) => {
+    const ov = ROW_OVERRIDES[String(r.id)];
+    return ov ? Object.assign({}, r, ov.row) : r;
+  });
+}
+
 let _queueChain = null;
 let _queuePending = 0;
 function loadQueue(prefetch) {
@@ -1296,7 +1345,7 @@ async function _loadQueueInner(prefetch) {
     fetchJson(`/api/setter/queue?${params.toString()}`, { _timeoutMs: 25000, _retries: 1 }));
   _queueLoading = false;
   if (res.ok) {
-    QUEUE_ROWS = res.data.rows || [];
+    QUEUE_ROWS = reconcileQueuePayload(res.data.rows || []);
     graftThreads(QUEUE_ROWS);
     KPIS = res.data.kpis || {};
     LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
@@ -1449,8 +1498,22 @@ function renderUnresolvedTray() {
   document.getElementById("trayTitle").textContent = `Sent without follow-up (${n})`;
   document.getElementById("trayBadge").textContent = n;
   const body = document.getElementById("trayBody");
+  // Keep the reviewer's place (bounce fix 2026-08-01): the wholesale
+  // innerHTML swap zeroed the tray's scroll on every render — every action,
+  // every 60s reload — which is most of the reported "UI bounces around".
+  const keepScroll = body.scrollTop;
   body.innerHTML = sortedTrayRows().map(trayRowHtml).join("");
+  body.scrollTop = keepScroll;
   wireUnresolvedTrayEvents(body);
+}
+/* The next person to process after `id` leaves (or is decided in) the tray —
+   computed against the SAME ordering the tray renders, so "next" is what the
+   eye expects. Falls back to the previous row at the end of the list. */
+function trayNextAfter(id) {
+  const ordered = sortedTrayRows();
+  const i = ordered.findIndex((r) => String(r.id) === String(id));
+  if (i < 0) return ordered[0] || null;
+  return ordered[i + 1] || ordered[i - 1] || null;
 }
 function wireUnresolvedTrayEvents(el) {
   el.querySelectorAll(".sg-add").forEach((btn) => btn.addEventListener("click", () => doTrayAdd(btn)));
@@ -1567,8 +1630,16 @@ async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
   }
   clearError();
   protoNote("Pushed to Smartlead subsequence");
+  // Progress-to-next (owner ask 2026-08-01): resolve the next person BEFORE
+  // this row leaves, update the tray optimistically (no awaited round trip —
+  // that network wait + full rebuild was the bounce), open the next
+  // conversation, and reconcile with the server in the background.
+  const nextAdd = trayNextAfter(id);
   applyRetroDecision(id, { added_to_subsequence: true, subsequence_decision: "pushed" });
-  await loadUnresolvedTray();
+  unresolvedRows = unresolvedRows.filter((r) => String(r.id) !== String(id));
+  renderUnresolvedTray();
+  if (nextAdd) openUnresolvedRow(nextAdd.id);
+  loadUnresolvedTray();
 }
 async function retroFollowupNone(id, btn) {
   const restore = busyBtn(btn, "Saving…");
@@ -1586,8 +1657,15 @@ async function retroFollowupNone(id, btn) {
     return;
   }
   clearError();
+  // "None" is a mark, not a removal (owner ruling 2026-07-22): the row stays
+  // visible, but it IS processed — so still progress to the next person.
+  const nextNone = trayNextAfter(id);
   applyRetroDecision(id, { subsequence_decision: "none" });
-  await loadUnresolvedTray();
+  const tRow = unresolvedRows.find((r) => String(r.id) === String(id));
+  if (tRow) tRow.subsequence_decision = "none";
+  renderUnresolvedTray();
+  if (nextNone) openUnresolvedRow(nextNone.id);
+  loadUnresolvedTray();
 }
 /* "Dismiss" - the only action that removes a thread from the follow-up
    reminder tray (owner ruling 2026-07-22). The reply stays sent; this just
@@ -1600,8 +1678,10 @@ async function retroFollowupDismiss(id, btn) {
   // random error followed by the whole tray repainting (owner report
   // 2026-07-25: "it comes up with this error and then it kind of restarts").
   const wasIn = unresolvedRows.some((r) => String(r.id) === String(id));
+  const nextDis = trayNextAfter(id);
   unresolvedRows = unresolvedRows.filter((r) => String(r.id) !== String(id));
   renderUnresolvedTray();
+  if (wasIn && nextDis) openUnresolvedRow(nextDis.id);
   const dPayload = { id: id, action: "subsequence_dismiss" };
   const dIdent = trayIdentity(id);
   if (dIdent) dPayload.identity = dIdent;
@@ -1867,13 +1947,27 @@ function pagedInboxRows() {
 
 function renderQueue() {
   renderInboxList();
-  // Fall back to ALL_ROWS (same fallback selectRow uses for cross-pill
-  // search results): a conversation opened from the unresolved banner can
-  // belong to a status tab that isn't the active pill, and a background
-  // refresh must not blank it.
+  if (selectedRowId == null) { renderDetail(null); return; }
   const stillThere = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId))
                   || ALL_ROWS.find((r) => String(r.id) === String(selectedRowId));
-  renderDetail(stillThere || null);
+  if (stillThere) {
+    // Guarded repaint (stale-cache fix 2026-08-01): this used to call
+    // renderDetail unconditionally, with none of refreshOpenDetail's typing/
+    // signature guards — so the queue reload that follows every action
+    // repainted the open conversation from the ~20s-stale cache payload,
+    // resurrecting the previous draft over a fresh regen and eating the
+    // caret mid-edit. Route through the ONE guarded path instead.
+    refreshOpenDetail();
+    return;
+  }
+  // The open row is no longer in any loaded list. If the pane is showing a
+  // locally-completed state (just sent / just filed), leave it alone — the
+  // reviewer is reading the confirmation; blanking it (and nulling
+  // selectedRowId, which also killed the success repaint and the failure
+  // rollback repaint) was the "pane goes blank after Approve" bug.
+  const dr = currentDetailRowObj();
+  if (dr && String(dr.id) === String(selectedRowId)) return;
+  renderDetail(null);
 }
 
 function renderInboxList() {
@@ -2137,6 +2231,57 @@ function applyLeadPanelHidden() {
     btn.title = PANEL_HIDDEN ? "Show lead details" : "Hide lead details";
   }
 }
+
+/* ── Conversations-list sidebar: drag-resize + collapse, both persisted
+   (owner ask 2026-08-01). Same localStorage shape as PANEL_HIDDEN. ─────── */
+const LIST_WIDTH_KEY = "setterListWidth";
+const LIST_COLLAPSED_KEY = "setterListCollapsed";
+const LIST_W_MIN = 240, LIST_W_MAX = 560;
+function applyListSidebarState() {
+  const shell = document.getElementById("inboxShell");
+  if (!shell) return;
+  let w = null, collapsed = false;
+  try {
+    w = parseInt(localStorage.getItem(LIST_WIDTH_KEY) || "", 10);
+    collapsed = localStorage.getItem(LIST_COLLAPSED_KEY) === "1";
+  } catch { /* ignore */ }
+  if (w && w >= LIST_W_MIN && w <= LIST_W_MAX) shell.style.setProperty("--il-w", w + "px");
+  shell.classList.toggle("list-collapsed", collapsed);
+}
+function wireListSidebar() {
+  const shell = document.getElementById("inboxShell");
+  const left = shell && shell.querySelector(".inbox-left");
+  const resizer = document.getElementById("listResizer");
+  if (!shell || !left) return;
+  applyListSidebarState();
+  const setCollapsed = (on) => {
+    shell.classList.toggle("list-collapsed", on);
+    try { localStorage.setItem(LIST_COLLAPSED_KEY, on ? "1" : "0"); } catch { /* ignore */ }
+  };
+  const cBtn = document.getElementById("listCollapseBtn");
+  const eBtn = document.getElementById("listExpandBtn");
+  if (cBtn) cBtn.addEventListener("click", () => setCollapsed(true));
+  if (eBtn) eBtn.addEventListener("click", () => setCollapsed(false));
+  if (resizer) resizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    resizer.setPointerCapture(e.pointerId);
+    resizer.classList.add("dragging");
+    const startX = e.clientX, startW = left.getBoundingClientRect().width;
+    const move = (ev) => {
+      const w = Math.round(Math.min(LIST_W_MAX, Math.max(LIST_W_MIN, startW + (ev.clientX - startX))));
+      shell.style.setProperty("--il-w", w + "px");
+    };
+    const up = () => {
+      resizer.classList.remove("dragging");
+      resizer.removeEventListener("pointermove", move);
+      resizer.removeEventListener("pointerup", up);
+      const w = Math.round(left.getBoundingClientRect().width);
+      try { localStorage.setItem(LIST_WIDTH_KEY, String(w)); } catch { /* ignore */ }
+    };
+    resizer.addEventListener("pointermove", move);
+    resizer.addEventListener("pointerup", up);
+  });
+}
 /* Every reply the pane has ever shown, by row id -> the four fields that
    identify the REPLY rather than the row (bug 2026-07-28). Re-intake deletes a
    queue row and re-inserts it under a new id, and the same refresh drops the
@@ -2155,8 +2300,11 @@ function rememberIdentity(row) {
   };
 }
 
+let _DETAIL_ROW = null;   // the exact row object the pane last painted
+function currentDetailRowObj() { return _DETAIL_ROW; }
 function renderDetail(row) {
   rememberIdentity(row);
+  _DETAIL_ROW = row || null;
   const el = document.getElementById("inboxRight");
   const panelEl = document.getElementById("leadPanel");
   if (!row) {
@@ -2211,6 +2359,17 @@ function renderDetail(row) {
       </div>
     </div>`;
     setTimeout(hydrateUncatBanner, 0);
+  }
+
+  // Send-state banner (owner ask 2026-08-01: "confirmation the email sent
+  // would be useful"): a persistent state right in the pane, not just a
+  // 2.6s toast. 'inflight' while the job runs, 'sent' on confirmation —
+  // both survive queue repaints because the shield keeps this row object.
+  let sendStateHtml = "";
+  if (row._sendState === "inflight") {
+    sendStateHtml = `<div class="send-confirm inflight">Sending reply to ${esc(row.lead_email || "the lead")}&hellip;</div>`;
+  } else if (row._sendState === "sent") {
+    sendStateHtml = `<div class="send-confirm ok">&#10003; Reply sent to ${esc(row.lead_email || "the lead")} &middot; ${esc(pulledAgo(row.sent_at))}</div>`;
   }
 
   // Auto-sent / sent rows keep one calm line, placed right above the draft
@@ -2272,12 +2431,14 @@ function renderDetail(row) {
       </div>
       <div class="dh-row2">
         <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
+        ${row.lead_email ? `<button type="button" class="dh-copy" id="copyEmailBtn" data-email="${esc(row.lead_email)}" title="Copy email address" aria-label="Copy email address">${ICON_COPY}</button>` : ""}
         <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
       </div>
       <div class="dh-campaign" title="${esc(campaignNameFor(row))}">${esc(campaignNameFor(row))}</div>
     </div>
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
+    ${sendStateHtml}
     ${errorBannerHtml}
     ${uncatBannerHtml}
     ${convoHtml(row)}
@@ -2318,6 +2479,25 @@ function renderDetail(row) {
     applyLeadPanelHidden();
   });
   applyLeadPanelHidden();
+  // One-click copy of the recipient's address (owner ask 2026-08-01). Same
+  // clipboard-with-fallback shape as #shareTrainCopyBtn.
+  const copyBtn = document.getElementById("copyEmailBtn");
+  if (copyBtn) copyBtn.addEventListener("click", async () => {
+    const addr = copyBtn.getAttribute("data-email") || "";
+    let done = false;
+    try { await navigator.clipboard.writeText(addr); done = true; } catch { /* fallback below */ }
+    if (!done) {
+      const tmp = document.createElement("textarea");
+      tmp.value = addr; document.body.appendChild(tmp); tmp.select();
+      try { document.execCommand("copy"); done = true; } catch { /* give up quietly */ }
+      tmp.remove();
+    }
+    if (done) {
+      copyBtn.classList.add("copied");
+      copyBtn.innerHTML = "&#10003;";
+      setTimeout(() => { copyBtn.classList.remove("copied"); copyBtn.innerHTML = ICON_COPY; }, 1500);
+    }
+  });
   // Restore the reader's place BEFORE wiring (wireDetailEvents only centres
   // brand-new rows; same-row repaints land exactly where the reader was).
   if (_sameRow) {
@@ -2460,6 +2640,7 @@ const ICON_LINKEDIN = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden=
 const ICON_EXTERNAL = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 3a1 1 0 0 0 0 2h3.59l-8.3 8.29a1 1 0 1 0 1.42 1.42L19 6.41V10a1 1 0 0 0 2 0V4a1 1 0 0 0-1-1h-6Z"/><path d="M5 5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 1 0-2 0v5H5V7h5a1 1 0 0 0 0-2H5Z"/></svg>`;
 // Right-panel toggle glyph: a framed rectangle with a right-hand column.
 const ICON_PANEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><line x1="15" y1="4.5" x2="15" y2="19.5"/></svg>`;
+const ICON_COPY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
 
 function companyBrandFromDomain(d) {
   d = String(d || "").trim().toLowerCase().replace(/^www\./, "");
@@ -2752,15 +2933,47 @@ async function applyCategory(block, override) {
     return;
   }
   const act = res.data && res.data.action;
-  if (act === "converted") selectedRowId = (res.data && res.data.new_id) || null;
-  else if (act === "discarded") selectedRowId = null;
-  // A re-label on a SENT thread can take it out of "Sent without follow-up"
-  // (non-positive categories - owner ask 2026-07-25), so refresh that tray too
-  // instead of leaving a stale reminder on screen.
-  if (act === "relabelled_sent" && hint) {
-    hint.textContent = (res.data && res.data.removed_from_followup)
-      ? "Category updated - removed from the follow-up reminder."
-      : "Category updated.";
+  const rowId = selectedRowId;
+  if (act === "discarded") {
+    // INSTANT removal (owner report 2026-08-01: "when I recategorised
+    // something to not qualified, it didn't instantly disappear so I had to
+    // repeat" — the old path waited on a queue reload that is served from a
+    // ~20s stale cache, so the row visibly survived its own filing). Same
+    // optimistic shape as doDismiss, plus the tombstone so the stale payload
+    // can't resurrect it, plus an auto-advance to the next conversation.
+    tombstoneRow(rowId);
+    const idx = QUEUE_ROWS.findIndex((r) => String(r.id) === String(rowId));
+    const prevStatus = idx >= 0 ? QUEUE_ROWS[idx].status : null;
+    if (idx >= 0) QUEUE_ROWS.splice(idx, 1);
+    const counts = KPIS.counts || {};
+    if (prevStatus && typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
+    if (prevStatus === "needs_review" && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
+    const next = visibleInboxRows()[Math.min(Math.max(idx, 0), Math.max(visibleInboxRows().length - 1, 0))];
+    renderKpis(); renderQueueFilters();
+    if (next) { selectRow(next.id); } else { selectedRowId = null; renderQueue(); }
+    protoNote(`Filed as ${name}`);
+  } else if (act === "converted") {
+    tombstoneRow(rowId);   // the old id is gone; the reply lives under new_id
+    selectedRowId = (res.data && res.data.new_id) || null;
+  } else if (act === "relabelled" || act === "relabelled_sent") {
+    // Reflect the label immediately on the live row and shield it from the
+    // stale reload; the pane's category pill repaints from it.
+    const live = QUEUE_ROWS.find((r) => String(r.id) === String(rowId))
+              || ALL_ROWS.find((r) => String(r.id) === String(rowId))
+              || currentDetailRowObj();
+    if (live && String(live.id) === String(rowId)) {
+      live.category = name; live.category_source = "manual";
+      overrideRow(live);
+      renderDetail(live);
+    }
+    // renderDetail rebuilt the panel, so the old hint node is detached —
+    // re-query the fresh one before writing the confirmation.
+    const freshHint = document.querySelector("#leadPanel .lp-cat-hint") || hint;
+    if (freshHint) {
+      freshHint.textContent = (act === "relabelled_sent" && res.data && res.data.removed_from_followup)
+        ? "Category updated - removed from the follow-up reminder."
+        : "Category updated.";
+    }
   }
   loadUnresolvedTray();
   await loadQueue();
@@ -3655,13 +3868,16 @@ async function doSend(btn) {
   if (row && prev) {
     const now = new Date().toISOString();
     [qRow, aRow].forEach((r) => { if (r) { r.status = "sent"; r.sent_at = now; r.sent_body = sentBody; } });
+    row._sendState = "inflight";   // in-pane state, not just a toast (2026-08-01)
+    // Shield: a stale queue payload arriving mid-send must not resurrect
+    // this row in the list (tombstone) — the pane keeps the live object.
+    tombstoneRow(id);
     if (qIdx >= 0 && currentStatus && currentStatus !== "sent") QUEUE_ROWS.splice(qIdx, 1);
     if (typeof counts[prev.status] === "number") counts[prev.status] -= 1;
     if (typeof counts.sent === "number") counts.sent += 1;
     if (prev.status === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
     renderKpis(); renderQueueFilters(); renderQueue();
     if (String(selectedRowId) === String(id)) renderDetail(row);
-    protoNote("Reply sent");
   }
   const res = await runSendJob(payload, null);
   btn.disabled = false;
@@ -3672,6 +3888,8 @@ async function doSend(btn) {
   if (sendFailed) {
     // Roll the optimistic state back: same objects, same index, same counts.
     if (row && prev) {
+      delete ROW_TOMBSTONES[String(id)];
+      delete row._sendState;
       [qRow, aRow].forEach((r) => { if (r) { r.status = prev.status; r.sent_at = prev.sent_at; r.sent_body = prev.sent_body; } });
       if (qRow && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
         QUEUE_ROWS.splice(Math.min(Math.max(qIdx, 0), QUEUE_ROWS.length), 0, qRow);
@@ -3683,16 +3901,24 @@ async function doSend(btn) {
       renderKpis(); renderQueueFilters(); renderQueue();
       if (String(selectedRowId) === String(id)) renderDetail(row);
     }
-    const msg = (res.data && res.data.row && res.data.row.error) || res.error || "the send did not go through";
+    const msg = (res.data && (res.data.error || (res.data.row && res.data.row.error))) || res.error || "the send did not go through";
     showError("Couldn't send the reply: " + msg);
     showDetailError("Couldn't send the reply: " + msg);
     return;
   }
   clearError();
+  if (row) {
+    // Confirmed: the persistent green state replaces the in-flight one, and
+    // the override keeps any stale queue payload from undoing the sent row.
+    row._sendState = "sent";
+    if (res.data && res.data.row && res.data.row.sent_at) row.sent_at = res.data.row.sent_at;
+    overrideRow(row);
+    if (String(selectedRowId) === String(id)) renderDetail(row);
+  }
+  protoNote("Reply sent");
   delete EDITED_DRAFTS[id];
   delete GATE_SELECTION[id];
   loadUnresolvedTray();
-  if (!row) protoNote("Reply sent");
   // If this approve carried an edit and training is on, the learner may turn
   // it into a standing rule ~40s from now. Watch for it and SAY SO - the
   // tester panel's core finding (2026-07-17, 5/5 startled) was that a silent
@@ -3758,12 +3984,22 @@ async function doSendFollowup(btn) {
         }
       }
     }
-    const msg = (res.data && res.data.row && res.data.row.error) || res.error || "the follow-up did not go through";
+    const msg = (res.data && (res.data.error || (res.data.row && res.data.row.error))) || res.error || "the follow-up did not go through";
     showError("Couldn't send the follow-up: " + msg);
     showDetailError("Couldn't send the follow-up: " + msg);
     return;
   }
   clearError();
+  // Processing a tray person ends with the NEXT person, not a bounce back
+  // (owner ask 2026-08-01): if this thread was in the follow-up tray,
+  // resolve it there and open the next one.
+  if (unresolvedRows.some((r) => String(r.id) === String(id))) {
+    const nextFu = trayNextAfter(id);
+    unresolvedRows = unresolvedRows.filter((r) => String(r.id) !== String(id));
+    renderUnresolvedTray();
+    if (nextFu) openUnresolvedRow(nextFu.id);
+    loadUnresolvedTray();
+  }
   loadQueue();
 }
 
@@ -3897,9 +4133,14 @@ async function runRedraftJob(payload, onTick) {
    sent instead of tempting a double-send with a false error. */
 async function runSendJob(payload, onTick, opts) {
   const started = Date.now();
+  // _retries: retrying the START POST on a 502/503 is SAFE as of 2026-08-01 —
+  // the server dedupes a repeated start onto the running job (same job_id
+  // back) and the durable 'sending' claim means a retry can never produce a
+  // second Smartlead post. Most start-502s are a restarting instance.
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, async: true }),
+    _timeoutMs: 20000, _retries: 1,
   });
   if (res.ok && !(res.data && res.data.job_id)) return res;  // old server: answered synchronously
   if (res.ok && res.data && res.data.job_id) {
@@ -3935,7 +4176,7 @@ async function runSendJob(payload, onTick, opts) {
   // stays ambiguous with no recorded error, say so honestly instead of
   // claiming failure.
   let row = null, rowReadOk = false;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     if (i) await sleep(2000);
     const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`, { _retries: 1 });
     rowReadOk = rowReadOk || rowRes.ok;
@@ -3943,7 +4184,16 @@ async function runSendJob(payload, onTick, opts) {
     if (row && (row.status === "sent" || row.status === "auto_sent")) {
       return { ok: true, data: { ok: true, row } };
     }
+    // 'sending' is the durable claim (2026-08-01): the send IS in flight on
+    // the server, so keep reading — it will land as sent or as a recorded
+    // error, and either answer is definite.
+    if (row && row.status === "sending") continue;
     if (row && row.error) break;   // a real recorded failure - stop waiting
+  }
+  if (row && row.status === "sending") {
+    return { ok: false, error:
+      "the send is still finishing on the server - it will complete in the background; " +
+      "check the Sent pill in a minute before doing anything else" };
   }
   if (row && row.error) return { ok: false, error: row.error };
   if (rowReadOk && row && row.status === "needs_review" && res.error) {
@@ -3998,7 +4248,14 @@ async function doRedraft(btn, feedback, scope) {
    the same id (separate fetches), so both are updated - same rule as
    doDismiss's optimistic path. */
 function applyRedraftedRow(id, fresh) {
-  if (!fresh) return;
+  // Silent no-op was the "first Regenerate shows nothing" bug (2026-08-01):
+  // a job payload without a row, or a row that fell out of the list mid-regen,
+  // painted nothing and said nothing — the second click then "worked" only
+  // because the cache TTL had passed. Every path now paints or explains.
+  if (!fresh) {
+    showDetailError("The regeneration finished but returned nothing usable - click Regenerate once more.");
+    return;
+  }
   let merged = null;
   [QUEUE_ROWS, ALL_ROWS].forEach((set) => (set || []).forEach((r) => {
     if (String(r.id) === String(id)) {
@@ -4008,7 +4265,19 @@ function applyRedraftedRow(id, fresh) {
       merged = r;
     }
   }));
-  if (merged && String(selectedRowId) === String(id)) renderDetail(merged);
+  // Row not in any loaded list (an interleaved refresh dropped it): paint the
+  // fresh row directly rather than showing nothing.
+  if (!merged) merged = fresh;
+  // Shield: the loadQueue() that follows every regen serves the ~20s-stale
+  // cache — without this override it repainted draft #1 over the new draft.
+  overrideRow(merged);
+  if (String(selectedRowId) === String(id)) {
+    renderDetail(merged);
+    if (merged.status === "needs_review" && !merged.draft_body) {
+      showDetailError("No draft came back: " +
+        (merged.decision_reason || "the drafter returned an empty reply - regenerate with feedback to steer it."));
+    }
+  }
 }
 
 /* no_action rows have no draft yet - same redraft endpoint builds one, then
@@ -4842,8 +5111,17 @@ async function refreshThreadFor(row, isRepoll) {
   const fresh = res.data.thread;
   // A stale cached answer means a live re-hydrate is running server-side:
   // poll once more shortly to pick up whatever it wrote. One re-poll only.
+  // Re-resolve the row by id AT FIRE TIME (regen fix 2026-08-01): this
+  // closure used to hold the pre-regen object, and the 4s re-poll then
+  // repainted draft #1 over the fresh regeneration.
   if (res.data.stale && !isRepoll) {
-    setTimeout(() => refreshThreadFor(row, true), 4000);
+    setTimeout(() => {
+      const live = QUEUE_ROWS.find((x) => String(x.id) === String(row.id))
+                || ALL_ROWS.find((x) => String(x.id) === String(row.id))
+                || (currentDetailRowObj() && String(currentDetailRowObj().id) === String(row.id)
+                    ? currentDetailRowObj() : row);
+      refreshThreadFor(live, true);
+    }, 4000);
   }
   if (fresh.length && threadKey(fresh) !== threadKey(row.thread)) {
     row.thread = fresh;
@@ -4851,7 +5129,14 @@ async function refreshThreadFor(row, isRepoll) {
       const r = (list || []).find((x) => String(x.id) === String(row.id));
       if (r) r.thread = fresh;
     });
-    if (String(selectedRowId) === String(row.id)) renderDetail(row);
+    if (String(selectedRowId) === String(row.id)) {
+      const live = currentDetailRowObj();
+      // Never repaint from a detached stale object: prefer the object the
+      // pane is actually showing (it carries the newest draft), grafting the
+      // fresh thread onto it.
+      if (live && String(live.id) === String(row.id) && live !== row) live.thread = fresh;
+      renderDetail(live && String(live.id) === String(row.id) ? live : row);
+    }
   }
 }
 
@@ -4864,13 +5149,18 @@ document.addEventListener("click", (e) => {
 });
 
 (async function init() {
+  wireListSidebar();   // restore + wire the persisted list width/collapse first — pure DOM, no network
   // Everything that can start at once, starts at once (perf pass 2026-07-16).
   // Old path was strictly serial: agents -> queue -> poll, so first paint
   // waited on all three. Now the queue fetch and the reply-sweep POST both
   // fire alongside the agents/campaigns load. The queue RENDER still waits for
   // agents (client filter + agent labels read those maps), so nothing renders
   // with empty data - only the network waits overlap.
-  const queueP = fetchJson(`/api/setter/queue?status=${encodeURIComponent(currentStatus)}&limit=200&fields=list`);
+  // Same timeout+retry armour as every later refresh (502 fix 2026-08-01):
+  // this prefetch was the ONE queue call with neither, so a restart window
+  // 502 blanked the very first paint while every subsequent refresh healed.
+  const queueP = fetchJson(`/api/setter/queue?status=${encodeURIComponent(currentStatus)}&limit=200&fields=list`,
+    { _timeoutMs: 25000, _retries: 1 });
   // Stamp of the last completed sweep BEFORE this page kicks its own, so the
   // boot wait below can tell "finished" from "was already finished". Fired as
   // a promise, never awaited here - first paint must not wait on it.

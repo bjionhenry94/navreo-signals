@@ -31,11 +31,14 @@ AS $function$
     group by 1),
   mtg as (
     -- Call Booked ONLY (owner ruling 2026-07-30): a Meeting Request is not a
-    -- meeting until the call is actually booked.
+    -- meeting until the call is actually booked. workspace-scoped (2026-08-01):
+    -- this graph is Navreo's own homepage; a client-workspace booking must
+    -- never inflate it (the per-client hub carries those under their label).
     select b.d, count(*) n from (
       select (min(replied_at) at time zone 'utc')::date d
       from replies
       where category = 'Call Booked'
+        and workspace = 'navreo'
         and (p_campaign is null or smartlead_campaign_id::text = p_campaign)
       group by smartlead_campaign_id, email) b
     where b.d between p_start and p_end
