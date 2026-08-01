@@ -7865,7 +7865,10 @@ def cockpit_assignments_map() -> dict:
     """{"<scope>::<key>": {state, assigned_to, assigned_at}} for the whole team.
     Degrades to an empty map (never an error) so a DB blip just falls back to
     the buttons' un-owned default rather than breaking the cockpit render."""
-    rows = sb("GET", "cockpit_action_assignments?select=action_key,state,assigned_to,assigned_at")
+    # sb_get_all, not sb: PostgREST caps a bare GET at ~1000 rows, and
+    # assignment rows accumulate — a truncated map silently resurrects
+    # long-dismissed acts as "Review" items in every badge.
+    rows = sb_get_all("cockpit_action_assignments?select=action_key,state,assigned_to,assigned_at")
     if not isinstance(rows, list):
         return {"assignments": {}, "degraded": True}
     out = {r.get("action_key"): {"state": r.get("state"),
@@ -7885,7 +7888,9 @@ def cockpit_set_assignment(payload: dict, actor: str | None):
     now"). assigned_to is ALWAYS the session email, never a body field."""
     from datetime import datetime, timezone
     from urllib.parse import quote
-    action_key = (payload.get("action_key") or "").strip()
+    if not isinstance(payload, dict):
+        return {"ok": False, "message": "body must be a JSON object"}, 400
+    action_key = (str(payload.get("action_key") or "")).strip()[:512]
     if not action_key:
         return {"ok": False, "message": "action_key required"}, 400
     state = (payload.get("state") or "").strip()
@@ -7897,9 +7902,13 @@ def cockpit_set_assignment(payload: dict, actor: str | None):
     if state not in COCKPIT_ASSIGN_STATES:
         return {"ok": False, "message": f"state must be one of {COCKPIT_ASSIGN_STATES + ('clear',)}"}, 400
     now_iso = datetime.now(timezone.utc).isoformat()
+    # campaign_id/insight_key are display metadata, but unbounded junk from a
+    # buggy client would still become permanent rows every GET carries
+    _cid = str(payload.get("campaign_id") or "")[:64] or None
+    _ik = str(payload.get("insight_key") or "")[:256] or None
     row = {"action_key": action_key,
-           "campaign_id": (payload.get("campaign_id") or None),
-           "insight_key": (payload.get("insight_key") or None),
+           "campaign_id": _cid,
+           "insight_key": _ik,
            "state": state, "assigned_to": actor, "assigned_at": now_iso,
            "updated_at": now_iso}
     res = sb("POST", "cockpit_action_assignments?on_conflict=action_key", row,
@@ -18231,6 +18240,10 @@ class Handler(SimpleHTTPRequestHandler):
         "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/notify/positive-card",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
         "/api/warmup-live",  # read-only Smartlead read — must not nuke SWR caches
+        # act-state clicks touch only cockpit_action_assignments (whose GET is
+        # deliberately uncached) — a triage click-storm must not cold-start
+        # every UI SWR cache for the whole team
+        "/api/cockpit/assignments",
     }
 
     def do_POST(self):

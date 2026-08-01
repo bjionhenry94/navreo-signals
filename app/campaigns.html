@@ -2625,8 +2625,16 @@
         replied: s ? s.replied : null,
         positives: s ? s.positives : vs.pos,
         bounced: s ? s.bounced : null,
-        meetings: (meetings[scope] != null) ? meetings[scope] : 0,
+        /* meetings coverage is navreo-only (the archive query pins the
+           workspace): client rows get an honest null → "-" in the cell, never
+           a fake zero */
+        meetings: (meetings[scope] != null) ? meetings[scope]
+          : ((((s && s.workspace) || "navreo") === "navreo") ? 0 : null),
         completion: (vs.completion != null) ? vs.completion : null,
+        /* Smartlead's own per-lead audience split, straight off the synced
+           scorecard row — the ring/bucket truth for rows outside the live
+           check's 150-id cap (the sent÷(leads×2) heuristic is last resort) */
+        completedLeads: s ? s.completed : null,
         source: s ? "scorecard" : "crunch"
       };
       /* An un-crunched campaign gets an honest neutral state, never a made-up
@@ -2862,10 +2870,14 @@
     applyPerfVisibility();
     applyTheme(currentTheme());
     /* badges tally by saved act state (dismissed drop out, claimed go amber),
-       so the assignments map loads eagerly once and rows repaint when it
-       lands — otherwise every previously-dismissed act would keep counting
-       until the first panel open. */
-    if (!ACT_LOADED) actLoadOnce(renderRows);
+       so the assignments map loads eagerly once — repainting ONLY the badge
+       cells when it lands (a full renderRows here would snap shut any panel
+       opened during the fetch, and the rest of the row can't have changed). */
+    if (!ACT_LOADED) actLoadOnce(function () {
+      document.querySelectorAll("#campaign-rows .campaign-row[id^=row-c]").forEach(function (r) {
+        refreshReviewBadge(r.id.slice(5));
+      });
+    });
   }
 
   /* live status bucket for a campaign from the LIVE Smartlead check */
@@ -2892,23 +2904,24 @@
          not — 100% completion files it under Completed, off the Active pick */
       if ((ls && ls.completion != null && ls.completion >= 100) ||
           (ls && ls.total > 0 && ls.completed != null && ls.completed >= ls.total)) return "completed";
-      /* The live check caps at 150 ids, so most rows only hold synced stats.
-         Their ring is sent ÷ (leads × 2) — when THAT reads 100% the row must
-         file under Completed too, or the list shows a 100% ring on an
-         "active" row. Same formula as rowHTML so ring and filter never
-         disagree. */
+      /* a LIVE answer that carries completion data and says mid-flight is
+         final — never let a synced heuristic overrule the live check */
+      if (ls && (ls.completion != null || (ls.total > 0 && ls.completed != null))) return "active";
+      /* No live answer (150-id cap): the synced scorecard's own per-lead
+         split decides, and the sent ÷ (leads × 2) ring heuristic only when
+         the sync doesn't carry it — the same order rowHTML draws the ring
+         with, so ring, chip and filter can never disagree. */
       var cc = STATE.byId && STATE.byId[id], st = cc && cc.stats;
-      if (st && st.leads && st.sent != null &&
-          Math.round(st.sent / (st.leads * 2) * 100) >= 100) return "completed";
+      if (st) {
+        if (st.completedLeads != null && st.leads > 0)
+          return st.completedLeads >= st.leads ? "completed" : "active";
+        if (st.leads && st.sent != null &&
+            Math.round(st.sent / (st.leads * 2) * 100) >= 100) return "completed";
+      }
       return "active";
     }
     return "other";
   }
-  function liveCompletion(id) {
-    var ls = STATE.liveStatus && STATE.liveStatus[id];
-    return (ls && ls.completion != null) ? ls.completion : null;
-  }
-
   /* Build #campaign-rows honouring the current tier filter, live-status filter,
      search, and completion sort. Rows are plain <a> — no per-row JS — so a full
      innerHTML rebuild on every control change is safe. */
@@ -3123,7 +3136,13 @@
 
   function rowHTML(c) {
     var st = c.stats;
-    var ringPct = (st.leads && st.sent != null) ? Math.min(100, Math.round(st.sent / (st.leads * 2) * 100)) : null;
+    /* ring = leads through the sequence when the sync carries it (Smartlead's
+       own split), sent ÷ (leads × 2) only as the legacy fallback — one source
+       shared with liveBucket so ring, chip and filter can never disagree */
+    var ringReal = st.completedLeads != null && st.leads > 0;
+    var ringPct = ringReal ? Math.min(100, Math.round(st.completedLeads / st.leads * 100))
+      : (st.leads && st.sent != null) ? Math.min(100, Math.round(st.sent / (st.leads * 2) * 100)) : null;
+    var ringTitle = ringReal ? "leads finished the sequence" : "sent &divide; (leads &times; 2)";
     var replyPct = pct(st.replied, st.sent, 2);
     var bouncePct = pct(st.bounced, st.sent, 1);
     var search = (c.name + " " + c.pill + " " + c.tier).toLowerCase();
@@ -3139,7 +3158,7 @@
       '<a class="row-summary" href="#/c/' + esc(c.id) + '" aria-label="' + esc(c.name) + ". " + esc(c.pill) + '. Open the campaign page.">' +
       '<span class="ring-wrap">' +
       (ringPct != null
-        ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="sent &divide; (leads &times; 2)"><span class="ring-hole">' + ringPct + "%</span></span>"
+        ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="' + ringTitle + '"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
       '</span>' +
       '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span></span>" +
@@ -3149,7 +3168,7 @@
       '<span class="stat stat--positives"><span class="stat-num tnum">' + fmtInt(st.positives) + '</span><span class="stat-label">Positives</span></span>' +
       '<span class="stat stat--sendspos"><span class="stat-num tnum" title="Sends per warm lead. Under 1,500 is healthy.">' + (c.ratio ? "1 per " + fmtInt(c.ratio) : "-") + '</span><span class="stat-label">Sends/positive</span></span>' +
       '<span class="stat stat--bounce"><span class="stat-num tnum">' + (bouncePct != null ? bouncePct + "%" : "-") + '</span><span class="stat-label">Bounce rate</span></span>' +
-      '<span class="stat stat--meetings"><span class="stat-num tnum">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="stat-label">Meetings</span></span>' +
+      '<span class="stat stat--meetings"><span class="stat-num tnum">' + (st.meetings != null ? fmtInt(st.meetings) : "-") + '</span><span class="stat-label">Meetings</span></span>' +
       reviewBadge +
       '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>' +
       rowSignalBit(c) +
@@ -3186,8 +3205,8 @@
     var bits = [];
     if (n.review || !n.prog) bits.push('Review <b class="tnum">' + n.review + "</b>");
     if (n.prog) bits.push('<span class="rb-prog">In-progress <b class="tnum">' + n.prog + "</b></span>");
-    var lbl = (n.review ? n.review + " optimisation" + (n.review === 1 ? "" : "s") + " to review" : "") +
-      (n.prog ? (n.review ? ", " : "") + n.prog + " in progress" : "");
+    var lbl = ((n.review ? n.review + " optimisation" + (n.review === 1 ? "" : "s") + " to review" : "") +
+      (n.prog ? (n.review ? ", " : "") + n.prog + " in progress" : "")) || "No optimisations left";
     return '<span class="review-badge" role="button" tabindex="0" data-review="' + esc(c.id) +
       '" aria-controls="optim-c' + esc(c.id) + '" aria-expanded="' + (expanded ? "true" : "false") +
       '" aria-label="' + lbl + ' for this campaign">' + bits.join(" &middot; ") + REVIEW_CARET + "</span>";
@@ -5038,10 +5057,13 @@
     if (refreshBtn) refreshBtn.addEventListener("click", function () {
       STATE.liveCheckedAt = null; loadLiveStatus();
     });
-    /* search */
+    /* search — debounced: each renderRows is a full innerHTML rebuild of the
+       whole inventory, far too heavy to run per keystroke at 500+ rows */
+    var searchT = null;
     document.getElementById("cockpit-search").addEventListener("input", function () {
       STATE.view.q = document.getElementById("cockpit-search").value || "";
-      renderRows();
+      clearTimeout(searchT);
+      searchT = setTimeout(renderRows, 120);
     });
     var clearBtn = document.getElementById("clear-filters-btn");
     if (clearBtn) clearBtn.addEventListener("click", function () {
@@ -5070,9 +5092,12 @@
         panel.hidden = !willOpen;
         badge.setAttribute("aria-expanded", willOpen ? "true" : "false");
         if (willOpen) {
-          var cs = STATE.campaigns || [], c = null;
-          for (var i = 0; i < cs.length; i++) { if (String(cs[i].id) === String(id)) { c = cs[i]; break; } }
+          var c = STATE.byId && STATE.byId[id];
           if (c) openRowOptim(c, panel);
+        } else {
+          /* closing re-tallies the badge: a panel emptied while open was
+             showing the expanded-only zero pill, which must not outlive it */
+          refreshReviewBadge(id);
         }
       };
       rowsC.addEventListener("click", function (e) {
@@ -5146,17 +5171,24 @@
       else { tag.hidden = true; tag.textContent = ""; }
     }
   }
+  var ACT_PENDING = null;  // in-flight guard: second caller joins the first fetch
   function actLoadOnce(cb) {
     if (ACT_LOADED) { cb(); return; }
-    Promise.all([
-      getJSON("/api/cockpit/assignments").catch(function () { return {}; }),
-      getJSON("/api/auth/me").catch(function () { return {}; })
-    ]).then(function (res) {
-      ACT_ASSIGN = (res[0] && res[0].assignments) || {};
-      ACT_ME = (res[1] && res[1].email) || null;
-      ACT_LOADED = true;
-      cb();
-    });
+    if (!ACT_PENDING) {
+      ACT_PENDING = Promise.all([
+        getJSON("/api/cockpit/assignments").catch(function () { return {}; }),
+        getJSON("/api/auth/me").catch(function () { return {}; })
+      ]).then(function (res) {
+        /* merge under any optimistic clicks that landed mid-flight — a click's
+           local write must not be clobbered by the initial snapshot */
+        var fresh = (res[0] && res[0].assignments) || {};
+        Object.keys(ACT_ASSIGN).forEach(function (k) { fresh[k] = ACT_ASSIGN[k]; });
+        ACT_ASSIGN = fresh;
+        ACT_ME = (res[1] && res[1].email) || ACT_ME;
+        ACT_LOADED = true;
+      });
+    }
+    ACT_PENDING.then(cb);
   }
   /* Shared toast for the cockpit's copy actions. */
   function cockpitToast(msg) {
@@ -5312,12 +5344,15 @@
        count from everywhere, so comparison variants the note names get bars. */
     var parts = (cardText || "").split("\u0001");
     var head = parts[0] || "", m, vars = {}, emails = {};
-    /* case-insensitive + enumeration-aware: "variants A and B", "Var E / F",
-       "var C, D and E" all resolve to their letters (the old pattern only hit
-       a literal capitalised "Var X", so most prose cards got no bars) */
-    var reV = /\bvar(?:iant)?s?\s+([A-Z](?:\s*(?:,|and|&|\+|\/)\s*[A-Z])*)\b/gi, reE = /\bEmail\s+(\d+)\b/g;
+    /* enumeration-aware with a case-insensitive PREFIX but strictly UPPERCASE
+       letters: "variants A and B", "Var E / F", "variant A, B, and C" all
+       resolve; prose like "the variants I compared" or "give the variant a
+       fair test" binds nothing (a lowercase or pronoun letter is English, not
+       a variant citation — /i on the letter class silently trimmed real
+       splits to phantom vars) */
+    var reV = /\b[Vv]ar(?:iant)?s?\s+([A-Z](?:\s*(?:,|,?\s*and|&|\+|\/)\s+?[A-Z])*)\b/g, reE = /\bEmail\s+(\d+)\b/g;
     while ((m = reV.exec(cardText || ""))) {
-      m[1].split(/[^A-Za-z]+/).forEach(function (w) { if (w.length === 1) vars[w.toUpperCase()] = 1; });
+      m[1].split(/[^A-Za-z]+/).forEach(function (w) { if (w.length === 1 && w >= "A" && w <= "Z") vars[w] = 1; });
     }
     while ((m = reE.exec(head))) emails[m[1]] = 1;
     return { vars: vars, emails: emails, anyVar: Object.keys(vars).length > 0, anyEmail: Object.keys(emails).length > 0 };
@@ -5424,7 +5459,16 @@
        all) stay bar-free. Everything textual on the expander is already
        rendered from the card's own payload (one source of truth). */
     var tok = whyCardTokens(cardText);
-    var vs = (tok.anyVar || tok.anyEmail || !WHY_NONVARIANT[ik || ""]) ? whyHarvestVariants(rows, tok) : [];
+    /* the kind gate outranks card tokens: a list-audit card that happens to
+       say "Email 1" in its prose still stays bar-free */
+    var nonVariant = !!WHY_NONVARIANT[ik || ""];
+    var vs = nonVariant ? [] : whyHarvestVariants(rows, tok);
+    /* cited letters that match no real row (phantom "I" pronoun, or a variant
+       since removed) must not blank the receipts — fall back to the whole
+       split rather than "no findings" over a card that has a full one */
+    if (!vs.length && !nonVariant && (tok.anyVar || tok.anyEmail)) {
+      vs = whyHarvestVariants(rows, { vars: {}, emails: {}, anyVar: false, anyEmail: false });
+    }
     var showCut = /\b(scrap|replace|kill|retire|drop|cut|swap|remove)\b/i.test(cardText || "");
     if (!vs.length) return hasVerdict ? "" : '<p class="why-empty">No further findings behind this one.</p>';
     return (hasVerdict ? "" : '<p class="why-verdict">' + whyVariantVerdict(vs, showCut) + "</p>") + whyBarsHTML(vs, showCut);
