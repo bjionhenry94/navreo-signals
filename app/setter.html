@@ -2356,7 +2356,7 @@ function renderDetail(row) {
   if (row._sendState === "inflight") {
     sendStateHtml = `<div class="send-confirm inflight">Sending reply to ${esc(row.lead_email || "the lead")}&hellip;</div>`;
   } else if (row._sendState === "sent") {
-    sendStateHtml = `<div class="send-confirm ok">&#10003; Reply sent to ${esc(row.lead_email || "the lead")} &middot; ${esc(pulledAgo(row.sent_at))}</div>`;
+    sendStateHtml = `<div class="send-confirm ok">&#10003; Reply sent to ${esc(row.lead_email || "the lead")} &middot; ${pulledAgo(row.sent_at)}</div>`;
   }
 
   // Auto-sent / sent rows keep one calm line, placed right above the draft
