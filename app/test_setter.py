@@ -3652,187 +3652,6 @@ def test_agent_duplicate():
     check("duplicate: missing agent_id -> 400", status3 == 400, (status3, resp3))
 
 
-# ── v2: grading page endpoints ──────────────────────────────────────────────
-
-def _wait_for_relearn_idle(timeout=2.0):
-    """Relearn runs on a background thread; against the fakes it's near
-    instant (no real network), but polling for idle rather than assuming a
-    fixed sleep keeps this test honest and non-flaky either way."""
-    import time as _time
-    deadline = _time.time() + timeout
-    resp = {}
-    while _time.time() < deadline:
-        _, resp = setter.route_grading_get(None)
-        if (resp.get("relearn") or {}).get("status") == "idle":
-            return resp
-        _time.sleep(0.01)
-    return resp
-
-
-def test_grading_endpoints():
-    sb, http = fresh_setter()
-
-    status, resp = setter.route_grading_get(None)
-    check("grading: GET with nothing stored returns empty cases/answers/relearn/feedback_log",
-         status == 200 and resp == {"cases": [], "answers": {}, "relearn": {"status": "idle"}, "feedback_log": []},
-         resp)
-
-    status, resp = setter.route_grading_answer({"id": "case-1", "decision_ok": True, "reply_ok": False,
-                                                "note": "close but no cigar"})
-    check("grading: answer upsert returns 200 ok", status == 200 and resp.get("ok") is True, resp)
-    check("grading: the answer is stored under its case id",
-         resp.get("answers", {}).get("case-1", {}).get("decision_ok") is True, resp)
-    check("grading: reply_ok and note both persisted",
-         resp.get("answers", {}).get("case-1", {}).get("reply_ok") is False and
-         resp.get("answers", {}).get("case-1", {}).get("note") == "close but no cigar", resp)
-    # a note (or a False on either question) is feedback worth learning from -
-    # the answer response reports that a relearn pass has been kicked off
-    check("grading: an answer carrying a note kicks off a relearn pass immediately",
-         resp.get("relearn", {}).get("status") == "running", resp)
-    _wait_for_relearn_idle()
-
-    _, resp2 = setter.route_grading_get(None)
-    check("grading: GET reflects the stored answer", resp2.get("answers", {}).get("case-1", {}).get("decision_ok") is True, resp2)
-    check("grading: the feedback note landed in feedback_log",
-         any(e.get("note") == "close but no cigar" for e in resp2.get("feedback_log") or []), resp2.get("feedback_log"))
-
-    # a second, different case is additive - both persist. decision_ok=False
-    # with no note is still a wrong-call signal, so it also triggers relearn.
-    status_b, resp_b = setter.route_grading_answer({"id": "case-2", "decision_ok": False, "reply_ok": None, "note": ""})
-    check("grading: a noteless wrong-decision answer also kicks off relearn",
-         resp_b.get("relearn", {}).get("status") == "running", resp_b)
-    _wait_for_relearn_idle()
-    _, resp3 = setter.route_grading_get(None)
-    check("grading: two different cases both persist",
-         set(resp3.get("answers", {}).keys()) == {"case-1", "case-2"}, resp3)
-    check("grading: feedback_log has one entry per triggering answer (2 so far)",
-         len(resp3.get("feedback_log") or []) == 2, resp3.get("feedback_log"))
-
-    # re-answering the same case upserts in place rather than duplicating
-    setter.route_grading_answer({"id": "case-1", "decision_ok": False, "reply_ok": True, "note": "actually no"})
-    _wait_for_relearn_idle()
-    _, resp4 = setter.route_grading_get(None)
-    check("grading: re-answering the same case id upserts in place, not a duplicate",
-         resp4.get("answers", {}).get("case-1", {}).get("decision_ok") is False and
-         len(resp4.get("answers", {})) == 2, resp4)
-
-    # answer with no id is rejected
-    status5, resp5 = setter.route_grading_answer({"decision_ok": True})
-    check("grading: answer without an id returns 400", status5 == 400, (status5, resp5))
-
-    # reset clears answers only, never the cases list
-    doc = setter._load_grading()
-    doc["cases"] = [{"id": "case-1", "inbound": "hi"}]
-    setter._save_grading(doc)
-    status6, resp6 = setter.route_grading_reset({})
-    check("grading: reset returns 200 ok", status6 == 200 and resp6.get("ok") is True, resp6)
-    _, resp7 = setter.route_grading_get(None)
-    check("grading: reset clears every answer", resp7.get("answers") == {}, resp7)
-    check("grading: reset leaves the stored cases list untouched",
-         resp7.get("cases") == [{"id": "case-1", "inbound": "hi"}], resp7)
-
-    # the reserved __grading__ doc row must never leak into _load_agents()
-    check("grading: the __grading__ doc row never appears in _load_agents()",
-         all(a.get("id") != setter.GRADING_ID for a in setter._load_agents()), setter._load_agents())
-
-
-def test_grading_relearn_updates_unanswered_cases():
-    """The owner's own scenario: leave feedback on one case, and every other
-    still-unanswered case should get re-classified/re-decided/re-drafted with
-    that feedback folded in - without the owner repeating themselves, and
-    without ever touching an already-answered case."""
-    sb, http = fresh_setter()
-    agent_snapshot = {
-        "id": "agent-grading-test", "mode": "autopilot", "enabled": True,
-        "allowed_intents": ["send_resource", "pricing", "scheduling"],
-        "instructions": "Flat $500/mo. Resource: The breakdown - https://x.example/r - "
-                        "send when they want more info.",
-        "confidence_threshold": 0.9,
-    }
-    case_answered = {
-        "id": "case-00", "bucket": "b", "inbound": "Sure, send it over.",
-        "lead_first_name": "Jane", "company_domain": "example.com", "hydrated": True,
-        "thread": [], "category": None, "intent": "send_resource", "confidence": 0.5,
-        "decision": "review", "reason": "old reason", "draft_html": "<div>old</div>", "would_auto": False,
-        "_ctx": {"category": None, "timezone": "Europe/London", "slot_status": "not_configured",
-                 "body_len": 20, "same_day_ask": False, "subject": "Re: hi", "last_outbound": ""},
-    }
-    case_unanswered = {
-        "id": "case-01", "bucket": "b", "inbound": "Yeah go for it, cheers",
-        "lead_first_name": "Sam", "company_domain": "example.org", "hydrated": True,
-        "thread": [], "category": None, "intent": None, "confidence": 0.4,
-        "decision": "review", "reason": "old reason", "draft_html": None, "would_auto": False,
-        "_ctx": {"category": None, "timezone": "Europe/London", "slot_status": "ok",
-                 "body_len": 22, "same_day_ask": False, "subject": "Re: hi", "last_outbound": ""},
-    }
-    doc = {"cases": [case_answered, case_unanswered],
-          "answers": {"case-00": {"decision_ok": True, "reply_ok": True, "note": ""}},
-          "agent_snapshot": agent_snapshot, "feedback_log": [], "relearn": {"status": "idle"}}
-    setter._save_grading(doc)
-
-    http.classify_fn = lambda _b: {
-        "primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
-        "confidence": 0.97, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
-        "wants": "wants the resource", "rationale": "unqualified yes",
-    }
-    http.draft_fn = lambda _b: {"subject": "Re: hi",
-                               "html": '<div>Hi Sam,</div><br><div>Of course.</div><br>'
-                                       '<div><a href="https://x.example/r">Here it is</a></div><br>'
-                                       '<div>Best,<br>Bjion</div>'}
-
-    status, resp = setter.route_grading_answer({"id": "case-00", "decision_ok": False, "reply_ok": True,
-                                                "note": "This should have been held for review"})
-    check("grading relearn: answering with a note kicks off a running relearn pass immediately",
-         status == 200 and resp.get("relearn", {}).get("status") == "running", resp)
-
-    final = _wait_for_relearn_idle()
-    check("grading relearn: relearn settles back to idle", final.get("relearn", {}).get("status") == "idle", final)
-    check("grading relearn: notes_applied reflects the one feedback entry",
-         final.get("relearn", {}).get("notes_applied") == 1, final.get("relearn"))
-    check("grading relearn: cases_updated counts the one unanswered case",
-         final.get("relearn", {}).get("cases_updated") == 1, final.get("relearn"))
-    check("grading relearn: feedback_log recorded the note verbatim",
-         len(final.get("feedback_log") or []) == 1 and
-         final["feedback_log"][0]["note"] == "This should have been held for review", final.get("feedback_log"))
-
-    updated_cases = {c["id"]: c for c in final.get("cases") or []}
-    check("grading relearn: the ANSWERED case (case-00) is left completely untouched",
-         updated_cases["case-00"]["draft_html"] == "<div>old</div>" and
-         not updated_cases["case-00"].get("updated_by_feedback"), updated_cases.get("case-00"))
-    check("grading relearn: the UNANSWERED case (case-01) got re-classified and re-drafted",
-         updated_cases["case-01"].get("updated_by_feedback") is True and
-         updated_cases["case-01"]["intent"] == "send_resource" and
-         updated_cases["case-01"]["decision"] == "auto_send" and
-         updated_cases["case-01"]["would_auto"] is True and
-         "Hi Sam" in (updated_cases["case-01"]["draft_html"] or ""), updated_cases.get("case-01"))
-
-
-def test_grading_relearn_extracts_real_calendly_slots_from_existing_draft():
-    """When a case's own _ctx.slot_status was 'ok', a relearn re-draft must
-    keep offering the SAME two real call times already baked into the case's
-    existing draft (extracted from its calendly.com anchors), never invent
-    fresh ones and never call Calendly again."""
-    html = ('<div>Hi Sam,</div><br><div>Of course.</div><br>'
-           '<div>Would you be free on <a href="https://calendly.com/navreo/book-a-call/2026-07-15T09:00">'
-           'Wednesday, 15th July at 9:00 AM BST</a> or '
-           '<a href="https://calendly.com/navreo/book-a-call/2026-07-15T13:00">1:00 PM BST</a>?</div><br>'
-           '<div>Best,<br>Bjion</div>')
-    slots = setter._extract_calendly_slots(html)
-    check("grading relearn: extracts exactly two calendly slots from an existing draft's anchors",
-         len(slots) == 2, slots)
-    if len(slots) == 2:
-        check("grading relearn: first slot's link is the real calendly deep link",
-             slots[0]["link"] == "https://calendly.com/navreo/book-a-call/2026-07-15T09:00", slots)
-        check("grading relearn: first slot's label is the anchor's own text",
-             slots[0]["label"] == "Wednesday, 15th July at 9:00 AM BST", slots)
-        check("grading relearn: second slot's link is the real calendly deep link",
-             slots[1]["link"] == "https://calendly.com/navreo/book-a-call/2026-07-15T13:00", slots)
-    check("grading relearn: no calendly anchors in the draft -> empty slots, never raises",
-         setter._extract_calendly_slots("<div>no links here</div>") == [])
-    check("grading relearn: empty/None draft_html -> empty slots, never raises",
-         setter._extract_calendly_slots(None) == [] and setter._extract_calendly_slots("") == [])
-
-
 # ── training engine ──────────────────────────────────────────────────────────
 
 _TRAINING_CATEGORIES = ["Interested", "Information Request", "Meeting Request", "Contact Forward",
@@ -6464,10 +6283,9 @@ def test_training_get_route():
 
 
 def test_training_get_self_heals_stale_running_marker():
-    """Mirrors route_grading_get's relearn self-heal: a "running" marker
-    left behind by a process restart mid-batch (the in-memory thread and
-    per-agent lock both die with the process) is healed to idle in the
-    RESPONSE once it's old enough - never persisted, exactly like relearn,
+    """A "running" marker left behind by a process restart mid-batch (the
+    in-memory thread and per-agent lock both die with the process) is
+    healed to idle in the RESPONSE once it's old enough - never persisted,
     since the next real generate() call overwrites it anyway."""
     sb, http = fresh_setter()
     agent = {"id": "agent-train-stale1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
@@ -6485,7 +6303,7 @@ def test_training_get_self_heals_stale_running_marker():
          and resp.get("generating", {}).get("stale_recovered") is True, resp.get("generating"))
 
     persisted = setter._load_training(agent["id"])
-    check("training get: the self-heal is NOT persisted back to storage (mirrors route_grading_get's relearn heal)",
+    check("training get: the self-heal is NOT persisted back to storage",
          persisted.get("generating", {}).get("status") == "running", persisted.get("generating"))
 
     # A recent (not stale) running marker is left running, not healed.
@@ -8080,7 +7898,7 @@ def test_proofread_wired_into_queue_redraft():
 # "it keeps switching the name it signs off with" - draft_reply's sender_first
 # used to be derived differently per surface: the live pipeline read the real
 # Smartlead thread (correct, per-lead), but training real-case building,
-# grading relearn, the retrain worker, and the recheck worker all hardcoded
+# the retrain worker, and the recheck worker all hardcoded
 # "Bjion", and route_queue_redraft passed "" (no sign-off at all). Every one
 # of those call sites now routes through _sender_first_for, the single
 # resolver: thread-derived name (live ground truth) wins when present,
@@ -8120,19 +7938,6 @@ def test_sender_first_for_resolver_precedence():
          setter._sender_first_for(None, "") == "")
     check("_sender_first_for: whitespace-only inputs on both sides resolve to ''",
          setter._sender_first_for({"sender_first": "   "}, "   ") == "")
-
-
-def test_relearn_uses_agent_sender_first_not_hardcoded_bjion():
-    sb, http = fresh_setter()
-    captured, draft_fn = _draft_capture("Kevin")
-    http.draft_fn = draft_fn
-    http.classify_fn = _SF_CLASSIFY_FN
-
-    agent_snapshot = {"id": "agent-relearnsf1", "sender_first": "Kevin", "resource_link": "https://x.example/r"}
-    case = {"inbound": "Sure, send it over.", "_ctx": {"subject": "Re: hi"}, "lead_first_name": "Pat"}
-    setter._relearn_one_case(case, agent_snapshot, "")
-    check("grading relearn: draft_reply gets the agent's own sender_first, not a hardcoded 'Bjion'",
-         captured.get("sender_first") == "Kevin", captured)
 
 
 def test_build_training_case_uses_agent_sender_first_not_hardcoded_bjion():
@@ -9439,9 +9244,6 @@ if __name__ == "__main__":
     test_redraft_scope_remember_merges_instructions()
     test_redraft_without_scope_does_not_persist()
     test_agent_duplicate()
-    test_grading_endpoints()
-    test_grading_relearn_updates_unanswered_cases()
-    test_grading_relearn_extracts_real_calendly_slots_from_existing_draft()
     test_training_generate_weighted_excludes_used_and_batch_cap()
     test_training_generate_stores_real_bodies_verbatim()
     test_training_case_includes_original_outreach_and_human_answer_when_present()
@@ -9557,7 +9359,6 @@ if __name__ == "__main__":
     test_proofread_wired_into_queue_redraft()
 
     test_sender_first_for_resolver_precedence()
-    test_relearn_uses_agent_sender_first_not_hardcoded_bjion()
     test_build_training_case_uses_agent_sender_first_not_hardcoded_bjion()
     test_retrain_case_uses_agent_sender_first_not_hardcoded_bjion()
     test_recheck_case_uses_agent_sender_first_not_hardcoded_bjion()

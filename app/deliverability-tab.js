@@ -407,8 +407,12 @@
     if (DATA.trends.status === "loading" || DATA.trends.status === "ready") return;
     if (!isLive()) { DATA.trends.series = null; DATA.trends.status = "error"; return; } // no live backend → no trend claims (never synthesized)
     DATA.trends.status = "loading";
-    fetch("/api/deliverability-trends?days=30")
-      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    // Reuse the host page's boot fetch when it exists (shared-fetch registry in
+    // deliverability.html) — this module used to issue an identical second
+    // request on every page view.
+    const sharedTrends = window.__ahFetch && window.__ahFetch["/api/deliverability-trends?days=30"];
+    (sharedTrends || fetch("/api/deliverability-trends?days=30")
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }))
       .then((j) => {
         const s = j && j.series;
         if (!s || !Array.isArray(s.days) || !s.days.length) throw new Error("empty series");
@@ -2854,8 +2858,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (DATA.signals.started || !isLive()) return;
     DATA.signals.started = true;
     DATA.signals.status = "loading";
-    fetch("/api/signals/daily", { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+    const sharedSig = window.__ahFetch && window.__ahFetch["/api/signals/daily"];
+    (sharedSig || fetch("/api/signals/daily", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))))
       .then((j) => {
         if (!j || !Array.isArray(j.days)) throw new Error("bad payload");
         DATA.signals.data = j;
@@ -2911,8 +2916,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (DATA.book.started) return;
     DATA.book.started = true;
     DATA.book.status = "loading";
-    fetch("/api/cockpit/insights", { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : null))
+    const sharedIns = window.__ahFetch && window.__ahFetch["/api/cockpit/insights"];
+    (sharedIns || fetch("/api/cockpit/insights", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null)))
       .then((j) => {
         var ins = (j && j.insights) || [];
         DATA.book.rows = ins.filter((r) => r && r.scope === "book");

@@ -683,6 +683,15 @@ function j(url) {
     return r.json();
   });
 }
+// Shared-fetch registry: deliverability-tab.js loads the same trends/signals/
+// insights endpoints this page loads at boot. Publishing the boot promises here
+// lets the tab module reuse them instead of issuing a second identical request
+// (three true double-fetches per page view, audit 2026-08-02).
+window.__ahFetch = window.__ahFetch || {};
+function jShared(url) {
+  if (!window.__ahFetch[url]) window.__ahFetch[url] = j(url);
+  return window.__ahFetch[url];
+}
 
 var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null, CW = null, COLL = null;
 // Sent and Bounces default OFF: their scale flattens Replies/Interested/
@@ -730,17 +739,20 @@ function clientOfName(name, ws) {
   if (n.indexOf("qwintiq") >= 0) return "Qwintiq";
   if (n.indexOf("thunderbird") >= 0) return "ThunderBird";   // its own client
   if (n.indexOf("acme") >= 0) return "Acme";                 // demo client (toggle-gated server-side)
-  return "Navreo";
+  if (n.indexOf("navreo") >= 0) return "Navreo";             // name-gated like every client
+  // No keyword → belongs to NO client. Must never fall back to Navreo (that
+  // silently inflated Navreo's numbers by every unmatched campaign).
+  return "__unassigned";
 }
+function clientDisplay(c) { return c === "__unassigned" ? "Unassigned" : c; }
 function campClient(id, c) {
-  // A deterministic NAME keyword (thunderbird/amplif/arnic/qwintiq) or a client
-  // workspace wins over HUB.campaign_clients — the hub's SQL cmap may not know a
-  // newly-split client (e.g. ThunderBird) until its migration is applied, and
-  // the keyword is unambiguous either way.
-  var byName = clientOfName(c && c.name, c && c.workspace);
-  if (byName !== "Navreo") return byName;
+  // ONE label authority: campaign_scorecard.client, written server-side by
+  // _client_win_label. It arrives on the scorecard payload (c.client) and as
+  // the hub's campaign_clients map (same column). The local keyword cascade is
+  // only a fallback for rows that predate the column.
+  if (c && c.client) return c.client;
   if (HUB && HUB.campaign_clients && HUB.campaign_clients[id]) return HUB.campaign_clients[id];
-  return byName;
+  return clientOfName(c && c.name, c && c.workspace);
 }
 function scoreRows() {   // [{id, ...scorecard row}] for the selected client
   var out = [];
@@ -955,7 +967,7 @@ function renderChips() {
   // Sources are added canonical-first (hub → CW → scorecard) so the first
   // casing wins.
   var seen = {}, names = [];
-  function add(c) { if (c && c !== "__all" && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
+  function add(c) { if (c && c !== "__all" && c !== "__unassigned" && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
   ((HUB && HUB.clients) || []).forEach(add);
   if (CW && CW.windows && CW.windows["30"]) Object.keys(CW.windows["30"]).forEach(add);
   if (SCORE && SCORE.campaigns) {
@@ -1861,7 +1873,7 @@ function renderRank() {
       '<div><div class="rname"><a class="nm" href="campaigns.html#/c/' + encodeURIComponent(c.id) + '" title="' + escq(c.name) + '">' + escq(c.name) + "</a>" +
       (i === 0 && (c.meetings || 0) > 0 ? '<span class="apill green">Best</span>' : "") +
       (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
-      '</div><div class="rsub">' + escq(campClient(c.id, c)) + " · all time</div></div>" +
+      '</div><div class="rsub">' + escq(clientDisplay(campClient(c.id, c))) + " · all time</div></div>" +
       '<span class="rint">' + fmtN(c.positives || 0) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span>" +
       '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
       '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
@@ -2538,10 +2550,10 @@ function boot() {
     .then(function () { criticalSettled(); scheduleRender(); });
   j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
     .then(function () { criticalSettled(); scheduleRender(); });
-  j("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; scheduleRender(); }, function () {});
-  j("/api/cockpit/insights").then(function (d) { INS = d; scheduleRender(); }, function () {});
+  jShared("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; scheduleRender(); }, function () {});
+  jShared("/api/cockpit/insights").then(function (d) { INS = d; scheduleRender(); }, function () {});
   j("/api/campaigns-unified").then(function (d) { UNI = d; scheduleRender(); }, function () {});
-  j("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
+  jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
   j("/api/sources?slim=1").then(function (d) { SRC = d; scheduleRender(); }, function () {});
   j("/api/deliverability/_audit").then(function (d) { AUDIT = d; scheduleRender(); }, function () {});
   j("/api/collisions").then(function (d) { COLL = d && !d.error ? d : null; scheduleRender(); }, function () {});
