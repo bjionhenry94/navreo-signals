@@ -7847,12 +7847,16 @@ def _all_campaign_scorecard() -> dict:
         camps[sid]["meetings"] = None
     # meetings from the reply archive: one per distinct booked lead, the same
     # definition every other surface uses (the optimiser-cache snapshot this
-    # replaced couldn't be reconciled against any pullable source)
+    # replaced couldn't be reconciled against any pullable source).
+    # workspace=None (panel fix 2026-08-01): client campaigns showed "—"
+    # forever and sorted to the bottom of every leaderboard even when their
+    # own workspace had real Call Booked replies. Per-campaign ids keep each
+    # count in its own row — nothing leaks across workspaces.
     try:
-        archive = _reply_archive_meetings()
+        archive = _reply_archive_meetings(workspace=None)
         if archive is not None:
             for sid, c in camps.items():
-                if (c.get("workspace") or "navreo") == "navreo" and not sid.startswith("hr-"):
+                if not sid.startswith("hr-"):
                     c["meetings"] = archive.get(sid, 0)
     except Exception:  # noqa: BLE001
         pass

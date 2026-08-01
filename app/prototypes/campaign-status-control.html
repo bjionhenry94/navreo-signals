@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One status button — 3 prototypes</title>
+<style>
+  @font-face {
+    font-family: "Acid Grotesk";
+    src: url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  :root {
+    --nav-white:#FFFFFF; --nav-ink:#14110E; --nav-ink-2:#3A332C; --nav-ink-3:#6B6055;
+    --nav-orange:#FF4D00; --sunken:#F7F7F6;
+    --success:#2E7D5B; --success-bg:#E2F1E9;
+    --warning:#8F6600; --warning-bg:#F8EAC4;
+    --danger:#C2371F; --danger-bg:#F7DCD5; --danger-bd:rgba(194,55,31,0.34);
+    --border:#ECECEA; --border-strong:#DDDDDA;
+    --focus-ring:0 0 0 3px rgba(255,77,0,0.32);
+    --fg:var(--nav-ink); --fg-muted:var(--nav-ink-2); --fg-subtle:var(--nav-ink-3);
+    --font-sans:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --font-display:"Acid Grotesk","DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --r-pill:999px;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:var(--font-sans); color:var(--fg); background:var(--nav-white);
+    padding:44px clamp(20px,5vw,72px) 96px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:1080px; margin:0 auto; }
+  h1 { font-family:var(--font-display); font-weight:400; font-size:32px; letter-spacing:-0.02em; margin:0 0 6px; }
+  .lede { color:var(--fg-subtle); font-size:14.5px; line-height:1.55; margin:0 0 4px; max-width:64ch; }
+  .lede b { color:var(--fg-muted); font-weight:600; }
+
+  /* ---- the state switcher ---- */
+  .switcher {
+    display:flex; align-items:center; flex-wrap:wrap; gap:10px;
+    margin:26px 0 34px; padding:16px 18px; border:1px solid var(--border);
+    border-radius:14px; background:var(--sunken);
+  }
+  .switcher-lab { font-size:13px; font-weight:600; color:var(--fg-muted); margin-right:4px; }
+  .sw {
+    font:inherit; font-size:13px; font-weight:600; cursor:pointer;
+    padding:7px 15px; border-radius:var(--r-pill);
+    border:1px solid var(--border-strong); background:var(--nav-white); color:var(--fg-muted);
+  }
+  .sw:hover { border-color:var(--nav-ink-3); }
+  .sw.on { background:var(--nav-ink); border-color:var(--nav-ink); color:var(--nav-white); }
+  .switcher-note { font-size:12.5px; color:var(--fg-subtle); margin-left:auto; }
+
+  /* ---- prototype card ---- */
+  .proto { border-top:1px solid var(--border); padding:34px 0 10px; }
+  .proto-head { display:flex; align-items:baseline; gap:14px; margin-bottom:4px; flex-wrap:wrap; }
+  .pn { font-family:var(--font-display); font-size:21px; color:var(--nav-orange); }
+  .pname { font-size:17px; font-weight:700; letter-spacing:-0.01em; }
+  .bet { color:var(--fg-subtle); font-size:14px; line-height:1.55; margin:0 0 22px; max-width:70ch; }
+
+  /* ---- the real header mock ---- */
+  .mock {
+    border:1px solid var(--border); border-radius:16px; padding:20px 24px 24px;
+    background:var(--nav-white);
+  }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .back-link, .action-link {
+    font-size:13px; font-weight:600; color:var(--fg-subtle); text-decoration:none;
+  }
+  .action-link { color:var(--nav-orange); }
+  .bar-right { display:inline-flex; align-items:center; gap:16px; }
+  .header-main { display:flex; align-items:flex-start; gap:18px; margin-top:16px; }
+  .dial { flex:0 0 auto; position:relative; width:58px; height:58px; }
+  .dial svg { display:block; }
+  .dial-track { fill:none; stroke:#EFEDEA; stroke-width:6; }
+  .dial-fill { fill:none; stroke:var(--nav-ink); stroke-width:6; stroke-linecap:round; }
+  .dial-val {
+    position:absolute; inset:0; display:grid; place-items:center;
+    font-size:13px; font-weight:700; font-variant-numeric:tabular-nums;
+  }
+  .c-title { font-family:var(--font-display); font-weight:400; font-size:23px; letter-spacing:-0.02em; margin:0 0 3px; }
+  .c-sub { font-size:13px; color:var(--fg-subtle); margin:0; }
+  .live-dot {
+    display:inline-block; width:6px; height:6px; border-radius:999px;
+    background:var(--success); margin-right:5px; vertical-align:1px;
+  }
+
+  /* ---- shared control atoms ---- */
+  .ctl { position:relative; display:inline-flex; }
+  .btn {
+    font:inherit; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;
+    padding:7px 15px; border-radius:var(--r-pill);
+    border:1px solid var(--border-strong); background:var(--nav-white); color:var(--fg);
+    display:inline-flex; align-items:center; gap:7px;
+  }
+  .btn:hover { border-color:var(--nav-ink-3); }
+  .btn:focus-visible { outline:none; box-shadow:var(--focus-ring); }
+  .btn[aria-expanded="true"] { background:var(--nav-ink); border-color:var(--nav-ink); color:var(--nav-white); }
+  .caret { font-size:9px; opacity:0.65; }
+  .btn[aria-expanded="true"] .caret { opacity:1; }
+
+  /* the menu */
+  .menu {
+    position:absolute; top:calc(100% + 7px); right:0; z-index:20; min-width:232px;
+    background:var(--nav-white); border:1px solid var(--border-strong); border-radius:13px;
+    box-shadow:0 10px 34px rgba(20,17,14,0.13); padding:6px; text-align:left;
+  }
+  .menu[hidden] { display:none; }
+  .mi {
+    display:block; width:100%; text-align:left; font:inherit; cursor:pointer;
+    background:none; border:0; border-radius:9px; padding:9px 11px; color:var(--fg);
+  }
+  .mi:hover { background:var(--sunken); }
+  .mi-t { font-size:13px; font-weight:600; display:block; }
+  .mi-d { font-size:12px; color:var(--fg-subtle); display:block; margin-top:2px; line-height:1.45; }
+  .mi--danger .mi-t { color:var(--danger); }
+  .mi--armed { background:var(--danger-bg); }
+  .mi--armed:hover { background:var(--danger-bg); }
+  .mi--armed.mi--go { background:var(--sunken); }
+  .menu-sep { height:1px; background:var(--border); margin:5px 8px; }
+  .menu-head {
+    font-size:11px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;
+    color:var(--fg-subtle); padding:7px 11px 5px;
+  }
+
+  /* status chip inside a button (P2) */
+  .st-dot { width:7px; height:7px; border-radius:999px; flex:0 0 auto; }
+  .st-active { background:var(--success); }
+  .st-paused { background:var(--warning); }
+  .st-stopped, .st-completed { background:var(--nav-ink-3); }
+  .st-draft { background:var(--border-strong); }
+
+  /* P3 sheet */
+  .sheet {
+    position:absolute; top:calc(100% + 7px); right:0; z-index:20; width:308px;
+    background:var(--nav-white); border:1px solid var(--border-strong); border-radius:14px;
+    box-shadow:0 10px 34px rgba(20,17,14,0.13); padding:14px; text-align:left;
+  }
+  .sheet[hidden] { display:none; }
+  .sheet-h { font-size:13.5px; font-weight:700; margin:0 0 2px; }
+  .sheet-s { font-size:12.5px; color:var(--fg-subtle); margin:0 0 12px; line-height:1.5; }
+  .opt { border:1px solid var(--border); border-radius:11px; padding:11px 12px; margin-bottom:8px; }
+  .opt:last-of-type { margin-bottom:0; }
+  .opt-t { font-size:13px; font-weight:600; margin:0 0 2px; }
+  .opt-d { font-size:12px; color:var(--fg-subtle); margin:0; line-height:1.5; }
+  .opt-go {
+    font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; margin-top:9px;
+    padding:6px 13px; border-radius:var(--r-pill); border:1px solid var(--border-strong);
+    background:var(--nav-white); color:var(--fg);
+  }
+  .opt-go:hover { border-color:var(--nav-ink-3); }
+  .opt-go--danger { color:var(--danger); border-color:var(--danger-bd); }
+  .opt-go--danger:hover { background:var(--danger); border-color:var(--danger); color:#fff; }
+
+  .done { font-size:12.5px; color:var(--success); font-weight:600; }
+  .note {
+    margin:16px 0 0; font-size:12.5px; color:var(--fg-subtle); line-height:1.6;
+    padding-left:14px; border-left:2px solid var(--border);
+  }
+  .note b { color:var(--fg-muted); font-weight:600; }
+  .toast {
+    position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:60;
+    background:#141414; color:#fff; border-radius:12px; padding:11px 17px; font-size:13.5px;
+    box-shadow:0 8px 28px rgba(0,0,0,.25); max-width:92vw; text-align:center;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>One status button</h1>
+  <p class="lede">
+    Today an Active campaign shows two controls side by side — <b>Pause</b> and <b>Stop (mark completed)</b>.
+    Three ways to collapse that into one. Every prototype below is live: click it, flip the campaign's state,
+    try to make it do the wrong thing. <b>Nothing here talks to Smartlead.</b>
+  </p>
+
+  <div class="switcher">
+    <span class="switcher-lab">Pretend this campaign is</span>
+    <button class="sw on" data-set="ACTIVE">Active</button>
+    <button class="sw" data-set="PAUSED">Paused</button>
+    <button class="sw" data-set="STOPPED">Stopped</button>
+    <button class="sw" data-set="COMPLETED">Completed</button>
+    <button class="sw" data-set="DRAFTED">Draft</button>
+    <span class="switcher-note">All three prototypes follow this state.</span>
+  </div>
+
+  <!-- ─────────────────────────── P1 ─────────────────────────── -->
+  <section class="proto">
+    <div class="proto-head"><span class="pn">P1</span><span class="pname">The split button</span></div>
+    <p class="bet">
+      The one thing you'll do 95% of the time stays a single click; everything else hides under the caret.
+      The button always shows the <em>obvious</em> move for this campaign — Pause when it's running,
+      Set live when it isn't — and Stop lives one deliberate click deeper, in red.
+    </p>
+    <div class="mock" data-proto="p1">
+      <div class="topbar">
+        <a class="back-link" href="#">← Campaigns</a>
+        <span class="bar-right"><span data-slot></span><a class="action-link" href="#">Open in Smartlead</a></span>
+      </div>
+      <div class="header-main">
+        <div class="dial">
+          <svg viewBox="0 0 64 64" width="58" height="58" aria-hidden="true">
+            <circle cx="32" cy="32" r="26" class="dial-track"/>
+            <circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="163.36" stroke-dashoffset="9.8" transform="rotate(-90 32 32)"/>
+          </svg>
+          <span class="dial-val">94%</span>
+        </div>
+        <div>
+          <p class="c-title">Arnic – Sales Enablement Roles</p>
+          <p class="c-sub">Navreo · <span data-word>Active</span> · campaign 3401559</p>
+        </div>
+      </div>
+    </div>
+    <p class="note">
+      <b>The bet:</b> a CSM pausing a campaign shouldn't have to read two buttons first.
+      <b>The risk:</b> Stop is hidden, so someone who wants it has to discover the caret.
+    </p>
+  </section>
+
+  <!-- ─────────────────────────── P2 ─────────────────────────── -->
+  <section class="proto">
+    <div class="proto-head"><span class="pn">P2</span><span class="pname">The status is the button</span></div>
+    <p class="bet">
+      The button doesn't sit <em>next to</em> the status — it <em>is</em> the status. It reads
+      "● Active", and clicking it opens the states you can move to. One element now does the job of
+      the status word in the subtitle and both old buttons, so the subtitle drops it.
+    </p>
+    <div class="mock" data-proto="p2">
+      <div class="topbar">
+        <a class="back-link" href="#">← Campaigns</a>
+        <span class="bar-right"><span data-slot></span><a class="action-link" href="#">Open in Smartlead</a></span>
+      </div>
+      <div class="header-main">
+        <div class="dial">
+          <svg viewBox="0 0 64 64" width="58" height="58" aria-hidden="true">
+            <circle cx="32" cy="32" r="26" class="dial-track"/>
+            <circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="163.36" stroke-dashoffset="9.8" transform="rotate(-90 32 32)"/>
+          </svg>
+          <span class="dial-val">94%</span>
+        </div>
+        <div>
+          <p class="c-title">Arnic – Sales Enablement Roles</p>
+          <p class="c-sub">Navreo · campaign 3401559</p>
+        </div>
+      </div>
+    </div>
+    <p class="note">
+      <b>The bet:</b> status and the control over status are the same idea, so they should be the same object —
+      and you stop reading the state in one place and changing it in another.
+      <b>The risk:</b> a thing that looks like a label now has to look clickable too.
+    </p>
+  </section>
+
+  <!-- ─────────────────────────── P3 ─────────────────────────── -->
+  <section class="proto">
+    <div class="proto-head"><span class="pn">P3</span><span class="pname">One quiet verb</span></div>
+    <p class="bet">
+      A single neutral button — "Change status" — opens a small card that spells out each move in plain
+      English before you pick it. No action is the "easy" one; pausing and stopping both cost the same two
+      clicks, and both tell you exactly what they'll do to the campaign.
+    </p>
+    <div class="mock" data-proto="p3">
+      <div class="topbar">
+        <a class="back-link" href="#">← Campaigns</a>
+        <span class="bar-right"><span data-slot></span><a class="action-link" href="#">Open in Smartlead</a></span>
+      </div>
+      <div class="header-main">
+        <div class="dial">
+          <svg viewBox="0 0 64 64" width="58" height="58" aria-hidden="true">
+            <circle cx="32" cy="32" r="26" class="dial-track"/>
+            <circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="163.36" stroke-dashoffset="9.8" transform="rotate(-90 32 32)"/>
+          </svg>
+          <span class="dial-val">94%</span>
+        </div>
+        <div>
+          <p class="c-title">Arnic – Sales Enablement Roles</p>
+          <p class="c-sub">Navreo · <span data-word>Active</span> · campaign 3401559</p>
+        </div>
+      </div>
+    </div>
+    <p class="note">
+      <b>The bet:</b> these are rare, consequential actions — the founder reads the consequence, then acts.
+      <b>The risk:</b> pausing costs two clicks and a read, every time.
+    </p>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* One mock campaign state drives all three prototypes. */
+  var STATE = "ACTIVE";
+
+  var LABEL = { ACTIVE:"Active", PAUSED:"Paused", STOPPED:"Stopped", COMPLETED:"Completed", DRAFTED:"Draft" };
+  var DOT   = { ACTIVE:"st-active", PAUSED:"st-paused", STOPPED:"st-stopped", COMPLETED:"st-completed", DRAFTED:"st-draft" };
+
+  /* What you can do from each state. `to` mirrors the shipped API vocabulary. */
+  var START = { key:"START", verb:"Set live", ask:"set it live",
+                desc:"Starts sending again from where the sequence left off." };
+  var PAUSE = { key:"PAUSED", verb:"Pause", ask:"pause it",
+                desc:"Stops sending now. Nothing is lost — you can set it live again any time." };
+  var STOP  = { key:"STOPPED", verb:"Stop", ask:"stop it", danger:true,
+                desc:"Marks the campaign completed. It won't send again unless you set it live.",
+                menuT:"Stop — mark completed" };
+
+  var MOVES = {
+    ACTIVE:    [PAUSE, STOP],
+    PAUSED:    [START, STOP],
+    STOPPED:   [START],
+    COMPLETED: [START],
+    DRAFTED:   [START]
+  };
+  var RESULT = { START:"ACTIVE", PAUSED:"PAUSED", STOPPED:"COMPLETED" };
+
+  function toast(msg) {
+    var t = document.getElementById("proto-toast");
+    if (t) t.remove();
+    t = document.createElement("div");
+    t.id = "proto-toast"; t.className = "toast"; t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function () { if (t.parentNode) t.remove(); }, 3200);
+  }
+
+  function applyMove(mv) {
+    STATE = RESULT[mv.key] || STATE;
+    document.querySelectorAll(".sw").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-set") === STATE);
+    });
+    paintAll();
+    toast(mv.key === "START" ? "Campaign set live." :
+          mv.key === "PAUSED" ? "Campaign paused." : "Campaign stopped — marked completed.");
+  }
+
+  function closeAll(except) {
+    document.querySelectorAll("[data-pop]").forEach(function (p) {
+      if (p !== except) {
+        p.hidden = true;
+        var owner = p.previousElementSibling;
+        if (owner && owner.classList.contains("btn")) owner.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest(".ctl")) closeAll(null);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeAll(null);
+  });
+
+  /* ───────── P1 — split button ───────── */
+  function buildP1(slot) {
+    var moves = MOVES[STATE], primary = moves[0], rest = moves.slice(1);
+    var ctl = document.createElement("span");
+    ctl.className = "ctl";
+
+    var main = document.createElement("button");
+    main.className = "btn";
+    main.type = "button";
+    main.textContent = primary.verb;
+    main.title = primary.desc;
+
+    var armed = false, armT = null;
+    function disarm() { armed = false; clearTimeout(armT); main.textContent = primary.verb; }
+    main.addEventListener("click", function (e) {
+      e.stopPropagation(); closeAll(null);
+      if (!armed) {
+        armed = true;
+        main.textContent = "Confirm — " + primary.ask + "?";
+        armT = setTimeout(disarm, 8000);   /* an armed button must not wait forever */
+        return;
+      }
+      clearTimeout(armT);
+      applyMove(primary);
+    });
+
+    ctl.appendChild(main);
+
+    if (rest.length) {
+      var caret = document.createElement("button");
+      caret.className = "btn";
+      caret.type = "button";
+      caret.setAttribute("aria-haspopup", "true");
+      caret.setAttribute("aria-expanded", "false");
+      caret.setAttribute("aria-label", "More status actions");
+      caret.style.marginLeft = "6px";
+      caret.style.padding = "7px 11px";
+      caret.innerHTML = '<span class="caret">▼</span>';
+
+      var menu = document.createElement("div");
+      menu.className = "menu"; menu.hidden = true; menu.setAttribute("data-pop", "1");
+      rest.forEach(function (mv) {
+        var mi = document.createElement("button");
+        mi.type = "button";
+        mi.className = "mi" + (mv.danger ? " mi--danger" : "");
+        mi.innerHTML = '<span class="mi-t">' + (mv.menuT || mv.verb) + '</span><span class="mi-d">' + mv.desc + "</span>";
+        var mArmed = false, mT = null;
+        mi.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (!mArmed) {
+            mArmed = true;
+            mi.classList.add("mi--armed");
+            mi.querySelector(".mi-t").textContent = "Confirm — " + mv.ask + "?";
+            mT = setTimeout(function () {
+              mArmed = false; mi.classList.remove("mi--armed");
+              mi.querySelector(".mi-t").textContent = mv.menuT || mv.verb;
+            }, 8000);
+            return;
+          }
+          clearTimeout(mT);
+          menu.hidden = true; caret.setAttribute("aria-expanded", "false");
+          applyMove(mv);
+        });
+        menu.appendChild(mi);
+      });
+
+      caret.addEventListener("click", function (e) {
+        e.stopPropagation();
+        disarm();
+        var open = menu.hidden;
+        closeAll(open ? menu : null);
+        menu.hidden = !open;
+        caret.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+
+      ctl.appendChild(caret);
+      ctl.appendChild(menu);
+    }
+    slot.appendChild(ctl);
+  }
+
+  /* ───────── P2 — the status IS the button ───────── */
+  function buildP2(slot) {
+    var moves = MOVES[STATE];
+    var ctl = document.createElement("span");
+    ctl.className = "ctl";
+
+    var btn = document.createElement("button");
+    btn.className = "btn";
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "true");
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML = '<span class="st-dot ' + DOT[STATE] + '"></span>' + LABEL[STATE] + ' <span class="caret">▼</span>';
+    btn.title = "Change this campaign's status";
+
+    var menu = document.createElement("div");
+    menu.className = "menu"; menu.hidden = true; menu.setAttribute("data-pop", "1");
+    var head = document.createElement("div");
+    head.className = "menu-head";
+    head.textContent = "Currently " + LABEL[STATE].toLowerCase() + " — move to";
+    menu.appendChild(head);
+
+    moves.forEach(function (mv, i) {
+      if (i) menu.appendChild(Object.assign(document.createElement("div"), { className:"menu-sep" }));
+      var mi = document.createElement("button");
+      mi.type = "button";
+      mi.className = "mi" + (mv.danger ? " mi--danger" : "");
+      mi.innerHTML = '<span class="mi-t">' + (mv.menuT || mv.verb) + '</span><span class="mi-d">' + mv.desc + "</span>";
+      var mArmed = false, mT = null;
+      mi.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (!mArmed) {
+          mArmed = true;
+          mi.classList.add("mi--armed");
+          mi.querySelector(".mi-t").textContent = "Confirm — " + mv.ask + "?";
+          mT = setTimeout(function () {
+            mArmed = false; mi.classList.remove("mi--armed");
+            mi.querySelector(".mi-t").textContent = mv.menuT || mv.verb;
+          }, 8000);
+          return;
+        }
+        clearTimeout(mT);
+        menu.hidden = true; btn.setAttribute("aria-expanded", "false");
+        applyMove(mv);
+      });
+      menu.appendChild(mi);
+    });
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = menu.hidden;
+      closeAll(open ? menu : null);
+      menu.hidden = !open;
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+
+    ctl.appendChild(btn);
+    ctl.appendChild(menu);
+    slot.appendChild(ctl);
+  }
+
+  /* ───────── P3 — one quiet verb ───────── */
+  function buildP3(slot) {
+    var moves = MOVES[STATE];
+    var ctl = document.createElement("span");
+    ctl.className = "ctl";
+
+    var btn = document.createElement("button");
+    btn.className = "btn";
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "true");
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML = 'Change status <span class="caret">▼</span>';
+
+    var sheet = document.createElement("div");
+    sheet.className = "sheet"; sheet.hidden = true; sheet.setAttribute("data-pop", "1");
+    var h = document.createElement("p");
+    h.className = "sheet-h"; h.textContent = "This campaign is " + LABEL[STATE].toLowerCase();
+    var s = document.createElement("p");
+    s.className = "sheet-s";
+    s.textContent = moves.length > 1
+      ? "Two things you can do from here."
+      : "One thing you can do from here.";
+    sheet.appendChild(h); sheet.appendChild(s);
+
+    moves.forEach(function (mv) {
+      var opt = document.createElement("div");
+      opt.className = "opt";
+      var t = document.createElement("p");
+      t.className = "opt-t"; t.textContent = mv.verb === "Stop" ? "Stop the campaign" : mv.verb;
+      var d = document.createElement("p");
+      d.className = "opt-d"; d.textContent = mv.desc;
+      var go = document.createElement("button");
+      go.type = "button";
+      go.className = "opt-go" + (mv.danger ? " opt-go--danger" : "");
+      go.textContent = mv.verb === "Stop" ? "Yes, stop it" :
+                       mv.verb === "Pause" ? "Yes, pause it" : "Yes, set it live";
+      go.addEventListener("click", function (e) {
+        e.stopPropagation();
+        sheet.hidden = true; btn.setAttribute("aria-expanded", "false");
+        applyMove(mv);
+      });
+      opt.appendChild(t); opt.appendChild(d); opt.appendChild(go);
+      sheet.appendChild(opt);
+    });
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = sheet.hidden;
+      closeAll(open ? sheet : null);
+      sheet.hidden = !open;
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+
+    ctl.appendChild(btn);
+    ctl.appendChild(sheet);
+    slot.appendChild(ctl);
+  }
+
+  var BUILD = { p1:buildP1, p2:buildP2, p3:buildP3 };
+
+  function paintAll() {
+    document.querySelectorAll(".mock").forEach(function (mock) {
+      var which = mock.getAttribute("data-proto");
+      var slot = mock.querySelector("[data-slot]");
+      slot.innerHTML = "";
+      BUILD[which](slot);
+      var word = mock.querySelector("[data-word]");
+      if (word) {
+        word.innerHTML = (STATE === "ACTIVE" ? '<span class="live-dot"></span>' : "") + LABEL[STATE];
+      }
+    });
+  }
+
+  document.querySelectorAll(".sw").forEach(function (b) {
+    b.addEventListener("click", function () {
+      STATE = b.getAttribute("data-set");
+      document.querySelectorAll(".sw").forEach(function (x) { x.classList.toggle("on", x === b); });
+      paintAll();
+    });
+  });
+
+  paintAll();
+})();
+</script>
+</body>
+</html>

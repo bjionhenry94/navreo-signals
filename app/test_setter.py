@@ -42,6 +42,7 @@ passing checks.
 import contextlib
 import copy
 import datetime as dt
+import time as _time_mod
 import io
 import json
 import os
@@ -226,7 +227,7 @@ class FakeSB:
         # else's reply - the exact wrong-reply case a stale-id recovery must
         # never hit (2026-07-28).
         for key in ("id", "workspace", "smartlead_campaign_id", "lead_email", "message_id",
-                    "source_message_id", "status", "is_test", "agent_id", "updated_at"):
+                    "source_message_id", "status", "is_test", "agent_id", "updated_at", "sent_at"):
             if key in params and not self._match_eq(row.get(key), params[key]):
                 return False
         return True
@@ -562,6 +563,19 @@ def fresh_setter(fake_sb=None, fake_http=None):
     http = fake_http or FakeHTTP()
     setter.configure(sb=sb, http_json=http, keys={"OPENAI_API_KEY": "x", "SMARTLEAD_API_KEY": "y"},
                      log_activity=lambda *a, **k: None)
+    # A fresh fixture must mean fresh CACHES too (harness fix 2026-08-01):
+    # the setter module's SWR caches survived across tests, so a later test's
+    # route_queue_get could serve an EARLIER test's rows — four trust-queue
+    # checks failed only under the full run, green in isolation.
+    setter._ROWS_CACHE.clear()
+    setter._QUEUE_RESP_MEMO.clear()
+    setter._REP_IDS_CACHE.update(at=0.0, val=None, rows=None, rows_at=0.0)
+    setter._KPI_CACHE.update(at=0.0, val=None)
+    setter._POLL_TS_CACHE.update(at=0.0)
+    setter._WS_IDS_CACHE.update(at=0.0, ids=None)
+    setter._SEND_INFLIGHT.clear()
+    setter._LEAD_CONTACT_CACHE.clear()
+    setter._QUEUE_RESP_RESTORE.update(done=False, next_try=0.0)
     return sb, http
 
 
@@ -2168,7 +2182,11 @@ def test_unresolved_excludes_send_gate_decisions_and_non_positive_categories():
     check("unresolved 2026-07-25: undecided positive still listed", 901 in ids, ids)
     check("unresolved 2026-07-25: tray 'none' MARK still listed (2026-07-22 ruling intact)",
          902 in ids, ids)
-    check("unresolved 2026-07-25: send-gate 'none' is NOT re-listed", 903 not in ids, ids)
+    # 2026-07-30 owner ruling (re-affirmed 2026-08-01: "even if I choose
+    # 'None' initially, these should still show here"): a send-gate 'none' is
+    # a MARK, not a removal — the row STAYS visible in the tray. The original
+    # 2026-07-25 assertion (hidden entirely) was reverted with cabfc1a.
+    check("unresolved 2026-07-30: send-gate 'none' STAYS listed (mark, not removal)", 903 in ids, ids)
     check("unresolved 2026-07-25: an in-flight push is NOT re-listed", 904 not in ids, ids)
     check("unresolved 2026-07-25: a push stuck past the grace window resurfaces", 905 in ids, ids)
     check("unresolved 2026-07-25: 'Not Interested' is dropped", 906 not in ids, ids)
@@ -2501,8 +2519,24 @@ def _fresh_reconcile_setup(campaign_id=7710001, sub_id=7720001):
     return sb, http
 
 
+def _wait_for_subseq_warm(cid, timeout_s=3.0):
+    """The reconcile is CACHE-ONLY (perf fix 2026-07-28): the first call kicks
+    a background warm and keeps every row. Tests wait for the warm to land,
+    then re-fetch — the same two-step the live tray performs."""
+    deadline = _time_mod.time() + timeout_s
+    while _time_mod.time() < deadline:
+        if setter._enrolled_emails_cached_only(str(cid)) is not None:
+            return True
+        _time_mod.sleep(0.05)
+    return False
+
+
 def test_unresolved_reconcile_stamps_smartlead_enrolled_row():
     sb, http = _fresh_reconcile_setup()
+    # First call: cache-only design keeps every row and warms in background.
+    st1, r1 = setter.route_subsequence_unresolved({})
+    check("reconcile: first (cold) call keeps rows and answers 200", st1 == 200, (st1, r1))
+    check("reconcile: background warm lands", _wait_for_subseq_warm(7710001), "warm timed out")
     status, resp = setter.route_subsequence_unresolved({})
     ids = {r["id"] for r in resp.get("rows", [])}
     check("reconcile: 200 status", status == 200, (status, resp))
@@ -2545,8 +2579,13 @@ def test_unresolved_reconcile_smartlead_error_fails_open():
 
 def test_unresolved_reconcile_second_call_uses_cache():
     sb, http = _fresh_reconcile_setup(campaign_id=7710003, sub_id=7720003)
+    # Cache-only design (2026-07-28): the COLD call keeps rows + warms in the
+    # background; the warmed call resolves. Assert exactly that contract.
+    status0, _r0 = setter.route_subsequence_unresolved({})
+    check("reconcile cache: cold call answers 200", status0 == 200, status0)
+    check("reconcile cache: background warm lands", _wait_for_subseq_warm(7710003), "warm timed out")
     status1, resp1 = setter.route_subsequence_unresolved({})
-    check("reconcile cache: first call resolves the enrolled row",
+    check("reconcile cache: warmed call resolves the enrolled row",
          status1 == 200 and 901001 not in {r["id"] for r in resp1.get("rows", [])}, (status1, resp1))
     n_before = len(http.smartlead_calls)
     status2, resp2 = setter.route_subsequence_unresolved({})
@@ -8501,7 +8540,14 @@ def test_trust_thread_route_rehydrates_and_persists():
         {"type": "REPLY", "time": "2026-07-12T09:00:00+00:00", "subject": "Re: hi",
          "email_body": "their newest message", "message_id": "m-live-3", "stats_id": "st-live-3"},
     ]
-    status, resp = setter.route_thread_get({"id": ["71"]})
+    # Cache-first contract (perf ruling 2026-07-30): a plain open serves the
+    # STORED snapshot instantly (stale-marked, background rehydrate kicked);
+    # ?live=1 is the explicit synchronous refresh. Assert both halves.
+    st_c, resp_c = setter.route_thread_get({"id": ["71"]})
+    check("thread route: plain open serves the stored snapshot instantly",
+          st_c == 200 and resp_c.get("cached") is True and len(resp_c.get("thread") or []) == 1,
+          (st_c, resp_c))
+    status, resp = setter.route_thread_get({"id": ["71"], "live": ["1"]})
     thread = resp.get("thread") or []
     check("thread route: 200 + refreshed", status == 200 and resp.get("refreshed") is True, (status, resp))
     check("thread route: newest messages present", len(thread) == 3
@@ -8884,8 +8930,11 @@ def test_uncat_autoresolve_converts_core_four():
         setter.process_reply = real
     check("auto-resolve: converted through process_reply with the late category",
          len(calls) == 1 and calls[0].get("category") == "Interested", (summary, calls))
-    check("auto-resolve: stale triage row deleted",
-         not any(r.get("id") == 501 for r in sb.queue), sb.queue)
+    # Adopt-in-place (2026-08-01): the convert no longer deletes the triage
+    # row — it re-runs the SAME id through the pipeline (_redrive_id), so a
+    # failed re-intake can never lose the reply. Assert the adoption handle.
+    check("auto-resolve: convert adopts the triage row in place (no delete window)",
+         len(calls) == 1 and calls[0].get("_redrive_id") == 501, calls)
     check("auto-resolve: summary counted", summary.get("auto_resolved") == 1, summary)
 
 

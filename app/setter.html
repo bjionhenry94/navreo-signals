@@ -1260,12 +1260,27 @@ async function loadAgentsAndCampaigns() {
   // these are idempotent reads, and a restart-window 502 on the agents call
   // used to paint "Autopilot OFF" as fact with no self-heal.
   const _ro = { _timeoutMs: 15000, _retries: 1 };
-  const [agentsRes, campaignsRes, unifiedRes, clientsRes, workspacesRes] = await Promise.all([
-    fetchJson("/api/setter/agents", _ro),
-    fetchJson("/api/setter/campaigns", _ro),
+  // Only agents + campaigns BLOCK the first paint (panel fix 2026-08-01) —
+  // the other three feed labels/filters, not the list render, and gating on
+  // all five held the whole page blank behind one slow /api/clients.
+  const labelsP = Promise.all([
     fetchJson("/api/campaigns-unified", _ro),
     fetchJson("/api/clients", _ro),
     fetchJson("/api/workspaces", _ro),
+  ]).then(([unifiedRes, clientsRes, workspacesRes]) => {
+    campaignClientMap = buildCampaignClientMap(unifiedRes, clientsRes);
+    workspaceLabels = {};
+    if (workspacesRes.ok && Array.isArray((workspacesRes.data || {}).workspaces)) {
+      workspacesRes.data.workspaces.forEach((w) => {
+        if (w && w.id) workspaceLabels[w.id] = w.display_label || w.name || w.id;
+      });
+    }
+    // Late labels repaint the surfaces that read them.
+    renderClientFilter(); renderQueue();
+  }).catch(() => { /* labels are cosmetic; the list stands without them */ });
+  const [agentsRes, campaignsRes] = await Promise.all([
+    fetchJson("/api/setter/agents", _ro),
+    fetchJson("/api/setter/campaigns", _ro),
   ]);
   if (agentsRes.ok) {
     AGENTS = agentsRes.data.agents || [];
@@ -1281,16 +1296,12 @@ async function loadAgentsAndCampaigns() {
   }
   campaignMap = {};
   CAMPAIGNS.forEach((c) => { campaignMap[c.id] = c.name; });
-  campaignClientMap = buildCampaignClientMap(unifiedRes, clientsRes);
-  workspaceLabels = {};
-  if (workspacesRes.ok && Array.isArray((workspacesRes.data || {}).workspaces)) {
-    workspacesRes.data.workspaces.forEach((w) => {
-      if (w && w.id) workspaceLabels[w.id] = w.display_label || w.name || w.id;
-    });
-  }
   renderAutopilotSwitch();
   renderAgents();
   renderSettings();
+  // labelsP is deliberately NOT returned: `await` flattens thenables, so
+  // returning it would re-couple the first paint to the label reads.
+  void labelsP;
 }
 
 /* Perf architecture (2026-07-16): the list paints from a SLIM fetch
@@ -1317,7 +1328,36 @@ async function loadAgentsAndCampaigns() {
    state) are merged over their stale twins — until the server catches up. */
 const ROW_TOMBSTONES = {};   // id -> {until: ms epoch, keepFor: status|null}
 const ROW_OVERRIDES = {};    // id -> {row, at}
-const MUTATION_SHIELD_MS = 65000;   // > 3x the server's SWR TTL
+// Above the send job's own 120s deadline (panel fix 2026-08-01): a shield
+// that expired mid-send let the 60s refresh repaint an in-flight row back
+// into Needs review with Approve re-enabled.
+const MUTATION_SHIELD_MS = 130000;
+
+// Counter deltas (panel fix 2026-08-01): the first counter shield froze ALL
+// of KPIS while any tombstone lived, so a working session never saw fresh
+// counts. Instead: every optimistic move records a delta, and each fresh
+// payload is accepted WITH the still-shielded deltas re-applied on top — new
+// intakes show up, local moves hold.
+const COUNT_DELTAS = {};     // counts key (or "__nr") -> local delta vs server truth
+let COUNT_DELTAS_AT = 0;
+function bumpCounts(row, from, to) {
+  // Server counts are navreo-only and exclude test rows — mirror that, or a
+  // client/test row's action double-moves the folded badge.
+  if (!row || row.is_test || (row.workspace || "navreo") !== "navreo") return;
+  const counts = KPIS.counts || (KPIS.counts = {});
+  const step = (key, d) => {
+    if (typeof counts[key] === "number") counts[key] += d;
+    COUNT_DELTAS[key] = (COUNT_DELTAS[key] || 0) + d;
+  };
+  if (from) step(from, -1);
+  if (to) step(to, +1);
+  const nrd = (to === "needs_review" ? 1 : 0) - (from === "needs_review" ? 1 : 0);
+  if (nrd) {
+    if (typeof KPIS.needs_review === "number") KPIS.needs_review += nrd;
+    COUNT_DELTAS.__nr = (COUNT_DELTAS.__nr || 0) + nrd;
+  }
+  COUNT_DELTAS_AT = Date.now();
+}
 // keepFor names the status pill where the row SHOULD now live ("sent",
 // "dismissed") — the tombstone drops it from every OTHER pill's stale payload
 // but keeps it (override-merged) under its new pill and under All. A bare
@@ -1371,13 +1411,18 @@ async function _loadQueueInner(prefetch) {
   _queueLoading = false;
   if (res.ok) {
     QUEUE_ROWS = reconcileQueuePayload(res.data.rows || []);
-    // Counter shield (panel fix 2026-08-01): the rows are shielded from the
-    // stale payload but the counters were replaced wholesale, so the pill
-    // bounced back to the pre-action number ~1s after every Approve/Dismiss.
-    // While any local mutation is still under shield, keep the locally
-    // adjusted counters; the server catches up within the shield window.
-    if (!Object.keys(ROW_TOMBSTONES).length && !Object.keys(ROW_OVERRIDES).length) {
-      KPIS = res.data.kpis || {};
+    // Fresh counters, with the still-shielded local deltas re-applied on top
+    // (panel fix 2026-08-01): the pill neither bounces back to pre-action
+    // numbers nor freezes out newly intaken replies.
+    KPIS = res.data.kpis || {};
+    if (Date.now() - COUNT_DELTAS_AT < MUTATION_SHIELD_MS) {
+      const c = KPIS.counts || (KPIS.counts = {});
+      Object.keys(COUNT_DELTAS).forEach((k) => {
+        if (k === "__nr") { if (typeof KPIS.needs_review === "number") KPIS.needs_review += COUNT_DELTAS[k]; }
+        else if (typeof c[k] === "number") c[k] += COUNT_DELTAS[k];
+      });
+    } else {
+      Object.keys(COUNT_DELTAS).forEach((k) => delete COUNT_DELTAS[k]);
     }
     LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
     renderLastChecked();
@@ -1401,7 +1446,15 @@ async function _loadQueueInner(prefetch) {
   // A COPY, not an alias (panel fix 2026-08-01): shared row objects keep the
   // cross-pill mutations cheap, but tray-opened shells are pushed into
   // ALL_ROWS and an alias leaked them straight into the active pill's list.
-  if (!_allRowsLoaded) ALL_ROWS = QUEUE_ROWS.slice();
+  if (!_allRowsLoaded) {
+    ALL_ROWS = QUEUE_ROWS.slice();
+    // Re-adopt override rows the stale payload doesn't carry (a just-
+    // converted reply's new id) — without this the open row fell out of both
+    // arrays and its Approve lost every shield (panel fix 2026-08-01).
+    Object.keys(ROW_OVERRIDES).forEach((k) => {
+      if (!ALL_ROWS.some((r) => String(r.id) === k)) ALL_ROWS.push(ROW_OVERRIDES[k].row);
+    });
+  }
   renderKpis();
   renderQueueFilters();
   renderClientFilter();
@@ -1435,6 +1488,11 @@ function isTypingIn(rowId) {
   if (!el || el === document.body) return false;
   const owner = el.closest ? el.closest("[data-id]") : null;
   if (owner && String(owner.getAttribute("data-id")) !== String(rowId)) return false;
+  // No [data-id] ancestor: only count focus INSIDE the conversation pane as
+  // typing (panel fix 2026-08-01) — a caret resting in the search box or the
+  // client filter read as "typing in every row" and silently froze the open
+  // conversation's thread refresh forever.
+  if (!owner && !(el.closest && el.closest("#inboxRight"))) return false;
   return el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
 }
 function refreshOpenDetail() {
@@ -1455,13 +1513,25 @@ function refreshOpenDetail() {
    Auto-expands whenever the count is above zero (collapsible; a new
    unresolved send re-expands it). Hidden entirely at zero. Fed on queue
    load and re-fetched after every tray/detail action and every send. */
+let _trayInFlight = null;
 async function loadUnresolvedTray() {
-  const res = await fetchJson("/api/setter/subsequence/unresolved");
-  // A FAILED fetch keeps the last good rows instead of zeroing them - the
-  // zero made the next successful fetch read as "new sends arrived" and pop
-  // the tray open out of nowhere (same keep-last-good rule as loadQueue).
-  if (res.ok && res.data && Array.isArray(res.data.rows)) unresolvedRows = res.data.rows;
-  renderUnresolvedTray();
+  // Single-flight (panel fix 2026-08-01): action paths and loadQueue's tail
+  // both call this, which fired two identical GETs per action — joiners now
+  // share the in-flight fetch.
+  if (_trayInFlight) return _trayInFlight;
+  _trayInFlight = (async () => {
+    try {
+      const res = await fetchJson("/api/setter/subsequence/unresolved");
+      // A FAILED fetch keeps the last good rows instead of zeroing them - the
+      // zero made the next successful fetch read as "new sends arrived" and pop
+      // the tray open out of nowhere (same keep-last-good rule as loadQueue).
+      if (res.ok && res.data && Array.isArray(res.data.rows)) unresolvedRows = res.data.rows;
+      renderUnresolvedTray();
+    } finally {
+      _trayInFlight = null;
+    }
+  })();
+  return _trayInFlight;
 }
 function unresolvedAgeHours(r) {
   const t = new Date(r.sent_at || 0).getTime();
@@ -1859,9 +1929,13 @@ function renderQueueFilters() {
   // Monitor-workspace rows render in the list but the server's counts are
   // deliberately navreo-only — fold the visible client rows into the badge
   // the same way test rows are, so the number matches the eye again
-  // (panel fix 2026-08-01: "Needs review (19)" over a 25-row list).
-  const clientNeeds = QUEUE_ROWS.filter((r) => !r.is_test && r.status === "needs_review"
-    && (r.workspace || "navreo") !== "navreo").length;
+  // (panel fix 2026-08-01: "Needs review (19)" over a 25-row list). Scoped
+  // to the SAME basis as testNeeds (the visible list, needs_review pill
+  // only): on other pills _reclassify keeps answered rows at stored
+  // status needs_review, which over-counted the badge from the Sent pill.
+  const clientNeeds = (currentStatus === "needs_review" ? visibleInboxRows() : [])
+    .filter((r) => !r.is_test && r.status === "needs_review"
+      && (r.workspace || "navreo") !== "navreo").length;
   wrap.innerHTML = FILTER_PILLS.map((p) => {
     let n = counts[p.count];
     if (typeof n === "number" && p.key === "needs_review") n += testNeeds + clientNeeds;
@@ -2248,13 +2322,18 @@ function inboxItemHtml(row) {
 let _mobileListScrollY = 0;
 function selectRow(id) {
   selectedRowId = id;
-  document.getElementById("inboxShell").classList.add("mobile-detail");
+  const _shell = document.getElementById("inboxShell");
+  // Stash the LIST position only on a genuine list→detail transition (panel
+  // fix 2026-08-01): auto-advances call selectRow while already in detail
+  // view, and stashing the conversation's scroll as "the list position"
+  // dumped Back-to-inbox at an arbitrary point.
+  const _wasDetail = _shell.classList.contains("mobile-detail");
+  _shell.classList.add("mobile-detail");
   // On phones the DOCUMENT scrolls (the panes are height:auto), so opening a
   // reply from deep in the list left the page scrolled ~2000px into the
-  // conversation. Land at the top; backToInbox restores the list position
-  // (panel fix 2026-08-01).
+  // conversation. Land at the top; backToInbox restores the list position.
   if (window.matchMedia("(max-width: 900px)").matches) {
-    _mobileListScrollY = window.scrollY;
+    if (!_wasDetail) _mobileListScrollY = window.scrollY;
     window.scrollTo(0, 0);
   }
   document.querySelectorAll(".inbox-item").forEach((item) => {
@@ -2329,7 +2408,12 @@ function applyListSidebarState() {
   const mobile = window.matchMedia("(max-width: 900px)").matches;
   shell.classList.toggle("list-collapsed", collapsed && !mobile);
 }
-window.addEventListener("resize", applyListSidebarState);
+// Breakpoint-change only (panel fix 2026-08-01): a raw resize listener ran
+// localStorage reads + a shell-wide custom-property write at frame rate
+// during window drags and on every iOS URL-bar collapse.
+try {
+  window.matchMedia("(max-width: 900px)").addEventListener("change", applyListSidebarState);
+} catch { /* older Safari: no change events — boot-time state still applies */ }
 function wireListSidebar() {
   const shell = document.getElementById("inboxShell");
   const left = shell && shell.querySelector(".inbox-left");
@@ -2828,7 +2912,9 @@ function categoryControlInner(row, compact) {
         <select class="lp-cat-sel" aria-label="Change lead category"><option value="">Loading…</option></select>
         <button type="button" class="btn primary sm lp-cat-btn" disabled>Update</button>
         ${curCat.toLowerCase() === NQ_CATEGORY_NAME.toLowerCase() ? "" :
-          `<button type="button" class="btn danger sm lp-cat-nq" title="Files this lead as '${esc(NQ_CATEGORY_NAME)}' in Smartlead and clears it from the queue - one click, no dropdown.">Not qualified</button>`}
+          `<button type="button" class="btn danger sm lp-cat-nq" title="${(row.workspace || "navreo") !== "navreo"
+            ? `Files this lead as '${esc(NQ_CATEGORY_NAME)}' in the tool and clears it from the queue - monitor workspaces are never written to the client's Smartlead.`
+            : `Files this lead as '${esc(NQ_CATEGORY_NAME)}' in Smartlead and clears it from the queue - one click, no dropdown.`}">Not qualified</button>`}
       </div>
       <div class="lp-cat-hint">${hint}</div>` : ""}`;
 }
@@ -2931,11 +3017,13 @@ async function hydrateLeadContact(row) {
   if (haveLi && haveSite && haveMap) return;
   // Negative cache (panel fix 2026-08-01): a lead with NO LinkedIn re-fired
   // this on every repaint forever — once per row per page-life is enough
-  // (the server caches per email+campaign for an hour anyway).
+  // (the server caches per email+campaign for an hour anyway). A TRANSIENT
+  // failure un-poisons the cache so a restart-window 502 doesn't blank the
+  // quick links for the whole session.
   if (LEAD_CONTACT_TRIED.has(String(row.id))) return;
   LEAD_CONTACT_TRIED.add(String(row.id));
-  const res = await fetchJson(`/api/setter/lead-contact?id=${encodeURIComponent(row.id)}`);
-  if (!res.ok || !res.data) return;
+  const res = await fetchJson(`/api/setter/lead-contact?id=${encodeURIComponent(row.id)}`, { _retries: 1 });
+  if (!res.ok || !res.data) { LEAD_CONTACT_TRIED.delete(String(row.id)); return; }
   let changed = false;
   if (res.data.linkedin && !haveLi) { row.lead_linkedin = res.data.linkedin; changed = true; }
   if (res.data.website && !haveSite) { row.company_website = res.data.website; changed = true; }
@@ -3041,22 +3129,25 @@ async function applyCategory(block, override) {
     // BEFORE the removal — indexing the unfiltered array skipped a
     // conversation whenever a search/lens/client filter was active, and the
     // list itself must repaint in the advance arm too (panel fix 2026-08-01).
-    const filedRow = QUEUE_ROWS.find((r) => String(r.id) === String(rowId));
-    const visBefore = visibleInboxRows();
+    // .slice(): visibleInboxRows can RETURN QUEUE_ROWS itself (unfiltered
+    // default view), and indexing a snapshot the splice below mutates
+    // skipped one conversation on every filing (panel fix 2026-08-01).
+    const filedRow = QUEUE_ROWS.find((r) => String(r.id) === String(rowId))
+                  || ALL_ROWS.find((r) => String(r.id) === String(rowId))
+                  || currentDetailRowObj();
+    const visBefore = visibleInboxRows().slice();
     const vIdx = visBefore.findIndex((r) => String(r.id) === String(rowId));
     tombstoneRow(rowId, "dismissed");
     delete ROW_OVERRIDES[String(rowId)];
     const idx = QUEUE_ROWS.findIndex((r) => String(r.id) === String(rowId));
-    const prevStatus = idx >= 0 ? QUEUE_ROWS[idx].status : null;
+    const prevStatus = (idx >= 0 ? QUEUE_ROWS[idx].status : null)
+                    || (filedRow && filedRow.status) || null;
     if (idx >= 0) QUEUE_ROWS.splice(idx, 1);
-    const counts = KPIS.counts || {};
-    const isTestRow = !!(filedRow && filedRow.is_test);
-    if (!isTestRow && prevStatus && typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
-    if (!isTestRow && prevStatus === "needs_review" && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
+    bumpCounts(filedRow, prevStatus, "dismissed");
     const next = vIdx >= 0 ? (visBefore[vIdx + 1] || visBefore[vIdx - 1]) : null;
     renderKpis(); renderQueueFilters(); renderQueue();
     if (next) { selectRow(next.id); } else { selectedRowId = null; renderQueue(); }
-    protoNote(`Filed as ${name}`);
+    protoNote((res.data && res.data.detail) ? `Filed as ${name} - in the tool only` : `Filed as ${name}`);
   } else if (act === "converted") {
     tombstoneRow(rowId);   // the old id is gone; the reply lives under new_id
     delete ROW_OVERRIDES[String(rowId)];
@@ -3100,8 +3191,7 @@ async function applyCategory(block, override) {
           : "Category updated.");
     }
   }
-  loadUnresolvedTray();
-  await loadQueue();
+  await loadQueue();   // its tail refreshes the tray — no separate GET needed
 }
 /* Wire every category control (.lp-cat) found under `root`: hydrate its
    dropdown, wire change -> updateCatBtn, and its button -> applyCategory. Runs
@@ -3512,11 +3602,13 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Enter") {
-    // A focused BUTTON keeps its native Enter activation (panel fix
-    // 2026-08-01): without this, Enter on e.g. the lead-panel toggle SENT
-    // THE REPLY instead of toggling the panel — an irreversible surprise.
+    // A focused button-like control keeps its native Enter activation (panel
+    // fix 2026-08-01, widened same day): tagName BUTTON alone missed the
+    // role="button" divs/anchors (tray header, tray rows, uncat chip) — Enter
+    // on those still SENT THE REPLY, an irreversible surprise.
     const a = document.activeElement;
-    if (a && a.tagName === "BUTTON" && !a.classList.contains("sg-chip")) return;
+    if (a && a.closest && a.closest('button, [role="button"]')
+        && !a.classList.contains("sg-chip")) return;
     const btn = document.querySelector(`.qc-send[data-id="${CSS.escape(String(selectedRowId))}"]`);
     if (btn && !btn.disabled) { e.preventDefault(); doSend(btn); }
   }
@@ -3996,8 +4088,6 @@ async function doSend(btn) {
   const sentBody = draftEl ? draftEl.innerHTML : (row && row.draft_body) || "";
   const originalDraft = (row && row.original_draft_body) || "";
   const prev = row ? { status: row.status, sent_at: row.sent_at, sent_body: row.sent_body } : null;
-  const counts = KPIS.counts || {};
-  const hadCounts = prev ? { prev: counts[prev.status], sent: counts.sent, nr: KPIS.needs_review } : null;
   if (row && prev) {
     const now = new Date().toISOString();
     [qRow, aRow].forEach((r) => { if (r) { r.status = "sent"; r.sent_at = now; r.sent_body = sentBody; } });
@@ -4008,9 +4098,7 @@ async function doSend(btn) {
     tombstoneRow(id, "sent");
     overrideRow(row);
     if (qIdx >= 0 && currentStatus && currentStatus !== "sent") QUEUE_ROWS.splice(qIdx, 1);
-    if (!row.is_test && typeof counts[prev.status] === "number") counts[prev.status] -= 1;
-    if (!row.is_test && typeof counts.sent === "number") counts.sent += 1;
-    if (prev.status === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
+    bumpCounts(row, prev.status, "sent");
     renderKpis(); renderQueueFilters(); renderQueue();
     if (String(selectedRowId) === String(id)) renderDetail(row);
   }
@@ -4030,10 +4118,7 @@ async function doSend(btn) {
       if (qRow && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
         QUEUE_ROWS.splice(Math.min(Math.max(qIdx, 0), QUEUE_ROWS.length), 0, qRow);
       }
-      if (hadCounts) {
-        counts[prev.status] = hadCounts.prev; counts.sent = hadCounts.sent;
-        KPIS.needs_review = hadCounts.nr;
-      }
+      bumpCounts(row, "sent", prev.status);
       renderKpis(); renderQueueFilters(); renderQueue();
       if (String(selectedRowId) === String(id)) renderDetail(row);
     }
@@ -4135,9 +4220,8 @@ async function doSendFollowup(btn) {
     unresolvedRows = unresolvedRows.filter((r) => String(r.id) !== String(id));
     renderUnresolvedTray();
     if (nextFu) openUnresolvedRow(nextFu.id);
-    loadUnresolvedTray();
   }
-  loadQueue();
+  loadQueue();   // its tail reconciles the tray — no separate GET needed
 }
 
 /* Mirrors the server's _draft_text: compare what a human would READ, so
@@ -4408,6 +4492,10 @@ function applyRedraftedRow(id, fresh) {
   // Shield: the loadQueue() that follows every regen serves the ~20s-stale
   // cache — without this override it repainted draft #1 over the new draft.
   overrideRow(merged);
+  // Re-baseline the signature (panel fix 2026-08-01): without this, the
+  // refreshOpenDetail on the very next queue reload saw a "changed" row and
+  // repainted — erasing any message shown after this paint within ~600ms.
+  _lastDetailSignature = detailSignature(merged);
   if (String(selectedRowId) === String(id)) {
     renderDetail(merged);
     if (merged.status === "needs_review" && !merged.draft_body) {
@@ -4479,24 +4567,22 @@ async function doDismiss(btn) {
   const row = qRow || aRow;
   if (!row) { btn.disabled = false; return; }
   const prevStatus = row.status;
-  const counts = KPIS.counts || {};
-  const hadCounts = { prev: counts[prevStatus], dis: counts.dismissed };
   if (qRow) qRow.status = "dismissed";
   if (aRow) aRow.status = "dismissed";
   // Shield (panel fix 2026-08-01): dismiss was the ONE mutation with no
   // tombstone, so a stale queue payload — or a live override from an earlier
   // regen/relabel on this row — resurrected it into Needs review. The
-  // override is deleted for the same reason: it would force the pre-dismiss
-  // status back over the server's fresh dismissed row.
+  // override is deleted (stashed for the failure rollback) for the same
+  // reason: it would force the pre-dismiss status back over the server's
+  // fresh dismissed row.
+  const prevOverride = ROW_OVERRIDES[String(id)];
   tombstoneRow(id, "dismissed");
   delete ROW_OVERRIDES[String(id)];
   // The dismissed row only leaves the list when the active pill excludes it -
   // on "Dismissed"/"All" (or during a cross-pill search) it stays put and the
   // re-render flips its visible status instead.
   if (qIdx >= 0 && currentStatus && currentStatus !== "dismissed") QUEUE_ROWS.splice(qIdx, 1);
-  if (!row.is_test && typeof counts[prevStatus] === "number") counts[prevStatus] -= 1;
-  if (!row.is_test && typeof counts.dismissed === "number") counts.dismissed += 1;
-  if (prevStatus === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review -= 1;
+  bumpCounts(row, prevStatus, "dismissed");
   renderKpis(); renderQueueFilters(); renderQueue();
   protoNote("Dismissed");
   // Identity rides along so a re-intake id swap can't 404 the dismiss (owner
@@ -4510,16 +4596,17 @@ async function doDismiss(btn) {
   });
   btn.disabled = false;
   if (!res.ok) {
-    // Roll the optimistic state back: same objects, same index, same counts.
+    // Roll the optimistic state back: same objects, same index, same counts —
+    // including the row's live override (a regen'd draft must not be lost to
+    // a failed dismiss).
     delete ROW_TOMBSTONES[String(id)];
+    if (prevOverride) ROW_OVERRIDES[String(id)] = prevOverride;
     if (qRow) qRow.status = prevStatus;
     if (aRow) aRow.status = prevStatus;
     if (qIdx >= 0 && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
       QUEUE_ROWS.splice(Math.min(qIdx, QUEUE_ROWS.length), 0, qRow);
     }
-    counts[prevStatus] = hadCounts.prev;
-    counts.dismissed = hadCounts.dis;
-    if (prevStatus === "needs_review" && !row.is_test && typeof KPIS.needs_review === "number") KPIS.needs_review += 1;
+    bumpCounts(row, "dismissed", prevStatus);
     renderKpis(); renderQueueFilters(); renderQueue();
     showError("Couldn't dismiss: " + res.error);
     showDetailError("Couldn't dismiss: " + res.error);
@@ -5237,6 +5324,7 @@ async function saveSettings() {
    server throttles its own background Smartlead re-hydrate per row. The
    detail re-renders only when the thread actually changed -
    reapplyEditedDraft inside renderDetail keeps any in-progress edit safe. */
+const THREAD_FETCHED_AT = new Map();   // row id -> last /thread GET ms
 function threadKey(t) {
   return (t || []).map((m) => `${m.type}:${m.message_id || m.stats_id || String(m.body || "").slice(0, 40)}`).join("|");
 }
@@ -5244,10 +5332,13 @@ async function refreshThreadFor(row, isRepoll) {
   if (!row || row.is_test) return;
   // Per-row throttle (panel fix 2026-08-01): renderDetail calls this on
   // EVERY repaint, and one Approve repaints three times — each call was a
-  // /thread GET. The server's snapshot is cache-first anyway; 10s is fresh.
+  // /thread GET. Module-level map, not a row property: queue reloads replace
+  // the row objects wholesale, which reset a row-borne stamp every 60s.
   const nowMs = Date.now();
-  if (!isRepoll && row._threadFetchedAt && nowMs - row._threadFetchedAt < 10000) return;
-  row._threadFetchedAt = nowMs;
+  const lastFetch = THREAD_FETCHED_AT.get(String(row.id)) || 0;
+  if (!isRepoll && nowMs - lastFetch < 10000) return;
+  THREAD_FETCHED_AT.set(String(row.id), nowMs);
+  if (THREAD_FETCHED_AT.size > 500) THREAD_FETCHED_AT.clear();   // bound across re-intakes
   // Cache-first (perf ruling 2026-07-30): the endpoint now answers instantly
   // from the stored snapshot (one indexed Supabase read) and re-hydrates from
   // Smartlead in the background, so every open may take it - the old 60s
