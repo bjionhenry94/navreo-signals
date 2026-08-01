@@ -2135,17 +2135,34 @@ class _SWRCache:
 
 
 class _SWRKeyedCache:
-    """Same SWR semantics as _SWRCache, keyed (e.g. per campaign_id/id-set)."""
+    """Same SWR semantics as _SWRCache, keyed (e.g. per campaign_id/id-set).
 
-    def __init__(self, compute, ttl, is_degraded=lambda p: False, name=""):
+    Hardened 2026-08-01 (audit round 1):
+    - per-key in-flight dedup: concurrent cold reads share ONE compute instead
+      of a thundering herd of identical upstream calls;
+    - invalidation fence: a compute that STARTED before invalidate_id() ran can
+      never store its (pre-write) payload afterwards — the status-write race
+      that could re-cache the old status for a full TTL;
+    - optional negative caching (neg_ttl): a degraded sweep is remembered for a
+      few seconds so an upstream outage doesn't recompute per request."""
+
+    def __init__(self, compute, ttl, is_degraded=lambda p: False, name="", neg_ttl=0):
         self.compute = compute  # fn(key) -> payload
         self.ttl = ttl
+        self.neg_ttl = neg_ttl
         self.is_degraded = is_degraded
         self.name = name
         self.lock = threading.Lock()
-        self.entries: dict = {}  # key -> {"ts", "payload", "refreshing"}
+        self.entries: dict = {}  # key -> {"ts", "payload", "refreshing", "neg"?}
+        self.fence: dict = {}    # key -> last invalidate_id() timestamp
+        self.computing: dict = {}  # key -> threading.Event (in-flight cold compute)
+
+    def _fenced(self, key, started):
+        with self.lock:
+            return self.fence.get(key, 0) > started
 
     def _refresh_bg(self, key):
+        started = time.time()
         try:
             payload = self.compute(key)
         except Exception as e:  # noqa: BLE001
@@ -2159,7 +2176,7 @@ class _SWRKeyedCache:
             e2 = self.entries.get(key)
             if e2 is not None:
                 e2["refreshing"] = False
-            if not self.is_degraded(payload):
+            if not self.is_degraded(payload) and not self.fence.get(key, 0) > started:
                 self.entries[key] = {"ts": time.time(), "payload": payload, "refreshing": False}
 
     def get(self, key):
@@ -2167,22 +2184,64 @@ class _SWRKeyedCache:
         with self.lock:
             entry = self.entries.get(key)
         if entry is not None:
-            if (now - entry["ts"]) < self.ttl:
+            ttl = self.neg_ttl if entry.get("neg") else self.ttl
+            if (now - entry["ts"]) < ttl:
                 return entry["payload"]
-            start_thread = False
+            if entry.get("neg"):
+                with self.lock:  # negative entry expired — recompute in foreground
+                    if self.entries.get(key) is entry:
+                        del self.entries[key]
+                entry = None
+            else:
+                start_thread = False
+                with self.lock:
+                    e2 = self.entries.get(key)
+                    if e2 is not None and not e2["refreshing"]:
+                        e2["refreshing"] = True
+                        start_thread = True
+                if start_thread:
+                    threading.Thread(target=self._refresh_bg, args=(key,), daemon=True).start()
+                return entry["payload"]
+        # cold: dedup concurrent computes for the same key
+        with self.lock:
+            ev = self.computing.get(key)
+            if ev is None:
+                ev = threading.Event()
+                self.computing[key] = ev
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            ev.wait(timeout=25)
             with self.lock:
                 e2 = self.entries.get(key)
-                if e2 is not None and not e2["refreshing"]:
-                    e2["refreshing"] = True
-                    start_thread = True
-            if start_thread:
-                threading.Thread(target=self._refresh_bg, args=(key,), daemon=True).start()
-            return entry["payload"]
-        payload = self.compute(key)
-        if not self.is_degraded(payload):
+            if e2 is not None:
+                return e2["payload"]
+            # owner failed/fenced — fall through to compute ourselves
+        started = time.time()
+        try:
+            payload = self.compute(key)
+        finally:
+            if owner:
+                with self.lock:
+                    self.computing.pop(key, None)
+                ev.set()
+        degraded = self.is_degraded(payload)
+        if not self._fenced(key, started):
             with self.lock:
-                self.entries[key] = {"ts": now, "payload": payload, "refreshing": False}
+                if not degraded:
+                    self.entries[key] = {"ts": time.time(), "payload": payload, "refreshing": False}
+                elif self.neg_ttl:
+                    self.entries[key] = {"ts": time.time(), "payload": payload,
+                                         "refreshing": False, "neg": True}
         return payload
+
+    def put_fresh(self, key, payload):
+        """Store a just-computed payload unconditionally (post-write refresh):
+        clears the fence so this authoritative value is what readers see."""
+        with self.lock:
+            self.fence.pop(key, None)
+            self.entries[key] = {"ts": time.time(), "payload": payload, "refreshing": False}
 
     def clear(self):
         with self.lock:
@@ -2191,12 +2250,17 @@ class _SWRKeyedCache:
     def invalidate_id(self, cid):
         """Drop every entry whose key names this campaign id (keys are single
         ids or comma-joined id lists) — used after a status write so the very
-        next read is fresh instead of a 45s-stale lie."""
+        next read is fresh instead of a 45s-stale lie. Also fences: any compute
+        already in flight when this ran can no longer store its stale result."""
         cid = str(cid)
+        now = time.time()
         with self.lock:
             for k in [k for k in self.entries
                       if cid in str(k).split(",")]:
                 del self.entries[k]
+                self.fence[k] = now
+            # fence the single-id key even if nothing was cached under it yet
+            self.fence[cid] = now
 
 
 _SOURCES_TTL_S = 30
@@ -7893,7 +7957,7 @@ def cockpit_set_assignment(payload: dict, actor: str | None):
     action_key = (str(payload.get("action_key") or "")).strip()[:512]
     if not action_key:
         return {"ok": False, "message": "action_key required"}, 400
-    state = (payload.get("state") or "").strip()
+    state = str(payload.get("state") or "").strip()
     if state == "clear":
         res = sb("DELETE", f"cockpit_action_assignments?action_key=eq.{quote(action_key, safe='')}")
         if res is None:
@@ -8144,6 +8208,27 @@ def _vp_match_cluster(body_norm: str, clusters: list):
     return scored[0][1]
 
 
+def _sl_sequences_raw(cid):
+    """ONE Smartlead GET /campaigns/{id}/sequences, shared by the sequence-copy
+    endpoint, the messaging fold-in and _variant_paths — a Messaging-tab open
+    used to pay this call twice (audit round 1, #5). Returns the seqs LIST:
+    [] = Smartlead answered but the campaign has no sequence (valid, cacheable);
+    None = transport failure (degraded, negative-cached briefly)."""
+    try:
+        raw = _smartlead_json("GET", f"/campaigns/{int(str(cid).strip())}/sequences",
+                              timeout=15, attempts=2)
+    except Exception:  # noqa: BLE001
+        return None
+    return raw if isinstance(raw, list) else (
+        (raw.get("data") or raw.get("sequences") or []) if isinstance(raw, dict) else [])
+
+
+_SL_SEQS_SWR = _SWRKeyedCache(
+    _sl_sequences_raw, 180,
+    is_degraded=lambda p: p is None,
+    name="sl-seqs", neg_ttl=15)
+
+
 def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) -> dict:
     """Per-COPY meeting attribution + opener\u2192follow-up combinations, deduced from
     the copy each booked lead saw. Smartlead exposes no sent-variant per lead, so
@@ -8161,13 +8246,7 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
     and stamps the stragglers, so the web read stays fast and complete.
     Pass seqs= to reuse an already-fetched /sequences payload."""
     if seqs is None:
-        try:
-            sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences",
-                                   timeout=15, attempts=2)
-        except Exception:  # noqa: BLE001
-            return {}
-        seqs = sraw if isinstance(sraw, list) else (
-            (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
+        seqs = _SL_SEQS_SWR.get(str(n))
     if not seqs:
         return {}
     step_clusters = _vp_cluster_steps(seqs)
@@ -8196,6 +8275,7 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
             continue
         seen.add(em)
         path = {}
+        exhausted = set()
         cached = r.get("vpath")
         if isinstance(cached, str) and cached:
             try:
@@ -8203,17 +8283,24 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
                 if isinstance(cp, dict):
                     path = {str(k): v for k, v in cp.items()
                             if v and str(k) in valid_keys and v in valid_keys[str(k)]}
+                    # '_x' = steps a cron history-attempt already failed to
+                    # place — they can never resolve (no quote, no SENT body),
+                    # so no compute re-tries them forever (audit #16). A
+                    # sequence re-save changes the clusters and MAY strand an
+                    # _x entry; accepted — the copy it named is gone anyway.
+                    exhausted = {str(x) for x in (cp.get("_x") or [])} & set(step_clusters)
             except Exception:  # noqa: BLE001
                 path = {}
+        cached_path, cached_x = dict(path), set(exhausted)
         body = _vp_norm(r.get("reply_body") or r.get("rawbody") or "")
-        if not path or (set(step_clusters) - set(path)):
+        if set(step_clusters) - set(path) - exhausted:
             for st, clusters in step_clusters.items():
-                if st in path:
+                if st in path or st in exhausted:
                     continue
                 cl = _vp_match_cluster(body, clusters)
                 if cl:
                     path[st] = cl["rep"]
-            need = set(step_clusters) - set(path)
+            need = set(step_clusters) - set(path) - exhausted
             if need and fetches < history_budget:
                 fetches += 1
                 sent = _vp_sent_bodies_from_history(n, em)
@@ -8221,8 +8308,16 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
                     cl = _vp_match_cluster(_vp_norm(sent.get(st) or ""), step_clusters[st])
                     if cl:
                         path[st] = cl["rep"]
-            if path:
-                _vp_stamp_path(r.get("id"), path)
+                # the history record is this lead's complete send record: any
+                # step still unplaced after it is permanently unresolvable
+                exhausted |= set(step_clusters) - set(path)
+            # stamp ONLY when something changed — identical re-stamps were a
+            # GET+PATCH pair per booker per compute, forever (audit #6/#16)
+            if path != cached_path or exhausted != cached_x:
+                stamp = dict(path)
+                if exhausted:
+                    stamp["_x"] = sorted(exhausted)
+                _vp_stamp_path(r.get("id"), stamp)
         if not path:
             # No live copy matched. If the booker still quoted a substantial
             # thread, their opener was real but has since been removed from the
@@ -8322,8 +8417,13 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
     speaks for their whole thread. Leads whose rows all arrived step-less
     (backstop ingest strips the field) need one Smartlead history lookup each
     — request path passes lookup_budget=0 (Supabase-only, fast); the cron
-    passes a real budget and stamps the answer back so it never repeats."""
-    mrows = sb("GET", f"replies?workspace=eq.navreo&smartlead_campaign_id=eq.{n}"
+    passes a real budget and stamps the answer back so it never repeats.
+
+    Scope: by campaign id ONLY — no workspace filter, matching _variant_paths'
+    replies query exactly. The old workspace=eq.navreo filter made the
+    meetings TOTAL navreo-only while per-variant attribution counted every
+    workspace: cells could sum to more than the stated total (audit #3)."""
+    mrows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}"
                       "&category=eq.Call%20Booked"
                       "&select=id,email,step:raw->>email_seq_number,"
                       "stepbf:raw->>email_seq_number_backfill"
@@ -8397,16 +8497,13 @@ def _cockpit_messaging(cid) -> dict:
     # Fold in EVERY variant that variant-statistics leaves out — above all the
     # DELETED / disabled ones. A founder must still see a variant that ran and
     # was turned off; the table must never silently hide one. The raw /sequences
-    # payload carries is_deleted variants (the sequence-copy endpoint strips
-    # them); merge them here — with 0 stats when the stats endpoint has dropped
-    # them — and flag `disabled`. Fully defensive: any failure leaves the
-    # variant-statistics list exactly as it was.
-    _seqs = None  # fetched once here, reused by _variant_paths below (was two identical calls)
+    # payload carries is_deleted variants (the sequence-copy endpoint now keeps
+    # and flags them too); merge them here and flag `disabled`. A deleted
+    # variant's counters are PURGED by Smartlead, not zero — flag stats_purged
+    # so the UI renders '—', never a false 'Sent 0' (audit #8). Fully
+    # defensive: any failure leaves the variant-statistics list as it was.
+    _seqs = _SL_SEQS_SWR.get(str(n))  # shared with sequence-copy + _variant_paths (audit #5)
     try:
-        _sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences",
-                                timeout=15, attempts=2)
-        _seqs = _sraw if isinstance(_sraw, list) else (
-            (_sraw.get("data") or _sraw.get("sequences") or []) if isinstance(_sraw, dict) else [])
         _idx = {(str(r.get("step")), r.get("label") or ""): r for r in versions}
         for _s in (_seqs or []):
             _step = _s.get("seq_number")
@@ -8419,7 +8516,8 @@ def _cockpit_messaging(cid) -> dict:
                     continue
                 _new = {"step": _step, "label": _v.get("variant_label"), "inline": False,
                         "sent": 0, "replies": 0, "positives": 0, "bounces": 0,
-                        "disabled": bool(_v.get("is_deleted"))}
+                        "disabled": bool(_v.get("is_deleted")),
+                        "stats_purged": bool(_v.get("is_deleted"))}
                 _idx[_key] = _new
                 versions.append(_new)
         versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
@@ -8464,9 +8562,18 @@ def vpath_backfill(per_campaign_history: int = 12) -> dict:
     request path serves stamped Supabase rows and never crawls Smartlead
     message history itself (512MB web instance latency/OOM rail). Idempotent:
     stamped rows are skipped by the readers, so the unstamped set only
-    shrinks. Returns a per-campaign note for the cron log."""
-    rows = sb("GET", "replies?category=eq.Call%20Booked"
-                     "&select=smartlead_campaign_id")
+    shrinks. Returns a per-campaign note for the cron log.
+
+    Feeder is pre-filtered to UNSTAMPED work (audit #7/#18): only campaigns
+    still holding a booked row with no vpath2 stamp (the '_x' exhausted marker
+    counts as stamped) or no step/backfill stamp — fully-stamped campaigns
+    age out of the sweep instead of recurring 8x/day forever. sb_get_all
+    paginates past PostgREST's silent 1000-row default cap."""
+    rows = sb_get_all(
+        "replies?category=eq.Call%20Booked"
+        "&or=(raw->>vpath2.is.null,and(raw->>email_seq_number.is.null,"
+        "raw->>email_seq_number_backfill.is.null))"
+        "&select=smartlead_campaign_id")
     if not isinstance(rows, list):
         return {"error": "archive unreachable"}
     ids = sorted({str(r.get("smartlead_campaign_id")) for r in rows
@@ -8510,20 +8617,24 @@ def _cockpit_sequence_copy(cid) -> dict:
         return {"error": "bad_id", "degraded": True}
     if not KEYS.get("SMARTLEAD_API_KEY"):
         return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
-    try:
-        # Capped wait: this runs on the request thread, so a Smartlead outage
-        # must answer in seconds as a degraded payload, never hold the
-        # connection for minutes of 429 backoff or raise through do_GET
-        # (the raise was the silent "Loading…" dead-end on the Messaging tab).
-        raw = _smartlead_json("GET", f"/campaigns/{n}/sequences",
-                              timeout=15, attempts=2)
-    except Exception as e:  # noqa: BLE001 — degrade, never raise
-        return {"error": "smartlead_unavailable", "campaign_id": n,
-                "degraded": True, "detail": str(e)[:200]}
-    seqs = raw if isinstance(raw, list) else (
-        (raw.get("data") or raw.get("sequences") or []) if isinstance(raw, dict) else [])
-    if not seqs:
+    # Shared, capped fetch (audit #5): this runs on the request thread, so a
+    # Smartlead outage answers in seconds as a degraded payload, never a raise
+    # through do_GET (the raise was the silent "Loading…" dead-end).
+    seqs = _SL_SEQS_SWR.get(str(n))
+    if seqs is None:
         return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
+    if not seqs:
+        # Smartlead ANSWERED and there is no sequence — a permanent state, not
+        # an outage: cacheable, and the UI must not offer a retry (audit #19).
+        return {"error": "no_sequence", "campaign_id": n, "steps": [],
+                "empty": True, "degraded": False}
+
+    _BODY_CAP = 6000  # audit #2: 1500 cut real emails mid-sentence, silently
+
+    def _body(html):
+        t = _email_html_to_text(html)
+        return t[:_BODY_CAP], len(t) > _BODY_CAP
+
     steps = []
     for s in sorted(seqs, key=lambda x: x.get("seq_number") or 0):
         variants = []
@@ -8534,15 +8645,18 @@ def _cockpit_sequence_copy(cid) -> dict:
             # Smartlead variants inherit either field from the step when unset
             subject = v.get("subject") if v.get("subject") is not None else s.get("subject")
             body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
+            btxt, btrunc = _body(body)
             variants.append({"label": v.get("variant_label") or "?",
                              "subject": (subject or "").strip(),
-                             "body": _email_html_to_text(body)[:1500],
+                             "body": btxt,
+                             "truncated": btrunc,
                              "deleted": bool(v.get("is_deleted")),
                              "split": v.get("variant_distribution_percentage")})
         if not variants:
+            btxt, btrunc = _body(s.get("email_body"))
             variants.append({"label": None,
                              "subject": (s.get("subject") or "").strip(),
-                             "body": _email_html_to_text(s.get("email_body"))[:1500]})
+                             "body": btxt, "truncated": btrunc})
         sd = s.get("seq_delay_details") or {}
         steps.append({"step": s.get("seq_number"),
                       # Smartlead answers camelCase here (delayInDays); older
@@ -8573,11 +8687,19 @@ def _cockpit_live_status(ids_csv: str) -> dict:
 
     def one(cid):
         try:
-            data = _smartlead_json("GET", f"/campaigns/{cid}/analytics")
+            # Capped (audit round 1): the defaults (attempts=5, timeout=60,
+            # 429 sleeps to 30s) made a Smartlead outage hold 16 worker
+            # threads in backoff for minutes per sweep on the 512MB box.
+            data = _smartlead_json("GET", f"/campaigns/{cid}/analytics",
+                                   timeout=10, attempts=2)
             m = _parse_smartlead_analytics(data)
         except Exception:  # noqa: BLE001 — one bad id must not blank the board
             return cid, None
         total, completed = m.get("total") or 0, m.get("completed") or 0
+        if not m.get("status") and not total:
+            # unknown campaign / error body zero-filled by the parser — a
+            # fabricated all-zero record must not count as resolved or cache
+            return cid, None
         comp = round(completed / total * 100) if total else None
         return cid, {"status": m.get("status") or "", "completed": completed,
                      "total": total, "completion": comp,
@@ -8596,7 +8718,8 @@ def _cockpit_live_status(ids_csv: str) -> dict:
 _COCKPIT_LIVE_STATUS_SWR = _SWRKeyedCache(
     _cockpit_live_status, 45,  # short: fresh-from-Smartlead, but a 45s shield stops toggle-stampede
     is_degraded=lambda p: not isinstance(p, dict) or not p.get("campaigns"),
-    name="cockpit-live-status")
+    name="cockpit-live-status",
+    neg_ttl=15)  # an outage sweep is remembered 15s instead of recomputed per request
 
 
 # ── Set live / Pause / Stop from the campaign header ────────────────────────
@@ -8640,10 +8763,13 @@ def api_campaign_status(p: dict) -> tuple:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "message": f"Smartlead unreachable: {e}"}, 502
     # The header must not lie for the SWR's 45s window: drop every cached
-    # entry naming this id, then re-read fresh so the response carries the
-    # status Smartlead now reports (START lands as ACTIVE).
+    # entry naming this id (fencing any pre-write compute still in flight),
+    # then compute DIRECTLY and store as the authoritative post-write value —
+    # a plain .get() could race a concurrent reader (audit round 1, #14).
     _COCKPIT_LIVE_STATUS_SWR.invalidate_id(cid)
-    fresh = _COCKPIT_LIVE_STATUS_SWR.get(str(cid))
+    fresh = _cockpit_live_status(str(cid))
+    if isinstance(fresh, dict) and fresh.get("campaigns"):
+        _COCKPIT_LIVE_STATUS_SWR.put_fresh(str(cid), fresh)
     rec = (fresh.get("campaigns") or {}).get(str(cid)) if isinstance(fresh, dict) else None
     return {"ok": True, "campaign_id": cid, "requested": status,
             "live": rec, "smartlead_response": sl}, 200

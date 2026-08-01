@@ -1079,7 +1079,6 @@
   }
   .campaign-subtitle { font-size: 0.82rem; color: var(--fg-subtle); margin-top: 4px; }
   .campaign-header-right { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-  .campaign-run-status { font-size: 0.74rem; color: var(--fg-subtle); white-space: nowrap; }
   .campaign-run-row { display: flex; align-items: center; gap: 8px; }
   .campaign-tabs {
     display: flex;
@@ -3603,7 +3602,10 @@
     if (slStatus) slStatus = slStatus.charAt(0).toUpperCase() + slStatus.slice(1).toLowerCase();
     h.push('<div class="campaign-header-main">' + dial + '<div>' +
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
-      '<p class="campaign-subtitle">Navreo &middot; <span id="cstat-word">' + (slStatus ? esc(slStatus) : "&hellip;") + "</span> &middot; campaign " + esc(c.id) + "</p></div>" +
+      /* workspace ownership, not a hardcoded "Navreo" (audit #11): a Grout/
+         ThunderBird campaign must not read as Navreo's on the page a CSM
+         acts from — wsLabel is the workspace's display label, server-fed */
+      '<p class="campaign-subtitle">' + esc(c.wsLabel || "Navreo") + ' &middot; <span id="cstat-word">' + (slStatus ? esc(slStatus) : "&hellip;") + "</span> &middot; campaign " + esc(c.id) + "</p></div>" +
       "</div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
@@ -4073,6 +4075,15 @@
     }, 4000);
   }
 
+  /* Page-identity guard (audit round 1, #0): every detail hydrator paints
+     into shared ids (#sequence-root, #ovm-status, #messaging-root, #cstat-*)
+     that exist on EVERY campaign page. A slow fetch or surviving retry timer
+     from campaign A must never paint into campaign B's page — resolve the
+     root through the page's data-cid instead of a bare getElementById. */
+  function onPage(id) {
+    return !!document.querySelector('.campaign-page[data-cid="' + String(id).replace(/"/g, "") + '"]');
+  }
+
   /* ── Audience progress bar (count-truth fix, 1 Aug 2026) ────────────────
      ONE exact source per segment: the PLATFORM's own audience split
      (campaign_lead_stats via /api/cockpit/live-status — completed /
@@ -4083,10 +4094,12 @@
      check is loading or failed. Repainted from both hydrateDetail and the
      live-status landing, whichever arrives last wins with better data. */
   function paintAudience(c) {
+    if (!onPage(c.id)) return; /* audit #0 */
     var ov = document.getElementById("ovm-status");
     if (!ov) return;
     var d = STATE.detail[c.id] || {};
     var live = (STATE.liveStatus[c.id] || {}).lead_stats;
+    var liveTried = !!((STATE.liveTried || {})[c.id]);
     var A_DONE = "#2E7D5B", A_PROG = "#A7CDB8", A_NOT = "#D9D6D1", A_BLK = "var(--danger)", A_STOP = "#8A8681";
     var s = null, note = "";
     if (live && live.total) {
@@ -4097,7 +4110,8 @@
             tot: live.total };
     } else if ((d.lead_statuses || []).length) {
       /* source: contact-record archive — an ESTIMATE (keeps deleted leads),
-         only shown until the live platform split lands */
+         shown until the live platform split lands. Once the live check has
+         SETTLED without an answer, the note stops promising one (audit #20). */
       var aBy = {}; (d.lead_statuses || []).forEach(function (r) { aBy[r.k] = (aBy[r.k] || 0) + (r.n || 0); });
       var done = aBy.COMPLETED || 0,
           prog = (aBy.INPROGRESS || 0) + (aBy.STARTED || 0) + (aBy.PAUSED || 0),
@@ -4105,13 +4119,22 @@
       var acc = done + prog + blk;
       var base = Math.max(acc, (d.leads || {}).total || 0, c.stats.leads != null ? c.stats.leads : 0);
       s = { done: done, prog: prog, not: Math.max(0, base - acc), blk: blk, stop: 0, tot: base };
-      note = '<p class="card-subtitle" style="margin-top:6px">Contact-record estimate &mdash; checking the platform\'s exact split&hellip;</p>';
+      note = liveTried
+        ? '<p class="card-subtitle" style="margin-top:6px">Contact-record estimate &mdash; the platform\'s exact split couldn\'t be checked right now (includes leads since removed from the platform).</p>'
+        : '<p class="card-subtitle" style="margin-top:6px">Contact-record estimate &mdash; checking the platform\'s exact split&hellip;</p>';
     } else if (d.campaign_id != null && !(d.leads || {}).total) {
       ov.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet' +
         (c.stats.leads != null ? " &mdash; Smartlead itself holds " + fmtInt(c.stats.leads) + " leads" : "") +
         ". The Leads tab shows the live platform audience.</p>";
       return;
-    } else return; /* nothing loaded yet — keep the loading state */
+    } else if (liveTried && d.campaign_id == null) {
+      /* both sources have reported and neither answered — never a silent
+         forever-"Loading" (audit #20) */
+      ov.innerHTML = '<p class="card-subtitle">The audience split couldn\'t be loaded right now' +
+        (c.stats.leads != null ? " &mdash; Smartlead holds " + fmtInt(c.stats.leads) + " leads (hourly sync)" : "") +
+        ". It will refresh on the next visit.</p>";
+      return;
+    } else return; /* still loading — a source is yet to report */
     var pc = function (n) { return s.tot ? (100 * n / s.tot).toFixed(1) : "0"; };
     var seg = function (n, col) { return n > 0 ? '<i style="width:' + pc(n) + "%;background:" + col + '"></i>' : ""; };
     var leg = function (n, col, lab) { return n > 0 ? '<span><i style="background:' + col + '"></i>' + lab + ' <b class="tnum">' + fmtInt(n) + "</b></span>" : ""; };
@@ -4124,6 +4147,7 @@
   function hydrateDetail(c) {
     var id = c.id;
     var apply = function (d) {
+      if (!onPage(id)) return; /* audit #0: never paint into another campaign's page */
       if (!d || d.degraded) return;
       /* receipts */
       var rc = document.getElementById("receipts-card");
@@ -4197,6 +4221,10 @@
       }).catch(function () {
         if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
         else STATE.detailBusy[id] = false;
+        if (!onPage(id)) return;
+        /* audit #4: a failed detail fetch must not clobber an already-exact
+           audience bar — the live platform split outranks the error note */
+        if (((STATE.liveStatus || {})[id] || {}).lead_stats) { paintAudience(c); return; }
         var ovErr = document.getElementById("ovm-status");
         if (ovErr) ovErr.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. The results on the left are live from the sync.</p>';
       });
@@ -4207,6 +4235,8 @@
   function hydrateMessaging(c) {
     var id = c.id;
     var apply = function (m) {
+      if (STATE.messagingBusy) STATE.messagingBusy[id] = false;
+      if (!onPage(id)) return; /* audit #0 */
       var root = document.getElementById("messaging-root");
       if (!root) return;
       if (!m || m.degraded || !(m.versions || []).length) {
@@ -4224,16 +4254,19 @@
       root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations);
     };
     if (STATE.messaging[id]) { apply(STATE.messaging[id]); return; }
+    /* in-flight dedup (audit #35) */
+    if (STATE.messagingBusy && STATE.messagingBusy[id]) return;
+    (STATE.messagingBusy = STATE.messagingBusy || {})[id] = true;
     var fetchIt = function (isRetry) {
       getJSON("/api/cockpit/messaging?id=" + encodeURIComponent(id)).then(function (m) {
         var healthy = m && !m.degraded && (m.versions || []).length;
         /* only a HEALTHY payload may stick for the SPA's lifetime — caching a
            mid-deploy failure was how the tab stayed empty until a hard reload */
         if (healthy) STATE.messaging[id] = m;
-        else if (!isRetry) setTimeout(function () { if (!STATE.messaging[id]) fetchIt(true); }, 7000);
+        else if (!isRetry && onPage(id)) { setTimeout(function () { if (!STATE.messaging[id]) fetchIt(true); }, 7000); return apply(m); }
         apply(m);
       }).catch(function () {
-        if (!isRetry) setTimeout(function () { if (!STATE.messaging[id]) fetchIt(true); }, 7000);
+        if (!isRetry && onPage(id)) { setTimeout(function () { if (!STATE.messaging[id]) fetchIt(true); }, 7000); }
         apply(null);
       });
     };
@@ -4275,11 +4308,14 @@
       function vTag(v) { return v.deleted ? " (deleted)" : v.split === 0 ? " (off)" : ""; }
       var pills = "";
       if (variants.length > 1) {
+        /* keyed by INDEX, not label (audit #9): Smartlead can carry a deleted
+           'A' beside a re-created live 'A' in the same step — label keys would
+           un-hide both panels together */
         pills = '<div class="seq-version-pills" aria-label="Email ' + esc(stepNo) + ' versions">' +
           variants.map(function (v, vi) {
             return '<button type="button" class="seq-pill' + (vi === 0 ? " is-active" : "") +
               (v.deleted ? " seq-pill--del" : v.split === 0 ? " seq-pill--off" : "") +
-              '" data-step="' + esc(stepNo) + '" data-version="' + esc(v.label || "?") + '" aria-pressed="' + (vi === 0 ? "true" : "false") + '">' +
+              '" data-step="' + esc(stepNo) + '" data-vidx="' + vi + '" aria-pressed="' + (vi === 0 ? "true" : "false") + '">' +
               esc((v.label || "?") + vTag(v)) + "</button>";
           }).join("") + "</div>";
       }
@@ -4292,11 +4328,13 @@
           : '<p class="card-subtitle">' + (v.deleted
               ? "This variant was deleted; Smartlead no longer stores its copy."
               : "No copy stored for this variant.") + "</p>";
-        return '<div class="seq-version-panel" data-step="' + esc(stepNo) + '" data-version="' + esc(v.label || "?") + '"' + (vi === 0 ? "" : " hidden") + ">" +
+        return '<div class="seq-version-panel" data-step="' + esc(stepNo) + '" data-vidx="' + vi + '"' + (vi === 0 ? "" : " hidden") + ">" +
           (v.deleted ? '<p class="card-subtitle">Deleted variant &mdash; no longer sending.</p>'
             : v.split === 0 ? '<p class="card-subtitle">Switched off (0% of sends) &mdash; kept here so you can still read it.</p>' : "") +
           '<p class="seq-subject"><strong>Subject:</strong> ' + subj + "</p>" +
-          '<div class="seq-body-scroll">' + body + "</div></div>";
+          '<div class="seq-body-scroll">' + body +
+          (v.truncated ? '<p class="card-subtitle">&hellip; copy truncated &mdash; open the sequence in Smartlead for the rest.</p>' : "") +
+          "</div></div>";
       }).join("");
       parts.push('<div class="seq-step"><div class="seq-step-header"><span class="seq-step-title">Email ' + esc(stepNo) + "</span>" + pills + "</div>" +
         '<div class="seq-body">' + panels + "</div></div>");
@@ -4312,35 +4350,47 @@
     /* Never a silent dead-end (owner ruling, 1 Aug 2026): three attempts with
        backoff, then a LABELLED error + "Try again" — and every paint stamps
        data-seqcopy on the root so the detail payload's structure rail can't
-       clobber a rendered copy (that race was the disappearing-copy bug). */
+       clobber a rendered copy (that race was the disappearing-copy bug).
+       Page-identity guarded (audit #0): a retry chain surviving navigation to
+       another campaign silently stops instead of painting cross-campaign. */
     var id = c.id;
+    var root = function () {
+      return onPage(id) ? document.getElementById("sequence-root") : null;
+    };
+    var done = function () { if (STATE.seqcopyBusy) STATE.seqcopyBusy[id] = false; };
     var apply = function (sc) {
-      var root = document.getElementById("sequence-root");
-      if (!root) return;
-      root.setAttribute("data-seqcopy", "1");
-      root.innerHTML = sequenceCopyHTML(sc);
+      var r = root();
+      if (!r) { done(); return; }
+      r.setAttribute("data-seqcopy", "1");
+      if (sc.empty) { /* Smartlead answered: no sequence exists — permanent, no retry (audit #19) */
+        r.innerHTML = '<p class="card-subtitle">No sequence set up in Smartlead yet for this campaign.</p>';
+        done(); return;
+      }
+      r.innerHTML = sequenceCopyHTML(sc);
       /* version pills swap the shown subject+body within their step */
-      root.querySelectorAll(".seq-pill").forEach(function (pill) {
+      r.querySelectorAll(".seq-pill").forEach(function (pill) {
         pill.addEventListener("click", function () {
           var step = pill.closest(".seq-step");
           if (!step) return;
-          var version = pill.getAttribute("data-version");
+          var vidx = pill.getAttribute("data-vidx");
           step.querySelectorAll(".seq-pill").forEach(function (p) {
             var on = p === pill;
             p.classList.toggle("is-active", on);
             p.setAttribute("aria-pressed", on ? "true" : "false");
           });
           step.querySelectorAll(".seq-version-panel").forEach(function (panel) {
-            panel.hidden = panel.getAttribute("data-version") !== version;
+            panel.hidden = panel.getAttribute("data-vidx") !== vidx;
           });
         });
       });
+      done();
     };
     var fail = function () {
-      var root = document.getElementById("sequence-root");
-      if (!root) return;
-      root.setAttribute("data-seqcopy", "1");
-      root.innerHTML = '<div class="seq-fail">' +
+      done();
+      var r = root();
+      if (!r) return;
+      r.setAttribute("data-seqcopy", "1");
+      r.innerHTML = '<div class="seq-fail">' +
         '<p class="card-subtitle">Couldn\'t pull the live copy from Smartlead just now. Nothing is wrong with the campaign &mdash; the platform didn\'t answer in time.</p>' +
         '<button type="button" class="btn" id="seq-retry">Try again</button></div>';
       var b = document.getElementById("seq-retry");
@@ -4348,21 +4398,27 @@
     };
     var attempt = function (i) {
       getJSON("/api/cockpit/sequence-copy?id=" + encodeURIComponent(id)).then(function (sc) {
-        var healthy = sc && !sc.degraded && (sc.steps || []).length;
+        var healthy = sc && !sc.degraded && ((sc.steps || []).length || sc.empty);
         if (healthy) { STATE.seqcopy[id] = sc; apply(sc); return; }
+        if (!onPage(id)) { done(); return; } /* user left — stop the chain */
         if (i < 2) setTimeout(function () { attempt(i + 1); }, i === 0 ? 3000 : 7000);
         else fail();
       }).catch(function () {
+        if (!onPage(id)) { done(); return; }
         if (i < 2) setTimeout(function () { attempt(i + 1); }, i === 0 ? 3000 : 7000);
         else fail();
       });
     };
     var start = function () {
-      var root = document.getElementById("sequence-root");
-      if (root && !root.querySelector(".seq-rail")) root.innerHTML = '<p class="card-subtitle">Pulling the live copy&hellip;</p>';
+      var r = root();
+      if (r && !r.querySelector(".seq-rail")) r.innerHTML = '<p class="card-subtitle">Pulling the live copy&hellip;</p>';
       attempt(0);
     };
     if (STATE.seqcopy[id]) { apply(STATE.seqcopy[id]); return; }
+    /* in-flight dedup (audit #35): tab-flipping mid-fetch must not spawn
+       parallel retry chains against the same id */
+    if (STATE.seqcopyBusy && STATE.seqcopyBusy[id]) return;
+    (STATE.seqcopyBusy = STATE.seqcopyBusy || {})[id] = true;
     start();
   }
 
@@ -4434,10 +4490,16 @@
             (v.inline ? '' : ' <span class="vp-dot vp-dot--' + (v.disabled ? 'off' : 'on') + '" title="' + (v.disabled ? 'turned off' : 'active') + '"></span>') +
             (isBest ? ' <span class="vp-best">best</span>' : '') +
             (isRep && siblings ? ' <span class="ring-caption" title="' + esc((membersOf[sk + '|' + rep] || []).join(', ')) + ' are the same copy">+' + ((membersOf[sk + '|' + rep] || []).length - 1) + ' same</span>' : '') + '</td>' +
-          '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + '</td>' +
-          '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
-          '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>' +
-          '<td class="tnum" data-label="Sent / positive">' + perPos(v) + '</td>' +
+          /* a deleted variant's counters were PURGED by Smartlead, not zero —
+             '—' with the why, never a false 'Sent 0' (audit #8) */
+          (v.stats_purged
+            ? '<td class="tnum" data-label="Sent"><span class="ring-caption" title="Smartlead purges a variant\'s counters when it is deleted — it did send before deletion">&mdash;</span></td>' +
+              '<td class="tnum" data-label="Replies"><span class="ring-caption">&mdash;</span></td>' +
+              '<td class="tnum" data-label="Positives"><span class="ring-caption">&mdash;</span></td>'
+            : '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + '</td>' +
+              '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
+              '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>') +
+          '<td class="tnum" data-label="Sent / positive">' + (v.stats_purged ? '<span class="ring-caption">&mdash;</span>' : perPos(v)) + '</td>' +
           '<td class="tnum" data-label="Meetings">' + meetCell + '</td>' +
           '<td class="tnum" data-label="Sent / meeting">' + pmCell + '</td></tr>';
       }).join('');
@@ -4836,6 +4898,7 @@
   function hydratePlatformLeads(c) {
     var id = c.id;
     var apply = function (pl) {
+      if (!onPage(id)) return; /* audit #0 */
       var root = document.getElementById("leads-grid");
       if (!root) return;
       var leads = (pl || {}).leads || [];
@@ -4899,10 +4962,6 @@
       if (!page) return;
       var t = page.querySelector(".campaign-title");
       if (t) t.textContent = row.name;
-      if (row.status) {
-        var rs = page.querySelector(".campaign-run-status");
-        if (rs) rs.textContent = "Runs in Smartlead · " + String(row.status).toLowerCase();
-      }
       document.title = row.name + " · The cockpit";
     });
   }
@@ -5572,6 +5631,7 @@
     var root = document.getElementById("cstat-controls");
     if (!root || c.ghost || !/^\d+$/.test(String(c.id))) return;
     function word(status) {
+      if (!onPage(c.id)) return; /* audit #0: async landings never cross campaigns */
       var el = document.getElementById("cstat-word");
       if (el && status) {
         var t = String(status).toLowerCase();
@@ -5579,6 +5639,7 @@
       }
     }
     function paint(status) {
+      if (!onPage(c.id)) return; /* audit #0 */
       var acts = CSTAT_ACTIONS[cstatBucket(status)] || [];
       if (!acts.length) { root.innerHTML = ""; return; }
       root.innerHTML = acts.map(function (a, i) {
@@ -5594,7 +5655,9 @@
         var to = btn.getAttribute("data-to"), base = btn.textContent;
         btn.addEventListener("click", function () {
           if (btn.getAttribute("data-armed") !== "1") {
-            /* arm: this click asks, the next confirms; any other button click disarms */
+            /* arm: this click asks, the next confirms; any other button click
+               disarms — and the arm auto-expires (audit #10: an armed Stop
+               left for minutes must not fire on a distracted later click) */
             root.querySelectorAll(".cstat-btn").forEach(function (b) {
               b.removeAttribute("data-armed");
               b.textContent = b.getAttribute("data-base") || b.textContent;
@@ -5602,8 +5665,16 @@
             btn.setAttribute("data-base", base);
             btn.setAttribute("data-armed", "1");
             btn.textContent = "Confirm: " + base.toLowerCase() + "?";
+            clearTimeout(btn._disarmT);
+            btn._disarmT = setTimeout(function () {
+              if (btn.getAttribute("data-armed") === "1" && !btn.disabled) {
+                btn.removeAttribute("data-armed");
+                btn.textContent = btn.getAttribute("data-base") || btn.textContent;
+              }
+            }, 8000);
             return;
           }
+          clearTimeout(btn._disarmT);
           btn.disabled = true;
           btn.textContent = "Working…";
           sigPost("/api/campaign-status", { id: parseInt(c.id, 10), status: to, confirm: to })
@@ -5627,18 +5698,21 @@
     if (ls && ls.status) { word(ls.status); paint(ls.status); }
     getJSON("/api/cockpit/live-status?ids=" + encodeURIComponent(c.id))
       .then(function (r) {
+        (STATE.liveTried = STATE.liveTried || {})[c.id] = true;
         var rec = ((r || {}).campaigns || {})[c.id];
         if (rec && rec.status) {
           STATE.liveStatus[c.id] = rec;
           word(rec.status);
           paint(rec.status);
-          paintAudience(c); /* the exact platform split rides the same fetch */
         } else if (!(ls && ls.status)) {
           word(c.slStatus); paint(c.slStatus); /* honest fallback: synced status */
         }
+        paintAudience(c); /* exact split rides this fetch; also settles the estimate note */
       })
       .catch(function () {
+        (STATE.liveTried = STATE.liveTried || {})[c.id] = true;
         if (!(ls && ls.status)) { word(c.slStatus); paint(c.slStatus); }
+        paintAudience(c); /* live check failed — let the bar settle honestly */
       });
   }
 
