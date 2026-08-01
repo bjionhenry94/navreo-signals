@@ -1346,7 +1346,6 @@ async function _loadQueueInner(prefetch) {
   _queueLoading = false;
   if (res.ok) {
     QUEUE_ROWS = reconcileQueuePayload(res.data.rows || []);
-    graftThreads(QUEUE_ROWS);
     KPIS = res.data.kpis || {};
     LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
     renderLastChecked();
@@ -1746,18 +1745,6 @@ function doTrayDismiss(btn) {
    on demand via /queue/row. Kept as a no-op so every existing caller is safe. */
 let _hydrateP = null;  // retained: some call sites read/await the handle
 function hydrateAllRows() { return Promise.resolve(); }
-
-/* Copy stored threads from the hydrated corpus onto slim rows by id, so a
-   conversation opened from a slim list still shows its history instantly. */
-function graftThreads(rows) {
-  if (!_allRowsLoaded || !rows || !rows.length) return;
-  const byId = new Map(ALL_ROWS.map((r) => [String(r.id), r]));
-  rows.forEach((q) => {
-    if (q.thread) return;
-    const full = byId.get(String(q.id));
-    if (full && full.thread) q.thread = full.thread;
-  });
-}
 
 /* Client-side mirror of setter.py's _queue_direction: who spoke last in the
    stored thread decides the row's REAL pill. Keep in lockstep with the
@@ -2514,7 +2501,9 @@ function renderDetail(row) {
   // Wire the category control in BOTH the sticky bar (inside el) and the
   // sidebar (panelEl); hydrate the lead's contact links once (re-renders every
   // .lp-quick on the page).
-  wireCategoryControls(el, row);
+  // Only the sidebar renders a category control (.lp-cat lives solely in
+  // leadPanelHtml) — the old duplicate call against the conversation pane
+  // matched nothing and was pure dead work on every repaint.
   wireCategoryControls(panelEl, row);
   hydrateLeadContact(row);
   reapplyEditedDraft(row.id);
