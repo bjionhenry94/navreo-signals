@@ -2188,6 +2188,16 @@ class _SWRKeyedCache:
         with self.lock:
             self.entries.clear()
 
+    def invalidate_id(self, cid):
+        """Drop every entry whose key names this campaign id (keys are single
+        ids or comma-joined id lists) — used after a status write so the very
+        next read is fresh instead of a 45s-stale lie."""
+        cid = str(cid)
+        with self.lock:
+            for k in [k for k in self.entries
+                      if cid in str(k).split(",")]:
+                del self.entries[k]
+
 
 _SOURCES_TTL_S = 30
 
@@ -7539,7 +7549,15 @@ def _parse_smartlead_analytics(data) -> dict:
             "bounced": _sc_int(data.get("bounce_count")),
             "completed": _sc_int(cls.get("completed")),
             "total": _sc_int(cls.get("total") or data.get("total_count")),
-            "status": data.get("status")}
+            "status": data.get("status"),
+            # the platform's OWN audience split — the one exact source for the
+            # overview progress bar (the contact-record blend over-counted:
+            # deleted leads keep their last status forever; audited 2026-08-01,
+            # 3401559: blend said 3,966 people / 361 in progress vs Smartlead's
+            # 3,689 / 184).
+            "lead_stats": {k: _sc_int(cls.get(k)) for k in
+                           ("completed", "inprogress", "paused", "blocked",
+                            "stopped", "notStarted", "total")} if cls else None}
 
 
 _SCORECARD_SYNC_INTERVAL_S = 3600  # hourly; campaign stats don't move fast and
@@ -8015,13 +8033,18 @@ def _vp_sent_bodies_from_history(cid: int, email: str) -> dict:
 
 def _vp_stamp_path(reply_id, path: dict) -> None:
     """Cache a deduced {step->variant} onto the reply row so the (possibly
-    history-fetching) resolution never repeats for this lead."""
+    history-fetching) resolution never repeats for this lead.
+
+    KEY BUG (fixed 2026-08-01): this wrote raw["vpath"] while _variant_paths
+    reads raw->>vpath2 — the stamp was never read back, so every cold load
+    re-crawled Smartlead from scratch. That mismatch WAS the slow
+    variant-performance tab."""
     try:
         rows = sb("GET", f"replies?id=eq.{reply_id}&select=raw")
         raw = rows[0].get("raw") if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
         if not isinstance(raw, dict):
             raw = {}
-        raw["vpath"] = path
+        raw["vpath2"] = path
         sb("PATCH", f"replies?id=eq.{reply_id}", {"raw": raw}, prefer="return=minimal")
     except Exception:  # noqa: BLE001
         pass
@@ -8112,7 +8135,7 @@ def _vp_match_cluster(body_norm: str, clusters: list):
     return scored[0][1]
 
 
-def _variant_paths(n: int) -> dict:
+def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) -> dict:
     """Per-COPY meeting attribution + opener\u2192follow-up combinations, deduced from
     the copy each booked lead saw. Smartlead exposes no sent-variant per lead, so
     the variant is recovered from the sent thread the lead QUOTES BACK in their
@@ -8120,13 +8143,22 @@ def _variant_paths(n: int) -> dict:
     quiet repliers. Variants that share identical copy are ONE version here \u2014 a
     booking pins to the shared copy, never a fabricated label split. Every meeting
     is placed in one of three honest buckets: attributed (matched a live copy),
-    removed (clearly quoted an opener no longer in the sequence), or traceless."""
-    try:
-        sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
-    except Exception:  # noqa: BLE001
-        return {}
-    seqs = sraw if isinstance(sraw, list) else (
-        (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
+    removed (clearly quoted an opener no longer in the sequence), or traceless.
+
+    SUPABASE-FIRST (2026-08-01): the request path passes history_budget=0 \u2014
+    it serves the vpath2 stamps + reply-quote matches and NEVER crawls
+    Smartlead message history (up to 12 sequential calls that made the tab
+    minutes-slow). The 3-hourly cron (vpath_backfill) passes a real budget
+    and stamps the stragglers, so the web read stays fast and complete.
+    Pass seqs= to reuse an already-fetched /sequences payload."""
+    if seqs is None:
+        try:
+            sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences",
+                                   timeout=15, attempts=2)
+        except Exception:  # noqa: BLE001
+            return {}
+        seqs = sraw if isinstance(sraw, list) else (
+            (sraw.get("data") or sraw.get("sequences") or []) if isinstance(sraw, dict) else [])
     if not seqs:
         return {}
     step_clusters = _vp_cluster_steps(seqs)
@@ -8173,7 +8205,7 @@ def _variant_paths(n: int) -> dict:
                 if cl:
                     path[st] = cl["rep"]
             need = set(step_clusters) - set(path)
-            if need and fetches < 12:
+            if need and fetches < history_budget:
                 fetches += 1
                 sent = _vp_sent_bodies_from_history(n, em)
                 for st in list(need):
@@ -8274,18 +8306,66 @@ def _variant_paths_debug(n: int, email: str = "") -> dict:
     return out
 
 
+def _booked_meeting_steps(n: int, lookup_budget: int = 0):
+    """Meetings by STEP from the reply archive (Call Booked — one per PERSON,
+    so the table's total always equals the overview tile). The webhook's
+    email_seq_number gives the step; a lead's earliest step-carrying reply
+    speaks for their whole thread. Leads whose rows all arrived step-less
+    (backstop ingest strips the field) need one Smartlead history lookup each
+    — request path passes lookup_budget=0 (Supabase-only, fast); the cron
+    passes a real budget and stamps the answer back so it never repeats."""
+    mrows = sb("GET", f"replies?workspace=eq.navreo&smartlead_campaign_id=eq.{n}"
+                      "&category=eq.Call%20Booked"
+                      "&select=id,email,step:raw->>email_seq_number,"
+                      "stepbf:raw->>email_seq_number_backfill"
+                      "&order=replied_at.asc")
+    if not isinstance(mrows, list):
+        return None  # archive unreachable: the UI omits the column rather than showing false zeros
+    booked: dict = {}                    # email -> {row_id (first row), step}
+    for mr in mrows:
+        em = (mr.get("email") or "").strip().lower()
+        rec = booked.setdefault(em, {"row_id": mr.get("id"), "step": None})
+        s = str(mr.get("step") or mr.get("stepbf") or "").strip()
+        if rec["step"] is None and s.isdigit():
+            rec["step"] = s
+    lookups = 0
+    for em, rec in booked.items():
+        if rec["step"] is None and em and lookups < lookup_budget:
+            lookups += 1
+            step = _meeting_step_from_history(n, em)
+            if step:
+                rec["step"] = step
+                _stamp_meeting_step(rec["row_id"], step)
+    by_step: dict = {}
+    unattributed = 0
+    for rec in booked.values():
+        if rec["step"]:
+            by_step[rec["step"]] = by_step.get(rec["step"], 0) + 1
+        else:
+            unattributed += 1
+    return {"by_step": by_step, "unattributed": unattributed,
+            "total": len(booked)}
+
+
 def _cockpit_messaging(cid) -> dict:
-    """Per-version table straight from Smartlead variant-statistics (the source
-    of truth). Rows with a null seq_variant_id are inline step counters: kept
-    only when they actually sent. Counters reset on sequence re-save, so the
-    payload carries the standing since-relaunch note."""
+    """Per-version table from Smartlead variant-statistics (the per-variant
+    sent/reply counters), with meetings + per-variant attribution served
+    SUPABASE-FIRST: the archive's stamped rows answer on the request thread;
+    Smartlead message-history crawls happen only in the cron (vpath_backfill).
+    Rows with a null seq_variant_id are inline step counters: kept only when
+    they actually sent. Counters reset on sequence re-save, so the payload
+    carries the standing since-relaunch note."""
     try:
         n = int(str(cid).strip())
     except Exception:  # noqa: BLE001
         return {"error": "bad_id", "degraded": True}
     if not KEYS.get("SMARTLEAD_API_KEY"):
         return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
-    data = _smartlead_json("GET", f"/campaigns/{n}/variant-statistics")
+    try:
+        data = _smartlead_json("GET", f"/campaigns/{n}/variant-statistics",
+                               timeout=15, attempts=2)
+    except Exception:  # noqa: BLE001 — degrade, never raise through do_GET
+        return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
     rows = data.get("data") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
@@ -8312,8 +8392,10 @@ def _cockpit_messaging(cid) -> dict:
     # them); merge them here — with 0 stats when the stats endpoint has dropped
     # them — and flag `disabled`. Fully defensive: any failure leaves the
     # variant-statistics list exactly as it was.
+    _seqs = None  # fetched once here, reused by _variant_paths below (was two identical calls)
     try:
-        _sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
+        _sraw = _smartlead_json("GET", f"/campaigns/{n}/sequences",
+                                timeout=15, attempts=2)
         _seqs = _sraw if isinstance(_sraw, list) else (
             (_sraw.get("data") or _sraw.get("sequences") or []) if isinstance(_sraw, dict) else [])
         _idx = {(str(r.get("step")), r.get("label") or ""): r for r in versions}
@@ -8334,51 +8416,15 @@ def _cockpit_messaging(cid) -> dict:
         versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
     except Exception:  # noqa: BLE001 — variant completeness must never break the tab
         pass
-    # Meetings by step, from the reply archive (Call Booked + Meeting Request —
-    # the page's standing definition: one meeting per PERSON, so this table's
-    # total always equals the overview tile). Smartlead never attributes a
-    # booking to a variant; the webhook's email_seq_number gives the STEP. A
-    # lead's earliest step-carrying reply speaks for their whole thread; leads
-    # whose rows all arrived step-less (backstop ingest strips the field) get
-    # one Smartlead history lookup each, stamped back onto the archive row so
-    # the lookup never repeats.
-    mrows = sb("GET", f"replies?workspace=eq.navreo&smartlead_campaign_id=eq.{n}"
-                      "&category=eq.Call%20Booked"
-                      "&select=id,email,step:raw->>email_seq_number,"
-                      "stepbf:raw->>email_seq_number_backfill"
-                      "&order=replied_at.asc")
-    if isinstance(mrows, list):
-        booked: dict = {}                    # email -> {row_id (first row), step}
-        for mr in mrows:
-            em = (mr.get("email") or "").strip().lower()
-            rec = booked.setdefault(em, {"row_id": mr.get("id"), "step": None})
-            s = str(mr.get("step") or mr.get("stepbf") or "").strip()
-            if rec["step"] is None and s.isdigit():
-                rec["step"] = s
-        lookups = 0
-        for em, rec in booked.items():
-            if rec["step"] is None and em and lookups < 6:  # bounded: SWR holds this 600s
-                lookups += 1
-                step = _meeting_step_from_history(n, em)
-                if step:
-                    rec["step"] = step
-                    _stamp_meeting_step(rec["row_id"], step)
-        by_step: dict = {}
-        unattributed = 0
-        for rec in booked.values():
-            if rec["step"]:
-                by_step[rec["step"]] = by_step.get(rec["step"], 0) + 1
-            else:
-                unattributed += 1
-        meetings = {"by_step": by_step, "unattributed": unattributed,
-                    "total": len(booked)}
-    else:
-        meetings = None  # archive unreachable: the UI omits the column rather than showing false zeros
+    # Meetings by step — Supabase-only on this thread (lookup_budget=0); the
+    # cron does the history crawls and stamps the archive rows.
+    meetings = _booked_meeting_steps(n, lookup_budget=0)
     # Per-variant meeting attribution + opener→follow-up combinations, deduced
-    # from the sent copy each booked lead quotes back in their reply.
+    # from the sent copy each booked lead quotes back in their reply. Reuses
+    # the /sequences payload fetched above; history_budget=0 on this thread.
     vpaths = {}
     try:
-        vpaths = _variant_paths(n)
+        vpaths = _variant_paths(n, seqs=_seqs)
     except Exception:  # noqa: BLE001 — attribution is best-effort, never break the tab
         vpaths = {}
     if isinstance(meetings, dict):
@@ -8401,6 +8447,32 @@ _COCKPIT_MESSAGING_SWR = _SWRKeyedCache(
     _cockpit_messaging, 600,
     is_degraded=lambda p: not isinstance(p, dict) or p.get("degraded"),
     name="cockpit-messaging")
+
+
+def vpath_backfill(per_campaign_history: int = 12) -> dict:
+    """CRON-ONLY (run_daily, every 3h): resolve + stamp variant paths (vpath2)
+    and meeting steps (email_seq_number_backfill) for booked leads, so the web
+    request path serves stamped Supabase rows and never crawls Smartlead
+    message history itself (512MB web instance latency/OOM rail). Idempotent:
+    stamped rows are skipped by the readers, so the unstamped set only
+    shrinks. Returns a per-campaign note for the cron log."""
+    rows = sb("GET", "replies?category=eq.Call%20Booked"
+                     "&select=smartlead_campaign_id")
+    if not isinstance(rows, list):
+        return {"error": "archive unreachable"}
+    ids = sorted({str(r.get("smartlead_campaign_id")) for r in rows
+                  if isinstance(r, dict) and str(r.get("smartlead_campaign_id") or "").isdigit()})
+    out = {}
+    for cid in ids:
+        n = int(cid)
+        try:
+            _booked_meeting_steps(n, lookup_budget=per_campaign_history)
+            vp = _variant_paths(n, history_budget=per_campaign_history)
+            out[cid] = (f"booked {vp.get('booked', 0)} · attributed {vp.get('attributed', 0)}"
+                        if vp else "no sequences")
+        except Exception as e:  # noqa: BLE001 — one campaign must not kill the sweep
+            out[cid] = f"error: {str(e)[:120]}"
+    return out
 
 
 def _email_html_to_text(html: str) -> str:
@@ -8429,7 +8501,16 @@ def _cockpit_sequence_copy(cid) -> dict:
         return {"error": "bad_id", "degraded": True}
     if not KEYS.get("SMARTLEAD_API_KEY"):
         return {"error": "smartlead_unavailable", "campaign_id": n, "degraded": True}
-    raw = _smartlead_json("GET", f"/campaigns/{n}/sequences")
+    try:
+        # Capped wait: this runs on the request thread, so a Smartlead outage
+        # must answer in seconds as a degraded payload, never hold the
+        # connection for minutes of 429 backoff or raise through do_GET
+        # (the raise was the silent "Loading…" dead-end on the Messaging tab).
+        raw = _smartlead_json("GET", f"/campaigns/{n}/sequences",
+                              timeout=15, attempts=2)
+    except Exception as e:  # noqa: BLE001 — degrade, never raise
+        return {"error": "smartlead_unavailable", "campaign_id": n,
+                "degraded": True, "detail": str(e)[:200]}
     seqs = raw if isinstance(raw, list) else (
         (raw.get("data") or raw.get("sequences") or []) if isinstance(raw, dict) else [])
     if not seqs:
@@ -8438,14 +8519,17 @@ def _cockpit_sequence_copy(cid) -> dict:
     for s in sorted(seqs, key=lambda x: x.get("seq_number") or 0):
         variants = []
         for v in (s.get("sequence_variants") or []):
-            if v.get("is_deleted"):
-                continue
+            # Deleted and 0%-split variants stay IN, flagged — a founder must
+            # be able to cycle to a variant that ran and was turned off; the
+            # tab must never silently hide one (owner ruling, 1 Aug 2026).
             # Smartlead variants inherit either field from the step when unset
             subject = v.get("subject") if v.get("subject") is not None else s.get("subject")
             body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
             variants.append({"label": v.get("variant_label") or "?",
                              "subject": (subject or "").strip(),
-                             "body": _email_html_to_text(body)[:1500]})
+                             "body": _email_html_to_text(body)[:1500],
+                             "deleted": bool(v.get("is_deleted")),
+                             "split": v.get("variant_distribution_percentage")})
         if not variants:
             variants.append({"label": None,
                              "subject": (s.get("subject") or "").strip(),
@@ -8487,7 +8571,8 @@ def _cockpit_live_status(ids_csv: str) -> dict:
         total, completed = m.get("total") or 0, m.get("completed") or 0
         comp = round(completed / total * 100) if total else None
         return cid, {"status": m.get("status") or "", "completed": completed,
-                     "total": total, "completion": comp}
+                     "total": total, "completion": comp,
+                     "lead_stats": m.get("lead_stats")}
 
     out = {}
     if ids:
@@ -8503,6 +8588,56 @@ _COCKPIT_LIVE_STATUS_SWR = _SWRKeyedCache(
     _cockpit_live_status, 45,  # short: fresh-from-Smartlead, but a 45s shield stops toggle-stampede
     is_degraded=lambda p: not isinstance(p, dict) or not p.get("campaigns"),
     name="cockpit-live-status")
+
+
+# ── Set live / Pause / Stop from the campaign header ────────────────────────
+# HARD CONSTRAINT (same as execute_pause_action): this handler may ONLY EVER
+# call Smartlead's POST /campaigns/{id}/status endpoint. Never a sequences/
+# variants endpoint — those destroy variant history. Confirm-gated: the CSM
+# clicking the two-step confirm in the header IS the approval, so the endpoint
+# must never be callable without the echoed confirm word.
+_CAMPAIGN_STATUS_ALLOWED = {"START", "PAUSED", "STOPPED"}
+
+
+def api_campaign_status(p: dict) -> tuple:
+    import urllib.error
+    status = str(p.get("status") or "").strip().upper()
+    if status not in _CAMPAIGN_STATUS_ALLOWED:
+        return {"ok": False, "message": "status must be START, PAUSED or STOPPED"}, 400
+    if p.get("confirm") != status:
+        return {"ok": False,
+                "message": f'confirmation required: send {{"confirm":"{status}"}}'}, 400
+    try:
+        cid = int(str(p.get("id")).strip())
+    except (TypeError, ValueError):
+        return {"ok": False, "message": "id is not numeric"}, 400
+    try:
+        # The ONLY Smartlead endpoint this handler may call (see above).
+        # _smartlead_json federates: a client-workspace id uses that
+        # workspace's key automatically.
+        sl = _smartlead_json("POST", f"/campaigns/{cid}/status",
+                             {"status": status}, timeout=30, attempts=2)
+    except urllib.error.HTTPError as e:
+        try:
+            raw = e.read().decode()
+        except Exception:  # noqa: BLE001
+            raw = ""
+        try:
+            raw = json.loads(raw) if raw else {}
+        except ValueError:
+            pass
+        return {"ok": False, "message": "Smartlead rejected the status change",
+                "smartlead_status": e.code, "smartlead_response": raw}, 502
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"Smartlead unreachable: {e}"}, 502
+    # The header must not lie for the SWR's 45s window: drop every cached
+    # entry naming this id, then re-read fresh so the response carries the
+    # status Smartlead now reports (START lands as ACTIVE).
+    _COCKPIT_LIVE_STATUS_SWR.invalidate_id(cid)
+    fresh = _COCKPIT_LIVE_STATUS_SWR.get(str(cid))
+    rec = (fresh.get("campaigns") or {}).get(str(cid)) if isinstance(fresh, dict) else None
+    return {"ok": True, "campaign_id": cid, "requested": status,
+            "live": rec, "smartlead_response": sl}, 200
 
 
 # ── Collective last-30-days top line (homepage strip) ──────────────────────
@@ -18174,6 +18309,19 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             out = strategy_focus_post(p)
             return self._json(out, 200 if out.get("ok") else 400)
+        if path == "/api/campaign-status":
+            # Set live / Pause / Stop from the campaign header. Session-gated
+            # above; confirm-gated + status-endpoint-only inside the handler.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            body, status = api_campaign_status(p)
+            log_activity(path, {"id": p.get("id"), "status": p.get("status"),
+                                "ok": body.get("ok")},
+                         action="campaign-status", entity="campaign",
+                         entity_id=str(p.get("id") or "") or None)
+            return self._json(body, status)
         if path == "/api/cockpit/assignments":
             # Team-shared "Assign to me" / Completed / Dismissed on a cockpit
             # suggested action. Body: {action_key, campaign_id, insight_key,

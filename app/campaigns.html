@@ -1043,6 +1043,18 @@
   }
   .back-link:hover { color: var(--fg); }
   .campaign-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .cstat-bar { display: inline-flex; align-items: center; gap: 14px; }
+  #cstat-controls { display: inline-flex; align-items: center; gap: 8px; }
+  .cstat-btn {
+    font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    padding: 6px 13px; border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--fg);
+  }
+  .cstat-btn:hover { border-color: var(--nav-ink-3); }
+  .cstat-btn[data-armed="1"] { background: var(--chip-active-bg); color: var(--chip-active-fg); border-color: var(--chip-active-bg); }
+  .cstat-btn--stop { color: var(--danger); }
+  .cstat-btn--stop[data-armed="1"] { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .cstat-btn:disabled { opacity: 0.55; cursor: default; }
   .campaign-header-main {
     display: flex;
     flex-wrap: wrap;
@@ -1794,6 +1806,11 @@
   }
   .seq-pill:hover { border-color: var(--nav-ink-3); color: var(--fg); }
   .seq-pill.is-active { background: var(--chip-active-bg); border-color: var(--chip-active-bg); color: var(--chip-active-fg); }
+  /* off (0% split) and deleted variants stay cyclable but read as muted */
+  .seq-pill--off { opacity: 0.66; font-style: italic; }
+  .seq-pill--del { opacity: 0.5; text-decoration: line-through; }
+  .seq-pill--off.is-active, .seq-pill--del.is-active { opacity: 1; }
+  .seq-fail { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
   .seq-connector {
     align-self: flex-start;
     margin: 4px 0 4px 18px;
@@ -2844,6 +2861,11 @@
     attachListHandlers();
     applyPerfVisibility();
     applyTheme(currentTheme());
+    /* badges tally by saved act state (dismissed drop out, claimed go amber),
+       so the assignments map loads eagerly once and rows repaint when it
+       lands — otherwise every previously-dismissed act would keep counting
+       until the first panel open. */
+    if (!ACT_LOADED) actLoadOnce(renderRows);
   }
 
   /* live status bucket for a campaign from the LIVE Smartlead check */
@@ -2870,6 +2892,14 @@
          not — 100% completion files it under Completed, off the Active pick */
       if ((ls && ls.completion != null && ls.completion >= 100) ||
           (ls && ls.total > 0 && ls.completed != null && ls.completed >= ls.total)) return "completed";
+      /* The live check caps at 150 ids, so most rows only hold synced stats.
+         Their ring is sent ÷ (leads × 2) — when THAT reads 100% the row must
+         file under Completed too, or the list shows a 100% ring on an
+         "active" row. Same formula as rowHTML so ring and filter never
+         disagree. */
+      var cc = STATE.byId && STATE.byId[id], st = cc && cc.stats;
+      if (st && st.leads && st.sent != null &&
+          Math.round(st.sent / (st.leads * 2) * 100) >= 100) return "completed";
       return "active";
     }
     return "other";
@@ -3001,7 +3031,9 @@
       Array.prototype.forEach.call(sel.options, function (opt) {
         var k = opt.value;
         if (k === "all") return;
-        opt.textContent = LBL[k] + " (" + counts[k] + ")";
+        /* label stays count-free (owner ruling 01 Aug 2026: the numbers were
+           noise); the tally only decides which empty statuses grey out */
+        opt.textContent = LBL[k];
         opt.disabled = counts[k] === 0 && STATE.view.status !== k;
       });
     }
@@ -3060,7 +3092,10 @@
       return ' &middot; <span class="row-live"><span class="row-live-dot"></span>' +
         esc(txt) + "</span>";
     }
-    return c.slStatus ? " &middot; " + esc(String(c.slStatus).toLowerCase()) : "";
+    /* cached chip follows the same bucket rule, so a ring-complete row never
+       reads "active" while the filter files it under Completed */
+    return c.slStatus ? " &middot; " +
+      esc(liveBucket(c.id) === "completed" ? "completed" : String(c.slStatus).toLowerCase()) : "";
   }
 
   /* Live-signal line (P1 ship, 25 Jul 2026): "● 2 live sources · pulled 2 h
@@ -3099,12 +3134,7 @@
        memory on c.insights (no fetch). Clicking it expands the inline optim
        panel (a sibling of the row link, so its own clicks never navigate);
        clicking anywhere else on the row opens the campaign page as before. */
-    var nOpt = campaignActs(c).length;
-    var reviewBadge = nOpt > 0
-      ? '<span class="review-badge" role="button" tabindex="0" data-review="' + esc(c.id) + '" aria-controls="optim-c' + esc(c.id) + '" aria-expanded="false" aria-label="Review ' + nOpt + ' optimisation' + (nOpt === 1 ? "" : "s") + ' for this campaign">Review <b class="tnum">' + nOpt + "</b>" + REVIEW_CARET + "</span>"
-      /* nothing to review → no pill at all (owner ruling: "All clear" was
-         noise). Empty span keeps the grid column so the chevron stays put. */
-      : '<span aria-hidden="true"></span>';
+    var reviewBadge = reviewBadgeHTML(c, false);
     return '<div class="campaign-row" id="row-c' + esc(c.id) + '" data-tier="' + c.tier + '" data-search="' + esc(search) + '">' +
       '<a class="row-summary" href="#/c/' + esc(c.id) + '" aria-label="' + esc(c.name) + ". " + esc(c.pill) + '. Open the campaign page.">' +
       '<span class="ring-wrap">' +
@@ -3133,6 +3163,48 @@
      actions" render from). Used for the row's "Review N" count + inline panel. */
   function campaignActs(c) {
     return (c.insights || []).filter(function (r) { return (r.payload || {}).act; });
+  }
+
+  /* Per-campaign act tally by saved state: dismissed and completed drop out of
+     Review, claimed ones move to the amber In-progress share. Keys are built
+     exactly like the cards' data-action-key so ACT_ASSIGN lines up. */
+  function actCounts(c) {
+    var n = { review: 0, prog: 0 };
+    campaignActs(c).forEach(function (r, i) {
+      var rec = ACT_ASSIGN[(r.scope || c.id) + "::" + (r.insight_key || ("act-" + i))] || {};
+      if (rec.state === "dismiss" || rec.state === "done") return;
+      if (rec.state === "ack") n.prog++; else n.review++;
+    });
+    return n;
+  }
+  function reviewBadgeHTML(c, expanded) {
+    var n = actCounts(c);
+    /* nothing left → no pill at all (owner ruling: "All clear" was noise) —
+       unless the panel is open, where the pill is the only way to close it.
+       The slot span keeps the grid column so the chevron stays put. */
+    if (!n.review && !n.prog && !expanded) return '<span class="review-badge-slot" aria-hidden="true"></span>';
+    var bits = [];
+    if (n.review || !n.prog) bits.push('Review <b class="tnum">' + n.review + "</b>");
+    if (n.prog) bits.push('<span class="rb-prog">In-progress <b class="tnum">' + n.prog + "</b></span>");
+    var lbl = (n.review ? n.review + " optimisation" + (n.review === 1 ? "" : "s") + " to review" : "") +
+      (n.prog ? (n.review ? ", " : "") + n.prog + " in progress" : "");
+    return '<span class="review-badge" role="button" tabindex="0" data-review="' + esc(c.id) +
+      '" aria-controls="optim-c' + esc(c.id) + '" aria-expanded="' + (expanded ? "true" : "false") +
+      '" aria-label="' + lbl + ' for this campaign">' + bits.join(" &middot; ") + REVIEW_CARET + "</span>";
+  }
+  /* Repaint one row's badge in place after a state change — no reload, and an
+     open panel stays open (badge clicks are delegated on the rows container,
+     so swapping the node never orphans a handler). */
+  function refreshReviewBadge(cid) {
+    var row = document.getElementById("row-c" + cid);
+    var c = STATE.byId && STATE.byId[cid];
+    if (!row || !c) return;
+    var cur = row.querySelector(".review-badge, .review-badge-slot");
+    if (!cur) return;
+    var expanded = cur.getAttribute("aria-expanded") === "true";
+    var tmp = document.createElement("span");
+    tmp.innerHTML = reviewBadgeHTML(c, expanded);
+    cur.replaceWith(tmp.firstChild);
   }
 
   var REVIEW_CARET = '<svg class="caret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
@@ -3484,7 +3556,8 @@
        "Runs in Smartlead" dropped. */
     h.push('<div class="campaign-topbar">' +
       '<a href="#/" class="back-link">&larr; Campaigns</a>' +
-      '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a>' +
+      '<span class="cstat-bar"><span id="cstat-controls"></span>' +
+      '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a></span>' +
       "</div>");
     var dial = "";
     if (st.completion != null) {
@@ -3500,7 +3573,7 @@
     if (slStatus) slStatus = slStatus.charAt(0).toUpperCase() + slStatus.slice(1).toLowerCase();
     h.push('<div class="campaign-header-main">' + dial + '<div>' +
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
-      '<p class="campaign-subtitle">Navreo' + (slStatus ? " &middot; " + esc(slStatus) : "") + " &middot; campaign " + esc(c.id) + "</p></div>" +
+      '<p class="campaign-subtitle">Navreo &middot; <span id="cstat-word">' + (slStatus ? esc(slStatus) : "&hellip;") + "</span> &middot; campaign " + esc(c.id) + "</p></div>" +
       "</div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
@@ -3575,7 +3648,7 @@
     /* messaging */
     h.push('<div class="tab-panel" data-tab="messaging"' + (tab !== "messaging" ? " hidden" : "") + ">" +
       '<div class="ov-card"><div class="card-title">Version performance</div>' +
-      '<p class="card-subtitle">Every version, pulled live from Smartlead, one row per email step (positives = Smartlead\'s interested mark).</p>' +
+      '<p class="card-subtitle">Every version, one row per email step &mdash; send/reply counters from Smartlead, meetings from our reply archive (positives = Smartlead\'s interested mark).</p>' +
       '<div id="messaging-root"><p class="lw-loading">Pulling live version stats from Smartlead&hellip;</p></div></div>' +
       '<div class="ov-card"><div class="card-title">The sequence</div><div id="sequence-root"><p class="card-subtitle">Loading&hellip;</p></div>' +
       '<p class="sample-footer">The live copy itself stays in Smartlead (the only safe place to edit it). <a class="action-link" href="' + esc(c.smartleadUrl.replace("/analytics", "/sequences")) + '" target="_blank" rel="noopener">Open the sequence in Smartlead</a></p></div></div>');
@@ -3970,6 +4043,54 @@
     }, 4000);
   }
 
+  /* ── Audience progress bar (count-truth fix, 1 Aug 2026) ────────────────
+     ONE exact source per segment: the PLATFORM's own audience split
+     (campaign_lead_stats via /api/cockpit/live-status — completed /
+     inprogress+paused / notStarted / blocked / stopped, exact counts).
+     The old contact-record blend over-counted (deleted leads keep their last
+     status in the archive forever: 3401559 audited 3,966 vs Smartlead's
+     3,689). The blend now only paints as a labelled ESTIMATE while the live
+     check is loading or failed. Repainted from both hydrateDetail and the
+     live-status landing, whichever arrives last wins with better data. */
+  function paintAudience(c) {
+    var ov = document.getElementById("ovm-status");
+    if (!ov) return;
+    var d = STATE.detail[c.id] || {};
+    var live = (STATE.liveStatus[c.id] || {}).lead_stats;
+    var A_DONE = "#2E7D5B", A_PROG = "#A7CDB8", A_NOT = "#D9D6D1", A_BLK = "var(--danger)", A_STOP = "#8A8681";
+    var s = null, note = "";
+    if (live && live.total) {
+      /* source: Smartlead campaign_lead_stats — exact, PAUSED reads as
+         in-progress (mid-sequence), stopped shows only when present */
+      s = { done: live.completed || 0, prog: (live.inprogress || 0) + (live.paused || 0),
+            not: live.notStarted || 0, blk: live.blocked || 0, stop: live.stopped || 0,
+            tot: live.total };
+    } else if ((d.lead_statuses || []).length) {
+      /* source: contact-record archive — an ESTIMATE (keeps deleted leads),
+         only shown until the live platform split lands */
+      var aBy = {}; (d.lead_statuses || []).forEach(function (r) { aBy[r.k] = (aBy[r.k] || 0) + (r.n || 0); });
+      var done = aBy.COMPLETED || 0,
+          prog = (aBy.INPROGRESS || 0) + (aBy.STARTED || 0) + (aBy.PAUSED || 0),
+          blk = aBy.BLOCKED || 0;
+      var acc = done + prog + blk;
+      var base = Math.max(acc, (d.leads || {}).total || 0, c.stats.leads != null ? c.stats.leads : 0);
+      s = { done: done, prog: prog, not: Math.max(0, base - acc), blk: blk, stop: 0, tot: base };
+      note = '<p class="card-subtitle" style="margin-top:6px">Contact-record estimate &mdash; checking the platform\'s exact split&hellip;</p>';
+    } else if (d.campaign_id != null && !(d.leads || {}).total) {
+      ov.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet' +
+        (c.stats.leads != null ? " &mdash; Smartlead itself holds " + fmtInt(c.stats.leads) + " leads" : "") +
+        ". The Leads tab shows the live platform audience.</p>";
+      return;
+    } else return; /* nothing loaded yet — keep the loading state */
+    var pc = function (n) { return s.tot ? (100 * n / s.tot).toFixed(1) : "0"; };
+    var seg = function (n, col) { return n > 0 ? '<i style="width:' + pc(n) + "%;background:" + col + '"></i>' : ""; };
+    var leg = function (n, col, lab) { return n > 0 ? '<span><i style="background:' + col + '"></i>' + lab + ' <b class="tnum">' + fmtInt(n) + "</b></span>" : ""; };
+    var compPct = s.tot ? Math.round(100 * s.done / s.tot) : 0;
+    ov.innerHTML = '<div class="gv-audh"><span>Who we\'re working &mdash; <b class="tnum">' + fmtInt(s.tot) + '</b> people</span><span><b class="tnum">' + compPct + '%</b> completed</span></div>' +
+      '<div class="gv-stack">' + seg(s.done, A_DONE) + seg(s.prog, A_PROG) + seg(s.not, A_NOT) + seg(s.stop, A_STOP) + seg(s.blk, A_BLK) + "</div>" +
+      '<div class="gv-legend">' + leg(s.done, A_DONE, "Completed") + leg(s.prog, A_PROG, "In progress") + leg(s.not, A_NOT, "Not started") + leg(s.stop, A_STOP, "Stopped") + leg(s.blk, A_BLK, "Blocked") + "</div>" + note;
+  }
+
   function hydrateDetail(c) {
     var id = c.id;
     var apply = function (d) {
@@ -3984,38 +4105,8 @@
         }).join("");
         rc.hidden = false;
       }
-      /* overview glance: audience panel (from the campaign-detail payload) */
-      var ov = document.getElementById("ovm-status");
-      if (ov && !((d.leads || {}).total)) {
-        ov.innerHTML = '<p class="card-subtitle">No contact-record rows for this campaign yet' +
-          (c.stats.leads != null ? " &mdash; Smartlead itself holds " + fmtInt(c.stats.leads) + " leads" : "") +
-          ". The Leads tab shows the live platform audience.</p>";
-      } else if (ov) {
-        /* Audience split into the three states Bjion wants at a glance —
-           completed (full green), in progress (faded green), not started (grey);
-           STARTED/INPROGRESS/PAUSED all read as in-progress. Blocked is a real
-           bad state, so when present it shows as a distinct red segment rather
-           than being folded into "not started". Not-started = the platform
-           audience (or contact record) minus everyone with a known status. */
-        var aBy = {}; (d.lead_statuses || []).forEach(function (s) { aBy[s.k] = (aBy[s.k] || 0) + (s.n || 0); });
-        var aDone = aBy.COMPLETED || 0;
-        var aProg = (aBy.INPROGRESS || 0) + (aBy.STARTED || 0) + (aBy.PAUSED || 0);
-        var aBlk = aBy.BLOCKED || 0;
-        var aAcc = aDone + aProg + aBlk;
-        var aSeqd = (d.leads || {}).total || aAcc;
-        var aPlat = c.stats.leads;
-        var aBase = Math.max(aAcc, aSeqd, aPlat != null ? aPlat : 0);
-        var aNot = Math.max(0, aBase - aAcc);
-        var aTot = aBase;
-        var A_DONE = "#2E7D5B", A_PROG = "#A7CDB8", A_NOT = "#D9D6D1", A_BLK = "var(--danger)";
-        var aPc = function (n) { return aTot ? (100 * n / aTot).toFixed(1) : "0"; };
-        var aSeg = function (n, col) { return n > 0 ? '<i style="width:' + aPc(n) + "%;background:" + col + '"></i>' : ""; };
-        var aLeg = function (n, col, lab) { return n > 0 ? '<span><i style="background:' + col + '"></i>' + lab + ' <b class="tnum">' + fmtInt(n) + "</b></span>" : ""; };
-        var aCompPct = aTot ? Math.round(100 * aDone / aTot) : 0;
-        ov.innerHTML = '<div class="gv-audh"><span>Who we\'re working &mdash; <b class="tnum">' + fmtInt(aTot) + '</b> people</span><span><b class="tnum">' + aCompPct + '%</b> completed</span></div>' +
-          '<div class="gv-stack">' + aSeg(aDone, A_DONE) + aSeg(aProg, A_PROG) + aSeg(aNot, A_NOT) + aSeg(aBlk, A_BLK) + "</div>" +
-          '<div class="gv-legend">' + aLeg(aDone, A_DONE, "Completed") + aLeg(aProg, A_PROG, "In progress") + aLeg(aNot, A_NOT, "Not started") + aLeg(aBlk, A_BLK, "Blocked") + "</div>";
-      }
+      /* overview glance: audience panel */
+      paintAudience(c);
       /* sources */
       var sr = document.getElementById("sources-root");
       if (sr) {
@@ -4037,8 +4128,12 @@
           }).join("") + "</div>";
         }
       }
-      /* sequence rail */
+      /* sequence rail — structure-only fallback. NEVER overwrite the full
+         live copy (or its error state): hydrateSequenceCopy marks the root
+         with data-seqcopy once it has painted, and this detail payload can
+         land AFTER it — that race was the "sequence copy disappears" bug. */
       var seqr = document.getElementById("sequence-root");
+      if (seqr && seqr.getAttribute("data-seqcopy")) seqr = null;
       if (seqr) {
         var seq = d.sequence;
         if (!seq || !seq.step_count) {
@@ -4057,15 +4152,21 @@
       }
     };
     if (STATE.detail[id]) { apply(STATE.detail[id]); return; }
+    /* in-flight dedup: a direct leads-tab open used to fire this fetch twice
+       concurrently (page render + tab branch) — one detail payload, not two */
+    if (STATE.detailBusy && STATE.detailBusy[id]) return;
+    (STATE.detailBusy = STATE.detailBusy || {})[id] = true;
     var fetchIt = function (isRetry) {
       getJSON("/api/cockpit/campaign-detail?id=" + encodeURIComponent(id)).then(function (d) {
         /* a degraded payload (mid-deploy, DB blip) must not stick for the
            SPA's lifetime — render it, but refetch next visit + retry once */
-        if (d && !d.degraded) STATE.detail[id] = d;
+        if (d && !d.degraded) { STATE.detail[id] = d; STATE.detailBusy[id] = false; }
         else if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
+        else STATE.detailBusy[id] = false;
         apply(d);
       }).catch(function () {
         if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
+        else STATE.detailBusy[id] = false;
         var ovErr = document.getElementById("ovm-status");
         if (ovErr) ovErr.innerHTML = '<p class="card-subtitle">The contact record could not be loaded right now. The results on the left are live from the sync.</p>';
       });
@@ -4136,21 +4237,36 @@
     var parts = [];
     steps.forEach(function (s, si) {
       var stepNo = s.step != null ? s.step : "?";
-      var variants = s.variants || [];
+      /* EVERY variant is cyclable (owner ruling, 1 Aug 2026): live first,
+         then switched-off (0% split), then deleted — labelled so nobody
+         mistakes an off variant for a live one. Default-active = first live. */
+      function vRank(v) { return v.deleted ? 2 : (v.split === 0 ? 1 : 0); }
+      var variants = (s.variants || []).slice().sort(function (a, b) { return vRank(a) - vRank(b); });
+      function vTag(v) { return v.deleted ? " (deleted)" : v.split === 0 ? " (off)" : ""; }
       var pills = "";
       if (variants.length > 1) {
         pills = '<div class="seq-version-pills" aria-label="Email ' + esc(stepNo) + ' versions">' +
           variants.map(function (v, vi) {
-            return '<button type="button" class="seq-pill' + (vi === 0 ? " is-active" : "") + '" data-step="' + esc(stepNo) + '" data-version="' + esc(v.label || "?") + '" aria-pressed="' + (vi === 0 ? "true" : "false") + '">' + esc(v.label || "?") + "</button>";
+            return '<button type="button" class="seq-pill' + (vi === 0 ? " is-active" : "") +
+              (v.deleted ? " seq-pill--del" : v.split === 0 ? " seq-pill--off" : "") +
+              '" data-step="' + esc(stepNo) + '" data-version="' + esc(v.label || "?") + '" aria-pressed="' + (vi === 0 ? "true" : "false") + '">' +
+              esc((v.label || "?") + vTag(v)) + "</button>";
           }).join("") + "</div>";
       }
       var panels = variants.map(function (v, vi) {
         var subj = v.subject
           ? '<span class="seq-subject-text">' + seqRichText(resolveSpin(v.subject)) .replace(/^<p>|<\/p>$/g, "") + "</span>"
           : '<span class="seq-subject-text seq-subject-none">(no subject, reply in thread)</span>';
+        var body = v.body
+          ? seqRichText(resolveSpin(v.body))
+          : '<p class="card-subtitle">' + (v.deleted
+              ? "This variant was deleted; Smartlead no longer stores its copy."
+              : "No copy stored for this variant.") + "</p>";
         return '<div class="seq-version-panel" data-step="' + esc(stepNo) + '" data-version="' + esc(v.label || "?") + '"' + (vi === 0 ? "" : " hidden") + ">" +
+          (v.deleted ? '<p class="card-subtitle">Deleted variant &mdash; no longer sending.</p>'
+            : v.split === 0 ? '<p class="card-subtitle">Switched off (0% of sends) &mdash; kept here so you can still read it.</p>' : "") +
           '<p class="seq-subject"><strong>Subject:</strong> ' + subj + "</p>" +
-          '<div class="seq-body-scroll">' + seqRichText(resolveSpin(v.body)) + "</div></div>";
+          '<div class="seq-body-scroll">' + body + "</div></div>";
       }).join("");
       parts.push('<div class="seq-step"><div class="seq-step-header"><span class="seq-step-title">Email ' + esc(stepNo) + "</span>" + pills + "</div>" +
         '<div class="seq-body">' + panels + "</div></div>");
@@ -4163,10 +4279,15 @@
   }
 
   function hydrateSequenceCopy(c) {
+    /* Never a silent dead-end (owner ruling, 1 Aug 2026): three attempts with
+       backoff, then a LABELLED error + "Try again" — and every paint stamps
+       data-seqcopy on the root so the detail payload's structure rail can't
+       clobber a rendered copy (that race was the disappearing-copy bug). */
     var id = c.id;
     var apply = function (sc) {
       var root = document.getElementById("sequence-root");
-      if (!root || !sc || sc.degraded || !(sc.steps || []).length) return; /* structure rail stays as the honest fallback */
+      if (!root) return;
+      root.setAttribute("data-seqcopy", "1");
       root.innerHTML = sequenceCopyHTML(sc);
       /* version pills swap the shown subject+body within their step */
       root.querySelectorAll(".seq-pill").forEach(function (pill) {
@@ -4185,18 +4306,34 @@
         });
       });
     };
-    if (STATE.seqcopy[id]) { apply(STATE.seqcopy[id]); return; }
-    var fetchIt = function (isRetry) {
+    var fail = function () {
+      var root = document.getElementById("sequence-root");
+      if (!root) return;
+      root.setAttribute("data-seqcopy", "1");
+      root.innerHTML = '<div class="seq-fail">' +
+        '<p class="card-subtitle">Couldn\'t pull the live copy from Smartlead just now. Nothing is wrong with the campaign &mdash; the platform didn\'t answer in time.</p>' +
+        '<button type="button" class="btn" id="seq-retry">Try again</button></div>';
+      var b = document.getElementById("seq-retry");
+      if (b) b.addEventListener("click", start);
+    };
+    var attempt = function (i) {
       getJSON("/api/cockpit/sequence-copy?id=" + encodeURIComponent(id)).then(function (sc) {
         var healthy = sc && !sc.degraded && (sc.steps || []).length;
-        if (healthy) STATE.seqcopy[id] = sc;
-        else if (!isRetry) setTimeout(function () { if (!STATE.seqcopy[id]) fetchIt(true); }, 7000);
-        apply(sc);
+        if (healthy) { STATE.seqcopy[id] = sc; apply(sc); return; }
+        if (i < 2) setTimeout(function () { attempt(i + 1); }, i === 0 ? 3000 : 7000);
+        else fail();
       }).catch(function () {
-        if (!isRetry) setTimeout(function () { if (!STATE.seqcopy[id]) fetchIt(true); }, 7000);
+        if (i < 2) setTimeout(function () { attempt(i + 1); }, i === 0 ? 3000 : 7000);
+        else fail();
       });
     };
-    fetchIt(false);
+    var start = function () {
+      var root = document.getElementById("sequence-root");
+      if (root && !root.querySelector(".seq-rail")) root.innerHTML = '<p class="card-subtitle">Pulling the live copy&hellip;</p>';
+      attempt(0);
+    };
+    if (STATE.seqcopy[id]) { apply(STATE.seqcopy[id]); return; }
+    start();
   }
 
   function versionTableHTML(versions, note, meetings, combinations) {
@@ -5128,6 +5265,11 @@
           if (next === "clear") delete ACT_ASSIGN[key];
           else ACT_ASSIGN[key] = { state: next, assigned_to: ACT_ME };
           actApplyCard(card);
+          /* the row's Review/In-progress badge tallies from ACT_ASSIGN, so it
+             repaints on the optimistic write, the confirm, AND the rollback */
+          var rowEl = card.closest(".campaign-row");
+          var rowCid = rowEl && rowEl.id.indexOf("row-c") === 0 ? rowEl.id.slice(5) : null;
+          if (rowCid) refreshReviewBadge(rowCid);
           fetch("/api/cockpit/assignments", {
             method: "POST", credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
@@ -5137,9 +5279,11 @@
             if (next === "clear") delete ACT_ASSIGN[key];
             else ACT_ASSIGN[key] = { state: out.state, assigned_to: out.assigned_to };
             actApplyCard(card);
+            if (rowCid) refreshReviewBadge(rowCid);
           }).catch(function () {
             if (prev) ACT_ASSIGN[key] = prev; else delete ACT_ASSIGN[key];
             actApplyCard(card);
+            if (rowCid) refreshReviewBadge(rowCid);
           });
         });
       });
@@ -5295,6 +5439,103 @@
     attachThemeToggles(pr);
     applyTheme(currentTheme());
     wireActionCards(pr);
+    hydrateStatusControls(c);
+  }
+
+  /* ── Set live / Pause / Stop from the header ─────────────────────────────
+     Buttons are driven by the LIVE Smartlead status (45s SWR server-side,
+     invalidated after every write so the header never lies). Two-step
+     confirm: first click arms the button ("Sure?"), second click sends —
+     that second click IS the CSM approval the server's confirm token
+     encodes. Only POST /campaigns/{id}/status is ever hit server-side. */
+  var CSTAT_ACTIONS = {
+    ACTIVE:    [{ lab: "Pause", to: "PAUSED" }, { lab: "Stop", to: "STOPPED" }],
+    PAUSED:    [{ lab: "Set live", to: "START" }, { lab: "Stop", to: "STOPPED" }],
+    STOPPED:   [{ lab: "Set live", to: "START" }],
+    COMPLETED: [{ lab: "Set live", to: "START" }],
+    DRAFTED:   [{ lab: "Set live", to: "START" }]
+  };
+  function cstatBucket(status) {
+    var s = String(status || "").toUpperCase();
+    if (s.indexOf("ACTIVE") !== -1 || s.indexOf("START") !== -1) return "ACTIVE";
+    if (s.indexOf("PAUS") !== -1) return "PAUSED";
+    if (s.indexOf("STOP") !== -1) return "STOPPED";
+    if (s.indexOf("COMPLET") !== -1) return "COMPLETED";
+    if (s.indexOf("DRAFT") !== -1) return "DRAFTED";
+    return "";
+  }
+  function hydrateStatusControls(c) {
+    var root = document.getElementById("cstat-controls");
+    if (!root || c.ghost || !/^\d+$/.test(String(c.id))) return;
+    function word(status) {
+      var el = document.getElementById("cstat-word");
+      if (el && status) {
+        var t = String(status).toLowerCase();
+        el.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+      }
+    }
+    function paint(status) {
+      var acts = CSTAT_ACTIONS[cstatBucket(status)] || [];
+      if (!acts.length) { root.innerHTML = ""; return; }
+      root.innerHTML = acts.map(function (a, i) {
+        var stop = a.to === "STOPPED";
+        return '<button type="button" class="cstat-btn' + (stop ? " cstat-btn--stop" : "") +
+          '" data-to="' + a.to + '" title="' +
+          (stop ? "Stops the campaign — Smartlead marks it completed" :
+           a.to === "PAUSED" ? "Pauses all sending on this campaign" :
+           "Starts sending — the campaign goes live") + '">' + a.lab +
+          (stop ? " (mark completed)" : "") + "</button>";
+      }).join("");
+      root.querySelectorAll(".cstat-btn").forEach(function (btn) {
+        var to = btn.getAttribute("data-to"), base = btn.textContent;
+        btn.addEventListener("click", function () {
+          if (btn.getAttribute("data-armed") !== "1") {
+            /* arm: this click asks, the next confirms; any other button click disarms */
+            root.querySelectorAll(".cstat-btn").forEach(function (b) {
+              b.removeAttribute("data-armed");
+              b.textContent = b.getAttribute("data-base") || b.textContent;
+            });
+            btn.setAttribute("data-base", base);
+            btn.setAttribute("data-armed", "1");
+            btn.textContent = "Confirm: " + base.toLowerCase() + "?";
+            return;
+          }
+          btn.disabled = true;
+          btn.textContent = "Working…";
+          sigPost("/api/campaign-status", { id: parseInt(c.id, 10), status: to, confirm: to })
+            .then(function (r) {
+              var live = r.live || {};
+              var fresh = live.status || (to === "START" ? "ACTIVE" : to);
+              STATE.liveStatus[c.id] = live.status ? live : { status: fresh };
+              word(fresh);
+              paint(fresh);
+              paintAudience(c);
+              renderRows(); /* list chip agrees when the user goes back */
+            })
+            .catch(function (e) {
+              sigToast("Couldn't change the status: " + (e.message || "request failed"));
+              paint(status); /* repaint the honest current state */
+            });
+        });
+      });
+    }
+    var ls = STATE.liveStatus && STATE.liveStatus[c.id];
+    if (ls && ls.status) { word(ls.status); paint(ls.status); }
+    getJSON("/api/cockpit/live-status?ids=" + encodeURIComponent(c.id))
+      .then(function (r) {
+        var rec = ((r || {}).campaigns || {})[c.id];
+        if (rec && rec.status) {
+          STATE.liveStatus[c.id] = rec;
+          word(rec.status);
+          paint(rec.status);
+          paintAudience(c); /* the exact platform split rides the same fetch */
+        } else if (!(ls && ls.status)) {
+          word(c.slStatus); paint(c.slStatus); /* honest fallback: synced status */
+        }
+      })
+      .catch(function () {
+        if (!(ls && ls.status)) { word(c.slStatus); paint(c.slStatus); }
+      });
   }
 
   /* ---------- theme ---------- */

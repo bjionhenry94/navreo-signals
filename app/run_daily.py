@@ -132,6 +132,17 @@ def main():
 
     run_optimiser_refresh()  # gated to once/day; never blocks/kills the source pulls above
 
+    # Variant-path + meeting-step stamping (Supabase-first messaging tab): the
+    # web request path never crawls Smartlead message history, so this cron
+    # stamps vpath2 / step backfills for any unresolved booked leads. Cheap
+    # once stamped — the unstamped set only shrinks.
+    try:
+        bf = server.vpath_backfill()
+        print(f"vpath backfill · {len(bf)} campaign(s): "
+              + (", ".join(f"{k}: {v}" for k, v in list(bf.items())[:8]) or "none"))
+    except Exception as e:  # noqa: BLE001 — stamping must never kill the run
+        print(f"vpath backfill · FAILED: {str(e)[:200]}")
+
 
 if __name__ == "__main__":
     main()
