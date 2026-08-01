@@ -2237,10 +2237,11 @@ class _SWRKeyedCache:
         return payload
 
     def put_fresh(self, key, payload):
-        """Store a just-computed payload unconditionally (post-write refresh):
-        clears the fence so this authoritative value is what readers see."""
+        """Store a just-computed payload unconditionally (post-write refresh).
+        The fence STAYS (audit r2): it only blocks stale stores from computes
+        that started pre-invalidate — popping it would re-open the window for
+        such a compute landing after this store to overwrite it."""
         with self.lock:
-            self.fence.pop(key, None)
             self.entries[key] = {"ts": time.time(), "payload": payload, "refreshing": False}
 
     def clear(self):
@@ -8265,15 +8266,21 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
                      "&order=replied_at.asc")
     if not isinstance(rows, list):
         return {}
-    by_variant, combos, seen = {}, {}, set()
+    # Group rows per booker (audit r2): a booker with several Call-Booked rows
+    # used to have only their FIRST row stamped \u2014 the later rows stayed
+    # vpath2-null forever and kept their campaign in every backfill sweep.
+    groups: dict = {}  # email -> [rows, earliest first]
+    for r in rows:
+        em = (r.get("email") or "").strip().lower()
+        if em:
+            groups.setdefault(em, []).append(r)
+    by_variant, combos = {}, {}
+    seen = set(groups)  # distinct bookers \u2014 len(seen) is the booked count
     attributed = 0
     fetches = 0
     unresolved = []  # (email, shingles) \u2014 bookers with a real quote but no live-copy match
-    for r in rows:
-        em = (r.get("email") or "").strip().lower()
-        if not em or em in seen:
-            continue
-        seen.add(em)
+    for em, grp in groups.items():
+        r = grp[0]
         path = {}
         exhausted = set()
         cached = r.get("vpath")
@@ -8311,13 +8318,21 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
                 # the history record is this lead's complete send record: any
                 # step still unplaced after it is permanently unresolvable
                 exhausted |= set(step_clusters) - set(path)
-            # stamp ONLY when something changed — identical re-stamps were a
-            # GET+PATCH pair per booker per compute, forever (audit #6/#16)
-            if path != cached_path or exhausted != cached_x:
-                stamp = dict(path)
-                if exhausted:
-                    stamp["_x"] = sorted(exhausted)
-                _vp_stamp_path(r.get("id"), stamp)
+        # Stamp EVERY row of this booker whose stored vpath2 differs from the
+        # final answer — on-change only (identical re-stamps were a GET+PATCH
+        # per booker per compute forever, audit #6/#16), all rows (a stamped
+        # first row with unstamped siblings churned the feeder, audit r2).
+        stamp = dict(path)
+        if exhausted:
+            stamp["_x"] = sorted(exhausted)
+        if stamp:
+            for rr in grp:
+                try:
+                    cur = json.loads(rr.get("vpath")) if rr.get("vpath") else None
+                except Exception:  # noqa: BLE001
+                    cur = None
+                if cur != stamp:
+                    _vp_stamp_path(rr.get("id"), stamp)
         if not path:
             # No live copy matched. If the booker still quoted a substantial
             # thread, their opener was real but has since been removed from the
@@ -8430,21 +8445,31 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
                       "&order=replied_at.asc")
     if not isinstance(mrows, list):
         return None  # archive unreachable: the UI omits the column rather than showing false zeros
-    booked: dict = {}                    # email -> {row_id (first row), step}
+    booked: dict = {}   # email -> {"step", "unstamped": [ids of rows with no step field]}
     for mr in mrows:
         em = (mr.get("email") or "").strip().lower()
-        rec = booked.setdefault(em, {"row_id": mr.get("id"), "step": None})
+        rec = booked.setdefault(em, {"step": None, "unstamped": []})
         s = str(mr.get("step") or mr.get("stepbf") or "").strip()
+        if not s:
+            rec["unstamped"].append(mr.get("id"))
         if rec["step"] is None and s.isdigit():
             rec["step"] = s
     lookups = 0
     for em, rec in booked.items():
+        attempted = False
         if rec["step"] is None and em and lookups < lookup_budget:
             lookups += 1
-            step = _meeting_step_from_history(n, em)
-            if step:
-                rec["step"] = step
-                _stamp_meeting_step(rec["row_id"], step)
+            attempted = True
+            rec["step"] = _meeting_step_from_history(n, em)
+        if lookup_budget and rec["unstamped"] and (rec["step"] or attempted):
+            # Stamp EVERY step-less row (audit r2): the answer when there is
+            # one, else a non-digit 'none' marker after a failed lookup so the
+            # cron never re-burns 2 Smartlead calls on a lead whose own thread
+            # can't say — readers isdigit()-guard it into 'unattributed', and
+            # the backfill feeder stops selecting the row.
+            for rid in rec["unstamped"]:
+                _stamp_meeting_step(rid, rec["step"] or "none")
+            rec["unstamped"] = []
     by_step: dict = {}
     unattributed = 0
     for rec in booked.values():

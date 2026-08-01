@@ -4215,11 +4215,11 @@
         /* a degraded payload (mid-deploy, DB blip) must not stick for the
            SPA's lifetime — render it, but refetch next visit + retry once */
         if (d && !d.degraded) { STATE.detail[id] = d; STATE.detailBusy[id] = false; }
-        else if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
+        else if (!isRetry && onPage(id)) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
         else STATE.detailBusy[id] = false;
         apply(d);
       }).catch(function () {
-        if (!isRetry) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
+        if (!isRetry && onPage(id)) setTimeout(function () { if (!STATE.detail[id]) fetchIt(true); }, 7000);
         else STATE.detailBusy[id] = false;
         if (!onPage(id)) return;
         /* audit #4: a failed detail fetch must not clobber an already-exact
@@ -4275,13 +4275,22 @@
 
   function resolveSpin(text) {
     /* {a|b|c} -> a, innermost-first until stable, so the copy reads like the
-       email a lead receives. {{merge_tags}} have no pipe and never match. */
-    var t = text || "", prev;
+       email a lead receives — Bjion reads copy resolved, never raw spintax.
+       {{merge_tags}} inside a spin block used to BLOCK the match (their inner
+       braces failed the brace-free character class), leaving whole bodies as
+       raw spintax soup (audit r2): mask tags to sentinels first, resolve,
+       then unmask so seqRichText can still highlight them. */
+    var tags = [];
+    var t = (text || "").replace(/\{\{[^}]+\}\}|%signature%/g, function (m) {
+      tags.push(m);
+      return "\x00" + (tags.length - 1) + "\x00";
+    });
+    var prev;
     do {
       prev = t;
       t = t.replace(/\{([^{}|]*(?:\|[^{}]*)+)\}/g, function (_, opts) { return opts.split("|")[0]; });
     } while (t !== prev);
-    return t;
+    return t.replace(/\x00(\d+)\x00/g, function (_, i) { return tags[+i]; });
   }
 
   function seqRichText(text) {
@@ -5681,7 +5690,12 @@
             .then(function (r) {
               var live = r.live || {};
               var fresh = live.status || (to === "START" ? "ACTIVE" : to);
-              STATE.liveStatus[c.id] = live.status ? live : { status: fresh };
+              /* merge, never replace (audit r2): a post-write response with
+                 no lead_stats must not throw away the exact split we hold —
+                 that dropped the bar back to the estimate right after the one
+                 action a CSM takes on this page */
+              STATE.liveStatus[c.id] = Object.assign({}, STATE.liveStatus[c.id],
+                live.status ? live : { status: fresh });
               word(fresh);
               paint(fresh);
               paintAudience(c);
