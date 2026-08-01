@@ -2064,24 +2064,6 @@
   }
   .ic8.lg { width: 24px; height: 24px; }
 
-  /* page-level tabs: Campaigns | Optimisations (the lilly-optimiser Priority
-     Report, embedded from notifications.html). Scoped under .cockpit so the
-     color rules beat the generic `.cockpit a` inherit. */
-  .cockpit .page-tabs {
-    /* Bar removed from view (user request 2026-07-24): the lone "Campaigns" tab
-       carried no information. Elements stay in the DOM — the hash router still
-       toggles them and #/optimisations remains reachable by URL. */
-    display: none;
-  }
-  .cockpit .page-tab {
-    padding: 0 2px 11px; font-size: 0.86rem; font-weight: 600;
-    color: var(--fg-subtle); border-bottom: 2px solid transparent;
-    margin-bottom: -1px; white-space: nowrap;
-  }
-  .cockpit .page-tab:hover { color: var(--fg); }
-  .cockpit .page-tab.is-active { color: var(--fg); border-bottom-color: var(--nav-orange); }
-  #optim-frame { display: block; width: 100%; border: 0; min-height: 480px; }
-
   /* ---- inline "Review N" optimiser badge + panel (merged Optimisations tab) ---- */
   .cockpit .review-badge {
     flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
@@ -2277,11 +2259,6 @@
 
 <div class="cockpit">
 
-  <div class="page-tabs">
-    <a class="page-tab is-active" id="ptab-campaigns" href="#/">Campaigns</a>
-    <a class="page-tab" id="ptab-optim" href="#/optimisations" hidden>Optimisations</a>
-  </div>
-
   <div class="lw-banner" id="lw-error" hidden>
     <span id="lw-error-text">Live data is unavailable right now.</span>
     <button type="button" id="lw-retry">Retry</button>
@@ -2310,10 +2287,6 @@
   <div id="view-campaign" hidden>
     <div class="lw-loading" id="page-loading" hidden>Loading campaign&hellip;</div>
     <div id="page-root"></div>
-  </div>
-
-  <div id="view-optim" hidden>
-    <iframe id="optim-frame" title="Campaign Optimisation Priority Report"></iframe>
   </div>
 
 </div>
@@ -3874,7 +3847,6 @@
       "</div>" +
       '<div class="sig-body" hidden>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-          '<a class="action-link" href="/app/unified.html#c:camp-sl-' + esc(c.id) + '">Edit targeting</a>' +
           '<button type="button" class="action-link" data-sig-dup="' + esc(s.id) + '">Duplicate</button>' +
         "</div>" +
         '<div class="sig-ice"><span class="source-list-meta">Icebreaker &middot; first line of the email</span>' +
@@ -4977,26 +4949,9 @@
 
   function route() {
     var hash = window.location.hash || "#/";
-    /* top-level page tab: #/optimisations shows the embedded Priority Report;
-       every other hash is the campaigns side (list or detail). Handled before
-       the campaign matcher so the unknown-hash fallback never eats it. */
-    var optim = hash === "#/optimisations";
-    document.getElementById("ptab-campaigns").classList.toggle("is-active", !optim);
-    document.getElementById("ptab-optim").classList.toggle("is-active", optim);
-    var viewOptim = document.getElementById("view-optim");
-    if (optim) {
-      var vl = document.getElementById("view-list");
-      if (!vl.hidden) listScrollY = window.scrollY || 0;
-      vl.hidden = true;
-      document.getElementById("view-campaign").hidden = true;
-      var fr = document.getElementById("optim-frame");
-      if (!fr.getAttribute("src")) fr.src = "notifications.html?embed=1";
-      viewOptim.hidden = false;
-      document.title = "Optimisations · Navreo";
-      window.scrollTo(0, 0);
-      return;
-    }
-    viewOptim.hidden = true;
+    /* (the #/optimisations embedded Priority Report was removed 2026-08-02 —
+       notifications.html is gone; the inline Review-N badges + panels on the
+       list are the optimisation surface) */
     var m = hash.match(/^#\/c\/(\d+)(?:\/(messaging|leads|sources))?$/);
     var viewList = document.getElementById("view-list");
     var viewCamp = document.getElementById("view-campaign");
@@ -5055,29 +5010,6 @@
     window.scrollTo(0, 0);
   }
   window.addEventListener("hashchange", route);
-
-  /* The embedded report grows the iframe to its content height so the cockpit
-     keeps the single page scrollbar (no scroll-within-scroll). Same-origin, so
-     the frame's document is readable. Sized by a poll, NOT ResizeObserver:
-     RO/rAF delivery rides the rendering pipeline and is throttled to silence
-     in embedded webviews (verified live — zero deliveries even on real body
-     growth), while timers keep running. The poll only works while the tab is
-     visible and only writes when the height actually changed. */
-  (function () {
-    var fr = document.getElementById("optim-frame");
-    function fit() {
-      try {
-        var d = fr.contentDocument;
-        if (!d || !d.documentElement) return;
-        var h = Math.max(d.documentElement.scrollHeight, 480);
-        if (fr.offsetHeight !== h) fr.style.height = h + "px";
-      } catch (e) { /* frame not ready */ }
-    }
-    fr.addEventListener("load", fit);
-    setInterval(function () {
-      if (!document.getElementById("view-optim").hidden) fit();
-    }, 700);
-  })();
 
   /* ---------- handlers ---------- */
   function attachListHandlers() {
