@@ -2624,6 +2624,7 @@
         name: vp.campaign_name || (s && s.name) || ("Campaign " + scope),
         workspace: (s && s.workspace) || "navreo",
         wsLabel: (s && s.ws_label) || "",
+        client: (s && s.client) || "",   // campaign_scorecard.client — the one label authority
         slStatus: (s && s.status) || "",
         tag: tag, tier: meta.tier, reviewed: reviewed,
         pill: reviewed ? (vp.pill || meta.pill) : meta.pill,
@@ -2683,8 +2684,9 @@
     }
   }
 
-  /* Client a campaign belongs to. There is no client field on the campaign, so
-     we match the name against a KNOWN-CLIENT keyword table, first match wins.
+  /* Client a campaign belongs to. Scorecard rows carry a server-side `client`
+     label (the one authority); real client labels win in clientOf below, and
+     the KNOWN-CLIENT keyword table refines the rest, first match wins.
      Mirrors CLIENT_KEYWORDS in app/build_notifications.py (the same table that
      stamps optimiser_notifications.client), extended with the other clients
      that actually appear in the book.
@@ -2728,6 +2730,13 @@
        every client-workspace campaign under that client. navreo campaigns keep
        the name-keyword mapping below (Navreo runs campaigns for many clients). */
     if (c.wsLabel) return c.wsLabel;
+    /* One-authority parity (panel 2026-08-02): scorecard rows now carry the
+       server's client label (same source the analytics page uses). A REAL
+       client label wins; 'Navreo' and '__unassigned' fall through to the finer
+       name map below, which deliberately splits Navreo's own book into the
+       sub-clients campaigns are run FOR (Valsoft, BytePlus, ...) — detail the
+       analytics dimension intentionally doesn't have. */
+    if (c.client && c.client !== "Navreo" && c.client !== "__unassigned") return c.client;
     var n = String(c.name || "").toLowerCase();
     for (var i = 0; i < CLIENT_KEYWORDS.length; i++) {
       if (n.indexOf(CLIENT_KEYWORDS[i][0]) !== -1) return CLIENT_KEYWORDS[i][1];
@@ -3144,7 +3153,7 @@
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="' + ringTitle + '"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
       '</span>' +
-      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">' + esc(c.wsLabel || "Navreo") + rowStatusBit(c) + "</span></span>" +
+      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Navreo")) + rowStatusBit(c) + "</span></span>" +
       '<span class="stat stat--leads"><span class="stat-num tnum">' + fmtInt(st.leads) + '</span><span class="stat-label">Leads</span></span>' +
       '<span class="stat stat--sent"><span class="stat-num tnum">' + fmtInt(st.sent) + '</span><span class="stat-label">Emails sent</span></span>' +
       '<span class="stat stat--reply"><span class="stat-num tnum">' + (st.replied != null ? fmtInt(st.replied) + (replyPct != null ? " (" + replyPct + "%)" : "") : "-") + '</span><span class="stat-label">Replies</span></span>' +
@@ -3349,6 +3358,17 @@
   }
   function paintPerf(p) {
     STATE.perf = p;
+    /* Honest header (panel 2026-08-02): the card used to claim "whole fleet"
+       even while the server payload confessed it was serving the Navreo-only
+       fleet_daily_stats fallback (cold client-windows blob). Read the truth
+       off labels.sent instead of hardcoding it. */
+    var tEl = document.querySelector("#perfx-card .perfx-title");
+    if (tEl && p && p.labels && p.labels.sent) {
+      tEl.textContent = p.labels.sent.indexOf("Navreo workspace") >= 0
+        ? "Performance, Navreo workspace (fleet view warming up)"
+        : "Performance, whole fleet";
+      tEl.title = p.labels.sent;
+    }
     drawPerf(perfDays());
     attachPerfToggle();
   }
@@ -3578,7 +3598,7 @@
       /* workspace ownership, not a hardcoded "Navreo" (audit #11): a Grout/
          ThunderBird campaign must not read as Navreo's on the page a CSM
          acts from — wsLabel is the workspace's display label, server-fed */
-      '<p class="campaign-subtitle">' + esc(c.wsLabel || "Navreo") + ' &middot; <span id="cstat-word">' + (slStatus ? esc(slStatus) : "&hellip;") + "</span> &middot; campaign " + esc(c.id) + "</p></div>" +
+      '<p class="campaign-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Navreo")) + ' &middot; <span id="cstat-word">' + (slStatus ? esc(slStatus) : "&hellip;") + "</span> &middot; campaign " + esc(c.id) + "</p></div>" +
       "</div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
