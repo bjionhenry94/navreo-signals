@@ -2625,11 +2625,12 @@
         replied: s ? s.replied : null,
         positives: s ? s.positives : vs.pos,
         bounced: s ? s.bounced : null,
-        /* meetings coverage is navreo-only (the archive query pins the
-           workspace): client rows get an honest null → "-" in the cell, never
-           a fake zero */
+        /* meetings: insights rollup first, then the scorecard row's own
+           archive-gated count (null when the archive was unreachable or the
+           workspace is outside coverage) — "-" renders for null, never a
+           fake zero */
         meetings: (meetings[scope] != null) ? meetings[scope]
-          : ((((s && s.workspace) || "navreo") === "navreo") ? 0 : null),
+          : (s && s.meetings != null) ? s.meetings : null,
         completion: (vs.completion != null) ? vs.completion : null,
         /* Smartlead's own per-lead audience split, straight off the synced
            scorecard row — the ring/bucket truth for rows outside the live
@@ -3139,13 +3140,23 @@
     /* ring = leads through the sequence when the sync carries it (Smartlead's
        own split), sent ÷ (leads × 2) only as the legacy fallback — one source
        shared with liveBucket so ring, chip and filter can never disagree */
-    var ringReal = st.completedLeads != null && st.leads > 0;
-    var ringPct = ringReal ? Math.min(100, Math.round(st.completedLeads / st.leads * 100))
-      : (st.leads && st.sent != null) ? Math.min(100, Math.round(st.sent / (st.leads * 2) * 100)) : null;
-    var ringTitle = ringReal ? "leads finished the sequence" : "sent &divide; (leads &times; 2)";
+    /* completion-source precedence mirrors liveBucket exactly: live answer,
+       then the synced per-lead split, then the legacy heuristic — so ring,
+       chip and filter draw one truth on every path */
+    var lsr = STATE.liveStatus && STATE.liveStatus[c.id];
+    var ringPct, ringTitle;
+    if (lsr && lsr.completion != null) {
+      ringPct = Math.min(100, Math.round(lsr.completion));
+      ringTitle = "live: leads finished the sequence";
+    } else if (st.completedLeads != null && st.leads > 0) {
+      ringPct = Math.min(100, Math.round(st.completedLeads / st.leads * 100));
+      ringTitle = "leads finished the sequence";
+    } else if (st.leads && st.sent != null) {
+      ringPct = Math.min(100, Math.round(st.sent / (st.leads * 2) * 100));
+      ringTitle = "sent &divide; (leads &times; 2)";
+    } else { ringPct = null; ringTitle = ""; }
     var replyPct = pct(st.replied, st.sent, 2);
     var bouncePct = pct(st.bounced, st.sent, 1);
-    var search = (c.name + " " + c.pill + " " + c.tier).toLowerCase();
     /* Insight-kind badges ("copy", "list audit", …) used to render in the
        card's corner; owner ruling 26 Jul 2026: the Review panel is the only
        surface for optimisation changes, so the row carries no tag pills. */
@@ -3154,14 +3165,14 @@
        panel (a sibling of the row link, so its own clicks never navigate);
        clicking anywhere else on the row opens the campaign page as before. */
     var reviewBadge = reviewBadgeHTML(c, false);
-    return '<div class="campaign-row" id="row-c' + esc(c.id) + '" data-tier="' + c.tier + '" data-search="' + esc(search) + '">' +
+    return '<div class="campaign-row" id="row-c' + esc(c.id) + '" data-tier="' + c.tier + '">' +
       '<a class="row-summary" href="#/c/' + esc(c.id) + '" aria-label="' + esc(c.name) + ". " + esc(c.pill) + '. Open the campaign page.">' +
       '<span class="ring-wrap">' +
       (ringPct != null
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="' + ringTitle + '"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
       '</span>' +
-      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">Navreo' + rowStatusBit(c) + "</span></span>" +
+      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">' + esc(c.wsLabel || "Navreo") + rowStatusBit(c) + "</span></span>" +
       '<span class="stat stat--leads"><span class="stat-num tnum">' + fmtInt(st.leads) + '</span><span class="stat-label">Leads</span></span>' +
       '<span class="stat stat--sent"><span class="stat-num tnum">' + fmtInt(st.sent) + '</span><span class="stat-label">Emails sent</span></span>' +
       '<span class="stat stat--reply"><span class="stat-num tnum">' + (st.replied != null ? fmtInt(st.replied) + (replyPct != null ? " (" + replyPct + "%)" : "") : "-") + '</span><span class="stat-label">Replies</span></span>' +
@@ -3644,7 +3655,7 @@
       '<div class="gv-q"><span class="gv-n tnum">' + fmtInt(st.sent) + '</span><span class="gv-l">Sent</span></div>' +
       '<div class="gv-q"><span class="gv-n tnum">' + (replyPct != null ? replyPct + "%" : fmtInt(st.replied)) + "</span>" + (replyPct != null ? '<span class="gv-c tnum">' + fmtInt(st.replied) + "</span>" : "") + '<span class="gv-l">Replied</span></div>' +
       '<div class="gv-q"><span class="gv-n tnum ' + gClass + '">' + fmtInt(st.positives != null ? st.positives : 0) + "</span>" + (gPosPct != null ? '<span class="gv-c tnum">' + gPosPct + "%</span>" : "") + '<span class="gv-l">Positives</span></div>' +
-      '<div class="gv-q"><span class="gv-n tnum' + ((st.meetings || 0) > 0 ? " gv-good" : "") + '">' + fmtInt(st.meetings != null ? st.meetings : 0) + '</span><span class="gv-l">Meetings</span></div>' +
+      '<div class="gv-q"><span class="gv-n tnum' + ((st.meetings || 0) > 0 ? " gv-good" : "") + '">' + (st.meetings != null ? fmtInt(st.meetings) : "-") + '</span><span class="gv-l">Meetings</span></div>' +
       "</div>" +
       '<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>' +
       "</div>");
@@ -5033,9 +5044,15 @@
         filtersBtn.setAttribute("aria-expanded", String(open));
       });
       filtersPop.addEventListener("click", function (e) { e.stopPropagation(); });
-      document.addEventListener("click", function () {
-        if (!filtersPop.hidden) { filtersPop.hidden = true; filtersBtn.setAttribute("aria-expanded", "false"); }
-      });
+      /* bind-once: renderList can re-run via the boot retry path, and the
+         document listener would otherwise stack (pinning detached nodes) */
+      if (!document.body.getAttribute("data-filters-doc-bound")) {
+        document.body.setAttribute("data-filters-doc-bound", "1");
+        document.addEventListener("click", function () {
+          var pop = document.getElementById("filters-pop"), btn = document.getElementById("filters-btn");
+          if (pop && !pop.hidden) { pop.hidden = true; if (btn) btn.setAttribute("aria-expanded", "false"); }
+        });
+      }
     }
     /* client dropdown */
     var clientSel = document.getElementById("client-select");
@@ -5096,8 +5113,16 @@
           if (c) openRowOptim(c, panel);
         } else {
           /* closing re-tallies the badge: a panel emptied while open was
-             showing the expanded-only zero pill, which must not outlive it */
+             showing the expanded-only zero pill, which must not outlive it.
+             If the swap removed the focused badge (zero counts → inert slot),
+             keyboard focus moves to the row link instead of dropping to body */
+          var hadFocus = document.activeElement === badge;
           refreshReviewBadge(id);
+          if (hadFocus) {
+            var row = document.getElementById("row-c" + id);
+            var next = row && (row.querySelector(".review-badge") || row.querySelector(".row-summary"));
+            if (next) next.focus();
+          }
         }
       };
       rowsC.addEventListener("click", function (e) {
@@ -5176,16 +5201,22 @@
     if (ACT_LOADED) { cb(); return; }
     if (!ACT_PENDING) {
       ACT_PENDING = Promise.all([
-        getJSON("/api/cockpit/assignments").catch(function () { return {}; }),
+        getJSON("/api/cockpit/assignments").catch(function () { return null; }),
         getJSON("/api/auth/me").catch(function () { return {}; })
       ]).then(function (res) {
         /* merge under any optimistic clicks that landed mid-flight — a click's
            local write must not be clobbered by the initial snapshot */
-        var fresh = (res[0] && res[0].assignments) || {};
-        Object.keys(ACT_ASSIGN).forEach(function (k) { fresh[k] = ACT_ASSIGN[k]; });
-        ACT_ASSIGN = fresh;
+        var got = res[0] && res[0].assignments != null && !res[0].degraded;
+        if (got) {
+          var fresh = res[0].assignments;
+          Object.keys(ACT_ASSIGN).forEach(function (k) { fresh[k] = ACT_ASSIGN[k]; });
+          ACT_ASSIGN = fresh;
+        }
         ACT_ME = (res[1] && res[1].email) || ACT_ME;
-        ACT_LOADED = true;
+        /* a failed or DB-degraded snapshot stays unloaded so the next call
+           retries — otherwise dismissed acts resurrect until a full reload */
+        ACT_LOADED = got;
+        ACT_PENDING = null;
       });
     }
     ACT_PENDING.then(cb);
@@ -5267,7 +5298,6 @@
         if (!d.open) return;
         var box = d.querySelector(".why-full");
         if (!box || box.getAttribute("data-loaded")) return;
-        box.setAttribute("data-loaded", "1");
         var cardEl = d.closest(".action-card");
         /* headline half \u0001 note half: email tokens only bind from the head */
         var grab = function (sels) {
@@ -5276,7 +5306,15 @@
         };
         var cardText = grab([".action-how", ".action-payoff"]) + "\u0001" + grab([".why-verdict", ".why-hero-cap"]);
         whyBreakdownFetch(d.getAttribute("data-why-cid")).then(function (rows) {
-          box.innerHTML = whyDigestHTML(Array.isArray(rows) ? rows : null, d.getAttribute("data-why-v") === "1", cardText || "", d.getAttribute("data-why-ik") || "");
+          /* loaded only marks on a real answer: a failed fetch (rows null,
+             WHY_CACHE already self-evicted for retry) must re-fetch on the
+             next open instead of freezing a false "no findings" verdict */
+          if (Array.isArray(rows)) {
+            box.setAttribute("data-loaded", "1");
+            box.innerHTML = whyDigestHTML(rows, d.getAttribute("data-why-v") === "1", cardText || "", d.getAttribute("data-why-ik") || "");
+          } else {
+            box.innerHTML = '<p class="why-empty">Receipts didn’t load — close and reopen to retry.</p>';
+          }
         });
       });
     });
@@ -5350,7 +5388,7 @@
        fair test" binds nothing (a lowercase or pronoun letter is English, not
        a variant citation — /i on the letter class silently trimmed real
        splits to phantom vars) */
-    var reV = /\b[Vv]ar(?:iant)?s?\s+([A-Z](?:\s*(?:,|,?\s*and|&|\+|\/)\s+?[A-Z])*)\b/g, reE = /\bEmail\s+(\d+)\b/g;
+    var reV = /\b[Vv]ar(?:iant)?s?\s+([A-Z](?:\s*(?:,|,?\s*and|&|\+|\/)\s*[A-Z])*)\b/g, reE = /\bEmail\s+(\d+)\b/g;
     while ((m = reV.exec(cardText || ""))) {
       m[1].split(/[^A-Za-z]+/).forEach(function (w) { if (w.length === 1 && w >= "A" && w <= "Z") vars[w] = 1; });
     }
@@ -5462,6 +5500,15 @@
     /* the kind gate outranks card tokens: a list-audit card that happens to
        say "Email 1" in its prose still stays bar-free */
     var nonVariant = !!WHY_NONVARIANT[ik || ""];
+    /* prune cited letters to variants that actually exist in the rows — a
+       phantom capture (the pronoun "I", a mis-read letter) must not skew the
+       email-step pick or trim real bars (data decides, not prose) */
+    if (tok.anyVar && rows) {
+      var real = {};
+      rows.forEach(function (n) { (n.variants || []).forEach(function (v) { real[String(v.variant)] = 1; }); });
+      Object.keys(tok.vars).forEach(function (L) { if (!real[L]) delete tok.vars[L]; });
+      tok.anyVar = Object.keys(tok.vars).length > 0;
+    }
     var vs = nonVariant ? [] : whyHarvestVariants(rows, tok);
     /* cited letters that match no real row (phantom "I" pronoun, or a variant
        since removed) must not blank the receipts — fall back to the whole
