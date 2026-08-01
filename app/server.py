@@ -7885,12 +7885,36 @@ def _all_campaign_scorecard() -> dict:
     asof = _SCORECARD_SYNC_TS
     if not asof:
         asof = (_blob_snapshot_load("scorecard_sync_ts") or {}).get("ts")
-    return {"campaigns": camps, "heyreach": hr, "asof": asof}
+    out = {"campaigns": camps, "heyreach": hr, "asof": asof}
+    if camps:
+        _blob_snapshot_save("campaign_scorecard_all", out)
+    return out
 
 
 _CAMPAIGN_SCORECARD_ALL_SWR = _SWRCache(_all_campaign_scorecard, 120,
                                          is_degraded=lambda p: not (p and p.get("campaigns")),
                                          name="campaign-scorecard-all")
+
+_SC_SNAP_SEEDED = False
+
+
+def _scorecard_seed_from_snapshot() -> None:
+    """One-time after boot: seed the scorecard read-SWR from its persisted
+    snapshot (stale, ts 0) so a request racing the boot warmer's compute
+    serves instantly instead of waiting on it."""
+    global _SC_SNAP_SEEDED
+    if _SC_SNAP_SEEDED:
+        return
+    _SC_SNAP_SEEDED = True
+    with _CAMPAIGN_SCORECARD_ALL_SWR.lock:
+        if _CAMPAIGN_SCORECARD_ALL_SWR.payload is not None:
+            return
+    snap = _blob_snapshot_load("campaign_scorecard_all")
+    if snap and snap.get("campaigns"):
+        with _CAMPAIGN_SCORECARD_ALL_SWR.lock:
+            if _CAMPAIGN_SCORECARD_ALL_SWR.payload is None:
+                _CAMPAIGN_SCORECARD_ALL_SWR.payload = snap
+                _CAMPAIGN_SCORECARD_ALL_SWR.ts = 0.0
 
 
 _CAMPAIGN_SCORECARD_SWR = _SWRCache(
@@ -18084,6 +18108,7 @@ class Handler(SimpleHTTPRequestHandler):
             # from the background-synced campaign_scorecard cache (Smartlead's own
             # numbers) + HeyReach LinkedIn progress. SWR ~2min over a cheap
             # Supabase read; the slow /analytics fetches happen in the bg thread.
+            _scorecard_seed_from_snapshot()
             return self._json(_inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get()))
         if path == "/api/workspaces":
             # Settings page: connected Smartlead workspaces (keys masked to
