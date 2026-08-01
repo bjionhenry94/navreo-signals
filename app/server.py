@@ -15418,6 +15418,17 @@ def _client_win_build():
             print(f"[client-win] daily series {k} dropped as incomplete: {ksum} vs {wk['sent']}",
                   file=sys.stderr)
             del out_series[k]
+    # a required key that is entirely MISSING (both day-wise attempts failed)
+    # gates the build too — otherwise a lost workspace line stamps fresh and
+    # persists over the last complete blob (round-3 panel). Only own-workspace
+    # clients and the fleet sum are required; shared-name clients legitimately
+    # fall back to the labelled apportioned estimate.
+    for k in list(ws_labels.keys()) + ["__all"]:
+        wk = w30.get(k)
+        if wk and wk.get("sent") and k not in out_series:
+            gated = True
+            daywise_errs.append(f"series {k} missing entirely")
+            print(f"[client-win] daily series {k} missing — build gated", file=sys.stderr)
     data = {"days": days_out, "series": out_series, "windows": windows,
             "_series_gated": gated,
             "campaigns": campaigns, "ws_labels": ws_labels,

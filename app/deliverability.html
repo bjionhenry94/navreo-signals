@@ -861,6 +861,10 @@ function sentDailyFull() {
   var key = state.client === "All" ? "__all" : state.client;
   var s = cwTrusted(key);
   if (s && s.sent) return s.sent;
+  // the apportioned split is only honest for clients that genuinely SHARE the
+  // Navreo workspace — an own-workspace client whose line was gate-dropped
+  // must not get bars shaped like another workspace's rhythm (round-3 panel)
+  if (state.client !== "All" && CW.ws_labels && CW.ws_labels[state.client]) return null;
   var wsS = CW.series["__navreo_ws"];
   var cw = cwFor(state.client);
   if (wsS && wsS.sent && cw && cw.sent > 0) {
@@ -925,6 +929,11 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     // archive, which is complete for them.
     var ws = cwTrusted(state.client === "All" ? "__all" : state.client);
     if (ws && ws.replied) return ws.replied;
+    // an exact window total exists but no TRUSTED daily line — never plot the
+    // partial archive as the reply rhythm (round-3 panel: the chip said 9
+    // while the funnel correctly said 182 in the same viewport)
+    var cwr = cwFor(state.client);
+    if (cwr && cwr.replied != null) return null;
   }
   var s = HUB && HUB.series && HUB.series[ckey()];
   return (s && s[k === "interested" ? "interested" : k]) || [];
@@ -1042,6 +1051,7 @@ function renderLegend() {
     if (k === "rate") { var ra = rateAvg(); val = ra == null ? "–" : ra + "%"; }
     else if (k === "sent") val = cw ? fmtN(cw.sent) : "–";
     else if (k === "bounces" && cw) val = fmtN(cw.bounced);
+    else if (k === "replies") val = fmtN(repliesShown());   // the ONE reply count — chip can never disagree with the funnel
     else if (hasLine) val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
     else val = "–";
     // "noline" = a real total exists but no day-by-day line (shared-workspace
