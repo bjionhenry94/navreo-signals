@@ -14235,6 +14235,10 @@ def _deliv_trends_build(days: int) -> dict:
             by_daymonth[(int(d), months.get(mon[:3], 0))] = m
         except (ValueError, AttributeError):
             continue
+    if not by_daymonth:
+        # empty day-wise read = Smartlead outage/4xx body; raise before paying
+        # the snapshots round-trip (the all-zero guard below stays as backstop)
+        raise RuntimeError("smartlead day-wise returned no rows")
     # Snapshot rows for the same window (issues series — may be sparse at first).
     snaps = sb("GET", ("deliverability_daily_snapshots"
                        f"?snapshot_date=gte.{start.isoformat()}&order=snapshot_date.asc")) or []
@@ -14466,7 +14470,11 @@ def _client_win_restore():
     if snap is not None:
         with _CLIENT_WIN_LOCK:
             if _CLIENT_WIN["data"] is None:
-                _CLIENT_WIN.update(data=snap, ts=0.0)  # ts 0 → refresh kicks
+                # 5-min boot grace before the rebuild kicks: the build's 500+
+                # Smartlead calls used to fire into the boot-warm burst and 429
+                # (both round-1 and round-2 panels caught a gated/short series
+                # built in the first minute of a process's life)
+                _CLIENT_WIN.update(data=snap, ts=time.time() - _CLIENT_WIN_TTL_S + 300)
 
 
 _DAYWISE_MONTHS = {m: i + 1 for i, m in enumerate(
@@ -14677,14 +14685,26 @@ def _client_win_build():
     # ~10% of the verified window total and the page drew wrong daily bars,
     # funnel replies and rate — stamped fresh. A materially short series never
     # ships: the FE falls back to fleet trends / window pills, which are honest.
-    win_sent = (windows.get("30", {}).get("__all") or {}).get("sent") or 0
-    ser_sent = sum((out_series.get("__all") or {}).get("sent", [])[-30:])
-    if win_sent and ser_sent < 0.8 * win_sent:
-        daywise_errs.append(f"series dropped: incomplete ({ser_sent} vs window {win_sent})")
-        print(f"[client-win] daily series dropped as incomplete: {ser_sent} vs {win_sent}",
-              file=sys.stderr)
-        out_series = {}
+    # (round-3 refinement: per-KEY check instead of all-or-nothing — the 22:02Z
+    # gated build threw away perfectly good Asteri/KRG/Grout lines along with
+    # the bad __all, which forced the funnel onto the incomplete reply archive.)
+    gated = False
+    w30 = windows.get("30", {})
+    for k in list(out_series.keys()):
+        if k == "__navreo_ws":
+            continue   # raw workspace line, only ever used to apportion shapes
+        wk = w30.get(k)
+        if not (wk and wk.get("sent")):
+            continue
+        ksum = sum((out_series[k].get("sent") or [])[-30:])
+        if ksum < 0.8 * wk["sent"]:
+            gated = True
+            daywise_errs.append(f"series {k} dropped: incomplete ({ksum} vs window {wk['sent']})")
+            print(f"[client-win] daily series {k} dropped as incomplete: {ksum} vs {wk['sent']}",
+                  file=sys.stderr)
+            del out_series[k]
     data = {"days": days_out, "series": out_series, "windows": windows,
+            "_series_gated": gated,
             "campaigns": campaigns, "ws_labels": ws_labels,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
             "_debug": {"candidates": len(cands), "calls": calls, "errors": errs,
@@ -14703,8 +14723,18 @@ def _client_win_run_bg():
             _CLIENT_WIN.update(running=False, error=str(e)[:200])
         print(f"[client-win] build failed: {e}", file=sys.stderr)
         return
+    gated = bool(data.get("_series_gated"))
     with _CLIENT_WIN_LOCK:
-        _CLIENT_WIN.update(data=data, ts=time.time(), running=False, error=None)
+        # a gated (series-degraded) build serves now but retries in ~10 min
+        # instead of sitting for the full 2h TTL (panel round-2: a deploy-time
+        # 429 burst left the page without daily lines for 2h)
+        ts = time.time() - (_CLIENT_WIN_TTL_S - 600) if gated else time.time()
+        _CLIENT_WIN.update(data=data, ts=ts, running=False, error=None)
+    if gated:
+        # never overwrite the last COMPLETE persisted blob with a degraded one
+        print("[client-win] gated build: served with 10-min retry clock, not persisted",
+              file=sys.stderr)
+        return
     try:
         sb("POST", "deliverability_audit_cache?on_conflict=id",
            {"id": "client_windows", "blob": data,
@@ -14916,7 +14946,8 @@ def who_replies_get(client: str, days: int) -> tuple[dict, int]:
             # TTL while the follow-ups card said "fills in after the next sync".
             # Once subseq stats exist for this client, a null-subseq cache entry
             # is expired instead of served.
-            stale_subseq = ent["data"].get("subseq") is None and _SUBSEQ_STATS.get(client)
+            stale_subseq = (ent["data"].get("subseq") is None
+                            and (_SUBSEQ_STATS.get(client) or {}).get("sent"))
             if not stale_subseq:
                 return ent["data"], 200
     try:
@@ -17897,6 +17928,19 @@ class Handler(SimpleHTTPRequestHandler):
     }
 
     def do_POST(self):
+        # Mark-stale must run AFTER the mutating handler too (panel fix BE-1,
+        # 2026-08-02): the pre-dispatch call below lets a concurrent reader kick
+        # a background refresh that reads PRE-write state and re-caches it with
+        # a fresh ts for a full TTL. The post-dispatch pass in `finally` costs a
+        # lock + ts=0 per cache and restores the "next read converges" contract.
+        _p = self.path.split("?")[0]
+        try:
+            return self._do_post_dispatch()
+        finally:
+            if _p not in self._CLEAR_CACHE_EXEMPT_POST and self._authed_email():
+                _clear_ui_caches()
+
+    def _do_post_dispatch(self):
         if not self._drain_request_body():
             return
         path = self.path.split("?")[0]
@@ -18637,6 +18681,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": False, "message": str(e)[:300]}, 200)
 
     def do_PATCH(self):
+        try:
+            return self._do_patch_dispatch()
+        finally:
+            _clear_ui_caches()  # post-write pass — same BE-1 race as do_POST
+
+    def _do_patch_dispatch(self):
         if not self._drain_request_body():
             return
         _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it

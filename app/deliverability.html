@@ -831,12 +831,18 @@ function fleetSeries() {  // {sent[], bounces[], rate[]} aligned to HUB.days, fr
 // funnel replies and rate, stamped fresh. The server now drops incomplete
 // series; this gate also refuses any cached/old blob whose __all daily sum
 // is materially short of the verified window total.
-function cwDailyOk() {
-  if (!CW || !CW.series || !CW.series.__all) return false;
-  var w = CW.windows && CW.windows["30"] && CW.windows["30"].__all;
-  if (!w || !w.sent) return true;   // nothing to check against
-  var sum = (CW.series.__all.sent || []).reduce(function (a, b) { return a + (b || 0); }, 0);
-  return sum >= 0.5 * w.sent;
+function cwTrusted(key) {
+  // series for key, or null unless its own 30d sum backs the verified window
+  // total (>=0.8x, same threshold the server gate uses). Per KEY, round 3:
+  // one lost workspace must not throw away every other client's good line.
+  var s = CW && CW.series && CW.series[key];
+  if (!s || !s.sent) return null;
+  var w = CW.windows && CW.windows["30"] && CW.windows["30"][key];
+  if (w && w.sent) {
+    var sum = s.sent.reduce(function (a, b) { return a + (b || 0); }, 0);
+    if (sum < 0.8 * w.sent) return null;
+  }
+  return s;
 }
 function cwFor(client) {  // {sent,replied,bounced} for a client over state.range
   var w = CW && CW.windows && CW.windows[String(state.range)];
@@ -851,9 +857,9 @@ function rateMinSent() { return state.client === "All" ? 1000 : 100; }
 // share of the window total — the window total stays exact, only the daily
 // SHAPE is estimated (Bjion: per-day sent per client is super important).
 function sentDailyFull() {
-  if (!CW || !CW.series || !cwDailyOk()) return null;
+  if (!CW || !CW.series) return null;
   var key = state.client === "All" ? "__all" : state.client;
-  var s = CW.series[key];
+  var s = cwTrusted(key);
   if (s && s.sent) return s.sent;
   var wsS = CW.series["__navreo_ws"];
   var cw = cwFor(state.client);
@@ -873,7 +879,7 @@ function sentDailyEstimated() {
   return !!(CW && CW.series && !(CW.series[key] && CW.series[key].sent) && sentDailyFull());
 }
 function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none exists
-  var s = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
+  var s = cwTrusted(state.client === "All" ? "__all" : state.client);
   if (!s) return null;
   if (k === "sent") return s.sent;
   if (k === "bounces") return s.bounced;
@@ -917,13 +923,21 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     // KRG, All) — the archive misses client-workspace replies (38 vs 116 on
     // Asteri, caught by the 2026-07-28 testers). Navreo-ws clients keep the
     // archive, which is complete for them.
-    var ws = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
+    var ws = cwTrusted(state.client === "All" ? "__all" : state.client);
     if (ws && ws.replied) return ws.replied;
   }
   var s = HUB && HUB.series && HUB.series[ckey()];
   return (s && s[k === "interested" ? "interested" : k]) || [];
 }
 function repliesShown() { // THE reply count every widget shows for this view
+  // No trusted daily line -> use the EXACT client-windows window total before
+  // ever falling back to the archive sum: the archive undercounts client
+  // workspaces (round-2 panel replayed KRG at 9 archive replies vs 182 real).
+  var ws = cwTrusted(state.client === "All" ? "__all" : state.client);
+  if (!(ws && ws.replied)) {
+    var cwx = cwFor(state.client);
+    if (cwx && cwx.replied != null) return cwx.replied;
+  }
   var r = seriesFor("replies");
   var sum = r ? slice(r).reduce(function (a, b) { return a + (b || 0); }, 0) : 0;
   // a keyword client not yet in the hub series (e.g. ThunderBird before its
@@ -1415,6 +1429,10 @@ function fmtMins(m) {
   return h > 0 ? h + " h " + mm + " m" : mm + " m";
 }
 function renderLeakbar(leak, v) {
+  if (!(HUB && HUB.series)) {   // interested/meetings unknown — the funnel
+    $("leakbar").style.display = "none";   // shows en-dashes; a leak verdict
+    return;                                // from unknown data would be a lie
+  }
   var lat = HUB && HUB.latency && HUB.latency[ckey()];
   var bar = $("leakbar"), head = $("leak-head"), body = $("leak-body"), fix = $("leak-fix");
   // Deliverability is UPSTREAM of every pipeline stage — if emails aren't
@@ -1466,7 +1484,6 @@ function renderLeakbar(leak, v) {
   }
   bar.style.display = "";
 }
-function set(dotId, txtId, cls, txt) { $(dotId).className = "dot " + cls; $(txtId).textContent = txt; }
 function renderTags(v) {
   $("tag-leads").textContent = fmtN(v.leadsLeft);
   $("tag-sent").textContent = fmtN(v.sent);
@@ -1603,7 +1620,7 @@ function weekSeries(n) {
   // client-windows); the fleet trends line is the fallback — renderWeek says
   // which one is on screen so a client view never silently reads fleet-wide.
   var out = { days: [], rate: [], sent: [], scope: "fleet" };
-  var cs = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
+  var cs = cwTrusted(state.client === "All" ? "__all" : state.client);
   if (cs && CW.days && CW.days.length) {
     var min = state.client === "All" ? WK_MIN_SENT : 50;
     var from0 = Math.max(0, CW.days.length - n);
@@ -2159,7 +2176,7 @@ function renderBounce() {
   setStamp("bnc-stamp", (TRENDS && TRENDS.asof) || (CW && CW.asof), 6);
   var big = $("bnc-big");
   // daily bounce % for the selected client when a true series exists
-  var cs = cwDailyOk() && CW.series[state.client === "All" ? "__all" : state.client];
+  var cs = cwTrusted(state.client === "All" ? "__all" : state.client);
   var days = [], bp = [];
   if (cs && CW.days && CW.days.length) {
     days = CW.days.slice(-state.range);
