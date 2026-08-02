@@ -2017,7 +2017,8 @@ def verify_strategy_share(token: str):
 
 # copy fields a shared client may edit — NOTHING else ever writes through
 # /api/strategy/copy-edit (targeting, numbers, build state are GTME/chat-only)
-_STRATEGY_CLIENT_FIELDS = {"pain", "moment", "videoAngle", "offer", "email", "caption"}
+_STRATEGY_CLIENT_FIELDS = {"pain", "moment", "videoAngle", "offer", "email", "caption",
+                           "followup", "subject"}
 
 
 def strategy_copy_edit(p: dict) -> dict:

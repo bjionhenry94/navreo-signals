@@ -131,6 +131,8 @@ a{color:inherit;text-decoration:none}
 .sum-meta a{font-size:12.5px;font-weight:600;color:var(--orange-600);text-decoration:none;}
 .sum-meta a:hover{text-decoration:underline;}
 .sum-note{font-size:13px;color:var(--ink-3);margin-top:12px;max-width:640px;}
+.mail-label{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:20px 0 8px;}
+.mail-label:first-of-type,.copy-heading + .mail-label{margin-top:0;}
 .mail{max-width:640px;}
 .mail .mh .ms{color:var(--ink-2);text-transform:none;letter-spacing:0;font-size:13.5px;}
 /* Live tab — goes-live preview */
@@ -319,7 +321,13 @@ function targetingSections(x){
 function versionFrame(x){
   // client mode: the email body is editable in place; Save posts a copy-edit
   const ed=CLIENT_MODE?' contenteditable="true" data-edit="email" spellcheck="true"':'';
-  return `<div class="mail"><div class="mh">Subject: ${esc(x.subject||x.caption||'')}</div><div class="mb"${ed}>${esc(x.email||'').replace(/\n/g,'<br>')}</div></div>`;}
+  return `<div class="mail"><div class="mh">Subject: ${highlightTokensHtml(x.subject||x.caption||'')}</div><div class="mb"${ed}>${highlightTokensHtml(x.email||'')}</div></div>`;}
+// Follow-up = email 2, shown as its own clearly-labelled block UNDER email 1.
+function followupFrame(x){
+  if(!x.followup)return '';
+  const ed=CLIENT_MODE?' contenteditable="true" data-edit="followup" spellcheck="true"':'';
+  return `<p class="mail-label">Follow-up</p>`
+    +`<div class="mail"><div class="mh">Sent a few days later, same thread</div><div class="mb"${ed}>${highlightTokensHtml(x.followup)}</div></div>`;}
 // "Share a link" on the Summary page (Bjion, 2026-08-02): GTME-only by design —
 // the Summary tab never renders in client mode. Mints this board's client
 // permalink (copy-edit-only view) and puts it on the clipboard.
@@ -359,18 +367,18 @@ async function gtmeShareLink(btn){
   }catch(e){btn.disabled=false;btn.textContent='Share a link';if(out)out.textContent='Could not make the link, try again.';}
 }
 async function clientSaveCopy(x,btn){
-  const mb=document.querySelector('.mb[data-edit="email"]');
-  if(!mb)return;
-  const value=mb.innerText.trim();
-  if(!value){btn.textContent='Nothing to save';return;}
+  const eds=[...document.querySelectorAll('.mb[data-edit]')].filter(el=>el.innerText.trim());
+  if(!eds.length){btn.textContent='Nothing to save';return;}
   btn.disabled=true;btn.textContent='Saving…';
   try{
-    const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:'email',value,share:SHARE})});
-    const j=await r.json();
-    btn.disabled=false;
-    if(j.ok){btn.textContent='Saved — your team will see this';setTimeout(()=>{btn.textContent='Save my edits';},4000);}
-    else{btn.textContent=(j.message||'Could not save, try again');}
+    for(const el of eds){
+      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:el.dataset.edit,value:el.innerText.trim(),share:SHARE})});
+      const j=await r.json();
+      if(!j.ok){btn.disabled=false;btn.textContent=(j.message||'Could not save, try again');return;}
+    }
+    btn.disabled=false;btn.textContent='Saved — your team will see this';
+    setTimeout(()=>{btn.textContent='Save my edits';},4000);
   }catch(e){btn.disabled=false;btn.textContent='Could not save, try again';}
 }
 
@@ -406,23 +414,33 @@ function resolvedEmail(x,p){
 // words are personalised for this prospect. esc() leaves {tokens} intact,
 // which is what makes replace-after-escape safe.
 function _mvar(v){return `<span class="mvar">${esc(v)}</span>`;}
-function resolvedEmailHtml(x,p){
+// Copy tab shows the TEMPLATE: highlight the merge TOKENS themselves so the GTME
+// sees what is personalised (the real values aren't known until we have a person).
+function highlightTokensHtml(t){
+  return esc(String(t||''))
+    .replace(/\{\{?first(_name)?\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
+    .replace(/\{\{?company\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
+    .replace(/\{\{?icebreaker\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
+    .replace(/\{\{?colleague\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
+    .replace(/%signature%/gi,m=>`<span class="mvar">${m}</span>`)
+    .replace(/\n/g,'<br>');
+}
+// Summary shows the RESOLVED email for one person, with every substituted value highlighted.
+function resolvedTextHtml(text,x,p){
   const opener=openerFor(p);
-  let h;
-  if(x.email){
-    h=esc(String(x.email))
+  if(text){
+    return esc(String(text))
       .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
       .replace(/\{\{?company\}?\}/gi,_mvar(p.company||''))
       .replace(/\{\{?icebreaker\}?\}/gi,_mvar(opener))
       .replace(/\{\{?colleague\}?\}/gi,_mvar(COLLEAGUES[x.id]||'a colleague'))
-      .replace(/%signature%/gi,_mvar('Bjion')+'<br>'+_mvar('Navreo'));
-  }else{
-    const parts=[_mvar(opener),esc(x.pain||''),esc(x.offer||'')].filter(s=>s&&s!=='<span class="mvar"></span>');
-    h='Hey '+_mvar(p.first||'there')+',<br><br>'+parts.join('<br><br>')
-      +'<br><br>Worth a quick chat?<br><br>Bjion<br>Navreo';
+      .replace(/%signature%/gi,_mvar('Bjion')+'<br>'+_mvar('Navreo'))
+      .replace(/\n/g,'<br>');
   }
-  return h.replace(/\n/g,'<br>');
+  const parts=[_mvar(opener),esc(x.pain||''),esc(x.offer||'')].filter(s=>s&&s!=='<span class="mvar"></span>');
+  return 'Hey '+_mvar(p.first||'there')+',<br><br>'+parts.join('<br><br>')+'<br><br>Worth a quick chat?<br><br>Bjion<br>Navreo';
 }
+function resolvedEmailHtml(x,p){return resolvedTextHtml(x.email,x,p);}
 function resolvedSubjectHtml(x,p){
   const s=String(x.subject||x.caption||'');
   const cap=s.charAt(0).toUpperCase()+s.slice(1);
@@ -438,14 +456,12 @@ function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2
 function panelHTML(x){
   if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`;
   if(tab==='copy') return `<p class="copy-heading">Your emails</p>`
-    +`<div class="pager"><button class="pager-arrow" disabled>‹</button><div class="pager-mid"><div class="pager-dots">`
-    +`<button class="pager-dot active"></button><button class="pager-dot"></button><button class="pager-dot"></button><button class="pager-dot"></button>`
-    +`<span class="pager-divider"></span><button class="pager-dot"></button><span class="pager-fu">Follow-up</span></div>`
-    +`<span class="pager-label">Version A</span></div><button class="pager-arrow">›</button></div>`
+    +`<p class="mail-label">First email</p>`
     +versionFrame(x)
+    +followupFrame(x)
     +(CLIENT_MODE
       ?`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save my edits</button></div>`
-       +`<p class="hooknote" style="margin-top:10px">Click into the email above to edit it. Saving shares it with your team.</p>`
+       +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Saving shares it with your team.</p>`
       :`<div class="actions-center"><button class="btn-ink">Next: see the summary</button></div>`);
   if(tab==='first') return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
     +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
@@ -471,7 +487,9 @@ function panelHTML(x){
       +`<p class="sum-lead">This goes to <b>${num(x.reachablePool||x.net)}</b> people. Tap one to read their email.</p>`
       +`<div class="sum-strip">${strip}</div>`
       +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span></div>`
+      +`<p class="mail-label">First email</p>`
       +`<div class="mail"><div class="mh">Subject: <span class="ms">${resolvedSubjectHtml(x,pr)}</span></div><div class="mb">${resolvedEmailHtml(x,pr)}</div></div>`
+      +(x.followup?`<p class="mail-label">Follow-up</p><div class="mail"><div class="mh">Sent a few days later, same thread</div><div class="mb">${resolvedTextHtml(x.followup,x,pr)}</div></div>`:'')
       +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`
       +shareBlock();
   }
@@ -483,12 +501,10 @@ function panelHTML(x){
     +`<p class="lg-head">Give the final go-ahead</p>`
     +`<p class="lg-sub">Nothing pulls, builds or sends until you paste this line into the chat:</p>`
     +`<div class="lg-code"><code id="lg-phrase">${esc(phrase)}</code><button class="lg-copy" id="lg-copy">Copy</button></div>`
-    +`<p class="lg-note">When you send it, we create the campaign, pull the real list, and run every check below. You'll get three links back in the chat: the campaign page, the checks receipt, and the list.</p>`
     +`</div>`;
   return `<p class="eyb">Launch</p>`
     +goBlock
     +`<div class="livebanner">Not live yet. The campaign turns on when you give the go-ahead above, and nothing sends until then.</div>`
-    +`<p class="chkhead">Every box below is checked against this campaign as it stands, and nothing ticks until it's actually true. ${doneN} of ${cks.length} are done right now.</p>`
     +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Ran before launch'}</span></div>`).join('')+`</div>`;
 }
 
@@ -499,7 +515,7 @@ function renderSidebar(){
       +kindPill(x)
       +`<p class="im-count"><span class="im-number">${num(x.net||x.reachablePool)}</span> reachable</p>`
       +(service?`<p class="im-type">${esc(service)}</p>`:'')
-      +`<div class="im-track"><i></i><i></i><i></i><i></i><i></i></div></div>`;}).join('');
+      +`</div>`;}).join('');
   side.innerHTML=(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div></div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
   side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;render();});
