@@ -562,7 +562,7 @@
             <div id="vaw4-rows"><div class="subline">Checking the optimiser's calls…</div></div>
             <div class="vaw4-foot">
               <button class="btn sm" id="vaw4-go" disabled type="button">Switch off selected</button>
-              <span class="subline" id="vaw4-note">Their traffic moves to each campaign's other live versions. History is kept.</span>
+              <span class="subline" id="vaw4-note">Their share moves to each campaign's best-performing version. History is kept.</span>
             </div>
           </div>
         </div>
@@ -2630,6 +2630,31 @@ boot();
     ".vaw4-row.is-done{opacity:.65}",
     ".vaw4-row .ok{color:#2f9e44;font-weight:700}",
     ".vaw4-row .bad{color:#c9352b;font-size:.72rem}",
+    /* P3 traffic-light row */
+    ".vaw4-tl{display:grid;grid-template-columns:16px 1fr 122px;gap:12px;align-items:center;padding:10px 8px;border-bottom:1px solid var(--line,#eee9df);cursor:pointer;border-radius:8px}",
+    ".vaw4-tl:last-child{border-bottom:0}",
+    ".vaw4-tl.sel{background:#FFF1EA}",
+    ".vaw4-tl.is-done{opacity:.55;pointer-events:none}",
+    ".vaw4-tl>input{width:15px;height:15px;accent-color:#FF4D00;cursor:pointer}",
+    ".vaw4-top{display:flex;align-items:center;gap:7px;min-width:0}",
+    ".vaw4-dot{width:8px;height:8px;border-radius:50%;background:#C2371F;flex:0 0 auto}",
+    ".vaw4-name{display:flex;align-items:center;gap:5px;min-width:0;color:var(--ink,#211d16);text-decoration:none;font-weight:600;font-size:.82rem}",
+    ".vaw4-name .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+    ".vaw4-name .ext{flex:0 0 auto;font-size:.7rem;color:var(--ink-3,#8a8477)}",
+    ".vaw4-name:hover .nm{text-decoration:underline}",
+    ".vaw4-name:hover .ext{color:#FF4D00}",
+    ".vaw4-sub{font-size:.7rem;color:var(--ink-3,#8a8477);margin-top:2px}",
+    ".vaw4-mini{display:flex;flex-direction:column;gap:5px}",
+    ".vaw4-mb{display:flex;align-items:center;gap:6px;font-size:.68rem;color:var(--ink-3,#8a8477);white-space:nowrap}",
+    ".vaw4-mb .k{width:26px;flex:0 0 auto}",
+    ".vaw4-tk{flex:1;height:6px;border-radius:4px;background:var(--wash,#f4f1ec);overflow:hidden}",
+    ".vaw4-fl{display:block;height:100%;border-radius:4px}",
+    ".vaw4-fl.win{background:#FF4D00}",
+    ".vaw4-fl.lose{background:#CFC8BF}",
+    ".vaw4-v{font-variant-numeric:tabular-nums;width:14px;text-align:right;font-weight:700;color:var(--ink-2,#5c554a)}",
+    ".vaw4-right{font-size:.72rem;color:var(--ink-3,#8a8477);text-align:right;white-space:nowrap}",
+    ".vaw4-right .ok{color:#2f9e44;font-weight:700}",
+    ".vaw4-right .bad{color:#c9352b}",
     ".vaw4-foot{display:flex;gap:10px;align-items:center;margin-top:9px;flex-wrap:wrap}",
     ".vaw4-ov{position:fixed;inset:0;background:rgba(20,16,10,.45);z-index:900;display:flex;align-items:center;justify-content:center;padding:18px}",
     ".vaw4-modal{background:#fff;color:var(--ink,#211d16);border:1px solid var(--line,#ddd8cf);border-radius:14px;max-width:520px;width:100%;max-height:84vh;overflow:auto;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.28)}",
@@ -2659,39 +2684,124 @@ boot();
       .then(function (r) { return r.json().catch(function () { return { ok: false, message: "bad response (" + r.status + ")" }; }); });
   }
 
+  // The card follows the page's client filter (state.client) — a loser
+  // belongs to a client, so switching to Amplifyy must only show Amplifyy's
+  // losers. "All" shows the whole book. We re-paint on the same
+  // dlv-client-lens event the rest of the page listens to.
+  function curClient() { try { return (state && state.client) || "All"; } catch (e) { return "All"; } }
+  function visible() {
+    var cl = curClient();
+    return cl === "All" ? CAND : CAND.filter(function (c) { return c.client === cl; });
+  }
   function paint() {
     var rowsEl = $id("vaw4-rows");
-    if (!CAND.length) {
-      rowsEl.innerHTML = '<div class="subline">No clear losers flagged right now — nothing to switch off.</div>';
+    var vis = visible();
+    if (!vis.length) {
+      var cl = curClient();
+      rowsEl.innerHTML = '<div class="subline">' +
+        (cl === "All" ? "No clear losers flagged right now — nothing to switch off."
+                      : "No losing versions for " + E(cl) + " right now — nothing to switch off.") +
+        "</div>";
       $id("vaw4-go").disabled = true;
       return;
     }
-    rowsEl.innerHTML = CAND.map(function (c, i) {
-      var stats = c.v ? (Number(c.v.sent || 0).toLocaleString() + " sent · " + (c.v.positives || 0) + " pos") : "";
-      var right = c.state === "done" ? '<span class="ok">✓ off</span>'
-        : c.state === "err" ? '<span class="bad">' + E(c.err) + "</span>"
-        : '<span class="s">' + E(stats) + "</span>";
-      return '<div class="vaw4-row' + (c.state === "done" ? " is-done" : "") + '">' +
+    rowsEl.innerHTML = vis.map(function (c, i) {
+      var link = "campaigns.html#/c/" + encodeURIComponent(c.cid) + "/messaging";
+      var sent = Number((c.lose && c.lose.sent) || (c.v && c.v.sent) || 0);
+      var splitTxt = (c.split != null) ? (" · " + c.split + "% split") : "";
+      var sub = "Email " + c.email + " · Ver " + E(c.vlab) + " · " + sent.toLocaleString() + " sent" + splitTxt;
+      // right column: the Best/This comparison, or a done/err/loading state
+      var right;
+      if (c.state === "done") { right = '<div class="vaw4-right"><span class="ok">✓ off</span></div>'; }
+      else if (c.state === "err") { right = '<div class="vaw4-right"><span class="bad">' + E(c.err) + "</span></div>"; }
+      else if (c.metric && c.win) {
+        var wv = c.win.val, lv = c.lose.val, mx = Math.max(wv, lv, 1);
+        right = '<div class="vaw4-mini">' +
+          '<div class="vaw4-mb"><span class="k">Best</span><span class="vaw4-tk"><span class="vaw4-fl win" style="width:' + (wv / mx * 100).toFixed(0) + '%"></span></span><span class="vaw4-v">' + wv + "</span></div>" +
+          '<div class="vaw4-mb"><span class="k">This</span><span class="vaw4-tk"><span class="vaw4-fl lose" style="width:' + (lv / mx * 100).toFixed(0) + '%"></span></span><span class="vaw4-v">' + lv + "</span></div>" +
+          "</div>";
+      } else {
+        right = '<div class="vaw4-right"><span class="s">' + (c.v ? (c.v.positives || 0) + " interested" : "") + "</span></div>";
+      }
+      return '<div class="vaw4-tl' + (c.checked ? " sel" : "") + (c.state === "done" ? " is-done" : "") + '" data-i="' + i + '">' +
         '<input type="checkbox" data-i="' + i + '"' +
         (c.state === "done" ? " disabled" : c.checked ? " checked" : "") + ">" +
-        '<div><div class="c">' + E(c.name) + "</div>" +
-        '<div class="m">Email ' + c.email + " · Version " + E(c.vlab) + " · campaign " + E(c.cid) + "</div></div>" +
+        '<div><div class="vaw4-top"><span class="vaw4-dot"></span>' +
+        '<a class="vaw4-name" href="' + link + '" target="_blank" rel="noopener" title="Open campaign in a new tab">' +
+        '<span class="nm">' + E(c.name) + '</span><span class="ext" aria-label="opens in a new tab">↗</span></a></div>' +
+        '<div class="vaw4-sub">' + E(sub) + "</div></div>" +
         right + "</div>";
     }).join("");
-    rowsEl.querySelectorAll("input[data-i]").forEach(function (cb) {
-      cb.addEventListener("change", function () {
-        CAND[+cb.getAttribute("data-i")].checked = cb.checked;
-        sync();
+    // the campaign-name link opens a new tab; its click must not toggle the row
+    rowsEl.querySelectorAll(".vaw4-name").forEach(function (a) {
+      a.addEventListener("click", function (e) { e.stopPropagation(); });
+    });
+    rowsEl.querySelectorAll(".vaw4-tl > input[data-i]").forEach(function (cb) {
+      cb.addEventListener("change", function (e) {
+        e.stopPropagation();
+        vis[+cb.getAttribute("data-i")].checked = cb.checked;
+        paint();
+      });
+    });
+    rowsEl.querySelectorAll(".vaw4-tl").forEach(function (row) {
+      row.addEventListener("click", function () {
+        var c = vis[+row.getAttribute("data-i")];
+        if (c.state === "done") return;
+        c.checked = !c.checked;
+        paint();
       });
     });
     sync();
   }
-  function picked() { return CAND.filter(function (c) { return c.checked && c.state !== "done"; }); }
+  function picked() { return visible().filter(function (c) { return c.checked && c.state !== "done"; }); }
   function sync() {
     var n = picked().length;
     var go = $id("vaw4-go");
     go.disabled = !n;
     go.textContent = n ? "Switch off selected (" + n + ")" : "Switch off selected";
+  }
+
+  function enrich4(done) {
+    // Hydrate each loser with its email-step siblings from cockpit so the row
+    // can show Best-vs-This and name the winner — ranked by meetings per email
+    // sent, then positives per email sent (Bjion's order). Best-effort: a
+    // campaign whose stats don't load just renders without the comparison and
+    // is still switch-off-able, so this never blocks the action.
+    var ids = {}; CAND.forEach(function (c) { ids[c.cid] = 1; });
+    var list = Object.keys(ids);
+    if (!list.length) { done(); return; }
+    Promise.all(list.map(function (id) {
+      return fetch("/api/cockpit/messaging?id=" + encodeURIComponent(id), { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; });
+    })).then(function (res) {
+      var byCid = {}; list.forEach(function (id, i) { byCid[id] = res[i]; });
+      CAND.forEach(function (c) {
+        try {
+          var d = byCid[String(c.cid)];
+          if (!d || d.degraded || !Array.isArray(d.versions)) return;
+          var bv = (d.meetings && d.meetings.by_variant) || {};
+          var meetOf = function (v) { return bv[String(v.step) + "|" + String(v.label)] || 0; };
+          var step = d.versions.filter(function (v) { return String(v.step) === String(c.email); });
+          var lose = step.filter(function (v) { return v.label === c.vlab; })[0];
+          var sibs = step.filter(function (v) { return (v.split == null || v.split > 0) && v.label && v.label !== c.vlab; });
+          if (!lose || !sibs.length) return;
+          sibs.sort(function (a, b) {
+            var sa = a.sent || 0, sb = b.sent || 0;
+            var ma = sa ? meetOf(a) / sa : 0, mb = sb ? meetOf(b) / sb : 0;
+            var pa = sa ? (a.positives || 0) / sa : 0, pb = sb ? (b.positives || 0) / sb : 0;
+            return (mb - ma) || (pb - pa);
+          });
+          var win = sibs[0];
+          var hasMeet = step.some(function (v) { return meetOf(v) > 0; });
+          c.metric = hasMeet ? "meet" : "pos";
+          c.split = (lose.split != null) ? lose.split : null;
+          c.lose = { sent: lose.sent || (c.v && c.v.sent) || 0, val: c.metric === "meet" ? meetOf(lose) : (lose.positives || 0) };
+          c.win = { v: win.label, val: c.metric === "meet" ? meetOf(win) : (win.positives || 0) };
+        } catch (e) { /* leave this row without a comparison */ }
+      });
+      done();
+    });
   }
 
   function runBatch() {
@@ -2753,7 +2863,9 @@ boot();
       .then(function (rows) {
         CAND = (Array.isArray(rows) ? rows : []).filter(function (n) {
           return n.finding_type === "variant_call" && /disable/i.test(n.suggested_action || "") &&
-            (n.status || "") !== "actioned" && TITLE_RE.test(n.title || "");
+            (n.status || "") !== "actioned" && TITLE_RE.test(n.title || "") &&
+            // under 800 sent it's too little to judge — don't surface it (Bjion 2026-08-02)
+            Number(n.sent || 0) >= 800;
         }).map(function (n) {
           var m = TITLE_RE.exec(n.title || "");
           var email = +m[1], vlab = (m[2] || "").trim();
@@ -2761,9 +2873,10 @@ boot();
             return String(x.email) === String(email) && String(x.variant) === vlab;
           })[0];
           return { nid: n.id, cid: n.campaign_id, name: n.campaign_name || ("Campaign " + n.campaign_id),
+                   client: n.client || "Unknown",
                    email: email, vlab: vlab, v: v, checked: true, state: "" };
         }).filter(function (c) { return c.vlab; });
-        paint();
+        enrich4(paint);
       })
       .catch(function () {
         $id("vaw4-rows").innerHTML = '<div class="subline">Couldn\'t load the optimiser\'s calls — reload to retry.</div>';
@@ -2771,6 +2884,9 @@ boot();
   }
 
   $id("vaw4-go").addEventListener("click", runBatch);
+  // Follow the page's client filter: re-paint (filter to the picked client)
+  // whenever the client chips change. Data is fetched once; filtering is local.
+  window.addEventListener("dlv-client-lens", function () { if (CAND.length) paint(); });
   boot4();
 })();
 </script>

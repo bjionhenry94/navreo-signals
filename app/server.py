@@ -3441,14 +3441,67 @@ def _pct_of(v) -> int:
 
 
 def _active_variants(step: dict) -> list:
-    """[{'id','pct'}] for every non-deleted variant with a >0 share."""
+    """[{'id','pct','label'}] for every non-deleted variant with a >0 share.
+    `label` rides so a disable can fold the freed share into the winning
+    sibling by label; id/pct-only callers ignore it."""
     out = []
     for v in (step.get("sequence_variants") or []):
         if v.get("is_deleted"):
             continue
         pct = _pct_of(v)
         if pct > 0:
-            out.append({"id": v.get("id"), "pct": pct})
+            out.append({"id": v.get("id"), "pct": pct, "label": v.get("variant_label")})
+    return out
+
+
+def _best_sibling_label(cid, email_num, exclude_label):
+    """The WINNING sibling's label on this email step, for folding a disabled
+    variant's share into the best performer (Bjion, 2026-08-02: freed traffic
+    goes to the winner). Ranked in Bjion's order: (1) meetings per email sent,
+    then (2) positives per email sent. Reads live per-variant performance via
+    _cockpit_messaging (per-variant meetings from meetings.by_variant, keyed
+    '<step>|<label>'). Returns a label, or None when performance is
+    unavailable/degraded or no clear active sibling exists — callers then fall
+    back to the proportional split, so a disable never fails on this."""
+    try:
+        m = _cockpit_messaging(cid)
+    except Exception:  # noqa: BLE001 — winner is best-effort; never break the disable
+        return None
+    if not isinstance(m, dict) or m.get("degraded"):
+        return None
+    by_variant = ((m.get("meetings") or {}).get("by_variant")) or {}
+    best_label, best_key = None, None
+    for v in (m.get("versions") or []):
+        if str(v.get("step")) != str(email_num):
+            continue
+        lab = v.get("label")
+        if not lab or lab == exclude_label:
+            continue
+        split = v.get("split")
+        if split is not None and split <= 0:  # switched-off / deleted siblings can't take traffic
+            continue
+        sent = v.get("sent") or 0
+        meet = by_variant.get(str(v.get("step")) + "|" + str(lab), 0)
+        pos = v.get("positives") or 0
+        # meetings/sent first, then positives/sent — 0 sent sorts last
+        key = ((meet / sent) if sent else 0.0, (pos / sent) if sent else 0.0)
+        if best_key is None or key > best_key:
+            best_label, best_key = lab, key
+    return best_label
+
+
+def _pcts_to_winner(others: list, target_pct: int, winner_label) -> dict | None:
+    """Fold the WHOLE freed share into the single winning sibling; every other
+    active sibling keeps its current share. Returns {id: new_pct} (summing to
+    the same pool _redistribute_variant_shares would), or None to fall back to
+    the proportional split when the winner isn't among the active others."""
+    if not winner_label:
+        return None
+    win = next((o for o in others if o.get("label") == winner_label), None)
+    if win is None:
+        return None
+    out = {o["id"]: o["pct"] for o in others}
+    out[win["id"]] = win["pct"] + target_pct
     return out
 
 
@@ -3477,11 +3530,14 @@ def _variant_pct_in(steps: list, email_num: int, variant_id) -> int | None:
 
 
 def _disable_variant_pcts(steps: list, email_num: int, variant_label: str,
-                          smartlead_url, result: dict) -> dict:
-    """Guards + new distribution for disabling one variant (target -> 0,
-    others per _redistribute_variant_shares). Raises SequenceActionRefused on
-    any guard, mirroring the pre-helper behaviour byte for byte. Side-fills
-    `result` (pcts / target_pct / target_id) for the caller's receipt."""
+                          smartlead_url, result: dict, winner_label=None) -> dict:
+    """Guards + new distribution for disabling one variant (target -> 0). The
+    freed share goes to the WINNING sibling (`winner_label`, from
+    _best_sibling_label) so switching a loser off pushes its traffic to the
+    best performer; when no winner is resolvable it falls back to the
+    proportional split (_redistribute_variant_shares). Raises
+    SequenceActionRefused on any guard. Side-fills `result` (pcts /
+    target_pct / target_id / winner_id) for the caller's receipt."""
     step = _find_step(steps, email_num)
     if step is None:
         raise SequenceActionRefused(404, {
@@ -3504,7 +3560,14 @@ def _disable_variant_pcts(steps: list, email_num: int, variant_label: str,
             "message": "fewer than 2 active variants on this step - refusing to disable the last one",
             "smartlead_url": smartlead_url})
     others = [a for a in active if a["id"] != target.get("id")]
-    new_pcts = _redistribute_variant_shares(others, target_pct)
+    new_pcts = _pcts_to_winner(others, target_pct, winner_label)
+    if new_pcts is None:
+        new_pcts = _redistribute_variant_shares(others, target_pct)
+        result["winner_id"] = None
+    else:
+        win = next((o for o in others if o.get("label") == winner_label), None)
+        result["winner_id"] = win.get("id") if win else None
+        result["winner_label"] = winner_label
     new_pcts[target.get("id")] = 0
     result["pcts"] = new_pcts
     result["target_pct"] = target_pct
@@ -3539,6 +3602,10 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
 
     receipt = {"pcts_before": {}, "pcts_after": {}, "labels": {}}
 
+    # A disable folds the freed share into the winning sibling (best performer)
+    # just like the notification-execute path; None → proportional fallback.
+    disable_winner = _best_sibling_label(campaign_id, email_num, variant_label) if action == "disable" else None
+
     def _mutate(steps):
         step = _find_step(steps, email_num)
         if step is None:
@@ -3550,7 +3617,7 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
 
         if action == "disable":
             result = {}
-            new_pcts = _disable_variant_pcts(steps, email_num, variant_label, None, result)
+            new_pcts = _disable_variant_pcts(steps, email_num, variant_label, None, result, disable_winner)
             _apply_step_pcts(steps, email_num, new_pcts)
             receipt["target_id"] = result["target_id"]
         elif action == "enable":
@@ -4014,11 +4081,17 @@ def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
 
     result = {"pcts": {}, "target_pct": 0, "target_id": None}
 
+    # The freed share goes to the winning sibling on this step (best performer,
+    # by positives) — resolved once here, off the same live per-variant stats
+    # the card shows. None (Smartlead degraded / no clear winner) → the mutate
+    # falls back to the proportional split, so a disable never fails on this.
+    winner_label = _best_sibling_label(campaign_id, email_num, variant_label)
+
     def _mutate(steps):
         # Same guards as the pre-helper implementation, moved inside the
         # mutate so they run against the helper's OWN fresh GET (one fetch,
         # no decide-on-stale-state window).
-        new_pcts = _disable_variant_pcts(steps, email_num, variant_label, smartlead_url, result)
+        new_pcts = _disable_variant_pcts(steps, email_num, variant_label, smartlead_url, result, winner_label)
         _apply_step_pcts(steps, email_num, new_pcts)
         return steps
 
