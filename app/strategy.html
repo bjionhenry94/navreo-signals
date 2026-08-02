@@ -59,6 +59,11 @@ a{color:inherit;text-decoration:none}
 .chip-sub{color:var(--ink-3);} .chip-more{color:var(--ink-3);background:transparent;}
 .tgt-meta{font-size:13px;color:var(--ink-2);margin:0;}
 .tgt-note{font-size:12.5px;color:var(--ink-3);margin:14px 0 0;line-height:1.5;max-width:640px;}
+.share-box{margin-top:26px;padding-top:20px;border-top:1px solid var(--line);}
+.share-head{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin:0 0 8px;}
+.share-sub{font-size:13px;color:var(--ink-2);margin:0 0 12px;max-width:520px;line-height:1.5;}
+.share-out{font-size:12.5px;color:var(--ink-3);margin:10px 0 0;word-break:break-all;}
+.share-out a{color:var(--orange-600);}
 .chips{display:flex;flex-wrap:wrap;gap:8px;}
 .mech{display:inline-flex;align-items:center;font-family:var(--font-display);font-size:15px;background:var(--cream-50);border:1px solid var(--line);border-radius:999px;padding:8px 16px;}
 .tnum{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding-bottom:22px;border-bottom:1px solid var(--line);margin-bottom:22px;}
@@ -251,6 +256,36 @@ function versionFrame(x){
   // client mode: the email body is editable in place; Save posts a copy-edit
   const ed=CLIENT_MODE?' contenteditable="true" data-edit="email" spellcheck="true"':'';
   return `<div class="mail"><div class="mh">Subject: ${esc(x.caption||'')}</div><div class="mb"${ed}>${esc(x.email||'').replace(/\n/g,'<br>')}</div></div>`;}
+// "Share a link" on the Summary page (Bjion, 2026-08-02): GTME-only by design —
+// the Summary tab never renders in client mode. Mints this board's client
+// permalink (copy-edit-only view) and puts it on the clipboard.
+function shareBlock(){
+  if(CLIENT_MODE)return '';
+  return `<div class="share-box"><p class="share-head">Share with your client</p>`
+    +`<p class="share-sub">They get this board with just Targeting, Icebreaker and Copy. They can edit the emails; they never see Build.</p>`
+    +`<div class="actions-center"><button class="btn-ink" id="gtme-share-link">Share a link</button></div>`
+    +`<p class="share-out" id="share-out"></p></div>`;
+}
+async function gtmeShareLink(btn){
+  const rid=SERVED_RUN_ID||RUN_ID;
+  const out=document.querySelector('#share-out');
+  if(!rid){if(out)out.textContent='This board needs its own page first — ask in chat to republish it.';return;}
+  btn.disabled=true;btn.textContent='Making your link…';
+  try{
+    const r=await fetch('/api/strategy/share',{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:rid})});
+    const j=await r.json();
+    btn.disabled=false;
+    if(!j.ok){btn.textContent='Share a link';if(out)out.textContent=j.message||'Could not make the link, try again.';return;}
+    const full=location.origin+j.url;
+    let copied=false;
+    try{await navigator.clipboard.writeText(full);copied=true;}catch(e){}
+    btn.textContent=copied?'Link copied':'Share a link';
+    if(out)out.innerHTML=(copied?'On your clipboard, ready to send: ':'Copy this and send it: ')
+      +`<a href="${esc(full)}" target="_blank" rel="noopener">${esc(full)}</a>`;
+    setTimeout(()=>{btn.textContent='Share a link';},5000);
+  }catch(e){btn.disabled=false;btn.textContent='Share a link';if(out)out.textContent='Could not make the link, try again.';}
+}
 async function clientSaveCopy(x,btn){
   const mb=document.querySelector('.mb[data-edit="email"]');
   if(!mb)return;
@@ -369,6 +404,8 @@ function renderWorkspace(){
   work.querySelectorAll('.tabs label').forEach(l=>l.onclick=()=>{tab=l.dataset.tab;renderWorkspace();});
   const csb=work.querySelector('#client-save-copy');
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
+  const shb=work.querySelector('#gtme-share-link');
+  if(shb)shb.onclick=()=>gtmeShareLink(shb);
   work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{sIdx=+c.dataset.i;renderWorkspace();});
 }
 function render(){renderSidebar();renderWorkspace();}
