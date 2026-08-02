@@ -299,8 +299,13 @@ function tgtType(x){const k=x.targeting&&x.targeting.kind;return TGT_TYPES[k]?`<
 const SIGNAL_NAMES={prospeo_signal:"Buying signal",hiring_signal:"Hiring signal",engagement_signal:"Social Engagement",news_intent:"In the news"};
 const LIST_NAMES={targeted_list:"Targeted list",lookalike:"Lookalike list",followers:"Follower list",recontact:"Re-approach list",events:"Event list"};
 function kindPill(x){
-  const k=x.targeting&&x.targeting.kind;if(!k)return '';
-  if(SIGNAL_NAMES[k])return `<p class="kpill-wrap"><span class="kpill kpill-live"><span class="kdot"></span>LIVE - ${esc(SIGNAL_NAMES[k])}</span></p>`;
+  const t=x.targeting||{};const k=t.kind;if(!k)return '';
+  if(SIGNAL_NAMES[k]){
+    // name the SPECIFIC signal (targeting.signal) when the run gives one,
+    // e.g. "Runs a sales stack", falling back to the generic type name.
+    const name=t.signal||SIGNAL_NAMES[k];
+    return `<p class="kpill-wrap"><span class="kpill kpill-live"><span class="kdot"></span>LIVE - ${esc(name)}</span></p>`;
+  }
   return `<p class="kpill-wrap"><span class="kpill kpill-list">${esc(LIST_NAMES[k]||'Targeted list')}</span></p>`;
 }
 function grpChip(c){const i=String(c).indexOf(' — ');if(i<0)return `<span class="chip">${esc(c)}</span>`;return `<span class="chip">${esc(String(c).slice(0,i))}<span class="chip-sub"> — ${esc(String(c).slice(i+3))}</span></span>`;}
