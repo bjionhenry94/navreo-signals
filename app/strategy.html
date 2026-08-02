@@ -185,24 +185,46 @@ const CLIENT_MODE=!!SHARE;
 function runIdFromHash(){const m=location.hash.match(/^#\/r\/([a-z0-9-]+)/);return m?m[1]:'';}
 let RUN_ID=runIdFromHash();
 window.addEventListener('hashchange',()=>{const r=runIdFromHash();if(r!==RUN_ID){RUN_ID=r;lastFP=null;fetchRun();}});
-const TABS_ALL=[['tgt','Targeting'],['first','Icebreaker'],['copy','Copy'],['build','Summary'],['live','Live']];
-// client mode: build/live (and every GTME action inside them) NEVER enter the DOM
-const TABS=CLIENT_MODE?TABS_ALL.filter(t=>['tgt','first','copy'].includes(t[0])):TABS_ALL;
+// Client mode sees ALL pages including Summary + Launch (Bjion 2026-08-02);
+// what stays GTME-only is the ACTIONS: the Build button and the share block
+// never render for a client. 'live' key kept for state compat; label = Launch.
+const TABS_ALL=[['tgt','Targeting'],['first','Icebreaker'],['copy','Copy'],['build','Summary'],['live','Launch']];
+const TABS=TABS_ALL;
 const ICEB=[["Safe opener", true, "A polite, personal-feeling opening line that always works. Our best performer.", "Apologies if this isn't relevant, wasn't sure who at {company} was the best person for this."], ["Company detail", false, "References something specific we found about their company.", "Saw {company} covers three states now. Growth like that usually strains the pipeline side."], ["Colleague mention", false, "Names a colleague we found, only where we're confident it's right.", "I wasn't sure if you or {colleague} was the right person to ask at {company}."]];
 // Pre-launch checks live on the Live page (wizard-summary-restage, 2026-08-02):
 // third field = already done at this stage (1) vs happens before launch (0),
 // so anyone the board is shared with sees the plan AND the progress.
+// REAL launch checklist (Bjion 2026-08-02): every tick is COMPUTED from the
+// idea's actual data at render time — nothing is painted on. Text checks read
+// the real email; platform checks (mailboxes/caps/links-verified/grammar pass)
+// tick only when the run carries verified evidence flags (idea.checks.* or
+// run-level checks.*, set by chat/QA when the work has actually been done).
+const SPAMMY=/\b(guaranteed?|100% free|act now|risk[- ]free|cash bonus|no obligation|click here now|limited time|make money fast|winner)\b/i;
+function _emailText(x){return String(x.email||'');}
+function _lastLine(t){const L=String(t||'').split('\n').map(s=>s.trim()).filter(Boolean);return L[L.length-1]||'';}
+function _flag(x,k){return !!((x.checks&&x.checks[k])||(RUN_META.checks&&RUN_META.checks[k]));}
 const CHECKS=[
-  ["Spelling &amp; grammar","every line read and fixed",1],
-  ["Signature added","a real person signs off every email",1],
-  ["Unsubscribe line present","an easy opt-out on every email",1],
-  ["No spam-trigger words","wording that stays out of the junk folder",1],
-  ["Merge fields fill in","no blank [First name] or [Company] slips through",0],
-  ["Links work","every link opened and checked",0],
-  ["Sending addresses are healthy","warmed-up domains, good reputation",0],
-  ["Daily send caps set","we ramp up slowly, never blast",0],
-  ["Nobody emailed twice","checked against everyone we've contacted before",0]
+  ["Signature added","a real person signs off this email",
+    x=>{const l=_lastLine(_emailText(x));return !!l&&l.length<=34&&/^[A-Z][A-Za-z .'’-]*$/.test(l);}],
+  ["Merge fields fill in","no blank {first name} or [company] slips through",
+    x=>!!_emailText(x)&&!/\{[^}]*\}|\[[A-Za-z][^\]]*\]/.test(_emailText(x))],
+  ["No spam-trigger words","wording that stays out of the junk folder",
+    x=>!!_emailText(x)&&!SPAMMY.test(_emailText(x)+' '+(x.caption||''))],
+  ["Easy opt-out included","one line that lets them say no thanks",
+    x=>/unsubscribe|opt[ -]?out|rather not hear|not for you|don'?t want these|let me know and I'?ll stop/i.test(_emailText(x))],
+  ["Spelling &amp; grammar read","every line read and fixed by a person",
+    x=>_flag(x,'grammar')],
+  ["Links work","every link opened and checked",
+    x=>{const n=(_emailText(x).match(/https?:\/\//g)||[]).length;return n===0?!!_emailText(x):_flag(x,'links');}],
+  ["Sending addresses are healthy","warmed-up domains, good reputation",
+    x=>_flag(x,'mailboxes')],
+  ["Daily send caps set","we ramp up slowly, never blast",
+    x=>_flag(x,'caps')],
+  ["Nobody emailed twice","checked against everyone we've contacted before",
+    x=>x.freeFromRecords!=null&&x.newPeople!=null]
 ];
+function checksFor(x){return CHECKS.map(c=>[c[0],c[1],!!c[2](x)]);}
+let RUN_META={};
 let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
 const side=document.getElementById('side'), work=document.getElementById('work'),
       boot=document.getElementById('boot'), toast=document.getElementById('toast');
@@ -369,14 +391,15 @@ function panelHTML(x){
       +`<span class="mlinks"><a href="${esc(wurl)}" target="_blank" rel="noopener">Website ↗</a><a href="${esc(lurl)}" target="_blank" rel="noopener">LinkedIn ↗</a></span></div>`
       +`<div class="mail"><div class="mh">Subject: <span class="ms">${esc(subj.charAt(0).toUpperCase()+subj.slice(1))}</span></div><div class="mb">${esc(resolvedEmail(x,pr)).replace(/\n/g,'<br>')}</div></div>`
       +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`
-      +`<div class="actions-center"><button class="build-btn">Build the campaign</button></div>`
+      +(CLIENT_MODE?'':`<div class="actions-center"><button class="build-btn">Build the campaign</button></div>`)
       +shareBlock();
   }
   const p=x.reachablePool||x.net;
-  const doneN=CHECKS.filter(c=>c[2]).length;
-  return `<p class="eyb">Live</p><div class="livebanner">Not live yet — the campaign turns on when you approve it. Nothing sends until then.</div>`
-    +`<p class="chkhead">Every box below gets ticked before the first email goes out. ${doneN} of ${CHECKS.length} are already done.</p>`
-    +`<div class="checks">`+CHECKS.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Before launch'}</span></div>`).join('')+`</div>`
+  const cks=checksFor(x);
+  const doneN=cks.filter(c=>c[2]).length;
+  return `<p class="eyb">Launch</p><div class="livebanner">Not live yet — the campaign turns on when you approve it. Nothing sends until then.</div>`
+    +`<p class="chkhead">Every box below is checked against this campaign as it stands — nothing ticks until it's actually true. ${doneN} of ${cks.length} are done right now.</p>`
+    +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Before launch'}</span></div>`).join('')+`</div>`
     +`<div class="tiles" style="margin-top:22px"><div class="tile"><div class="tn">${num(p)}</div><div class="tl">in the pool</div></div>`
     +`<div class="tile"><div class="tn">—</div><div class="tl">emailed</div></div>`
     +`<div class="tile"><div class="tn">—</div><div class="tl">replies</div></div>`
@@ -435,6 +458,7 @@ async function fetchRun(){
     if(fp===lastFP)return;
     const first=lastFP===null;
     IDEAS=ideas;client=run.client||run.clientLabel||client;
+    RUN_META={checks:(run&&run.checks)||{}};
     PEOPLE=run.people||{};COLLEAGUES=run.colleagues||{};
     if(active>=IDEAS.length)active=0;
     render();boot.classList.add('gone');
