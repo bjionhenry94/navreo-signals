@@ -288,6 +288,14 @@ function checksFor(x){return CHECKS.map(c=>[c[0],c[1],!!c[2](x)]);}
 let RUN_META={};
 let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
 let copyVer={}; // Copy tab: active version index per sequence step (reset per idea)
+let SIG=null;   // run.signature {name, role, company, domain} — resolves %signature%
+// House signature format (Bjion rule 2026-08-03): name / role / company / website line.
+function sigHtml(){
+  const s=(SIG&&SIG.name)
+    ?[SIG.name,SIG.role,SIG.company,SIG.domain?('Visit our website at '+SIG.domain):''].filter(Boolean)
+    :['Bjion','Navreo'];
+  return '<span class="mvar">'+s.map(esc).join('<br>')+'</span>';
+}
 const side=document.getElementById('side'), work=document.getElementById('work'),
       boot=document.getElementById('boot'), toast=document.getElementById('toast');
 
@@ -508,7 +516,7 @@ function resolvedTextHtml(text,x,p){
       .replace(/\{\{?company\}?\}/gi,_mvar(p.company||''))
       .replace(/\{\{?icebreaker\}?\}/gi,_mvar(opener))
       .replace(/\{\{?colleague\}?\}/gi,_mvar(COLLEAGUES[x.id]||'a colleague'))
-      .replace(/%signature%/gi,_mvar('Bjion')+'<br>'+_mvar('Navreo'))
+      .replace(/%signature%/gi,sigHtml())
       .replace(/\n/g,'<br>');
   }
   const parts=[_mvar(opener),esc(x.pain||''),esc(x.offer||'')].filter(s=>s&&s!=='<span class="mvar"></span>');
@@ -592,7 +600,7 @@ function panelHTML(x){
     const purl=p=>({
       w:p.website||('https://www.google.com/search?q='+encodeURIComponent(p.company||p.first||'')),
       l:p.linkedin||('https://www.linkedin.com/search/results/all/?keywords='+encodeURIComponent(p.company||p.first||''))});
-    const strip=ppl.map((p,i)=>{const u=purl(p);return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><span class="sum-av">${esc((p.first||'?')[0])}</span><div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
+    const strip=ppl.map((p,i)=>{const u=purl(p);return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
       +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
     return `<p class="eyb">Preview</p>`
       +`<p class="sum-lead">This goes to <b>${num(x.reachablePool||x.net)}</b> people. Tap one to read their email.</p>`
@@ -714,7 +722,7 @@ async function fetchRun(){
     const fp=JSON.stringify(ideas)+'|'+JSON.stringify(run.people||{})+'|'+(j.updated||run.updated||'')+'|'+(foc.ts||'')+'|'+(foc.note||'');
     if(fp===lastFP)return;
     const first=lastFP===null;
-    IDEAS=ideas;client=run.client||run.clientLabel||client;
+    IDEAS=ideas;client=run.client||run.clientLabel||client;SIG=run.signature||null;
     RUN_META={checks:(run&&run.checks)||{}};
     PEOPLE=run.people||{};COLLEAGUES=run.colleagues||{};
     if(active>=IDEAS.length)active=0;
