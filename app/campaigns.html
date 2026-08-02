@@ -1043,18 +1043,79 @@
   }
   .back-link:hover { color: var(--fg); }
   .campaign-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  /* Status control (P2, Bjion's pick 1 Aug 2026): ONE button that IS the
+     status — it shows the state and opens the moves you can make from it, so
+     the subtitle no longer repeats the status word and Pause/Stop stop
+     competing for space in the topbar. */
   .cstat-bar { display: inline-flex; align-items: center; gap: 14px; }
-  #cstat-controls { display: inline-flex; align-items: center; gap: 8px; }
+  #cstat-controls { display: inline-flex; align-items: center; }
+  .cstat-ctl { position: relative; display: inline-flex; }
   .cstat-btn {
-    font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap;
     padding: 6px 13px; border-radius: var(--r-pill);
     border: 1px solid var(--border-strong); background: var(--bg); color: var(--fg);
+    display: inline-flex; align-items: center; gap: 7px;
   }
   .cstat-btn:hover { border-color: var(--nav-ink-3); }
-  .cstat-btn[data-armed="1"] { background: var(--chip-active-bg); color: var(--chip-active-fg); border-color: var(--chip-active-bg); }
-  .cstat-btn--stop { color: var(--danger); }
-  .cstat-btn--stop[data-armed="1"] { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .cstat-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .cstat-btn[aria-expanded="true"] { background: var(--chip-active-bg); border-color: var(--chip-active-bg); color: var(--chip-active-fg); }
   .cstat-btn:disabled { opacity: 0.55; cursor: default; }
+  /* the dot is the ONLY non-text state signal on the chip, so every state
+     needs its own readable token — Draft was #DDDDDA on white (1.36:1), i.e.
+     a dot that looked like it failed to load */
+  .cstat-dot { width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto; background: var(--fg-subtle); }
+  .cstat-dot--active { background: var(--success); }
+  .cstat-dot--paused { background: var(--warning); }
+  .cstat-dot--stopped { background: var(--danger); }
+  .cstat-dot--completed { background: var(--fg); }
+  .cstat-dot--drafted { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-subtle); }
+  /* the chip inverts when open — lift the dots so they hold against the dark face */
+  .cstat-btn[aria-expanded="true"] .cstat-dot--completed { background: var(--nav-white); }
+  .cstat-btn[aria-expanded="true"] .cstat-dot--drafted { box-shadow: inset 0 0 0 1.5px var(--nav-white); }
+  .cstat-caret { font-size: 0.55rem; opacity: 0.65; }
+  .cstat-btn[aria-expanded="true"] .cstat-caret { opacity: 1; }
+  .cstat-menu {
+    position: absolute; top: calc(100% + 7px); right: 0; z-index: 30; min-width: 186px;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 13px;
+    box-shadow: 0 10px 34px rgba(20,17,14,0.13); padding: 6px; text-align: left;
+  }
+  .cstat-menu[hidden] { display: none; }
+  .cstat-head {
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--fg-subtle); padding: 6px 11px 4px;
+  }
+  .cstat-mi {
+    display: block; width: 100%; text-align: left; font: inherit; font-size: 0.8rem; font-weight: 600;
+    cursor: pointer; background: none; border: 0; border-radius: 9px; padding: 8px 11px; color: var(--fg);
+  }
+  .cstat-mi:hover { background: var(--sunken); }
+  .cstat-mi:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .cstat-mi--danger { color: var(--danger); }
+  .cstat-mi--open { background: var(--sunken); }
+  .cstat-sep { height: 1px; background: var(--border); margin: 5px 8px; }
+  /* the commit button: a SEPARATE target, revealed under its row, so the
+     second press of a double-click can never land on it */
+  .cstat-row { display: block; }
+  .cstat-confirm { padding: 2px 11px 8px; }
+  .cstat-why {
+    font-size: 0.7rem; line-height: 1.45; color: var(--fg-subtle);
+    margin: 0 0 7px; max-width: 216px;
+  }
+  .cstat-commit {
+    display: block; font: inherit; font-size: 0.76rem; font-weight: 600;
+    cursor: pointer; padding: 6px 13px; border-radius: var(--r-pill);
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--fg);
+  }
+  .cstat-commit:hover { border-color: var(--nav-ink-3); }
+  .cstat-commit:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .cstat-commit:disabled { opacity: 0.45; cursor: default; }
+  .cstat-commit--danger { color: var(--danger); border-color: var(--danger-bd); }
+  .cstat-commit--danger:hover:enabled { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .cstat-commit--danger:focus-visible { box-shadow: 0 0 0 3px rgba(194,55,31,0.32); }
+  .cstat-sr {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
   .campaign-header-main {
     display: flex;
     flex-wrap: wrap;
@@ -3578,7 +3639,8 @@
        "Runs in Smartlead" dropped. */
     h.push('<div class="campaign-topbar">' +
       '<a href="#/" class="back-link">&larr; Campaigns</a>' +
-      '<span class="cstat-bar"><span id="cstat-controls"></span>' +
+      '<span class="cstat-bar"><span id="cstat-sr" class="cstat-sr" aria-live="polite"></span>' +
+      '<span id="cstat-controls"></span>' +
       '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a></span>' +
       "</div>");
     var dial = "";
@@ -3597,8 +3659,12 @@
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
       /* workspace ownership, not a hardcoded "Navreo" (audit #11): a Grout/
          ThunderBird campaign must not read as Navreo's on the page a CSM
-         acts from — wsLabel is the workspace's display label, server-fed */
-      '<p class="campaign-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Navreo")) + ' &middot; <span id="cstat-word">' + (slStatus ? esc(slStatus) : "&hellip;") + "</span> &middot; campaign " + esc(c.id) + "</p></div>" +
+         acts from — wsLabel is the workspace's display label, server-fed.
+         The STATUS word is deliberately absent: the status control in the
+         topbar carries it now (P2, Bjion 1 Aug 2026) — one place to read it,
+         the same place you change it. Client-label fallback: a name-gated
+         client campaign (or demo Acme) must not read as Navreo either. */
+      '<p class="campaign-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Navreo")) + " &middot; campaign " + esc(c.id) + "</p></div>" +
       "</div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
@@ -6153,19 +6219,50 @@
     hydrateStatusControls(c);
   }
 
-  /* ── Set live / Pause / Stop from the header ─────────────────────────────
-     Buttons are driven by the LIVE Smartlead status (45s SWR server-side,
-     invalidated after every write so the header never lies). Two-step
-     confirm: first click arms the button ("Sure?"), second click sends —
-     that second click IS the CSM approval the server's confirm token
-     encodes. Only POST /campaigns/{id}/status is ever hit server-side. */
+  /* ── The status control ──────────────────────────────────────────────────
+     ONE button that IS the status (P2, Bjion 1 Aug 2026 — replaced a
+     side-by-side Pause + Stop pair): it shows the live Smartlead state and
+     opens the moves available from that state. Driven by the LIVE status
+     (45s SWR server-side, invalidated + put_fresh'd after every write so the
+     header never lies). Two-step confirm on the menu row: the first click
+     arms it, the second sends — that second click IS the CSM approval the
+     server's confirm token encodes. Only POST /campaigns/{id}/status is ever
+     hit server-side. Rows carry no descriptions (Bjion): the verbs carry
+     themselves, and the point of this control was less to read, not more. */
+  /* Confirm model (user-test panel, 1 Aug 2026): arm-in-place was defeated by
+     a plain double-click — the arm and the confirm were the same pixel with no
+     dwell, so one twitchy double-click ended a campaign. A row that changes
+     the world outward now REVEALS a separate commit button beneath itself: a
+     different target, in a different place, that did not exist when the first
+     click landed, plus a 350ms dwell gate. Pause is exempt — it only ever
+     STOPS sending and is undone by Set live, so making the safe, everyday
+     action instant costs nothing and keeps it at two clicks. */
+  var CSTAT_SETLIVE = { lab: "Set live", to: "START", commit: "Yes, set it live" };
+  var CSTAT_STOP = { lab: "Stop — mark completed", to: "STOPPED",
+                     commit: "Yes, stop it", danger: true };
+  /* The rows stay bare (Bjion: no descriptions). The consequence appears only
+     in the revealed confirm block — on demand, at the one moment it's worth
+     reading — and it NAMES the campaign, because the menu can overlap the
+     title and "are you sure?" should never be about an unnamed thing.
+     "Set live" is state-specific: telling a draft it "resumes where it left
+     off" is simply false, and it's the case where mail sends for the first time. */
+  function cstatWhy(mv, bucket, name) {
+    var who = name ? " “" + (name.length > 44 ? name.slice(0, 43) + "…" : name) + "”" : " this campaign";
+    if (mv.to === "STOPPED") return "Marks" + who + " completed. Nothing more sends.";
+    if (bucket === "DRAFTED") return "Starts sending" + who + " for the first time. Sent mail can't be recalled.";
+    if (bucket === "PAUSED") return "Picks up sending" + who + " where it left off.";
+    return "Restarts" + who + ", which you'd already finished.";
+  }
   var CSTAT_ACTIONS = {
-    ACTIVE:    [{ lab: "Pause", to: "PAUSED" }, { lab: "Stop", to: "STOPPED" }],
-    PAUSED:    [{ lab: "Set live", to: "START" }, { lab: "Stop", to: "STOPPED" }],
-    STOPPED:   [{ lab: "Set live", to: "START" }],
-    COMPLETED: [{ lab: "Set live", to: "START" }],
-    DRAFTED:   [{ lab: "Set live", to: "START" }]
+    ACTIVE:    [{ lab: "Pause", to: "PAUSED", instant: true }, CSTAT_STOP],
+    PAUSED:    [CSTAT_SETLIVE, CSTAT_STOP],
+    STOPPED:   [CSTAT_SETLIVE],
+    COMPLETED: [CSTAT_SETLIVE],
+    DRAFTED:   [CSTAT_SETLIVE]
   };
+  var CSTAT_DWELL_MS = 350;  /* a double-click's second press can never commit */
+  var CSTAT_LABEL = { ACTIVE: "Active", PAUSED: "Paused", STOPPED: "Stopped",
+                      COMPLETED: "Completed", DRAFTED: "Draft" };
   function cstatBucket(status) {
     var s = String(status || "").toUpperCase();
     if (s.indexOf("ACTIVE") !== -1 || s.indexOf("START") !== -1) return "ACTIVE";
@@ -6175,96 +6272,314 @@
     if (s.indexOf("DRAFT") !== -1) return "DRAFTED";
     return "";
   }
+  /* One document-level listener for every status menu ever painted: an
+     outside click or Escape closes the open menu AND disarms whatever was
+     armed inside it, so a half-confirmed Stop can never survive a click
+     elsewhere on the page. Registered once, never per repaint. */
+  var CSTAT_DOC_WIRED = false;
+  function cstatCloseMenus(except) {
+    document.querySelectorAll(".cstat-menu").forEach(function (m) {
+      if (m.hidden || m === except) return;
+      m.hidden = true;
+      m.querySelectorAll(".cstat-mi").forEach(function (mi) { if (mi._disarm) mi._disarm(); });
+      var b = m.parentNode && m.parentNode.querySelector(".cstat-btn");
+      if (b) b.setAttribute("aria-expanded", "false");
+    });
+  }
+  function cstatWireDoc() {
+    if (CSTAT_DOC_WIRED) return;
+    CSTAT_DOC_WIRED = true;
+    document.addEventListener("click", function (e) {
+      if (!e.target.closest(".cstat-ctl")) cstatCloseMenus(null);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      var open = document.querySelector(".cstat-menu:not([hidden])");
+      if (!open) return;
+      var b = open.parentNode && open.parentNode.querySelector(".cstat-btn");
+      cstatCloseMenus(null);
+      if (b) b.focus();
+    });
+  }
+
   function hydrateStatusControls(c) {
     var root = document.getElementById("cstat-controls");
     if (!root || c.ghost || !/^\d+$/.test(String(c.id))) return;
-    function word(status) {
-      if (!onPage(c.id)) return; /* audit #0: async landings never cross campaigns */
-      var el = document.getElementById("cstat-word");
-      if (el && status) {
-        var t = String(status).toLowerCase();
-        el.textContent = t.charAt(0).toUpperCase() + t.slice(1);
-      }
+    cstatWireDoc();
+
+    function announce(status) {
+      /* the status lives in a button now, so a state CHANGE has to be spoken
+         explicitly — a sighted user sees the pill change, a screen-reader
+         user would otherwise get nothing. Change-only: never called on page
+         load (an on-arrival announcement trains users to tune the region
+         out), and page-guarded like paint() so a slow response can't speak
+         campaign A's status on campaign B's page. */
+      if (!onPage(c.id)) return;
+      var sr = document.getElementById("cstat-sr");
+      if (!sr || !status) return;
+      sr.textContent = CSTAT_LABEL[cstatBucket(status)]
+        ? "Campaign status: " + CSTAT_LABEL[cstatBucket(status)]
+        : status; /* free text, e.g. "Changing campaign status…" */
     }
+
     function paint(status) {
-      if (!onPage(c.id)) return; /* audit #0 */
-      var acts = CSTAT_ACTIONS[cstatBucket(status)] || [];
-      if (!acts.length) { root.innerHTML = ""; return; }
-      root.innerHTML = acts.map(function (a, i) {
-        var stop = a.to === "STOPPED";
-        return '<button type="button" class="cstat-btn' + (stop ? " cstat-btn--stop" : "") +
-          '" data-to="' + a.to + '" title="' +
-          (stop ? "Stops the campaign — Smartlead marks it completed" :
-           a.to === "PAUSED" ? "Pauses all sending on this campaign" :
-           "Starts sending — the campaign goes live") + '">' + a.lab +
-          (stop ? " (mark completed)" : "") + "</button>";
-      }).join("");
-      root.querySelectorAll(".cstat-btn").forEach(function (btn) {
-        var to = btn.getAttribute("data-to"), base = btn.textContent;
-        btn.addEventListener("click", function () {
-          if (btn.getAttribute("data-armed") !== "1") {
-            /* arm: this click asks, the next confirms; any other button click
-               disarms — and the arm auto-expires (audit #10: an armed Stop
-               left for minutes must not fire on a distracted later click) */
-            root.querySelectorAll(".cstat-btn").forEach(function (b) {
-              b.removeAttribute("data-armed");
-              b.textContent = b.getAttribute("data-base") || b.textContent;
-            });
-            btn.setAttribute("data-base", base);
-            btn.setAttribute("data-armed", "1");
-            btn.textContent = "Confirm: " + base.toLowerCase() + "?";
-            clearTimeout(btn._disarmT);
-            btn._disarmT = setTimeout(function () {
-              if (btn.getAttribute("data-armed") === "1" && !btn.disabled) {
-                btn.removeAttribute("data-armed");
-                btn.textContent = btn.getAttribute("data-base") || btn.textContent;
-              }
-            }, 8000);
-            return;
-          }
-          clearTimeout(btn._disarmT);
-          btn.disabled = true;
-          btn.textContent = "Working…";
-          sigPost("/api/campaign-status", { id: parseInt(c.id, 10), status: to, confirm: to })
-            .then(function (r) {
-              var live = r.live || {};
-              var fresh = live.status || (to === "START" ? "ACTIVE" : to);
-              /* merge, never replace (audit r2): a post-write response with
-                 no lead_stats must not throw away the exact split we hold —
-                 that dropped the bar back to the estimate right after the one
-                 action a CSM takes on this page */
-              STATE.liveStatus[c.id] = Object.assign({}, STATE.liveStatus[c.id],
-                live.status ? live : { status: fresh });
-              word(fresh);
-              paint(fresh);
-              paintAudience(c);
-              renderRows(); /* list chip agrees when the user goes back */
-            })
-            .catch(function (e) {
-              sigToast("Couldn't change the status: " + (e.message || "request failed"));
-              paint(status); /* repaint the honest current state */
-            });
+      if (!onPage(c.id)) return; /* audit #0: async landings never cross campaigns */
+      var bucket = cstatBucket(status);
+      var moves = CSTAT_ACTIONS[bucket] || [];
+      root.innerHTML = "";
+      if (!moves.length) return; /* unknown status: no control beats a wrong one */
+
+      var ctl = document.createElement("span");
+      ctl.className = "cstat-ctl";
+
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "cstat-btn";
+      btn.setAttribute("aria-haspopup", "menu");
+      btn.setAttribute("aria-expanded", "false");
+      btn.title = "Change this campaign's status";
+      /* the visible text is a bare adjective ("Active") and the caret is
+         decorative, so spell the name out for a screen reader */
+      btn.setAttribute("aria-label",
+        "Campaign status: " + (CSTAT_LABEL[bucket] || "unknown") + ". Change status");
+      var dot = document.createElement("span");
+      dot.className = "cstat-dot cstat-dot--" + bucket.toLowerCase();
+      btn.appendChild(dot);
+      /* the word lives in its own span so the in-flight "Working…" swap can
+         keep the dot + caret instead of wiping the button's children */
+      var wordEl = document.createElement("span");
+      wordEl.className = "cstat-word";
+      wordEl.textContent = CSTAT_LABEL[bucket] || "";
+      btn.appendChild(wordEl);
+      var caret = document.createElement("span");
+      caret.className = "cstat-caret";
+      caret.setAttribute("aria-hidden", "true");
+      caret.textContent = "▼";
+      btn.appendChild(caret);
+
+      var menu = document.createElement("div");
+      menu.className = "cstat-menu";
+      menu.hidden = true;
+      menu.setAttribute("role", "menu");
+      menu.id = "cstat-menu";
+      menu.setAttribute("aria-label", "Move to");
+      btn.setAttribute("aria-controls", "cstat-menu");
+      var head = document.createElement("div");
+      head.className = "cstat-head";
+      head.setAttribute("aria-hidden", "true"); /* the menu's aria-label carries it */
+      head.textContent = "Move to"; /* the button already says the current state */
+      menu.appendChild(head);
+
+      var items = [];
+      moves.forEach(function (mv, i) {
+        if (i) {
+          var sep = document.createElement("div");
+          sep.className = "cstat-sep";
+          sep.setAttribute("role", "separator");
+          menu.appendChild(sep);
+        }
+        var mi = document.createElement("button");
+        mi.type = "button";
+        mi.className = "cstat-mi" + (mv.danger ? " cstat-mi--danger" : "");
+        mi.setAttribute("role", "menuitem");
+        mi.textContent = mv.lab;
+        items.push(mi);
+
+        if (mv.instant) {
+          /* Pause: reversible, everyday, no confirm step. */
+          mi._disarm = function () {};
+          mi.addEventListener("click", function () { send(mv, btn, status); });
+          menu.appendChild(mi);
+          return;
+        }
+
+        /* Set live / Stop: reveal a distinct confirm block below the row.
+           role="group" keeps the menu tree valid (a menu may own groups,
+           menuitems and separators — not bare divs and buttons). */
+        var wrap = document.createElement("div");
+        wrap.className = "cstat-row";
+        wrap.setAttribute("role", "group");
+        wrap.setAttribute("aria-label", mv.lab);
+        var box = document.createElement("div");
+        box.className = "cstat-confirm";
+        box.hidden = true;
+        var why = document.createElement("p");
+        why.className = "cstat-why";
+        why.id = "cstat-why-" + mv.to;
+        why.textContent = cstatWhy(mv, bucket, c.name);
+        var commit = document.createElement("button");
+        commit.type = "button";
+        commit.className = "cstat-commit" + (mv.danger ? " cstat-commit--danger" : "");
+        commit.textContent = mv.commit;
+        /* the consequence sentence must reach a screen reader too — focus
+           lands on the commit, so the commit carries it as its description */
+        commit.setAttribute("aria-describedby", why.id);
+        box.appendChild(why);
+        box.appendChild(commit);
+        var shownAt = 0, hideT = null, enableT = null;
+        mi.setAttribute("aria-expanded", "false");
+        function restartHide() {
+          clearTimeout(hideT);
+          hideT = setTimeout(function () {
+            /* timing out with focus inside must not dump the keyboard on
+               <body> in silence — put it back on the row and say so */
+            var hadFocus = box.contains(document.activeElement);
+            mi._disarm();
+            if (hadFocus) {
+              mi.focus();
+              announce("Status change cancelled — the confirmation timed out.");
+            }
+          }, 12000);
+        }
+        mi._disarm = function () {
+          clearTimeout(hideT);
+          clearTimeout(enableT);
+          box.hidden = true;
+          shownAt = 0;
+          commit.disabled = true;
+          mi.setAttribute("aria-expanded", "false");
+          mi.classList.remove("cstat-mi--open");
+        };
+        mi.addEventListener("click", function () {
+          if (!box.hidden) { mi._disarm(); return; }  /* click again = never mind */
+          items.forEach(function (o) { if (o !== mi) o._disarm(); });
+          box.hidden = false;
+          shownAt = Date.now();
+          mi.setAttribute("aria-expanded", "true");
+          mi.classList.add("cstat-mi--open");
+          /* dwell gate, visibly: the commit is born disabled and wakes after
+             CSTAT_DWELL_MS — a double-click's second press hits a disabled
+             button (announced as such) instead of being swallowed in silence.
+             Focus moves to the commit at wake time, past the consequence
+             sentence it now carries as its description. */
+          commit.disabled = true;
+          clearTimeout(enableT);
+          enableT = setTimeout(function () {
+            commit.disabled = false;
+            if (!box.hidden) commit.focus();
+          }, CSTAT_DWELL_MS);
+          restartHide();
         });
+        /* any activity inside the block keeps it alive — reading slowly must
+           not race a timer */
+        box.addEventListener("keydown", restartHide);
+        box.addEventListener("focusin", function () { if (!box.hidden) restartHide(); });
+        commit.addEventListener("click", function () {
+          if (!shownAt || Date.now() - shownAt < CSTAT_DWELL_MS) return; /* belt + braces */
+          clearTimeout(hideT);
+          clearTimeout(enableT);
+          send(mv, btn, status);
+        });
+        wrap.appendChild(mi);
+        wrap.appendChild(box);
+        menu.appendChild(wrap);
       });
+
+      function setOpen(open) {
+        cstatCloseMenus(open ? menu : null);
+        menu.hidden = !open;
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        if (!open) items.forEach(function (o) { o._disarm(); });
+      }
+
+      btn.addEventListener("click", function () { setOpen(menu.hidden); });
+      /* keyboard: the menu is reachable and operable without a mouse */
+      btn.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          setOpen(true);
+          (e.key === "ArrowDown" ? items[0] : items[items.length - 1]).focus();
+        }
+      });
+      menu.addEventListener("keydown", function (e) {
+        var a = document.activeElement;
+        /* arrows from a revealed commit hop back to its owning row, so the
+           cycle never strands focus outside items[] */
+        if (a && a.classList && a.classList.contains("cstat-commit")) {
+          if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            e.preventDefault();
+            var row = a.closest(".cstat-row");
+            var owner = row && row.querySelector(".cstat-mi");
+            if (owner) owner.focus();
+          } else if (e.key === "Tab") { setOpen(false); btn.focus(); }
+          return;
+        }
+        var i = items.indexOf(a);
+        if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1 + items.length) % items.length].focus(); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+        else if (e.key === "Home") { e.preventDefault(); items[0].focus(); }
+        else if (e.key === "End") { e.preventDefault(); items[items.length - 1].focus(); }
+        else if (e.key === "Tab") {
+          /* close first, then refocus the trigger so the browser computes the
+             next tab stop from a visible element, not a display:none one */
+          setOpen(false);
+          btn.focus();
+        }
+      });
+
+      ctl.appendChild(btn);
+      ctl.appendChild(menu);
+      root.appendChild(ctl);
     }
+
+    function send(mv, btn, prevStatus) {
+      /* the control is rebuilt on the answer, so remember whether the keyboard
+         was inside it — a operator who just pressed Enter must not be dumped
+         on <body> and have to tab back from the top of the document */
+      var hadFocus = !!(document.activeElement && document.activeElement.closest &&
+                        document.activeElement.closest(".cstat-ctl"));
+      cstatCloseMenus(null);
+      btn.disabled = true;
+      /* swap only the word — the dot and caret survive — and tell a screen
+         reader something is happening: this is the one action on the page
+         that ends or starts a campaign, and it must not go silent mid-flight */
+      var wEl = btn.querySelector(".cstat-word");
+      if (wEl) wEl.textContent = "Working…"; else btn.textContent = "Working…";
+      btn.setAttribute("aria-label", "Changing campaign status…");
+      announce("Changing campaign status…");
+      sigPost("/api/campaign-status", { id: parseInt(c.id, 10), status: mv.to, confirm: mv.to })
+        .then(function (r) {
+          var live = r.live || {};
+          var fresh = live.status || (mv.to === "START" ? "ACTIVE" : mv.to);
+          /* merge, never replace (audit r2): a post-write response with no
+             lead_stats must not throw away the exact split we hold — that
+             dropped the audience bar back to the estimate right after the one
+             action a CSM takes on this page */
+          STATE.liveStatus[c.id] = Object.assign({}, STATE.liveStatus[c.id],
+            live.status ? live : { status: fresh });
+          paint(fresh);
+          announce(fresh);
+          if (hadFocus) { var nb = root.querySelector(".cstat-btn"); if (nb) nb.focus(); }
+          paintAudience(c);
+          renderRows(); /* list chip agrees when the user goes back */
+        })
+        .catch(function (e) {
+          sigToast("Couldn't change the status: " + (e.message || "request failed"));
+          paint(prevStatus); /* repaint the honest current state */
+          if (hadFocus) { var nb2 = root.querySelector(".cstat-btn"); if (nb2) nb2.focus(); }
+        });
+    }
+
     var ls = STATE.liveStatus && STATE.liveStatus[c.id];
-    if (ls && ls.status) { word(ls.status); paint(ls.status); }
+    if (ls && ls.status) paint(ls.status);
     getJSON("/api/cockpit/live-status?ids=" + encodeURIComponent(c.id))
       .then(function (r) {
         (STATE.liveTried = STATE.liveTried || {})[c.id] = true;
         var rec = ((r || {}).campaigns || {})[c.id];
         if (rec && rec.status) {
           STATE.liveStatus[c.id] = rec;
-          word(rec.status);
           paint(rec.status);
+          /* no announce() here: speaking the status on page ARRIVAL trains a
+             screen-reader user to tune the region out — the chip's aria-label
+             already carries the current state; the region is for CHANGES */
         } else if (!(ls && ls.status)) {
-          word(c.slStatus); paint(c.slStatus); /* honest fallback: synced status */
+          paint(c.slStatus); /* honest fallback: the synced status */
         }
         paintAudience(c); /* exact split rides this fetch; also settles the estimate note */
       })
       .catch(function () {
         (STATE.liveTried = STATE.liveTried || {})[c.id] = true;
-        if (!(ls && ls.status)) { word(c.slStatus); paint(c.slStatus); }
+        if (!(ls && ls.status)) paint(c.slStatus);
         paintAudience(c); /* live check failed — let the bar settle honestly */
       });
   }
