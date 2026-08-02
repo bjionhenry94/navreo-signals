@@ -2262,6 +2262,13 @@
   }
   .action-swap-btn:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); }
   .action-buttons .vaw-act { display: inline-flex; }
+  /* One orange per card: the footer primary owns the card's single orange —
+     inside a card's Act-on-it-now wall the act buttons stay quiet, whichever
+     way the card routed. (Other vaw surfaces keep their own styling.) */
+  .action-card .vaw-acts .vaw-btn--primary {
+    background: var(--bg); border-color: var(--border-strong); color: var(--fg);
+  }
+  .action-card .vaw-acts .vaw-btn--primary:hover { border-color: var(--fg-subtle); }
   /* Why? digest — the receipts behind THIS card only: one bold verdict line,
      stat chips, then sent/positive mini bars for the variants the card names.
      Replaced the old full-breakdown dump (every finding + 8-col table). */
@@ -4966,7 +4973,7 @@
   function vawWhyActionsHTML(rows, tok, ik, cid) {
     var acts = vawWhyActions(rows, tok, ik);
     if (!acts.length) return "";
-    var h = ['<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Act on it now</span>'];
+    var h = ['<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">More moves</span>'];
     acts.forEach(function (a, i) {
       if (a.kind === "p1") {
         h.push('<div class="vaw-act">' + (a.done
@@ -6261,14 +6268,20 @@
           };
           var cardText = grab([".action-how", ".action-payoff"]) + "\u0001" + grab([".why-verdict", ".why-hero-cap"]);
           var acts = vawWhyActions(rows, whyCardTokens(cardText), ik).filter(function (a) { return !a.done; });
-          /* Priority across ALL the card's acts: rewrite/challenger (ideation,
-             Claude's job) outrank the 1-click fixes. Swap only when the card's
-             TOP fix is the simple one — an incidental equal-share match must
-             not bury a rewrite call's Copy-prompt. */
-          var order = { p3: 1, p7: 2, p5: 3, p6: 4, p1: 5 };
-          var top = acts.filter(function (a) { return order[a.kind]; })
-                        .sort(function (a, b) { return order[a.kind] - order[b.kind]; })[0];
-          var pick = top && (top.kind === "p5" || top.kind === "p6" || top.kind === "p1") ? top : null;
+          /* Route by what the CARD ITSELF recommends (Bjion, 02 Aug 2026):
+             a simple mechanical move (shift traffic, scale, split, turn off)
+             is one click; ideation (rebuild/rewrite copy, new angles, audits)
+             is Claude's job, so Copy-prompt stays. Classified on the card's
+             own headline, NOT on which act kinds happen to exist. Ideation
+             outranks simple on a double match ("swap variant B's LINE" is
+             copy work), and an unmatched headline defaults to Claude. */
+          var head = (card.querySelector(".action-how") || {}).textContent || "";
+          var IDEATION = /\b(rebuild|rewrite|write|draft|new (copy|angle|version)|challenger|opener|subject|problem statement|audit|scrap|retire|pivot)\b/i;
+          var SIMPLE = /\b(move|shift|weight|scale|send 100%|even( the)? split|equal share|turn off|switch off|disable|pause)\b/i;
+          if (IDEATION.test(head) || !SIMPLE.test(head)) return;
+          var order = { p5: 1, p6: 2, p1: 3 };
+          var pick = acts.filter(function (a) { return order[a.kind]; })
+                         .sort(function (a, b) { return order[a.kind] - order[b.kind]; })[0];
           if (!pick) return;
           var label = pick.kind === "p5" ? "Send 100% of Email " + pick.email + " to Version " + esc(pick.vlab)
                     : pick.kind === "p6" ? "Give every version of Email " + pick.email + " an equal share"
@@ -6276,9 +6289,13 @@
           var attr = pick.kind === "p5" ? 'data-vaw-p5="1" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"'
                    : pick.kind === "p6" ? 'data-vaw-p6="1" data-email="' + pick.email + '"'
                    : 'data-vaw-p1="' + esc(String(pick.nid)) + '" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"';
+          var hint = pick.kind === "p5" ? "the winner takes every send on this step"
+                   : pick.kind === "p6" ? "fixes a split that was never set up"
+                   : "stops sending it, share moves to the live versions";
           var wrap = document.createElement("span");
           wrap.className = "vaw-act";
-          wrap.innerHTML = '<button type="button" class="action-swap-btn" ' + attr + ">" + label + "</button>";
+          wrap.innerHTML = '<button type="button" class="action-swap-btn" ' + attr + ">" + label + "</button>" +
+            '<span class="vaw-hint">' + hint + "</span>";
           cpBtn.replaceWith(wrap);
           vawWireWhy(wrap, cid);
           card.setAttribute("data-swap-act", pick.kind + "|" + pick.email + "|" + (pick.vlab || ""));
