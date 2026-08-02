@@ -603,8 +603,15 @@
     color: var(--fg-subtle);
     font-size: 0.88rem;
   }
-  .rows-empty-state button {
+  .rows-empty-actions {
     margin-top: 8px;
+    display: flex;
+    gap: 18px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .rows-empty-state button {
+    margin-top: 0;
     border: none;
     background: none;
     color: var(--nav-orange-600);
@@ -612,6 +619,26 @@
     cursor: pointer;
     text-decoration: underline;
     font-size: 0.85rem;
+  }
+  #show-all-statuses-btn[hidden] { display: none; }
+
+  /* under-rows cross-status note (non-empty search the status pick is trimming) */
+  .rows-crossstatus {
+    margin-top: 12px;
+    padding: 10px 14px;
+    text-align: center;
+    color: var(--fg-subtle);
+    font-size: 0.83rem;
+  }
+  .rows-crossstatus[hidden] { display: none; }
+  .rows-crossstatus button {
+    border: none;
+    background: none;
+    color: var(--nav-orange-600);
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    font-size: 0.83rem;
   }
 
   /* ============================================================
@@ -2947,10 +2974,14 @@
     /* the visible "N campaigns shown" caption is gone (owner ruling: clutter);
        the sr-only live region below still announces the count for screen readers */
     h.push('<div class="sr-only" role="status" aria-live="polite" id="rows-live-region"></div>');
-    h.push('<div class="rows-empty-state" id="rows-empty-state" hidden><p id="rows-empty-text">No campaigns match that filter in this view.</p><button type="button" id="clear-filters-btn">Clear filters</button></div>');
+    h.push('<div class="rows-empty-state" id="rows-empty-state" hidden><p id="rows-empty-text">No campaigns match that filter in this view.</p><div class="rows-empty-actions"><button type="button" id="show-all-statuses-btn" hidden>Show all statuses</button><button type="button" id="clear-filters-btn">Clear filters</button></div></div>');
 
     /* rows — filled by renderRows() so live status/completion controls can reshape it */
     h.push('<section aria-label="Campaigns"><div class="campaign-rows" id="campaign-rows"></div></section>');
+    /* cross-status note: shown under the rows when a search has matches on
+       screen but the status pick is hiding more elsewhere — so a narrowed
+       search never silently swallows results the user might be after */
+    h.push('<div class="rows-crossstatus" id="rows-crossstatus" hidden><span id="rows-crossstatus-text"></span> <button type="button" id="rows-crossstatus-btn">Show all statuses</button></div>');
     loadSignalsByCamp(); // one-shot; the signal lines paint in when the rollup lands
 
     /* footer */
@@ -3050,9 +3081,12 @@
     var visible = cs.filter(function (c) {
       if (!(v.tier === "all" || c.tier === v.tier)) return false;
       if (!(v.client === "all" || c.client === v.client)) return false;
-      /* typing a search widens to every status — the status pick only narrows
-         browsing, never hides a campaign someone is explicitly looking for */
-      if (!q && !(v.status === "all" || liveBucket(c.id) === v.status)) return false;
+      /* status composes with search exactly like client + tier do: an explicit
+         status pick always narrows, even mid-search, so the visible "Completed"
+         chip never lies about what's on screen. Discovery isn't lost — when a
+         search comes up empty under the current status the empty state names how
+         many match elsewhere and offers a one-tap "Show all statuses". */
+      if (!(v.status === "all" || liveBucket(c.id) === v.status)) return false;
       if (q) {
         var hay = (c.name + " " + c.pill + " " + c.tier + " " + (c.client || "")).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
@@ -3094,14 +3128,44 @@
     var empty = document.getElementById("rows-empty-state");
     if (empty) empty.hidden = visible.length > 0;
     var emptyTxt = document.getElementById("rows-empty-text");
+    var showAllBtn = document.getElementById("show-all-statuses-btn");
+    if (showAllBtn) showAllBtn.hidden = true;
+    /* how many campaigns the search WOULD match if the status pick weren't
+       narrowing it (respects client + tier, ignores status) — lets a narrowed
+       search always point at the matches it's hiding, empty results or not */
+    var crossStatus = (q && v.status !== "all") ? cs.filter(function (c) {
+      if (!(v.tier === "all" || c.tier === v.tier)) return false;
+      if (!(v.client === "all" || c.client === v.client)) return false;
+      var hay = (c.name + " " + c.pill + " " + c.tier + " " + (c.client || "")).toLowerCase();
+      return hay.indexOf(q) !== -1;
+    }).length : 0;
     if (emptyTxt && !visible.length) {
-      /* a search runs across every status, so its empty message must not
-         blame the status pick */
-      emptyTxt.textContent = q
-        ? "No campaigns match that search in this view."
-        : (v.status !== "all")
-          ? "No " + (STATUS_LABEL[v.status] || v.status) + " campaigns right now."
-          : "No campaigns in this view.";
+      if (q && crossStatus > 0) {
+        emptyTxt.innerHTML = "No " + esc(STATUS_LABEL[v.status] || v.status) +
+          " campaigns match &ldquo;" + esc((v.q || "").trim()) + "&rdquo;. <b class=\"tnum\">" +
+          crossStatus + "</b> match under other statuses.";
+        if (showAllBtn) showAllBtn.hidden = false;
+      } else {
+        emptyTxt.textContent = q
+          ? "No campaigns match that search in this view."
+          : (v.status !== "all")
+            ? "No " + (STATUS_LABEL[v.status] || v.status) + " campaigns right now."
+            : "No campaigns in this view.";
+      }
+    }
+    /* non-empty search that the status pick is still trimming: a quiet footer
+       line naming the hidden count, with the same one-tap widen */
+    var xNote = document.getElementById("rows-crossstatus");
+    var xTxt = document.getElementById("rows-crossstatus-text");
+    var xHidden = crossStatus - visible.length;
+    if (xNote) {
+      if (visible.length && q && v.status !== "all" && xHidden > 0) {
+        xTxt.innerHTML = "<b class=\"tnum\">" + xHidden + "</b> more campaign" + (xHidden === 1 ? " matches" : "s match") +
+          " &ldquo;" + esc((v.q || "").trim()) + "&rdquo; under other statuses.";
+        xNote.hidden = false;
+      } else {
+        xNote.hidden = true;
+      }
     }
     var live = document.getElementById("rows-live-region");
     if (live) live.textContent = visible.length + " campaign" + (visible.length === 1 ? "" : "s") + " shown" +
@@ -5941,6 +6005,20 @@
       clearTimeout(searchT);
       searchT = setTimeout(renderRows, 120);
     });
+    /* "Show all statuses" (empty-state + footer escape hatch): drop only the
+       status narrowing, keep whatever the user has typed so the cross-status
+       matches appear without them re-running the search. Both the empty-state
+       button and the under-rows footer note share this. */
+    function widenToAllStatuses() {
+      STATE.view.status = "all";
+      var sel = document.getElementById("status-select"); if (sel) sel.value = "all";
+      syncFiltersTag();
+      renderRows();
+    }
+    var showAllBtn2 = document.getElementById("show-all-statuses-btn");
+    if (showAllBtn2) showAllBtn2.addEventListener("click", widenToAllStatuses);
+    var xNoteBtn = document.getElementById("rows-crossstatus-btn");
+    if (xNoteBtn) xNoteBtn.addEventListener("click", widenToAllStatuses);
     var clearBtn = document.getElementById("clear-filters-btn");
     if (clearBtn) clearBtn.addEventListener("click", function () {
       document.getElementById("cockpit-search").value = "";
