@@ -2312,7 +2312,7 @@
   .cockpit .why-bar-label { font-weight: 700; color: var(--fg-muted); white-space: nowrap; }
   .cockpit .why-bar-label.wv-cut { color: var(--danger); text-decoration: line-through; }
   .cockpit .why-bar-track { height: 10px; border-radius: 5px; background: var(--sunken); overflow: hidden; }
-  .cockpit .why-bar-fill { height: 100%; border-radius: 5px; background: var(--nav-orange); opacity: 0.85; min-width: 2px; }
+  .cockpit .why-bar-fill { display: block; height: 100%; border-radius: 5px; background: var(--nav-orange); opacity: 0.85; min-width: 2px; }
   .cockpit .why-bar-row.wv-cut .why-bar-fill { background: var(--danger); opacity: 0.5; }
   .cockpit .why-bar-count { color: var(--fg-subtle); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
   .cockpit .why-bar-count b { color: var(--fg); }
@@ -5072,10 +5072,10 @@
       b.addEventListener("click", function () {
         var email = b.getAttribute("data-email"), from = b.getAttribute("data-from"), to = b.getAttribute("data-to");
         vawModal({
-          title: "Move Version " + from + "'s share to Version " + to + " on Email " + email + "?",
+          title: "Move Email " + email + ": Variant " + from + "'s share to Variant " + to + "?",
           sub: (c.name || "") + " · campaign " + cid,
-          lines: [["Version " + from, vawChangeV("its current share", "0% — kept, history intact")],
-                  ["Version " + to, vawChangeV("its current share", "gets Version " + from + "'s share added")],
+          lines: [["Email " + email + ": Variant " + from, vawChangeV("its current share", "0% — kept, history intact")],
+                  ["Email " + email + ": Variant " + to, vawChangeV("its current share", "gets Variant " + from + "'s share added")],
                   ["Copy / subject", "untouched"]],
           idnote: VAW_IDNOTE, token: "SHIFT", danger: false,
           confirmLabel: "Confirm — move the share",
@@ -5084,9 +5084,9 @@
               { action: "shift_share", email: +email, variant_label: from, to_label: to, confirm: "SHIFT" });
           },
           receipt: function (resp) {
-            return { title: "Version " + to + " now carries Version " + from + "'s share",
+            return { title: "Email " + email + ": Variant " + to + " now carries Variant " + from + "'s share",
               lines: Object.keys(resp.after || {}).map(function (k) {
-                return ["Version " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
+                return ["Variant " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
               }),
               foot: "Both keep their IDs and history — nothing recreated." };
           },
@@ -6379,10 +6379,10 @@
                        .sort(function (a, b) { return order[a.kind] - order[b.kind]; })[0];
           }
           if (!pick) return;
-          var label = pick.kind === "p8" ? "Move Version " + esc(pick.from) + "'s share to Version " + esc(pick.to)
-                    : pick.kind === "p5" ? "Send 100% of Email " + pick.email + " to Version " + esc(pick.vlab)
-                    : pick.kind === "p6" ? "Give every version of Email " + pick.email + " an equal share"
-                    : "Turn off Version " + esc(pick.vlab) + " on Email " + pick.email;
+          var label = pick.kind === "p8" ? "Move Email " + pick.email + ": Variant " + esc(pick.from) + "'s share to Variant " + esc(pick.to)
+                    : pick.kind === "p5" ? "Send 100% of Email " + pick.email + " to Variant " + esc(pick.vlab)
+                    : pick.kind === "p6" ? "Give every variant of Email " + pick.email + " an equal share"
+                    : "Turn off Email " + pick.email + ": Variant " + esc(pick.vlab);
           var attr = pick.kind === "p8" ? 'data-vaw-p8="1" data-email="' + pick.email + '" data-from="' + esc(pick.from) + '" data-to="' + esc(pick.to) + '"'
                    : pick.kind === "p5" ? 'data-vaw-p5="1" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"'
                    : pick.kind === "p6" ? 'data-vaw-p6="1" data-email="' + pick.email + '"'
@@ -6395,7 +6395,7 @@
           var winner = pick.to || "";
           var cname = vawCampaignOf(cid).name || "";
           var claudeItems = [
-            { t: "Rewrite " + (loser ? "Version " + loser + "'s" : "the weak") + " line",
+            { t: "Rewrite " + (loser ? "Email " + pick.email + ": Variant " + loser + "'s" : "the weak") + " line",
               p: "In Smartlead campaign \"" + cname + "\" (id " + cid + "), Email " + pick.email +
                  ": rewrite variant " + (loser || "the underperformer") + "'s copy" +
                  (winner ? " — it is losing to variant " + winner : "") +
