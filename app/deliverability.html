@@ -2647,11 +2647,14 @@ boot();
     ".vaw4-sub{font-size:.7rem;color:var(--ink-3,#8a8477);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
     ".vaw4-mini{display:flex;flex-direction:column;gap:5px;min-width:0}",
     ".vaw4-mb{display:flex;align-items:center;gap:6px;font-size:.68rem;color:var(--ink-3,#8a8477);white-space:nowrap}",
+    ".vaw4-mb.this{color:var(--ink-2,#5c554a)}",
     ".vaw4-mb .k{width:26px;flex:0 0 auto}",
-    ".vaw4-tk{flex:1;height:6px;border-radius:4px;background:var(--wash,#f4f1ec);overflow:hidden}",
+    ".vaw4-mb.this .k{font-weight:600}",
+    ".vaw4-tk{flex:1;height:6px;border-radius:4px;background:rgba(20,16,10,.10);overflow:hidden}",
+    ".vaw4-mb.this .vaw4-tk{background:rgba(20,16,10,.14)}",
     ".vaw4-fl{display:block;height:100%;border-radius:4px}",
     ".vaw4-fl.win{background:#FF4D00}",
-    ".vaw4-fl.lose{background:#CFC8BF}",
+    ".vaw4-fl.lose{background:#8C8173}",
     ".vaw4-v{font-variant-numeric:tabular-nums;width:14px;text-align:right;font-weight:700;color:var(--ink-2,#5c554a)}",
     ".vaw4-right{font-size:.72rem;color:var(--ink-3,#8a8477);text-align:right;white-space:nowrap}",
     ".vaw4-right .ok{color:#2f9e44;font-weight:700}",
@@ -2725,7 +2728,7 @@ boot();
         var wv = c.win.val, lv = c.lose.val, mx = Math.max(wv, lv, 1);
         right = '<div class="vaw4-mini">' +
           '<div class="vaw4-mb"><span class="k">Best</span><span class="vaw4-tk"><span class="vaw4-fl win" style="width:' + (wv / mx * 100).toFixed(0) + '%"></span></span><span class="vaw4-v">' + wv + "</span></div>" +
-          '<div class="vaw4-mb"><span class="k">This</span><span class="vaw4-tk"><span class="vaw4-fl lose" style="width:' + (lv / mx * 100).toFixed(0) + '%"></span></span><span class="vaw4-v">' + lv + "</span></div>" +
+          '<div class="vaw4-mb this"><span class="k">This</span><span class="vaw4-tk"><span class="vaw4-fl lose" style="width:' + (lv / mx * 100).toFixed(0) + '%"></span></span><span class="vaw4-v">' + lv + "</span></div>" +
           "</div>";
       } else {
         right = '<div class="vaw4-right"><span class="s">' + (c.v ? (c.v.positives || 0) + " interested" : "") + "</span></div>";
