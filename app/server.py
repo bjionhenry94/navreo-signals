@@ -3288,6 +3288,12 @@ class SequenceSaveDriftError(Exception):
     surface 'check Smartlead', never retry silently."""
 
 
+class SequenceRateLimited(Exception):
+    """Smartlead answered 429 on every retry inside the helper. NOTHING was
+    saved (the retries cover the pre-GET / POST; a persistent 429 never reaches
+    a partial write). Callers return a clean 429 'wait a moment' message."""
+
+
 def _sequence_steps_from(resp) -> list:
     """Normalise a GET /campaigns/{id}/sequences response to the step list."""
     if isinstance(resp, list):
@@ -3346,11 +3352,51 @@ def _sequence_post_payload(steps: list) -> list:
     return out
 
 
+def _looks_rate_limited(resp) -> bool:
+    """A dict-form 429 (some Smartlead paths return the JSON error body rather
+    than raising): a 429 code/status, or a 'too many requests' / 'rate limit'
+    message."""
+    if not isinstance(resp, dict):
+        return False
+    if str(resp.get("code") or resp.get("status") or "") == "429":
+        return True
+    msg = str(resp.get("message") or resp.get("error") or "").lower()
+    return "too many requests" in msg or "rate limit" in msg
+
+
+def _sl_call_retry(call, method, url, body=None, attempts=4):
+    """Wrap one Smartlead call with 429-aware backoff. Smartlead caps at
+    ~200 req/min per account; opening the Messaging tab (several reads) then
+    firing a write (GET+POST+GET) can tip a burst over the cap, which used to
+    surface to the user as a raw 'HTTP Error 429' with NOTHING written. Here a
+    429 (raised HTTPError OR dict-form body) waits 2s→4s→8s and retries, so a
+    transient burst self-heals; a persistent one raises SequenceRateLimited for
+    a clean 'wait a moment' message. Never retries a non-429 error."""
+    delay = 2.0
+    last = None
+    for i in range(attempts):
+        try:
+            last = call(method, url, {}, body) if body is not None else call(method, url, {})
+        except urllib.error.HTTPError as e:  # http_json re-raises a non-JSON 4xx
+            if getattr(e, "code", None) == 429 and i < attempts - 1:
+                time.sleep(delay); delay = min(delay * 2, 12); continue
+            if getattr(e, "code", None) == 429:
+                raise SequenceRateLimited("Smartlead is rate-limiting right now — wait a few seconds and try again")
+            raise
+        if _looks_rate_limited(last) and i < attempts - 1:
+            time.sleep(delay); delay = min(delay * 2, 12); continue
+        if _looks_rate_limited(last):
+            raise SequenceRateLimited("Smartlead is rate-limiting right now — wait a few seconds and try again")
+        return last
+    return last
+
+
 def save_sequence_ids_intact(campaign_id: int, mutate_fn, api_key: str | None = None,
                              http=None, verify_fn=None) -> dict:
     """THE one door to Smartlead's sequences-save endpoint. Every sequence
     write in this platform routes through here — no other code path may POST
     /campaigns/{id}/sequences (grep-enforced by the variant-action-wire loop).
+    Every Smartlead call goes through _sl_call_retry (429-aware backoff).
 
     Contract (the proven id-intact recipe, memory smartlead-variant-edit-recipe):
       1. FRESH GET of the campaign's sequences — never a stale snapshot.
@@ -3374,7 +3420,7 @@ def save_sequence_ids_intact(campaign_id: int, mutate_fn, api_key: str | None = 
     key = api_key or ws_key_for_campaign(campaign_id)
     seq_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={key}"
 
-    steps_before = _sequence_steps_from(call("GET", seq_url, {}))
+    steps_before = _sequence_steps_from(_sl_call_retry(call, "GET", seq_url))
     if not steps_before:
         raise SequenceActionRefused(404, {
             "ok": False, "message": "could not load campaign sequences from Smartlead"})
@@ -3392,9 +3438,9 @@ def save_sequence_ids_intact(campaign_id: int, mutate_fn, api_key: str | None = 
             f"mutate_fn dropped ids (steps {missing_seqs} variants {missing_vars}) — refusing to save")
 
     payload = _sequence_post_payload(steps_new)
-    sl_resp = call("POST", seq_url, {}, {"sequences": payload})
+    sl_resp = _sl_call_retry(call, "POST", seq_url, {"sequences": payload})
 
-    steps_after = _sequence_steps_from(call("GET", seq_url, {}))
+    steps_after = _sequence_steps_from(_sl_call_retry(call, "GET", seq_url))
     after_ids = _sequence_id_set(steps_after)
     lost_seqs = [i for i in before_ids["seqs"] if i not in after_ids["seqs"]]
     lost_vars = [i for i in before_ids["variants"] if i not in after_ids["variants"]]
@@ -3886,6 +3932,8 @@ def api_campaign_add_variant(cid: str, payload: dict) -> tuple:
     except SequenceSaveDriftError:
         return 500, {"ok": False,
                       "message": "save verification failed - variant history may be affected, check Smartlead"}
+    except SequenceRateLimited as e:
+        return 429, {"ok": False, "message": str(e)}
     except Exception as e:  # noqa: BLE001
         return 502, {"ok": False, "message": f"Smartlead call failed: {str(e)[:200]}"}
 
@@ -3988,6 +4036,8 @@ def api_notification_apply_fix(nid: str, payload: dict) -> tuple:
         return 500, {"ok": False,
                       "message": "save verification failed - variant history may be affected, check Smartlead",
                       "smartlead_url": smartlead_url}
+    except SequenceRateLimited as e:
+        return 429, {"ok": False, "message": str(e)}
     except Exception as e:  # noqa: BLE001
         return 502, {"ok": False, "message": f"Smartlead call failed: {str(e)[:200]}"}
 
@@ -4112,6 +4162,8 @@ def execute_disable_variant_action(nid: str, row: dict, payload: dict) -> tuple:
         return 500, {"ok": False,
                       "message": "id drift detected - variant history may be affected, check Smartlead",
                       "smartlead_url": smartlead_url}
+    except SequenceRateLimited as e:
+        return 429, {"ok": False, "message": str(e), "smartlead_url": smartlead_url}
 
     new_pcts = result["pcts"]
     target_pct = result["target_pct"]

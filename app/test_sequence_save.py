@@ -177,10 +177,67 @@ def test_refused_aborts_cleanly():
     check("NO POST fired", len(stub.posts) == 0)
 
 
+class HTTP429Once(StubHTTP):
+    """Raises a 429 HTTPError on the first N calls, then behaves normally.
+    Reproduces the Messaging-tab-then-write burst that used to hard-fail."""
+    def __init__(self, fixture, fail_first=2):
+        super().__init__(fixture)
+        self.left = fail_first
+
+    def __call__(self, method, url, headers, body=None, timeout=60):
+        if self.left > 0:
+            self.left -= 1
+            import urllib.error
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+        return super().__call__(method, url, headers, body, timeout)
+
+
+def test_429_retries_then_succeeds():
+    print("(e) a transient 429 burst is retried, not surfaced as failure")
+    _orig_sleep = server.time.sleep
+    server.time.sleep = lambda *_a, **_k: None  # no real waiting in the test
+    try:
+        stub = HTTP429Once(FIXTURE, fail_first=2)
+
+        def mutate(steps):
+            server._find_variant(server._find_step(steps, 1), "B")["variant_distribution_percentage"] = 0
+            server._find_variant(server._find_step(steps, 1), "A")["variant_distribution_percentage"] = 100
+            return steps
+
+        out = server.save_sequence_ids_intact(3999999, mutate, api_key="stub", http=stub)
+        check("write eventually succeeded through the 429s", out["ok"] is True)
+        check("the POST did land", len(stub.posts) == 1)
+        check("ids intact after retry", out["after_ids"]["variants"] == ["901", "902"])
+    finally:
+        server.time.sleep = _orig_sleep
+
+
+def test_persistent_429_raises_clean():
+    print("(f) a persistent 429 raises SequenceRateLimited, never a partial write")
+    _orig_sleep = server.time.sleep
+    server.time.sleep = lambda *_a, **_k: None
+    try:
+        stub = HTTP429Once(FIXTURE, fail_first=99)  # never clears
+
+        def mutate(steps):
+            return steps
+
+        try:
+            server.save_sequence_ids_intact(3999999, mutate, api_key="stub", http=stub)
+            check("rate-limit surfaced", False, "no exception")
+        except server.SequenceRateLimited:
+            check("rate-limit surfaced", True)
+        check("NO POST fired on persistent 429", len(stub.posts) == 0)
+    finally:
+        server.time.sleep = _orig_sleep
+
+
 if __name__ == "__main__":
     test_roundtrip_preserves_ids()
     test_id_drop_rejected_before_post()
     test_new_variant_allowed()
     test_refused_aborts_cleanly()
+    test_429_retries_then_succeeds()
+    test_persistent_429_raises_clean()
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     sys.exit(1 if FAIL else 0)
