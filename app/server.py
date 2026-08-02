@@ -19485,12 +19485,16 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             return self._do_patch_dispatch()
         finally:
-            _clear_ui_caches()  # post-write pass — same BE-1 race as do_POST
+            # post-write pass — same BE-1 race as do_POST; session-gated like
+            # do_POST so a drive-by PATCH can't stale every cache (round-2 note)
+            if self._authed_email():
+                _clear_ui_caches()
 
     def _do_patch_dispatch(self):
         if not self._drain_request_body():
             return
-        _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it
+        if self._authed_email():
+            _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it
         path = self.path.split("?")[0]
         if not self._gate(path):
             return
