@@ -2308,11 +2308,12 @@
   .cockpit .why-hero-cap { font-size: 0.84rem; color: var(--fg-muted); line-height: 1.45; max-width: 430px; }
   .cockpit .why-move { margin: 10px 0 0; font-size: 0.84rem; font-weight: 700; color: var(--nav-orange-600); }
   .cockpit .why-bars { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
-  .cockpit .why-bar-row { display: grid; grid-template-columns: 74px 1fr 92px; gap: 8px; align-items: center; font-size: 0.74rem; }
+  .cockpit .why-bar-row { display: grid; grid-template-columns: 128px 1fr 92px; gap: 8px; align-items: center; font-size: 0.74rem; }
   .cockpit .why-bar-label { font-weight: 700; color: var(--fg-muted); white-space: nowrap; }
   .cockpit .why-bar-label.wv-cut { color: var(--danger); text-decoration: line-through; }
   .cockpit .why-bar-track { height: 10px; border-radius: 5px; background: var(--sunken); overflow: hidden; }
   .cockpit .why-bar-fill { display: block; height: 100%; border-radius: 5px; background: var(--nav-orange); opacity: 0.85; min-width: 2px; }
+  .cockpit .why-bar-fill.is-good { background: var(--success); opacity: 1; }
   .cockpit .why-bar-row.wv-cut .why-bar-fill { background: var(--danger); opacity: 0.5; }
   .cockpit .why-bar-count { color: var(--fg-subtle); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
   .cockpit .why-bar-count b { color: var(--fg); }
@@ -6355,25 +6356,29 @@
              copy work), and an unmatched headline defaults to Claude. */
           var head = (card.querySelector(".action-how") || {}).textContent || "";
           var IDEATION = /\b(rebuild|rewrite|write|draft|new (copy|angle|version)|challenger|opener|subject|problem statement|audit|scrap|retire|pivot)\b/i;
-          var SIMPLE = /\b(move|shift|weight|scale|send 100%|even( the)? split|equal share|turn off|switch off|disable|pause)\b/i;
-          if (IDEATION.test(head) || !SIMPLE.test(head)) return;
-          /* The one-click must DO what the headline says. A "move X onto Y"
-             headline gets a real share-shift (new shift_share action), not a
-             substituted equal split. */
+          if (IDEATION.test(head)) return;  // writing new copy is always Claude's job
           var pick = null;
-          var sm = /\bvariant\s+([A-Z])\b[\s\S]*?\b(?:onto|to|towards?)\s+(?:variant\s+)?([A-Z])\b/i.exec(head);
-          if (sm) {
-            var shiftEmail = null;
-            acts.forEach(function (a) { if (shiftEmail == null && a.email != null) shiftEmail = a.email; });
-            if (shiftEmail == null) rows.forEach(function (n) {
-              (n.variants || []).forEach(function (v) {
-                var lab = String(v.variant || "");
-                if (shiftEmail == null && (lab === sm[1].toUpperCase() || lab === sm[2].toUpperCase())) shiftEmail = v.email;
-              });
-            });
-            if (shiftEmail != null) pick = { kind: "p8", email: shiftEmail, from: sm[1].toUpperCase(), to: sm[2].toUpperCase() };
+          /* Back-the-winner move: ANY headline that redistributes traffic
+             between the card's variants (move / shift / weight / lean / push /
+             back / favour) becomes ONE real share-shift. The direction is read
+             from the DATA — worst per-positive -> best — never from word order,
+             so "Move variant G onto F" and "Weight Email 1 toward variant A"
+             both land the loser's share on the winner the right way round. */
+          if (/\b(move|shift|weight|lean|push|back|favou?r|prioriti[sz]e)\b/i.test(head)) {
+            var namedVars = whyHarvestVariants(rows, whyCardTokens(cardText))
+              .filter(function (v) { return !v.agg && v.variant != null && v.sent > 0; });
+            if (namedVars.length >= 2) {
+              var perPos = function (v) { return v.positives > 0 ? (v.sent / v.positives) : Infinity; };
+              var ranked = namedVars.slice().sort(function (a, b) { return perPos(a) - perPos(b); });
+              var win = ranked[0], lose = ranked[ranked.length - 1];
+              if (String(win.variant) !== String(lose.variant))
+                pick = { kind: "p8", email: win.email, from: String(lose.variant), to: String(win.variant) };
+            }
           }
+          /* Other simple one-click moves (scale a winner to 100%, even a split,
+             turn a loser off) use whatever matching act the card carries. */
           if (!pick) {
+            if (!/\b(scale|send 100%|even( the)? split|equal share|turn off|switch off|disable|pause)\b/i.test(head)) return;
             var order = { p5: 1, p6: 2, p1: 3 };
             pick = acts.filter(function (a) { return order[a.kind]; })
                        .sort(function (a, b) { return order[a.kind] - order[b.kind]; })[0];
@@ -6564,7 +6569,13 @@
   }
   function whyBarsHTML(vs, showCut) {
     if (!vs.length) return "";
-    var max = Math.max.apply(null, vs.map(function (v) { return v.sent || 0; }).concat([1]));
+    /* The bar tells the STORY, not the volume: it length-encodes how well each
+       variant converts (positives / sends), so a winner reads long and a loser
+       short even on an even A/B split where sends are near-equal. When nothing
+       has converted yet, it falls back to sends so the row isn't all-empty. */
+    var rate = function (v) { return (v.sent > 0) ? (v.positives || 0) / v.sent : 0; };
+    var maxRate = Math.max.apply(null, vs.map(rate).concat([0]));
+    var maxSent = Math.max.apply(null, vs.map(function (v) { return v.sent || 0; }).concat([1]));
     var anyOff = false;
     var h = ['<div class="why-bars">'];
     vs.forEach(function (v) {
@@ -6572,16 +6583,20 @@
       var cut = showCut && !v.agg && flags.indexOf("failing") !== -1;
       var off = flags.indexOf("disabled") !== -1 || flags.indexOf("zero_distribution") !== -1;
       if (off) anyOff = true;
-      var label = v.agg ? "E" + esc(String(v.email)) + " overall"
-        : "E" + esc(String(v.email)) + (v.variant != null ? " Var " + esc(String(v.variant)) : "") + (off ? " (off)" : "");
+      var r = rate(v);
+      var width = maxRate > 0 ? (r > 0 ? Math.max(6, Math.round(r / maxRate * 100)) : 0)
+                             : Math.max(2, Math.round((v.sent || 0) / maxSent * 100));
+      var best = maxRate > 0 && r === maxRate && !v.agg && !off;
+      var label = v.agg ? "Email " + esc(String(v.email)) + " overall"
+        : "Email " + esc(String(v.email)) + (v.variant != null ? ": Variant " + esc(String(v.variant)) : "") + (off ? " (off)" : "");
       h.push('<div class="why-bar-row' + (cut ? " wv-cut" : "") + (off ? " wv-inactive" : "") + '">' +
         '<span class="why-bar-label' + (cut ? " wv-cut" : "") + '">' + label + "</span>" +
-        '<span class="why-bar-track"><span class="why-bar-fill" style="width:' + Math.max(2, Math.round((v.sent || 0) / max * 100)) + '%"></span></span>' +
+        '<span class="why-bar-track"><span class="why-bar-fill' + (best ? " is-good" : "") + '" style="width:' + width + '%"></span></span>' +
         '<span class="why-bar-count"><b>' + fmtInt(v.positives) + "</b> pos / " + fmtInt(v.sent) +
         (v.positives > 0 ? " &middot; 1 per " + fmtInt(Math.round((v.sent || 0) / v.positives)) : "") + "</span>");
       h.push("</div>");
     });
-    h.push("</div>", '<p class="why-bars-caption">Bar = sends.' +
+    h.push("</div>", '<p class="why-bars-caption">Bar = how often it lands a yes.' +
       (showCut ? " Red = replace this variant." : "") + (anyOff ? " Greyed = switched off." : "") + "</p>");
     return h.join("");
   }
