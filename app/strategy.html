@@ -22,7 +22,7 @@ a{color:inherit;text-decoration:none}
 .client .lbl{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);}
 .client .name{font-size:14.5px;font-weight:600;margin-top:3px;}
 .sechead{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);padding:8px 12px 6px;}
-.im{display:block;position:relative;border:1px solid transparent;border-radius:12px;padding:13px 14px;margin-bottom:5px;transition:.13s;}
+.im{display:block;position:relative;border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-bottom:8px;transition:.13s;}
 .im:hover{background:var(--cream-50);border-color:var(--line);}
 .im-name{font-size:14px;font-weight:600;line-height:1.3;margin:0;}
 .im-caption{font-size:12.5px;color:var(--ink-3);margin:3px 0 10px;}
@@ -132,6 +132,10 @@ a{color:inherit;text-decoration:none}
 .sum-meta a:hover{text-decoration:underline;}
 .sum-note{font-size:13px;color:var(--ink-3);margin-top:12px;max-width:640px;}
 .copy-sub{font-size:13.5px;color:var(--ink-2);margin:-8px 0 4px;line-height:1.5;max-width:600px;}
+.ver-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px;}
+.ver-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
+.ver-tab:hover{border-color:var(--ink-3);}
+.ver-tab.on{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange);}
 .mail-label{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:20px 0 8px;}
 .mail-label:first-of-type,.copy-heading + .mail-label{margin-top:0;}
 .mail{max-width:640px;}
@@ -261,6 +265,7 @@ const CHECKS=[
 function checksFor(x){return CHECKS.map(c=>[c[0],c[1],!!c[2](x)]);}
 let RUN_META={};
 let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
+let copyVer={}; // Copy tab: active version index per sequence step (reset per idea)
 const side=document.getElementById('side'), work=document.getElementById('work'),
       boot=document.getElementById('boot'), toast=document.getElementById('toast');
 
@@ -323,21 +328,22 @@ function versionFrame(x){
   // client mode: the email body is editable in place; Save posts a copy-edit
   const ed=CLIENT_MODE?' contenteditable="true" data-edit="email" spellcheck="true"':'';
   return `<div class="mail"><div class="mh">Subject: ${highlightTokensHtml(x.subject||x.caption||'')}</div><div class="mb"${ed}>${highlightTokensHtml(x.email||'')}</div></div>`;}
-// Every copy variation the campaign rotates (A/B/…). Falls back to the single
-// email for older runs. Version A mirrors idea.email (Summary + back-compat).
-function versionsOf(x){
-  if(Array.isArray(x.versions)&&x.versions.length)return x.versions;
-  return [{subject:x.subject||x.caption||'',email:x.email||''}];
+// The email SEQUENCE: each step (First email, Follow-up, …) has its own copy
+// variations shown as tabs. Derived from older shapes (versions[] + followup)
+// for back-compat. sequence[0].versions[0] is the primary (mirrors idea.email).
+function sequenceOf(x){
+  if(Array.isArray(x.sequence)&&x.sequence.length)return x.sequence;
+  const step1={name:'First email',versions:(Array.isArray(x.versions)&&x.versions.length)
+    ?x.versions:[{subject:x.subject||x.caption||'',email:x.email||''}]};
+  const seq=[step1];
+  if(x.followup)seq.push({name:'Follow-up',versions:[{subject:'',email:x.followup}]});
+  return seq;
 }
+function primaryVersion(x){return (((sequenceOf(x)[0]||{}).versions||[])[0])||{};}
 function mailFrameHl(subject,email,editKey){
   const ed=(CLIENT_MODE&&editKey)?` contenteditable="true" data-edit="${editKey}" spellcheck="true"`:'';
-  return `<div class="mail"><div class="mh">Subject: ${highlightTokensHtml(subject)}</div><div class="mb"${ed}>${highlightTokensHtml(email)}</div></div>`;}
-// Follow-up = the later email in the thread, its own clearly-labelled block.
-function followupFrame(x){
-  if(!x.followup)return '';
-  const ed=CLIENT_MODE?' contenteditable="true" data-edit="followup" spellcheck="true"':'';
-  return `<p class="mail-label">Follow-up</p>`
-    +`<div class="mail"><div class="mh">Sent a few days later, same thread</div><div class="mb"${ed}>${highlightTokensHtml(x.followup)}</div></div>`;}
+  const head=subject?`Subject: ${highlightTokensHtml(subject)}`:'Sent a few days later, same thread';
+  return `<div class="mail"><div class="mh">${head}</div><div class="mb"${ed}>${highlightTokensHtml(email)}</div></div>`;}
 // "Share a link" on the Summary page (Bjion, 2026-08-02): GTME-only by design —
 // the Summary tab never renders in client mode. Mints this board's client
 // permalink (copy-edit-only view) and puts it on the clipboard.
@@ -375,6 +381,14 @@ async function gtmeShareLink(btn){
       +`<a href="${esc(full)}" target="_blank" rel="noopener">${esc(full)}</a>`;
     setTimeout(()=>{btn.textContent='Share a link';},5000);
   }catch(e){btn.disabled=false;btn.textContent='Share a link';if(out)out.textContent='Could not make the link, try again.';}
+}
+async function persistVisibleEdits(x){
+  const eds=[...document.querySelectorAll('.mb[data-edit]')].filter(el=>el.dataset.dirty==='1'&&el.innerText.trim());
+  for(const el of eds){
+    try{await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:el.dataset.edit,value:el.innerText.trim(),share:SHARE})});
+      el.dataset.dirty='';}catch(e){}
+  }
 }
 async function clientSaveCopy(x,btn){
   const eds=[...document.querySelectorAll('.mb[data-edit]')].filter(el=>el.innerText.trim());
@@ -450,9 +464,9 @@ function resolvedTextHtml(text,x,p){
   const parts=[_mvar(opener),esc(x.pain||''),esc(x.offer||'')].filter(s=>s&&s!=='<span class="mvar"></span>');
   return 'Hey '+_mvar(p.first||'there')+',<br><br>'+parts.join('<br><br>')+'<br><br>Worth a quick chat?<br><br>Bjion<br>Navreo';
 }
-function resolvedEmailHtml(x,p){return resolvedTextHtml((versionsOf(x)[0]||{}).email||x.email,x,p);}
+function resolvedEmailHtml(x,p){return resolvedTextHtml(primaryVersion(x).email||x.email,x,p);}
 function resolvedSubjectHtml(x,p){
-  const s=String((versionsOf(x)[0]||{}).subject||x.subject||x.caption||'');
+  const s=String(primaryVersion(x).subject||x.subject||x.caption||'');
   const cap=s.charAt(0).toUpperCase()+s.slice(1);
   return esc(cap)
     .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
@@ -466,13 +480,19 @@ function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2
 function panelHTML(x){
   if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`;
   if(tab==='copy'){
-    const vs=versionsOf(x);const AZ='ABCDEFGHIJ';
+    const seq=sequenceOf(x);const AZ='ABCDEFGHIJ';
     let h=`<p class="copy-heading">Your emails</p>`
-      +(vs.length>1?`<p class="copy-sub">${vs.length} versions we rotate so no two sends look the same. The follow-up goes to anyone who doesn't reply.</p>`:'');
-    vs.forEach((v,i)=>{h+=`<p class="mail-label">${vs.length>1?('Version '+AZ[i]):'First email'}</p>`
-      +mailFrameHl(v.subject||x.subject||x.caption||'',v.email||'','version:'+i);});
-    h+=followupFrame(x)
-      +(CLIENT_MODE
+      +`<p class="copy-sub">Each email in the sequence has a few versions we rotate so no two sends look the same. The follow-up goes to anyone who doesn't reply.</p>`;
+    seq.forEach((step,si)=>{
+      const vs=step.versions||[];const sel=Math.min(copyVer[si]||0,Math.max(0,vs.length-1));
+      h+=`<p class="mail-label">${esc(step.name||('Email '+(si+1)))}</p>`;
+      if(vs.length>1){
+        h+=`<div class="ver-tabs">`+vs.map((v,vi)=>`<button class="ver-tab${vi===sel?' on':''}" data-si="${si}" data-vi="${vi}">Version ${AZ[vi]}</button>`).join('')+`</div>`;
+      }
+      const v=vs[sel]||{};
+      h+=mailFrameHl(v.subject||'',v.email||'','seq:'+si+':'+sel);
+    });
+    h+=(CLIENT_MODE
         ?`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save my edits</button></div>`
          +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Saving shares it with your team.</p>`
         :`<div class="actions-center"><button class="btn-ink">Next: see the summary</button></div>`);
@@ -502,9 +522,12 @@ function panelHTML(x){
       +`<p class="sum-lead">This goes to <b>${num(x.reachablePool||x.net)}</b> people. Tap one to read their email.</p>`
       +`<div class="sum-strip">${strip}</div>`
       +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span></div>`
-      +`<p class="mail-label">First email</p>`
-      +`<div class="mail"><div class="mh">Subject: <span class="ms">${resolvedSubjectHtml(x,pr)}</span></div><div class="mb">${resolvedEmailHtml(x,pr)}</div></div>`
-      +(x.followup?`<p class="mail-label">Follow-up</p><div class="mail"><div class="mh">Sent a few days later, same thread</div><div class="mb">${resolvedTextHtml(x.followup,x,pr)}</div></div>`:'')
+      +sequenceOf(x).map((step,si)=>{
+        const v=(step.versions||[])[0]||{};
+        const head=si===0?`Subject: <span class="ms">${resolvedSubjectHtml(x,pr)}</span>`:'Sent a few days later, same thread';
+        return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}</p>`
+          +`<div class="mail"><div class="mh">${head}</div><div class="mb">${resolvedTextHtml(v.email,x,pr)}</div></div>`;
+      }).join('')
       +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`
       +shareBlock();
   }
@@ -533,7 +556,7 @@ function renderSidebar(){
       +`</div>`;}).join('');
   side.innerHTML=(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div></div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
-  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;render();});
+  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;copyVer={};render();});
 }
 function renderWorkspace(){
   const x=IDEAS[active];
@@ -545,6 +568,12 @@ function renderWorkspace(){
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
   const shb=work.querySelector('#gtme-share-link');
   if(shb)shb.onclick=()=>gtmeShareLink(shb);
+  // version tabs: switch which variation shows for a sequence step. In client
+  // mode, persist any edit in the visible email before switching so it isn't lost.
+  work.querySelectorAll('.ver-tab').forEach(t=>t.onclick=async()=>{
+    if(CLIENT_MODE)await persistVisibleEdits(x);
+    copyVer[+t.dataset.si]=+t.dataset.vi;renderWorkspace();});
+  if(CLIENT_MODE)work.querySelectorAll('.mb[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
   const lgc=work.querySelector('#lg-copy');
   if(lgc)lgc.onclick=async()=>{const t=(work.querySelector('#lg-phrase')||{}).textContent||'';
     try{await navigator.clipboard.writeText(t);lgc.textContent='Copied';setTimeout(()=>{lgc.textContent='Copy';},3000);}catch(e){lgc.textContent='Select and copy';}};

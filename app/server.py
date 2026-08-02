@@ -2032,11 +2032,13 @@ def strategy_copy_edit(p: dict) -> dict:
         return {"ok": False, "message": "This link has expired. Ask your contact for a fresh one."}
     if p.get("run_id") and p["run_id"] != run_id:
         return {"ok": False, "message": "link does not match this board"}
-    # allowed fields: the base copy fields, OR a version body "version:<i>"
-    # (each copy variation the client can edit) OR "version:<i>:subject".
+    # allowed fields: the base copy fields, a flat version body "version:<i>",
+    # OR a sequenced variation "seq:<step>:<ver>" (+ optional ":subject") — each
+    # copy variant the client can edit, grouped by email in the sequence.
     field = p.get("field") or ""
     ver_m = re.match(r"^version:(\d+)(?::subject)?$", field)
-    if field not in _STRATEGY_CLIENT_FIELDS and not ver_m:
+    seq_m = re.match(r"^seq:(\d+):(\d+)(?::subject)?$", field)
+    if field not in _STRATEGY_CLIENT_FIELDS and not ver_m and not seq_m:
         return {"ok": False, "message": "only the copy can be edited from this link"}
     value = p.get("value")
     if not isinstance(value, str) or not value.strip() or len(value) > 4000:
@@ -2053,7 +2055,23 @@ def strategy_copy_edit(p: dict) -> dict:
     idea = next((i for i in run.get("ideas") or [] if i.get("id") == idea_id), None)
     if not idea:
         return {"ok": False, "message": "that idea is no longer on the board"}
-    if ver_m:
+    if seq_m:
+        si, vi = int(seq_m.group(1)), int(seq_m.group(2))
+        seq = idea.get("sequence")
+        if not isinstance(seq, list) or si < 0 or si >= len(seq):
+            return {"ok": False, "message": "that email is no longer on the board"}
+        versions = (seq[si] or {}).get("versions")
+        if not isinstance(versions, list) or vi < 0 or vi >= len(versions):
+            return {"ok": False, "message": "that version is no longer on the board"}
+        if field.endswith(":subject"):
+            versions[vi]["subject"] = value
+            if si == 0 and vi == 0:
+                idea["subject"] = value
+        else:
+            versions[vi]["email"] = value
+            if si == 0 and vi == 0:  # primary mirrors idea.email (Summary/back-compat)
+                idea["email"] = value
+    elif ver_m:
         idx = int(ver_m.group(1))
         versions = idea.get("versions")
         if not isinstance(versions, list) or idx < 0 or idx >= len(versions):
