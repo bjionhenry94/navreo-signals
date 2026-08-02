@@ -2105,6 +2105,41 @@ def strategy_copy_edit(p: dict) -> dict:
 _STRATEGY_FOCUS_VIEWS = ("board", "targeting", "emails", "opener", "checks", "building", "signoff")
 
 
+def strategy_reorder_icebreaker(p: dict) -> dict:
+    """GTME-only: move one icebreaker angle (from -> to) on an idea's waterfall
+    and re-store the run. Behind the login gate (strategy is not client-editable)."""
+    if not isinstance(p, dict):
+        return {"ok": False, "message": "invalid body"}
+    run_id = p.get("run_id")
+    if not _strategy_run_id_ok(run_id):
+        return {"ok": False, "message": "bad run_id"}
+    try:
+        frm, to = int(p.get("from")), int(p.get("to"))
+    except (TypeError, ValueError):
+        return {"ok": False, "message": "from/to must be integers"}
+    key = _strategy_key(run_id)
+    rows = sb("GET", "campaign_insights?scope=eq.strategy"
+                     f"&insight_key=eq.{key}&status=eq.live"
+                     "&select=payload,generated_at&order=generated_at.desc&limit=1") or []
+    if not rows:
+        return {"ok": False, "message": "this board no longer exists"}
+    run = rows[0].get("payload") or {}
+    idea = next((i for i in run.get("ideas") or [] if i.get("id") == p.get("ideaId")), None)
+    if not idea:
+        return {"ok": False, "message": "that idea is no longer on the board"}
+    angles = (idea.get("icebreaker") or {}).get("angles")
+    if not isinstance(angles, list):
+        return {"ok": False, "message": "this idea has no icebreaker angles"}
+    n = len(angles)
+    if not (0 <= frm < n and 0 <= to < n):
+        return {"ok": False, "message": "index out of range"}
+    angles.insert(to, angles.pop(frm))  # move frm to position to (adjacent = swap)
+    out = strategy_run_post(dict(run, run_id=run_id, generated_by="chat"))
+    if not out.get("ok"):
+        return out
+    return {"ok": True, "updated": out.get("updated")}
+
+
 _STRATEGY_FOCUS_VIEWS = ("board", "targeting", "emails", "opener", "checks", "building", "signoff")
 
 
@@ -19230,6 +19265,14 @@ class Handler(SimpleHTTPRequestHandler):
             tok = mint_strategy_share(rid)
             return self._json({"ok": True, "run_id": rid, "token": tok,
                                "url": f"/app/strategy.html?share={tok}#/r/{rid}"})
+        if path == "/api/strategy/reorder-icebreaker":
+            # GTME-only (behind the gate above): reorder an idea's icebreaker waterfall
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            out = strategy_reorder_icebreaker(p)
+            return self._json(out, 200 if out.get("ok") else 400)
         if path == "/api/strategy/run":
             # chat pushes a full lilly-strategy run.json; the wizard page's
             # poll picks it up within ~5s (see strategy_run_post above)
