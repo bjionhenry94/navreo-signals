@@ -3319,7 +3319,16 @@ def _sequence_post_payload(steps: list) -> list:
     remap per the 2026-07-09 draft experiments (GET names != POST names):
     sequence_variants -> seq_variants, delayInDays -> delay_in_days (inside
     seq_delay_details). A variant WITHOUT an id is allowed through — that is
-    how a new challenger variant is appended — but existing ids always ride."""
+    how a new challenger variant is appended — but existing ids always ride.
+
+    variant_distribution_type is MANDATORY on every variant-carrying step
+    (Bjion, 2026-08-02): the GET never returns it, and a save that omits it
+    makes Smartlead flip the step back to EQUAL distribution — the UI then
+    shows every variant re-enabled on an even split while the stored
+    percentages sit ignored underneath. Our writes are percentage-based by
+    construction, so every step with variants ships MANUAL_PERCENTAGE (the
+    value the founder-verified MCP client sends). is_deleted is echoed for
+    the same reason: never let the POST default a deleted variant back on."""
     out = []
     for s in steps:
         step = {"id": s.get("id"), "seq_number": s.get("seq_number")}
@@ -3335,6 +3344,7 @@ def _sequence_post_payload(steps: list) -> list:
             step["email_body"] = s.get("email_body")
         variants = s.get("sequence_variants") or []
         if variants:
+            step["variant_distribution_type"] = s.get("variant_distribution_type") or "MANUAL_PERCENTAGE"
             seq_variants = []
             for v in variants:
                 variant = {"variant_label": v.get("variant_label")}
@@ -3346,6 +3356,8 @@ def _sequence_post_payload(steps: list) -> list:
                     variant["email_body"] = v.get("email_body")
                 if v.get("variant_distribution_percentage") is not None:
                     variant["variant_distribution_percentage"] = v.get("variant_distribution_percentage")
+                if v.get("is_deleted") is not None:
+                    variant["is_deleted"] = bool(v.get("is_deleted"))
                 seq_variants.append(variant)
             step["seq_variants"] = seq_variants
         out.append(step)
@@ -3628,7 +3640,7 @@ def _disable_variant_pcts(steps: list, email_num: int, variant_label: str,
 
 _VARIANT_ACTION_CONFIRM = {"disable": "DISABLE", "enable": "ENABLE",
                            "scale_winner": "SCALE", "even_split": "SPLIT",
-                           "shift_share": "SHIFT"}
+                           "shift_share": "SHIFT", "repair_mode": "REPAIR"}
 
 
 def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
@@ -3655,6 +3667,24 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
     # A disable folds the freed share into the winning sibling (best performer)
     # just like the notification-execute path; None → proportional fallback.
     disable_winner = _best_sibling_label(campaign_id, email_num, variant_label) if action == "disable" else None
+
+    # even_split needs per-version send history to tell "never configured"
+    # (0%, zero sends -> may join the split) from "switched off on purpose"
+    # (0%, has sends -> stays off). Id-intact saves preserve these counters,
+    # so history survives our own writes. Unreadable history = refuse, never
+    # guess about resurrecting a version someone turned off.
+    receipt["sent_by_vid"] = {}
+    if action == "even_split":
+        try:
+            stats = _smartlead_json("GET", f"/campaigns/{campaign_id}/variant-statistics", timeout=20)
+            rows = stats.get("data") if isinstance(stats, dict) else None
+            for r in (rows or []):
+                if isinstance(r, dict) and r.get("seq_variant_id") is not None:
+                    receipt["sent_by_vid"][r.get("seq_variant_id")] = int(r.get("sent_count") or 0)
+        except Exception:  # noqa: BLE001
+            return 502, {"ok": False,
+                          "message": "couldn't read version send history from Smartlead - refusing to guess "
+                                     "which versions were switched off on purpose; try again in a moment"}
 
     def _mutate(steps):
         step = _find_step(steps, email_num)
@@ -3720,12 +3750,37 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
             new_pcts[src.get("id")] = 0
             _apply_step_pcts(steps, email_num, new_pcts)
             receipt["target_id"] = dst.get("id")
+        elif action == "repair_mode":
+            # Identity re-save: pcts untouched, but the POST now carries
+            # variant_distribution_type=MANUAL_PERCENTAGE — repairs a step
+            # whose mode an older (pre-fix) save flipped back to EQUAL.
+            new_pcts = {v.get("id"): _pct_of(v) for v in variants}
         else:  # even_split
             if len(variants) < 2:
                 raise SequenceActionRefused(400, {
                     "ok": False, "message": "fewer than 2 variants on this step - nothing to split"})
-            shares = _even_shares(len(variants))
-            new_pcts = {v.get("id"): shares[i] for i, v in enumerate(variants)}
+            # NEVER resurrect a deliberately switched-off version (Bjion,
+            # 2026-08-02). When the step has live versions, the even split
+            # covers only: versions already receiving traffic, plus versions
+            # that have NEVER sent (the true "split was never set" case). A
+            # version at 0% WITH send history was turned off on purpose and
+            # stays off. Only when NO version is live (distribution never
+            # configured at all) does the split cover every non-deleted one.
+            live = [v for v in variants if _pct_of(v) > 0]
+            if live:
+                include = [v for v in variants
+                           if _pct_of(v) > 0 or receipt["sent_by_vid"].get(v.get("id"), 0) == 0]
+            else:
+                include = list(variants)
+            if len(include) < 2:
+                raise SequenceActionRefused(400, {
+                    "ok": False,
+                    "message": "nothing to split - the versions at 0% were switched off on purpose "
+                               "(they have send history); use their toggles to bring one back instead"})
+            shares = _even_shares(len(include))
+            new_pcts = {v.get("id"): 0 for v in variants}
+            for i, v in enumerate(include):
+                new_pcts[v.get("id")] = shares[i]
             _apply_step_pcts(steps, email_num, new_pcts)
         receipt["pcts_after"] = new_pcts
         return steps

@@ -5038,6 +5038,34 @@
     return (STATE.byId && STATE.byId[cid]) || { id: cid, name: "Campaign " + cid };
   }
 
+  /* A successful one-click write IS the card's job done — flip the status
+     pill to Completed right there (Bjion, 2 Aug 2026: "it was actioned but
+     the status remained the same"). Same state machine as clicking "Mark as
+     completed": optimistic local write + assignments POST + badge repaint. */
+  function vawMarkCardDone(el) {
+    var card = el && el.closest ? el.closest(".action-card") : null;
+    if (!card) return;
+    var key = card.getAttribute("data-action-key");
+    if (!key) return;
+    var parts = key.split("::");
+    ACT_ASSIGN[key] = { state: "done", assigned_to: ACT_ME };
+    actApplyCard(card);
+    var rowEl = card.closest(".campaign-row");
+    var rowCid = rowEl && rowEl.id.indexOf("row-c") === 0 ? rowEl.id.slice(5) : null;
+    if (rowCid) refreshReviewBadge(rowCid);
+    fetch("/api/cockpit/assignments", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action_key: key, campaign_id: parts[0],
+                             insight_key: parts.slice(1).join("::"), state: "done" })
+    }).then(function (r) { return r.json(); }).then(function (out) {
+      if (out && out.ok !== false && out.state) {
+        ACT_ASSIGN[key] = { state: out.state, assigned_to: out.assigned_to };
+        actApplyCard(card);
+      }
+    }).catch(function () {});
+  }
+
   function vawWireWhy(box, cid) {
     var c = vawCampaignOf(cid);
     box.querySelectorAll("[data-vaw-p8]").forEach(function (b) {
@@ -5062,7 +5090,7 @@
               }),
               foot: "Both keep their IDs and history — nothing recreated." };
           },
-          after: function () { vawRefreshCampaign(c); }
+          after: function () { vawMarkCardDone(b); vawRefreshCampaign(c); }
         });
       });
     });
@@ -5087,7 +5115,9 @@
                      foot: "Its stats stay on its version ID — nothing was recreated." };
           },
           after: function () {
-            b.closest(".vaw-act").innerHTML = '<span class="vaw-done">&#10003; Version ' + esc(lab) + " on Email " + esc(email) + " was switched off</span>";
+            vawMarkCardDone(b);
+            var act = b.closest(".vaw-act");
+            if (act) act.innerHTML = '<span class="vaw-done">&#10003; Version ' + esc(lab) + " on Email " + esc(email) + " was switched off</span>";
             vawRefreshCampaign(c);
           }
         });
@@ -5115,7 +5145,7 @@
               }),
               foot: "The rest are paused at 0% — IDs and history intact." };
           },
-          after: function () { vawRefreshCampaign(c); }
+          after: function () { vawMarkCardDone(b); vawRefreshCampaign(c); }
         });
       });
     });
@@ -5140,7 +5170,7 @@
               }),
               foot: "Every version keeps its ID — the ones that never sent start counting now." };
           },
-          after: function () { vawRefreshCampaign(c); }
+          after: function () { vawMarkCardDone(b); vawRefreshCampaign(c); }
         });
       });
     });
@@ -5181,6 +5211,7 @@
                 foot: "Same version row, same stats — the counters keep counting from here." };
             },
             after: function () {
+              vawMarkCardDone(b);
               var wrap = box.querySelector('[data-vaw-p3-wrap="' + nid + '"]');
               if (wrap) wrap.innerHTML = '<span class="vaw-done">&#10003; The rewritten copy was applied</span>';
               vawRefreshCampaign(c);
@@ -5191,13 +5222,13 @@
     });
     box.querySelectorAll("[data-vaw-p7]").forEach(function (b) {
       b.addEventListener("click", function () {
-        vawChallengerFlow(cid, parseInt(b.getAttribute("data-email"), 10), b.getAttribute("data-vlabel"), c);
+        vawChallengerFlow(cid, parseInt(b.getAttribute("data-email"), 10), b.getAttribute("data-vlabel"), c, b);
       });
     });
   }
 
   /* P7: checkbox scope (problem default) -> drafted preview -> typed ADD */
-  function vawChallengerFlow(cid, email, baseLabel, c) {
+  function vawChallengerFlow(cid, email, baseLabel, c, originEl) {
     var ov = document.createElement("div");
     ov.className = "vaw-overlay";
     ov.innerHTML = '<div class="vaw-modal" role="dialog" aria-modal="true">' +
@@ -5279,6 +5310,7 @@
               "</div></div>" +
               '<div class="vaw-foot"><button type="button" class="vaw-btn vaw-btn--primary" data-x3>Done</button></div>';
             modal.querySelector("[data-x3]").addEventListener("click", close);
+            vawMarkCardDone(originEl);
             vawRefreshCampaign(c);
           }).catch(function () {
             err2.textContent = "Couldn't reach the tool - network error.";

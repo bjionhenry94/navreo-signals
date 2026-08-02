@@ -118,6 +118,15 @@ def test_roundtrip_preserves_ids():
           == "<p>A body</p>")
     check("post-verify ids intact", out["after_ids"]["variants"] == ["901", "902"])
     check("target change took", server._variant_pct_in(out["steps_after"], 1, 902) == 0)
+    # Bjion 2026-08-02: a save that omits variant_distribution_type flips the
+    # step back to EQUAL mode in Smartlead (all versions re-enabled, even
+    # split shown, stored pcts ignored). Every variant-carrying step MUST
+    # ship MANUAL_PERCENTAGE.
+    s1 = next(s for s in posted if s["id"] == 111)
+    check("variant-carrying step ships MANUAL_PERCENTAGE",
+          s1.get("variant_distribution_type") == "MANUAL_PERCENTAGE", str(s1.get("variant_distribution_type")))
+    s2 = next(s for s in posted if s["id"] == 222)
+    check("variant-less step ships no distribution type", "variant_distribution_type" not in s2)
 
 
 def test_id_drop_rejected_before_post():
