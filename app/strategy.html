@@ -40,7 +40,7 @@ a{color:inherit;text-decoration:none}
 .wrap{max-width:860px;padding:30px 40px 90px;}
 .wtop{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;}
 .status{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin-bottom:8px;}
-.h1{font-family:var(--font-display);font-size:32px;letter-spacing:-.03em;line-height:1.08;margin:18px 0;}
+.h1{font-family:var(--font-display);font-size:32px;letter-spacing:-.03em;line-height:1.08;margin:22px 0;}
 .recc{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--orange-600);background:var(--orange-100);border-radius:999px;padding:3px 10px;margin-left:10px;vertical-align:middle;}
 .capline{font-size:14px;color:var(--ink-3);margin-top:6px;}
 .tabin{position:absolute;width:0;height:0;opacity:0;pointer-events:none;}
@@ -52,7 +52,7 @@ a{color:inherit;text-decoration:none}
 .typetag{display:inline-flex;align-items:center;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--ink-2);background:var(--cream-50);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;margin-left:12px;vertical-align:middle;white-space:nowrap;}
 .desc{font-size:17px;line-height:1.55;color:var(--ink);max-width:640px;margin:0 0 4px;letter-spacing:-.01em;}
 .desc b{background:linear-gradient(transparent 62%, var(--orange-100) 62%);font-weight:600;}
-.panels{margin-top:22px;}
+.panels{margin-top:0;}
 .panel{display:none;}
 .eyb{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin:0 0 12px;}
 .chip{display:inline-flex;font-size:13.5px;padding:6px 12px;border-radius:9px;background:var(--cream-50);border:1px solid var(--line);color:var(--ink-2);}
@@ -91,6 +91,19 @@ a{color:inherit;text-decoration:none}
 .chk:last-child{border-bottom:none;}
 .chk .ck{width:17px;height:17px;border-radius:50%;border:1.5px solid var(--line-2);margin-top:2px;flex:none;}
 .chk .cl{font-size:15px;font-weight:600;} .chk .cn{font-size:13px;color:var(--ink-3);margin-top:2px;}
+/* Live checklist states + Summary page (wizard-summary-restage) */
+.chk{align-items:center;}
+.chk.done .ck{background:var(--orange);border-color:var(--orange);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;margin-top:0;}
+.chk-state{margin-left:auto;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);background:var(--cream-50);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap;}
+.chk-state.is-done{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange-100);}
+.sum-recap{display:flex;align-items:center;gap:16px;margin:2px 0 18px;flex-wrap:wrap;}
+.sum-reach{font-size:14px;color:var(--ink-3);} .sum-reach b{font-family:var(--font-display);font-size:19px;color:var(--ink);letter-spacing:-.02em;}
+.sum-pager{display:flex;align-items:center;gap:14px;margin-bottom:12px;max-width:640px;}
+.sum-whois{flex:1;display:flex;align-items:baseline;justify-content:center;gap:10px;flex-wrap:wrap;text-align:center;}
+.sum-name{font-family:var(--font-display);font-size:17px;letter-spacing:-.01em;}
+.sum-co{font-size:13.5px;color:var(--ink-3);}
+.sum-note{font-size:13px;color:var(--ink-3);margin-top:12px;max-width:640px;}
+.mail{max-width:640px;}
 /* Live tab — goes-live preview */
 .livebanner{background:var(--cream-50);border:1px solid var(--line);border-radius:12px;padding:14px 18px;font-size:14px;color:var(--ink-2);margin-bottom:16px;}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:0 0 18px;max-width:660px;}
@@ -149,19 +162,33 @@ a{color:inherit;text-decoration:none}
 #toast b{color:var(--ink);font-weight:600;}
 .empty-pick{max-width:760px;padding:60px 40px;font-family:var(--font-display);font-size:30px;letter-spacing:-.03em;color:var(--ink-3);}
 </style></head><body><div id="boot">Loading your board…</div><div id="toast"></div><div class="app"><aside class="side" id="side"></aside><main class="work" id="work"></main></div><script>
-const TABS=[['tgt','Targeting'],['copy','Copy'],['first','Icebreaker'],['build','Build'],['live','Live']];
+// Session routing + client share (strategy-session-share, 2026-08-02):
+// #/r/<run_id> pins the board to ONE session's run; ?share=<token> is the
+// client permalink — logged-out, copy-editable, no build machinery in the DOM.
+const SHARE=new URLSearchParams(location.search).get('share')||'';
+const CLIENT_MODE=!!SHARE;
+function runIdFromHash(){const m=location.hash.match(/^#\/r\/([a-z0-9-]+)/);return m?m[1]:'';}
+let RUN_ID=runIdFromHash();
+window.addEventListener('hashchange',()=>{const r=runIdFromHash();if(r!==RUN_ID){RUN_ID=r;lastFP=null;fetchRun();}});
+const TABS_ALL=[['tgt','Targeting'],['first','Icebreaker'],['copy','Copy'],['build','Summary'],['live','Live']];
+// client mode: build/live (and every GTME action inside them) NEVER enter the DOM
+const TABS=CLIENT_MODE?TABS_ALL.filter(t=>['tgt','first','copy'].includes(t[0])):TABS_ALL;
 const ICEB=[["Safe opener", true, "A polite, personal-feeling opening line that always works. Our best performer.", "Apologies if this isn't relevant, wasn't sure who at {company} was the best person for this."], ["Company detail", false, "References something specific we found about their company.", "Saw {company} covers three states now. Growth like that usually strains the pipeline side."], ["Colleague mention", false, "Names a colleague we found, only where we're confident it's right.", "I wasn't sure if you or {colleague} was the right person to ask at {company}."]];
+// Pre-launch checks live on the Live page (wizard-summary-restage, 2026-08-02):
+// third field = already done at this stage (1) vs happens before launch (0),
+// so anyone the board is shared with sees the plan AND the progress.
 const CHECKS=[
-  ["Spelling &amp; grammar","every line read and fixed"],
-  ["Merge fields fill in","no blank [First name] or [Company] slips through"],
-  ["Links work","every link opened and checked"],
-  ["Unsubscribe line present","an easy opt-out on every email"],
-  ["No spam-trigger words","wording that stays out of the junk folder"],
-  ["Sending addresses are healthy","warmed-up domains, good reputation"],
-  ["Daily send caps set","we ramp up slowly, never blast"],
-  ["Nobody emailed twice","checked against everyone we've contacted before"]
+  ["Spelling &amp; grammar","every line read and fixed",1],
+  ["Signature added","a real person signs off every email",1],
+  ["Unsubscribe line present","an easy opt-out on every email",1],
+  ["No spam-trigger words","wording that stays out of the junk folder",1],
+  ["Merge fields fill in","no blank [First name] or [Company] slips through",0],
+  ["Links work","every link opened and checked",0],
+  ["Sending addresses are healthy","warmed-up domains, good reputation",0],
+  ["Daily send caps set","we ramp up slowly, never blast",0],
+  ["Nobody emailed twice","checked against everyone we've contacted before",0]
 ];
-let IDEAS=[], active=0, tab='tgt', lastFP=null, client='';
+let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
 const side=document.getElementById('side'), work=document.getElementById('work'),
       boot=document.getElementById('boot'), toast=document.getElementById('toast');
 
@@ -210,7 +237,52 @@ function targetingSections(x){
   if(t.note)h+=`<p class="tgt-note">${esc(t.note)}</p>`;
   return h;
 }
-function versionFrame(x){return `<div class="mail"><div class="mh">Subject: ${esc(x.caption||'')}</div><div class="mb">${esc(x.email||'').replace(/\n/g,'<br>')}</div></div>`;}
+function versionFrame(x){
+  // client mode: the email body is editable in place; Save posts a copy-edit
+  const ed=CLIENT_MODE?' contenteditable="true" data-edit="email" spellcheck="true"':'';
+  return `<div class="mail"><div class="mh">Subject: ${esc(x.caption||'')}</div><div class="mb"${ed}>${esc(x.email||'').replace(/\n/g,'<br>')}</div></div>`;}
+async function clientSaveCopy(x,btn){
+  const mb=document.querySelector('.mb[data-edit="email"]');
+  if(!mb)return;
+  const value=mb.innerText.trim();
+  if(!value){btn.textContent='Nothing to save';return;}
+  btn.disabled=true;btn.textContent='Saving…';
+  try{
+    const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:'email',value,share:SHARE})});
+    const j=await r.json();
+    btn.disabled=false;
+    if(j.ok){btn.textContent='Saved — your team will see this';setTimeout(()=>{btn.textContent='Save my edits';},4000);}
+    else{btn.textContent=(j.message||'Could not save, try again');}
+  }catch(e){btn.disabled=false;btn.textContent='Could not save, try again';}
+}
+
+/* Summary page — up to 5 real mapped people per idea (run.people[idea.id]),
+   every merge field resolved: what actually lands in their inbox. */
+const LINE_ORDER=['safe','detail','colleague'];
+function summaryProspects(x){
+  let arr=(PEOPLE[x.id]||[]).slice(0,5);
+  if(!arr.length&&x.firstName)arr=[{first:x.firstName,title:'',company:x.company||'',lines:{}}];
+  return arr;
+}
+function openerFor(p){
+  const L=p.lines||{};
+  for(const k of LINE_ORDER)if(L[k])return L[k];
+  return "Apologies if this isn't relevant, wasn't sure who at "+(p.company||"your company")+" was the best person for this.";
+}
+function resolvedEmail(x,p){
+  const opener=openerFor(p);
+  if(x.email){
+    return String(x.email)
+      .replace(/\{\{?first(_name)?\}?\}/gi,p.first||'')
+      .replace(/\{\{?company\}?\}/gi,p.company||'')
+      .replace(/\{\{?icebreaker\}?\}/gi,opener)
+      .replace(/\{\{?colleague\}?\}/gi,COLLEAGUES[x.id]||'a colleague')
+      .replace(/%signature%/gi,"Bjion\nNavreo");
+  }
+  const parts=[opener,x.pain||'',x.offer||''].filter(Boolean);
+  return "Hey "+(p.first||'there')+",\n\n"+parts.join("\n\n")+"\n\nWorth a quick chat?\n\nBjion\nNavreo";
+}
 function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2],ex=o[3];
   const recH=rec?' <span class="ib-rec">Recommended</span>':'';const up=i===0?' disabled':'';const dn=i===ICEB.length-1?' disabled':'';
   return `<div class="opener-row"><div class="opener-order"><span class="opos">${i+1}</span><button class="oarrow"${up}>▲</button><button class="oarrow"${dn}>▼</button></div>`
@@ -223,15 +295,33 @@ function panelHTML(x){
     +`<button class="pager-dot active"></button><button class="pager-dot"></button><button class="pager-dot"></button><button class="pager-dot"></button>`
     +`<span class="pager-divider"></span><button class="pager-dot"></button><span class="pager-fu">Follow-up</span></div>`
     +`<span class="pager-label">Version A</span></div><button class="pager-arrow">›</button></div>`
-    +versionFrame(x)+`<div class="actions-center"><button class="btn-ink">Next: choose the opener</button></div>`;
+    +versionFrame(x)
+    +(CLIENT_MODE
+      ?`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save my edits</button></div>`
+       +`<p class="hooknote" style="margin-top:10px">Click into the email above to edit it. Saving shares it with your team.</p>`
+      :`<div class="actions-center"><button class="btn-ink">Next: see the summary</button></div>`);
   if(tab==='first') return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
-    +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`;
-  if(tab==='build') return `<p class="eyb">Build</p><p class="chkhead">This is the one step that pulls real data. When you build, we pull the real list (or arm the trigger for an ongoing signal) and run every check below. Nothing sends until it's Live.</p>`
-    +`<div class="checks">`+CHECKS.map(c=>`<div class="chk"><span class="ck"></span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div></div>`).join('')+`</div>`
-    +`<button class="build-btn">Build the campaign</button>`;
+    +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
+    +`<div class="actions-center"><button class="btn-ink">Next: your emails</button></div>`;
+  if(tab==='build'){
+    const ppl=summaryProspects(x);if(sIdx>=ppl.length)sIdx=0;
+    if(!ppl.length)return `<p class="eyb">Summary</p><div class="ph">Once this idea has its people mapped, real examples show up here.</div>`;
+    const pr=ppl[sIdx];
+    return `<p class="eyb">Summary</p>`
+      +`<div class="sum-recap">${tgtType(x)}<span class="sum-reach"><b>${num(x.reachablePool||x.net)}</b> people we can reach</span></div>`
+      +`<div class="sum-pager"><button class="pager-arrow sum-prev"${sIdx===0?' disabled':''}>‹</button>`
+      +`<div class="sum-whois"><span class="sum-name">${esc(pr.first)}${pr.title?', '+esc(pr.title):''}</span><span class="sum-co">${esc(pr.company||'')}</span></div>`
+      +`<button class="pager-arrow sum-next"${sIdx>=ppl.length-1?' disabled':''}>›</button></div>`
+      +`<div class="mail"><div class="mh">Subject: ${esc(x.caption||'')}</div><div class="mb">${esc(resolvedEmail(x,pr)).replace(/\n/g,'<br>')}</div></div>`
+      +`<p class="sum-note">${sIdx+1} of ${ppl.length} — real people from this exact audience, every blank filled in. This is what lands.</p>`
+      +`<div class="actions-center"><button class="build-btn">Build the campaign</button></div>`;
+  }
   const p=x.reachablePool||x.net;
+  const doneN=CHECKS.filter(c=>c[2]).length;
   return `<p class="eyb">Live</p><div class="livebanner">Not live yet — the campaign turns on when you approve it. Nothing sends until then.</div>`
-    +`<div class="tiles"><div class="tile"><div class="tn">${num(p)}</div><div class="tl">in the pool</div></div>`
+    +`<p class="chkhead">Every box below gets ticked before the first email goes out. ${doneN} of ${CHECKS.length} are already done.</p>`
+    +`<div class="checks">`+CHECKS.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Before launch'}</span></div>`).join('')+`</div>`
+    +`<div class="tiles" style="margin-top:22px"><div class="tile"><div class="tn">${num(p)}</div><div class="tl">in the pool</div></div>`
     +`<div class="tile"><div class="tn">—</div><div class="tl">emailed</div></div>`
     +`<div class="tile"><div class="tn">—</div><div class="tl">replies</div></div>`
     +`<div class="tile"><div class="tn">—</div><div class="tl">meetings booked</div></div></div>`
@@ -248,7 +338,7 @@ function renderSidebar(){
   side.innerHTML=`<div class="brand"><b>Navreo</b><span class="ey">Strategy</span></div>`
     +(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div></div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
-  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';render();});
+  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;render();});
 }
 function renderWorkspace(){
   const x=IDEAS[active];
@@ -256,6 +346,11 @@ function renderWorkspace(){
   const pills=`<div class="tabs">`+TABS.map(t=>`<label class="${t[0]===tab?'active':''}" data-tab="${t[0]}"><span class="ring"></span>${esc(t[1])}</label>`).join('')+`</div>`;
   work.innerHTML=`<div class="wrap">${pills}<h1 class="h1">${esc(x.name)}</h1><div class="panels"><section class="panel">${panelHTML(x)}</section></div></div>`;
   work.querySelectorAll('.tabs label').forEach(l=>l.onclick=()=>{tab=l.dataset.tab;renderWorkspace();});
+  const csb=work.querySelector('#client-save-copy');
+  if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
+  const pv=work.querySelector('.sum-prev'),nx=work.querySelector('.sum-next');
+  if(pv)pv.onclick=()=>{if(sIdx>0){sIdx--;renderWorkspace();}};
+  if(nx)nx.onclick=()=>{sIdx++;renderWorkspace();};
 }
 function render(){renderSidebar();renderWorkspace();}
 
@@ -264,15 +359,27 @@ function showToast(updated,note){
   toast.innerHTML=`<span class="lt-dot"></span><span>Just updated${note?': <b>'+esc(note)+'</b>':' from chat'} · ${fmtTime(updated)}</span>`;
   toast.classList.add('show');clearTimeout(toast._h);toast._h=setTimeout(()=>toast.classList.remove('show'),6500);
 }
+let SERVED_RUN_ID='';
 async function fetchRun(){
+  // never re-render over a client's half-typed edit — the poll catches up
+  // on the next tick after they click away
+  if(CLIENT_MODE&&document.activeElement&&document.activeElement.dataset&&document.activeElement.dataset.edit)return;
   try{
-    const r=await fetch('/api/strategy/run',{credentials:'include',cache:'no-store'});
-    if(!r.ok)return;
+    const q=new URLSearchParams();
+    if(RUN_ID)q.set('id',RUN_ID);
+    if(SHARE)q.set('share',SHARE);
+    const r=await fetch('/api/strategy/run'+(q.toString()?'?'+q.toString():''),{credentials:'include',cache:'no-store'});
+    if(!r.ok){
+      if(r.status===401&&CLIENT_MODE){boot.querySelector('p').textContent='This link has expired. Ask your contact for a fresh one.';}
+      return;
+    }
     const j=await r.json();const run=j.run||j;const ideas=(run&&run.ideas)||[];
-    const fp=JSON.stringify(ideas)+'|'+(j.updated||run.updated||'');
+    SERVED_RUN_ID=j.run_id||RUN_ID||'';
+    const fp=JSON.stringify(ideas)+'|'+JSON.stringify(run.people||{})+'|'+(j.updated||run.updated||'');
     if(fp===lastFP)return;
     const first=lastFP===null;
     IDEAS=ideas;client=run.client||run.clientLabel||client;
+    PEOPLE=run.people||{};COLLEAGUES=run.colleagues||{};
     if(active>=IDEAS.length)active=0;
     render();boot.classList.add('gone');
     if(!first){const note=(j.focus&&j.focus.note)||(run.focus&&run.focus.note)||'';showToast(j.updated||run.updated,note);}
