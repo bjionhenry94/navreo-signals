@@ -65,6 +65,12 @@
 .ah svg.trend{display:block;width:100%;height:auto;cursor:crosshair}
 .ah .trend text{font-family:var(--font-sans)}
 .ah .trendwrap{position:relative}
+/* Reply-rate graph fills the leftover height of its (grid-stretched) card so
+   it lines up with the taller bounce card beside it. renderWeek() reads this
+   wrapper's pixel aspect and sets the viewBox to match — the line scales
+   uniformly, no distortion. */
+.ah .week-wrap{flex:1 1 auto;min-height:150px}
+.ah #week-svg{display:block;width:100%;height:100%}
 .ah .charttip{position:absolute;top:0;left:0;pointer-events:none;background:var(--card);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;font-size:11.5px;line-height:1.6;color:var(--ink-2);white-space:nowrap;z-index:5}
 .ah .charttip b{display:block;font-size:11px;color:var(--ink);margin-bottom:2px}
 .ah .charttip .row{display:flex;align-items:center;gap:6px}
@@ -464,11 +470,10 @@
           <div class="card-head">
             <div class="card-kick" id="week-kick">Reply rate over time</div><span class="stamp" id="week-stamp"></span>
           </div>
-          <div class="trendwrap" style="margin-top:0">
-            <svg viewBox="0 0 620 170" width="100%" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
+          <div class="trendwrap week-wrap" style="margin-top:0">
+            <svg viewBox="0 0 620 170" preserveAspectRatio="xMidYMid meet" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
             <div class="charttip" id="week-tip" hidden></div>
           </div>
-          <div class="subline" id="week-sub">&nbsp;</div>
           <div class="take"><span class="arr">→</span><span id="week-take">&nbsp;</span></div>
         </div>
 
@@ -1705,8 +1710,7 @@ function renderWeek() {
   if (pts.length < 2) {
     $("week-svg").innerHTML = "";
     WK = null;
-    $("week-sub").textContent = "Not enough sending in this window to read a rate.";
-    $("week-take").textContent = "";
+    $("week-take").textContent = "Not enough sending in this window to read a rate.";
     return;
   }
 
@@ -1715,7 +1719,13 @@ function renderWeek() {
   var pad = Math.max((hi - lo) * 0.25, 0.15);
   lo = Math.max(0, lo - pad); hi = hi + pad;
 
-  var L = 44, R = 52, T = 16, B = 30, W = 620, H = 170;
+  // Height tracks the wrapper's real pixel aspect so the graph fills the
+  // leftover card space; viewBox width stays 620 (hover maths depends on it).
+  var wrap = $("week-svg").parentNode;
+  var wpx = wrap.clientWidth || 620, hpx = wrap.clientHeight || 170;
+  var L = 44, R = 52, T = 16, B = 30, W = 620;
+  var H = Math.max(150, Math.round(W * hpx / Math.max(1, wpx)));
+  $("week-svg").setAttribute("viewBox", "0 0 " + W + " " + H);
   var pw = W - L - R, ph = H - T - B, den = (d.days.length - 1) || 1;
   var X = function (i2) { return L + i2 / den * pw; };
   var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * ph; };
@@ -1756,22 +1766,6 @@ function renderWeek() {
   WK = { days: d.days, rate: d.rate, sent: d.sent, pts: pts, L: L, pw: pw, den: den, lo: lo, hi: hi, T: T, ph: ph };
   $("week-svg").setAttribute("aria-label",
     "Reply rate over the " + rangeLabel() + ", now " + d.rate[last].toFixed(1) + "%");
-
-  var cwc = cwFor(state.client);
-  if (d.scope === "fleet" && state.client !== "All" && cwc && cwc.sent > 0) {
-    // shared-workspace client: their real window rate — same maths as the
-    // legend chip (rateAvg), so the two can never disagree — fleet line for shape
-    var wra = rateAvg();
-    $("week-sub").textContent = state.client + ": " + (wra == null ? "–" : wra + "%") +
-      " over the " + rangeLabel() + " · the line shows the whole fleet day by day.";
-  } else {
-    // rateAvg(), not the send-weighted daily mean: the daily mean drops
-    // sub-minimum days and drifted a decimal from the legend chip (round 2)
-    var pooled = rateAvg();
-    $("week-sub").textContent = pooled == null ? "" :
-      (d.scope === "fleet" || d.scope === "all" ? "" : d.scope + ": ") +
-      "Averaging " + pooled + "% over the " + rangeLabel() + ".";
-  }
 
   // first half vs second half of the window — the direction that matters
   var half = Math.ceil(pts.length / 2);
@@ -2483,6 +2477,13 @@ $("trend-svg").addEventListener("mousemove", trendMove);
 $("trend-svg").addEventListener("mouseleave", hideTip);
 $("week-svg").addEventListener("mousemove", weekMove);
 $("week-svg").addEventListener("mouseleave", weekHide);
+// The week graph sizes itself to its wrapper's pixel aspect, so re-fit it when
+// the layout changes width/height (debounced).
+var _weekResizeT = null;
+window.addEventListener("resize", function () {
+  clearTimeout(_weekResizeT);
+  _weekResizeT = setTimeout(function () { try { renderWeek(); } catch (e) { /* pre-data */ } }, 150);
+});
 $("ah-retry").addEventListener("click", boot);
 // Copy-prompt on the double-tap bar → clipboard (with a non-secure-context
 // fallback), then a 1.6s "Copied ✓" confirmation.
