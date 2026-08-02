@@ -57,6 +57,8 @@ a{color:inherit;text-decoration:none}
 .eyb{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin:0 0 12px;}
 .chip{display:inline-flex;font-size:13.5px;padding:6px 12px;border-radius:9px;background:var(--cream-50);border:1px solid var(--line);color:var(--ink-2);}
 .chip-sub{color:var(--ink-3);} .chip-more{color:var(--ink-3);background:transparent;}
+.tgt-meta{font-size:13px;color:var(--ink-2);margin:0;}
+.tgt-note{font-size:12.5px;color:var(--ink-3);margin:14px 0 0;line-height:1.5;max-width:640px;}
 .chips{display:flex;flex-wrap:wrap;gap:8px;}
 .mech{display:inline-flex;align-items:center;font-family:var(--font-display);font-size:15px;background:var(--cream-50);border:1px solid var(--line);border-radius:999px;padding:8px 16px;}
 .tnum{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding-bottom:22px;border-bottom:1px solid var(--line);margin-bottom:22px;}
@@ -180,9 +182,34 @@ function rolesChips(x){const r=(x.targeting&&x.targeting.roles)||[],n=8;
   let h=r.slice(0,n).map(v=>`<span class="chip">${esc(v)}</span>`).join('');
   if(r.length>n)h+=`<span class="chip chip-more">+${r.length-n} more</span>`;return h;}
 function numBig(x){const p=x.reachablePool||x.net;return `<div class="numbig"><div class="n">${num(p)}</div><div class="rl">reachable — we email all</div></div>`;}
-function targetingSections(x){return `<div class="sect"><p class="eyb">Companies like these</p><div class="chips">${anchorChips(x)}</div></div>`
-  +`<div class="sect"><p class="eyb">Case studies we pull</p><div class="chips">${caseChips(x)}</div></div>`
-  +`<div class="sect"><p class="eyb">Decision-makers we email</p><div class="chips">${rolesChips(x)}</div></div>`;}
+// Per-kind fallback label for a target group + the plain-English campaign TYPE.
+// Labels come from the idea's own targeting.groups data first; these only fill in
+// when a group omits its label, so NO header is hard-coded to one example idea.
+const TGT_LABELS={targeted_list:"Companies we target",lookalike:"Companies like these",prospeo_signal:"What we watch for",hiring_signal:"Roles they're hiring for",engagement_signal:"Posts they react to",followers:"Pages whose followers we email",news_intent:"The news we watch for",recontact:"Who we're re-approaching",events:"Events we pull people from"};
+function tgtLabel(k){return TGT_LABELS[k]||"What we target";}
+const TGT_TYPES={targeted_list:"Niche list",lookalike:"Lookalike",prospeo_signal:"Buying signal",hiring_signal:"Hiring signal",engagement_signal:"Engagement signal",followers:"Follower audience",news_intent:"News signal",recontact:"Re-approach",events:"Event audience"};
+function tgtType(x){const k=x.targeting&&x.targeting.kind;return TGT_TYPES[k]?`<div class="mech">${esc(TGT_TYPES[k])}</div>`:'';}
+function grpChip(c){const i=String(c).indexOf(' — ');if(i<0)return `<span class="chip">${esc(c)}</span>`;return `<span class="chip">${esc(String(c).slice(0,i))}<span class="chip-sub"> — ${esc(String(c).slice(i+3))}</span></span>`;}
+function grpSection(label,chips){return (label&&chips&&chips.length)?`<div class="sect"><p class="eyb">${esc(label)}</p><div class="chips">${chips.map(grpChip).join('')}</div></div>`:'';}
+// Data-driven Targeting: render whatever labelled groups the idea supplies (each
+// falling back to its per-kind default), so the Targeting page fits every campaign
+// use-case (niche list, buying/hiring/engagement/news signal, followers, lookalike,
+// recontact, events) rather than the frozen lookalike headers. Legacy anchors/cases
+// runs are shimmed into groups so they render unchanged.
+function targetingSections(x){
+  const t=x.targeting||{};
+  let groups=Array.isArray(t.groups)?t.groups.slice():[];
+  if(!groups.length){
+    if(x.anchors&&x.anchors.length)groups.push({label:tgtLabel(t.kind||'lookalike'),chips:x.anchors});
+    if(x.cases&&x.cases.length)groups.push({label:'Case studies we pull',chips:x.cases});
+  }
+  let h=groups.map(g=>grpSection(g.label||tgtLabel(t.kind),g.chips)).join('');
+  if(((t.roles)||[]).length)h+=`<div class="sect"><p class="eyb">Decision-makers we email</p><div class="chips">${rolesChips(x)}</div></div>`;
+  if(typeof t.meta==='string'&&t.meta.trim())h+=`<div class="sect"><p class="eyb">Scope</p><p class="tgt-meta">${esc(t.meta)}</p></div>`;
+  else if(Array.isArray(t.meta)&&t.meta.length)h+=`<div class="sect"><p class="eyb">Scope</p><p class="tgt-meta">${t.meta.map(m=>esc(m[0])+': '+esc(m[1])).join('  ·  ')}</p></div>`;
+  if(t.note)h+=`<p class="tgt-note">${esc(t.note)}</p>`;
+  return h;
+}
 function versionFrame(x){return `<div class="mail"><div class="mh">Subject: ${esc(x.caption||'')}</div><div class="mb">${esc(x.email||'').replace(/\n/g,'<br>')}</div></div>`;}
 function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2],ex=o[3];
   const recH=rec?' <span class="ib-rec">Recommended</span>':'';const up=i===0?' disabled':'';const dn=i===ICEB.length-1?' disabled':'';
@@ -190,7 +217,7 @@ function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2
     +`<div class="opener-body"><p class="ib-name">${esc(name)}${recH}</p><p class="ib-plain">${esc(plain)}</p><p class="ib-example">"${esc(ex)}"</p></div><span class="otog">On</span></div>`;}).join('');}
 
 function panelHTML(x){
-  if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${numBig(x)}</div>${targetingSections(x)}`;
+  if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`;
   if(tab==='copy') return `<p class="copy-heading">Your emails</p>`
     +`<div class="pager"><button class="pager-arrow" disabled>‹</button><div class="pager-mid"><div class="pager-dots">`
     +`<button class="pager-dot active"></button><button class="pager-dot"></button><button class="pager-dot"></button><button class="pager-dot"></button>`
