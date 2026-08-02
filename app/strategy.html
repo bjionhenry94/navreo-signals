@@ -319,7 +319,7 @@ function targetingSections(x){
 function versionFrame(x){
   // client mode: the email body is editable in place; Save posts a copy-edit
   const ed=CLIENT_MODE?' contenteditable="true" data-edit="email" spellcheck="true"':'';
-  return `<div class="mail"><div class="mh">Subject: ${esc(x.caption||'')}</div><div class="mb"${ed}>${esc(x.email||'').replace(/\n/g,'<br>')}</div></div>`;}
+  return `<div class="mail"><div class="mh">Subject: ${esc(x.subject||x.caption||'')}</div><div class="mb"${ed}>${esc(x.email||'').replace(/\n/g,'<br>')}</div></div>`;}
 // "Share a link" on the Summary page (Bjion, 2026-08-02): GTME-only by design —
 // the Summary tab never renders in client mode. Mints this board's client
 // permalink (copy-edit-only view) and puts it on the clipboard.
@@ -424,7 +424,7 @@ function resolvedEmailHtml(x,p){
   return h.replace(/\n/g,'<br>');
 }
 function resolvedSubjectHtml(x,p){
-  const s=String(x.caption||'');
+  const s=String(x.subject||x.caption||'');
   const cap=s.charAt(0).toUpperCase()+s.slice(1);
   return esc(cap)
     .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
