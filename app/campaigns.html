@@ -2048,7 +2048,7 @@
   /* No outer border box — the per-stat boxes carry their own chrome. */
   .perfx-card { margin: 18px 0; }
   .perfx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .perfx-title { font-weight: 700; font-size: 15px; }
+  .perfx-title { font-family: var(--font-display); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: -0.03em; }
   .perfx-toggle { display: flex; gap: 6px; }
   .perfx-toggle button { font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: inherit; border-radius: 999px; padding: 3px 10px; }
   .perfx-toggle button.is-active { background: var(--chip-active-bg); color: var(--chip-active-fg); border-color: var(--chip-active-bg); }
@@ -2332,7 +2332,7 @@
          first frame from the localStorage replay and repaint when the live
          read lands. -->
     <div class="perfx-card" id="perfx-card" hidden>
-      <div class="perfx-head"><span class="perfx-title">Performance, whole fleet</span>
+      <div class="perfx-head"><span class="perfx-title">Campaigns</span>
         <div class="live-meta live-meta--perf" id="live-meta"><span class="live-dot" id="live-dot"></span><span id="live-meta-text">Checking Smartlead live&hellip;</span>
           <button type="button" class="live-refresh" id="live-refresh-btn" title="Re-check live status now" hidden>Refresh</button></div>
         <div class="perfx-toggle" role="group" aria-label="Window">
@@ -3425,9 +3425,9 @@
        off labels.sent instead of hardcoding it. */
     var tEl = document.querySelector("#perfx-card .perfx-title");
     if (tEl && p && p.labels && p.labels.sent) {
-      tEl.textContent = p.labels.sent.indexOf("Navreo workspace") >= 0
-        ? "Performance, Navreo workspace (fleet view warming up)"
-        : "Performance, whole fleet";
+      /* Heading stays "Campaigns"; the honest fleet-vs-Navreo-only truth
+         lives on the tooltip so the label never overclaims. */
+      tEl.textContent = "Campaigns";
       tEl.title = p.labels.sent;
     }
     drawPerf(perfDays());

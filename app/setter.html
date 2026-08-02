@@ -26,7 +26,7 @@
    No manual check button - every page load runs the reply check itself
    (see init), so refreshing the page IS the check (owner ask 2026-07-26). ── */
 .setter-head-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 12px; }
-.sh-title { font-family: var(--font-sans); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; margin: 0; }
+.sh-title { font-family: var(--font-display); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: -0.03em; margin: 0; }
 .setter-head-row .sh-spacer { flex: 1; }
 
 /* ── Toolbar row: filters + test toggle + settings gear (agents drawer) + master switch pill ── */
@@ -260,7 +260,7 @@
   .main { padding: 14px 14px 0; }
   /* Calmer header: just title + stats */
   .setter-head-row { gap: 8px 10px; margin-bottom: 8px; }
-  .sh-title { font-size: 20px; }
+  .sh-title { font-size: 26px; }
   .stats-inline { width: 100%; order: 3; }
 
   /* Status lenses = one horizontal scroll strip of touch pills */
@@ -714,7 +714,7 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
   <div id="rail"></div>
   <main class="main">
     <div class="setter-head-row">
-      <h1 class="sh-title">Appointment Setter</h1>
+      <h1 class="sh-title">Inbox</h1>
       <div class="stats-inline" id="statsInline"><span class="muted"><span class="btnspin"></span> Loading…</span></div>
       <div class="sh-spacer"></div>
       <span class="small muted" id="lastCheckedNote"></span>

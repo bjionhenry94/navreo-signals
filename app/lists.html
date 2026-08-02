@@ -98,6 +98,7 @@ a.sheet-link:hover { color: var(--orange-700); text-decoration: underline; }
 .gh-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .gh-sep { color: var(--line-2); font-size: 13px; }
 h1#gridName { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pagehead .ph-title { font-family: var(--font-display); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: -0.03em; }
 .gh-rows { font-size: 12.5px; }
 .gh-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .gh-right .btn .dlicon { font-size: 14px; line-height: 1; }
@@ -331,8 +332,7 @@ table.datagrid { border-collapse: collapse; font-size: 12.5px; width: max-conten
     <div id="view-files">
       <div class="pagehead">
         <div>
-          <div class="eyebrow">Lists</div>
-          <h1>All Files</h1>
+          <h1 class="ph-title">All prospects lists</h1>
         </div>
         <div class="fb-actions">
           <input class="search" id="fbSearch" placeholder="Search lists or clients…">
