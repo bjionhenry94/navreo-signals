@@ -1888,28 +1888,58 @@ _STRATEGY_ENGINE_FIELDS = ("vector", "probe", "netting", "pull_spec")
 # generation and refuses to store — so a bust can never be undone by a
 # straggler re-storing the old run with a fresh ts.
 _STRATEGY_RUN_MEMO_LOCK = threading.Lock()
-_STRATEGY_RUN_MEMO = {"ts": 0.0, "payload": None}  # swapped whole, under the lock
+# Session-scoped runs (strategy-session-share, 2026-08-02): the memo is now a
+# small per-run dict — key None = the bare "newest run" read, key "<run_id>" =
+# that session's board. Capped at 8 entries (512MB Render starter — see
+# web-instance-oom-crashloop); evicts oldest-stored. Same one-object-swap +
+# generation-fence discipline as before, now per key.
+_STRATEGY_RUN_MEMO = {}  # key -> {"ts": float, "payload": dict}
 _STRATEGY_RUN_GEN = 0
+_STRATEGY_RUN_MEMO_CAP = 8
+_STRATEGY_RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,58}[a-z0-9]$")
 
 
 def _strategy_run_memo_bust() -> None:
-    """Drop the memo AND advance the generation (see fence note above)."""
+    """Drop ALL memoized runs AND advance the generation (see fence note above)."""
     global _STRATEGY_RUN_MEMO, _STRATEGY_RUN_GEN
     with _STRATEGY_RUN_MEMO_LOCK:
         _STRATEGY_RUN_GEN += 1
-        _STRATEGY_RUN_MEMO = {"ts": 0.0, "payload": None}
+        _STRATEGY_RUN_MEMO = {}
 
 
-def strategy_run_get() -> dict:
+def _strategy_run_id_ok(run_id) -> bool:
+    return isinstance(run_id, str) and bool(_STRATEGY_RUN_ID_RE.match(run_id))
+
+
+def _strategy_key(run_id=None) -> str:
+    """insight_key for a run: keyed per session, legacy bare key otherwise."""
+    return f"wizard_run:{run_id}" if run_id else "wizard_run"
+
+
+def strategy_run_get(run_id=None) -> dict:
+    """One run's board payload. run_id=None keeps the legacy behaviour: the
+    NEWEST run of any session (bare strategy.html + old links stay alive)."""
     global _STRATEGY_RUN_MEMO
+    if run_id is not None and not _strategy_run_id_ok(run_id):
+        return {"run": None, "updated": None, "focus": None,
+                "error": "bad run id"}
     with _STRATEGY_RUN_MEMO_LOCK:
-        memo = _STRATEGY_RUN_MEMO
+        memo = _STRATEGY_RUN_MEMO.get(run_id)
         gen = _STRATEGY_RUN_GEN
-    if memo["payload"] is not None and (time.time() - memo["ts"]) < 20:
+    if memo and memo["payload"] is not None and (time.time() - memo["ts"]) < 20:
         return memo["payload"]
-    rows = sb("GET", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_run"
-                     "&status=eq.live&select=payload,generated_at"
-                     "&order=generated_at.desc&limit=1") or []
+    if run_id:
+        run_q = ("campaign_insights?scope=eq.strategy"
+                 f"&insight_key=eq.{_strategy_key(run_id)}"
+                 "&status=eq.live&select=payload,generated_at,insight_key"
+                 "&order=generated_at.desc&limit=1")
+    else:
+        # newest run across legacy + keyed rows (insight_key wizard_run*)
+        run_q = ("campaign_insights?scope=eq.strategy"
+                 "&insight_key=like.wizard_run*"
+                 "&status=eq.live&select=payload,generated_at,insight_key"
+                 "&order=generated_at.desc&limit=1")
+    rows = sb("GET", run_q) or []
     if not rows:
         return {"run": None, "updated": None, "focus": None}
     run = rows[0].get("payload") or {}
@@ -1917,41 +1947,141 @@ def strategy_run_get() -> dict:
     for idea in run.get("ideas") or []:
         for f in _STRATEGY_ENGINE_FIELDS:
             idea.pop(f, None)
-    # chat-mirror focus (chat-mirror-lab, 2026-07-27): where chat is working
-    # right now, so the page can follow the conversation. One poll carries both.
-    frow = sb("GET", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_focus"
+    # which run this actually is (bare GET may serve a keyed run)
+    served_id = None
+    ikey = rows[0].get("insight_key") or ""
+    if ikey.startswith("wizard_run:"):
+        served_id = ikey.split(":", 1)[1]
+    # chat-mirror focus follows the run's own key so one session's chat never
+    # steers another session's open board (per-run focus, 2026-08-02).
+    fkey = f"wizard_focus:{served_id}" if served_id else "wizard_focus"
+    frow = sb("GET", "campaign_insights?scope=eq.strategy"
+                     f"&insight_key=eq.{fkey}"
                      "&status=eq.live&select=payload,generated_at"
                      "&order=generated_at.desc&limit=1") or []
     focus = None
     if frow and isinstance(frow[0].get("payload"), dict):
         focus = dict(frow[0]["payload"])
         focus["ts"] = frow[0].get("generated_at")
-    out = {"run": run, "updated": rows[0].get("generated_at"), "focus": focus}
+    out = {"run": run, "updated": rows[0].get("generated_at"), "focus": focus,
+           "run_id": served_id}
     # store only if no bust ran while we were computing (generation fence);
-    # ts+payload land as ONE object swap so readers never see a torn memo.
-    # (An empty run — the `not rows` return above — is deliberately never
-    # memoized, same as before.)
+    # per-key one-object swap; empty runs never memoized (same as before).
     with _STRATEGY_RUN_MEMO_LOCK:
         if _STRATEGY_RUN_GEN == gen:
-            _STRATEGY_RUN_MEMO = {"ts": time.time(), "payload": out}
+            if len(_STRATEGY_RUN_MEMO) >= _STRATEGY_RUN_MEMO_CAP \
+                    and run_id not in _STRATEGY_RUN_MEMO:
+                oldest = min(_STRATEGY_RUN_MEMO, key=lambda k: _STRATEGY_RUN_MEMO[k]["ts"])
+                _STRATEGY_RUN_MEMO.pop(oldest, None)
+            _STRATEGY_RUN_MEMO[run_id] = {"ts": time.time(), "payload": out}
     return out
+
+
+def mint_strategy_share(run_id: str, days: int = 90) -> str:
+    """Client permalink token for ONE run — same HMAC shape as the setter
+    training share (payload signed with the app auth secret, url-safe b64)."""
+    import base64
+    import hashlib
+    import hmac
+    exp = int(time.time()) + max(1, int(days or 90)) * 86400
+    payload = f"strat|{run_id}|{exp}".encode()
+    sig = hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+def verify_strategy_share(token: str):
+    """The run_id a share token is valid for, or None. Never raises — a
+    malformed/tampered/expired token is just 'not valid'."""
+    import base64
+    import hashlib
+    import hmac
+    try:
+        token = str(token or "")
+        if not token or "." not in token:
+            return None
+        b64, _sep, sig = token.rpartition(".")
+        payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        expect = hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expect, sig):
+            return None
+        parts = payload.decode(errors="replace").split("|")
+        if len(parts) != 3 or parts[0] != "strat":
+            return None
+        _prefix, run_id, exp = parts
+        if not _strategy_run_id_ok(run_id) or not exp.isdigit() or int(exp) < time.time():
+            return None
+        return run_id
+    except Exception:  # noqa: BLE001 - a bad token is just "not valid"
+        return None
+
+
+# copy fields a shared client may edit — NOTHING else ever writes through
+# /api/strategy/copy-edit (targeting, numbers, build state are GTME/chat-only)
+_STRATEGY_CLIENT_FIELDS = {"pain", "moment", "videoAngle", "offer", "email", "caption"}
+
+
+def strategy_copy_edit(p: dict) -> dict:
+    """A shared client's copy edit: token-verified, copy-fields-only, written
+    as a superseding run row so the GTME's open board reflects it on its next
+    poll. Stamps edited_by so provenance survives in the payload."""
+    if not isinstance(p, dict):
+        return {"ok": False, "message": "invalid body"}
+    run_id = verify_strategy_share(p.get("share"))
+    if not run_id:
+        return {"ok": False, "message": "This link has expired. Ask your contact for a fresh one."}
+    if p.get("run_id") and p["run_id"] != run_id:
+        return {"ok": False, "message": "link does not match this board"}
+    field = p.get("field")
+    if field not in _STRATEGY_CLIENT_FIELDS:
+        return {"ok": False, "message": "only the copy can be edited from this link"}
+    value = p.get("value")
+    if not isinstance(value, str) or not value.strip() or len(value) > 4000:
+        return {"ok": False, "message": "the new text must be 1-4000 characters"}
+    idea_id = p.get("ideaId")
+    key = _strategy_key(run_id)
+    rows = sb("GET", "campaign_insights?scope=eq.strategy"
+                     f"&insight_key=eq.{key}&status=eq.live"
+                     "&select=payload,generated_at&order=generated_at.desc&limit=1") or []
+    if not rows:
+        return {"ok": False, "message": "this board no longer exists"}
+    run = rows[0].get("payload") or {}
+    idea = next((i for i in run.get("ideas") or [] if i.get("id") == idea_id), None)
+    if not idea:
+        return {"ok": False, "message": "that idea is no longer on the board"}
+    idea[field] = value.strip()
+    idea.setdefault("clientEdits", []).append(
+        {"field": field, "at": _dtmod.datetime.utcnow().isoformat() + "Z"})
+    run["edited_by"] = "client"
+    out = strategy_run_post(dict(run, run_id=run_id, generated_by="client-share"))
+    if not out.get("ok"):
+        return out
+    return {"ok": True, "updated": out.get("updated"), "field": field}
+
+
+_STRATEGY_FOCUS_VIEWS = ("board", "targeting", "emails", "opener", "checks", "building", "signoff")
 
 
 _STRATEGY_FOCUS_VIEWS = ("board", "targeting", "emails", "opener", "checks", "building", "signoff")
 
 
 def strategy_focus_post(p: dict) -> dict:
-    """Chat's 'I am working HERE' signal - the page follows it (chat-mirror-lab)."""
+    """Chat's 'I am working HERE' signal - the page follows it (chat-mirror-lab).
+    Keyed per run (2026-08-02) so one session's focus never steers another
+    session's open board; run_id absent keeps the legacy shared key."""
     if not isinstance(p, dict) or p.get("view") not in _STRATEGY_FOCUS_VIEWS:
         return {"ok": False, "message": f"view must be one of {', '.join(_STRATEGY_FOCUS_VIEWS)}"}
+    run_id = p.get("run_id")
+    if run_id is not None and not _strategy_run_id_ok(run_id):
+        return {"ok": False, "message": "bad run id"}
+    fkey = f"wizard_focus:{run_id}" if run_id else "wizard_focus"
     import hashlib
     doc = {"ideaId": p.get("ideaId"), "view": p["view"], "note": str(p.get("note") or "")[:120]}
     now = _dtmod.datetime.utcnow().isoformat() + "Z"
     fp = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:32]
-    sb("PATCH", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_focus&status=eq.live",
+    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{fkey}&status=eq.live",
        {"status": "superseded", "superseded_at": now})
     ins = sb("POST", "campaign_insights", {
-        "scope": "strategy", "insight_key": "wizard_focus", "payload": doc,
+        "scope": "strategy", "insight_key": fkey, "payload": doc,
         "data_fingerprint": fp, "expires_at": "2036-01-01T00:00:00Z",
         "generated_by": "chat", "status": "live"},
         prefer="return=representation")
@@ -1968,13 +2098,20 @@ def strategy_focus_post(p: dict) -> dict:
 def strategy_run_post(p: dict) -> dict:
     if not isinstance(p, dict) or not isinstance(p.get("ideas"), list) or not p["ideas"]:
         return {"ok": False, "message": "run needs a non-empty ideas list"}
+    # session-scoped (2026-08-02): a run publishes to ITS OWN key, so sessions
+    # never clobber each other's boards. run_id absent = legacy shared key
+    # (accepted with a warning so old callers keep working).
+    run_id = p.get("run_id")
+    if run_id is not None and not _strategy_run_id_ok(run_id):
+        return {"ok": False, "message": "bad run_id (lowercase letters, digits, dashes, 4-60 chars)"}
+    key = _strategy_key(run_id)
     import hashlib
     now = _dtmod.datetime.utcnow().isoformat() + "Z"
     fp = hashlib.sha256(json.dumps(p, sort_keys=True, default=str).encode()).hexdigest()[:32]
-    sb("PATCH", "campaign_insights?scope=eq.strategy&insight_key=eq.wizard_run&status=eq.live",
+    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{key}&status=eq.live",
        {"status": "superseded", "superseded_at": now})
     ins = sb("POST", "campaign_insights", {
-        "scope": "strategy", "insight_key": "wizard_run", "payload": p,
+        "scope": "strategy", "insight_key": key, "payload": p,
         "data_fingerprint": fp,  # NOT NULL on this table
         # the table defaults expires_at to +7 days for cockpit insights; the
         # strategy board must not silently die in a week
@@ -1988,7 +2125,11 @@ def strategy_run_post(p: dict) -> dict:
         msg = ins.get("message") if isinstance(ins, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
     _strategy_run_memo_bust()  # a new run shows on the next poll
-    return {"ok": True, "updated": row["generated_at"]}
+    out = {"ok": True, "updated": row["generated_at"], "run_id": run_id}
+    if not run_id:
+        out["warning"] = ("no run_id — published to the legacy shared board; "
+                          "mint a session run_id so sessions don't overwrite each other")
+    return out
 
 
 def preview_lookalike(p: dict) -> dict:
@@ -18277,7 +18418,13 @@ class Handler(SimpleHTTPRequestHandler):
             # Public training-share reads: only when a share=<token> is
             # actually present on the query string - the token's validity is
             # then enforced inside setter.py's own routes (verify_training_share).
-            if not (path in _TRAIN_SHARE_GET and "share=" in self.path):
+            # Strategy-share reads (strategy-session-share, 2026-08-02): the
+            # client permalink loads the board page + polls the run without a
+            # login; token validity is enforced inside the /api/strategy/run
+            # handler (page load with a bad token just shows the boot screen).
+            _strat_share = (path in ("/api/strategy/run", "/app/strategy.html")
+                            and "share=" in self.path)
+            if not (path in _TRAIN_SHARE_GET and "share=" in self.path) and not _strat_share:
                 if not self._gate(path):
                     return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
@@ -18425,7 +18572,19 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self._json(strategy_map_result((q.get("job") or [""])[0]))
         if path == "/api/strategy/run":  # live wizard board (strategy.html polls this)
-            return self._json(strategy_run_get())
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            rid = (q.get("id") or [None])[0]
+            share = (q.get("share") or [None])[0]
+            if not self._authed_email():
+                # logged-out = share-link only: the token must be valid and it
+                # pins WHICH run is served (never the newest / another run)
+                srid = verify_strategy_share(share)
+                if not srid or (rid and rid != srid):
+                    return self._json({"run": None, "updated": None, "focus": None,
+                                       "error": "share link invalid or expired"}, 401)
+                rid = srid
+            return self._json(strategy_run_get(rid))
         if path == "/api/engagement-verdicts":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -18995,8 +19154,38 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(body, status)
         if path.startswith("/api/qa-gate/") and path != "/api/qa-gate/runs" and self._qa_token_ok():
             return self._qa_gate_post(path)
-        if path not in _AUTH_PUBLIC_POST and not self._gate(path):
+        # Client copy-edit from a share link (strategy-session-share): allowed
+        # past the login gate — the handler verifies the HMAC share token and
+        # accepts copy fields only, same trust model as the training share.
+        if path != "/api/strategy/copy-edit" \
+                and path not in _AUTH_PUBLIC_POST and not self._gate(path):
             return
+        if path == "/api/strategy/copy-edit":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 32768:
+                return self._json({"ok": False, "message": "payload too large"}, 413)
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            out = strategy_copy_edit(p)
+            log_activity(path, {"ok": out.get("ok"), "field": p.get("field"),
+                                "ideaId": p.get("ideaId")},
+                         action="client-copy-edit", entity="strategy",
+                         entity_id=str(p.get("run_id") or ""))
+            return self._json(out, 200 if out.get("ok") else 400)
+        if path == "/api/strategy/share":
+            # GTME-only (behind the gate above): mint the client permalink
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            rid = p.get("run_id")
+            if not _strategy_run_id_ok(rid):
+                return self._json({"ok": False, "message": "bad run_id"}, 400)
+            tok = mint_strategy_share(rid)
+            return self._json({"ok": True, "run_id": rid, "token": tok,
+                               "url": f"/app/strategy.html?share={tok}#/r/{rid}"})
         if path == "/api/strategy/run":
             # chat pushes a full lilly-strategy run.json; the wizard page's
             # poll picks it up within ~5s (see strategy_run_post above)
