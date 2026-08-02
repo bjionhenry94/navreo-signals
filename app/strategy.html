@@ -142,6 +142,14 @@ a{color:inherit;text-decoration:none}
 .planline{font-size:14px;color:var(--ink-3);max-width:600px;}
 .build-btn{margin-top:22px;font-family:var(--font-sans);font-size:15px;font-weight:600;color:#fff;background:var(--orange);border:none;border-radius:999px;padding:12px 26px;cursor:pointer;transition:.12s;}
 .build-btn:hover{background:var(--orange-600);}
+.launch-go{background:var(--orange-100);border:1px solid var(--orange);border-radius:14px;padding:18px 20px;margin:0 0 20px;}
+.lg-head{font-family:var(--font-display);font-size:18px;color:var(--ink);margin:0 0 4px;}
+.lg-sub{font-size:13.5px;color:var(--ink-2);margin:0 0 12px;line-height:1.5;}
+.lg-code{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.lg-code code{font-family:'SF Mono',ui-monospace,monospace;font-size:13.5px;color:var(--ink);background:var(--bg);border:1px solid var(--line-2);border-radius:9px;padding:9px 13px;flex:1;min-width:220px;word-break:break-word;}
+.lg-copy{font-family:var(--font-sans);font-size:13px;font-weight:600;color:#fff;background:var(--orange);border:none;border-radius:999px;padding:9px 18px;cursor:pointer;flex:none;}
+.lg-copy:hover{background:var(--orange-600);}
+.lg-note{font-size:12.5px;color:var(--ink-3);margin:12px 0 0;line-height:1.55;}
 /* Copy screen (Your emails) + Icebreaker screen (The opener) — the tool's real UI, reskinned */
 .copy-heading{font-family:var(--font-display);font-size:22px;letter-spacing:-.02em;margin:0 0 18px;}
 .pager{display:flex;align-items:center;gap:16px;margin-bottom:18px;}
@@ -322,6 +330,14 @@ function shareBlock(){
     +`<div class="actions-center"><button class="btn-ink" id="gtme-share-link">Share a link</button></div>`
     +`<p class="share-out" id="share-out"></p></div>`;
 }
+// Final launch sign-off code (Bjion, 2026-08-03): a stable per-idea-per-run
+// code the GTME pastes into chat to authorise the build (create campaign +
+// pull the list + run the checks). Deterministic so it's the same every render.
+function launchCode(x){
+  const s=(SERVED_RUN_ID||RUN_ID||'')+':'+(x.id||'');
+  let h=0;for(let i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))>>>0;}
+  return 'LAUNCH-'+('000000'+h.toString(36).toUpperCase()).slice(-6);
+}
 async function gtmeShareLink(btn){
   const rid=SERVED_RUN_ID||RUN_ID;
   const out=document.querySelector('#share-out');
@@ -457,13 +473,21 @@ function panelHTML(x){
       +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span></div>`
       +`<div class="mail"><div class="mh">Subject: <span class="ms">${resolvedSubjectHtml(x,pr)}</span></div><div class="mb">${resolvedEmailHtml(x,pr)}</div></div>`
       +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`
-      +(CLIENT_MODE?'':`<div class="actions-center"><button class="build-btn">Build the campaign</button></div>`)
       +shareBlock();
   }
   const p=x.reachablePool||x.net;
   const cks=checksFor(x);
   const doneN=cks.filter(c=>c[2]).length;
-  return `<p class="eyb">Launch</p><div class="livebanner">Not live yet — the campaign turns on when you approve it. Nothing sends until then.</div>`
+  const phrase=`Launch "${x.name}" · code ${launchCode(x)}`;
+  const goBlock=CLIENT_MODE?'':`<div class="launch-go">`
+    +`<p class="lg-head">Give the final go-ahead</p>`
+    +`<p class="lg-sub">Nothing pulls, builds or sends until you paste this line into the chat:</p>`
+    +`<div class="lg-code"><code id="lg-phrase">${esc(phrase)}</code><button class="lg-copy" id="lg-copy">Copy</button></div>`
+    +`<p class="lg-note">When you send it, we create the campaign, pull the real list, and run every check below. You'll get three links back in the chat: the campaign page, the checks receipt, and the list.</p>`
+    +`</div>`;
+  return `<p class="eyb">Launch</p>`
+    +goBlock
+    +`<div class="livebanner">Not live yet. The campaign turns on when you give the go-ahead above, and nothing sends until then.</div>`
     +`<p class="chkhead">Every box below is checked against this campaign as it stands, and nothing ticks until it's actually true. ${doneN} of ${cks.length} are done right now.</p>`
     +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Ran before launch'}</span></div>`).join('')+`</div>`;
 }
@@ -476,8 +500,7 @@ function renderSidebar(){
       +`<p class="im-count"><span class="im-number">${num(x.net||x.reachablePool)}</span> reachable</p>`
       +(service?`<p class="im-type">${esc(service)}</p>`:'')
       +`<div class="im-track"><i></i><i></i><i></i><i></i><i></i></div></div>`;}).join('');
-  side.innerHTML=`<div class="brand"><b>Navreo</b><span class="ey">Strategy</span></div>`
-    +(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div></div>`:'')
+  side.innerHTML=(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div></div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
   side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;render();});
 }
@@ -491,6 +514,9 @@ function renderWorkspace(){
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
   const shb=work.querySelector('#gtme-share-link');
   if(shb)shb.onclick=()=>gtmeShareLink(shb);
+  const lgc=work.querySelector('#lg-copy');
+  if(lgc)lgc.onclick=async()=>{const t=(work.querySelector('#lg-phrase')||{}).textContent||'';
+    try{await navigator.clipboard.writeText(t);lgc.textContent='Copied';setTimeout(()=>{lgc.textContent='Copy';},3000);}catch(e){lgc.textContent='Select and copy';}};
   work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{sIdx=+c.dataset.i;renderWorkspace();});
 }
 function render(){renderSidebar();renderWorkspace();}
