@@ -121,6 +121,7 @@
 .ah .cards{display:grid;gap:14px}
 .ah .c3{grid-template-columns:repeat(3,1fr)}
 .ah .c23{grid-template-columns:2fr 3fr 3fr}
+.ah .c-land{grid-template-columns:3fr 4fr}
 .ah .c32{grid-template-columns:3fr 2fr}
 .ah .acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
 .ah .card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
@@ -247,7 +248,7 @@
   .ah .hero-flow{grid-template-columns:240px 1fr}
 }
 @media (max-width:980px){
-  .ah .c3,.ah .c23,.ah .c32{grid-template-columns:1fr}
+  .ah .c3,.ah .c23,.ah .c-land,.ah .c32{grid-template-columns:1fr}
   .ah .hero-flow{grid-template-columns:1fr}
   .ah .fuelcard{grid-row:auto}
   .ah .stagestrip{grid-column:1}
@@ -457,7 +458,7 @@
         <h2 class="lane-q">Are your emails landing?</h2>
         <span class="lane-tag num">Emails sent · <span id="tag-sent">–</span></span>
       </div>
-      <div class="cards c23">
+      <div class="cards c-land">
 
         <div class="acard">
           <div class="card-head">
@@ -500,7 +501,6 @@
            inbox & domain manager (verbatim production code), blacklist and
            batch sub-tabs, history and fleet details. -->
       <div style="margin-top:14px">
-        <div class="fleetnote" id="dlv-lens-note">Whole sending fleet — all clients. (Mailbox health is about today, so the date range doesn't apply here.)</div>
         <!-- On a client view the engine room folds shut: it is whole-fleet ops
              plumbing either way, and repeating it full-length under every chip
              buried the per-client story (round-2 testers). -->
@@ -2414,16 +2414,6 @@ function updateLens() {
   var c = state.client;
   var WS_CLIENTS = wsClients();
   window.DLV_CLIENT_LENS = { client: c, ws: WS_CLIENTS[c] || null };
-  var note = $("dlv-lens-note");
-  if (note) {
-    // The manager's health tiles and to-dos always cover the whole fleet and
-    // it keeps its own working window — say exactly that, never more (round 1
-    // caught the old banner promising a client-only manager it didn't deliver)
-    var tail = " Health tiles and to-dos always cover the whole fleet; the manager keeps its own window (mailbox health is about today).";
-    if (c === "All") note.textContent = "Whole sending fleet — all clients." + tail;
-    else if (WS_CLIENTS[c]) note.textContent = c + " sends from their own workspace — the mailbox and domain tables filter to " + c + "." + tail;
-    else note.textContent = c + " sends from the shared Navreo fleet." + tail;
-  }
   // Engine room open on the whole-book view (the manager stays inline by
   // ruling), folded on client views so the per-client story stays short
   var fold = $("dlv-embed-fold");
