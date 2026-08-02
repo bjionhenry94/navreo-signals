@@ -3627,7 +3627,8 @@ def _disable_variant_pcts(steps: list, email_num: int, variant_label: str,
 # notifications execute path, keyed on step+label instead of a row title.
 
 _VARIANT_ACTION_CONFIRM = {"disable": "DISABLE", "enable": "ENABLE",
-                           "scale_winner": "SCALE", "even_split": "SPLIT"}
+                           "scale_winner": "SCALE", "even_split": "SPLIT",
+                           "shift_share": "SHIFT"}
 
 
 def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
@@ -3643,8 +3644,11 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
     except (TypeError, ValueError):
         return 400, {"ok": False, "message": "campaign id and email must be numeric"}
     variant_label = str(payload.get("variant_label") or "").strip()
-    if action in ("disable", "enable", "scale_winner") and not variant_label:
+    if action in ("disable", "enable", "scale_winner", "shift_share") and not variant_label:
         return 400, {"ok": False, "message": "variant_label is required for this action"}
+    to_label = str(payload.get("to_label") or "").strip()
+    if action == "shift_share" and not to_label:
+        return 400, {"ok": False, "message": "to_label is required for shift_share"}
 
     receipt = {"pcts_before": {}, "pcts_after": {}, "labels": {}}
 
@@ -3690,6 +3694,32 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
             new_pcts = {v.get("id"): (100 if v.get("id") == target.get("id") else 0) for v in variants}
             _apply_step_pcts(steps, email_num, new_pcts)
             receipt["target_id"] = target.get("id")
+        elif action == "shift_share":
+            # Move ALL of one live variant's share onto another live variant
+            # (the "push the loser's quarter onto the winner" card move). The
+            # source stays on the step at 0% — same id, history kept.
+            src = _find_variant(step, variant_label)
+            dst = _find_variant(step, to_label)
+            if src is None or src.get("is_deleted"):
+                raise SequenceActionRefused(404, {
+                    "ok": False, "message": f"variant {variant_label} not found (or deleted) on Email {email_num}"})
+            if dst is None or dst.get("is_deleted"):
+                raise SequenceActionRefused(404, {
+                    "ok": False, "message": f"variant {to_label} not found (or deleted) on Email {email_num}"})
+            if src.get("id") == dst.get("id"):
+                raise SequenceActionRefused(400, {
+                    "ok": False, "message": "source and target are the same variant"})
+            if _pct_of(src) <= 0:
+                raise SequenceActionRefused(400, {
+                    "ok": False, "message": f"variant {variant_label} has no share to move - it is already at 0%"})
+            if _pct_of(dst) <= 0:
+                raise SequenceActionRefused(400, {
+                    "ok": False, "message": f"variant {to_label} is switched off - switch it on before moving share to it"})
+            new_pcts = {v.get("id"): _pct_of(v) for v in variants}
+            new_pcts[dst.get("id")] = _pct_of(dst) + _pct_of(src)
+            new_pcts[src.get("id")] = 0
+            _apply_step_pcts(steps, email_num, new_pcts)
+            receipt["target_id"] = dst.get("id")
         else:  # even_split
             if len(variants) < 2:
                 raise SequenceActionRefused(400, {

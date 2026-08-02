@@ -2262,6 +2262,33 @@
   }
   .action-swap-btn:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); }
   .action-buttons .vaw-act { display: inline-flex; }
+  /* the primary's caret + the Claude-prompt moves behind it */
+  .swap-wrap { position: relative; }
+  .swap-split { display: inline-flex; }
+  .swap-split .action-swap-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .action-swap-car {
+    display: inline-flex; align-items: center; justify-content: center; width: 34px;
+    border: 1px solid var(--nav-orange-600); border-left-color: rgba(255,255,255,0.4);
+    border-radius: 0 var(--r-pill) var(--r-pill) 0;
+    background: var(--nav-orange-600); color: #fff; font-size: 0.7rem;
+    font-family: inherit; cursor: pointer;
+  }
+  .action-swap-car:hover { filter: brightness(1.07); }
+  .swap-menu {
+    position: absolute; left: 0; top: calc(100% + 6px); z-index: 30; min-width: 250px;
+    display: flex; flex-direction: column; padding: 5px;
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+    box-shadow: 0 10px 30px rgba(20,17,14,.14);
+  }
+  .swap-menu[hidden] { display: none; }
+  .swap-mi {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+    border: none; border-radius: 6px; background: none; padding: 9px 12px;
+    font-family: inherit; text-align: left; cursor: pointer;
+  }
+  .swap-mi:hover { background: var(--sunken); }
+  .swap-mi b { font-size: 0.82rem; font-weight: 700; color: var(--fg); }
+  .swap-mi span { font-size: 0.72rem; color: var(--fg-subtle); }
   /* One orange per card: the footer primary owns the card's single orange —
      inside a card's Act-on-it-now wall the act buttons stay quiet, whichever
      way the card routed. (Other vaw surfaces keep their own styling.) */
@@ -5013,6 +5040,32 @@
 
   function vawWireWhy(box, cid) {
     var c = vawCampaignOf(cid);
+    box.querySelectorAll("[data-vaw-p8]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var email = b.getAttribute("data-email"), from = b.getAttribute("data-from"), to = b.getAttribute("data-to");
+        vawModal({
+          title: "Move Version " + from + "'s share to Version " + to + " on Email " + email + "?",
+          sub: (c.name || "") + " · campaign " + cid,
+          lines: [["Version " + from, vawChangeV("its current share", "0% — kept, history intact")],
+                  ["Version " + to, vawChangeV("its current share", "gets Version " + from + "'s share added")],
+                  ["Copy / subject", "untouched"]],
+          idnote: VAW_IDNOTE, token: "SHIFT", danger: false,
+          confirmLabel: "Confirm — move the share",
+          run: function () {
+            return vawPost("/api/campaigns/" + cid + "/variant-action",
+              { action: "shift_share", email: +email, variant_label: from, to_label: to, confirm: "SHIFT" });
+          },
+          receipt: function (resp) {
+            return { title: "Version " + to + " now carries Version " + from + "'s share",
+              lines: Object.keys(resp.after || {}).map(function (k) {
+                return ["Version " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
+              }),
+              foot: "Both keep their IDs and history — nothing recreated." };
+          },
+          after: function () { vawRefreshCampaign(c); }
+        });
+      });
+    });
     box.querySelectorAll("[data-vaw-p1]").forEach(function (b) {
       b.addEventListener("click", function () {
         var lab = b.getAttribute("data-vlabel"), email = b.getAttribute("data-email");
@@ -6218,20 +6271,13 @@
       });
     });
     actLoadOnce(function () { root.querySelectorAll(".action-card").forEach(actApplyCard); });
-    /* the swapped-in footer primary and the same act's row in the Act-on-it-now
-       wall must never show together — whichever renders second hides the wall's
-       copy (the footer wrap sits outside .vaw-acts, so it never hides itself) */
+    /* On a card whose primary swapped to the 1-click, the whole More-moves
+       wall folds away — its ideation moves live behind the primary's caret
+       as Claude prompts instead (Bjion, 02 Aug 2026). The footer wrap sits
+       outside .vaw-acts, so it is never hidden. */
     function actHideSwapDupe(card) {
-      var k = card.getAttribute("data-swap-act");
-      if (!k) return;
-      var p = k.split("|");
-      var sel = p[0] === "p6" ? '[data-vaw-p6][data-email="' + p[1] + '"]'
-              : p[0] === "p5" ? '[data-vaw-p5][data-email="' + p[1] + '"][data-vlabel="' + p[2] + '"]'
-              : '[data-vaw-p1][data-email="' + p[1] + '"][data-vlabel="' + p[2] + '"]';
-      card.querySelectorAll(".vaw-acts " + sel).forEach(function (b) {
-        var row = b.closest(".vaw-act");
-        if (row) row.hidden = true;
-      });
+      if (!card.getAttribute("data-swap-act")) return;
+      card.querySelectorAll(".vaw-acts").forEach(function (el) { el.hidden = true; });
     }
     root.querySelectorAll(".action-card").forEach(function (card) {
       if (card.getAttribute("data-act-bound")) return;
@@ -6279,22 +6325,85 @@
           var IDEATION = /\b(rebuild|rewrite|write|draft|new (copy|angle|version)|challenger|opener|subject|problem statement|audit|scrap|retire|pivot)\b/i;
           var SIMPLE = /\b(move|shift|weight|scale|send 100%|even( the)? split|equal share|turn off|switch off|disable|pause)\b/i;
           if (IDEATION.test(head) || !SIMPLE.test(head)) return;
-          var order = { p5: 1, p6: 2, p1: 3 };
-          var pick = acts.filter(function (a) { return order[a.kind]; })
-                         .sort(function (a, b) { return order[a.kind] - order[b.kind]; })[0];
+          /* The one-click must DO what the headline says. A "move X onto Y"
+             headline gets a real share-shift (new shift_share action), not a
+             substituted equal split. */
+          var pick = null;
+          var sm = /\bvariant\s+([A-Z])\b[\s\S]*?\b(?:onto|to|towards?)\s+(?:variant\s+)?([A-Z])\b/i.exec(head);
+          if (sm) {
+            var shiftEmail = null;
+            acts.forEach(function (a) { if (shiftEmail == null && a.email != null) shiftEmail = a.email; });
+            if (shiftEmail == null) rows.forEach(function (n) {
+              (n.variants || []).forEach(function (v) {
+                var lab = String(v.variant || "");
+                if (shiftEmail == null && (lab === sm[1].toUpperCase() || lab === sm[2].toUpperCase())) shiftEmail = v.email;
+              });
+            });
+            if (shiftEmail != null) pick = { kind: "p8", email: shiftEmail, from: sm[1].toUpperCase(), to: sm[2].toUpperCase() };
+          }
+          if (!pick) {
+            var order = { p5: 1, p6: 2, p1: 3 };
+            pick = acts.filter(function (a) { return order[a.kind]; })
+                       .sort(function (a, b) { return order[a.kind] - order[b.kind]; })[0];
+          }
           if (!pick) return;
-          var label = pick.kind === "p5" ? "Send 100% of Email " + pick.email + " to Version " + esc(pick.vlab)
+          var label = pick.kind === "p8" ? "Move Version " + esc(pick.from) + "'s share to Version " + esc(pick.to)
+                    : pick.kind === "p5" ? "Send 100% of Email " + pick.email + " to Version " + esc(pick.vlab)
                     : pick.kind === "p6" ? "Give every version of Email " + pick.email + " an equal share"
                     : "Turn off Version " + esc(pick.vlab) + " on Email " + pick.email;
-          var attr = pick.kind === "p5" ? 'data-vaw-p5="1" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"'
+          var attr = pick.kind === "p8" ? 'data-vaw-p8="1" data-email="' + pick.email + '" data-from="' + esc(pick.from) + '" data-to="' + esc(pick.to) + '"'
+                   : pick.kind === "p5" ? 'data-vaw-p5="1" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"'
                    : pick.kind === "p6" ? 'data-vaw-p6="1" data-email="' + pick.email + '"'
                    : 'data-vaw-p1="' + esc(String(pick.nid)) + '" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"';
+          /* The ideation moves live behind the primary's caret, each one a
+             prompt copied straight into Claude. Curated: ONE rewrite of the
+             weak version, ONE fresh angle — no challenger for the loser, no
+             doubled draft-the-fix (Bjion, 02 Aug 2026). */
+          var loser = pick.from || pick.vlab || "";
+          var winner = pick.to || "";
+          var cname = vawCampaignOf(cid).name || "";
+          var claudeItems = [
+            { t: "Rewrite " + (loser ? "Version " + loser + "'s" : "the weak") + " line",
+              p: "In Smartlead campaign \"" + cname + "\" (id " + cid + "), Email " + pick.email +
+                 ": rewrite variant " + (loser || "the underperformer") + "'s copy" +
+                 (winner ? " — it is losing to variant " + winner : "") +
+                 ". The card says: " + head.trim() + " Pull both variants' stats from the tool, draft the rewrite, and show me before anything is saved." },
+            { t: "Try a fresh angle",
+              p: "In Smartlead campaign \"" + cname + "\" (id " + cid + "), Email " + pick.email +
+                 ": draft a brand-new challenger variant with a fresh angle" +
+                 (winner ? ", to run next to winning variant " + winner : "") +
+                 ". The card says: " + head.trim() + " Show me the draft before it goes in." }
+          ];
           var wrap = document.createElement("span");
-          wrap.className = "vaw-act";
-          wrap.innerHTML = '<button type="button" class="action-swap-btn" ' + attr + ">" + label + "</button>";
+          wrap.className = "vaw-act swap-wrap";
+          wrap.innerHTML = '<span class="swap-split">' +
+            '<button type="button" class="action-swap-btn" ' + attr + ">" + label + "</button>" +
+            '<button type="button" class="action-swap-car" data-swap-car aria-expanded="false" aria-label="More moves">&#9662;</button></span>' +
+            '<div class="swap-menu" hidden>' + claudeItems.map(function (it) {
+              return '<button type="button" class="swap-mi" data-claude-prompt="' + esc(it.p) + '"><b>' + esc(it.t) + "</b><span>copies a prompt for Claude</span></button>";
+            }).join("") + "</div>";
           cpBtn.replaceWith(wrap);
           vawWireWhy(wrap, cid);
-          card.setAttribute("data-swap-act", pick.kind + "|" + pick.email + "|" + (pick.vlab || ""));
+          var car = wrap.querySelector("[data-swap-car]");
+          var menu = wrap.querySelector(".swap-menu");
+          car.addEventListener("click", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            menu.hidden = !menu.hidden;
+            car.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+            car.innerHTML = menu.hidden ? "&#9662;" : "&#9652;";
+          });
+          document.addEventListener("click", function (e) {
+            if (e.target.closest && e.target.closest(".swap-wrap") === wrap) return;
+            if (!menu.hidden) { menu.hidden = true; car.setAttribute("aria-expanded", "false"); car.innerHTML = "&#9662;"; }
+          });
+          wrap.querySelectorAll("[data-claude-prompt]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              try { navigator.clipboard.writeText(b.getAttribute("data-claude-prompt") || ""); } catch (err) {}
+              menu.hidden = true; car.setAttribute("aria-expanded", "false"); car.innerHTML = "&#9662;";
+              cockpitToast("Copied. Paste it into Claude.");
+            });
+          });
+          card.setAttribute("data-swap-act", pick.kind + "|" + pick.email + "|" + (pick.vlab || pick.from || ""));
           actHideSwapDupe(card);
         });
       }
