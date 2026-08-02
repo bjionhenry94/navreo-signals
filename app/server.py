@@ -2032,12 +2032,16 @@ def strategy_copy_edit(p: dict) -> dict:
         return {"ok": False, "message": "This link has expired. Ask your contact for a fresh one."}
     if p.get("run_id") and p["run_id"] != run_id:
         return {"ok": False, "message": "link does not match this board"}
-    field = p.get("field")
-    if field not in _STRATEGY_CLIENT_FIELDS:
+    # allowed fields: the base copy fields, OR a version body "version:<i>"
+    # (each copy variation the client can edit) OR "version:<i>:subject".
+    field = p.get("field") or ""
+    ver_m = re.match(r"^version:(\d+)(?::subject)?$", field)
+    if field not in _STRATEGY_CLIENT_FIELDS and not ver_m:
         return {"ok": False, "message": "only the copy can be edited from this link"}
     value = p.get("value")
     if not isinstance(value, str) or not value.strip() or len(value) > 4000:
         return {"ok": False, "message": "the new text must be 1-4000 characters"}
+    value = value.strip()
     idea_id = p.get("ideaId")
     key = _strategy_key(run_id)
     rows = sb("GET", "campaign_insights?scope=eq.strategy"
@@ -2049,13 +2053,34 @@ def strategy_copy_edit(p: dict) -> dict:
     idea = next((i for i in run.get("ideas") or [] if i.get("id") == idea_id), None)
     if not idea:
         return {"ok": False, "message": "that idea is no longer on the board"}
-    idea[field] = value.strip()
+    if ver_m:
+        idx = int(ver_m.group(1))
+        versions = idea.get("versions")
+        if not isinstance(versions, list) or idx < 0 or idx >= len(versions):
+            return {"ok": False, "message": "that version is no longer on the board"}
+        if field.endswith(":subject"):
+            versions[idx]["subject"] = value
+            if idx == 0:
+                idea["subject"] = value
+        else:
+            versions[idx]["email"] = value
+            if idx == 0:  # version A mirrors the idea's primary email (Summary/back-compat)
+                idea["email"] = value
+    else:
+        idea[field] = value
     idea.setdefault("clientEdits", []).append(
         {"field": field, "at": _dtmod.datetime.utcnow().isoformat() + "Z"})
     run["edited_by"] = "client"
     out = strategy_run_post(dict(run, run_id=run_id, generated_by="client-share"))
     if not out.get("ok"):
         return out
+    # tell the open board this was a copy change, so its toast says "Copy updated"
+    # (not the stale focus note) and it navigates to the emails view.
+    try:
+        strategy_focus_post({"run_id": run_id, "ideaId": idea_id,
+                             "view": "emails", "note": "Copy updated"})
+    except Exception:  # noqa: BLE001 - the edit already saved; focus is best-effort
+        pass
     return {"ok": True, "updated": out.get("updated"), "field": field}
 
 

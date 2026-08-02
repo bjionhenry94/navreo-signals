@@ -131,6 +131,7 @@ a{color:inherit;text-decoration:none}
 .sum-meta a{font-size:12.5px;font-weight:600;color:var(--orange-600);text-decoration:none;}
 .sum-meta a:hover{text-decoration:underline;}
 .sum-note{font-size:13px;color:var(--ink-3);margin-top:12px;max-width:640px;}
+.copy-sub{font-size:13.5px;color:var(--ink-2);margin:-8px 0 4px;line-height:1.5;max-width:600px;}
 .mail-label{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:20px 0 8px;}
 .mail-label:first-of-type,.copy-heading + .mail-label{margin-top:0;}
 .mail{max-width:640px;}
@@ -322,7 +323,16 @@ function versionFrame(x){
   // client mode: the email body is editable in place; Save posts a copy-edit
   const ed=CLIENT_MODE?' contenteditable="true" data-edit="email" spellcheck="true"':'';
   return `<div class="mail"><div class="mh">Subject: ${highlightTokensHtml(x.subject||x.caption||'')}</div><div class="mb"${ed}>${highlightTokensHtml(x.email||'')}</div></div>`;}
-// Follow-up = email 2, shown as its own clearly-labelled block UNDER email 1.
+// Every copy variation the campaign rotates (A/B/…). Falls back to the single
+// email for older runs. Version A mirrors idea.email (Summary + back-compat).
+function versionsOf(x){
+  if(Array.isArray(x.versions)&&x.versions.length)return x.versions;
+  return [{subject:x.subject||x.caption||'',email:x.email||''}];
+}
+function mailFrameHl(subject,email,editKey){
+  const ed=(CLIENT_MODE&&editKey)?` contenteditable="true" data-edit="${editKey}" spellcheck="true"`:'';
+  return `<div class="mail"><div class="mh">Subject: ${highlightTokensHtml(subject)}</div><div class="mb"${ed}>${highlightTokensHtml(email)}</div></div>`;}
+// Follow-up = the later email in the thread, its own clearly-labelled block.
 function followupFrame(x){
   if(!x.followup)return '';
   const ed=CLIENT_MODE?' contenteditable="true" data-edit="followup" spellcheck="true"':'';
@@ -440,9 +450,9 @@ function resolvedTextHtml(text,x,p){
   const parts=[_mvar(opener),esc(x.pain||''),esc(x.offer||'')].filter(s=>s&&s!=='<span class="mvar"></span>');
   return 'Hey '+_mvar(p.first||'there')+',<br><br>'+parts.join('<br><br>')+'<br><br>Worth a quick chat?<br><br>Bjion<br>Navreo';
 }
-function resolvedEmailHtml(x,p){return resolvedTextHtml(x.email,x,p);}
+function resolvedEmailHtml(x,p){return resolvedTextHtml((versionsOf(x)[0]||{}).email||x.email,x,p);}
 function resolvedSubjectHtml(x,p){
-  const s=String(x.subject||x.caption||'');
+  const s=String((versionsOf(x)[0]||{}).subject||x.subject||x.caption||'');
   const cap=s.charAt(0).toUpperCase()+s.slice(1);
   return esc(cap)
     .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
@@ -455,14 +465,19 @@ function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2
 
 function panelHTML(x){
   if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`;
-  if(tab==='copy') return `<p class="copy-heading">Your emails</p>`
-    +`<p class="mail-label">First email</p>`
-    +versionFrame(x)
-    +followupFrame(x)
-    +(CLIENT_MODE
-      ?`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save my edits</button></div>`
-       +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Saving shares it with your team.</p>`
-      :`<div class="actions-center"><button class="btn-ink">Next: see the summary</button></div>`);
+  if(tab==='copy'){
+    const vs=versionsOf(x);const AZ='ABCDEFGHIJ';
+    let h=`<p class="copy-heading">Your emails</p>`
+      +(vs.length>1?`<p class="copy-sub">${vs.length} versions we rotate so no two sends look the same. The follow-up goes to anyone who doesn't reply.</p>`:'');
+    vs.forEach((v,i)=>{h+=`<p class="mail-label">${vs.length>1?('Version '+AZ[i]):'First email'}</p>`
+      +mailFrameHl(v.subject||x.subject||x.caption||'',v.email||'','version:'+i);});
+    h+=followupFrame(x)
+      +(CLIENT_MODE
+        ?`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save my edits</button></div>`
+         +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Saving shares it with your team.</p>`
+        :`<div class="actions-center"><button class="btn-ink">Next: see the summary</button></div>`);
+    return h;
+  }
   if(tab==='first') return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
     +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
     +`<div class="actions-center"><button class="btn-ink">Next: your emails</button></div>`;
