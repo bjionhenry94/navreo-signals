@@ -2220,6 +2220,10 @@
   .cockpit .row-optim .action-num { display: none; }
   .cockpit .action-card .copy-prompt { background: var(--nav-orange); border-color: var(--nav-orange); color: #fff; font-weight: 700; }
   .cockpit .action-card .copy-prompt:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); color: #fff; }
+  /* ONE orange per card: when a 1-click "Do this" primary is on the card,
+     Copy-prompt demotes to the quiet ghost look (added via .is-quiet). */
+  .cockpit .action-card .copy-prompt.is-quiet { background: var(--bg); border-color: var(--border-strong); color: var(--fg-muted); font-weight: 600; }
+  .cockpit .action-card .copy-prompt.is-quiet:hover { background: var(--sunken); border-color: var(--nav-ink-3); color: var(--fg); }
   /* Why? digest — the receipts behind THIS card only: one bold verdict line,
      stat chips, then sent/positive mini bars for the variants the card names.
      Replaced the old full-breakdown dump (every finding + 8-col table). */
@@ -4945,30 +4949,40 @@
     if (!acts.length) return "";
     var D = acts.map(vawActDesc).filter(Boolean);
     if (!D.length) return "";
-    var kick = '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Do this</span>';
     var live = D.filter(function (d) { return !d.done; });
+    var doneRows = D.filter(function (d) { return d.done; });
+    function menuRows(list) {
+      return list.map(function (d) {
+        if (d.done) return '<div class="vaw-act"><span class="vaw-done">' + (d.doneHTML || "&#10003; Done") + "</span></div>";
+        return '<div class="vaw-act"' + (d.wrap ? " " + d.wrap : "") + '>' +
+          '<button type="button" class="vaw-mi" ' + d.attr + "><b>" + esc(d.label) + "</b><span>" + esc(d.sub) + "</span></button>" +
+          '<span class="vaw-how' + (d.claude ? " is-claude" : "") + '">' + esc(d.tag) + "</span></div>";
+      }).join("");
+    }
     if (!live.length) {
-      return kick + D.map(function (d) {
-        return '<div class="vaw-act"><span class="vaw-done">' + (d.doneHTML || "&#10003; Done") + "</span></div>";
-      }).join("") + "</div>";
+      return '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Do this</span>' +
+        menuRows(doneRows) + "</div>";
     }
     live.sort(function (a, b) { return a.rank - b.rank; });
-    var primary = live[0];
-    var rest = live.slice(1).concat(D.filter(function (d) { return d.done; }));
-    var h = kick +
+    /* ONE orange per card (Bjion, 02 Aug 2026): the loud "Do this" primary
+       renders ONLY when the top-ranked act is a 1-click task — it then
+       REPLACES Copy-prompt as the card's single orange (the demote happens
+       where the digest injects, via data-vaw-primary). If the top act needs
+       ideation, that work gets done IN Claude: the footer's Copy-prompt stays
+       the card's only orange and the acts render as a quiet tagged list. */
+    var primary = !live[0].claude ? live[0] : null;
+    if (!primary) {
+      return '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Ways to fix it</span>' +
+        '<div class="vaw-menu">' + menuRows(live.concat(doneRows)) + "</div></div>";
+    }
+    var rest = live.filter(function (d) { return d !== primary; }).concat(doneRows);
+    var h = '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '" data-vaw-primary="1"><span class="vaw-acts-kick">Do this</span>' +
       '<div class="vaw-move vaw-act"' + (primary.wrap ? " " + primary.wrap : "") + '>' +
       '<div class="vaw-split">' +
       '<button type="button" class="vaw-main" ' + primary.attr + ">" + esc(primary.main || primary.label) + "</button>" +
       (rest.length ? '<button type="button" class="vaw-caret" data-vaw-caret aria-expanded="false" aria-label="Other options">&#9662;</button>' : "") +
       "</div></div>";
-    if (rest.length) {
-      h += '<div class="vaw-menu" hidden>' + rest.map(function (d) {
-        if (d.done) return '<div class="vaw-act"><span class="vaw-done">' + (d.doneHTML || "&#10003; Done") + "</span></div>";
-        return '<div class="vaw-act"' + (d.wrap ? " " + d.wrap : "") + '>' +
-          '<button type="button" class="vaw-mi" ' + d.attr + "><b>" + esc(d.label) + "</b><span>" + esc(d.sub) + "</span></button>" +
-          '<span class="vaw-how' + (d.claude ? " is-claude" : "") + '">' + esc(d.tag) + "</span></div>";
-      }).join("") + "</div>";
-    }
+    if (rest.length) h += '<div class="vaw-menu" hidden>' + menuRows(rest) + "</div>";
     return h + "</div>";
   }
 
@@ -4978,6 +4992,14 @@
 
   function vawWireWhy(box, cid) {
     var c = vawCampaignOf(cid);
+    /* ONE orange per card: when the acts rendered a 1-click primary, it
+       replaces Copy-prompt as the card's loud move — demote Copy-prompt to
+       the quiet ghost style so two oranges never compete. */
+    if (box.querySelector('.vaw-acts[data-vaw-primary]')) {
+      var actCard = box.closest(".action-card");
+      var cpBtn = actCard && actCard.querySelector(".copy-prompt");
+      if (cpBtn) cpBtn.classList.add("is-quiet");
+    }
     box.querySelectorAll("[data-vaw-caret]").forEach(function (b) {
       b.addEventListener("click", function () {
         var acts = b.closest(".vaw-acts");
