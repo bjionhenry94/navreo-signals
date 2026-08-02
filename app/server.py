@@ -3774,9 +3774,15 @@ def api_campaign_draft_challenger(cid: str, payload: dict) -> tuple:
     if not key:
         return 503, {"ok": False, "message": "OPENAI_API_KEY missing from ~/.navreo-keys.env"}
 
-    api_key = ws_key_for_campaign(campaign_id)
-    seq_url = f"{SMARTLEAD_BASE}/campaigns/{campaign_id}/sequences?api_key={api_key}"
-    steps = _sequence_steps_from(http_json("GET", seq_url, {}))  # READ-ONLY fetch
+    # READ-ONLY fetch through _smartlead_json — the mature 429/Retry-After
+    # backoff (5 attempts) the rest of the variant features already use, so
+    # drafting a challenger right after opening the Messaging tab can't hard-
+    # fail on a rate-limit burst the way a raw http_json GET did.
+    try:
+        steps = _sequence_steps_from(
+            _smartlead_json("GET", f"/campaigns/{campaign_id}/sequences"))
+    except Exception as e:  # noqa: BLE001 — clean JSON, never a bare 500 page
+        return 502, {"ok": False, "message": f"couldn't load the sequence from Smartlead: {str(e)[:160]}"}
     step = _find_step(steps, email_num)
     if step is None:
         return 404, {"ok": False, "message": f"email {email_num} not found in this campaign's sequences"}
