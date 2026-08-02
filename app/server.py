@@ -18675,6 +18675,20 @@ class Handler(SimpleHTTPRequestHandler):
     }
 
     def do_POST(self):
+        # Mark-stale must run AFTER the mutating handler too (panel fix BE-1,
+        # 2026-08-02): the pre-dispatch call alone lets a concurrent reader
+        # kick a background refresh that reads PRE-write state and re-caches
+        # it with a fresh ts for a full TTL. The post-dispatch pass in
+        # `finally` costs a lock + ts=0 per cache and restores the "next read
+        # converges" contract.
+        _p = self.path.split("?")[0]
+        try:
+            return self._do_post_dispatch()
+        finally:
+            if _p not in self._CLEAR_CACHE_EXEMPT_POST and self._authed_email():
+                _clear_ui_caches()
+
+    def _do_post_dispatch(self):
         if not self._drain_request_body():
             return
         path = self.path.split("?")[0]
@@ -19444,6 +19458,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": False, "message": str(e)[:300]}, 200)
 
     def do_PATCH(self):
+        try:
+            return self._do_patch_dispatch()
+        finally:
+            _clear_ui_caches()  # post-write pass — same BE-1 race as do_POST
+
+    def _do_patch_dispatch(self):
         if not self._drain_request_body():
             return
         _clear_ui_caches()  # G2: every PATCH may mutate — never let a stale cached GET follow it
