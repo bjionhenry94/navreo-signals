@@ -182,6 +182,7 @@ a{color:inherit;text-decoration:none}
 .ib-rec{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--orange-600);background:var(--orange-100);border-radius:999px;padding:2px 8px;}
 .ib-plain{font-size:13.5px;color:var(--ink-3);margin:0 0 8px;}
 .ib-example{font-size:14px;color:var(--ink-2);margin:0;font-style:italic;}
+.ib-kind{margin:0 0 12px;}
 .otog{font-size:12px;font-weight:600;color:var(--orange-600);background:var(--orange-100);border-radius:999px;padding:4px 13px;white-space:nowrap;height:fit-content;}
 @media(max-width:760px){.tiles{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.app{grid-template-columns:1fr}.side{border-right:none;border-bottom:1px solid var(--line)}}
@@ -521,9 +522,28 @@ function panelHTML(x){
         :`<div class="actions-center"><button class="btn-ink">Next: see the summary</button></div>`);
     return h;
   }
-  if(tab==='first') return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
-    +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
-    +`<div class="actions-center"><button class="btn-ink">Next: your emails</button></div>`;
+  if(tab==='first'){
+    const ib=x.icebreaker;
+    if(ib&&Array.isArray(ib.angles)&&ib.angles.length){
+      const kindLabel=ib.kind==='fixed'?'Fixed opener':'Dynamic openers';
+      const rows=ib.angles.map((a,i)=>`<div class="opener-row"><div class="opener-order"><span class="opos">${i+1}</span></div>`
+        +`<div class="opener-body"><p class="ib-name">${esc(a.name)}${a.recommended?' <span class="ib-rec">Recommended</span>':''}</p>`
+        +(a.note?`<p class="ib-plain">${esc(a.note)}</p>`:'')
+        +`<p class="ib-example">"${highlightTokensHtml(a.example||'')}"</p></div><span></span></div>`).join('');
+      return `<p class="copy-heading">The opener</p>`
+        +`<p class="ib-kind"><span class="kpill kpill-list">${esc(kindLabel)}</span></p>`
+        +(ib.intro?`<p class="copy-sub">${esc(ib.intro)}</p>`:'')
+        +`<div class="opener-list">${rows}</div>`
+        +(ib.fallback?`<p class="mail-label" style="margin-top:20px">Always a fallback</p>`
+          +`<div class="opener-list"><div class="opener-row"><div class="opener-order"><span class="opos">&#8595;</span></div>`
+          +`<div class="opener-body"><p class="ib-example">"${highlightTokensHtml(ib.fallback)}"</p></div><span></span></div></div>`:'')
+        +`<p class="hooknote" style="margin-top:16px">We try these in order for each person and always land on the fallback, so no one ever gets a blank opener.</p>`
+        +`<div class="actions-center"><button class="btn-ink">Next: your emails</button></div>`;
+    }
+    return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
+      +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
+      +`<div class="actions-center"><button class="btn-ink">Next: your emails</button></div>`;
+  }
   if(tab==='build'){
     // Summary = P4 "Filmstrip" (Bjion's pick, 2026-08-02): people strip on top,
     // the selected person's fully-resolved email below, website + LinkedIn links
