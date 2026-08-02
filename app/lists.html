@@ -99,6 +99,9 @@ a.sheet-link:hover { color: var(--orange-700); text-decoration: underline; }
 .gh-sep { color: var(--line-2); font-size: 13px; }
 h1#gridName { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pagehead .ph-title { font-family: var(--font-display); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: -0.03em; }
+/* Enlarged 34px title needs balanced breathing room top & bottom (matches the
+   Analytics header rhythm). Scoped to the files view so the grid header is untouched. */
+#view-files .pagehead { margin-bottom: 32px; }
 .gh-rows { font-size: 12.5px; }
 .gh-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .gh-right .btn .dlicon { font-size: 14px; line-height: 1; }
