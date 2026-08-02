@@ -207,8 +207,23 @@ a{color:inherit;text-decoration:none}
 .tchip.in{transform:none;}
 .tchip .lt-dot{width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;}
 .tchip b{color:var(--ink);font-weight:600;}
+/* page-follows-chat: spotlight the panel chat just changed */
+@keyframes spotpulse{0%{box-shadow:0 0 0 4px var(--orange-100);}55%{box-shadow:0 0 0 4px var(--orange-100);}100%{box-shadow:0 0 0 0 rgba(255,77,0,0);}}
+.panel.spot{animation:spotpulse 1.7s ease-out;border-radius:12px;}
+/* Catch up: shown instead of yanking the page while your hand is on the board */
+#catchup{position:fixed;bottom:20px;right:20px;z-index:70;background:var(--orange);color:#fff;border:none;
+  border-radius:999px;padding:10px 18px;font-family:var(--font-sans);font-size:13px;font-weight:600;cursor:pointer;
+  box-shadow:0 8px 24px -10px rgba(20,17,14,.5);opacity:0;transform:translateY(10px);transition:.2s;pointer-events:none;}
+#catchup.show{opacity:1;transform:none;pointer-events:auto;}
+/* too-narrow overlay: the board needs a desktop-width window */
+#narrow{display:none;position:fixed;inset:0;z-index:200;background:var(--cream);flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;padding:32px;gap:12px;}
+#narrow .nz-ic{font-size:30px;color:var(--orange-600);line-height:1;}
+#narrow h2{font-family:var(--font-display);font-size:24px;letter-spacing:-.02em;color:var(--ink);margin:0;}
+#narrow p{font-size:15px;color:var(--ink-2);max-width:360px;line-height:1.55;margin:0;}
+@media (max-width:820px){#narrow{display:flex;}}
 .empty-pick{max-width:760px;padding:60px 40px;font-family:var(--font-display);font-size:30px;letter-spacing:-.03em;color:var(--ink-3);}
-</style></head><body><div id="boot">Loading your board…</div><div id="toast"></div><div class="app"><aside class="side" id="side"></aside><main class="work" id="work"></main></div><script>
+</style></head><body><div id="boot">Loading your board…</div><div id="toast"></div><div id="narrow"><div class="nz-ic">&#8596;</div><h2>Please widen your window</h2><p>The strategy board works best with a bit more room. Open it on a laptop or desktop, or widen this window to carry on.</p></div><div class="app"><aside class="side" id="side"></aside><main class="work" id="work"></main></div><script>
 // Session routing + client share (strategy-session-share, 2026-08-02):
 // #/r/<run_id> pins the board to ONE session's run; ?share=<token> is the
 // client permalink — logged-out, copy-editable, no build machinery in the DOM.
@@ -602,6 +617,29 @@ function addUpdate(note,updated){
     kids.forEach((c,i)=>{c.style.opacity=String(Math.max(0,1-i*0.22));});});
   if(kids.length>10)kids.slice(10).forEach(c=>c.remove()); // hard cap so the DOM never grows unbounded
 }
+// page-follows-chat: when chat says it's working somewhere (focus.view), jump the
+// board to that idea + tab and spotlight it — unless your hand is on the board,
+// in which case hold and offer a "Catch up" chip so we never yank you mid-edit.
+const VIEW_TAB={targeting:'tgt',emails:'copy',opener:'first',checks:'live',signoff:'live',building:'build'};
+let lastTouch=0;
+document.addEventListener('click',()=>{lastTouch=Date.now();},true);
+function spotlightPanel(){const p=document.querySelector('.panel');if(!p)return;
+  p.classList.remove('spot');void p.offsetWidth;p.classList.add('spot');
+  setTimeout(()=>p.classList.remove('spot'),1700);}
+function goFocus(idx,vt){active=idx;tab=vt;sIdx=0;render();spotlightPanel();}
+function showCatchup(idx,vt,note){let c=document.getElementById('catchup');
+  if(!c){c=document.createElement('button');c.id='catchup';document.body.appendChild(c);}
+  c.textContent=(note?note+' ':'Catch up ')+'↗';
+  c.onclick=()=>{c.classList.remove('show');goFocus(idx,vt);};
+  c.classList.add('show');clearTimeout(c._h);c._h=setTimeout(()=>c.classList.remove('show'),9000);}
+function followFocus(foc){
+  if(!foc||!foc.view)return;
+  const vt=VIEW_TAB[foc.view];if(!vt)return; // 'board' etc. -> chip only, no jump
+  const idx=foc.ideaId?IDEAS.findIndex(i=>i.id===foc.ideaId):active;
+  if(idx<0)return;
+  if(Date.now()-lastTouch<10000){showCatchup(idx,vt,foc.note);return;} // hand on board -> hold
+  goFocus(idx,vt);
+}
 let SERVED_RUN_ID='';
 async function fetchRun(){
   // never re-render over a client's half-typed edit — the poll catches up
@@ -627,7 +665,7 @@ async function fetchRun(){
     PEOPLE=run.people||{};COLLEAGUES=run.colleagues||{};
     if(active>=IDEAS.length)active=0;
     render();boot.classList.add('gone');
-    if(!first){addUpdate(foc.note||'',foc.ts||j.updated||run.updated);}
+    if(!first){addUpdate(foc.note||'',foc.ts||j.updated||run.updated);followFocus(foc);}
     lastFP=fp;
   }catch(e){/* keep last good board */}
 }
