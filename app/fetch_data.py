@@ -392,8 +392,8 @@ def build_notifications(campaigns, details, audit) -> list[dict]:
                 notes.append({
                     "priority": "high", "campaign_id": cid, "campaign": name,
                     "title": f"Replace dead Email {v['seq_number']} variant {v['label']}",
-                    "detail": f"Variant {v['label']} has {v['sent']:,} sends with zero replies. "
-                              "Offer-discovery rule: a variant is judged at 800 sends; this one is dragging the campaign average.",
+                    "detail": f"Variant {v['label']} has {v['sent']:,} sends and zero replies. "
+                              "We judge a variant once it reaches 800 sends, and this one is pulling the campaign average down.",
                     "rule": "dead-variant (lilly-optimiser)",
                     "numbers": {"sent": v["sent"], "replies": v["replies"]},
                 })
@@ -410,17 +410,17 @@ def build_notifications(campaigns, details, audit) -> list[dict]:
                 "title": "Whole offer is underperforming",
                 "detail": f"{sent:,} emails for {positives} positives "
                           f"({'no positives yet' if positives == 0 else format(round(sent / positives), ',') + ' emails per positive'}). "
-                          "Kill-threshold rule: pivot the offer, not the copy.",
+                          "Past this stop line, change the offer itself, not just the wording.",
                 "rule": "kill-threshold (lilly-optimiser)",
                 "numbers": {"sent": sent, "positives": positives},
             })
         elif sent >= 1500 and a.get("replies", 0) / max(sent, 1) < 0.005:
             notes.append({
                 "priority": "medium", "campaign_id": cid, "campaign": name,
-                "title": "Reply rate below deliverability floor",
+                "title": "Reply rate below our minimum",
                 "detail": f"{a.get('replies', 0)} replies on {sent:,} sends "
-                          f"({100 * a.get('replies', 0) / max(sent, 1):.2f}%) - under the 1% fleet benchmark and under 0.5% raw. "
-                          "Check copy angle and inbox placement.",
+                          f"({100 * a.get('replies', 0) / max(sent, 1):.2f}%), below our 1% benchmark and even below 0.5%. "
+                          "Check the wording and whether the emails are landing in the inbox.",
                 "rule": "reply-rate floor (DFY benchmark)",
                 "numbers": {"sent": sent, "replies": a.get("replies", 0)},
             })
@@ -431,7 +431,7 @@ def build_notifications(campaigns, details, audit) -> list[dict]:
                 "priority": "medium", "campaign_id": cid, "campaign": name,
                 "title": "Add leads - campaign is 75%+ through its list",
                 "detail": f"{completed:,} of {total:,} leads completed "
-                          f"({round(100 * completed / total)}%). 75%-rule: the only recommended action is adding leads.",
+                          f"({round(100 * completed / total)}%). The list is nearly used up, so the one thing to do is add fresh leads.",
                 "rule": "email-1 75% (lilly-optimiser)",
                 "numbers": {"total": total, "completed": completed},
             })
@@ -443,8 +443,8 @@ def build_notifications(campaigns, details, audit) -> list[dict]:
             "priority": "low", "campaign_id": cid,
             "campaign": (c or {}).get("name", f"Campaign {cid}"),
             "title": f"{count} lead-hygiene fixes pending",
-            "detail": "Name-casing / icebreaker fixes flagged by the lead audit "
-                      "(lilly-qa step 5d). Dirty fields propagate into {{Icebreaker}} and {{Why}}.",
+            "detail": "Name-casing and icebreaker fixes flagged by the lead audit "
+                      "(lilly-qa step 5d). Messy fields feed straight into {{Icebreaker}} and {{Why}}.",
             "rule": "field hygiene (lilly-qa 5d)",
             "numbers": {"issues": count},
         })
