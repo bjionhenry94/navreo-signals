@@ -96,14 +96,24 @@ a{color:inherit;text-decoration:none}
 .chk.done .ck{background:var(--orange);border-color:var(--orange);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;margin-top:0;}
 .chk-state{margin-left:auto;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);background:var(--cream-50);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap;}
 .chk-state.is-done{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange-100);}
-.sum-recap{display:flex;align-items:center;gap:16px;margin:2px 0 18px;flex-wrap:wrap;}
-.sum-reach{font-size:14px;color:var(--ink-3);} .sum-reach b{font-family:var(--font-display);font-size:19px;color:var(--ink);letter-spacing:-.02em;}
-.sum-pager{display:flex;align-items:center;gap:14px;margin-bottom:12px;max-width:640px;}
-.sum-whois{flex:1;display:flex;align-items:baseline;justify-content:center;gap:10px;flex-wrap:wrap;text-align:center;}
-.sum-name{font-family:var(--font-display);font-size:17px;letter-spacing:-.01em;}
-.sum-co{font-size:13.5px;color:var(--ink-3);}
+.sum-lead{font-size:14.5px;color:var(--ink-2);margin:2px 0 16px;}
+.sum-lead b{font-family:var(--font-display);font-size:18px;letter-spacing:-.02em;color:var(--ink);}
+.sum-strip{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin-bottom:16px;max-width:760px;}
+.sum-card{flex:none;display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:13px;padding:11px 15px;cursor:pointer;background:var(--bg);}
+.sum-card.on{border-color:var(--orange);background:var(--orange-100);}
+.sum-av{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:var(--orange-100);color:var(--orange-600);font-family:var(--font-display);font-size:13px;flex:none;}
+.sum-card.on .sum-av{background:var(--bg);}
+.sum-cnm{font-size:13.5px;font-weight:600;white-space:nowrap;}
+.sum-ccm{font-size:11.5px;color:var(--ink-3);white-space:nowrap;}
+.sum-more{flex:none;display:flex;align-items:center;font-size:12.5px;color:var(--ink-3);padding:0 8px;white-space:nowrap;}
+.sum-meta{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;max-width:640px;margin-bottom:10px;}
+.sum-meta .mt{font-size:13.5px;color:var(--ink-2);}
+.sum-meta .mlinks{margin-left:auto;display:flex;gap:14px;}
+.sum-meta a{font-size:12.5px;font-weight:600;color:var(--orange-600);text-decoration:none;}
+.sum-meta a:hover{text-decoration:underline;}
 .sum-note{font-size:13px;color:var(--ink-3);margin-top:12px;max-width:640px;}
 .mail{max-width:640px;}
+.mail .mh .ms{color:var(--ink-2);text-transform:none;letter-spacing:0;font-size:13.5px;}
 /* Live tab — goes-live preview */
 .livebanner{background:var(--cream-50);border:1px solid var(--line);border-radius:12px;padding:14px 18px;font-size:14px;color:var(--ink-2);margin-bottom:16px;}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:0 0 18px;max-width:660px;}
@@ -304,17 +314,28 @@ function panelHTML(x){
     +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
     +`<div class="actions-center"><button class="btn-ink">Next: your emails</button></div>`;
   if(tab==='build'){
+    // Summary = P4 "Filmstrip" (Bjion's pick, 2026-08-02): people strip on top,
+    // the selected person's fully-resolved email below, website + LinkedIn links
+    // (person's own if the run supplies them, safe search links otherwise).
     const ppl=summaryProspects(x);if(sIdx>=ppl.length)sIdx=0;
-    if(!ppl.length)return `<p class="eyb">Summary</p><div class="ph">Once this idea has its people mapped, real examples show up here.</div>`;
+    if(!ppl.length)return `<p class="eyb">Summary</p><div class="ph">Once this idea has its people mapped, real examples show up here.</div>`
+      +shareBlock();
     const pr=ppl[sIdx];
+    const more=Math.max(0,(x.reachablePool||x.net||0)-ppl.length);
+    const wurl=pr.website||('https://www.google.com/search?q='+encodeURIComponent(pr.company||''));
+    const lurl=pr.linkedin||('https://www.linkedin.com/search/results/companies/?keywords='+encodeURIComponent(pr.company||''));
+    const strip=ppl.map((p,i)=>`<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><span class="sum-av">${esc((p.first||'?')[0])}</span><div><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div></div></div>`).join('')
+      +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
+    const subj=String(x.caption||'');
     return `<p class="eyb">Summary</p>`
-      +`<div class="sum-recap">${tgtType(x)}<span class="sum-reach"><b>${num(x.reachablePool||x.net)}</b> people we can reach</span></div>`
-      +`<div class="sum-pager"><button class="pager-arrow sum-prev"${sIdx===0?' disabled':''}>‹</button>`
-      +`<div class="sum-whois"><span class="sum-name">${esc(pr.first)}${pr.title?', '+esc(pr.title):''}</span><span class="sum-co">${esc(pr.company||'')}</span></div>`
-      +`<button class="pager-arrow sum-next"${sIdx>=ppl.length-1?' disabled':''}>›</button></div>`
-      +`<div class="mail"><div class="mh">Subject: ${esc(x.caption||'')}</div><div class="mb">${esc(resolvedEmail(x,pr)).replace(/\n/g,'<br>')}</div></div>`
-      +`<p class="sum-note">${sIdx+1} of ${ppl.length} — real people from this exact audience, every blank filled in. This is what lands.</p>`
-      +`<div class="actions-center"><button class="build-btn">Build the campaign</button></div>`;
+      +`<p class="sum-lead">This goes to <b>${num(x.reachablePool||x.net)}</b> people. Tap one to read their email.</p>`
+      +`<div class="sum-strip">${strip}</div>`
+      +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span>`
+      +`<span class="mlinks"><a href="${esc(wurl)}" target="_blank" rel="noopener">Website ↗</a><a href="${esc(lurl)}" target="_blank" rel="noopener">LinkedIn ↗</a></span></div>`
+      +`<div class="mail"><div class="mh">Subject: <span class="ms">${esc(subj.charAt(0).toUpperCase()+subj.slice(1))}</span></div><div class="mb">${esc(resolvedEmail(x,pr)).replace(/\n/g,'<br>')}</div></div>`
+      +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`
+      +`<div class="actions-center"><button class="build-btn">Build the campaign</button></div>`
+      +shareBlock();
   }
   const p=x.reachablePool||x.net;
   const doneN=CHECKS.filter(c=>c[2]).length;
@@ -348,9 +369,7 @@ function renderWorkspace(){
   work.querySelectorAll('.tabs label').forEach(l=>l.onclick=()=>{tab=l.dataset.tab;renderWorkspace();});
   const csb=work.querySelector('#client-save-copy');
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
-  const pv=work.querySelector('.sum-prev'),nx=work.querySelector('.sum-next');
-  if(pv)pv.onclick=()=>{if(sIdx>0){sIdx--;renderWorkspace();}};
-  if(nx)nx.onclick=()=>{sIdx++;renderWorkspace();};
+  work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{sIdx=+c.dataset.i;renderWorkspace();});
 }
 function render(){renderSidebar();renderWorkspace();}
 
