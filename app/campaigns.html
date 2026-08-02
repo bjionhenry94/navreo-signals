@@ -1759,6 +1759,34 @@
   .copy-prompt:hover, .action-link:hover, .action-state-btn:hover { background: var(--sunken); border-color: var(--nav-ink-3); color: var(--fg); }
   .action-state-btn.is-acked { background: var(--chip-active-bg); border-color: var(--chip-active-bg); color: var(--chip-active-fg); }
   .action-state-btn.is-done-state { background: var(--success-bg); border-color: var(--success-bd); color: var(--success); }
+  /* P4: the lifecycle moves fold into one status pill (Bjion's pick 02 Aug 2026) */
+  .action-status { position: relative; display: inline-flex; margin-top: 4px; }
+  .action-buttons > .action-status { margin-top: 0; }
+  .action-status-pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px 8px 13px;
+    border: 1px solid var(--border-strong); border-radius: var(--r-pill);
+    background: var(--bg); color: var(--fg-muted); font-size: 0.78rem; font-weight: 600;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+    transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
+  }
+  .action-status-pill:hover { background: var(--sunken); border-color: var(--nav-ink-3); color: var(--fg); }
+  .action-status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--neutral-warm); flex: 0 0 auto; }
+  .action-status-pill[data-state="ack"]::before { background: var(--nav-orange); }
+  .action-status-pill[data-state="done"]::before { background: var(--success); }
+  .action-status-pill[data-state="dismiss"]::before { background: var(--fg-subtle); }
+  .action-status-car { font-size: 0.6rem; opacity: 0.7; margin-left: 1px; }
+  .action-status-menu {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 184px;
+    display: flex; flex-direction: column; padding: 5px;
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+    box-shadow: 0 10px 30px rgba(20,17,14,.14);
+  }
+  .action-status-menu[hidden] { display: none; }
+  .action-status-menu .action-state-btn {
+    margin: 0; align-self: auto; width: 100%; justify-content: flex-start;
+    border: none; border-radius: 6px; background: none; white-space: nowrap;
+  }
+  .action-status-menu .action-state-btn:hover { background: var(--sunken); border-color: transparent; }
   .action-why { margin-top: 10px; }
   .action-why > summary {
     list-style: none;
@@ -3401,9 +3429,14 @@
       whyHTML +
       '<div class="action-buttons">' +
       '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Copy prompt for Claude</button>' +
-      '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
-      '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
-      '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
+      '<div class="action-status">' +
+      '<button type="button" class="action-status-pill" data-state="none" aria-haspopup="true" aria-expanded="false">' +
+      '<span class="action-status-lab">Not started</span><span class="action-status-car" aria-hidden="true">&#9662;</span></button>' +
+      '<div class="action-status-menu" hidden role="menu">' +
+      '<button type="button" class="action-state-btn" data-act="ack" role="menuitem">Assign to me</button>' +
+      '<button type="button" class="action-state-btn" data-act="done" role="menuitem">Mark as completed</button>' +
+      '<button type="button" class="action-state-btn" data-act="dismiss" role="menuitem">Dismiss</button>' +
+      '</div></div></div>' +
       "</div>" +
       '<div class="action-dismissed-row" hidden><span>Dismissed &middot; <button type="button" class="action-undo-btn" data-act="undo">Undo</button></span></div></div>';
   }
@@ -5920,6 +5953,17 @@
     return parts.join(" ") || String(email);
   }
   function actStateVerb(state) { return state === "ack" ? "In progress" : state === "done" ? "Completed" : "Dismissed"; }
+  function actCloseStatusMenus() {
+    document.querySelectorAll(".action-status-menu:not([hidden])").forEach(function (m) {
+      m.hidden = true;
+      var p = m.parentNode && m.parentNode.querySelector(".action-status-pill");
+      if (p) p.setAttribute("aria-expanded", "false");
+    });
+  }
+  document.addEventListener("click", function (e) {
+    if (e.target.closest && e.target.closest(".action-status")) return;
+    actCloseStatusMenus();
+  });
   function actApplyCard(card) {
     var key = card.getAttribute("data-action-key");
     var rec = ACT_ASSIGN[key] || {};
@@ -5953,6 +5997,15 @@
     if (tag) {
       if ((state === "ack" || state === "done") && who) { tag.hidden = false; tag.textContent = actStateVerb(state) + " · " + who; }
       else { tag.hidden = true; tag.textContent = ""; }
+    }
+    /* the status pill IS the state, and opens the moves from it (P4) */
+    var pill = card.querySelector(".action-status-pill");
+    var pillLab = card.querySelector(".action-status-lab");
+    if (pill && pillLab) {
+      pill.setAttribute("data-state", state || "none");
+      pillLab.textContent = state
+        ? actStateVerb(state) + (who ? " · " + who : "")
+        : "Not started";
     }
   }
   var ACT_PENDING = null;  // in-flight guard: second caller joins the first fetch
@@ -6086,6 +6139,17 @@
       var key = card.getAttribute("data-action-key");
       var parts = (key || "").split("::");
       var cid = parts[0], ik = parts.slice(1).join("::");
+      var statusPill = card.querySelector(".action-status-pill");
+      var statusMenu = card.querySelector(".action-status-menu");
+      if (statusPill && statusMenu) {
+        statusPill.addEventListener("click", function (e) {
+          e.preventDefault(); e.stopPropagation();
+          var willOpen = statusMenu.hidden;
+          actCloseStatusMenus();
+          statusMenu.hidden = !willOpen;
+          statusPill.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        });
+      }
       card.querySelectorAll(".action-state-btn, .action-undo-btn").forEach(function (b) {
         b.addEventListener("click", function (e) {
           e.preventDefault(); e.stopPropagation();
@@ -6095,6 +6159,7 @@
           var prev = ACT_ASSIGN[key];
           if (next === "clear") delete ACT_ASSIGN[key];
           else ACT_ASSIGN[key] = { state: next, assigned_to: ACT_ME };
+          if (statusMenu) { statusMenu.hidden = true; if (statusPill) statusPill.setAttribute("aria-expanded", "false"); }
           actApplyCard(card);
           /* the row's Review/In-progress badge tallies from ACT_ASSIGN, so it
              repaints on the optimistic write, the confirm, AND the rollback */
