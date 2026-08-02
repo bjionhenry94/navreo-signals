@@ -665,6 +665,17 @@ function renderWorkspace(){
   work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{sIdx=+c.dataset.i;renderWorkspace();});
 }
 function render(){renderSidebar();renderWorkspace();}
+// every link on the board opens in a NEW TAB (Bjion rule 2026-08-03) — delegated
+// so it also covers anchors rendered later (chips, client-edited copy, new features);
+// in-page hash anchors are left alone.
+document.addEventListener('click',e=>{
+  const a=e.target&&e.target.closest&&e.target.closest('a[href]');
+  if(!a)return;
+  const h=a.getAttribute('href')||'';
+  if(h.startsWith('#'))return;
+  a.target='_blank';
+  a.rel='noopener';
+},true);
 
 function fmtTime(u){try{const d=u?new Date(u):new Date();return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
 function addUpdate(note,updated){
