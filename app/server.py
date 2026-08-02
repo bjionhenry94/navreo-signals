@@ -3406,6 +3406,17 @@ def save_sequence_ids_intact(campaign_id: int, mutate_fn, api_key: str | None = 
     if verify_fn is not None and not verify_fn(steps_after):
         raise SequenceSaveDriftError("save did not take — post-save state failed verification")
 
+    # Every read cache that serves this campaign's sequence/variant state is
+    # fenced HERE, in the one write door, so no caller can forget it and no
+    # page shows pre-write state after a successful save.
+    for _cache_name in ("_SL_SEQS_SWR", "_COCKPIT_MESSAGING_SWR"):
+        _cache = globals().get(_cache_name)
+        if _cache is not None:
+            try:
+                _cache.invalidate_id(str(campaign_id))
+            except Exception:  # noqa: BLE001 — cache hygiene never fails a saved write
+                pass
+
     return {"ok": True, "steps_before": steps_before, "steps_after": steps_after,
             "before_ids": before_ids, "after_ids": after_ids, "sl_resp": sl_resp}
 
@@ -9071,15 +9082,28 @@ def _cockpit_messaging(cid) -> dict:
             _step = _s.get("seq_number")
             for _v in (_s.get("sequence_variants") or []):
                 _key = (str(_step), _v.get("variant_label") or "")
+                # split + variant_id ride on every resolvable row so the
+                # Messaging tab's on/off toggle (variant-action-wire P2) knows
+                # the TRUE state: split>0 live, split==0 switched off,
+                # is_deleted untogglable. Absent when the seqs cache is cold —
+                # the UI degrades to the read-only dot, never guesses.
+                _split = _v.get("variant_distribution_percentage")
+                try:
+                    _split = int(_split) if _split is not None else None
+                except (TypeError, ValueError):
+                    _split = None
                 _hit = _idx.get(_key)
                 if _hit is not None:
                     if _v.get("is_deleted"):
                         _hit["disabled"] = True
+                    _hit["split"] = _split
+                    _hit["variant_id"] = _v.get("id")
                     continue
                 _new = {"step": _step, "label": _v.get("variant_label"), "inline": False,
                         "sent": 0, "replies": 0, "positives": 0, "bounces": 0,
                         "disabled": bool(_v.get("is_deleted")),
-                        "stats_purged": bool(_v.get("is_deleted"))}
+                        "stats_purged": bool(_v.get("is_deleted")),
+                        "split": _split, "variant_id": _v.get("id")}
                 _idx[_key] = _new
                 versions.append(_new)
         versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))

@@ -4243,7 +4243,8 @@
         }
         return;
       }
-      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations);
+      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations, id);
+      vawWireMessaging(root, c, m);
     };
     if (STATE.messaging[id]) { apply(STATE.messaging[id]); return; }
     /* in-flight dedup (audit #35) */
@@ -4423,7 +4424,564 @@
     start();
   }
 
-  function versionTableHTML(versions, note, meetings, combinations) {
+  /* ══ variant-action-wire (Bjion's picks, 2 Aug 2026) ═══════════════════
+     One-click variant actions: P1 turn-off from the Why? digest, P2 the
+     Messaging-tab toggle, P3 draft+approve a copy fix, P5 scale the winner,
+     P6 even-split a never-configured version, P7 draft a challenger (new
+     Version, checkbox-scoped, previewed before approve). EVERY write goes to
+     server endpoints that route through save_sequence_ids_intact — ids
+     echoed, history kept — and EVERY write sits behind a typed confirm. */
+  (function vawCSS() {
+    var css = [
+      ".vaw-toggle{position:relative;display:inline-block;width:30px;height:17px;border-radius:999px;border:1px solid var(--border-strong);background:var(--bg-sunken,#e9e5de);cursor:pointer;vertical-align:middle;margin-left:6px;padding:0;transition:background .15s}",
+      ".vaw-toggle .vaw-knob{position:absolute;top:1px;left:1px;width:13px;height:13px;border-radius:50%;background:var(--nav-white,#fff);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .15s}",
+      ".vaw-toggle.is-on{background:#2f9e44;border-color:#2f9e44}",
+      ".vaw-toggle.is-on .vaw-knob{left:14px}",
+      ".vaw-toggle:focus-visible{outline:2px solid var(--nav-orange);outline-offset:2px}",
+      ".vaw-toggle[data-busy]{opacity:.5;pointer-events:none}",
+      ".vaw-mini{font:inherit;font-size:.72rem;font-weight:600;padding:2px 8px;margin-left:8px;border-radius:999px;border:1px solid var(--border-strong);background:transparent;color:var(--fg-muted);cursor:pointer}",
+      ".vaw-mini:hover{border-color:var(--nav-orange);color:var(--nav-orange)}",
+      ".vaw-acts{margin-top:12px;padding-top:10px;border-top:1px dashed var(--border-strong);display:flex;flex-direction:column;gap:7px}",
+      ".vaw-acts-kick{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-subtle)}",
+      ".vaw-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap}",
+      ".vaw-btn{font:inherit;font-size:.78rem;font-weight:600;padding:5px 12px;border-radius:8px;border:1px solid var(--border-strong);background:var(--bg-card,#fff);color:var(--fg);cursor:pointer}",
+      ".vaw-btn:hover{border-color:var(--fg-subtle)}",
+      ".vaw-btn--danger{background:#c9352b;border-color:#c9352b;color:#fff}",
+      ".vaw-btn--danger:hover{filter:brightness(1.07)}",
+      ".vaw-btn--primary{background:var(--nav-orange,#e8590c);border-color:var(--nav-orange,#e8590c);color:#fff}",
+      ".vaw-btn--primary:hover{filter:brightness(1.07)}",
+      ".vaw-btn[disabled]{opacity:.5;cursor:default;pointer-events:none}",
+      ".vaw-act .vaw-done{font-size:.75rem;color:#2f9e44;font-weight:600}",
+      ".vaw-hint{font-size:.72rem;color:var(--fg-subtle)}",
+      ".vaw-overlay{position:fixed;inset:0;background:rgba(20,16,10,.45);z-index:900;display:flex;align-items:center;justify-content:center;padding:18px}",
+      ".vaw-modal{background:var(--bg-card,#fff);color:var(--fg);border:1px solid var(--border-strong);border-radius:14px;max-width:560px;width:100%;max-height:86vh;overflow:auto;padding:18px 18px 16px;box-shadow:0 18px 50px rgba(0,0,0,.28)}",
+      ".vaw-modal h3{margin:0 0 4px;font-size:1rem}",
+      ".vaw-modal .vaw-sub{margin:0 0 12px;font-size:.8rem;color:var(--fg-muted)}",
+      ".vaw-lines{display:flex;flex-direction:column;gap:6px;margin:0 0 12px}",
+      ".vaw-line{display:flex;justify-content:space-between;gap:12px;font-size:.8rem;background:var(--bg-sunken,#f4f1ec);border-radius:8px;padding:7px 10px;align-items:center}",
+      ".vaw-line .k{color:var(--fg-muted)}",
+      ".vaw-line .v{font-variant-numeric:tabular-nums;font-weight:600;text-align:right}",
+      ".vaw-line .v .old{color:var(--fg-subtle);text-decoration:line-through;font-weight:500}",
+      ".vaw-line .v .arr{color:var(--fg-subtle);margin:0 4px;font-weight:400}",
+      ".vaw-idnote{font-size:.72rem;color:var(--fg-subtle);margin:0 0 12px}",
+      ".vaw-token{display:flex;gap:8px;align-items:center;margin:0 0 6px;flex-wrap:wrap}",
+      ".vaw-token input{font:inherit;font-size:.85rem;padding:6px 10px;border:1px solid var(--border-strong);border-radius:8px;width:130px;background:var(--bg,transparent);color:var(--fg)}",
+      ".vaw-token .vaw-token-lbl{font-size:.78rem;color:var(--fg-muted)}",
+      ".vaw-err{color:#c9352b;font-size:.78rem;min-height:1.1em;margin:4px 0 8px}",
+      ".vaw-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}",
+      ".vaw-receipt{border:1px solid #2f9e44;background:rgba(47,158,68,.07);border-radius:10px;padding:10px 12px;margin:0 0 10px}",
+      ".vaw-receipt h4{margin:0 0 8px;font-size:.85rem;color:#2f9e44}",
+      ".vaw-receipt .vaw-line{background:transparent;padding:4px 0}",
+      ".vaw-checks{display:flex;flex-direction:column;gap:8px;margin:0 0 12px}",
+      ".vaw-checks label{display:flex;gap:9px;align-items:flex-start;font-size:.82rem;cursor:pointer}",
+      ".vaw-checks input{accent-color:var(--nav-orange);margin-top:2px}",
+      ".vaw-checks .d{color:var(--fg-subtle);font-size:.74rem}",
+      ".vaw-preview{border:1px solid var(--border-strong);border-radius:10px;padding:10px 12px;margin:0 0 12px;max-height:300px;overflow:auto}",
+      ".vaw-preview .vaw-prev-subj{font-size:.82rem;margin:0 0 8px}",
+      ".vaw-preview .vaw-prev-body{font-size:.8rem;line-height:1.5}",
+      ".vaw-preview .vaw-prev-body p{margin:0 0 .7em}",
+      ".vaw-swap{font-size:.74rem;background:var(--bg-sunken,#f4f1ec);border-radius:8px;padding:6px 9px;margin:0 0 6px}",
+      ".vaw-swap b{text-transform:capitalize}",
+      ".vaw-swap .old{color:var(--fg-subtle);text-decoration:line-through}",
+      "@media (prefers-reduced-motion:reduce){.vaw-toggle,.vaw-toggle .vaw-knob{transition:none}}"
+    ].join("\n");
+    var el = document.createElement("style");
+    el.id = "vaw-css";
+    el.textContent = css;
+    document.head.appendChild(el);
+  })();
+
+  function vawPost(url, body) {
+    return fetch(url, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (r) {
+      return r.json().catch(function () { return { ok: false, message: "bad response (" + r.status + ")" }; });
+    });
+  }
+
+  function vawChangeV(from, to) {
+    return '<span class="old">' + esc(String(from)) + '</span><span class="arr">&rarr;</span>' + esc(String(to));
+  }
+
+  /* Typed-token confirm modal (house contract: the typed word IS the
+     approval the server's confirm token encodes). opts:
+     {title, sub, lines:[[k, vHTML]], idnote, token, danger, confirmLabel,
+      body?:HTML above lines, run: fn -> Promise<resp>, receipt: fn(resp) ->
+      {title, lines:[[k, vHTML]], foot}} */
+  function vawModal(opts) {
+    var ov = document.createElement("div");
+    ov.className = "vaw-overlay";
+    var linesHTML = (opts.lines || []).map(function (l) {
+      return '<div class="vaw-line"><span class="k">' + esc(l[0]) + '</span><span class="v">' + l[1] + "</span></div>";
+    }).join("");
+    ov.innerHTML = '<div class="vaw-modal" role="dialog" aria-modal="true">' +
+      "<h3>" + esc(opts.title) + "</h3>" +
+      '<p class="vaw-sub">' + esc(opts.sub || "") + "</p>" +
+      (opts.body || "") +
+      (linesHTML ? '<div class="vaw-lines">' + linesHTML + "</div>" : "") +
+      (opts.idnote ? '<p class="vaw-idnote">&#128274; ' + esc(opts.idnote) + "</p>" : "") +
+      '<div class="vaw-token"><span class="vaw-token-lbl">Type <b>' + esc(opts.token) + "</b> to confirm:</span>" +
+      '<input type="text" autocomplete="off" spellcheck="false" aria-label="confirmation word"></div>' +
+      '<div class="vaw-err"></div>' +
+      '<div class="vaw-foot"><button type="button" class="vaw-btn" data-x>Cancel</button>' +
+      '<button type="button" class="vaw-btn ' + (opts.danger ? "vaw-btn--danger" : "vaw-btn--primary") +
+      '" data-go disabled>' + esc(opts.confirmLabel || "Confirm — write it") + "</button></div></div>";
+    document.body.appendChild(ov);
+    var input = ov.querySelector("input"), go = ov.querySelector("[data-go]"),
+        err = ov.querySelector(".vaw-err"), modal = ov.querySelector(".vaw-modal");
+    function close() { ov.remove(); document.removeEventListener("keydown", onKey); }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    document.addEventListener("keydown", onKey);
+    ov.addEventListener("mousedown", function (e) { if (e.target === ov) close(); });
+    ov.querySelector("[data-x]").addEventListener("click", close);
+    input.addEventListener("input", function () {
+      go.disabled = input.value.trim().toUpperCase() !== opts.token;
+    });
+    input.focus();
+    go.addEventListener("click", function () {
+      if (go.disabled) return;
+      go.disabled = true; go.textContent = "Writing…"; err.textContent = "";
+      opts.run().then(function (resp) {
+        if (!resp || resp.ok === false) {
+          err.textContent = (resp && resp.message) || "The write was refused - nothing changed.";
+          go.disabled = false; go.textContent = opts.confirmLabel || "Confirm — write it";
+          return;
+        }
+        var rec = opts.receipt ? opts.receipt(resp) : { title: "Saved", lines: [], foot: "" };
+        modal.innerHTML = '<div class="vaw-receipt"><h4>&#10003; ' + esc(rec.title) + "</h4>" +
+          '<div class="vaw-lines">' + (rec.lines || []).map(function (l) {
+            return '<div class="vaw-line"><span class="k">' + esc(l[0]) + '</span><span class="v">' + l[1] + "</span></div>";
+          }).join("") + "</div>" +
+          (rec.foot ? '<p class="vaw-idnote">' + rec.foot + "</p>" : "") + "</div>" +
+          '<div class="vaw-foot"><button type="button" class="vaw-btn vaw-btn--primary" data-x2>Done</button></div>';
+        modal.querySelector("[data-x2]").addEventListener("click", close);
+        if (opts.after) opts.after(resp);
+      }).catch(function (e2) {
+        err.textContent = "Couldn't reach the tool: " + (e2 && e2.message || "network error");
+        go.disabled = false; go.textContent = opts.confirmLabel || "Confirm — write it";
+      });
+    });
+  }
+
+  /* client-side caches out, fresh hydrate in — after ANY successful write */
+  function vawRefreshCampaign(c) {
+    STATE.messaging[c.id] = null;
+    if (STATE.seqcopy) STATE.seqcopy[c.id] = null;
+    if (STATE.messagingBusy) STATE.messagingBusy[c.id] = false;
+    delete WHY_CACHE[c.id];
+    hydrateMessaging(c);
+  }
+
+  var VAW_IDNOTE = "Saved the ID-intact way: fresh pull, every step & version ID echoed back, so all history is kept.";
+
+  function vawWireMessaging(root, c) {
+    root.querySelectorAll("[data-vaw-toggle]").forEach(function (t) {
+      t.addEventListener("click", function () {
+        var on = t.classList.contains("is-on");
+        var step = t.getAttribute("data-step"), lab = t.getAttribute("data-vlabel");
+        var split = parseInt(t.getAttribute("data-split"), 10) || 0;
+        vawModal(on ? {
+          title: "Switch off Version " + lab + " on Email " + step + "?",
+          sub: (c.name || "Campaign " + c.id) + " · campaign " + c.id,
+          lines: [["Version " + lab + " share", vawChangeV(split + "%", "0%")],
+                  ["Its " + split + "% goes to", "the other live versions"],
+                  ["Copy / subject", "untouched"]],
+          idnote: VAW_IDNOTE, token: "DISABLE", danger: true,
+          confirmLabel: "Confirm — switch it off",
+          run: function () {
+            return vawPost("/api/campaigns/" + c.id + "/variant-action",
+              { action: "disable", email: +step, variant_label: lab, confirm: "DISABLE" });
+          },
+          receipt: function (resp) {
+            return {
+              title: "Version " + lab + " switched off — IDs intact, history kept",
+              lines: Object.keys(resp.after || {}).map(function (k) {
+                return ["Version " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
+              }),
+              foot: "It stopped sending but keeps its stats — switch it back on any time."
+            };
+          },
+          after: function () { vawRefreshCampaign(c); }
+        } : {
+          title: "Switch Version " + lab + " back on (Email " + step + ")?",
+          sub: (c.name || "Campaign " + c.id) + " · campaign " + c.id,
+          lines: [["Version " + lab + " share", vawChangeV("0%", "an equal share")],
+                  ["Every live version", "rebalanced to equal shares"],
+                  ["Copy / subject", "untouched"]],
+          idnote: VAW_IDNOTE, token: "ENABLE", danger: false,
+          confirmLabel: "Confirm — switch it on",
+          run: function () {
+            return vawPost("/api/campaigns/" + c.id + "/variant-action",
+              { action: "enable", email: +step, variant_label: lab, confirm: "ENABLE" });
+          },
+          receipt: function (resp) {
+            return {
+              title: "Version " + lab + " is sending again",
+              lines: Object.keys(resp.after || {}).map(function (k) {
+                return ["Version " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
+              }),
+              foot: "Same version ID as before — its new sends stack onto its old history."
+            };
+          },
+          after: function () { vawRefreshCampaign(c); }
+        });
+      });
+    });
+    root.querySelectorAll("[data-vaw-scale]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var step = b.getAttribute("data-step"), lab = b.getAttribute("data-vlabel");
+        var split = parseInt(b.getAttribute("data-split"), 10) || 0;
+        vawModal({
+          title: "Send 100% of Email " + step + " to Version " + lab + "?",
+          sub: (c.name || "Campaign " + c.id) + " · campaign " + c.id,
+          lines: [["Version " + lab + " share", vawChangeV(split + "%", "100%")],
+                  ["Every other version on Email " + step, vawChangeV("their shares", "0% (kept, not deleted)")],
+                  ["Copy / subject", "untouched"]],
+          idnote: VAW_IDNOTE, token: "SCALE", danger: false,
+          confirmLabel: "Confirm — send it everything",
+          run: function () {
+            return vawPost("/api/campaigns/" + c.id + "/variant-action",
+              { action: "scale_winner", email: +step, variant_label: lab, confirm: "SCALE" });
+          },
+          receipt: function (resp) {
+            return {
+              title: "Version " + lab + " now takes all of Email " + step,
+              lines: Object.keys(resp.after || {}).map(function (k) {
+                return ["Version " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
+              }),
+              foot: "The others are paused at 0% with their IDs and history intact."
+            };
+          },
+          after: function () { vawRefreshCampaign(c); }
+        });
+      });
+    });
+  }
+
+  /* ── Why?-digest action rows (P1 / P3 / P5 / P6 / P7) ─────────────────── */
+  var VAW_TITLE_RE = /^Variant call: Email\s*(\d+)(?:\s+Var\s+(.+?))?\s*$/i;
+
+  function vawWhyActions(rows, tok, ik) {
+    /* Actionable rows scoped like the digest itself: if the card names
+       variants/emails, only matching rows act here. Every act is derived
+       from the row the SERVER will re-check - the button is a shortcut,
+       never the authority. */
+    if (WHY_NONVARIANT[ik || ""]) return [];
+    var acts = [], seenP7 = {};
+    (rows || []).forEach(function (n) {
+      var m = VAW_TITLE_RE.exec(n.title || "");
+      var email = m ? parseInt(m[1], 10) : null;
+      var vlab = (m && m[2] ? m[2].trim() : "");
+      var scoped = !(tok.anyVar && vlab && !tok.vars[vlab]) &&
+                   !(tok.anyEmail && email && !tok.emails[String(email)]);
+      if (!scoped) return;
+      var done = (n.status || "") === "actioned";
+      if (n.finding_type === "variant_call" && /disable/i.test(n.suggested_action || "") && email && vlab) {
+        acts.push({ kind: "p1", nid: n.id, email: email, vlab: vlab, done: done });
+        if (!seenP7[email + "|" + vlab] && !done) {
+          seenP7[email + "|" + vlab] = 1;
+          acts.push({ kind: "p7", email: email, base: vlab });
+        }
+      }
+      if (n.action_type === "replace_variants" && email) {
+        acts.push({ kind: "p3", nid: n.id, email: email, vlab: vlab, done: done,
+                    drafted: !!(n.draft_fix && n.draft_fix.body_html) });
+        if (vlab && !seenP7[email + "|" + vlab] && !done) {
+          seenP7[email + "|" + vlab] = 1;
+          acts.push({ kind: "p7", email: email, base: vlab });
+        }
+      }
+      /* split-never-set: a version at 0% with 0 sends on this row's step */
+      (n.variants || []).forEach(function (v) {
+        if ((v.flags || []).indexOf("zero_distribution") !== -1 &&
+            !acts.some(function (a) { return a.kind === "p6" && a.email === v.email; })) {
+          acts.push({ kind: "p6", email: v.email });
+        }
+      });
+      /* a flagged winner + at least 2 active versions -> offer the scale */
+      var winner = (n.variants || []).filter(function (v) { return (v.flags || []).indexOf("winner") !== -1; })[0];
+      if (winner && !done && /scal|winner|wider|100/i.test(n.suggested_action || "") &&
+          !acts.some(function (a) { return a.kind === "p5"; })) {
+        acts.push({ kind: "p5", email: winner.email, vlab: String(winner.variant) });
+      }
+    });
+    return acts;
+  }
+
+  function vawWhyActionsHTML(rows, tok, ik, cid) {
+    var acts = vawWhyActions(rows, tok, ik);
+    if (!acts.length) return "";
+    var h = ['<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Act on it now</span>'];
+    acts.forEach(function (a, i) {
+      if (a.kind === "p1") {
+        h.push('<div class="vaw-act">' + (a.done
+          ? '<span class="vaw-done">&#10003; Version ' + esc(a.vlab) + " on Email " + a.email + " was switched off</span>"
+          : '<button type="button" class="vaw-btn vaw-btn--danger" data-vaw-p1="' + esc(String(a.nid)) +
+            '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '">Turn off Version ' + esc(a.vlab) +
+            ' on Email ' + a.email + '</button><span class="vaw-hint">stops sending it, share moves to the live versions</span>') + "</div>");
+      } else if (a.kind === "p3") {
+        h.push('<div class="vaw-act" data-vaw-p3-wrap="' + esc(String(a.nid)) + '">' + (a.done
+          ? '<span class="vaw-done">&#10003; The rewritten copy was applied</span>'
+          : '<button type="button" class="vaw-btn" data-vaw-p3-draft="' + esc(String(a.nid)) +
+            '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '">' +
+            (a.drafted ? "Show the drafted fix" : "Draft the fix") + '</button>' +
+            '<span class="vaw-hint">new problem statement for Version ' + esc(a.vlab || "?") +
+            ' — you approve before anything is saved</span>') + "</div>");
+      } else if (a.kind === "p5") {
+        h.push('<div class="vaw-act"><button type="button" class="vaw-btn vaw-btn--primary" data-vaw-p5="1" data-email="' +
+          a.email + '" data-vlabel="' + esc(a.vlab) + '">Send 100% of Email ' + a.email + " to Version " + esc(a.vlab) +
+          '</button><span class="vaw-hint">the winner takes every send on this step</span></div>');
+      } else if (a.kind === "p6") {
+        h.push('<div class="vaw-act"><button type="button" class="vaw-btn vaw-btn--primary" data-vaw-p6="1" data-email="' +
+          a.email + '">Give every version of Email ' + a.email + ' an equal share</button>' +
+          '<span class="vaw-hint">fixes a split that was never set up</span></div>');
+      } else if (a.kind === "p7") {
+        h.push('<div class="vaw-act"><button type="button" class="vaw-btn" data-vaw-p7="1" data-email="' + a.email +
+          '" data-vlabel="' + esc(a.base) + '">Draft a challenger for Version ' + esc(a.base) +
+          '</button><span class="vaw-hint">a fresh angle as a NEW version — you read it before it goes in</span></div>');
+      }
+    });
+    h.push("</div>");
+    return h.join("");
+  }
+
+  function vawCampaignOf(cid) {
+    return (STATE.byId && STATE.byId[cid]) || { id: cid, name: "Campaign " + cid };
+  }
+
+  function vawWireWhy(box, cid) {
+    var c = vawCampaignOf(cid);
+    box.querySelectorAll("[data-vaw-p1]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var lab = b.getAttribute("data-vlabel"), email = b.getAttribute("data-email");
+        vawModal({
+          title: "Turn off Version " + lab + " on Email " + email + "?",
+          sub: (c.name || "") + " · campaign " + cid,
+          lines: [["Version " + lab, vawChangeV("sending", "0% — switched off")],
+                  ["Its share", "moves to the other live versions"],
+                  ["Copy / subject", "untouched"]],
+          idnote: VAW_IDNOTE, token: "DISABLE", danger: true,
+          confirmLabel: "Confirm — turn it off",
+          run: function () {
+            return vawPost("/api/notifications/" + b.getAttribute("data-vaw-p1") + "/execute",
+              { action: "disable_variant", confirm: "DISABLE" });
+          },
+          receipt: function (resp) {
+            var lines = [["Version " + lab + " share", vawChangeV(((resp.before || {}).pct || "") + "%", "0%")]];
+            return { title: "Version " + lab + " switched off — IDs intact, history kept", lines: lines,
+                     foot: "Its stats stay on its version ID — nothing was recreated." };
+          },
+          after: function () {
+            b.closest(".vaw-act").innerHTML = '<span class="vaw-done">&#10003; Version ' + esc(lab) + " on Email " + esc(email) + " was switched off</span>";
+            vawRefreshCampaign(c);
+          }
+        });
+      });
+    });
+    box.querySelectorAll("[data-vaw-p5]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var lab = b.getAttribute("data-vlabel"), email = b.getAttribute("data-email");
+        vawModal({
+          title: "Send 100% of Email " + email + " to Version " + lab + "?",
+          sub: (c.name || "") + " · campaign " + cid,
+          lines: [["Version " + lab, vawChangeV("its current share", "100%")],
+                  ["Every other version on Email " + email, vawChangeV("their shares", "0% (kept)")],
+                  ["Copy / subject", "untouched"]],
+          idnote: VAW_IDNOTE, token: "SCALE", danger: false,
+          confirmLabel: "Confirm — send it everything",
+          run: function () {
+            return vawPost("/api/campaigns/" + cid + "/variant-action",
+              { action: "scale_winner", email: +email, variant_label: lab, confirm: "SCALE" });
+          },
+          receipt: function (resp) {
+            return { title: "Version " + lab + " now takes all of Email " + email,
+              lines: Object.keys(resp.after || {}).map(function (k) {
+                return ["Version " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
+              }),
+              foot: "The rest are paused at 0% — IDs and history intact." };
+          },
+          after: function () { vawRefreshCampaign(c); }
+        });
+      });
+    });
+    box.querySelectorAll("[data-vaw-p6]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var email = b.getAttribute("data-email");
+        vawModal({
+          title: "Give every version of Email " + email + " an equal share?",
+          sub: (c.name || "") + " · campaign " + cid,
+          lines: [["All live versions on Email " + email, "equal shares, summing to 100%"],
+                  ["Copy / subject", "untouched"]],
+          idnote: VAW_IDNOTE, token: "SPLIT", danger: false,
+          confirmLabel: "Confirm — set the even split",
+          run: function () {
+            return vawPost("/api/campaigns/" + cid + "/variant-action",
+              { action: "even_split", email: +email, confirm: "SPLIT" });
+          },
+          receipt: function (resp) {
+            return { title: "Email " + email + " now splits evenly",
+              lines: Object.keys(resp.after || {}).map(function (k) {
+                return ["Version " + k + " share", vawChangeV((resp.before || {})[k] + "%", (resp.after || {})[k] + "%")];
+              }),
+              foot: "Every version keeps its ID — the ones that never sent start counting now." };
+          },
+          after: function () { vawRefreshCampaign(c); }
+        });
+      });
+    });
+    box.querySelectorAll("[data-vaw-p3-draft]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var nid = b.getAttribute("data-vaw-p3-draft");
+        var email = b.getAttribute("data-email"), lab = b.getAttribute("data-vlabel");
+        b.disabled = true; b.textContent = "Drafting…";
+        vawPost("/api/notifications/" + nid + "/draft-fix", {}).then(function (resp) {
+          b.disabled = false;
+          if (!resp || resp.ok === false || !resp.draft_fix) {
+            b.textContent = "Draft the fix";
+            alert((resp && resp.message) || "Couldn't draft the fix just now - try again.");
+            return;
+          }
+          b.textContent = "Show the drafted fix";
+          var d = resp.draft_fix;
+          vawModal({
+            title: "Apply the rewritten copy to Version " + (lab || "?") + " (Email " + email + ")?",
+            sub: (c.name || "") + " · campaign " + cid + " · same version, same history",
+            body: '<div class="vaw-swap"><b>problem statement</b><br><span class="old">' +
+              esc(d.changed_sentence && d.kept ? "(the current one)" : "") + "</span> " +
+              esc(d.changed_sentence || "") + "</div>" +
+              '<div class="vaw-preview"><p class="vaw-prev-subj"><strong>Subject:</strong> ' +
+              esc(resolveSpin(d.subject || "(unchanged)")) + '</p><div class="vaw-prev-body">' +
+              seqRichText(resolveSpin(d.body_html || "")) + "</div></div>",
+            lines: [["Writes to", "Version " + (lab || "?") + " — the SAME version ID"],
+                    ["Distribution / other versions", "unchanged"]],
+            idnote: VAW_IDNOTE, token: "APPLY", danger: false,
+            confirmLabel: "Approve — apply the copy",
+            run: function () {
+              return vawPost("/api/notifications/" + nid + "/apply-fix", { confirm: "APPLY" });
+            },
+            receipt: function (resp2) {
+              return { title: "Copy applied to Version " + (resp2.variant || lab || "?") + " — history kept",
+                lines: [["Version ID", esc(String(resp2.variant_id || "")) + " · unchanged"],
+                        ["New copy live on", "Email " + (resp2.email || email)]],
+                foot: "Same version row, same stats — the counters keep counting from here." };
+            },
+            after: function () {
+              var wrap = box.querySelector('[data-vaw-p3-wrap="' + nid + '"]');
+              if (wrap) wrap.innerHTML = '<span class="vaw-done">&#10003; The rewritten copy was applied</span>';
+              vawRefreshCampaign(c);
+            }
+          });
+        });
+      });
+    });
+    box.querySelectorAll("[data-vaw-p7]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        vawChallengerFlow(cid, parseInt(b.getAttribute("data-email"), 10), b.getAttribute("data-vlabel"), c);
+      });
+    });
+  }
+
+  /* P7: checkbox scope (problem default) -> drafted preview -> typed ADD */
+  function vawChallengerFlow(cid, email, baseLabel, c) {
+    var ov = document.createElement("div");
+    ov.className = "vaw-overlay";
+    ov.innerHTML = '<div class="vaw-modal" role="dialog" aria-modal="true">' +
+      "<h3>Draft a challenger for Version " + esc(baseLabel) + " (Email " + email + ")</h3>" +
+      '<p class="vaw-sub">' + esc(c.name || "") + " · campaign " + esc(String(cid)) +
+      " · a NEW version — nothing existing changes until you approve</p>" +
+      '<div class="vaw-checks">' +
+      '<label><input type="checkbox" value="problem" checked><span>Problem statement<br><span class="d">a fresh argument — the default; offer wording may shift a few words so it still reads</span></span></label>' +
+      '<label><input type="checkbox" value="offer"><span>Offer<br><span class="d">rewrite the offer itself</span></span></label>' +
+      '<label><input type="checkbox" value="social_proof"><span>Social proof<br><span class="d">swap the client names / numbers used as proof</span></span></label>' +
+      "</div>" +
+      '<div class="vaw-err"></div>' +
+      '<div class="vaw-foot"><button type="button" class="vaw-btn" data-x>Cancel</button>' +
+      '<button type="button" class="vaw-btn vaw-btn--primary" data-draft>Draft it</button></div></div>';
+    document.body.appendChild(ov);
+    var modal = ov.querySelector(".vaw-modal"), err = ov.querySelector(".vaw-err");
+    function close() { ov.remove(); }
+    ov.addEventListener("mousedown", function (e) { if (e.target === ov) close(); });
+    ov.querySelector("[data-x]").addEventListener("click", close);
+    ov.querySelector("[data-draft]").addEventListener("click", function () {
+      var change = Array.prototype.slice.call(modal.querySelectorAll(".vaw-checks input:checked"))
+        .map(function (i) { return i.value; });
+      if (!change.length) { err.textContent = "Pick at least one thing to change."; return; }
+      var db = ov.querySelector("[data-draft]");
+      db.disabled = true; db.textContent = "Drafting…"; err.textContent = "";
+      vawPost("/api/campaigns/" + cid + "/draft-challenger",
+        { email: email, base_label: baseLabel, change: change }).then(function (resp) {
+        if (!resp || resp.ok === false || !resp.draft) {
+          err.textContent = (resp && resp.message) || "Drafting failed - try again.";
+          db.disabled = false; db.textContent = "Draft it";
+          return;
+        }
+        var d = resp.draft;
+        var swapsHTML = (d.swaps || []).map(function (s) {
+          return '<div class="vaw-swap"><b>' + esc(s.component.replace("_", " ")) + "</b><br>" +
+            '<span class="old">' + esc(s.old_text) + "</span><br>&rarr; " + esc(s.new_text) + "</div>";
+        }).join("");
+        modal.innerHTML = "<h3>Version " + esc(d.next_label) + " — read it before it goes in</h3>" +
+          '<p class="vaw-sub">' + esc(c.name || "") + " · Email " + email +
+          " · based on Version " + esc(baseLabel) + ", changed parts only</p>" +
+          swapsHTML +
+          '<div class="vaw-preview"><p class="vaw-prev-subj"><strong>Subject:</strong> ' +
+          esc(resolveSpin(d.subject || "(no subject, reply in thread)")) + "</p>" +
+          '<div class="vaw-prev-body">' + seqRichText(resolveSpin(d.body_html || "")) + "</div></div>" +
+          '<div class="vaw-lines"><div class="vaw-line"><span class="k">Traffic plan</span><span class="v">' +
+          esc((d.plan && d.plan.note) || "") + "</span></div>" +
+          '<div class="vaw-line"><span class="k">Existing versions</span><span class="v">every ID kept — history intact</span></div></div>' +
+          '<p class="vaw-idnote">&#128274; ' + esc(VAW_IDNOTE) + "</p>" +
+          '<div class="vaw-token"><span class="vaw-token-lbl">Type <b>ADD</b> to confirm:</span>' +
+          '<input type="text" autocomplete="off" spellcheck="false" aria-label="confirmation word"></div>' +
+          '<div class="vaw-err"></div>' +
+          '<div class="vaw-foot"><button type="button" class="vaw-btn" data-x>Cancel</button>' +
+          '<button type="button" class="vaw-btn vaw-btn--primary" data-add disabled>Approve — add Version ' +
+          esc(d.next_label) + "</button></div>";
+        var input = modal.querySelector("input"), add = modal.querySelector("[data-add]"),
+            err2 = modal.querySelector(".vaw-err");
+        modal.querySelector("[data-x]").addEventListener("click", close);
+        input.addEventListener("input", function () { add.disabled = input.value.trim().toUpperCase() !== "ADD"; });
+        input.focus();
+        add.addEventListener("click", function () {
+          if (add.disabled) return;
+          add.disabled = true; add.textContent = "Adding…";
+          vawPost("/api/campaigns/" + cid + "/add-variant", {
+            email: email, base_label: baseLabel, subject: d.subject,
+            body_html: d.body_html, confirm: "ADD"
+          }).then(function (resp2) {
+            if (!resp2 || resp2.ok === false) {
+              err2.textContent = (resp2 && resp2.message) || "The write was refused - nothing changed.";
+              add.disabled = false; add.textContent = "Approve — add Version " + d.next_label;
+              return;
+            }
+            modal.innerHTML = '<div class="vaw-receipt"><h4>&#10003; Version ' + esc(resp2.new_label) +
+              " is in — every existing ID kept</h4><div class=\"vaw-lines\">" +
+              '<div class="vaw-line"><span class="k">New version</span><span class="v">' + esc(resp2.new_label) +
+              " · fresh ID " + esc(String(resp2.new_variant_id || "—")) + "</span></div>" +
+              '<div class="vaw-line"><span class="k">Its share</span><span class="v">' + esc(String(resp2.new_pct)) + "%" +
+              (resp2.took_over_pct ? " (took over Version " + esc(String(resp2.base_label)) + "’s share)" : "") + "</span></div>" +
+              '<div class="vaw-line"><span class="k">Existing versions</span><span class="v">IDs unchanged — history intact</span></div>' +
+              "</div></div>" +
+              '<div class="vaw-foot"><button type="button" class="vaw-btn vaw-btn--primary" data-x3>Done</button></div>';
+            modal.querySelector("[data-x3]").addEventListener("click", close);
+            vawRefreshCampaign(c);
+          }).catch(function () {
+            err2.textContent = "Couldn't reach the tool - network error.";
+            add.disabled = false; add.textContent = "Approve — add Version " + d.next_label;
+          });
+        });
+      }).catch(function () {
+        err.textContent = "Couldn't reach the tool - network error.";
+        var db2 = ov.querySelector("[data-draft]");
+        if (db2) { db2.disabled = false; db2.textContent = "Draft it"; }
+      });
+    });
+  }
+  /* ══ end variant-action-wire module ═══════════════════════════════════ */
+
+  function versionTableHTML(versions, note, meetings, combinations, cid) {
     /* Meetings attach to the COPY, not the label: Smartlead exposes no
        sent-variant per lead, and A/B tests routinely run several identical
        spintax siblings under different labels. The backend clusters variants by
@@ -4486,10 +5044,34 @@
           var cs = sentByRep[sk + '|' + rep] || v.sent;
           if (mv && cs) pmCell = fmtInt(Math.round(cs / mv));
         }
+        /* P2 (variant-action-wire): live on/off TOGGLE replaces the read-only
+           dot wherever the true split is known. deleted -> dot--off ("deleted",
+           can't re-enable a purged variant); split unknown (cold seqs cache)
+           -> old dot, honest degradation, never a guessing toggle. */
+        var stateCell;
+        if (v.inline) stateCell = '';
+        else if (v.disabled) stateCell = ' <span class="vp-dot vp-dot--off" title="deleted in Smartlead"></span>';
+        else if (v.split == null || v.variant_id == null || cid == null)
+          stateCell = ' <span class="vp-dot vp-dot--' + 'on' + '" title="active"></span>';
+        else {
+          var on = v.split > 0;
+          stateCell = ' <button type="button" class="vaw-toggle' + (on ? ' is-on' : '') +
+            '" data-vaw-toggle data-step="' + esc(String(sk)) + '" data-vlabel="' + esc(String(v.label)) +
+            '" data-split="' + v.split + '" aria-pressed="' + (on ? 'true' : 'false') +
+            '" title="' + (on ? 'Sending (' + v.split + '% of Email ' + esc(String(sk)) + ') — click to switch off'
+                              : 'Switched off — click to give it a share again') +
+            '"><span class="vaw-knob"></span></button>';
+        }
+        /* P5 seam on the table: the proven best opener gets an explicit
+           scale control — the button says exactly what it does. */
+        var scaleBtn = '';
+        if (isBest && v.split != null && v.split > 0 && v.split < 100 && cid != null)
+          scaleBtn = ' <button type="button" class="vaw-mini" data-vaw-scale data-step="' + esc(String(sk)) +
+            '" data-vlabel="' + esc(String(v.label)) + '" data-split="' + v.split +
+            '">Send 100% of Email ' + esc(String(sk)) + ' to it</button>';
         return '<tr>' +
-          '<td data-label="Version">' + esc(label) +
-            (v.inline ? '' : ' <span class="vp-dot vp-dot--' + (v.disabled ? 'off' : 'on') + '" title="' + (v.disabled ? 'turned off' : 'active') + '"></span>') +
-            (isBest ? ' <span class="vp-best">best</span>' : '') +
+          '<td data-label="Version">' + esc(label) + stateCell +
+            (isBest ? ' <span class="vp-best">best</span>' : '') + scaleBtn +
             (isRep && siblings ? ' <span class="ring-caption" title="' + esc((membersOf[sk + '|' + rep] || []).join(', ')) + ' are the same copy">+' + ((membersOf[sk + '|' + rep] || []).length - 1) + ' same</span>' : '') + '</td>' +
           /* a deleted variant's counters were PURGED by Smartlead, not zero —
              '—' with the why, never a false 'Sent 0' (audit #8) */
@@ -5331,7 +5913,9 @@
              next open instead of freezing a false "no findings" verdict */
           if (Array.isArray(rows)) {
             box.setAttribute("data-loaded", "1");
-            box.innerHTML = whyDigestHTML(rows, d.getAttribute("data-why-v") === "1", cardText || "", d.getAttribute("data-why-ik") || "");
+            var whyCid = d.getAttribute("data-why-cid");
+            box.innerHTML = whyDigestHTML(rows, d.getAttribute("data-why-v") === "1", cardText || "", d.getAttribute("data-why-ik") || "", whyCid);
+            vawWireWhy(box, whyCid);
           } else {
             box.innerHTML = '<p class="why-empty">Receipts didn’t load — close and reopen to retry.</p>';
           }
@@ -5510,7 +6094,7 @@
   /* insight kinds with nothing per-variant behind them — the only cards
      allowed to open a Why? without bars (owner ruling 01 Aug 2026) */
   var WHY_NONVARIANT = { "list-audit": 1, "unanswered-positives": 1, "lifecycle": 1, "weekly-pulse": 1 };
-  function whyDigestHTML(rows, hasVerdict, cardText, ik) {
+  function whyDigestHTML(rows, hasVerdict, cardText, ik, cid) {
     /* Lazy layer = per-variant bars. Named variants/steps trim the bars to
        what the card cites; a variant-kind card that names none shows the
        whole split. Non-variant kinds (and campaigns with no variant rows at
@@ -5537,8 +6121,11 @@
       vs = whyHarvestVariants(rows, { vars: {}, emails: {}, anyVar: false, anyEmail: false });
     }
     var showCut = /\b(scrap|replace|kill|retire|drop|cut|swap|remove)\b/i.test(cardText || "");
-    if (!vs.length) return hasVerdict ? "" : '<p class="why-empty">No further findings behind this one.</p>';
-    return (hasVerdict ? "" : '<p class="why-verdict">' + whyVariantVerdict(vs, showCut) + "</p>") + whyBarsHTML(vs, showCut);
+    /* variant-action-wire: the digest's own row-scoping decides which actions
+       belong on this card — the buttons render under the bars they prove. */
+    var actsHTML = vawWhyActionsHTML(rows, tok, ik, cid);
+    if (!vs.length) return (hasVerdict ? "" : '<p class="why-empty">No further findings behind this one.</p>') + actsHTML;
+    return (hasVerdict ? "" : '<p class="why-verdict">' + whyVariantVerdict(vs, showCut) + "</p>") + whyBarsHTML(vs, showCut) + actsHTML;
   }
 
   /* Populate a row's inline "Review N" panel from the campaign's in-memory
