@@ -108,8 +108,14 @@ a{color:inherit;text-decoration:none}
 .sum-card.on{border-color:var(--orange);background:var(--orange-100);}
 .sum-av{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:var(--orange-100);color:var(--orange-600);font-family:var(--font-display);font-size:13px;flex:none;}
 .sum-card.on .sum-av{background:var(--bg);}
+.sum-cbody{display:flex;flex-direction:column;gap:1px;}
 .sum-cnm{font-size:13.5px;font-weight:600;white-space:nowrap;}
 .sum-ccm{font-size:11.5px;color:var(--ink-3);white-space:nowrap;}
+.sum-clinks{display:flex;gap:12px;margin-top:6px;}
+.sum-clinks a{font-size:10.5px;font-weight:600;color:var(--orange-600);text-decoration:none;white-space:nowrap;}
+.sum-clinks a:hover{text-decoration:underline;}
+/* personalised variables highlighted in the resolved Summary email + subject */
+.mvar{background:var(--orange-100);color:var(--orange-600);border-radius:4px;padding:0 3px;font-weight:600;}
 .sum-more{flex:none;display:flex;align-items:center;font-size:12.5px;color:var(--ink-3);padding:0 8px;white-space:nowrap;}
 .sum-meta{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;max-width:640px;margin-bottom:10px;}
 .sum-meta .mt{font-size:13.5px;color:var(--ink-2);}
@@ -203,25 +209,35 @@ const SPAMMY=/\b(guaranteed?|100% free|act now|risk[- ]free|cash bonus|no obliga
 function _emailText(x){return String(x.email||'');}
 function _lastLine(t){const L=String(t||'').split('\n').map(s=>s.trim()).filter(Boolean);return L[L.length-1]||'';}
 function _flag(x,k){return !!((x.checks&&x.checks[k])||(RUN_META.checks&&RUN_META.checks[k]));}
+// The Launch checklist IS the upload-gate's pre-checks (Bjion, 2026-08-03) — the
+// exact QA that runs just before the receipt is created. Copy checks are computed
+// live from this idea's email; the list checks tick only when the gate has run and
+// stamped verified evidence (idea.checks.<key> / run checks.<key>) — keys mirror
+// lilly-upload-gate: schema · normalisation · variable_fill · spintax · recontact ·
+// email_verification · list_audit. Nothing is painted on.
 const CHECKS=[
   ["Signature added","a real person signs off this email",
     x=>{const l=_lastLine(_emailText(x));return !!l&&l.length<=34&&/^[A-Z][A-Za-z .'’-]*$/.test(l);}],
-  ["Merge fields fill in","no blank {first name} or [company] slips through",
-    x=>!!_emailText(x)&&!/\{[^}]*\}|\[[A-Za-z][^\]]*\]/.test(_emailText(x))],
+  ["Spelling &amp; grammar read","every line read and fixed by a person",
+    x=>_flag(x,'grammar')],
   ["No spam-trigger words","wording that stays out of the junk folder",
     x=>!!_emailText(x)&&!SPAMMY.test(_emailText(x)+' '+(x.caption||''))],
   ["Easy opt-out included","one line that lets them say no thanks",
     x=>/unsubscribe|opt[ -]?out|rather not hear|not for you|don'?t want these|let me know and I'?ll stop/i.test(_emailText(x))],
-  ["Spelling &amp; grammar read","every line read and fixed by a person",
-    x=>_flag(x,'grammar')],
-  ["Links work","every link opened and checked",
-    x=>{const n=(_emailText(x).match(/https?:\/\//g)||[]).length;return n===0?!!_emailText(x):_flag(x,'links');}],
-  ["Sending addresses are healthy","warmed-up domains, good reputation",
-    x=>_flag(x,'mailboxes')],
-  ["Daily send caps set","we ramp up slowly, never blast",
-    x=>_flag(x,'caps')],
+  ["Required fields on every lead","name, company and email present per row",
+    x=>_flag(x,'schema')],
+  ["Names &amp; companies cleaned up","no all-caps, stray punctuation or junk",
+    x=>_flag(x,'normalisation')],
+  ["Every variable fills in","no blank {first name} or {company} for any lead",
+    x=>_flag(x,'variable_fill')],
+  ["Emails vary per send","spintax so no two go out word-for-word",
+    x=>_flag(x,'spintax')],
+  ["Every email address verified","checked deliverable before we send",
+    x=>_flag(x,'email_verification')],
   ["Nobody emailed twice","checked against everyone we've contacted before",
-    x=>x.freeFromRecords!=null&&x.newPeople!=null]
+    x=>_flag(x,'recontact')||(x.freeFromRecords!=null&&x.newPeople!=null)],
+  ["List looks on-ICP","the right kinds of people, spot-checked",
+    x=>_flag(x,'list_audit')]
 ];
 function checksFor(x){return CHECKS.map(c=>[c[0],c[1],!!c[2](x)]);}
 let RUN_META={};
@@ -350,6 +366,36 @@ function resolvedEmail(x,p){
   const parts=[opener,x.pain||'',x.offer||''].filter(Boolean);
   return "Hey "+(p.first||'there')+",\n\n"+parts.join("\n\n")+"\n\nWorth a quick chat?\n\nBjion\nNavreo";
 }
+// Summary email as HTML with every SUBSTITUTED variable highlighted (Bjion,
+// 2026-08-03): escape the whole template first, THEN swap tokens for
+// highlighted, escaped per-person values — so the reader sees exactly which
+// words are personalised for this prospect. esc() leaves {tokens} intact,
+// which is what makes replace-after-escape safe.
+function _mvar(v){return `<span class="mvar">${esc(v)}</span>`;}
+function resolvedEmailHtml(x,p){
+  const opener=openerFor(p);
+  let h;
+  if(x.email){
+    h=esc(String(x.email))
+      .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
+      .replace(/\{\{?company\}?\}/gi,_mvar(p.company||''))
+      .replace(/\{\{?icebreaker\}?\}/gi,_mvar(opener))
+      .replace(/\{\{?colleague\}?\}/gi,_mvar(COLLEAGUES[x.id]||'a colleague'))
+      .replace(/%signature%/gi,_mvar('Bjion')+'<br>'+_mvar('Navreo'));
+  }else{
+    const parts=[_mvar(opener),esc(x.pain||''),esc(x.offer||'')].filter(s=>s&&s!=='<span class="mvar"></span>');
+    h='Hey '+_mvar(p.first||'there')+',<br><br>'+parts.join('<br><br>')
+      +'<br><br>Worth a quick chat?<br><br>Bjion<br>Navreo';
+  }
+  return h.replace(/\n/g,'<br>');
+}
+function resolvedSubjectHtml(x,p){
+  const s=String(x.caption||'');
+  const cap=s.charAt(0).toUpperCase()+s.slice(1);
+  return esc(cap)
+    .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
+    .replace(/\{\{?company\}?\}/gi,_mvar(p.company||''));
+}
 function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2],ex=o[3];
   const recH=rec?' <span class="ib-rec">Recommended</span>':'';const up=i===0?' disabled':'';const dn=i===ICEB.length-1?' disabled':'';
   return `<div class="opener-row"><div class="opener-order"><span class="opos">${i+1}</span><button class="oarrow"${up}>▲</button><button class="oarrow"${dn}>▼</button></div>`
@@ -379,17 +425,19 @@ function panelHTML(x){
       +shareBlock();
     const pr=ppl[sIdx];
     const more=Math.max(0,(x.reachablePool||x.net||0)-ppl.length);
-    const wurl=pr.website||('https://www.google.com/search?q='+encodeURIComponent(pr.company||''));
-    const lurl=pr.linkedin||('https://www.linkedin.com/search/results/companies/?keywords='+encodeURIComponent(pr.company||''));
-    const strip=ppl.map((p,i)=>`<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><span class="sum-av">${esc((p.first||'?')[0])}</span><div><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div></div></div>`).join('')
+    // each person's own links live IN their thumbnail (Bjion, 2026-08-03):
+    // their real website/LinkedIn if the run supplies them, safe search links
+    // otherwise. stopPropagation so opening a link doesn't also switch cards.
+    const purl=p=>({
+      w:p.website||('https://www.google.com/search?q='+encodeURIComponent(p.company||p.first||'')),
+      l:p.linkedin||('https://www.linkedin.com/search/results/all/?keywords='+encodeURIComponent(p.company||p.first||''))});
+    const strip=ppl.map((p,i)=>{const u=purl(p);return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><span class="sum-av">${esc((p.first||'?')[0])}</span><div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
       +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
-    const subj=String(x.caption||'');
     return `<p class="eyb">Summary</p>`
       +`<p class="sum-lead">This goes to <b>${num(x.reachablePool||x.net)}</b> people. Tap one to read their email.</p>`
       +`<div class="sum-strip">${strip}</div>`
-      +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span>`
-      +`<span class="mlinks"><a href="${esc(wurl)}" target="_blank" rel="noopener">Website ↗</a><a href="${esc(lurl)}" target="_blank" rel="noopener">LinkedIn ↗</a></span></div>`
-      +`<div class="mail"><div class="mh">Subject: <span class="ms">${esc(subj.charAt(0).toUpperCase()+subj.slice(1))}</span></div><div class="mb">${esc(resolvedEmail(x,pr)).replace(/\n/g,'<br>')}</div></div>`
+      +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span></div>`
+      +`<div class="mail"><div class="mh">Subject: <span class="ms">${resolvedSubjectHtml(x,pr)}</span></div><div class="mb">${resolvedEmailHtml(x,pr)}</div></div>`
       +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`
       +(CLIENT_MODE?'':`<div class="actions-center"><button class="build-btn">Build the campaign</button></div>`)
       +shareBlock();
@@ -399,12 +447,7 @@ function panelHTML(x){
   const doneN=cks.filter(c=>c[2]).length;
   return `<p class="eyb">Launch</p><div class="livebanner">Not live yet — the campaign turns on when you approve it. Nothing sends until then.</div>`
     +`<p class="chkhead">Every box below is checked against this campaign as it stands — nothing ticks until it's actually true. ${doneN} of ${cks.length} are done right now.</p>`
-    +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Before launch'}</span></div>`).join('')+`</div>`
-    +`<div class="tiles" style="margin-top:22px"><div class="tile"><div class="tn">${num(p)}</div><div class="tl">in the pool</div></div>`
-    +`<div class="tile"><div class="tn">—</div><div class="tl">emailed</div></div>`
-    +`<div class="tile"><div class="tn">—</div><div class="tl">replies</div></div>`
-    +`<div class="tile"><div class="tn">—</div><div class="tl">meetings booked</div></div></div>`
-    +`<p class="planline">Once it's on, we email all ${num(p)} at a steady, safe pace and track every reply, positive reply and meeting right here.</p>`;
+    +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Pending'}</span></div>`).join('')+`</div>`;
 }
 
 function renderSidebar(){
