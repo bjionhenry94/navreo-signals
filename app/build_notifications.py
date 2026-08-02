@@ -1126,8 +1126,8 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
         rows.append({**row_base(ctx), "finding_type": "lifecycle", "section": 3,
                      "priority": "Low", "title": title, "action_type": lifecycle_action,
                      "detail": clean_text(
-                         f"{sent:,} sent to {ctx['total_leads']:,} leads. The list is {comp:.0f}% worked "
-                         f"through (each lead gets two emails). Status: {title}."),
+                         f"{sent:,} of a possible {ctx['total_leads'] * EMAILS_PER_LEAD:,} emails sent "
+                         f"({ctx['total_leads']:,} leads, two emails each), so {comp:.0f}% through. Status: {title}."),
                      "suggested_action": title})
         # Says WHICH list to reload and how much runway is left, not just the
         # completion percentage (which every lifecycle card carries).
@@ -1208,7 +1208,7 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                     and is_performing_variant(s["sent"], s["positives"])
                     for s in judged)
                 if v["positives"] == 0 and sib_performing and step_sibs_active:
-                    call, a_type, prio = "Clear loser, disable it", "disable_loser", "Medium"
+                    call, a_type, prio = "Weakest version, disable it", "disable_loser", "Medium"
                     bullet = (f"Disable Var {v['label']} on Email {v['seq_number']}, its "
                               f"\"{v['angle']}\" approach is at {v['sent']:,} sends and 0 replies "
                               "while the other versions get replies. Turn it off, never delete it.")
@@ -1220,9 +1220,9 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                     # absorb traffic, so this is a rewrite, not a disable.
                     call, a_type, prio = "Rewrite it", "replace_variants", "High"
                     rewrite_note = (
-                        " The follow-up wording has stopped getting replies."
+                        " The follow-up wording is not getting replies."
                         if v["seq_number"] >= 2 else
-                        " The wording has stopped getting replies.")
+                        " The wording is not getting replies.")
                     bullet = (f"Rewrite Var {v['label']} on Email {v['seq_number']}, its "
                               f"\"{v['angle']}\" approach is at {v['sent']:,} sends and "
                               f"{pos_txt(v['sent'], v['positives'])}. It is the only version running "
