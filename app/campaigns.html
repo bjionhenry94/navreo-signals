@@ -4549,6 +4549,23 @@
       ".vaw-btn[disabled]{opacity:.5;cursor:default;pointer-events:none}",
       ".vaw-act .vaw-done{font-size:.75rem;color:#2f9e44;font-weight:600}",
       ".vaw-hint{font-size:.72rem;color:var(--fg-subtle)}",
+      /* P4 split-button + tagged dropdown */
+      ".vaw-move{width:100%}",
+      ".vaw-split{display:flex;border-radius:9px;overflow:hidden;box-shadow:0 4px 12px rgba(255,77,0,.16)}",
+      ".vaw-main{flex:1;font:inherit;font-weight:700;font-size:.82rem;text-align:left;padding:11px 15px;background:var(--nav-orange,#e8590c);color:#fff;border:none;cursor:pointer;transition:filter var(--dur-1,120ms)}",
+      ".vaw-main:hover{filter:brightness(1.06)}",
+      ".vaw-caret{width:42px;flex:0 0 auto;background:var(--nav-orange-600,#db4100);color:#fff;border:none;border-left:1px solid rgba(255,255,255,.28);cursor:pointer;font-size:.8rem;line-height:1}",
+      ".vaw-caret:hover{filter:brightness(1.06)}",
+      ".vaw-menu{margin-top:7px;border:1px solid var(--border-strong);border-radius:9px;overflow:hidden}",
+      ".vaw-menu[hidden]{display:none}",
+      ".vaw-menu .vaw-act{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;border-bottom:1px solid var(--border)}",
+      ".vaw-menu .vaw-act:last-child{border-bottom:none}",
+      ".vaw-mi{flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:1px;font:inherit;text-align:left;background:none;border:none;padding:10px 14px;cursor:pointer}",
+      ".vaw-mi:hover{background:var(--sunken,#f7f7f6)}",
+      ".vaw-mi b{font-size:.8rem;font-weight:700;color:var(--fg)}",
+      ".vaw-mi > span{font-size:.72rem;color:var(--fg-subtle)}",
+      ".vaw-how{margin-right:12px;flex:0 0 auto;font-size:.6rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:var(--sunken,#f7f7f6);color:var(--fg-subtle);white-space:nowrap}",
+      ".vaw-how.is-claude{background:var(--nav-orange-100,#ffe4d6);color:var(--nav-orange-600,#db4100)}",
       ".vaw-overlay{position:fixed;inset:0;background:rgba(20,16,10,.45);z-index:900;display:flex;align-items:center;justify-content:center;padding:18px}",
       ".vaw-modal{background:var(--bg-card,#fff);color:var(--fg);border:1px solid var(--border-strong);border-radius:14px;max-width:560px;width:100%;max-height:86vh;overflow:auto;padding:18px 18px 16px;box-shadow:0 18px 50px rgba(0,0,0,.28)}",
       ".vaw-modal h3{margin:0 0 4px;font-size:1rem}",
@@ -4806,41 +4823,75 @@
     return acts;
   }
 
+  /* P4 "merged" (Bjion's pick, 02 Aug 2026): the old flat wall of near-identical
+     buttons ("Draft the fix" x3, "Draft a challenger" x2) collapses to ONE
+     recommended move as a loud split-button, with the rest folded into a caret
+     dropdown. Each option is tagged by kind so a non-technical founder can tell
+     them apart at a glance: Claude = hands over a prompt / needs a look before it
+     saves; 1 click = a simple change done in place (behind the existing confirm).
+     Every data-* hook and the .vaw-act wrappers are preserved, so vawWireWhy and
+     the confirm modals keep firing unchanged. See app/prototypes/act-simplify-p4. */
+  function vawActDesc(a) {
+    if (a.kind === "p3") return { rank: 10, claude: true, tag: "Claude",
+      wrap: 'data-vaw-p3-wrap="' + esc(String(a.nid)) + '"',
+      label: "Rewrite Version " + (a.vlab || "?") + "'s line",
+      main: (a.drafted ? "Show the drafted fix" : "Rewrite Version " + (a.vlab || "?") + "'s line with Claude"),
+      sub: "Claude drafts it, you approve first",
+      attr: 'data-vaw-p3-draft="' + esc(String(a.nid)) + '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '"',
+      done: a.done, doneHTML: "&#10003; The rewritten copy was applied" };
+    if (a.kind === "p7") return { rank: 20, claude: true, tag: "Claude",
+      label: "Try a fresh angle on Version " + a.base,
+      main: "Try a fresh angle with Claude",
+      sub: "a brand-new version to test",
+      attr: 'data-vaw-p7="1" data-email="' + a.email + '" data-vlabel="' + esc(a.base) + '"' };
+    if (a.kind === "p5") return { rank: 30, claude: false, tag: "1 click",
+      label: "Send Version " + a.vlab + " to everyone",
+      main: "Send Version " + a.vlab + " to everyone",
+      sub: "the winner takes this step",
+      attr: 'data-vaw-p5="1" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '"' };
+    if (a.kind === "p6") return { rank: 35, claude: false, tag: "1 click",
+      label: "Give every version an equal share",
+      main: "Give every version an equal share",
+      sub: "fixes a split never set up",
+      attr: 'data-vaw-p6="1" data-email="' + a.email + '"' };
+    if (a.kind === "p1") return { rank: 40, claude: false, tag: "1 click",
+      label: "Turn off Version " + a.vlab,
+      main: "Turn off Version " + a.vlab,
+      sub: "stops it, share moves to the winners",
+      attr: 'data-vaw-p1="' + esc(String(a.nid)) + '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '"',
+      done: a.done, doneHTML: "&#10003; Version " + esc(a.vlab) + " on Email " + a.email + " was switched off" };
+    return null;
+  }
   function vawWhyActionsHTML(rows, tok, ik, cid) {
     var acts = vawWhyActions(rows, tok, ik);
     if (!acts.length) return "";
-    var h = ['<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Act on it now</span>'];
-    acts.forEach(function (a, i) {
-      if (a.kind === "p1") {
-        h.push('<div class="vaw-act">' + (a.done
-          ? '<span class="vaw-done">&#10003; Version ' + esc(a.vlab) + " on Email " + a.email + " was switched off</span>"
-          : '<button type="button" class="vaw-btn vaw-btn--danger" data-vaw-p1="' + esc(String(a.nid)) +
-            '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '">Turn off Version ' + esc(a.vlab) +
-            ' on Email ' + a.email + '</button><span class="vaw-hint">stops sending it, share moves to the live versions</span>') + "</div>");
-      } else if (a.kind === "p3") {
-        h.push('<div class="vaw-act" data-vaw-p3-wrap="' + esc(String(a.nid)) + '">' + (a.done
-          ? '<span class="vaw-done">&#10003; The rewritten copy was applied</span>'
-          : '<button type="button" class="vaw-btn" data-vaw-p3-draft="' + esc(String(a.nid)) +
-            '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '">' +
-            (a.drafted ? "Show the drafted fix" : "Draft the fix") + '</button>' +
-            '<span class="vaw-hint">new problem statement for Version ' + esc(a.vlab || "?") +
-            ' — you approve before anything is saved</span>') + "</div>");
-      } else if (a.kind === "p5") {
-        h.push('<div class="vaw-act"><button type="button" class="vaw-btn vaw-btn--primary" data-vaw-p5="1" data-email="' +
-          a.email + '" data-vlabel="' + esc(a.vlab) + '">Send 100% of Email ' + a.email + " to Version " + esc(a.vlab) +
-          '</button><span class="vaw-hint">the winner takes every send on this step</span></div>');
-      } else if (a.kind === "p6") {
-        h.push('<div class="vaw-act"><button type="button" class="vaw-btn vaw-btn--primary" data-vaw-p6="1" data-email="' +
-          a.email + '">Give every version of Email ' + a.email + ' an equal share</button>' +
-          '<span class="vaw-hint">fixes a split that was never set up</span></div>');
-      } else if (a.kind === "p7") {
-        h.push('<div class="vaw-act"><button type="button" class="vaw-btn" data-vaw-p7="1" data-email="' + a.email +
-          '" data-vlabel="' + esc(a.base) + '">Draft a challenger for Version ' + esc(a.base) +
-          '</button><span class="vaw-hint">a fresh angle as a NEW version — you read it before it goes in</span></div>');
-      }
-    });
-    h.push("</div>");
-    return h.join("");
+    var D = acts.map(vawActDesc).filter(Boolean);
+    if (!D.length) return "";
+    var kick = '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Do this</span>';
+    var live = D.filter(function (d) { return !d.done; });
+    if (!live.length) {
+      return kick + D.map(function (d) {
+        return '<div class="vaw-act"><span class="vaw-done">' + (d.doneHTML || "&#10003; Done") + "</span></div>";
+      }).join("") + "</div>";
+    }
+    live.sort(function (a, b) { return a.rank - b.rank; });
+    var primary = live[0];
+    var rest = live.slice(1).concat(D.filter(function (d) { return d.done; }));
+    var h = kick +
+      '<div class="vaw-move vaw-act"' + (primary.wrap ? " " + primary.wrap : "") + '>' +
+      '<div class="vaw-split">' +
+      '<button type="button" class="vaw-main" ' + primary.attr + ">" + esc(primary.main || primary.label) + "</button>" +
+      (rest.length ? '<button type="button" class="vaw-caret" data-vaw-caret aria-expanded="false" aria-label="Other options">&#9662;</button>' : "") +
+      "</div></div>";
+    if (rest.length) {
+      h += '<div class="vaw-menu" hidden>' + rest.map(function (d) {
+        if (d.done) return '<div class="vaw-act"><span class="vaw-done">' + (d.doneHTML || "&#10003; Done") + "</span></div>";
+        return '<div class="vaw-act"' + (d.wrap ? " " + d.wrap : "") + '>' +
+          '<button type="button" class="vaw-mi" ' + d.attr + "><b>" + esc(d.label) + "</b><span>" + esc(d.sub) + "</span></button>" +
+          '<span class="vaw-how' + (d.claude ? " is-claude" : "") + '">' + esc(d.tag) + "</span></div>";
+      }).join("") + "</div>";
+    }
+    return h + "</div>";
   }
 
   function vawCampaignOf(cid) {
@@ -4849,6 +4900,16 @@
 
   function vawWireWhy(box, cid) {
     var c = vawCampaignOf(cid);
+    box.querySelectorAll("[data-vaw-caret]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var acts = b.closest(".vaw-acts");
+        var menu = acts && acts.querySelector(".vaw-menu");
+        if (!menu) return;
+        menu.hidden = !menu.hidden;
+        b.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+        b.innerHTML = menu.hidden ? "&#9662;" : "&#9652;";
+      });
+    });
     box.querySelectorAll("[data-vaw-p1]").forEach(function (b) {
       b.addEventListener("click", function () {
         var lab = b.getAttribute("data-vlabel"), email = b.getAttribute("data-email");
