@@ -1786,34 +1786,6 @@
   .copy-prompt:hover, .action-link:hover, .action-state-btn:hover { background: var(--sunken); border-color: var(--nav-ink-3); color: var(--fg); }
   .action-state-btn.is-acked { background: var(--chip-active-bg); border-color: var(--chip-active-bg); color: var(--chip-active-fg); }
   .action-state-btn.is-done-state { background: var(--success-bg); border-color: var(--success-bd); color: var(--success); }
-  /* P4: the lifecycle moves fold into one status pill (Bjion's pick 02 Aug 2026) */
-  .action-status { position: relative; display: inline-flex; margin-top: 4px; }
-  .action-buttons > .action-status { margin-top: 0; }
-  .action-status-pill {
-    display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px 8px 13px;
-    border: 1px solid var(--border-strong); border-radius: var(--r-pill);
-    background: var(--bg); color: var(--fg-muted); font-size: 0.78rem; font-weight: 600;
-    font-family: inherit; cursor: pointer; white-space: nowrap;
-    transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
-  }
-  .action-status-pill:hover { background: var(--sunken); border-color: var(--nav-ink-3); color: var(--fg); }
-  .action-status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--neutral-warm); flex: 0 0 auto; }
-  .action-status-pill[data-state="ack"]::before { background: var(--nav-orange); }
-  .action-status-pill[data-state="done"]::before { background: var(--success); }
-  .action-status-pill[data-state="dismiss"]::before { background: var(--fg-subtle); }
-  .action-status-car { font-size: 0.6rem; opacity: 0.7; margin-left: 1px; }
-  .action-status-menu {
-    position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 184px;
-    display: flex; flex-direction: column; padding: 5px;
-    background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-md);
-    box-shadow: 0 10px 30px rgba(20,17,14,.14);
-  }
-  .action-status-menu[hidden] { display: none; }
-  .action-status-menu .action-state-btn {
-    margin: 0; align-self: auto; width: 100%; justify-content: flex-start;
-    border: none; border-radius: 6px; background: none; white-space: nowrap;
-  }
-  .action-status-menu .action-state-btn:hover { background: var(--sunken); border-color: transparent; }
   .action-why { margin-top: 10px; }
   .action-why > summary {
     list-style: none;
@@ -2247,10 +2219,17 @@
   .cockpit .row-optim .action-num { display: none; }
   .cockpit .action-card .copy-prompt { background: var(--nav-orange); border-color: var(--nav-orange); color: #fff; font-weight: 700; }
   .cockpit .action-card .copy-prompt:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); color: #fff; }
-  /* ONE orange per card: when a 1-click "Do this" primary is on the card,
-     Copy-prompt demotes to the quiet ghost look (added via .is-quiet). */
-  .cockpit .action-card .copy-prompt.is-quiet { background: var(--bg); border-color: var(--border-strong); color: var(--fg-muted); font-weight: 600; }
-  .cockpit .action-card .copy-prompt.is-quiet:hover { background: var(--sunken); border-color: var(--nav-ink-3); color: var(--fg); }
+  /* Adaptive primary: when the card's fix is a 1-click task, this button
+     stands where Copy-prompt stood, same look — nothing else changes. */
+  .action-swap-btn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+    border: 1px solid var(--nav-orange); border-radius: var(--r-pill);
+    background: var(--nav-orange); color: #fff; font-size: 0.78rem; font-weight: 700;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+    transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+  }
+  .action-swap-btn:hover { background: var(--nav-orange-600); border-color: var(--nav-orange-600); }
+  .action-buttons .vaw-act { display: inline-flex; }
   /* Why? digest — the receipts behind THIS card only: one bold verdict line,
      stat chips, then sent/positive mini bars for the variants the card names.
      Replaced the old full-breakdown dump (every finding + 8-col table). */
@@ -3541,14 +3520,9 @@
       whyHTML +
       '<div class="action-buttons">' +
       '<button type="button" class="copy-prompt" data-prompt="' + esc(prompt) + '">Copy prompt for Claude</button>' +
-      '<div class="action-status">' +
-      '<button type="button" class="action-status-pill" data-state="none" aria-haspopup="true" aria-expanded="false">' +
-      '<span class="action-status-lab">Not started</span><span class="action-status-car" aria-hidden="true">&#9662;</span></button>' +
-      '<div class="action-status-menu" hidden role="menu">' +
-      '<button type="button" class="action-state-btn" data-act="ack" role="menuitem">Assign to me</button>' +
-      '<button type="button" class="action-state-btn" data-act="done" role="menuitem">Mark as completed</button>' +
-      '<button type="button" class="action-state-btn" data-act="dismiss" role="menuitem">Dismiss</button>' +
-      '</div></div></div>' +
+      '<button type="button" class="action-state-btn" data-act="ack">Assign to me</button>' +
+      '<button type="button" class="action-state-btn" data-act="done">Mark as completed</button>' +
+      '<button type="button" class="action-state-btn" data-act="dismiss">Dismiss</button></div>' +
       "</div>" +
       '<div class="action-dismissed-row" hidden><span>Dismissed &middot; <button type="button" class="action-undo-btn" data-act="undo">Undo</button></span></div></div>';
   }
@@ -4694,23 +4668,6 @@
       ".vaw-btn[disabled]{opacity:.5;cursor:default;pointer-events:none}",
       ".vaw-act .vaw-done{font-size:.75rem;color:var(--success);font-weight:600}",
       ".vaw-hint{font-size:.72rem;color:var(--fg-subtle)}",
-      /* P4 split-button + tagged dropdown */
-      ".vaw-move{width:100%}",
-      ".vaw-split{display:flex;border-radius:9px;overflow:hidden;box-shadow:0 4px 12px rgba(255,77,0,.16)}",
-      ".vaw-main{flex:1;font:inherit;font-weight:700;font-size:.82rem;text-align:left;padding:11px 15px;background:var(--nav-orange,#e8590c);color:#fff;border:none;cursor:pointer;transition:filter var(--dur-1,120ms)}",
-      ".vaw-main:hover{filter:brightness(1.06)}",
-      ".vaw-caret{width:42px;flex:0 0 auto;background:var(--nav-orange-600,#db4100);color:#fff;border:none;border-left:1px solid rgba(255,255,255,.28);cursor:pointer;font-size:.8rem;line-height:1}",
-      ".vaw-caret:hover{filter:brightness(1.06)}",
-      ".vaw-menu{margin-top:7px;border:1px solid var(--border-strong);border-radius:9px;overflow:hidden}",
-      ".vaw-menu[hidden]{display:none}",
-      ".vaw-menu .vaw-act{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;border-bottom:1px solid var(--border)}",
-      ".vaw-menu .vaw-act:last-child{border-bottom:none}",
-      ".vaw-mi{flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:1px;font:inherit;text-align:left;background:none;border:none;padding:10px 14px;cursor:pointer}",
-      ".vaw-mi:hover{background:var(--sunken,#f7f7f6)}",
-      ".vaw-mi b{font-size:.8rem;font-weight:700;color:var(--fg)}",
-      ".vaw-mi > span{font-size:.72rem;color:var(--fg-subtle)}",
-      ".vaw-how{margin-right:12px;flex:0 0 auto;font-size:.6rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:var(--sunken,#f7f7f6);color:var(--fg-subtle);white-space:nowrap}",
-      ".vaw-how.is-claude{background:var(--nav-orange-100,#ffe4d6);color:var(--nav-orange-600,#db4100)}",
       ".vaw-overlay{position:fixed;inset:0;background:rgba(20,16,10,.55);z-index:900;display:flex;align-items:center;justify-content:center;padding:18px;font-family:var(--font-sans)}",
       ".vaw-modal{background:var(--bg-elevated);color:var(--fg);font-family:var(--font-sans);border:1px solid var(--border-strong);border-radius:var(--r-xl,18px);max-width:560px;width:100%;max-height:86vh;overflow:auto;padding:20px 20px 16px;box-shadow:0 24px 60px rgba(20,16,10,.35)}",
       ".vaw-modal h3{margin:0 0 4px;font-size:1.05rem;font-family:var(--font-display,var(--font-sans));letter-spacing:-.01em}",
@@ -4969,85 +4926,41 @@
     return acts;
   }
 
-  /* P4 "merged" (Bjion's pick, 02 Aug 2026): the old flat wall of near-identical
-     buttons ("Draft the fix" x3, "Draft a challenger" x2) collapses to ONE
-     recommended move as a loud split-button, with the rest folded into a caret
-     dropdown. Each option is tagged by kind so a non-technical founder can tell
-     them apart at a glance: Claude = hands over a prompt / needs a look before it
-     saves; 1 click = a simple change done in place (behind the existing confirm).
-     Every data-* hook and the .vaw-act wrappers are preserved, so vawWireWhy and
-     the confirm modals keep firing unchanged. See app/prototypes/act-simplify-p4. */
-  function vawActDesc(a) {
-    if (a.kind === "p3") return { rank: 10, claude: true, tag: "Claude",
-      wrap: 'data-vaw-p3-wrap="' + esc(String(a.nid)) + '"',
-      label: "Rewrite Version " + (a.vlab || "?") + "'s line",
-      main: (a.drafted ? "Show the drafted fix" : "Rewrite Version " + (a.vlab || "?") + "'s line with Claude"),
-      sub: "Claude drafts it, you approve first",
-      attr: 'data-vaw-p3-draft="' + esc(String(a.nid)) + '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '"',
-      done: a.done, doneHTML: "&#10003; The rewritten copy was applied" };
-    if (a.kind === "p7") return { rank: 20, claude: true, tag: "Claude",
-      label: "Try a fresh angle on Version " + a.base,
-      main: "Try a fresh angle with Claude",
-      sub: "a brand-new version to test",
-      attr: 'data-vaw-p7="1" data-email="' + a.email + '" data-vlabel="' + esc(a.base) + '"' };
-    if (a.kind === "p5") return { rank: 30, claude: false, tag: "1 click",
-      label: "Send Version " + a.vlab + " to everyone",
-      main: "Send Version " + a.vlab + " to everyone",
-      sub: "the winner takes this step",
-      attr: 'data-vaw-p5="1" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '"' };
-    if (a.kind === "p6") return { rank: 35, claude: false, tag: "1 click",
-      label: "Give every version an equal share",
-      main: "Give every version an equal share",
-      sub: "fixes a split never set up",
-      attr: 'data-vaw-p6="1" data-email="' + a.email + '"' };
-    if (a.kind === "p1") return { rank: 40, claude: false, tag: "1 click",
-      label: "Turn off Version " + a.vlab,
-      main: "Turn off Version " + a.vlab,
-      sub: "stops it, share moves to the winners",
-      attr: 'data-vaw-p1="' + esc(String(a.nid)) + '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '"',
-      done: a.done, doneHTML: "&#10003; Version " + esc(a.vlab) + " on Email " + a.email + " was switched off" };
-    return null;
-  }
   function vawWhyActionsHTML(rows, tok, ik, cid) {
     var acts = vawWhyActions(rows, tok, ik);
     if (!acts.length) return "";
-    var D = acts.map(vawActDesc).filter(Boolean);
-    if (!D.length) return "";
-    var live = D.filter(function (d) { return !d.done; });
-    var doneRows = D.filter(function (d) { return d.done; });
-    function menuRows(list) {
-      return list.map(function (d) {
-        if (d.done) return '<div class="vaw-act"><span class="vaw-done">' + (d.doneHTML || "&#10003; Done") + "</span></div>";
-        return '<div class="vaw-act"' + (d.wrap ? " " + d.wrap : "") + '>' +
-          '<button type="button" class="vaw-mi" ' + d.attr + "><b>" + esc(d.label) + "</b><span>" + esc(d.sub) + "</span></button>" +
-          '<span class="vaw-how' + (d.claude ? " is-claude" : "") + '">' + esc(d.tag) + "</span></div>";
-      }).join("");
-    }
-    if (!live.length) {
-      return '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Do this</span>' +
-        menuRows(doneRows) + "</div>";
-    }
-    live.sort(function (a, b) { return a.rank - b.rank; });
-    /* ONE orange per card (Bjion, 02 Aug 2026): the loud "Do this" primary
-       renders ONLY when the top-ranked act is a 1-click task — it then
-       REPLACES Copy-prompt as the card's single orange (the demote happens
-       where the digest injects, via data-vaw-primary). If the top act needs
-       ideation, that work gets done IN Claude: the footer's Copy-prompt stays
-       the card's only orange and the acts render as a quiet tagged list. */
-    var primary = !live[0].claude ? live[0] : null;
-    if (!primary) {
-      return '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Ways to fix it</span>' +
-        '<div class="vaw-menu">' + menuRows(live.concat(doneRows)) + "</div></div>";
-    }
-    var rest = live.filter(function (d) { return d !== primary; }).concat(doneRows);
-    var h = '<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '" data-vaw-primary="1"><span class="vaw-acts-kick">Do this</span>' +
-      '<div class="vaw-move vaw-act"' + (primary.wrap ? " " + primary.wrap : "") + '>' +
-      '<div class="vaw-split">' +
-      '<button type="button" class="vaw-main" ' + primary.attr + ">" + esc(primary.main || primary.label) + "</button>" +
-      (rest.length ? '<button type="button" class="vaw-caret" data-vaw-caret aria-expanded="false" aria-label="Other options">&#9662;</button>' : "") +
-      "</div></div>";
-    if (rest.length) h += '<div class="vaw-menu" hidden>' + menuRows(rest) + "</div>";
-    return h + "</div>";
+    var h = ['<div class="vaw-acts" data-vaw-cid="' + esc(String(cid)) + '"><span class="vaw-acts-kick">Act on it now</span>'];
+    acts.forEach(function (a, i) {
+      if (a.kind === "p1") {
+        h.push('<div class="vaw-act">' + (a.done
+          ? '<span class="vaw-done">&#10003; Version ' + esc(a.vlab) + " on Email " + a.email + " was switched off</span>"
+          : '<button type="button" class="vaw-btn vaw-btn--danger" data-vaw-p1="' + esc(String(a.nid)) +
+            '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '">Turn off Version ' + esc(a.vlab) +
+            ' on Email ' + a.email + '</button><span class="vaw-hint">stops sending it, share moves to the live versions</span>') + "</div>");
+      } else if (a.kind === "p3") {
+        h.push('<div class="vaw-act" data-vaw-p3-wrap="' + esc(String(a.nid)) + '">' + (a.done
+          ? '<span class="vaw-done">&#10003; The rewritten copy was applied</span>'
+          : '<button type="button" class="vaw-btn" data-vaw-p3-draft="' + esc(String(a.nid)) +
+            '" data-email="' + a.email + '" data-vlabel="' + esc(a.vlab) + '">' +
+            (a.drafted ? "Show the drafted fix" : "Draft the fix") + '</button>' +
+            '<span class="vaw-hint">new problem statement for Version ' + esc(a.vlab || "?") +
+            ' — you approve before anything is saved</span>') + "</div>");
+      } else if (a.kind === "p5") {
+        h.push('<div class="vaw-act"><button type="button" class="vaw-btn vaw-btn--primary" data-vaw-p5="1" data-email="' +
+          a.email + '" data-vlabel="' + esc(a.vlab) + '">Send 100% of Email ' + a.email + " to Version " + esc(a.vlab) +
+          '</button><span class="vaw-hint">the winner takes every send on this step</span></div>');
+      } else if (a.kind === "p6") {
+        h.push('<div class="vaw-act"><button type="button" class="vaw-btn vaw-btn--primary" data-vaw-p6="1" data-email="' +
+          a.email + '">Give every version of Email ' + a.email + ' an equal share</button>' +
+          '<span class="vaw-hint">fixes a split that was never set up</span></div>');
+      } else if (a.kind === "p7") {
+        h.push('<div class="vaw-act"><button type="button" class="vaw-btn" data-vaw-p7="1" data-email="' + a.email +
+          '" data-vlabel="' + esc(a.base) + '">Draft a challenger for Version ' + esc(a.base) +
+          '</button><span class="vaw-hint">a fresh angle as a NEW version — you read it before it goes in</span></div>');
+      }
+    });
+    h.push("</div>");
+    return h.join("");
   }
 
   function vawCampaignOf(cid) {
@@ -5056,24 +4969,6 @@
 
   function vawWireWhy(box, cid) {
     var c = vawCampaignOf(cid);
-    /* ONE orange per card: when the acts rendered a 1-click primary, it
-       replaces Copy-prompt as the card's loud move — demote Copy-prompt to
-       the quiet ghost style so two oranges never compete. */
-    if (box.querySelector('.vaw-acts[data-vaw-primary]')) {
-      var actCard = box.closest(".action-card");
-      var cpBtn = actCard && actCard.querySelector(".copy-prompt");
-      if (cpBtn) cpBtn.classList.add("is-quiet");
-    }
-    box.querySelectorAll("[data-vaw-caret]").forEach(function (b) {
-      b.addEventListener("click", function () {
-        var acts = b.closest(".vaw-acts");
-        var menu = acts && acts.querySelector(".vaw-menu");
-        if (!menu) return;
-        menu.hidden = !menu.hidden;
-        b.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
-        b.innerHTML = menu.hidden ? "&#9662;" : "&#9652;";
-      });
-    });
     box.querySelectorAll("[data-vaw-p1]").forEach(function (b) {
       b.addEventListener("click", function () {
         var lab = b.getAttribute("data-vlabel"), email = b.getAttribute("data-email");
@@ -6098,17 +5993,6 @@
     return parts.join(" ") || String(email);
   }
   function actStateVerb(state) { return state === "ack" ? "In progress" : state === "done" ? "Completed" : "Dismissed"; }
-  function actCloseStatusMenus() {
-    document.querySelectorAll(".action-status-menu:not([hidden])").forEach(function (m) {
-      m.hidden = true;
-      var p = m.parentNode && m.parentNode.querySelector(".action-status-pill");
-      if (p) p.setAttribute("aria-expanded", "false");
-    });
-  }
-  document.addEventListener("click", function (e) {
-    if (e.target.closest && e.target.closest(".action-status")) return;
-    actCloseStatusMenus();
-  });
   function actApplyCard(card) {
     var key = card.getAttribute("data-action-key");
     var rec = ACT_ASSIGN[key] || {};
@@ -6142,15 +6026,6 @@
     if (tag) {
       if ((state === "ack" || state === "done") && who) { tag.hidden = false; tag.textContent = actStateVerb(state) + " · " + who; }
       else { tag.hidden = true; tag.textContent = ""; }
-    }
-    /* the status pill IS the state, and opens the moves from it (P4) */
-    var pill = card.querySelector(".action-status-pill");
-    var pillLab = card.querySelector(".action-status-lab");
-    if (pill && pillLab) {
-      pill.setAttribute("data-state", state || "none");
-      pillLab.textContent = state
-        ? actStateVerb(state) + (who ? " · " + who : "")
-        : "Not started";
     }
   }
   var ACT_PENDING = null;  // in-flight guard: second caller joins the first fetch
@@ -6284,15 +6159,43 @@
       var key = card.getAttribute("data-action-key");
       var parts = (key || "").split("::");
       var cid = parts[0], ik = parts.slice(1).join("::");
-      var statusPill = card.querySelector(".action-status-pill");
-      var statusMenu = card.querySelector(".action-status-menu");
-      if (statusPill && statusMenu) {
-        statusPill.addEventListener("click", function (e) {
-          e.preventDefault(); e.stopPropagation();
-          var willOpen = statusMenu.hidden;
-          actCloseStatusMenus();
-          statusMenu.hidden = !willOpen;
-          statusPill.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      /* Adaptive primary (Bjion, 02 Aug 2026): the card stays exactly as it
+         was — Copy-prompt primary + Assign / Mark as completed / Dismiss.
+         The ONE change: when this card's fix is a super simple 1-click task
+         (scale the winner / even the split / turn a loser off), that button
+         stands where Copy-prompt stood. Ideation cards keep Copy-prompt —
+         that work happens in Claude. Uses the same lazily-shared notifications
+         fetch (WHY_CACHE) and the existing vawWireWhy confirm flows. */
+      var cpBtn = card.querySelector(".copy-prompt");
+      if (cpBtn && /^\d+$/.test(cid)) {
+        whyBreakdownFetch(cid).then(function (rows) {
+          if (!Array.isArray(rows) || !document.contains(cpBtn)) return;
+          var grab = function (sels) {
+            var t = ""; sels.forEach(function (sel) { var el = card.querySelector(sel); if (el) t += " " + el.textContent; });
+            return t;
+          };
+          var cardText = grab([".action-how", ".action-payoff"]) + "\u0001" + grab([".why-verdict", ".why-hero-cap"]);
+          var acts = vawWhyActions(rows, whyCardTokens(cardText), ik).filter(function (a) { return !a.done; });
+          /* Priority across ALL the card's acts: rewrite/challenger (ideation,
+             Claude's job) outrank the 1-click fixes. Swap only when the card's
+             TOP fix is the simple one — an incidental equal-share match must
+             not bury a rewrite call's Copy-prompt. */
+          var order = { p3: 1, p7: 2, p5: 3, p6: 4, p1: 5 };
+          var top = acts.filter(function (a) { return order[a.kind]; })
+                        .sort(function (a, b) { return order[a.kind] - order[b.kind]; })[0];
+          var pick = top && (top.kind === "p5" || top.kind === "p6" || top.kind === "p1") ? top : null;
+          if (!pick) return;
+          var label = pick.kind === "p5" ? "Send 100% of Email " + pick.email + " to Version " + esc(pick.vlab)
+                    : pick.kind === "p6" ? "Give every version of Email " + pick.email + " an equal share"
+                    : "Turn off Version " + esc(pick.vlab) + " on Email " + pick.email;
+          var attr = pick.kind === "p5" ? 'data-vaw-p5="1" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"'
+                   : pick.kind === "p6" ? 'data-vaw-p6="1" data-email="' + pick.email + '"'
+                   : 'data-vaw-p1="' + esc(String(pick.nid)) + '" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"';
+          var wrap = document.createElement("span");
+          wrap.className = "vaw-act";
+          wrap.innerHTML = '<button type="button" class="action-swap-btn" ' + attr + ">" + label + "</button>";
+          cpBtn.replaceWith(wrap);
+          vawWireWhy(wrap, cid);
         });
       }
       card.querySelectorAll(".action-state-btn, .action-undo-btn").forEach(function (b) {
@@ -6304,7 +6207,6 @@
           var prev = ACT_ASSIGN[key];
           if (next === "clear") delete ACT_ASSIGN[key];
           else ACT_ASSIGN[key] = { state: next, assigned_to: ACT_ME };
-          if (statusMenu) { statusMenu.hidden = true; if (statusPill) statusPill.setAttribute("aria-expanded", "false"); }
           actApplyCard(card);
           /* the row's Review/In-progress badge tallies from ACT_ASSIGN, so it
              repaints on the optimistic write, the confirm, AND the rollback */
