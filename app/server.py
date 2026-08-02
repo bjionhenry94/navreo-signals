@@ -3728,6 +3728,14 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
             # Move ALL of one live variant's share onto another live variant
             # (the "push the loser's quarter onto the winner" card move). The
             # source stays on the step at 0% — same id, history kept.
+            #
+            # Equal-split campaigns (Smartlead's "split the variant percentage
+            # equally" checkbox) carry NO stored percentages — every variant
+            # reads 0 from the GET while really receiving 100/n. When the
+            # step's stored pcts sum to 0, work from those effective even
+            # shares instead; the save layer already ships MANUAL_PERCENTAGE,
+            # so writing the explicit numbers flips the step to manual
+            # distribution with the same arithmetic the founder would do.
             src = _find_variant(step, variant_label)
             dst = _find_variant(step, to_label)
             if src is None or src.get("is_deleted"):
@@ -3739,14 +3747,21 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
             if src.get("id") == dst.get("id"):
                 raise SequenceActionRefused(400, {
                     "ok": False, "message": "source and target are the same variant"})
-            if _pct_of(src) <= 0:
+            equal_mode = sum(_pct_of(v) for v in variants) <= 0
+            if equal_mode:
+                shares = _even_shares(len(variants))
+                eff = {v.get("id"): shares[i] for i, v in enumerate(variants)}
+                receipt["pcts_before"] = dict(eff)
+            else:
+                eff = {v.get("id"): _pct_of(v) for v in variants}
+            if eff.get(src.get("id"), 0) <= 0:
                 raise SequenceActionRefused(400, {
                     "ok": False, "message": f"variant {variant_label} has no share to move - it is already at 0%"})
-            if _pct_of(dst) <= 0:
+            if eff.get(dst.get("id"), 0) <= 0:
                 raise SequenceActionRefused(400, {
                     "ok": False, "message": f"variant {to_label} is switched off - switch it on before moving share to it"})
-            new_pcts = {v.get("id"): _pct_of(v) for v in variants}
-            new_pcts[dst.get("id")] = _pct_of(dst) + _pct_of(src)
+            new_pcts = dict(eff)
+            new_pcts[dst.get("id")] = eff[dst.get("id")] + eff[src.get("id")]
             new_pcts[src.get("id")] = 0
             _apply_step_pcts(steps, email_num, new_pcts)
             receipt["target_id"] = dst.get("id")
