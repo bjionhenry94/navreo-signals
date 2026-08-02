@@ -886,7 +886,7 @@
 
   .row-summary {
     display: grid;
-    grid-template-columns: 60px minmax(160px,1.3fr) minmax(68px,110px) minmax(68px,110px) minmax(64px,110px) minmax(56px,110px) minmax(92px,110px) minmax(64px,110px) minmax(56px,110px) minmax(104px,max-content) 18px;
+    grid-template-columns: 60px minmax(160px,1.3fr) minmax(68px,110px) minmax(68px,110px) minmax(64px,110px) minmax(56px,110px) minmax(92px,110px) minmax(64px,110px) minmax(56px,110px) minmax(88px,max-content) 18px;
     align-items: center;
     gap: 12px 8px;
     padding: 20px 22px;
@@ -1555,7 +1555,7 @@
 
   @media (max-width: 1024px) {
     .row-summary {
-      grid-template-columns: 52px minmax(140px,1.2fr) minmax(54px,110px) minmax(46px,110px) minmax(78px,110px) minmax(54px,110px) minmax(46px,110px) minmax(120px,max-content) 16px;
+      grid-template-columns: 52px minmax(140px,1.2fr) minmax(54px,110px) minmax(46px,110px) minmax(78px,110px) minmax(54px,110px) minmax(46px,110px) minmax(96px,max-content) 16px;
       gap: 9px 8px;
       padding: 16px;
     }
@@ -2164,11 +2164,18 @@
 
   /* ---- inline "Review N" optimiser badge + panel (merged Optimisations tab) ---- */
   .cockpit .review-badge {
-    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+    flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px;
     font-size: 12px; font-weight: 700; padding: 6px 11px; border-radius: 999px;
     background: var(--nav-orange-100); color: var(--nav-orange-600);
-    border: 1px solid var(--nav-orange); cursor: pointer; white-space: nowrap;
+    border: 1px solid var(--nav-orange); cursor: pointer;
     transition: background .15s, box-shadow .15s, color .15s;
+  }
+  /* counts wrap when the pill runs out of room; each count stays whole. When the
+     two land on different lines JS adds .is-stacked, which turns the middot into
+     a full-width divider (see below) so they never crowd or hit the chevron. */
+  .cockpit .review-badge .rb-counts {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    column-gap: 7px; row-gap: 2px; min-width: 0;
   }
   .cockpit .review-badge:hover { background: var(--nav-orange); color: #fff; box-shadow: 0 2px 10px rgba(255,77,0,0.28); }
   .cockpit .review-badge:focus-visible { outline: 2px solid var(--nav-orange); outline-offset: 2px; }
@@ -2177,13 +2184,22 @@
   .cockpit .review-badge .caret { transition: transform .2s; flex: 0 0 auto; }
   .cockpit .review-badge[aria-expanded="true"] { background: var(--nav-orange); color: #fff; }
   .cockpit .review-badge[aria-expanded="true"] .caret { transform: rotate(180deg); }
-  .cockpit .review-badge .rb-review { display: inline-flex; align-items: center; gap: 4px; }
+  .cockpit .review-badge .rb-review { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .cockpit .review-badge .rb-sep { opacity: 0.55; font-weight: 700; }
+  /* wrapped: counts stack and the middot becomes a hairline rule between them */
+  .cockpit .review-badge.is-stacked { border-radius: 14px; }
+  .cockpit .review-badge.is-stacked .rb-counts { flex-direction: column; align-items: stretch; row-gap: 3px; }
+  .cockpit .review-badge.is-stacked .rb-review,
+  .cockpit .review-badge.is-stacked .rb-prog { justify-content: center; }
+  .cockpit .review-badge.is-stacked .rb-sep {
+    width: 100%; height: 0; font-size: 0; line-height: 0;
+    border-top: 1px solid currentColor; opacity: 0.3;
+  }
   /* in-progress share reads blue — a claimed/assigned action is visibly distinct
      from an unreviewed (orange) one. In the mixed state it rides its own inset
      blue chip so the two counts never crowd into one another. */
   .cockpit .review-badge .rb-prog {
-    display: inline-flex; align-items: center; gap: 4px; font-weight: 700;
+    display: inline-flex; align-items: center; gap: 4px; font-weight: 700; white-space: nowrap;
     padding: 1px 8px; border-radius: 999px;
     background: var(--info-100); color: var(--info-600);
   }
@@ -3069,6 +3085,7 @@
       });
     }
     container.innerHTML = h.join("");
+    syncReviewBadgeWrap(container);
     var STATUS_LABEL = { active: "Active", paused: "Paused", completed: "Completed", archived: "Archived", drafted: "Draft" };
     var empty = document.getElementById("rows-empty-state");
     if (empty) empty.hidden = visible.length > 0;
@@ -3320,7 +3337,8 @@
       (n.prog ? (n.review ? ", " : "") + n.prog + " in progress" : "")) || "No optimisations left";
     return '<span class="review-badge' + (hasProg ? " review-badge--prog" : "") + '" role="button" tabindex="0" data-review="' + esc(c.id) +
       '" aria-controls="optim-c' + esc(c.id) + '" aria-expanded="' + (expanded ? "true" : "false") +
-      '" aria-label="' + lbl + ' for this campaign">' + bits.join('<span class="rb-sep" aria-hidden="true">&middot;</span>') + REVIEW_CARET + "</span>";
+      '" aria-label="' + lbl + ' for this campaign"><span class="rb-counts">' +
+      bits.join('<span class="rb-sep" aria-hidden="true">&middot;</span>') + '</span>' + REVIEW_CARET + "</span>";
   }
   /* Repaint one row's badge in place after a state change — no reload, and an
      open panel stays open (badge clicks are delegated on the rows container,
@@ -3335,6 +3353,32 @@
     var tmp = document.createElement("span");
     tmp.innerHTML = reviewBadgeHTML(c, expanded);
     cur.replaceWith(tmp.firstChild);
+    syncReviewBadgeWrap(row);
+  }
+
+  /* CSS can't tell whether the two counts wrapped onto separate lines, so we
+     measure: a mixed "Review · In-progress" pill that ran out of room lands its
+     segments on different rows — flag it .is-stacked so the middot becomes a
+     horizontal divider. Cheap (a handful of rows) and re-run on resize. */
+  function syncReviewBadgeWrap(scope) {
+    var root = scope && scope.querySelectorAll ? scope : document;
+    var badges = root.querySelectorAll(".review-badge");
+    for (var i = 0; i < badges.length; i++) {
+      var b = badges[i];
+      var rev = b.querySelector(".rb-review");
+      var prog = b.querySelector(".rb-prog");
+      b.classList.remove("is-stacked");
+      if (!rev || !prog) continue;
+      if (prog.offsetTop - rev.offsetTop > 2) b.classList.add("is-stacked");
+    }
+  }
+  if (!window.__rbWrapBound) {
+    window.__rbWrapBound = true;
+    var _rbWrapT;
+    window.addEventListener("resize", function () {
+      clearTimeout(_rbWrapT);
+      _rbWrapT = setTimeout(function () { syncReviewBadgeWrap(document); }, 120);
+    });
   }
 
   var REVIEW_CARET = '<svg class="caret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
