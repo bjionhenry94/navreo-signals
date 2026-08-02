@@ -6289,13 +6289,9 @@
           var attr = pick.kind === "p5" ? 'data-vaw-p5="1" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"'
                    : pick.kind === "p6" ? 'data-vaw-p6="1" data-email="' + pick.email + '"'
                    : 'data-vaw-p1="' + esc(String(pick.nid)) + '" data-email="' + pick.email + '" data-vlabel="' + esc(pick.vlab) + '"';
-          var hint = pick.kind === "p5" ? "the winner takes every send on this step"
-                   : pick.kind === "p6" ? "fixes a split that was never set up"
-                   : "stops sending it, share moves to the live versions";
           var wrap = document.createElement("span");
           wrap.className = "vaw-act";
-          wrap.innerHTML = '<button type="button" class="action-swap-btn" ' + attr + ">" + label + "</button>" +
-            '<span class="vaw-hint">' + hint + "</span>";
+          wrap.innerHTML = '<button type="button" class="action-swap-btn" ' + attr + ">" + label + "</button>";
           cpBtn.replaceWith(wrap);
           vawWireWhy(wrap, cid);
           card.setAttribute("data-swap-act", pick.kind + "|" + pick.email + "|" + (pick.vlab || ""));
