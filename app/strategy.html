@@ -26,6 +26,14 @@ a{color:inherit;text-decoration:none}
 .im:hover{background:var(--cream-50);border-color:var(--line);}
 .im-name{font-size:14px;font-weight:600;line-height:1.3;margin:0;}
 .im-caption{font-size:12.5px;color:var(--ink-3);margin:3px 0 10px;}
+.kpill-wrap{margin:0 0 10px;}
+.kpill{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;border-radius:999px;padding:3px 10px;}
+.kpill-list{color:var(--orange-600);background:var(--orange-100);}
+.kpill-live{color:var(--green);background:rgba(46,125,91,.13);}
+.kdot{width:7px;height:7px;border-radius:50%;background:var(--green);position:relative;flex:none;}
+.kdot::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--green);animation:kpulse 1.6s ease-out infinite;}
+@keyframes kpulse{0%{transform:scale(1);opacity:.7;}70%{transform:scale(2.6);opacity:0;}100%{opacity:0;}}
+@media (prefers-reduced-motion:reduce){.kdot::after{animation:none;}}
 .im-count{display:flex;align-items:center;gap:8px;margin:0 0 9px;font-size:12.5px;color:var(--ink-3);}
 .im-number{font-family:var(--font-display);font-size:16px;letter-spacing:-.02em;color:var(--ink);}
 .im-type{display:inline-flex;font-size:11px;font-weight:600;color:var(--ink-2);background:transparent;border:1px solid var(--line-2);border-radius:999px;padding:3px 10px;margin:0 0 10px;}
@@ -269,6 +277,16 @@ const TGT_LABELS={targeted_list:"Companies we target",lookalike:"Companies like 
 function tgtLabel(k){return TGT_LABELS[k]||"What we target";}
 const TGT_TYPES={targeted_list:"Niche list",lookalike:"Lookalike",prospeo_signal:"Buying signal",hiring_signal:"Hiring signal",engagement_signal:"Engagement signal",followers:"Follower audience",news_intent:"News signal",recontact:"Re-approach",events:"Event audience"};
 function tgtType(x){const k=x.targeting&&x.targeting.kind;return TGT_TYPES[k]?`<div class="mech">${esc(TGT_TYPES[k])}</div>`:'';}
+// Sidebar card pill (Bjion, 2026-08-03): a SIGNAL is live + monitored, so green
+// with a pulsing dot and "LIVE - <name>"; a fixed list is a one-off pull, so a
+// plain orange pill, no dot.
+const SIGNAL_NAMES={prospeo_signal:"Buying signal",hiring_signal:"Hiring signal",engagement_signal:"Social Engagement",news_intent:"In the news"};
+const LIST_NAMES={targeted_list:"Targeted list",lookalike:"Lookalike list",followers:"Follower list",recontact:"Re-approach list",events:"Event list"};
+function kindPill(x){
+  const k=x.targeting&&x.targeting.kind;if(!k)return '';
+  if(SIGNAL_NAMES[k])return `<p class="kpill-wrap"><span class="kpill kpill-live"><span class="kdot"></span>LIVE - ${esc(SIGNAL_NAMES[k])}</span></p>`;
+  return `<p class="kpill-wrap"><span class="kpill kpill-list">${esc(LIST_NAMES[k]||'Targeted list')}</span></p>`;
+}
 function grpChip(c){const i=String(c).indexOf(' — ');if(i<0)return `<span class="chip">${esc(c)}</span>`;return `<span class="chip">${esc(String(c).slice(0,i))}<span class="chip-sub"> — ${esc(String(c).slice(i+3))}</span></span>`;}
 function grpSection(label,chips){return (label&&chips&&chips.length)?`<div class="sect"><p class="eyb">${esc(label)}</p><div class="chips">${chips.map(grpChip).join('')}</div></div>`:'';}
 // Data-driven Targeting: render whatever labelled groups the idea supplies (each
@@ -446,14 +464,15 @@ function panelHTML(x){
   const cks=checksFor(x);
   const doneN=cks.filter(c=>c[2]).length;
   return `<p class="eyb">Launch</p><div class="livebanner">Not live yet — the campaign turns on when you approve it. Nothing sends until then.</div>`
-    +`<p class="chkhead">Every box below is checked against this campaign as it stands — nothing ticks until it's actually true. ${doneN} of ${cks.length} are done right now.</p>`
-    +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Pending'}</span></div>`).join('')+`</div>`;
+    +`<p class="chkhead">Every box below is checked against this campaign as it stands, and nothing ticks until it's actually true. ${doneN} of ${cks.length} are done right now.</p>`
+    +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Ran before launch'}</span></div>`).join('')+`</div>`;
 }
 
 function renderSidebar(){
   const cards=IDEAS.map((x,i)=>{const service=(x.service||'').replace('->','→');
     return `<div class="im ${i===active?'active':''}" data-i="${i}"><p class="im-name">${esc(x.name)}</p>`
       +`<p class="im-caption">${esc(x.caption||'')}</p>`
+      +kindPill(x)
       +`<p class="im-count"><span class="im-number">${num(x.net||x.reachablePool)}</span> reachable</p>`
       +(service?`<p class="im-type">${esc(service)}</p>`:'')
       +`<div class="im-track"><i></i><i></i><i></i><i></i><i></i></div></div>`;}).join('');
