@@ -2631,11 +2631,12 @@ boot();
     ".vaw4-row .ok{color:#2f9e44;font-weight:700}",
     ".vaw4-row .bad{color:#c9352b;font-size:.72rem}",
     /* P3 traffic-light row */
-    ".vaw4-tl{display:grid;grid-template-columns:16px 1fr 122px;gap:12px;align-items:center;padding:10px 8px;border-bottom:1px solid var(--line,#eee9df);cursor:pointer;border-radius:8px}",
+    ".vaw4-tl{display:grid;grid-template-columns:16px minmax(0,1fr) 108px;gap:10px;align-items:center;padding:10px 8px;border-bottom:1px solid var(--line,#eee9df);cursor:pointer;border-radius:8px}",
     ".vaw4-tl:last-child{border-bottom:0}",
     ".vaw4-tl.sel{background:#FFF1EA}",
     ".vaw4-tl.is-done{opacity:.55;pointer-events:none}",
     ".vaw4-tl>input{width:15px;height:15px;accent-color:#FF4D00;cursor:pointer}",
+    ".vaw4-tl>div{min-width:0}",
     ".vaw4-top{display:flex;align-items:center;gap:7px;min-width:0}",
     ".vaw4-dot{width:8px;height:8px;border-radius:50%;background:#C2371F;flex:0 0 auto}",
     ".vaw4-name{display:flex;align-items:center;gap:5px;min-width:0;color:var(--ink,#211d16);text-decoration:none;font-weight:600;font-size:.82rem}",
@@ -2643,8 +2644,8 @@ boot();
     ".vaw4-name .ext{flex:0 0 auto;font-size:.7rem;color:var(--ink-3,#8a8477)}",
     ".vaw4-name:hover .nm{text-decoration:underline}",
     ".vaw4-name:hover .ext{color:#FF4D00}",
-    ".vaw4-sub{font-size:.7rem;color:var(--ink-3,#8a8477);margin-top:2px}",
-    ".vaw4-mini{display:flex;flex-direction:column;gap:5px}",
+    ".vaw4-sub{font-size:.7rem;color:var(--ink-3,#8a8477);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+    ".vaw4-mini{display:flex;flex-direction:column;gap:5px;min-width:0}",
     ".vaw4-mb{display:flex;align-items:center;gap:6px;font-size:.68rem;color:var(--ink-3,#8a8477);white-space:nowrap}",
     ".vaw4-mb .k{width:26px;flex:0 0 auto}",
     ".vaw4-tk{flex:1;height:6px;border-radius:4px;background:var(--wash,#f4f1ec);overflow:hidden}",
@@ -2688,7 +2689,13 @@ boot();
   // belongs to a client, so switching to Amplifyy must only show Amplifyy's
   // losers. "All" shows the whole book. We re-paint on the same
   // dlv-client-lens event the rest of the page listens to.
-  function curClient() { try { return (state && state.client) || "All"; } catch (e) { return "All"; } }
+  // Read the active client from window.DLV_CLIENT_LENS (the page publishes it
+  // there and updates it on every chip switch). NOT `state` — the main script
+  // is a strict-mode IIFE, so its `state` is not reachable from this block.
+  function curClient() {
+    try { return (window.DLV_CLIENT_LENS && window.DLV_CLIENT_LENS.client) || "All"; }
+    catch (e) { return "All"; }
+  }
   function visible() {
     var cl = curClient();
     return cl === "All" ? CAND : CAND.filter(function (c) { return c.client === cl; });
