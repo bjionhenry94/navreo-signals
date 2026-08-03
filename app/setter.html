@@ -186,9 +186,13 @@
 .dh-row1 { display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; }
 .dh-row2 { display: flex; align-items: center; justify-content: space-between; gap: 6px 16px; flex-wrap: wrap; }
 .dh-email { font-size: 12.5px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Keep the copy button hugging the address (owner ask): email + copy travel as
+   one group, the "replied" pill still floats to the far right of the row. */
+.dh-emailgrp { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 /* "replied X ago" as a neutral pill (matches the app's pill/age-badge look). */
 .dh-replied { font-size: 11px; font-weight: 500; color: var(--ink-2); white-space: nowrap; flex-shrink: 0; background: #F2F2F0; padding: 3px 10px; border-radius: 999px; }
-.dh-campaign { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dh-campaign { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); min-width: 0; }
+.dh-campaign .dh-campaign-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The Website / LinkedIn / Smartlead links, content-width, on the right. */
 .dh-links { flex: 0 0 auto; margin: 0; }
 .dh-links .lp-qbtn { flex: 0 0 auto; min-height: 34px; }
@@ -225,6 +229,11 @@
 .ii-line3 { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: nowrap; }
 .ii-hold { font-size: 11px; color: #6B4A00; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ii-time { font-size: 11px; color: var(--ink-3); margin-left: auto; flex-shrink: 0; }
+/* Per-client colour pill (hue set inline from the client label). Sits at the
+   right end of the row and to the left of the campaign name in the header. */
+.client-pill { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  white-space: nowrap; flex-shrink: 0; letter-spacing: 0.01em; }
+.ii-line3 .client-pill { margin-left: auto; }
 /* Waiting tab age badge - neutral under 15 minutes, amber past the
    response-time target so a stale reply stands out in the list. */
 .ii-age { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: var(--bg-sunken); color: var(--ink-2); flex-shrink: 0; }
@@ -1195,6 +1204,22 @@ function clientForRow(row) {
     if (n && cname.includes(n.toLowerCase())) return n;
   }
   return clientFromCampaignName(campaignNameFor(row));
+}
+/* Stable per-client colour: hash the client label to a hue so every row/header
+   of the same client wears the same coloured pill, and different clients read
+   apart at a glance. Own light background + dark text, so it stays legible on
+   either theme. */
+function clientHue(name) {
+  let h = 0;
+  const s = String(name || "");
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+function clientPillHtml(row) {
+  const name = clientForRow(row);
+  if (!name) return "";
+  const hue = clientHue(name);
+  return `<span class="client-pill" style="background:hsl(${hue} 62% 90%);color:hsl(${hue} 55% 28%)" title="Client: ${esc(name)}">${esc(name)}</span>`;
 }
 /* {smartlead_campaign_id (string) -> client display name}, joining
    /api/campaigns-unified's rows (platform="smartlead", client_id set only
@@ -2359,7 +2384,6 @@ function inboxItemHtml(row) {
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
   const snippet = esc(cleanBody(row.reply_body).replace(/\s+/g, " "));
   const selected = String(row.id) === String(selectedRowId) ? "selected" : "";
-  const holdLabel = (row.status === "needs_review" && row.decision_reason) ? holdReasonLabel(row.decision_reason, row) : "";
   // Status pill shows under "All" AND while a search is active - search spans
   // every filter, so without the pill a mixed result list would be unreadable.
   const statusChip = (currentStatus === "" || inboxSearchQuery.trim())
@@ -2370,16 +2394,17 @@ function inboxItemHtml(row) {
   const noAgentChip = row.agent_id ? "" : `<span class="pill n">No agent</span>`;
   const uncatChip = (isUncategorised(row) && !["sent", "auto_sent"].includes(row.status))
     ? `<span class="pill uncat-pill">UNCATEGORISED</span>` : "";
+  // Reason/verdict text and the right-side "X ago" time were removed (owner ask):
+  // the row now carries a per-client colour pill on the right instead.
   return `<div class="inbox-item ${selected}" data-id="${esc(row.id)}">
     <div class="ii-line1">${esc(leadName(row))} ${testChip}</div>
     <div class="ii-snippet">${snippet || "No reply text."}</div>
     <div class="ii-line3">
       ${ageBadgeHtml(row)}
       ${uncatChip}
-      ${holdLabel ? `<span class="ii-hold">${esc(holdLabel)}</span>` : ""}
       ${statusChip}
       ${noAgentChip}
-      <span class="ii-time">${pulledAgo(row.replied_at)}</span>
+      ${clientPillHtml(row)}
     </div>
   </div>`;
 }
@@ -2662,11 +2687,13 @@ function renderDetail(row) {
         </div>
       </div>
       <div class="dh-row2">
-        <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
-        ${row.lead_email ? `<button type="button" class="dh-copy" id="copyEmailBtn" data-email="${esc(row.lead_email)}" title="Copy email address" aria-label="Copy email address">${ICON_COPY}</button>` : ""}
+        <span class="dh-emailgrp">
+          <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
+          ${row.lead_email ? `<button type="button" class="dh-copy" id="copyEmailBtn" data-email="${esc(row.lead_email)}" title="Copy email address" aria-label="Copy email address">${ICON_COPY}</button>` : ""}
+        </span>
         <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
       </div>
-      <div class="dh-campaign" title="${esc(campaignNameFor(row))}">${esc(campaignNameFor(row))}</div>
+      <div class="dh-campaign" title="${esc(campaignNameFor(row))}">${clientPillHtml(row)}<span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>
     </div>
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>

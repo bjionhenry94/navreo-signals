@@ -2555,6 +2555,7 @@
     liveCheckedAt: null, // ISO stamp of the live check
     liveLoading: false,
     liveError: false,
+    createdAt: {},       // id -> campaign created_at ISO (from campaigns-unified)
     /* status opens on "active": the list is now the WHOLE inventory (~700 rows
        incl. hundreds of old drafts), and the campaigns anyone opens this page
        for are the running ones. Nothing is hidden, it is one dropdown away and
@@ -2743,6 +2744,7 @@
       document.getElementById("list-root").hidden = false;
       route();
       loadLiveStatus();
+      loadCreatedDates();
     }).catch(function (e) {
       if (String(e.message) === "auth") return;
       document.getElementById("list-loading").hidden = true;
@@ -3324,18 +3326,47 @@
   /* Subtitle status bit: LIVE status + completion% when the live check has
      landed, else the cached scorecard status. A live chip carries a dot. */
   function rowStatusBit(c) {
+    /* Created date sits after the status, separated by the same middot
+       (owner ask): "Arnic · ● active · 15 Jul 2026". Only shown once the
+       unified mirror has supplied a created_at for this campaign. */
+    var made = STATE.createdAt && STATE.createdAt[c.id];
+    var madeBit = made ? " &middot; " + esc(shortDate(made)) : "";
     var ls = STATE.liveStatus && STATE.liveStatus[c.id];
     if (ls && ls.status) {
       /* chip agrees with the filter bucket: a 100%-sent campaign says
          "completed" even while Smartlead's raw label is still ACTIVE */
       var txt = liveBucket(c.id) === "completed" ? "completed" : String(ls.status).toLowerCase();
       return ' &middot; <span class="row-live"><span class="row-live-dot"></span>' +
-        esc(txt) + "</span>";
+        esc(txt) + "</span>" + madeBit;
     }
     /* cached chip follows the same bucket rule, so a ring-complete row never
        reads "active" while the filter files it under Completed */
     return c.slStatus ? " &middot; " +
-      esc(liveBucket(c.id) === "completed" ? "completed" : String(c.slStatus).toLowerCase()) : "";
+      esc(liveBucket(c.id) === "completed" ? "completed" : String(c.slStatus).toLowerCase()) + madeBit : madeBit;
+  }
+  /* Compact date for the row subtitle — "15 Jul 2026", no time. */
+  function shortDate(iso) {
+    if (!iso) return "";
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        day: "numeric", month: "short", year: "numeric"
+      }).format(new Date(iso));
+    } catch (e) { return ""; }
+  }
+  /* Pull created_at for every campaign from the unified mirror (one fetch,
+     once per session) and repaint the rows in place — same lazy, additive
+     pattern as loadLiveStatus. A failure just leaves the date off. */
+  function loadCreatedDates() {
+    if (!STATE.unifiedP) STATE.unifiedP = getJSON("/api/campaigns-unified").catch(function () { return null; });
+    STATE.unifiedP.then(function (u) {
+      var rows = (u && u.rows) || [];
+      var map = {};
+      rows.forEach(function (r) {
+        if (r && r.platform_id != null && r.created_at) map[String(r.platform_id)] = r.created_at;
+      });
+      STATE.createdAt = map;
+      renderRows();
+    });
   }
 
   /* Live-signal line (P1 ship, 25 Jul 2026): "● 2 live sources · pulled 2 h
