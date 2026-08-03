@@ -409,8 +409,7 @@ function eventsSection(x){
     const sub=[e.when,e.where].filter(Boolean).map(esc).join(' · ');
     return `<span class="chip">${link}${sub?`<span class="chip-sub"> — ${sub}</span>`:''}</span>`;}).join('');
   return `<div class="sect"><p class="eyb">Events we pull exhibitors from</p><div class="chips">${rows}</div>`
-    +`<p class="tgt-meta foll-sum">${ev.length} event${ev.length===1?'':'s'} <span class="foll-arrow">→</span> about 100 decision makers each = <strong>~${num(ev.length*100)}</strong> we can reach (estimated)</p>`
-    +`<p class="tgt-meta foll-sum foll-warn">Exhibitors, not attendees — only the companies with a stand.</p></div>`;
+    +`<p class="tgt-meta foll-sum">${ev.length} event${ev.length===1?'':'s'} <span class="foll-arrow">→</span> about 100 decision makers each = <strong>~${num(ev.length*100)}</strong> we can reach (estimated)</p></div>`;
 }
 function targetingSections(x){
   const t=x.targeting||{};
