@@ -2783,6 +2783,49 @@ def _compute_signals_daily() -> dict:
         if day >= week_ago:
             for sid, n in by_day[day].items():
                 week_by_src[sid] = week_by_src.get(sid, 0) + n
+    # Per-client day-by-day breakdown so the deliverability widget can follow
+    # the page's client chips (2026-08-03). A source's client is its owning
+    # campaign's scorecard `client` column — the one label authority every
+    # page surface reads — joined source -> campaign_id (camp-sl-<id>) ->
+    # scorecard row. Arrays align to `days`; mech arrays let the widget keep
+    # its Hiring/Engagement bars per client at any range slice.
+    clients: dict = {}
+    try:
+        score = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,client,workspace,name")
+        camp_client = {}
+        for r in (score or []):
+            camp_client[str(r.get("smartlead_campaign_id"))] = \
+                r.get("client") or _client_win_label(r.get("workspace") or "navreo", r.get("name") or "")
+        # Scorecard only covers Smartlead campaigns — HeyReach (camp-hr-*) and
+        # unlaunched drafts (cdraft-*) fall through to the source's / owning
+        # draft's client_id, resolved to a display name via the clients registry
+        # (client-1 -> "Navreo" etc., the same names the scorecard column and
+        # the page chips carry).
+        cdocs, _cfail = _cached_clients()
+        cid_name = {str(c.get("id")): c.get("name") for c in (cdocs or []) if c.get("id")}
+        draft_cid = _campaign_client_map()
+        src_client, src_mech = {}, {}
+        for d in drafts:
+            if not is_signal_source(d):
+                continue
+            camp = str(d.get("campaign_id") or "")
+            lbl = camp_client.get(camp[8:]) if camp.startswith("camp-sl-") else None
+            if not lbl or lbl == _CLIENT_UNASSIGNED:
+                own = d.get("client_id") or draft_cid.get(camp)
+                lbl = cid_name.get(str(own)) or (lbl or "__unassigned")
+            src_client[str(d.get("id"))] = lbl
+            src_mech[str(d.get("id"))] = source_mech(d) or "other"
+        if score:  # a failed scorecard read must not ship an all-__unassigned map
+            for di, day in enumerate(days):
+                for sid, n in by_day[day].items():
+                    ent = clients.setdefault(src_client.get(sid, "__unassigned"),
+                                             {"all": [0] * len(days), "mech": {}})
+                    ent["all"][di] += n
+                    marr = ent["mech"].setdefault(src_mech.get(sid, "other"), [0] * len(days))
+                    marr[di] += n
+    except Exception as e:  # noqa: BLE001 — the fleet payload must still ship
+        print(f"[signals-daily] per-client join failed: {e}", file=sys.stderr)
+        clients = {}
     campaigns: dict = {}
     for d in drafts:
         if not is_signal_source(d):
@@ -2800,6 +2843,7 @@ def _compute_signals_daily() -> dict:
     return {"days": days,
             "all": [sum(by_day[d].values()) for d in days],
             "series": series,
+            "clients": clients,
             "campaigns": campaigns,
             "asof": datetime.now(timezone.utc).isoformat()}
 

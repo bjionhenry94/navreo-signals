@@ -134,8 +134,8 @@
 /* ── bounce card ── red/amber/green here mean one thing only: where you sit
    against the 2% limit. At or over it is red — the older <2 green / <3 amber
    banding painted six days over the limit the colour of caution. */
-.ah .bounce .bnc-hero{font-family:var(--font-display);font-size:42px;line-height:1.05;letter-spacing:-0.03em}
-.ah .bounce .bnc-chart{position:relative;height:52px;margin-top:2px}
+.ah .bounce .bnc-hero{font-family:var(--font-display);font-size:42px;line-height:1.05;letter-spacing:-0.03em;cursor:help}
+.ah .bounce .bnc-chart{position:relative;height:96px;margin-top:14px}
 .ah .bounce .bnc-chart svg{display:block;width:100%;height:100%}
 .ah .bounce .bnc-limlab{position:absolute;left:0;font-size:10px;color:var(--ink-3);
                         background:var(--card);padding-right:4px;transform:translateY(-50%)}
@@ -143,6 +143,8 @@
 .ah .bounce .bnc-row{display:grid;grid-template-columns:1fr auto 52px;gap:10px;align-items:baseline;
                      padding:7px 0;border-top:1px solid var(--line)}
 .ah .bounce .bnc-name{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ah .bounce .bnc-name a{color:inherit;text-decoration:none;cursor:pointer}
+.ah .bounce .bnc-name a:hover{text-decoration:underline}
 .ah .bounce .bnc-small{font-size:10.5px;color:var(--brown-400);font-weight:400}
 .ah .bounce .bnc-came{font-size:11.5px;color:var(--ink-3)}
 .ah .bounce .bnc-pct{font-size:14px;font-weight:600;text-align:right}
@@ -425,7 +427,7 @@
         </div>
 
         <div class="acard">
-          <div class="card-kick"><span id="sig-kick">New people found</span> <span style="text-transform:none;letter-spacing:0;font-weight:500">· whole fleet</span> <span class="stamp" id="sig-stamp"></span></div>
+          <div class="card-kick"><span id="sig-kick">New people found</span> <span id="sig-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· whole fleet</span> <span class="stamp" id="sig-stamp"></span></div>
           <div class="bignum num" id="sig-big">–</div>
           <div class="brows" id="sig-rows"></div>
           <div class="take"><span class="arr">→</span><span id="sig-take">&nbsp;</span></div>
@@ -487,10 +489,9 @@
             <div class="card-kick">Emails that came back <span class="stamp" id="bnc-stamp"></span></div>
           </div>
 
-          <div class="bnc-hero num" id="bnc-big">–</div>
-          <div class="subline" id="bnc-scope">&nbsp;</div>
+          <div class="bnc-hero num" id="bnc-big" title="">–</div>
 
-          <div class="bnc-chart">
+          <div class="bnc-chart" id="bnc-chart">
             <svg id="bnc-svg" preserveAspectRatio="none" aria-hidden="true"></svg>
             <span class="bnc-limlab" id="bnc-limlab">2% limit</span>
           </div>
@@ -1563,20 +1564,33 @@ function renderRunway(v) {
 }
 function renderSignals() {
   if (!SIG || !SIG.all) { $("sig-big").textContent = "–"; return; }
+  // Follows the page's client chips (2026-08-03): a client view reads the
+  // server's per-client day-by-day breakdown (source -> owning campaign ->
+  // scorecard client label). Fleet view keeps the original top-series path.
+  // A payload without `clients` (pre-deploy cache) falls back to the honest
+  // fleet view rather than dressing fleet numbers up as the client's.
+  var ce = state.client !== "All" && SIG.clients ? (SIG.clients[state.client] || { all: [], mech: {} }) : null;
   $("sig-kick").textContent = "New people found · " + rangeLabel();
+  $("sig-scope").textContent = ce ? "· " + state.client : "· whole fleet";
   setStamp("sig-stamp", SIG && SIG.asof, 6);
-  var total = slice(SIG.all).reduce(function (a, b) { return a + (b || 0); }, 0);
+  var total = slice(ce ? ce.all : SIG.all).reduce(function (a, b) { return a + (b || 0); }, 0);
   $("sig-big").textContent = fmtN(total);
   var mech = {};
-  var srcMech = {};
-  var srcArr = Array.isArray(SRC) ? SRC : ((SRC && SRC.sources) || []);
-  srcArr.forEach(function (s) { srcMech[s.id] = s.mechanism || "other"; });
-  (SIG.series || []).forEach(function (se) {
-    var m = srcMech[se.id] || "other";
-    var n = slice(se.counts || []).reduce(function (a, b) { return a + (b || 0); }, 0);
-    mech[m] = (mech[m] || 0) + n;
-  });
-  var label = { hiring: "Hiring", engagement: "Engagement", news: "News", recontact: "Recontact", other: "Other" };
+  if (ce) {
+    Object.keys(ce.mech || {}).forEach(function (m) {
+      mech[m] = slice(ce.mech[m] || []).reduce(function (a, b) { return a + (b || 0); }, 0);
+    });
+  } else {
+    var srcMech = {};
+    var srcArr = Array.isArray(SRC) ? SRC : ((SRC && SRC.sources) || []);
+    srcArr.forEach(function (s) { srcMech[s.id] = s.mechanism || "other"; });
+    (SIG.series || []).forEach(function (se) {
+      var m = srcMech[se.id] || "other";
+      var n = slice(se.counts || []).reduce(function (a, b) { return a + (b || 0); }, 0);
+      mech[m] = (mech[m] || 0) + n;
+    });
+  }
+  var label = { hiring: "Hiring", engagement: "Engagement", followers: "Followers", lookalike: "Lookalikes", news: "News", recontact: "Recontact", other: "Other" };
   var rows = Object.keys(mech).map(function (m) { return [label[m] || m, mech[m]]; })
     .filter(function (r) { return r[1] > 0; })
     .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 4);
@@ -1585,7 +1599,9 @@ function renderSignals() {
     return '<div class="brow"><span class="lbl">' + escq(r[0]) + '</span><div class="fill" style="width:' +
       Math.max(4, Math.round(r[1] / max * 100)) + '%"></div><span class="val num">' + fmtN(r[1]) + "</span></div>";
   }).join("");
-  $("sig-take").textContent = total > 0 ? "New people keep arriving — turn them into campaigns." : "No new signals in the " + rangeLabel() + ".";
+  $("sig-take").textContent = total > 0 ? "New people keep arriving — turn them into campaigns."
+    : ce ? "No new signals for " + state.client + " in the " + rangeLabel() + "."
+    : "No new signals in the " + rangeLabel() + ".";
 }
 function renderNC() {
   if (!UNI || !UNI.rows) { $("nc-big").textContent = "–"; return; }
@@ -2160,7 +2176,7 @@ function bncRows() {
   // the take-line never tells you to "pause" a finished campaign.
   return bad.sort(function (a, b) { return b.pct - a.pct; })
             .map(function (c) {
-              return { label: shortName(c.name), client: c.client,
+              return { id: c.id, label: shortName(c.name), client: c.client,
                        bounced: c.bounced, pct: c.pct, small: !!c.small,
                        active: !c.finished, names: [c.name] };
             });
@@ -2230,7 +2246,9 @@ function renderBounce() {
     });
     if (best && best.p >= BNC_LIMIT) worst = " · worst live client: " + best.cl + " at " + best.p.toFixed(1) + "%";
   }
-  $("bnc-scope").textContent = avgPct == null ? "" :
+  // The scope line no longer prints under the number — it rides as a hover
+  // tooltip on the big number, freeing that band for a taller trend chart.
+  $("bnc-big").title = avgPct == null ? "" :
     (state.client === "All" ? "All clients" : state.client) + " · average over the " + rangeLabel() +
     (today != null && !winMode ? " · latest day " + today.toFixed(2) + "%" : "") + worst;
 
@@ -2277,7 +2295,10 @@ function renderBounce() {
   $("bnc-rows").innerHTML = rows.length
     ? rows.slice(0, 3).map(function (r) {
         return '<div class="bnc-row">' +
-          '<span class="bnc-name">' + escq(r.label) +
+          '<span class="bnc-name">' +
+            (r.id != null
+              ? '<a href="campaigns.html#/c/' + encodeURIComponent(r.id) + '" title="' + escq(r.label) + '">' + escq(r.label) + '</a>'
+              : escq(r.label)) +
             (state.client === "All" && r.client && r.label.indexOf(r.client) < 0
               ? ' <span class="bnc-small">' + escq(r.client) + '</span>' : '') +
             (!r.active ? ' <span class="bnc-small">finished</span>' : '') +
