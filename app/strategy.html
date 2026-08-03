@@ -532,27 +532,39 @@ function openerFor(p){
   for(const k of LINE_ORDER)if(L[k])return L[k];
   return "Apologies if this isn't relevant, wasn't sure who at "+(p.company||"your company")+" was the best person for this.";
 }
+// Any OTHER {token} in copy ({page}, {events}, {tool}, {Role}, …) resolves from
+// the preview person's own fields — p.vars[token] first, then p[token] — so a
+// campaign type can introduce new merge vars and the Summary tab still shows a
+// real resolved email (Bjion fix 2026-08-03: "{page} showed as literal 'page'").
+// Unknown tokens are left visible on purpose: the render must never fake a fill.
+function personVars(s,p){
+  return String(s).replace(/\{\{?([A-Za-z_][A-Za-z0-9_ ]*)\}?\}/g,(m,k)=>{
+    const key=k.trim().toLowerCase();
+    const v=(p.vars&&(p.vars[k]??p.vars[key]))??p[key];
+    return (typeof v==='string'||typeof v==='number')?String(v):m;
+  });
+}
 // Preview {icebreaker} = the idea's ideated waterfall (recommended/first angle),
 // resolved for this person; falls back to the person's cast line, then generic.
 function icebreakerFor(x,p){
   const ib=x&&x.icebreaker;
   if(ib&&Array.isArray(ib.angles)&&ib.angles.length){
     const a=ib.angles.find(a=>a.recommended)||ib.angles[0];
-    if(a&&a.example)return String(a.example)
+    if(a&&a.example)return personVars(String(a.example)
       .replace(/\{company\}/gi,p.company||'your company')
-      .replace(/\{colleague\}/gi,p.colleague||'a colleague');
+      .replace(/\{colleague\}/gi,p.colleague||'a colleague'),p);
   }
   return openerFor(p);
 }
 function resolvedEmail(x,p){
   const opener=openerFor(p);
   if(x.email){
-    return String(x.email)
+    return personVars(String(x.email)
       .replace(/\{\{?first(_name)?\}?\}/gi,p.first||'')
       .replace(/\{\{?company\}?\}/gi,p.company||'')
       .replace(/\{\{?icebreaker\}?\}/gi,opener)
       .replace(/\{\{?colleague\}?\}/gi,COLLEAGUES[x.id]||'a colleague')
-      .replace(/%signature%/gi,"Bjion\nNavreo");
+      .replace(/%signature%/gi,"Bjion\nNavreo"),p);
   }
   const parts=[opener,x.pain||'',x.offer||''].filter(Boolean);
   return "Hey "+(p.first||'there')+",\n\n"+parts.join("\n\n")+"\n\nWorth a quick chat?\n\nBjion\nNavreo";
@@ -583,6 +595,13 @@ function resolvedTextHtml(text,x,p){
       .replace(/\{\{?company\}?\}/gi,_mvar(p.company||''))
       .replace(/\{\{?icebreaker\}?\}/gi,_mvar(opener))
       .replace(/\{\{?colleague\}?\}/gi,_mvar(COLLEAGUES[x.id]||'a colleague'))
+      // any remaining {token} resolves from this person's own fields (p.vars/p[token])
+      // and is highlighted like every other substituted variable; unknowns stay visible.
+      .replace(/\{\{?([A-Za-z_][A-Za-z0-9_ ]*)\}?\}/g,(m,k)=>{
+        const key=k.trim().toLowerCase();
+        const v=(p.vars&&(p.vars[k]??p.vars[key]))??p[key];
+        return (typeof v==='string'||typeof v==='number')?_mvar(String(v)):m;
+      })
       .replace(/%signature%/gi,sigHtml())
       .replace(/\n/g,'<br>');
   }
@@ -595,7 +614,12 @@ function resolvedSubjectHtml(x,p){
   const cap=s.charAt(0).toUpperCase()+s.slice(1);
   return esc(cap)
     .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
-    .replace(/\{\{?company\}?\}/gi,_mvar(p.company||''));
+    .replace(/\{\{?company\}?\}/gi,_mvar(p.company||''))
+    .replace(/\{\{?([A-Za-z_][A-Za-z0-9_ ]*)\}?\}/g,(m,k)=>{
+      const key=k.trim().toLowerCase();
+      const v=(p.vars&&(p.vars[k]??p.vars[key]))??p[key];
+      return (typeof v==='string'||typeof v==='number')?_mvar(String(v)):m;
+    });
 }
 function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2],ex=o[3];
   const recH=rec?' <span class="ib-rec">Recommended</span>':'';const up=i===0?' disabled':'';const dn=i===ICEB.length-1?' disabled':'';
