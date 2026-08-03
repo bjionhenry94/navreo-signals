@@ -9015,6 +9015,41 @@ _COCKPIT_INSIGHTS_SWR = _SWRCache(_cockpit_insights, 120,
                                   name="cockpit-insights")
 
 
+# ── team display names ──────────────────────────────────────────────────────
+# {login-email (lower): "Bjion"|"Yasir"|"Asad"|…} for every Navreo login. The
+# Supabase Auth user's user_metadata.display_name IS the single source of
+# truth (set via the admin API, no code edit for a new teammate); a user
+# without one falls back to a prettified email local-part. Cached so the
+# assignments GET doesn't hit the auth admin API on every poll, and a blip
+# serves the last good copy rather than blanking every assignee label.
+_TEAM_NAMES_CACHE = {"at": 0.0, "names": {}}
+_TEAM_NAMES_TTL_S = 600
+
+
+def team_display_names() -> dict:
+    if _TEAM_NAMES_CACHE["names"] and time.time() - _TEAM_NAMES_CACHE["at"] < _TEAM_NAMES_TTL_S:
+        return _TEAM_NAMES_CACHE["names"]
+    url = KEYS.get("SUPABASE_URL")
+    key = KEYS.get("SUPABASE_SERVICE_ROLE_KEY")
+    if url and key:
+        try:
+            data = http_json("GET", f"{url.rstrip('/')}/auth/v1/admin/users?per_page=200",
+                             {"apikey": key, "Authorization": f"Bearer {key}"}, timeout=10)
+            users = data.get("users") if isinstance(data, dict) else None
+            if isinstance(users, list):
+                names = {}
+                for u in users:
+                    em = (u.get("email") or "").lower()
+                    dn = str((u.get("user_metadata") or {}).get("display_name") or "").strip()
+                    if em:
+                        names[em] = dn or em.split("@")[0].capitalize()
+                _TEAM_NAMES_CACHE.update(at=time.time(), names=names)
+        except Exception as e:  # noqa: BLE001 — labels degrade, never break a page
+            print(f"[team] WARNING display-name fetch failed: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+    return _TEAM_NAMES_CACHE["names"]
+
+
 # ── cockpit action assignments ("Assign to me") ─────────────────────────────
 # Team-shared ownership of the cockpit's Suggested-actions cards. Replaces the
 # old per-browser localStorage state: one row per action in
@@ -9034,12 +9069,12 @@ def cockpit_assignments_map() -> dict:
     # long-dismissed acts as "Review" items in every badge.
     rows = sb_get_all("cockpit_action_assignments?select=action_key,state,assigned_to,assigned_at")
     if not isinstance(rows, list):
-        return {"assignments": {}, "degraded": True}
+        return {"assignments": {}, "names": team_display_names(), "degraded": True}
     out = {r.get("action_key"): {"state": r.get("state"),
                                  "assigned_to": r.get("assigned_to"),
                                  "assigned_at": r.get("assigned_at")}
            for r in rows if r.get("action_key")}
-    return {"assignments": out, "degraded": False}
+    return {"assignments": out, "names": team_display_names(), "degraded": False}
 
 
 def cockpit_set_assignment(payload: dict, actor: str | None):
@@ -15904,6 +15939,41 @@ def _client_win_build():
             windows[str(w)]["__all"] = tot
     if calls == 0:
         raise RuntimeError(f"no analytics-by-date call succeeded ({len(cands)} candidates; first errors: {errs[:2]})")
+    # Windowed positives + meetings per campaign, from the same replies archive
+    # the hub RPC reads (positives = _AH_POSITIVE_CATS row count in the window;
+    # meeting = a lead's FIRST 'Call Booked', counted in the window it landed —
+    # identical defs to analytics_hub_v1, so the rank card can never disagree
+    # with the funnel). Two light Supabase reads (~300 + ~500 rows); a failure
+    # leaves the rows without pos/mtg and the FE falls back to lifetime labels.
+    try:
+        _pos_q = urllib.parse.quote(",".join(_AH_POSITIVE_CATS))
+        _since30 = (end - _dtmod.timedelta(days=29)).isoformat()
+        _reps = sb_get_all("replies?select=smartlead_campaign_id,category,replied_at"
+                           f"&category=in.({_pos_q})&replied_at=gte.{_since30}&order=id") or []
+        _bkd = sb_get_all("replies?select=smartlead_campaign_id,email,replied_at"
+                          f"&category=eq.{urllib.parse.quote('Call Booked')}&order=id") or []
+        _first: dict = {}
+        for r in _bkd:
+            k = (str(r.get("smartlead_campaign_id")), (r.get("email") or "").strip().lower())
+            t = str(r.get("replied_at") or "")
+            if t and (k not in _first or t < _first[k]):
+                _first[k] = t
+        for w in _CLIENT_WIN_WINDOWS:
+            _since = (end - _dtmod.timedelta(days=w - 1)).isoformat()
+            _pos_by: dict = {}
+            for r in _reps:
+                if str(r.get("replied_at") or "") >= _since:
+                    _c = str(r.get("smartlead_campaign_id"))
+                    _pos_by[_c] = _pos_by.get(_c, 0) + 1
+            _mtg_by: dict = {}
+            for (_c, _em), t in _first.items():
+                if t >= _since:
+                    _mtg_by[_c] = _mtg_by.get(_c, 0) + 1
+            for row in campaigns[str(w)]:
+                row["pos"] = _pos_by.get(row["id"], 0)
+                row["mtg"] = _mtg_by.get(row["id"], 0)
+    except Exception as e:  # noqa: BLE001 — windowed pos/mtg are additive, never fatal
+        print(f"[client-win] windowed pos/mtg failed: {e}", file=sys.stderr)
     if out_series.get("__all") and sum(out_series["__all"]["sent"][-30:]) > 0 \
             and not campaigns["30"]:
         # the fleet sent tens of thousands this month — a sweep with zero
@@ -16059,7 +16129,10 @@ def _inject_demo_client_windows(data: dict) -> dict:
             s = round(tot["sent"] * (c["sent"] / totsent) * f)
             extra.append({"id": c["id"], "client": "Acme", "name": c["name"], "sent": s,
                           "replied": round(s * tot["replied"] / max(1, tot["sent"])),
-                          "bounced": round(s * tot["bounced"] / max(1, tot["sent"]))})
+                          "bounced": round(s * tot["bounced"] / max(1, tot["sent"])),
+                          # windowed pos/mtg, scaled like everything else, so the
+                          # demo rank rows move with the 7/14/30 toggle too
+                          "pos": round(c["positives"] * f), "mtg": round(c["meetings"] * f)})
         camps_by_w[w] = list(lst or []) + extra
     return {**data, "series": series, "windows": windows or data.get("windows"),
             "campaigns": camps_by_w or data.get("campaigns")}
@@ -18510,7 +18583,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
             return self._json({"ok": True})
         if path == "/api/auth/me":  # who am I (login page uses it to skip itself)
-            return self._json({"email": self._authed_email()})
+            em = self._authed_email()
+            return self._json({"email": em,
+                               "name": team_display_names().get((em or "").lower())})
         if path == "/api/auth/logout":
             self.send_response(302)
             self.send_header("Location", "/app/login.html")

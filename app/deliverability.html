@@ -577,7 +577,7 @@
       </div>
       <div class="cards c23">
         <div class="acard">
-          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title · whole book</span> <span class="stamp" id="who-stamp"></span></div>
+          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title · <span id="who-scope">whole book</span></span> <span class="stamp" id="who-stamp"></span></div>
           <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
           <div class="subline" id="who-size" style="margin-top:8px">&nbsp;</div>
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
@@ -1790,13 +1790,17 @@ function campCost(id) {
 }
 function renderRank() {
   // Window rows (client-windows sweep): which campaigns are winning over the
-  // SELECTED range — reply rate on window sends. Interested/meetings have no
-  // per-campaign window split, so those columns show only in the lifetime
-  // fallback (while the sweep is still building).
+  // SELECTED range — reply rate on window sends. Positives/meetings ride the
+  // sweep rows too now (r.pos/r.mtg, replies-archive windows, same defs as the
+  // hub RPC); lifetime scorecard values are only the fallback for a blob built
+  // before the windowed fields existed — the scope tag says which is on screen.
   var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
   var minSent = Math.max(100, state.range * 15);
   setStamp("rank-stamp", win && win.length ? (CW && CW.asof) : (SCORE && SCORE.asof), 6);
   if (win && win.length) {
+    var winPM = false;   // set from the rows this VIEW shows (demo rows carry
+                         // pos/mtg before a fresh sweep does — they must not
+                         // un-caveat the All view's lifetime fallback numbers)
     var rows = win.filter(function (r) {
       // Demo rows never rank in the whole-book leaderboard: the __all totals
       // exclude them, so letting them place under "All" was a lie. There is
@@ -1806,11 +1810,11 @@ function renderRank() {
       return r.sent >= minSent && (state.client === "All" || r.client === state.client);
     }).map(function (r) {
       var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
-      // positives/meetings are lifetime per campaign (no per-window split
-      // exists) — same basis as the cost columns
+      if (r.pos != null) winPM = true;
       return { id: r.id, client: r.client, name: r.name || (sc && sc.name) || ("Campaign " + r.id),
                sent: r.sent, replied: r.replied,
-               pos: (sc && sc.positives) || 0, mtg: (sc && sc.meetings) || 0,
+               pos: r.pos != null ? r.pos : ((sc && sc.positives) || 0),
+               mtg: r.mtg != null ? r.mtg : ((sc && sc.meetings) || 0),
                active: !!(sc && String(sc.status || "").toUpperCase() === "ACTIVE") };
     });
     // rank meetings first, then positives, then reply rate (Bjion 2026-07-29)
@@ -1818,12 +1822,18 @@ function renderRank() {
       return (b.mtg - a.mtg) || (b.pos - a.pos) || ((b.replied / b.sent) - (a.replied / a.sent));
     });
     var top = rows.slice(0, 8);
-    $("rank-scope").textContent = "· " + rangeLabel() + " · positives & meetings all-time";
+    $("rank-scope").textContent = winPM ? "· " + rangeLabel()
+                                        : "· " + rangeLabel() + " · positives & meetings all-time";
     var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
     top.forEach(function (c, i) {
       var scLT = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
       var noYes = scLT && (scLT.sent || 0) >= 2000 && !(scLT.positives || 0);
-      var cost = campCost(c.id);
+      // costs follow the same window as the counts: window sent ÷ window
+      // pos/mtg. Lifetime campCost only when the blob predates windowed fields.
+      var cost = winPM
+        ? { perPos: c.pos > 0 ? Math.round(c.sent / c.pos) : null,
+            perMtg: c.mtg > 0 ? Math.round(c.sent / c.mtg) : null }
+        : campCost(c.id);
       s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
         '<div><div class="rname"><a class="nm" href="campaigns.html#/c/' + encodeURIComponent(c.id) + '" title="' + escq(c.name) + '">' + escq(c.name) + "</a>" +
         (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
@@ -1916,11 +1926,15 @@ function renderOffer() {
       (perClient ? " for " + escq(state.client) : "") + " yet.</div>";
     $("offer-sub").textContent = "";
     $("offer-take-row").style.display = "none";
-    if ($("offer-scope")) $("offer-scope").textContent = state.client === "All" ? "· whole book" : "· " + state.client;
+    if ($("offer-scope")) $("offer-scope").textContent = (state.client === "All" ? "· whole book" : "· " + state.client) + " · all-time";
     return;
   }
   var offers = offerList.slice(0, 5);
-  if ($("offer-scope")) $("offer-scope").textContent = perClient ? "· " + state.client : "· whole book";
+  // "all-time" is honest, not lazy: offer economics come from the insights
+  // cron's lifetime aggregation — there is no per-window per-offer split, and
+  // 7-day meeting counts per offer would be single-digit noise anyway. The tag
+  // stops the card from silently posing as a windowed number.
+  if ($("offer-scope")) $("offer-scope").textContent = (perClient ? "· " + state.client : "· whole book") + " · all-time";
   // Two costs per offer: emails to buy one positive reply, emails to buy one
   // meeting. Lower is better, so the winner is the SMALLEST number — the
   // opposite reading to every rate on this page, hence the column headers.
@@ -1964,6 +1978,8 @@ function ensureWho() {
 function renderWho() {
   var p = (WHO_KEY === state.client + "|" + state.range) ? WHO : null;
   var scope = state.client === "All" ? "whole book" : state.client;
+  // the header scope was static "whole book" — it must follow the chips + range
+  if ($("who-scope")) $("who-scope").textContent = scope + " · " + rangeLabel();
   setStamp("who-stamp", p && p.asof, 6);
   setStamp("wait-stamp", p && p.asof, 6);
   setStamp("subseq-stamp", p && p.asof, 6);
@@ -2034,7 +2050,9 @@ function renderSubseq(s) {
   var T_REPLY = 12.5, T_BOOK = 5;
   var reply = Math.round(1000 * s.positives / s.sent) / 10;
   var book = Math.round(1000 * s.booked / s.sent) / 10;
-  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups";
+  // all-time: subsequence stats are lifetime Smartlead analytics per sub —
+  // windowing them would need per-sub by-date calls (3× the hourly call load)
+  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups · all-time";
   function tone(v, t) { return v >= t ? "green" : v >= t * 0.75 ? "amber" : "red"; }
   function chip(tn) {
     var t = tn === "green" ? "On target" : tn === "amber" ? "Just under" : "Well under";
@@ -2106,11 +2124,10 @@ function renderHead() {
 /* ── bounce card ────────────────────────────────────────────────────────
    Today's number is the hero: the window average can sit under 2% while every
    recent day is over it, and providers throttle on today, not on the month.
-   Trend is fleet-wide (bounce_pct has no per-client split in the data layer);
-   the list below follows the client chips.
-   NOTE: campaign bounced/sent from the scorecard is LIFETIME cumulative —
-   there is no per-campaign daily series — so the list does not move with the
-   7/14/30 toggle. See prototypes/bounce-rate-BACKEND-SPEC.md.                */
+   Trend follows the client chips when a trusted daily series exists (fleet
+   trends are the fallback); the campaign list reads the client-windows sweep,
+   so it moves with the 7/14/30 toggle — lifetime scorecard rows are only the
+   still-building fallback and the kick says "all time" when they're up.      */
 var BNC_LIMIT = 2.0;
 var BNC_MIN_SENT = 500;   // below this a list is flagged as a small sample
 
