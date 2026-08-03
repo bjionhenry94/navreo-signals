@@ -12,24 +12,34 @@
     src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");
     font-weight:400; font-style:normal; font-display:swap;
   }
+  /* Tokens mirror campaigns.html (the detailed campaign view) so the two
+     pages read as one product. The cockpit-only pin keeps its orange accents. */
   :root{
-    --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
-    --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-400:#A89684;
+    --nav-white:#FFFFFF; --nav-ink:#14110E; --nav-ink-2:#3A332C; --nav-ink-3:#6B6055;
+    --nav-orange:#FF4D00; --nav-orange-100:#FFE4D6; --nav-orange-600:#DB4100; --orange-700:#A83100;
+    --info:#2563EB;
+    --sunken:#F7F7F6; --neutral-warm:#C9C4BC; --track-bg:#EFEDEA;
+    --bg:var(--nav-white); --bg-elevated:var(--nav-white);
+    --fg:var(--nav-ink); --fg-muted:var(--nav-ink-2); --fg-subtle:var(--nav-ink-3);
+    --success:#2E7D5B; --success-bg:#E2F1E9; --success-bd:rgba(46,125,91,0.32);
+    --warning:#8F6600; --warning-bg:#F8EAC4; --warning-bd:rgba(143,102,0,0.34);
+    --danger:#C2371F;  --danger-bg:#F7DCD5;  --danger-bd:rgba(194,55,31,0.34);
+    --border:#ECECEA; --border-strong:#DDDDDA;
+    --chip-active-bg:var(--nav-ink); --chip-active-fg:var(--nav-white);
     --cream:#F9F0E7;
-    --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF; --line:#ECECEA; --line-2:#DDDDDA;
-    --green:#2E7D5B; --green-bg:#E2F1E9; --green-line:#C4E2D3;
-    --amber:#8F6600; --amber-bg:#F8EAC4; --amber-line:#EBD79E;
-    --red:#C2371F;   --red-bg:#F7DCD5;   --red-line:#EFC7BB;
     --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
     --font-display:"Acid Grotesk","DM Sans",sans-serif;
     --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+    --r-md:8px; --r-lg:12px; --r-pill:999px;
+    --ease-out:cubic-bezier(0.2,0.7,0.2,1); --dur-2:180ms;
     --radius:14px; --focus:0 0 0 3px rgba(255,77,0,.32);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{
-    font-family:var(--font-sans); background:var(--bg); color:var(--ink);
+    font-family:var(--font-sans); background:var(--bg); color:var(--fg);
     line-height:1.5; letter-spacing:-.015em; -webkit-font-smoothing:antialiased;
   }
+  button{font-family:inherit}
   .tnum{font-variant-numeric:tabular-nums}
   .wrap{max-width:940px; margin:0 auto; padding:32px clamp(18px,4vw,40px) 96px}
 
@@ -37,28 +47,28 @@
   .eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--orange-700)}
   .head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:10px 0 4px}
   h1{font-family:var(--font-display);font-weight:400;font-size:30px;letter-spacing:-.03em;line-height:1.1}
-  .head-sub{font-size:13px;color:var(--ink-3);margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .head-sub{font-size:13px;color:var(--fg-subtle);margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .pill{font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:6px}
   .pill .dot{width:6px;height:6px;border-radius:999px;background:currentColor}
-  .pill.g{background:var(--green-bg);color:#195C3F}
-  .pill.n{background:#F2F2F0;color:var(--ink-2)}
-  a.slink{color:var(--ink-3);text-decoration:none;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--line-2)}
-  a.slink:hover{color:var(--ink)}
+  .pill.g{background:var(--success-bg);color:#195C3F}
+  .pill.n{background:#F2F2F0;color:var(--fg-muted)}
+  a.slink{color:var(--fg-subtle);text-decoration:none;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--border-strong)}
+  a.slink:hover{color:var(--fg)}
 
   /* ── the pinned reminder (sticky, on every tab) ──── */
   .pinwrap{position:sticky;top:0;z-index:40;padding-top:14px;background:linear-gradient(var(--bg) 72%,rgba(255,255,255,0))}
   .pin{
-    border:1px solid var(--orange-100); border-left:4px solid var(--orange);
+    border:1px solid var(--nav-orange-100); border-left:4px solid var(--nav-orange);
     background:linear-gradient(180deg,#FFF9F5,#FFFFFF);
     border-radius:var(--radius); padding:18px 20px;
     box-shadow:0 8px 24px rgba(255,77,0,.07);
   }
-  .pin.done{border-color:var(--green-line);border-left-color:var(--green);background:linear-gradient(180deg,#F3FAF6,#fff);box-shadow:none}
+  .pin.done{border-color:var(--success-bd);border-left-color:var(--success);background:linear-gradient(180deg,#F3FAF6,#fff);box-shadow:none}
   .pin-top{display:flex;align-items:center;gap:10px;margin-bottom:9px}
   .pin-kick{font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--orange-700)}
-  .pin.done .pin-kick{color:var(--green)}
-  .pin-min{margin-left:auto;background:none;border:1px solid var(--line-2);border-radius:8px;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink-3);flex:none}
-  .pin-min:hover{background:#fff;color:var(--ink)}
+  .pin.done .pin-kick{color:var(--success)}
+  .pin-min{margin-left:auto;background:none;border:1px solid var(--border-strong);border-radius:8px;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--fg-subtle);flex:none}
+  .pin-min:hover{background:#fff;color:var(--fg)}
   .pin-min svg{width:16px;height:16px;transition:transform .2s}
   /* minimised: collapse to a slim one-line bar so there's room to navigate */
   .pin.collapsed{padding:12px 20px}
@@ -66,109 +76,203 @@
   .pin.collapsed .pin-top{margin-bottom:4px}
   .pin.collapsed .pin-job{font-size:14.5px;margin-top:2px}
   .pin.collapsed .pin-min svg{transform:rotate(180deg)}
-  .pin-job{font-size:19px;font-weight:600;letter-spacing:-.02em;line-height:1.35;color:var(--ink)}
-  .pin-why{font-size:14px;color:var(--ink-2);margin-top:8px;max-width:64ch}
-  .pin-note{font-size:12.5px;color:var(--ink-3);margin-top:12px;display:flex;align-items:center;gap:8px}
-  .pin-note svg{width:14px;height:14px;flex:none;color:var(--ink-3)}
-  .pin-proof{margin-top:15px;padding-top:15px;border-top:1px solid var(--orange-100)}
-  .pin.done .pin-proof{border-top-color:var(--green-line)}
+  .pin-job{font-size:19px;font-weight:600;letter-spacing:-.02em;line-height:1.35;color:var(--fg)}
+  .pin-why{font-size:14px;color:var(--fg-muted);margin-top:8px;max-width:64ch}
+  .pin-note{font-size:12.5px;color:var(--fg-subtle);margin-top:12px;display:flex;align-items:center;gap:8px}
+  .pin-note svg{width:14px;height:14px;flex:none;color:var(--fg-subtle)}
+  .pin-proof{margin-top:15px;padding-top:15px;border-top:1px solid var(--nav-orange-100)}
+  .pin.done .pin-proof{border-top-color:var(--success-bd)}
   .pin-foot{display:flex;justify-content:flex-end;margin-top:16px}
   /* glanceable proof: reply rate by version (unique to the pin — no repeated raw stats) */
   .vbars{display:flex;flex-direction:column;gap:8px;max-width:480px}
-  .vbars-h{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);margin-bottom:2px}
+  .vbars-h{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--fg-subtle);margin-bottom:2px}
   .vbar{display:flex;align-items:center;gap:10px;font-size:12.5px}
-  .vb-l{width:74px;color:var(--ink-2);font-weight:500}
+  .vb-l{width:74px;color:var(--fg-muted);font-weight:500}
   .vb-l b{font-weight:600}
   .vb-t{flex:1;height:9px;border-radius:999px;background:#EEE8E1;overflow:hidden}
   .vb-f{height:100%;border-radius:999px;background:#CDBFB0;transition:width .5s cubic-bezier(.2,.8,.3,1)}
-  .vb-f.win{background:var(--green)}
-  .vb-v{width:64px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-3);font-weight:500}
+  .vb-f.win{background:var(--success)}
+  .vb-v{width:64px;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg-subtle);font-weight:500}
 
   .btn{
-    border:1px solid var(--line-2);background:transparent;color:var(--ink);
+    border:1px solid var(--border-strong);background:transparent;color:var(--fg);
     border-radius:999px;padding:11px 20px;font:600 14px var(--font-sans);letter-spacing:-.005em;
     cursor:pointer;display:inline-flex;align-items:center;gap:8px;white-space:nowrap;
   }
-  .btn:hover{background:var(--bg-sunken)}
+  .btn:hover{background:var(--sunken)}
   .btn:focus-visible{outline:none;box-shadow:var(--focus)}
   .btn svg{width:16px;height:16px;flex:none}
-  .btn.primary{background:var(--orange);border-color:var(--orange);color:var(--cream)}
-  .btn.primary:hover{background:var(--orange-600)}
-  .btn.done{background:var(--green);border-color:var(--green);color:#fff;cursor:default}
-  .btn.done:hover{background:var(--green)}
+  .btn.primary{background:var(--nav-orange);border-color:var(--nav-orange);color:var(--cream)}
+  .btn.primary:hover{background:var(--nav-orange-600)}
+  .btn.done{background:var(--success);border-color:var(--success);color:#fff;cursor:default}
+  .btn.done:hover{background:var(--success)}
 
-  /* ── tabs ─────────────────────────────────────────── */
-  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:22px 0 20px}
-  .tab{background:none;border:none;font:600 14px var(--font-sans);color:var(--ink-3);
-       padding:11px 16px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
-  .tab:hover{color:var(--ink-2)}
-  .tab.on{color:var(--orange-700);border-bottom-color:var(--orange)}
-  .tab .c{opacity:.5;font-weight:500}
+  /* ── tabs (campaign-detail look) ─────────────────── */
+  .campaign-tabs{display:flex;gap:22px;border-bottom:1px solid var(--border);margin:22px 0 0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .campaign-tab{background:none;border:none;padding:12px 2px 11px;font-size:0.86rem;font-weight:600;color:var(--fg-subtle);
+    border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;cursor:pointer}
+  .campaign-tab:hover{color:var(--fg)}
+  .campaign-tab.is-active{color:var(--fg);border-bottom-color:var(--nav-orange)}
+  .tab-count{font-variant-numeric:tabular-nums;color:var(--fg-subtle);font-weight:500}
+  .campaign-page-body{margin-top:22px}
 
-  /* ── cards / content ──────────────────────────────── */
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:18px}
-  .card-title{font-size:16px;font-weight:600;letter-spacing:-.01em}
-  .card-sub{font-size:13px;color:var(--ink-3);margin-top:4px}
-  .glance{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
-  @media(max-width:680px){.glance{grid-template-columns:repeat(2,1fr)}}
-  .tile{border:1px solid var(--line);border-radius:12px;padding:15px 16px}
-  .tile .lab{font-size:12px;color:var(--ink-3);font-weight:500}
-  .tile .num{font-family:var(--font-display);font-size:30px;line-height:1;margin-top:10px}
-  .tile .num.bad{color:var(--red)}
-  .tile .hint{font-size:11.5px;color:var(--ink-3);margin-top:7px}
-  .plain{background:var(--bg-sunken);border-radius:12px;padding:16px 18px;margin-top:18px;font-size:14px;color:var(--ink-2);line-height:1.6}
-  .plain b{color:var(--ink);font-weight:600}
+  /* ── cards (campaign-detail look) ─────────────────── */
+  .ov-card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r-lg);padding:20px 22px 22px;margin-bottom:18px}
+  .ov-card:last-child{margin-bottom:0}
+  .card-title{font-family:var(--font-display);font-weight:400;font-size:1.05rem;letter-spacing:-.01em;color:var(--fg)}
+  .card-subtitle{font-size:0.78rem;color:var(--fg-subtle);margin-top:3px}
+  .lw-loading{padding:38px 0;text-align:center;color:var(--fg-subtle);font-size:14px}
+  .ring-caption{font-size:0.55rem;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--fg-subtle);white-space:nowrap}
+  .sample-footer{margin-top:10px;font-size:0.76rem;color:var(--fg-subtle)}
+  a.action-link{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1px solid var(--border-strong);
+    border-radius:var(--r-pill);background:var(--bg);color:var(--fg-muted);font-size:0.78rem;font-weight:600;
+    cursor:pointer;white-space:nowrap;text-decoration:none;
+    transition:background var(--dur-2) var(--ease-out),border-color var(--dur-2) var(--ease-out),color var(--dur-2) var(--ease-out)}
+  a.action-link:hover{background:var(--sunken);border-color:var(--nav-ink-3);color:var(--fg)}
+  a.action-link--bare{border:none;background:none;padding:0;border-radius:0;color:var(--nav-orange-600)}
+  a.action-link--bare:hover{background:none;text-decoration:underline;color:var(--nav-orange-600)}
 
+  /* ── The glance, P5 "clean scoreboard" (matches campaigns.html) ── */
+  .gv-head{display:flex;align-items:baseline;gap:8px}
+  .gv-info{display:inline}
+  .gv-info>summary{list-style:none;cursor:pointer;width:16px;height:16px;border-radius:999px;border:1px solid var(--border-strong);color:var(--fg-subtle);font-size:0.62rem;font-style:italic;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
+  .gv-info>summary::-webkit-details-marker{display:none}
+  .gv-info[open]{display:block;margin-top:8px}
+  .gv-info p{margin:0;font-size:0.78rem;color:var(--fg-subtle);line-height:1.5;max-width:68ch}
+  .gv-pill{display:inline-flex;align-items:center;gap:6px;font-size:0.74rem;font-weight:700;padding:4px 11px;border-radius:999px;margin-top:16px}
+  .gv-pill::before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}
+  .gv-pill.gv-good{background:var(--success-bg);color:var(--success)}
+  .gv-pill.gv-avg{background:var(--warning-bg);color:var(--warning)}
+  .gv-pill.gv-bad{background:var(--danger-bg);color:var(--danger)}
+  .gv-pill.gv-neutral{background:var(--sunken);color:var(--fg-subtle)}
+  .gv-card .gv-word{font-family:var(--font-display);font-weight:400;font-size:clamp(1.6rem,3.4vw,2.1rem);letter-spacing:-.02em;line-height:1.05;margin:18px 0 9px}
+  .gv-word.gv-good{color:var(--success)}
+  .gv-word.gv-avg{color:var(--warning)}
+  .gv-word.gv-bad{color:var(--danger)}
+  .gv-word.gv-neutral{color:var(--fg)}
+  .gv-sub{font-size:0.98rem;color:var(--fg-muted);margin:0}
+  .gv-sub b{color:inherit;font-family:var(--font-display);font-weight:400}
+  .gv-quad{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:end;margin-top:26px}
+  .gv-n{font-family:var(--font-display);font-weight:400;font-size:clamp(1.9rem,4.2vw,2.5rem);letter-spacing:-.02em;line-height:1;color:var(--fg)}
+  .gv-n.gv-good{color:var(--success)}
+  .gv-n.gv-avg{color:var(--warning)}
+  .gv-n.gv-bad{color:var(--danger)}
+  .gv-c{font-family:var(--font-display);font-weight:400;font-size:1.05rem;color:var(--fg-subtle);margin-left:7px}
+  .gv-l{display:block;font-size:0.76rem;color:var(--fg-subtle);margin-top:5px}
+  .gv-aud{margin-top:22px;padding-top:18px;border-top:1px solid var(--border)}
+  .gv-audh{display:flex;justify-content:space-between;font-size:0.84rem;color:var(--fg-subtle);margin-bottom:9px}
+  .gv-audh b{color:var(--fg);font-family:var(--font-display);font-weight:400}
+  .gv-stack{height:12px;border-radius:999px;overflow:hidden;display:flex;background:var(--track-bg)}
+  .gv-stack i{height:100%;display:block}
+  .gv-legend{display:flex;gap:18px;margin-top:11px;font-size:0.78rem;color:var(--fg-subtle);flex-wrap:wrap}
+  .gv-legend span{display:inline-flex;align-items:center;gap:7px}
+  .gv-legend i{width:10px;height:10px;border-radius:3px}
+  .gv-legend b{color:var(--fg);font-family:var(--font-display);font-weight:400}
+  @media (max-width:640px){.gv-quad{grid-template-columns:repeat(2,1fr);gap:16px}}
+
+  /* ── Suggested actions (campaign-detail look, read-only here) ── */
+  .actions-section{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+  .badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--r-pill);font-size:0.68rem;font-weight:700;white-space:nowrap;border:1px solid transparent}
+  .badge--red{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-bd)}
+  .badge--amber{background:var(--warning-bg);color:var(--warning);border-color:var(--warning-bd)}
+  .badge--neutral{background:transparent;color:var(--fg-muted);border-color:var(--border-strong)}
+  .badge--pin{background:var(--nav-orange-100);color:var(--nav-orange-600);border-color:rgba(255,77,0,.3)}
+  .action-card{background:var(--sunken);border:1px solid var(--border);border-radius:var(--r-lg);padding:14px 16px;display:flex;gap:12px;align-items:flex-start}
+  .action-num{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:0.7rem;font-weight:700;background:var(--bg);border:1px solid var(--border-strong);color:var(--fg-muted);margin-top:2px}
+  .action-body{flex:1 1 auto;min-width:0}
+  .action-top{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
+  .opt-smartlead{margin-left:auto;font-size:0.78rem;font-weight:600;color:var(--fg-subtle);text-decoration:none}
+  .opt-smartlead:hover{color:var(--fg)}
+  .action-how{font-weight:700;font-size:0.92rem;color:var(--fg);line-height:1.5;margin-bottom:6px}
+  .action-payoff{font-size:0.8rem;color:var(--fg-subtle);line-height:1.5}
+  .action-payoff::before{content:"\2192\0020"}
+
+  /* ── Messaging: version performance table (campaign-detail look) ── */
+  .leads-table-wrap{overflow-x:auto;margin-top:14px}
+  table.leads-table{width:100%;border-collapse:collapse;font-size:0.82rem;min-width:480px}
+  table.leads-table th,table.leads-table td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border)}
+  table.leads-table th{font-size:0.65rem;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-subtle);font-weight:600}
+  table.leads-table tbody tr:last-child td{border-bottom:none}
+  table.version-perf-table th.tnum,table.version-perf-table td.tnum{text-align:right}
+  table.version-perf-table tr.vp-band td{background:var(--sunken);font-size:0.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--fg-muted);padding-top:7px;padding-bottom:7px}
+  table.version-perf-table tr.vp-band td.vp-l{text-align:left}
+  table.version-perf-table tr.vp-band .ring-caption{text-transform:none;letter-spacing:0}
+  .vp-best{display:inline-block;margin-left:6px;font-size:0.55rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#fff;background:var(--nav-orange);padding:1px 6px;border-radius:999px;vertical-align:1px}
+  .vp-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-left:7px;vertical-align:middle}
+  .vp-dot--on{background:#2E7D5B}
+  .vp-dot--off{background:#C0B0A0}
+  .vp-combos{margin-top:22px}
+  .vp-combos-h{font-size:0.8rem;font-weight:600;color:var(--fg);margin-bottom:2px}
+  .vp-combos-h .ring-caption{text-transform:none;letter-spacing:0;font-weight:500}
+  table.version-perf-table tr.vp-win{background:linear-gradient(90deg,rgba(255,77,0,0.06),transparent)}
+  table.version-perf-table tr.vp-win td:first-child{box-shadow:inset 3px 0 0 var(--nav-orange)}
+  .vp-sib{text-transform:none;letter-spacing:0;opacity:.75}
+
+  /* ── Messaging: "the sequence" Smartlead-editor-like step rail ── */
+  .seq-rail{margin-top:16px;display:flex;flex-direction:column}
+  .seq-step{border:1px solid var(--border);border-radius:var(--r-lg);padding:16px 18px 18px;background:var(--sunken)}
+  .seq-step-header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-bottom:14px}
+  .seq-step-title{font-family:var(--font-display);font-weight:400;font-size:1rem;letter-spacing:-.01em;color:var(--fg)}
+  .seq-version-pills{display:flex;flex-wrap:wrap;gap:6px}
+  .seq-pill{min-width:30px;padding:5px 10px;border-radius:var(--r-pill);border:1px solid var(--border-strong);background:var(--bg);
+    color:var(--fg-muted);font-size:0.76rem;font-weight:700;text-align:center;cursor:pointer;
+    transition:background var(--dur-2) var(--ease-out),color var(--dur-2) var(--ease-out),border-color var(--dur-2) var(--ease-out)}
+  .seq-pill:hover{border-color:var(--nav-ink-3);color:var(--fg)}
+  .seq-pill.is-active{background:var(--chip-active-bg);border-color:var(--chip-active-bg);color:var(--chip-active-fg)}
+  .seq-pill--off{opacity:.66;font-style:italic}
+  .seq-pill--del{opacity:.5;text-decoration:line-through}
+  .seq-pill--off.is-active,.seq-pill--del.is-active{opacity:1}
+  .seq-fail{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+  .seq-connector{align-self:flex-start;margin:4px 0 4px 18px;padding:6px 0 6px 16px;border-left:2px dashed var(--border-strong);
+    font-size:0.74rem;font-weight:600;color:var(--fg-subtle);display:flex;align-items:center}
+  .seq-subject{font-size:0.9rem;color:var(--fg);margin:0 0 10px}
+  .seq-subject strong{font-weight:700}
+  .seq-subject-none{color:var(--fg-subtle);font-weight:400;font-style:italic}
+  .seq-body-scroll{max-height:260px;overflow-y:auto;font-size:0.85rem;line-height:1.6;color:var(--fg-muted);
+    background:var(--bg);border:1px solid var(--border);border-radius:var(--r-md);padding:12px 14px}
+  .seq-body-scroll p{margin:0 0 10px}
+  .seq-body-scroll p:last-child{margin-bottom:0}
+  .mergetag{font-family:var(--font-mono);font-size:0.85em;color:var(--fg-subtle);background:var(--track-bg);padding:1px 5px;border-radius:4px;white-space:nowrap}
+  @media (max-width:480px){
+    .seq-step{padding:14px 14px 16px}
+    .seq-body-scroll{max-height:220px}
+    .mergetag{white-space:normal}
+  }
+
+  /* ── leads tab (unchanged) ────────────────────────── */
   table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
-  .tbl th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);padding:10px 12px;border-bottom:1px solid var(--line)}
-  .tbl td{padding:12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .tbl th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--fg-subtle);padding:10px 12px;border-bottom:1px solid var(--border)}
+  .tbl td{padding:12px;border-bottom:1px solid var(--border);vertical-align:middle}
   .tbl tr:last-child td{border-bottom:none}
-  .tbl tr.win td{background:#F3FAF6}
-  .verb{font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px}
-  .verb.keep{background:var(--green-bg);color:#195C3F}
-  .verb.pause{background:#F2F2F0;color:var(--ink-2)}
   .lead-name{font-weight:600}
-  .lead-sub{font-size:12px;color:var(--ink-3)}
+  .lead-sub{font-size:12px;color:var(--fg-subtle)}
   .st{font-size:11.5px;font-weight:500;padding:2px 9px;border-radius:999px}
-  .st.sent{background:var(--green-bg);color:#195C3F}
-  .st.wait{background:#F2F2F0;color:var(--ink-2)}
+  .st.sent{background:var(--success-bg);color:#195C3F}
+  .st.wait{background:#F2F2F0;color:var(--fg-muted)}
 
-  /* messaging: version performance footnotes + read-only sequence viewer */
-  .foot{font-size:12px;color:var(--ink-3);margin-top:12px;line-height:1.55}
-  .seq{display:flex;flex-direction:column;gap:14px;margin-top:16px}
-  .seq-step{border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:var(--bg-sunken)}
-  .seq-h{display:flex;align-items:center;gap:10px;margin-bottom:11px}
-  .seq-step-n{font-weight:600;font-size:14px}
-  .seq-pills{display:flex;gap:5px;margin-left:auto}
-  .vpill{font-size:11px;font-weight:600;padding:3px 11px;border-radius:999px;background:#EFEAE4;color:var(--ink-3);border:none;cursor:pointer;font-family:inherit}
-  .vpill:hover{background:#E4DBD0;color:var(--ink-2)}
-  .vpill.on{background:var(--ink);color:var(--cream)}
-  .vpill.win{box-shadow:inset 0 0 0 1.5px var(--green)}
-  .vpill.win.on{box-shadow:none}
-  .win-tag{font-size:11px;font-weight:600;color:var(--green);display:inline-flex;align-items:center;gap:5px}
-  .win-tag::before{content:"";width:6px;height:6px;border-radius:999px;background:var(--green)}
-  .v-copy.hidden{display:none}
-  .seq-subj{font-size:13.5px;margin-bottom:10px;color:var(--ink-2)}
-  .seq-body{font-size:13.5px;color:var(--ink-2);line-height:1.7;background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-  .var{font-family:var(--font-mono);font-size:12px;background:#EFEAE4;border-radius:5px;padding:1px 6px;color:var(--ink-2)}
   .hidden{display:none}
   /* toast */
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(90px);
-    background:var(--ink);color:var(--cream);font-size:13px;font-weight:500;padding:12px 20px;
+    background:var(--nav-ink);color:var(--cream);font-size:13px;font-weight:500;padding:12px 20px;
     border-radius:999px;transition:transform .28s cubic-bezier(.2,.9,.3,1.2);z-index:90;box-shadow:0 10px 30px rgba(20,17,14,.25)}
   .toast.on{transform:translateX(-50%) translateY(0)}
 </style>
 </head>
 <body>
-<div id="app"><div class="wrap" style="padding-top:60px"><p class="card-sub">Loading the optimisation…</p></div></div>
+<div id="app"><div class="wrap" style="padding-top:60px"><p class="card-subtitle">Loading the optimisation…</p></div></div>
 <script>
 
 const $ = (id)=>document.getElementById(id);
 const esc = (s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmt = (n)=> (n==null||isNaN(n))?"—":Number(n).toLocaleString();
+const pct = (n,d,p)=> d? +(100*n/d).toFixed(p==null?1:p) : null;
 const ratio = (sent,rep)=> rep>0 ? ("1 in "+Math.round(sent/rep).toLocaleString()) : "—";
 const qp = new URLSearchParams(location.search);
 const CID = qp.get("c"); const NID = qp.get("nid");
+const getJSON = (u)=>fetch(u,{cache:"no-store"}).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
+/* one-page cockpit: tiny caches so tab flips don't refetch */
+const CACHE = { messaging:null, seqcopy:null, detail:null, live:null,
+                messagingBusy:false, seqcopyBusy:false };
 
 function pickPrimary(rows){
   if(NID){ const m=rows.find(r=>String(r.id)===String(NID)); if(m) return m; }
@@ -188,8 +292,8 @@ function pickPrimary(rows){
 /* Display-only merge-tag cleanup (house rule: never show raw tags).
    "{{first_name}}" -> "First name", and leftover BARE snake_case artifacts
    ("Hi first_name, ...") collapse the same way. Used ONLY when painting
-   variant names/labels/copy on this page - never on any payload sent
-   anywhere (the only outbound call here is markDone's status PATCH). */
+   variant names/labels on this page - never on any payload sent anywhere
+   (the only outbound call here is markDone's status PATCH). */
 function humanField(f){
   const t=String(f||"").replace(/[{}]/g,"").trim().replace(/_+/g," ").trim();
   return t ? t.charAt(0).toUpperCase()+t.slice(1).toLowerCase() : "";
@@ -222,41 +326,395 @@ function barsFrom(variants){
   return `<div class="pin-proof"><div class="vbars"><div class="vbars-h">Which version is winning · reply rate · higher = better</div>${rows}</div></div>`;
 }
 
-function messagingTable(variants){
-  if(!(variants&&variants.length)) return `<p class="card-sub" style="margin-top:14px">No per-version breakdown yet for this campaign.</p>`;
-  const rows=variants.map(v=>{
-    const win=(v.flags||[]).includes("winner");
-    const label=humanTags((v.angle||"").split("/")[0].trim()).slice(0,30) || ("Email "+(v.email||""));
-    return `<tr class="${win?"win":""}"><td>Email ${esc(v.email)}</td>`
-      +`<td>${win?("<b>"+esc(label)+"</b> · winner"):esc(label)}</td>`
-      +`<td class="tnum">${fmt(v.sent)}</td><td class="tnum">${fmt(v.replies)}</td>`
-      +`<td class="tnum">${fmt(v.positives!=null?v.positives:(v.pos||0))}</td>`
-      +`<td class="tnum">${esc(ratio(v.sent,v.replies))}</td></tr>`;
-  }).join("");
-  return `<table class="tbl" style="margin-top:16px"><thead><tr><th>Email</th><th>Version</th><th>Sent</th><th>Replies</th><th>Positives</th><th>1 per</th></tr></thead><tbody>${rows}</tbody></table>`
-    +`<p class="foot">Reply frequency shown as "1 per N" — lower is better. Positives = Smartlead's "interested" mark.</p>`;
+/* ── Overview: the glance card (P5 clean scoreboard, mirrors campaigns.html
+   verdict tiering — sends-per-positive: <=1,500 good / 1,500-2,500 average /
+   >2,500 poor) ─────────────────────────────────────────────────────────── */
+function glanceHTML(r){
+  const sent=r.sent||0, rep=r.replied||0, pos=r.positive||0, mtg=r.meetings||0;
+  const replyPct = sent? pct(rep,sent,1) : null;
+  const gSpp = pos ? Math.round(sent/pos) : null;
+  const gPosPct = (pos && rep) ? pct(pos,rep,1) : null;
+  let gClass,gWord,gPill,gSub;
+  if(!sent){
+    gClass="gv-neutral"; gWord="Not sending yet."; gPill="Draft";
+    gSub="No emails have gone out on this campaign yet.";
+  }else if(!pos){
+    gClass="gv-bad"; gWord="Nothing landed yet."; gPill="No positives";
+    gSub="No positives yet from "+fmt(sent)+" emails sent.";
+  }else if(gSpp<=1500){
+    gClass="gv-good"; gWord="It’s working."; gPill="Healthy";
+    gSub="1 positive every <b>"+fmt(gSpp)+" emails</b> — good, under the 1,500 line.";
+  }else if(gSpp<=2500){
+    gClass="gv-avg"; gWord="Ticking along."; gPill="Average";
+    gSub="1 positive every <b>"+fmt(gSpp)+" emails</b> — average (1,500–2,500).";
+  }else{
+    gClass="gv-bad"; gWord="Underperforming."; gPill="Needs work";
+    gSub="1 positive every <b>"+fmt(gSpp)+" emails</b> — high, over the 2,500 line.";
+  }
+  const gSync="Campaign-to-date, from the daily Smartlead sync. Positives = Smartlead’s interested mark. "
+    +"Under 1,500 emails per positive is good, 1,500–2,500 average, above that poor.";
+  return '<div class="ov-card gv-card"><div class="gv-head"><div class="card-title" style="margin:0">The campaign at a glance</div>'
+    +'<details class="gv-info"><summary aria-label="about these numbers">i</summary><p>'+gSync+'</p></details></div>'
+    +'<span class="gv-pill '+gClass+'">'+esc(gPill)+'</span>'
+    +'<p class="gv-word '+gClass+'">'+gWord+'</p>'
+    +'<p class="gv-sub">'+gSub+'</p>'
+    +'<div class="gv-quad">'
+    +'<div class="gv-q"><span class="gv-n tnum">'+fmt(sent)+'</span><span class="gv-l">Sent</span></div>'
+    +'<div class="gv-q"><span class="gv-n tnum">'+(replyPct!=null? replyPct+"%" : fmt(rep))+'</span>'+(replyPct!=null?'<span class="gv-c tnum">'+fmt(rep)+'</span>':"")+'<span class="gv-l">Replied</span></div>'
+    +'<div class="gv-q"><span class="gv-n tnum '+gClass+'">'+fmt(pos)+'</span>'+(gPosPct!=null?'<span class="gv-c tnum">'+gPosPct+'%</span>':"")+'<span class="gv-l">Positives</span></div>'
+    +'<div class="gv-q"><span class="gv-n tnum'+(mtg>0?" gv-good":"")+'">'+fmt(mtg)+'</span><span class="gv-l">Meetings</span></div>'
+    +'</div>'
+    +'<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>'
+    +'</div>';
 }
 
-function sequenceView(variants){
-  const e1=(variants||[]).filter(v=>String(v.email)==="1").slice(0,3);
-  if(!e1.length) return "";
-  const pills=e1.map((v,i)=>`<button class="vpill${i===0?" on":""}${(v.flags||[]).includes("winner")?" win":""}" onclick="showVariant('V${i}',this)">${String.fromCharCode(65+i)}</button>`).join("");
-  const copies=e1.map((v,i)=>{
-    const parts=(v.angle||"").split("/"); const subj=humanTags((parts.shift()||"").trim()); const body=humanTags(parts.join("/").trim());
-    return `<div class="v-copy${i? " hidden":""}" data-v="V${i}"><div class="seq-subj"><b>Subject:</b> ${esc(subj)||"—"}</div>`
-      +`<div class="seq-body">${esc(body)||"(full body lives in Smartlead)"}</div></div>`;
+/* Audience split: exact platform split first (/api/cockpit/live-status),
+   contact-record estimate as the honest fallback — same sources and same
+   never-silent rules as the campaign page. */
+function paintAudience(){
+  const ov=$("ovm-status");
+  if(!ov) return;
+  const live=(CACHE.live||{}).lead_stats;
+  const d=CACHE.detail||{};
+  const liveTried = CACHE.liveTried===true;
+  const A_DONE="#2E7D5B", A_PROG="#A7CDB8", A_NOT="#D9D6D1", A_BLK="var(--danger)", A_STOP="#8A8681";
+  let s=null, note="";
+  if(live && live.total){
+    s={ done:live.completed||0, prog:(live.inprogress||0)+(live.paused||0),
+        not:live.notStarted||0, blk:live.blocked||0, stop:live.stopped||0, tot:live.total };
+  }else if((d.lead_statuses||[]).length){
+    const aBy={}; (d.lead_statuses||[]).forEach(r=>{ aBy[r.k]=(aBy[r.k]||0)+(r.n||0); });
+    const done=aBy.COMPLETED||0, prog=(aBy.INPROGRESS||0)+(aBy.STARTED||0)+(aBy.PAUSED||0), blk=aBy.BLOCKED||0;
+    const acc=done+prog+blk;
+    const base=Math.max(acc,(d.leads||{}).total||0);
+    s={ done:done, prog:prog, not:Math.max(0,base-acc), blk:blk, stop:0, tot:base };
+    note = liveTried
+      ? '<p class="card-subtitle" style="margin-top:6px">Contact-record estimate &mdash; the platform\'s exact split couldn\'t be checked right now (includes leads since removed from the platform).</p>'
+      : '<p class="card-subtitle" style="margin-top:6px">Contact-record estimate &mdash; checking the platform\'s exact split&hellip;</p>';
+  }else if(liveTried && CACHE.detailTried){
+    ov.innerHTML='<p class="card-subtitle">The audience split couldn\'t be loaded right now. It will refresh on the next visit.</p>';
+    return;
+  }else return; /* still loading — a source is yet to report */
+  const pc=(n)=> s.tot? (100*n/s.tot).toFixed(1) : "0";
+  const seg=(n,col)=> n>0? '<i style="width:'+pc(n)+'%;background:'+col+'"></i>' : "";
+  const leg=(n,col,lab)=> n>0? '<span><i style="background:'+col+'"></i>'+lab+' <b class="tnum">'+fmt(n)+'</b></span>' : "";
+  const compPct= s.tot? Math.round(100*s.done/s.tot) : 0;
+  ov.innerHTML='<div class="gv-audh"><span>Who we\'re working &mdash; <b class="tnum">'+fmt(s.tot)+'</b> people</span><span><b class="tnum">'+compPct+'%</b> completed</span></div>'
+    +'<div class="gv-stack">'+seg(s.done,A_DONE)+seg(s.prog,A_PROG)+seg(s.not,A_NOT)+seg(s.stop,A_STOP)+seg(s.blk,A_BLK)+'</div>'
+    +'<div class="gv-legend">'+leg(s.done,A_DONE,"Completed")+leg(s.prog,A_PROG,"In progress")+leg(s.not,A_NOT,"Not started")+leg(s.stop,A_STOP,"Stopped")+leg(s.blk,A_BLK,"Blocked")+'</div>'+note;
+}
+function hydrateAudience(campaignId){
+  getJSON("/api/cockpit/live-status?ids="+encodeURIComponent(campaignId))
+    .then(r=>{ CACHE.liveTried=true; CACHE.live=((r||{}).campaigns||{})[campaignId]||null; paintAudience(); })
+    .catch(()=>{ CACHE.liveTried=true; paintAudience(); });
+  getJSON("/api/cockpit/campaign-detail?id="+encodeURIComponent(campaignId))
+    .then(d=>{ CACHE.detailTried=true; if(d && !d.degraded) CACHE.detail=d; paintAudience(); })
+    .catch(()=>{ CACHE.detailTried=true; paintAudience(); });
+}
+
+/* ── Overview: suggested actions (campaign-detail card grammar; read-only
+   mirror here — the pin above is where this page's one job gets marked done,
+   status changes and prompts live on the campaigns page) ─────────────────── */
+function actionsHTML(rows, pinnedId, smartleadUrl){
+  if(!(rows&&rows.length)) return "";
+  const badge=(r)=> r.id===pinnedId ? '<span class="badge badge--pin">You\'re on it</span>'
+    : r.priority==="High" ? '<span class="badge badge--red">High</span>'
+    : r.priority==="Low" ? '<span class="badge badge--neutral">Low</span>'
+    : '<span class="badge badge--amber">Medium</span>';
+  const cards=rows.map((r,i)=>{
+    const act=esc(r.suggested_action||r.title||"Review this campaign").replace(/^(\w)/,c=>c.toUpperCase());
+    const payoff=(r.title && r.suggested_action && r.title!==r.suggested_action)? '<p class="action-payoff">'+esc(r.title)+'</p>':"";
+    return '<div class="action-card"><span class="action-num" aria-hidden="true">'+(i+1)+'</span>'
+      +'<div class="action-body"><div class="action-top">'+badge(r)
+      +(smartleadUrl?'<a class="opt-smartlead" href="'+esc(smartleadUrl)+'" target="_blank" rel="noopener">Open in Smartlead ↗</a>':"")
+      +'</div><p class="action-how">'+act+'</p>'+payoff+'</div></div>';
   }).join("");
-  const wintag = e1.some(v=>(v.flags||[]).includes("winner")) ? `<span class="win-tag">winner flagged</span>`:"";
-  return `<div class="card"><div class="card-title">The sequence</div>`
-    +`<div class="card-sub">Openers from the optimiser data (truncated). Tap the pills to compare versions. Full copy lives in Smartlead.</div>`
-    +`<div class="seq"><div class="seq-step"><div class="seq-h"><span class="seq-step-n">Email 1</span>${wintag}<span class="seq-pills">${pills}</span></div>${copies}</div></div></div>`;
+  return '<div class="ov-card"><div class="card-title">Suggested actions</div>'
+    +'<p class="card-subtitle">Every open optimisation on this campaign. The pinned one above is the job on this page.</p>'
+    +'<div class="actions-section">'+cards+'</div></div>';
+}
+
+/* ── Messaging: version performance (ported from the campaign page; read-only
+   here — no on/off toggles, the state dot is the honest degradation the design
+   already ships when live actions aren't wired) ──────────────────────────── */
+function versionTableHTML(versions, note, meetings, combinations){
+  const hasMeet=!!(meetings&&(meetings.by_step||meetings.by_variant));
+  const byVar=(meetings&&meetings.by_variant)||{};
+  const clusters=(meetings&&meetings.clusters)||{};
+  function rateSpan(n,d){ return (d&&n)? ' <span class="ring-caption">'+(n/d*100).toFixed(1)+'%</span>':''; }
+  function perPos(v){ return (v.positives>0&&v.sent)? fmt(Math.round(v.sent/v.positives)) : '<span class="ring-caption">'+(v.sent<300?'early':'—')+'</span>'; }
+  const repOf={}, membersOf={}; let hasGroup=false;
+  Object.keys(clusters).forEach(sk=>{
+    (clusters[sk]||[]).forEach(cl=>{
+      membersOf[sk+'|'+cl.rep]=cl.labels||[cl.rep];
+      if((cl.labels||[]).length>1) hasGroup=true;
+      (cl.labels||[cl.rep]).forEach(l=>{ repOf[sk+'|'+l]=cl.rep; });
+    });
+  });
+  const sentByRep={};
+  versions.forEach(v=>{
+    if(v.inline||v.label==null) return;
+    const rep=repOf[String(v.step)+'|'+v.label]||v.label;
+    const kk=String(v.step)+'|'+rep;
+    sentByRep[kk]=(sentByRep[kk]||0)+(v.sent||0);
+  });
+  const byStep={};
+  versions.forEach(v=>{ const k=v.step!=null?String(v.step):'?'; (byStep[k]=byStep[k]||[]).push(v); });
+  const stepKeys=Object.keys(byStep).sort((a,b)=>(parseInt(a,10)||0)-(parseInt(b,10)||0));
+  /* best opener: Email-1, active, with positives, fewest sends per positive */
+  let best=null;
+  (byStep['1']||[]).forEach(v=>{
+    if(v.disabled||v.inline||!(v.positives>0)||!v.sent) return;
+    const pp=v.sent/v.positives;
+    if(best===null||pp<best.pp) best={label:v.label,pp:pp};
+  });
+  const rows=stepKeys.map(sk=>{
+    const vs=byStep[sk].slice().sort((a,b)=>(a.label==null?'￿':String(a.label)).localeCompare(b.label==null?'￿':String(b.label)));
+    const band='<tr class="vp-band"><td class="vp-l" colspan="7">Email '+esc(sk)
+      +' <span class="ring-caption">'+vs.length+' variant'+(vs.length===1?'':'s')+'</span></td></tr>';
+    const body=vs.map(v=>{
+      const label=v.inline?'inline':(v.label||'?');
+      const isBest=best&&sk==='1'&&!v.disabled&&!v.inline&&v.label===best.label;
+      const rep=(!v.inline&&v.label!=null)?(repOf[sk+'|'+v.label]||v.label):null;
+      const isRep=rep!=null&&rep===v.label;
+      const siblings=rep!=null?(membersOf[sk+'|'+rep]||[v.label]).length>1:false;
+      let meetCell, pmCell='';
+      if(!hasMeet){ meetCell=''; }
+      else if(rep==null){ meetCell='<span class="ring-caption">&middot;</span>'; }
+      else if(!isRep){ meetCell='<span class="ring-caption vp-sib">= '+esc(rep)+'</span>'; }
+      else{
+        const mv=byVar[sk+'|'+rep]||0;
+        meetCell= mv>0? fmt(mv) : '<span class="ring-caption">0</span>';
+        const cs=sentByRep[sk+'|'+rep]||v.sent;
+        if(mv&&cs) pmCell=fmt(Math.round(cs/mv));
+      }
+      /* read-only state: deleted -> off dot; off (0% split) -> off dot; else on */
+      let stateCell;
+      if(v.inline) stateCell='';
+      else if(v.disabled) stateCell=' <span class="vp-dot vp-dot--off" title="deleted in Smartlead"></span>';
+      else if(v.split===0) stateCell=' <span class="vp-dot vp-dot--off" title="switched off (0% of sends)"></span>';
+      else stateCell=' <span class="vp-dot vp-dot--on" title="active"></span>';
+      return '<tr>'
+        +'<td data-label="Version">'+esc(label)+stateCell
+          +(isBest?' <span class="vp-best">best</span>':'')
+          +(isRep&&siblings?' <span class="ring-caption" title="'+esc((membersOf[sk+'|'+rep]||[]).join(', '))+' are the same copy">+'+((membersOf[sk+'|'+rep]||[]).length-1)+' same</span>':'')+'</td>'
+        /* a deleted variant's counters were PURGED by Smartlead, not zero */
+        +(v.stats_purged
+          ? '<td class="tnum" data-label="Sent"><span class="ring-caption" title="Smartlead purges a variant\'s counters when it is deleted — it did send before deletion">&mdash;</span></td>'
+            +'<td class="tnum" data-label="Replies"><span class="ring-caption">&mdash;</span></td>'
+            +'<td class="tnum" data-label="Positives"><span class="ring-caption">&mdash;</span></td>'
+          : '<td class="tnum" data-label="Sent">'+fmt(v.sent)+'</td>'
+            +'<td class="tnum" data-label="Replies">'+fmt(v.replies)+rateSpan(v.replies,v.sent)+'</td>'
+            +'<td class="tnum" data-label="Positives">'+fmt(v.positives)+rateSpan(v.positives,v.sent)+'</td>')
+        +'<td class="tnum" data-label="Sent / positive">'+(v.stats_purged?'<span class="ring-caption">&mdash;</span>':perPos(v))+'</td>'
+        +'<td class="tnum" data-label="Meetings">'+meetCell+'</td>'
+        +'<td class="tnum" data-label="Sent / meeting">'+pmCell+'</td></tr>';
+    }).join('');
+    return band+body;
+  }).join('');
+  /* combinations: opener → follow-up paths deduced from booked replies */
+  let comboHTML='';
+  if(combinations&&Object.keys(combinations).length){
+    const crows=Object.keys(combinations).map(k=>{
+      const p=k.split('>');
+      return { e1:p[0], e2:p[1], mt:combinations[k], snt:(sentByRep['1|'+p[0]]||0)+(sentByRep['2|'+p[1]]||0) };
+    }).sort((a,b)=>b.mt-a.mt||String(a.e1).localeCompare(String(b.e1)));
+    const bestMt=crows.reduce((m,c)=>Math.max(m,c.mt),0);
+    comboHTML='<div class="vp-combos"><div class="vp-combos-h">Best combination <span class="ring-caption">the opener the booker saw &rarr; the follow-up · sent counts both emails</span></div>'
+      +'<div class="leads-table-wrap"><table class="leads-table version-perf-table"><thead><tr><th>Combination</th><th class="tnum">Sent</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead><tbody>'
+      +crows.map(c=>{
+        const isb=c.mt===bestMt&&c.mt>0;
+        return '<tr'+(isb?' class="vp-win"':'')+'><td data-label="Combination">'+esc(c.e1)+' <span class="ring-caption">&rarr;</span> '+esc(c.e2)+(isb?' <span class="vp-best">best</span>':'')+'</td>'
+          +'<td class="tnum" data-label="Sent">'+(c.snt?fmt(c.snt):'<span class="ring-caption">—</span>')+'</td>'
+          +'<td class="tnum" data-label="Meetings">'+fmt(c.mt)+'</td>'
+          +'<td class="tnum" data-label="Sent / meeting">'+(c.mt&&c.snt?fmt(Math.round(c.snt/c.mt)):'<span class="ring-caption">—</span>')+'</td></tr>';
+      }).join('')+'</tbody></table></div></div>';
+  }
+  let meetNote='';
+  if(hasMeet){
+    const tot=meetings.total||0, att=meetings.attributed||0, rem=meetings.removed||0;
+    const traceless=Math.max(0,tot-att-rem);
+    meetNote=fmt(tot)+' meeting'+(tot===1?'':'s')+' on this campaign, one per person. '
+      +fmt(att)+' traced to the copy each booker quoted back in their reply'
+      +(rem?'; '+fmt(rem)+' came from an opener since removed from the sequence (its copy is gone from Smartlead, so it has no row above)':'')
+      +(traceless?'; '+fmt(traceless)+" didn't quote enough to place":'')+'. '
+      +(hasGroup?'Variants with identical copy count as one version — the meetings show on the active label and the rest read “= it”. ':'')
+      +"A booked call runs through an opener and a follow-up, so a version's Meetings counts every call whose journey passed through it.";
+  }
+  return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">'
+    +'<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table></div>'+comboHTML
+    +(meetNote?'<p class="sample-footer">'+esc(meetNote)+'</p>':'')
+    +(note?'<p class="sample-footer">'+esc(note)+'</p>':'');
+}
+
+function hydrateMessaging(r){
+  const root=$("messaging-root");
+  if(!root) return;
+  const apply=(m)=>{
+    CACHE.messagingBusy=false;
+    const el=$("messaging-root");
+    if(!el) return;
+    if(!m||m.degraded||!(m.versions||[]).length){
+      /* honest fallback: the optimiser's own per-variant split from the daily crunch */
+      const fb=(r.variants||[]).filter(v=>v.sent>0);
+      if(fb.length){
+        el.innerHTML=versionTableHTML(fb.map(v=>({
+          step:v.email, label:humanTags((v.angle||"").split("/")[0].trim()).slice(0,30)||"?",
+          sent:v.sent, replies:v.replies, positives:(v.positives!=null?v.positives:(v.pos||0))
+        })),"Smartlead is unreachable right now; this table is the optimiser's daily split.");
+      }else{
+        el.innerHTML='<p class="card-subtitle">No version stats available: Smartlead is unreachable and no daily split exists for this campaign yet.</p>';
+      }
+      return;
+    }
+    el.innerHTML=versionTableHTML(m.versions,m.note,m.meetings,m.combinations);
+  };
+  if(CACHE.messaging){ apply(CACHE.messaging); return; }
+  if(CACHE.messagingBusy) return;
+  CACHE.messagingBusy=true;
+  const fetchIt=(isRetry)=>{
+    getJSON("/api/cockpit/messaging?id="+encodeURIComponent(r.campaign_id)).then(m=>{
+      const healthy=m&&!m.degraded&&(m.versions||[]).length;
+      if(healthy) CACHE.messaging=m;
+      else if(!isRetry){ setTimeout(()=>{ if(!CACHE.messaging) fetchIt(true); },7000); return apply(m); }
+      apply(m);
+    }).catch(()=>{
+      if(!isRetry){ setTimeout(()=>{ if(!CACHE.messaging) fetchIt(true); },7000); }
+      apply(null);
+    });
+  };
+  fetchIt(false);
+}
+
+/* ── Messaging: "the sequence" — read-only mirror of the live Smartlead copy,
+   spintax resolved to one clean rendering (house rule: copy is read resolved,
+   never raw). Ported from the campaign page. ─────────────────────────────── */
+function resolveSpin(text){
+  const tags=[];
+  let t=(text||"").replace(/\{\{[^}]+\}\}|%signature%/g,(m)=>{ tags.push(m); return "\x00"+(tags.length-1)+"\x00"; });
+  let prev;
+  do{
+    prev=t;
+    t=t.replace(/\{([^{}|]*(?:\|[^{}]*)+)\}/g,(_,opts)=>opts.split("|")[0]);
+  }while(t!==prev);
+  return t.replace(/\x00(\d+)\x00/g,(_,i)=>tags[+i]);
+}
+function seqRichText(text){
+  const marked=esc(text||"").replace(/\{\{[^}]+\}\}|%signature%/g,(m)=>'<span class="mergetag">'+m+'</span>');
+  return marked.split(/\n\s*\n/).map(p=>'<p>'+p.replace(/\n/g,'<br>')+'</p>').join("");
+}
+function sequenceCopyHTML(sc){
+  const steps=sc.steps||[];
+  const parts=[];
+  steps.forEach((s,si)=>{
+    const stepNo=s.step!=null?s.step:"?";
+    /* live first, then switched-off (0% split), then deleted — labelled */
+    const vRank=(v)=> v.deleted?2:(v.split===0?1:0);
+    const variants=(s.variants||[]).slice().sort((a,b)=>vRank(a)-vRank(b));
+    const vTag=(v)=> v.deleted?" (deleted)":v.split===0?" (off)":"";
+    let pills="";
+    if(variants.length>1){
+      pills='<div class="seq-version-pills" aria-label="Email '+esc(stepNo)+' versions">'
+        +variants.map((v,vi)=>'<button type="button" class="seq-pill'+(vi===0?" is-active":"")
+          +(v.deleted?" seq-pill--del":v.split===0?" seq-pill--off":"")
+          +'" data-step="'+esc(stepNo)+'" data-vidx="'+vi+'" aria-pressed="'+(vi===0?"true":"false")+'">'
+          +esc((v.label||"?")+vTag(v))+'</button>').join("")+'</div>';
+    }
+    const panels=variants.map((v,vi)=>{
+      const subj=v.subject
+        ? '<span class="seq-subject-text">'+seqRichText(resolveSpin(v.subject)).replace(/^<p>|<\/p>$/g,"")+'</span>'
+        : '<span class="seq-subject-text seq-subject-none">(no subject, reply in thread)</span>';
+      const body=v.body
+        ? seqRichText(resolveSpin(v.body))
+        : '<p class="card-subtitle">'+(v.deleted
+            ? "This variant was deleted; Smartlead no longer stores its copy."
+            : "No copy stored for this variant.")+'</p>';
+      return '<div class="seq-version-panel" data-step="'+esc(stepNo)+'" data-vidx="'+vi+'"'+(vi===0?"":" hidden")+'>'
+        +(v.deleted?'<p class="card-subtitle">Deleted variant &mdash; no longer sending.</p>'
+          : v.split===0?'<p class="card-subtitle">Switched off (0% of sends) &mdash; kept here so you can still read it.</p>':"")
+        +'<p class="seq-subject"><strong>Subject:</strong> '+subj+'</p>'
+        +'<div class="seq-body-scroll">'+body
+        +(v.truncated?'<p class="card-subtitle">&hellip; copy truncated &mdash; open the sequence in Smartlead for the rest.</p>':"")
+        +'</div></div>';
+    }).join("");
+    parts.push('<div class="seq-step"><div class="seq-step-header"><span class="seq-step-title">Email '+esc(stepNo)+'</span>'+pills+'</div>'
+      +'<div class="seq-body">'+panels+'</div></div>');
+    const next=steps[si+1];
+    if(next&&next.delay_days!=null)
+      parts.push('<div class="seq-connector">Wait '+esc(next.delay_days)+' day'+(next.delay_days===1?'':'s')+'</div>');
+  });
+  return '<p class="card-subtitle">Read-only mirror of what\'s live in Smartlead: steps, wait gaps, subjects and bodies. Click a version pill to see its copy. Spun lines are shown as one clean rendering.</p>'
+    +'<div class="seq-rail">'+parts.join("")+'</div>';
+}
+function hydrateSequenceCopy(r){
+  const id=r.campaign_id;
+  const root=()=>$("sequence-root");
+  const done=()=>{ CACHE.seqcopyBusy=false; };
+  const apply=(sc)=>{
+    const el=root();
+    if(!el){ done(); return; }
+    el.setAttribute("data-seqcopy","1");
+    if(sc.empty){
+      el.innerHTML='<p class="card-subtitle">No sequence set up in Smartlead yet for this campaign.</p>';
+      done(); return;
+    }
+    el.innerHTML=sequenceCopyHTML(sc);
+    el.querySelectorAll(".seq-pill").forEach(pill=>{
+      pill.addEventListener("click",()=>{
+        const step=pill.closest(".seq-step");
+        if(!step) return;
+        const vidx=pill.getAttribute("data-vidx");
+        step.querySelectorAll(".seq-pill").forEach(p=>{
+          const on=p===pill;
+          p.classList.toggle("is-active",on);
+          p.setAttribute("aria-pressed",on?"true":"false");
+        });
+        step.querySelectorAll(".seq-version-panel").forEach(panel=>{
+          panel.hidden = panel.getAttribute("data-vidx")!==vidx;
+        });
+      });
+    });
+    done();
+  };
+  const fail=()=>{
+    done();
+    const el=root();
+    if(!el) return;
+    el.setAttribute("data-seqcopy","1");
+    el.innerHTML='<div class="seq-fail">'
+      +'<p class="card-subtitle">Couldn\'t pull the live copy from Smartlead just now. Nothing is wrong with the campaign &mdash; the platform didn\'t answer in time.</p>'
+      +'<button type="button" class="btn" id="seq-retry">Try again</button></div>';
+    const b=$("seq-retry");
+    if(b) b.addEventListener("click",start);
+  };
+  const attempt=(i)=>{
+    getJSON("/api/cockpit/sequence-copy?id="+encodeURIComponent(id)).then(sc=>{
+      const healthy=sc&&!sc.degraded&&((sc.steps||[]).length||sc.empty);
+      if(healthy){ CACHE.seqcopy=sc; apply(sc); return; }
+      if(i<2) setTimeout(()=>attempt(i+1), i===0?3000:7000);
+      else fail();
+    }).catch(()=>{
+      if(i<2) setTimeout(()=>attempt(i+1), i===0?3000:7000);
+      else fail();
+    });
+  };
+  const start=()=>{
+    const el=root();
+    if(el&&!el.querySelector(".seq-rail")) el.innerHTML='<p class="card-subtitle">Pulling the live copy&hellip;</p>';
+    attempt(0);
+  };
+  if(CACHE.seqcopy){ apply(CACHE.seqcopy); return; }
+  if(CACHE.seqcopyBusy) return;
+  CACHE.seqcopyBusy=true;
+  start();
 }
 
 function leadsTable(leads, sent){
   // three states: "loading" (fetch still in flight - the card never waits on
   // it), null (fetch failed or hit the 8s timeout), or an array of leads.
-  const shell=(body)=>`<div class="card"><div class="card-title">Who's in this campaign</div>`
-    +`<div class="card-sub">The live audience, straight from Smartlead. Showing the first few of ${fmt(sent)}.</div>`
+  const shell=(body)=>`<div class="ov-card"><div class="card-title">Who's in this campaign</div>`
+    +`<div class="card-subtitle">The live audience, straight from Smartlead. Showing the first few of ${fmt(sent)}.</div>`
     +`<table class="tbl" style="margin-top:16px"><thead><tr><th>Name</th><th>Role &amp; company</th><th>Status</th></tr></thead>`
     +`<tbody>${body}</tbody></table></div>`;
   if(leads==="loading") return shell('<tr><td colspan="3" class="lead-sub">Loading the live audience from Smartlead…</td></tr>');
@@ -270,13 +728,13 @@ function leadsTable(leads, sent){
   return shell(rows||'<tr><td colspan="3" class="lead-sub">Live audience loads from Smartlead.</td></tr>');
 }
 
-function render(r, leads){
-  const sent=r.sent||0, rep=r.replied||0, pos=r.positive||0, mtg=r.meetings||0;
+function render(r, rows, leads){
+  const sent=r.sent||0, rep=r.replied||0;
   const rr=(r.reply_rate!=null)? r.reply_rate : (sent? (rep/sent*100):0);
   const job = esc((r.suggested_action||r.title||"Review this campaign")).replace(/^(\w)/,c=>c.toUpperCase());
   const why = cleanWhy(r.detail) || `${fmt(sent)} emails, ${fmt(rep)} replies (${(+rr).toFixed(2)}%). ${esc(r.title||"")}`;
   const bars = barsFrom(r.variants);
-  const floorHint = rr>=1 ? "above the 1% floor" : "under the 1% floor";
+  const seqUrl = r.smartlead_url? r.smartlead_url.replace("/analytics","/sequences") : "";
   const app = `
   <div class="wrap">
     <div class="eyebrow">Optimisation cockpit</div>
@@ -297,26 +755,25 @@ function render(r, leads){
       <div class="pin-foot"><button class="btn primary" id="done-btn" onclick="markDone('${esc(r.id)}')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Mark this optimisation done</button></div>
     </div></div>
-    <nav class="tabs" role="tablist">
-      <button class="tab on" data-tab="overview" onclick="showTab('overview')">Overview</button>
-      <button class="tab" data-tab="messaging" onclick="showTab('messaging')">Messaging</button>
-      <button class="tab" data-tab="leads" onclick="showTab('leads')">Leads <span class="c tnum">(${fmt(sent)})</span></button></nav>
+    <nav class="campaign-tabs" role="tablist" aria-label="Campaign sections">
+      <button class="campaign-tab is-active" data-tab="overview" onclick="showTab('overview')">Overview</button>
+      <button class="campaign-tab" data-tab="messaging" onclick="showTab('messaging')">Messaging</button>
+      <button class="campaign-tab" data-tab="leads" onclick="showTab('leads')">Leads <span class="tab-count tnum">(${fmt(sent)})</span></button></nav>
+    <div class="campaign-page-body">
     <section class="tab-panel" data-tab="overview">
-      <div class="card"><div class="card-title">The campaign so far</div>
-        <div class="card-sub">Everything this campaign has done since it started. Numbers from the daily Smartlead sync.</div>
-        <div class="glance">
-          <div class="tile"><div class="lab">Emails sent</div><div class="num tnum">${fmt(sent)}</div><div class="hint">to date</div></div>
-          <div class="tile"><div class="lab">Replies</div><div class="num tnum">${fmt(rep)}</div><div class="hint">${(+rr).toFixed(2)}% — ${floorHint}</div></div>
-          <div class="tile"><div class="lab">Positive</div><div class="num tnum${pos?"":" bad"}">${fmt(pos)}</div><div class="hint">Smartlead's interested mark</div></div>
-          <div class="tile"><div class="lab">Meetings</div><div class="num tnum">${fmt(mtg)}</div><div class="hint">booked from this campaign</div></div>
-        </div>
-        <div class="plain">${why}</div></div></section>
+      ${glanceHTML(r)}
+      ${actionsHTML(rows, r.id, r.smartlead_url)}
+    </section>
     <section class="tab-panel hidden" data-tab="messaging">
-      <div class="card"><div class="card-title">Version performance</div>
-        <div class="card-sub">Every version, pulled live from Smartlead (positives = Smartlead's "interested" mark).</div>
-        ${messagingTable(r.variants)}</div>
-      ${sequenceView(r.variants)}</section>
+      <div class="ov-card"><div class="card-title">Version performance</div>
+        <p class="card-subtitle">Every version, one row per email step &mdash; send/reply counters from Smartlead, meetings from our reply archive (positives = Smartlead's interested mark).</p>
+        <div id="messaging-root"><p class="lw-loading">Pulling live version stats from Smartlead&hellip;</p></div></div>
+      <div class="ov-card"><div class="card-title">The sequence</div>
+        <div id="sequence-root"><p class="card-subtitle">Loading&hellip;</p></div>
+        <p class="sample-footer">The live copy itself stays in Smartlead (the only safe place to edit it).${seqUrl?' <a class="action-link action-link--bare" href="'+esc(seqUrl)+'" target="_blank" rel="noopener">Open the sequence in Smartlead</a>':""}</p></div>
+    </section>
     <section class="tab-panel hidden" data-tab="leads">${leadsTable(leads, sent)}</section>
+    </div>
   </div>
   <div class="toast" id="toast">✓ Marked done — staged for approval</div>`;
   return app;
@@ -324,20 +781,17 @@ function render(r, leads){
 
 function emptyState(msg){
   return `<div class="wrap"><div class="eyebrow">Optimisation cockpit</div>
-    <div class="card" style="margin-top:20px"><div class="card-title">Nothing to work on here</div>
-    <div class="card-sub">${esc(msg||("No open optimisation found for campaign "+(CID||"")+". It may already be actioned, or this campaign has no flags right now."))}</div></div></div>`;
+    <div class="ov-card" style="margin-top:20px"><div class="card-title">Nothing to work on here</div>
+    <div class="card-subtitle">${esc(msg||("No open optimisation found for campaign "+(CID||"")+". It may already be actioned, or this campaign has no flags right now."))}</div></div></div>`;
 }
 
 // ── interactions ──
+let ROW=null; /* the pinned optimisation, for lazy tab hydration */
 function togglePin(){ $("pin").classList.toggle("collapsed"); }
 function showTab(name){
   document.querySelectorAll(".tab-panel").forEach(p=>p.classList.toggle("hidden", p.getAttribute("data-tab")!==name));
-  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on", t.getAttribute("data-tab")===name));
-}
-function showVariant(v, el){
-  const step=el.closest(".seq-step");
-  step.querySelectorAll(".vpill").forEach(p=>p.classList.toggle("on", p===el));
-  step.querySelectorAll(".v-copy").forEach(c=>c.classList.toggle("hidden", c.getAttribute("data-v")!==v));
+  document.querySelectorAll(".campaign-tab").forEach(t=>t.classList.toggle("is-active", t.getAttribute("data-tab")===name));
+  if(name==="messaging" && ROW){ hydrateMessaging(ROW); hydrateSequenceCopy(ROW); }
 }
 function toast(msg){ const t=$("toast"); if(!t) return; t.textContent=msg; t.classList.add("on"); setTimeout(()=>t.classList.remove("on"),2600); }
 async function markDone(nid){
@@ -384,13 +838,23 @@ async function boot(){
     rows = rows.filter(r=>(r.status||"new")==="new" || NID);
     if(!rows.length){ $("app").innerHTML=emptyState(); return; }
     const row=pickPrimary(rows);
+    ROW=row;
+    /* Suggested actions list: pinned first, then the rest by priority */
+    const rank={High:3,Medium:2,Low:1};
+    const acts=[row].concat(rows.filter(r=>r!==row)
+      .sort((a,b)=>(rank[b.priority]||0)-(rank[a.priority]||0)));
     // nid-only open (or a primary row from a different campaign than ?c=):
     // fire the leads fetch for the row we actually picked.
     if(!leadsP || (CID && String(row.campaign_id)!==String(CID))) leadsP = fetchLeadsFor(row.campaign_id);
     // Render the card as soon as notifications lands - the leads grid shows a
     // loading placeholder and hydrates when (if) the parallel fetch resolves.
-    $("app").innerHTML = render(row, "loading");
+    $("app").innerHTML = render(row, acts, "loading");
     leadsP.then(leads=>hydrateLeads(row, leads));
+    /* the glance's audience bar + the Messaging tab hydrate from the same
+       cockpit endpoints as the campaign page */
+    hydrateAudience(row.campaign_id);
+    hydrateMessaging(row);
+    hydrateSequenceCopy(row);
   }catch(e){ $("app").innerHTML=emptyState("Couldn't load this optimisation ("+esc(e.message||e)+")."); }
 }
 boot();
