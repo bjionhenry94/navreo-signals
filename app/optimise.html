@@ -170,23 +170,6 @@
   .gv-legend b{color:var(--fg);font-family:var(--font-display);font-weight:400}
   @media (max-width:640px){.gv-quad{grid-template-columns:repeat(2,1fr);gap:16px}}
 
-  /* ── Suggested actions (campaign-detail look, read-only here) ── */
-  .actions-section{display:flex;flex-direction:column;gap:10px;margin-top:14px}
-  .badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--r-pill);font-size:0.68rem;font-weight:700;white-space:nowrap;border:1px solid transparent}
-  .badge--red{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-bd)}
-  .badge--amber{background:var(--warning-bg);color:var(--warning);border-color:var(--warning-bd)}
-  .badge--neutral{background:transparent;color:var(--fg-muted);border-color:var(--border-strong)}
-  .badge--pin{background:var(--nav-orange-100);color:var(--nav-orange-600);border-color:rgba(255,77,0,.3)}
-  .action-card{background:var(--sunken);border:1px solid var(--border);border-radius:var(--r-lg);padding:14px 16px;display:flex;gap:12px;align-items:flex-start}
-  .action-num{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:0.7rem;font-weight:700;background:var(--bg);border:1px solid var(--border-strong);color:var(--fg-muted);margin-top:2px}
-  .action-body{flex:1 1 auto;min-width:0}
-  .action-top{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
-  .opt-smartlead{margin-left:auto;font-size:0.78rem;font-weight:600;color:var(--fg-subtle);text-decoration:none}
-  .opt-smartlead:hover{color:var(--fg)}
-  .action-how{font-weight:700;font-size:0.92rem;color:var(--fg);line-height:1.5;margin-bottom:6px}
-  .action-payoff{font-size:0.8rem;color:var(--fg-subtle);line-height:1.5}
-  .action-payoff::before{content:"\2192\0020"}
-
   /* ── Messaging: version performance table (campaign-detail look) ── */
   .leads-table-wrap{overflow-x:auto;margin-top:14px}
   table.leads-table{width:100%;border-collapse:collapse;font-size:0.82rem;min-width:480px}
@@ -410,28 +393,6 @@ function hydrateAudience(campaignId){
   getJSON("/api/cockpit/campaign-detail?id="+encodeURIComponent(campaignId))
     .then(d=>{ CACHE.detailTried=true; if(d && !d.degraded) CACHE.detail=d; paintAudience(); })
     .catch(()=>{ CACHE.detailTried=true; paintAudience(); });
-}
-
-/* ── Overview: suggested actions (campaign-detail card grammar; read-only
-   mirror here — the pin above is where this page's one job gets marked done,
-   status changes and prompts live on the campaigns page) ─────────────────── */
-function actionsHTML(rows, pinnedId, smartleadUrl){
-  if(!(rows&&rows.length)) return "";
-  const badge=(r)=> r.id===pinnedId ? '<span class="badge badge--pin">You\'re on it</span>'
-    : r.priority==="High" ? '<span class="badge badge--red">High</span>'
-    : r.priority==="Low" ? '<span class="badge badge--neutral">Low</span>'
-    : '<span class="badge badge--amber">Medium</span>';
-  const cards=rows.map((r,i)=>{
-    const act=esc(r.suggested_action||r.title||"Review this campaign").replace(/^(\w)/,c=>c.toUpperCase());
-    const payoff=(r.title && r.suggested_action && r.title!==r.suggested_action)? '<p class="action-payoff">'+esc(r.title)+'</p>':"";
-    return '<div class="action-card"><span class="action-num" aria-hidden="true">'+(i+1)+'</span>'
-      +'<div class="action-body"><div class="action-top">'+badge(r)
-      +(smartleadUrl?'<a class="opt-smartlead" href="'+esc(smartleadUrl)+'" target="_blank" rel="noopener">Open in Smartlead ↗</a>':"")
-      +'</div><p class="action-how">'+act+'</p>'+payoff+'</div></div>';
-  }).join("");
-  return '<div class="ov-card"><div class="card-title">Suggested actions</div>'
-    +'<p class="card-subtitle">Every open optimisation on this campaign. The pinned one above is the job on this page.</p>'
-    +'<div class="actions-section">'+cards+'</div></div>';
 }
 
 /* ── Messaging: version performance (ported from the campaign page; read-only
@@ -728,7 +689,7 @@ function leadsTable(leads, sent){
   return shell(rows||'<tr><td colspan="3" class="lead-sub">Live audience loads from Smartlead.</td></tr>');
 }
 
-function render(r, rows, leads){
+function render(r, leads){
   const sent=r.sent||0, rep=r.replied||0;
   const rr=(r.reply_rate!=null)? r.reply_rate : (sent? (rep/sent*100):0);
   const job = esc((r.suggested_action||r.title||"Review this campaign")).replace(/^(\w)/,c=>c.toUpperCase());
@@ -762,7 +723,6 @@ function render(r, rows, leads){
     <div class="campaign-page-body">
     <section class="tab-panel" data-tab="overview">
       ${glanceHTML(r)}
-      ${actionsHTML(rows, r.id, r.smartlead_url)}
     </section>
     <section class="tab-panel hidden" data-tab="messaging">
       <div class="ov-card"><div class="card-title">Version performance</div>
@@ -839,16 +799,12 @@ async function boot(){
     if(!rows.length){ $("app").innerHTML=emptyState(); return; }
     const row=pickPrimary(rows);
     ROW=row;
-    /* Suggested actions list: pinned first, then the rest by priority */
-    const rank={High:3,Medium:2,Low:1};
-    const acts=[row].concat(rows.filter(r=>r!==row)
-      .sort((a,b)=>(rank[b.priority]||0)-(rank[a.priority]||0)));
     // nid-only open (or a primary row from a different campaign than ?c=):
     // fire the leads fetch for the row we actually picked.
     if(!leadsP || (CID && String(row.campaign_id)!==String(CID))) leadsP = fetchLeadsFor(row.campaign_id);
     // Render the card as soon as notifications lands - the leads grid shows a
     // loading placeholder and hydrates when (if) the parallel fetch resolves.
-    $("app").innerHTML = render(row, acts, "loading");
+    $("app").innerHTML = render(row, "loading");
     leadsP.then(leads=>hydrateLeads(row, leads));
     /* the glance's audience bar + the Messaging tab hydrate from the same
        cockpit endpoints as the campaign page */
