@@ -209,8 +209,11 @@ a{color:inherit;text-decoration:none}
   box-shadow:0 6px 22px -12px rgba(20,17,14,.35);opacity:0;transform:translateX(14px);
   transition:opacity .28s ease,transform .28s ease;max-width:340px;overflow:hidden;text-overflow:ellipsis;}
 .tchip.in{transform:none;}
+.tchip{pointer-events:auto;}
 .tchip .lt-dot{width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;}
 .tchip b{color:var(--ink);font-weight:600;}
+.tchip-x{border:none;background:transparent;color:var(--ink-3);font-size:15px;line-height:1;cursor:pointer;padding:0 0 0 2px;flex:none;}
+.tchip-x:hover{color:var(--ink);}
 /* page-follows-chat: spotlight the panel chat just changed */
 @keyframes spotpulse{0%{box-shadow:0 0 0 4px var(--orange-100);}55%{box-shadow:0 0 0 4px var(--orange-100);}100%{box-shadow:0 0 0 0 rgba(255,77,0,0);}}
 .panel.spot{animation:spotpulse 1.7s ease-out;border-radius:12px;}
@@ -681,7 +684,8 @@ function fmtTime(u){try{const d=u?new Date(u):new Date();return d.toLocaleTimeSt
 function addUpdate(note,updated){
   const chip=document.createElement('div');
   chip.className='tchip';
-  chip.innerHTML=`<span class="lt-dot"></span><span>${note?'<b>'+esc(note)+'</b>':'Updated from chat'} · ${fmtTime(updated)}</span>`;
+  chip.innerHTML=`<span class="lt-dot"></span><span>${note?'<b>'+esc(note)+'</b>':'Updated from chat'} · ${fmtTime(updated)}</span><button class="tchip-x" aria-label="Dismiss">&#215;</button>`;
+  chip.querySelector('.tchip-x').onclick=()=>{chip.style.opacity='0';setTimeout(()=>chip.remove(),200);};
   toast.prepend(chip);
   // depth fade: newest bright, older ones fade back as they're pushed down/out
   const kids=[...toast.children];
