@@ -1918,23 +1918,54 @@ function renderOffer() {
   // 2026-07-29). "All" uses the whole-book table; a client uses its own or,
   // if it has none, an honest "not enough for this client".
   var perClient = state.client !== "All";
-  var offerList = perClient
+  var baseList = perClient
     ? (p && p.by_client && p.by_client[state.client])
     : (p && p.stats && p.stats.offers);
+  // Re-price each offer over the SELECTED window whenever both sides carry the
+  // goods: the insight rows ship member-campaign ids (o[8]) and the sweep rows
+  // carry windowed sent/pos/mtg — the same engine as the rank card, so the two
+  // cards read the same reality for the same window. Lifetime numbers survive
+  // only as the labelled fallback (pre-ids payload or a still-building sweep).
+  var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
+  var byId = {};
+  (win || []).forEach(function (r) { if (r.pos != null) byId[String(r.id)] = r; });
+  var windowable = !!(baseList && baseList.length &&
+                      baseList.some(function (o) { return o[8] && o[8].length; }) &&
+                      Object.keys(byId).length);
+  var offerList = baseList, windowed = false;
+  if (windowable) {
+    var minSentO = Math.max(500, Math.round(2000 * state.range / 30));
+    var rows2 = [];
+    baseList.forEach(function (o) {
+      var ids = o[8] || [];
+      var sent = 0, pos = 0, mtg = 0, camps2 = 0;
+      ids.forEach(function (id) {
+        var r = byId[String(id)];
+        if (!r) return;
+        sent += r.sent || 0; pos += r.pos || 0; mtg += r.mtg || 0; camps2++;
+      });
+      if (sent < minSentO) return;
+      rows2.push([o[0], sent ? Math.round(pos / sent * 1000) / 10 : null, sent, camps2,
+                  pos > 0 ? Math.round(sent / pos) : null,
+                  mtg > 0 ? Math.round(sent / mtg) : null, pos, mtg]);
+    });
+    rows2.sort(function (a, b) { return ((a[4] == null) - (b[4] == null)) || ((a[4] || 0) - (b[4] || 0)); });
+    // committed: a thin window shows its honest empty state below — never the
+    // lifetime table silently dressed up as the window's
+    offerList = rows2; windowed = true;
+  }
+  var scopeTxt = (perClient ? "· " + state.client : "· whole book") + " · " + (windowed ? rangeLabel() : "all-time");
   if (!p || !offerList || offerList.length < 2) {
     box.innerHTML = '<div class="subline">Not enough sending behind any one offer' +
-      (perClient ? " for " + escq(state.client) : "") + " yet.</div>";
+      (perClient ? " for " + escq(state.client) : "") +
+      (windowed ? " in the " + rangeLabel() : "") + " yet.</div>";
     $("offer-sub").textContent = "";
     $("offer-take-row").style.display = "none";
-    if ($("offer-scope")) $("offer-scope").textContent = (state.client === "All" ? "· whole book" : "· " + state.client) + " · all-time";
+    if ($("offer-scope")) $("offer-scope").textContent = scopeTxt;
     return;
   }
   var offers = offerList.slice(0, 5);
-  // "all-time" is honest, not lazy: offer economics come from the insights
-  // cron's lifetime aggregation — there is no per-window per-offer split, and
-  // 7-day meeting counts per offer would be single-digit noise anyway. The tag
-  // stops the card from silently posing as a windowed number.
-  if ($("offer-scope")) $("offer-scope").textContent = (perClient ? "· " + state.client : "· whole book") + " · all-time";
+  if ($("offer-scope")) $("offer-scope").textContent = scopeTxt;
   // Two costs per offer: emails to buy one positive reply, emails to buy one
   // meeting. Lower is better, so the winner is the SMALLEST number — the
   // opposite reading to every rate on this page, hence the column headers.
@@ -1950,11 +1981,19 @@ function renderOffer() {
   var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
   var nomeet = offers.filter(function (o) { return !o[5]; }).length;
   $("offer-sub").textContent = (perClient ? state.client + " — " : "Whole book, every campaign — ") +
-    "emails it costs to buy one. Across " + fmtN(camps) + " campaigns and " + fmtN(sends) + " emails." +
+    "emails it costs to buy one" + (windowed ? " · " + rangeLabel() : "") +
+    ". Across " + fmtN(camps) + " campaigns and " + fmtN(sends) + " emails." +
     (nomeet ? " “–” means no meetings booked off that offer yet." : "");
-  // the take-line is a whole-book recommendation; only show it on the All view
-  if (!perClient && p.act) { $("offer-take").textContent = p.act; $("offer-take-row").style.display = ""; }
-  else $("offer-take-row").style.display = "none";
+  // take-line: a windowed view derives the winner from THIS window; the cron's
+  // lifetime recommendation shows only on the lifetime fallback (mixing the
+  // two could contradict the table it sits under)
+  if (windowed && offers.length && offers[0][4] != null) {
+    $("offer-take").textContent = "Make " + String(offers[0][0]).toLowerCase() +
+      " the ask — cheapest positive in the " + rangeLabel() + ".";
+    $("offer-take-row").style.display = "";
+  } else if (!windowed && !perClient && p.act) {
+    $("offer-take").textContent = p.act; $("offer-take-row").style.display = "";
+  } else $("offer-take-row").style.display = "none";
 }
 /* ── lane 5: who replies + waiting ── */
 // live per-client × range payload from /api/who-replies (see ensureWho)
@@ -2042,17 +2081,25 @@ function renderSubseq(s) {
       takeRow = $("subseq-take-row"), take = $("subseq-take");
   if (!scope || !body) return;
   if (!s || !s.sent) {
-    scope.textContent = "· automated subsequences";
-    body.innerHTML = '<div class="subline">Fills in after the next follow-up sync.</div>';
+    if (s && s.windowed) {
+      // windowed stats exist and the answer is a real zero — say so instead
+      // of the "still syncing" line (a quiet week is data, not a data gap)
+      scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups · " + rangeLabel();
+      body.innerHTML = '<div class="subline">No follow-up sends in the ' + rangeLabel() + ".</div>";
+    } else {
+      scope.textContent = "· automated subsequences";
+      body.innerHTML = '<div class="subline">Fills in after the next follow-up sync.</div>';
+    }
     takeRow.style.display = "none";
     return;
   }
   var T_REPLY = 12.5, T_BOOK = 5;
   var reply = Math.round(1000 * s.positives / s.sent) / 10;
   var book = Math.round(1000 * s.booked / s.sent) / 10;
-  // all-time: subsequence stats are lifetime Smartlead analytics per sub —
-  // windowing them would need per-sub by-date calls (3× the hourly call load)
-  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups · all-time";
+  // windowed payloads (s.windowed, per the page's 7/14/30 toggle) carry the
+  // hourly sync's per-window sent + archive positives/booked; "all-time" only
+  // survives as the label for a payload from before that sync ran
+  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups · " + (s.windowed ? rangeLabel() : "all-time");
   function tone(v, t) { return v >= t ? "green" : v >= t * 0.75 ? "amber" : "red"; }
   function chip(tn) {
     var t = tn === "green" ? "On target" : tn === "amber" ? "Just under" : "Well under";

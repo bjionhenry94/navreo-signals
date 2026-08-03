@@ -8808,6 +8808,7 @@ def _subseq_stats_sync_all():
         return
     try:
         per: dict = {}
+        _end = _dtmod.date.today()
         for w in ws_enabled():
             wid = w.get("id")
             wkey = ws_key(wid)
@@ -8830,14 +8831,50 @@ def _subseq_stats_sync_all():
                         _smartlead_json("GET", f"/campaigns/{cid}/analytics", workspace=wid))
                 except Exception:  # noqa: BLE001 — a missing sub is a zero, not a failure
                     continue
-                e = per.setdefault(cl, {"enrolled": 0, "sent": 0, "positives": 0, "sub_ids": []})
+                e = per.setdefault(cl, {"enrolled": 0, "sent": 0, "positives": 0, "sub_ids": [],
+                                        "wsent": {7: 0, 14: 0, 30: 0}})
                 e["enrolled"] += m["total"]
                 e["sent"] += m["sent"]
                 e["positives"] += m["positives"]
                 e["sub_ids"].append(cid)
+                # windowed SENT per sub (7/14/30) so the follow-ups card can
+                # price the SELECTED range, not the sub's whole life. 3 extra
+                # paced calls per sub per hour — the sweep does 500 in 4 min.
+                for _w in (7, 14, 30):
+                    try:
+                        d2 = _smartlead_json(
+                            "GET", f"/campaigns/{cid}/analytics-by-date"
+                                   f"?start_date={(_end - _dtmod.timedelta(days=_w - 1)).isoformat()}"
+                                   f"&end_date={_end.isoformat()}",
+                            workspace=wid, timeout=30)
+                        e["wsent"][_w] += int(float(d2.get("sent_count") or 0)) if isinstance(d2, dict) else 0
+                    except Exception:  # noqa: BLE001 — a missing window is a zero
+                        pass
+                    time.sleep(0.12)
                 time.sleep(0.3)  # ~200/min — under the shared Smartlead cap
+        # Windowed positives/booked per client from the replies archive — the
+        # same defs the rank card and hub RPC use (positives = _AH_POSITIVE_CATS
+        # row count in window; booked = a lead's FIRST 'Call Booked' counted in
+        # the window it landed). Two light reads once per sync; a failure leaves
+        # records without `win` and the card falls back to lifetime + label.
+        _pos_rows, _first_cb = [], {}
+        try:
+            _since30 = (_end - _dtmod.timedelta(days=29)).isoformat()
+            _pq = urllib.parse.quote(",".join(_AH_POSITIVE_CATS))
+            _pos_rows = sb_get_all("replies?select=smartlead_campaign_id,replied_at"
+                                   f"&category=in.({_pq})&replied_at=gte.{_since30}&order=id") or []
+            for r in (sb_get_all("replies?select=smartlead_campaign_id,email,replied_at"
+                                 f"&category=eq.{urllib.parse.quote('Call Booked')}&order=id") or []):
+                k = (str(r.get("smartlead_campaign_id")), (r.get("email") or "").strip().lower())
+                t = str(r.get("replied_at") or "")
+                if t and (k not in _first_cb or t < _first_cb[k]):
+                    _first_cb[k] = t
+        except Exception as e:  # noqa: BLE001
+            print(f"[subseq-sync] archive window reads failed: {e}", file=sys.stderr)
+            _pos_rows, _first_cb = [], {}
         out: dict = {}
-        allc = {"enrolled": 0, "sent": 0, "positives": 0, "booked": 0}
+        allc = {"enrolled": 0, "sent": 0, "positives": 0, "booked": 0,
+                "win": {str(w): {"sent": 0, "positives": 0, "booked": 0} for w in (7, 14, 30)}}
         for cl, e in per.items():
             booked = 0
             try:
@@ -8846,11 +8883,25 @@ def _subseq_stats_sync_all():
                     booked = sum(mm.values())
             except Exception:  # noqa: BLE001
                 booked = 0
+            _subs = {str(x) for x in e["sub_ids"]}
+            win = {}
+            for _w in (7, 14, 30):
+                _since = (_end - _dtmod.timedelta(days=_w - 1)).isoformat()
+                win[str(_w)] = {
+                    "sent": (e.get("wsent") or {}).get(_w, 0),
+                    "positives": sum(1 for r in _pos_rows
+                                     if str(r.get("smartlead_campaign_id")) in _subs
+                                     and str(r.get("replied_at") or "") >= _since),
+                    "booked": sum(1 for (_c, _em), t in _first_cb.items()
+                                  if _c in _subs and t >= _since)}
             rec = {"enrolled": e["enrolled"], "sent": e["sent"],
-                   "positives": e["positives"], "booked": booked}
+                   "positives": e["positives"], "booked": booked, "win": win}
             out[cl] = rec
             for k in ("enrolled", "sent", "positives", "booked"):
                 allc[k] += rec[k]
+            for _w in ("7", "14", "30"):
+                for k in ("sent", "positives", "booked"):
+                    allc["win"][_w][k] += win[_w][k]
         out["All"] = allc
         with _SUBSEQ_LOCK:
             _SUBSEQ_STATS.clear()
@@ -10479,7 +10530,7 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
         for grp in groups:
             agg = per_group_agg.setdefault(grp, {})
             a = agg.setdefault(bucket, {"sent": 0, "replies": 0, "pos": 0,
-                                        "meet": 0, "meet_sent": 0, "camps": []})
+                                        "meet": 0, "meet_sent": 0, "camps": [], "ids": []})
             a["sent"] += sent
             a["replies"] += row.get("replied") or 0
             a["pos"] += row.get("positives") or 0
@@ -10491,6 +10542,7 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
             a["meet"] += _cb_meet.get(str(cid), 0) if isinstance(_cb_meet, dict) else 0
             a["meet_sent"] += sent
             a["camps"].append(row.get("name") or cid)
+            a["ids"].append(str(cid))
 
     def _per(sent, n):
         return round(sent / n) if (n and sent) else None
@@ -10500,9 +10552,13 @@ def _ah_insights_refresh_inner(force: bool) -> dict:
         for k, a in agg.items():
             if a["sent"] < 2000:
                 continue
+            # o[8] = member campaign ids: lets the analytics page re-price each
+            # offer over the SELECTED 7/14/30 window from the client-windows
+            # sweep's per-campaign windowed sent/pos/mtg (same engine as the
+            # rank card). Readers of o[0..7] are unaffected.
             out.append([k, round(a["replies"] / a["sent"] * 100, 1), a["sent"], len(a["camps"]),
                         _per(a["sent"], a["pos"]), _per(a["meet_sent"], a["meet"]),
-                        a["pos"], a["meet"]])
+                        a["pos"], a["meet"], a["ids"]])
         out.sort(key=lambda o: (o[4] is None, o[4] or 0))   # cheapest positive first
         return out
 
@@ -16243,7 +16299,15 @@ def _who_replies_compute(client: str, days: int) -> dict:
         with _SUBSEQ_LOCK:
             s = _SUBSEQ_STATS.get(client)
             s = dict(s) if s else None
-        if s and s.get("sent"):
+        wv = (s.get("win") or {}).get(str(days)) if s else None
+        if wv is not None:
+            # windowed stats exist for this exact 7/14/30 window — serve them
+            # (sent may be a real 0: the card shows an honest zero-state, not
+            # the lifetime numbers dressed up as the window's)
+            subseq = {"enrolled": s.get("enrolled", 0), "sent": wv.get("sent", 0),
+                      "positives": wv.get("positives", 0), "booked": wv.get("booked", 0),
+                      "windowed": True, "days": days}
+        elif s and s.get("sent"):
             subseq = {"enrolled": s.get("enrolled", 0), "sent": s["sent"],
                       "positives": s.get("positives", 0), "booked": s.get("booked", 0)}
     except Exception:  # noqa: BLE001
@@ -16264,8 +16328,14 @@ def who_replies_get(client: str, days: int) -> tuple[dict, int]:
             # TTL while the follow-ups card said "fills in after the next sync".
             # Once subseq stats exist for this client, a null-subseq cache entry
             # is expired instead of served.
-            stale_subseq = (ent["data"].get("subseq") is None
-                            and (_SUBSEQ_STATS.get(client) or {}).get("sent"))
+            stale_subseq = ((ent["data"].get("subseq") is None
+                             and (_SUBSEQ_STATS.get(client) or {}).get("sent"))
+                            # same race, windowed flavour: a payload cached before
+                            # the sync's first windowed pass serves lifetime
+                            # numbers for the whole TTL while win stats sit ready
+                            or (isinstance(ent["data"].get("subseq"), dict)
+                                and not ent["data"]["subseq"].get("windowed")
+                                and bool((_SUBSEQ_STATS.get(client) or {}).get("win"))))
             if not stale_subseq:
                 return ent["data"], 200
     try:
