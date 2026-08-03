@@ -8814,7 +8814,13 @@ def _subseq_stats_sync_all():
             wkey = ws_key(wid)
             if not wkey:
                 continue
-            camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={wkey}", {})
+            try:
+                camps = http_json("GET", f"{SMARTLEAD_BASE}/campaigns?api_key={wkey}", {})
+            except Exception as e:  # noqa: BLE001 — a boot-burst 429 on one
+                # workspace list must not kill the whole sync until the next
+                # hourly tick (seen live 2026-08-03: sync dead for an hour)
+                print(f"[subseq-sync] campaigns list {wid} failed: {e}", file=sys.stderr)
+                continue
             if not isinstance(camps, list):
                 continue
             by_id = {c.get("id"): c for c in camps}
@@ -8832,31 +8838,42 @@ def _subseq_stats_sync_all():
                 except Exception:  # noqa: BLE001 — a missing sub is a zero, not a failure
                     continue
                 e = per.setdefault(cl, {"enrolled": 0, "sent": 0, "positives": 0, "sub_ids": [],
-                                        "wsent": {7: 0, 14: 0, 30: 0}})
+                                        "ws_ids": {}})
                 e["enrolled"] += m["total"]
                 e["sent"] += m["sent"]
                 e["positives"] += m["positives"]
                 e["sub_ids"].append(cid)
-                # windowed SENT per sub (7/14/30) so the follow-ups card can
-                # price the SELECTED range, not the sub's whole life. 3 extra
-                # paced calls per sub per hour — the sweep does 500 in 4 min.
-                for _w in (7, 14, 30):
-                    try:
-                        d2 = _smartlead_json(
-                            "GET", f"/campaigns/{cid}/analytics-by-date"
-                                   f"?start_date={(_end - _dtmod.timedelta(days=_w - 1)).isoformat()}"
-                                   f"&end_date={_end.isoformat()}",
-                            workspace=wid, timeout=30)
-                        e["wsent"][_w] += int(float(d2.get("sent_count") or 0)) if isinstance(d2, dict) else 0
-                    except Exception:  # noqa: BLE001 — a missing window is a zero
-                        pass
-                    time.sleep(0.12)
+                e["ws_ids"].setdefault(wid, []).append(str(cid))
                 time.sleep(0.3)  # ~200/min — under the shared Smartlead cap
+        # Windowed SENT per client: ONE scoped day-wise call per client covers
+        # every one of its subs (campaign_ids filter, proven 2026-07-29) —
+        # per-sub by-date calls tripled the run and tripped the shared 200/min
+        # Smartlead cap on boot (the 429 killed the sync for its whole hourly
+        # tick, seen live 2026-08-03). A failed client is marked wfail and
+        # ships WITHOUT windowed stats — lifetime + "all-time" label is honest,
+        # a zero-sent window that actually sent is not.
+        _days_out = [(_end - _dtmod.timedelta(days=29 - i)).isoformat() for i in range(30)]
+        for cl, e in per.items():
+            e["wsent"] = {7: 0, 14: 0, 30: 0}
+            for wid2, ids2 in (e.get("ws_ids") or {}).items():
+                try:
+                    s2 = _daywise_series(ws_key(wid2), _days_out,
+                                         _days_out[0], _end.isoformat(),
+                                         campaign_ids=ids2)
+                except Exception as e2:  # noqa: BLE001
+                    print(f"[subseq-sync] day-wise {cl}/{wid2} failed: {e2}", file=sys.stderr)
+                    e["wfail"] = True
+                    continue
+                _sent_arr = (s2 or {}).get("sent") or []
+                for _w in (7, 14, 30):
+                    e["wsent"][_w] += sum(v or 0 for v in _sent_arr[-_w:])
+                time.sleep(0.3)
         # Windowed positives/booked per client from the replies archive — the
         # same defs the rank card and hub RPC use (positives = _AH_POSITIVE_CATS
         # row count in window; booked = a lead's FIRST 'Call Booked' counted in
         # the window it landed). Two light reads once per sync; a failure leaves
         # records without `win` and the card falls back to lifetime + label.
+        _arch_ok = True
         _pos_rows, _first_cb = [], {}
         try:
             _since30 = (_end - _dtmod.timedelta(days=29)).isoformat()
@@ -8872,6 +8889,7 @@ def _subseq_stats_sync_all():
         except Exception as e:  # noqa: BLE001
             print(f"[subseq-sync] archive window reads failed: {e}", file=sys.stderr)
             _pos_rows, _first_cb = [], {}
+            _arch_ok = False
         out: dict = {}
         allc = {"enrolled": 0, "sent": 0, "positives": 0, "booked": 0,
                 "win": {str(w): {"sent": 0, "positives": 0, "booked": 0} for w in (7, 14, 30)}}
@@ -8883,25 +8901,33 @@ def _subseq_stats_sync_all():
                     booked = sum(mm.values())
             except Exception:  # noqa: BLE001
                 booked = 0
-            _subs = {str(x) for x in e["sub_ids"]}
-            win = {}
-            for _w in (7, 14, 30):
-                _since = (_end - _dtmod.timedelta(days=_w - 1)).isoformat()
-                win[str(_w)] = {
-                    "sent": (e.get("wsent") or {}).get(_w, 0),
-                    "positives": sum(1 for r in _pos_rows
-                                     if str(r.get("smartlead_campaign_id")) in _subs
-                                     and str(r.get("replied_at") or "") >= _since),
-                    "booked": sum(1 for (_c, _em), t in _first_cb.items()
-                                  if _c in _subs and t >= _since)}
             rec = {"enrolled": e["enrolled"], "sent": e["sent"],
-                   "positives": e["positives"], "booked": booked, "win": win}
+                   "positives": e["positives"], "booked": booked}
+            if _arch_ok and not e.get("wfail"):
+                _subs = {str(x) for x in e["sub_ids"]}
+                win = {}
+                for _w in (7, 14, 30):
+                    _since = (_end - _dtmod.timedelta(days=_w - 1)).isoformat()
+                    win[str(_w)] = {
+                        "sent": (e.get("wsent") or {}).get(_w, 0),
+                        "positives": sum(1 for r in _pos_rows
+                                         if str(r.get("smartlead_campaign_id")) in _subs
+                                         and str(r.get("replied_at") or "") >= _since),
+                        "booked": sum(1 for (_c, _em), t in _first_cb.items()
+                                      if _c in _subs and t >= _since)}
+                rec["win"] = win
+                for _w in ("7", "14", "30"):
+                    for k in ("sent", "positives", "booked"):
+                        allc["win"][_w][k] += win[_w][k]
+            else:
+                allc["wfail"] = True
             out[cl] = rec
             for k in ("enrolled", "sent", "positives", "booked"):
                 allc[k] += rec[k]
-            for _w in ("7", "14", "30"):
-                for k in ("sent", "positives", "booked"):
-                    allc["win"][_w][k] += win[_w][k]
+        # the All row's windows are only real if EVERY client contributed —
+        # a partial sum silently understates the fleet
+        if allc.pop("wfail", False):
+            allc.pop("win", None)
         out["All"] = allc
         with _SUBSEQ_LOCK:
             _SUBSEQ_STATS.clear()
