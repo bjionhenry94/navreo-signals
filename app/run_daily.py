@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server  # noqa: E402
 import build_notifications  # noqa: E402 — Lilly Optimiser notifications generator
+import campaign_register  # noqa: E402 — server-side auto-registration reconcile
 
 LOG = Path(__file__).parent / "data" / "daily_log.json"
 
@@ -142,6 +143,19 @@ def main():
               + (", ".join(f"{k}: {v}" for k, v in list(bf.items())[:8]) or "none"))
     except Exception as e:  # noqa: BLE001 — stamping must never kill the run
         print(f"vpath backfill · FAILED: {str(e)[:200]}")
+
+    # Auto-register any freshly-built Smartlead campaign the tool doesn't yet
+    # know about (Bjion 2026-08-03: "happens automatically from server-side").
+    # Cheap in steady state — one /campaigns list per workspace, a leads export
+    # only for genuinely new campaigns — so it runs every tick, no gate.
+    try:
+        r = campaign_register.reconcile()
+        names = ", ".join(x["id"] for x in r["registered"][:8]) or "none"
+        print(f"campaign register · checked {r['checked']}, registered "
+              f"{len(r['registered'])} ({names})"
+              + (f", {len(r['errors'])} error(s)" if r["errors"] else ""))
+    except Exception as e:  # noqa: BLE001 — registration must never kill the run
+        print(f"campaign register · FAILED: {str(e)[:200]}")
 
 
 if __name__ == "__main__":
