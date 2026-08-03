@@ -25,6 +25,8 @@ a{color:inherit;text-decoration:none}
 .sid-copy{display:block;margin-top:5px;padding:0;border:none;background:transparent;font-family:var(--font-sans);
   font-size:10.5px;color:var(--ink-3);text-decoration:underline;text-underline-offset:2px;cursor:pointer;text-align:left;}
 .sid-copy:hover{color:var(--ink);}
+.sid-prompt{display:block;width:100%;margin-top:6px;height:96px;font-family:'SF Mono',ui-monospace,monospace;
+  font-size:10px;color:var(--ink-2);background:var(--cream-50);border:1px solid var(--line);border-radius:8px;padding:7px;resize:none;}
 .sechead{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);padding:8px 12px 6px;}
 .im{display:block;position:relative;border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-bottom:8px;transition:.13s;}
 .im:hover{background:var(--cream-50);border-color:var(--line);}
@@ -655,9 +657,15 @@ function renderSidebar(){
   const sc=side.querySelector('#sid-copy');
   if(sc)sc.onclick=async()=>{
     const prompt=`Open my Navreo strategy board from a previous session and carry on with it.\n\nSession id: ${sid}\nBoard: https://navreo-signals.onrender.com/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;
-    try{await navigator.clipboard.writeText(prompt);sc.textContent='Copied — paste it into a new chat';}
-    catch(e){sc.textContent='Could not copy, select the id above';}
-    setTimeout(()=>{sc.textContent='Copy prompt to open this session in a new chat';},4000);
+    try{await navigator.clipboard.writeText(prompt);sc.textContent='Copied — paste it into a new chat';
+      setTimeout(()=>{sc.textContent='Copy prompt to open this session in a new chat';},4000);}
+    catch(e){
+      // clipboard blocked: show the prompt in a small selectable box instead
+      let box=side.querySelector('#sid-prompt');
+      if(!box){box=document.createElement('textarea');box.id='sid-prompt';box.readOnly=true;box.className='sid-prompt';sc.after(box);}
+      box.value=prompt;box.focus();box.select();
+      sc.textContent='Select and copy the prompt below';
+    }
   };
   side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;copyVer={};render();});
 }
