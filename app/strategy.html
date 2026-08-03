@@ -658,10 +658,9 @@ function renderSidebar(){
   // (with an explainer) + a button that copies the carry-on prompt for a new chat.
   const sid=SERVED_RUN_ID||RUN_ID||'';
   const aboutRows=(client?`<div class="ab-row"><span class="ab-k">Building for</span><span class="ab-v">${esc(client)}</span></div>`:'')
-    +((sid&&!CLIENT_MODE)?`<div class="ab-row"><span class="ab-k">Ideas ID</span><span class="ab-v mono">${esc(sid)}</span><button class="ab-i" id="ab-i" type="button" aria-label="What is this?">i</button></div>`
-      +`<p class="ab-help" id="ab-help">Every set of ideas gets its own ID, so this board stays exactly as you leave it and never mixes with other sessions. Use the button below to pick it up in a fresh chat.</p>`
+    +((sid&&!CLIENT_MODE)?`<p class="ab-help" id="ab-help">This board is its own saved session. It stays exactly as you leave it, and the button below lets you pick it up in a fresh chat.</p>`
       +`<button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button>`:'');
-  side.innerHTML=(aboutRows?`<div class="client"><div class="lbl">About this session</div>${aboutRows}</div>`:'')
+  side.innerHTML=(aboutRows?`<div class="client"><div class="lbl">About this session${(sid&&!CLIENT_MODE)?' <button class="ab-i" id="ab-i" type="button" aria-label="What is this?">i</button>':''}</div>${aboutRows}</div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
   const abi=side.querySelector('#ab-i');
   if(abi)abi.onclick=()=>{const h=side.querySelector('#ab-help');h.classList.toggle('open');};
