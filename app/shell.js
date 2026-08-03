@@ -34,9 +34,10 @@ function ic8(name, cls = "") {
 }
 
 const ICONS = {
-  campaigns: ic8("send", "lg"),
+  campaigns: ic8("paper-plane.svg", "lg"),
   lists: ic8("user.svg", "lg"),
   deliverability: ic8("analytics.svg", "lg"),
+  mailboxes: ic8("mail", "lg"),
   setter: ic8("reply", "lg"),
   settings: ic8("settings.svg", "lg"),
 };
@@ -45,6 +46,7 @@ const NAV = [
   ["campaigns.html", "campaigns", "Campaigns"],
   ["lists.html", "lists", "Lists"],
   ["deliverability.html", "deliverability", "Analytics"],
+  ["mailboxes.html", "mailboxes", "Mailboxes"],
   ["setter.html", "setter", "Setter"],
 ];
 

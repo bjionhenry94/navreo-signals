@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mailboxes · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* mailboxes-v1 — the engine room (inbox & domain manager) as its own tab.
+   The manager was previously embedded in a fold on the Analytics page; it
+   renders here verbatim (deliverability-tab.js, DLV_EMBED mode) with its own
+   front door so deliverability ops don't live below someone else's fold. */
+.mbx-head{max-width:1240px;padding:8px 0 4px}
+.mbx-head h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
+.mbx-head .sub{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
+#dlv-embed-slot{max-width:1240px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main">
+    <div class="mbx-head">
+      <h1>Mailboxes</h1>
+      <div class="sub">Engine room — mailbox &amp; domain health for the ops team (whole fleet).</div>
+    </div>
+    <div id="dlv-embed-slot"></div>
+  </main>
+</div>
+
+<script src="shell.js"></script>
+<script src="restore-reconcile.js"></script>
+<script>window.DLV_EMBED = true;</script>
+<script src="deliverability-tab.js"></script>
+<script>
+  document.getElementById("rail").outerHTML = renderRail("mailboxes");
+  // The manager IS this page — mount immediately, no idle deferral and no
+  // fold (both existed on the Analytics page only to keep the hub's numbers
+  // from contending with the engine's ~8 boot endpoints).
+  window.renderDeliverability();
+</script>
+</body>
+</html>

@@ -10,9 +10,8 @@
 <link rel="stylesheet" href="navreo.css">
 
 <!-- ── Analytics hub styles — ported from the chosen P3 "Funnel" prototype
-     (app/prototypes/analytics-hub-p3.html), scoped under .ah so the embedded
-     deliverability engine's own styles (navreo.css + injectStyles) are
-     untouched. ── -->
+     (app/prototypes/analytics-hub-p3.html), scoped under .ah. The engine
+     room's own styles now live with it on mailboxes.html. ── -->
 <style>
 .ah{max-width:1240px}
 .ah .num{font-variant-numeric:tabular-nums}
@@ -245,7 +244,9 @@
 .ah .databar.show{display:flex;align-items:center;gap:12px}
 .ah .databar button{margin-left:auto}
 
-#dlv-embed-slot{margin-top:14px}
+.ah .moved-note{margin-top:14px;font-size:12.5px;color:var(--ink-3)}
+.ah .moved-note a{color:var(--ink-2);font-weight:600;text-decoration:none}
+.ah .moved-note a:hover{text-decoration:underline}
 
 @media (max-width:1280px){
   .ah .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 58px 54px}
@@ -502,18 +503,9 @@
 
       </div>
 
-      <!-- The deliverability engine mounts here — Today's to-do first, then the
-           inbox & domain manager (verbatim production code), blacklist and
-           batch sub-tabs, history and fleet details. -->
-      <div style="margin-top:14px">
-        <!-- On a client view the engine room folds shut: it is whole-fleet ops
-             plumbing either way, and repeating it full-length under every chip
-             buried the per-client story (round-2 testers). -->
-        <details id="dlv-embed-fold" open>
-          <summary id="dlv-embed-summary" style="cursor:pointer;font:600 12.5px/1.4 var(--font-sans);color:var(--ink-2);padding:6px 0">Engine room — mailbox &amp; domain health for the ops team (whole fleet)</summary>
-          <div id="dlv-embed-slot"></div>
-        </details>
-      </div>
+      <!-- The engine room (inbox & domain manager) used to be embedded here in
+           a fold; it now lives on its own Mailboxes tab (mailboxes.html). -->
+      <div class="moved-note">Mailbox &amp; domain health has moved → <a href="mailboxes.html">Mailboxes</a></div>
     </section>
 
     <!-- ── 4 · REPLIES ── -->
@@ -633,31 +625,11 @@
 </div>
 
 <script src="shell.js"></script>
-<script src="restore-reconcile.js"></script>
-<script>window.DLV_EMBED = true;</script>
-<script src="deliverability-tab.js"></script>
 <script>
   document.getElementById("rail").outerHTML = renderRail("deliverability");
-  // Defer the embedded engine-room manager (deliverability-tab.js) until the
-  // analytics hub — the primary content of this page — has painted. Mounting it
-  // synchronously fired ~8 of its own endpoints (jobs, _bundle, reminders,
-  // mailbox-settings-audit, trends, signals, cockpit) that contended with the
-  // hub's boot for the browser's 6-connection pool and the main thread, so the
-  // numbers people come here to read landed late. The manager lives inside a
-  // <details> fold ("Engine room"), so nothing above the fold needs it on load.
-  // Mount on the first of: browser idle, the fold being opened, or a 2.5s cap.
-  (function () {
-    var mounted = false;
-    function mountEngine() {
-      if (mounted) return;
-      mounted = true;
-      if (window.renderDeliverability) window.renderDeliverability();
-    }
-    var fold = document.getElementById("dlv-embed-fold");
-    if (fold) fold.addEventListener("toggle", function () { if (fold.open) mountEngine(); });
-    if (window.requestIdleCallback) requestIdleCallback(mountEngine, { timeout: 2500 });
-    else setTimeout(mountEngine, 400);
-  })();
+  // The engine-room manager script no longer loads here — it has its own
+  // Mailboxes tab (mailboxes.html), so the hub's boot owns the browser's
+  // connection pool outright.
 </script>
 
 <script>
@@ -668,7 +640,7 @@
    /api/campaign-scorecard · /api/cockpit/insights · /api/campaigns-unified ·
    /api/signals/daily · /api/sources · /api/deliverability/_audit.
    Client chips re-slice everything client-side except the fleet-wide bits
-   (hero Sent/Bounces, landing, signals, and the embedded engine below). ── */
+   (hero Sent/Bounces, landing, signals). ── */
 var $ = function (id) { return document.getElementById(id); };
 var escq = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
 var fmtN = function (n) { return (n == null || isNaN(n)) ? "–" : Math.round(n).toLocaleString("en-GB"); };
@@ -703,10 +675,9 @@ function j(url) {
     return r.json();
   });
 }
-// Shared-fetch registry: deliverability-tab.js loads the same trends/signals/
-// insights endpoints this page loads at boot. Publishing the boot promises here
-// lets the tab module reuse them instead of issuing a second identical request
-// (three true double-fetches per page view, audit 2026-08-02).
+// Shared-fetch registry: hub sections that read the same endpoint reuse one
+// boot promise instead of issuing a second identical request (it also served
+// the engine-room embed before that moved to mailboxes.html).
 window.__ahFetch = window.__ahFetch || {};
 function jShared(url) {
   // evict on rejection: a cached rejected promise made the Retry button a
@@ -2397,8 +2368,8 @@ function renderAll() {
   ensureWho();
   renderMeet();
 }
-// The embedded inbox & domain manager follows the client chips (date range
-// doesn't apply to today's mailbox health). A connected client workspace maps
+// The client lens follows the client chips (date range doesn't apply to
+// today's mailbox health). A connected client workspace maps
 // 1:1 to a Smartlead account so its rows filter exactly; every other client
 // sends from the shared Navreo fleet, and the note says so instead of
 // pretending to split it. The map is server-supplied (client-windows
@@ -2408,11 +2379,7 @@ function updateLens() {
   var c = state.client;
   var WS_CLIENTS = wsClients();
   window.DLV_CLIENT_LENS = { client: c, ws: WS_CLIENTS[c] || null };
-  // Engine room open on the whole-book view (the manager stays inline by
-  // ruling), folded on client views so the per-client story stays short
-  var fold = $("dlv-embed-fold");
-  if (fold) fold.open = (c === "All");
-  try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) { /* older engines just skip the repaint */ }
+  try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) { /* listeners just skip the repaint */ }
 }
 $("ah-chips").addEventListener("click", function (e) {
   var b = e.target.closest(".chip");
@@ -2568,9 +2535,8 @@ function boot() {
   j("/api/campaigns-unified").then(function (d) { UNI = d; scheduleRender(); }, function () {});
   jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
   j("/api/sources?slim=1").then(function (d) { SRC = d; scheduleRender(); }, function () {});
-  // jShared: deliverability-tab.js's initial audit GET reuses this boot
-  // promise instead of issuing a second identical /_audit request per page
-  // view (its refresh/poll paths keep their own fetches).
+  // jShared so any second hub read of /_audit reuses this boot promise
+  // instead of issuing an identical request.
   jShared("/api/deliverability/_audit").then(function (d) { AUDIT = d; scheduleRender(); }, function () {});
   j("/api/collisions").then(function (d) { COLL = d && !d.error ? d : null; scheduleRender(); }, function () {});
   j("/api/client-windows").then(function (d) {

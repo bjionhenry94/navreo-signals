@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:" + os.environ.get("PORT", "7911")
@@ -255,8 +256,46 @@ def test_warmup():
     check("D4 warmup self-heal recovers", j.get("reason") != "run_first" and j.get("failed", 0) == 0, str(j))
 
 
+def _page(path, with_cookie=True):
+    """Raw GET of an app page. Returns (status, body_text); redirects NOT followed."""
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):  # noqa: ANN002, ANN003
+            return None
+    opener = urllib.request.build_opener(_NoRedirect)
+    req = urllib.request.Request(BASE + path, method="GET")
+    if with_cookie:
+        req.add_header("Cookie", COOKIE)
+    try:
+        with opener.open(req, timeout=30) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+
+
+def test_pages_layout():
+    """The engine room lives on mailboxes.html, and ONLY there (move of 2026-08-03).
+
+    Guards the split: the Analytics page must not quietly re-grow the embed
+    (its fold + deferred mount were removed so the hub owns its own boot),
+    and the Mailboxes page must actually carry the manager."""
+    st, mbx = _page("/app/mailboxes.html")
+    check("P1 mailboxes.html serves for a logged-in user", st == 200, f"status {st}")
+    check("P2 mailboxes.html mounts the engine room",
+          "dlv-embed-slot" in mbx and "deliverability-tab.js" in mbx and "DLV_EMBED" in mbx,
+          "missing embed slot / engine script / DLV_EMBED flag")
+    st, dlv = _page("/app/deliverability.html")
+    check("P3 deliverability.html serves for a logged-in user", st == 200, f"status {st}")
+    check("P4 analytics page carries NO engine-room embed",
+          "dlv-embed" not in dlv and "DLV_EMBED" not in dlv and "deliverability-tab.js" not in dlv,
+          "an engine-room marker crept back into deliverability.html")
+    check("P5 analytics page links to the new Mailboxes tab", "mailboxes.html" in dlv,
+          "moved-note link missing")
+    st, _ = _page("/app/mailboxes.html", with_cookie=False)
+    check("P6 mailboxes.html is login-gated", st in (301, 302, 303, 307, 401, 403), f"status {st}")
+
+
 if __name__ == "__main__":
-    for fn in (test_boot, test_process_new, test_signatures, test_warmup):
+    for fn in (test_boot, test_process_new, test_signatures, test_warmup, test_pages_layout):
         print(f"\n── {fn.__name__} ──")
         try:
             fn()
