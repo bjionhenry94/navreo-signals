@@ -114,6 +114,10 @@ body.solo .wrap{margin:0 auto;}
 .numbig .rl{font-size:15px;font-weight:600;color:var(--ink);margin-top:6px;}
 .numbig .ml{font-size:13.5px;color:var(--ink-3);margin-top:3px;}
 .numbig.right{text-align:right;}
+.numbig-none .n-none{font-family:var(--font-display);font-size:30px;letter-spacing:-.02em;line-height:1;color:var(--ink-2);}
+.foll-sum{margin-top:8px;font-weight:600;color:var(--ink);}
+.foll-sum .foll-arrow{color:var(--accent,#e0662a);padding:0 2px;}
+.foll-warn{color:#b45309;}
 .tgt-hero{padding-bottom:24px;border-bottom:1px solid var(--line);margin-bottom:24px;}      /* A */
 .tgt-hero .mech{margin-bottom:18px;}
 .hdr-b{display:flex;justify-content:space-between;align-items:flex-start;gap:28px;flex-wrap:wrap;}  /* B */
@@ -342,7 +346,15 @@ function caseChips(x){return (x.cases||[]).map(caseChip).join('');}
 function rolesChips(x){const r=(x.targeting&&x.targeting.roles)||[],n=8;
   let h=r.slice(0,n).map(v=>`<span class="chip">${esc(v)}</span>`).join('');
   if(r.length>n)h+=`<span class="chip chip-more">+${r.length-n} more</span>`;return h;}
-function numBig(x){const p=x.reachablePool||x.net;return `<div class="numbig"><div class="n">${num(p)}</div><div class="rl">reachable — we email all</div></div>`;}
+// Event Exhibitors carry NO reach number (Bjion rule 2026-08-03) — every reach
+// readout on the board guards on this so an events idea never shows a count.
+function hasReach(x){const k=x.targeting&&x.targeting.kind;if(k==='events')return false;const p=x.reachablePool||x.net;return typeof p==='number'&&p>0;}
+function numBig(x){
+  const k=x.targeting&&x.targeting.kind;
+  if(k==='events')return `<div class="numbig numbig-none"><div class="n-none">size not estimated</div><div class="rl">exhibitors only — headcount varies by show</div></div>`;
+  const p=x.reachablePool||x.net;
+  if(!(typeof p==='number'&&p>0))return `<div class="numbig numbig-none"><div class="n-none">size not estimated</div></div>`;
+  return `<div class="numbig"><div class="n">${num(p)}</div><div class="rl">reachable — we email all</div></div>`;}
 // Per-kind fallback label for a target group + the plain-English campaign TYPE.
 // Labels come from the idea's own targeting.groups data first; these only fill in
 // when a group omits its label, so NO header is hard-coded to one example idea.
@@ -372,6 +384,31 @@ function grpSection(label,chips){return (label&&chips&&chips.length)?`<div class
 // use-case (niche list, buying/hiring/engagement/news signal, followers, lookalike,
 // recontact, events) rather than the frozen lookalike headers. Legacy anchors/cases
 // runs are shimmed into groups so they render unchanged.
+// Company Followers (Bjion 2026-08-03): the pages are HYPERLINKED to their LinkedIn
+// company page, each shows its follower count, and the section states the reach math
+// (Sum of followers -> 5% = reachable).
+function followerPagesSection(x){
+  const pg=x.followerPages;if(!Array.isArray(pg)||!pg.length)return '';
+  let tot=0;
+  const rows=pg.map(p=>{const f=(typeof p.followers==='number')?p.followers:0;tot+=f;
+    const nm=esc(p.name||p.url||'');
+    const link=p.url?`<a href="${esc(p.url)}" target="_blank" rel="noopener">${nm}</a>`:nm;
+    return `<span class="chip">${link}<span class="chip-sub"> — ${num(f)} followers</span></span>`;}).join('');
+  const reach=Math.round(0.05*tot);
+  return `<div class="sect"><p class="eyb">Pages whose followers we email</p><div class="chips">${rows}</div>`
+    +`<p class="tgt-meta foll-sum">${num(tot)} followers total <span class="foll-arrow">→</span> 5% = <strong>${num(reach)}</strong> people we can reach</p></div>`;
+}
+// Event Exhibitors (Bjion 2026-08-03): events HYPERLINKED to their site, with the
+// hard "exhibitors, not attendees" callout right under them.
+function eventsSection(x){
+  const ev=x.events;if(!Array.isArray(ev)||!ev.length)return '';
+  const rows=ev.map(e=>{const nm=esc(e.name||e.url||'');
+    const link=e.url?`<a href="${esc(e.url)}" target="_blank" rel="noopener">${nm}</a>`:nm;
+    const sub=[e.when,e.where].filter(Boolean).map(esc).join(' · ');
+    return `<span class="chip">${link}${sub?`<span class="chip-sub"> — ${sub}</span>`:''}</span>`;}).join('');
+  return `<div class="sect"><p class="eyb">Events we pull exhibitors from</p><div class="chips">${rows}</div>`
+    +`<p class="tgt-meta foll-sum foll-warn">Exhibitors, not attendees — only the companies with a stand.</p></div>`;
+}
 function targetingSections(x){
   const t=x.targeting||{};
   let groups=Array.isArray(t.groups)?t.groups.slice():[];
@@ -379,7 +416,10 @@ function targetingSections(x){
     if(x.anchors&&x.anchors.length)groups.push({label:tgtLabel(t.kind||'lookalike'),chips:x.anchors});
     if(x.cases&&x.cases.length)groups.push({label:'Case studies we pull',chips:x.cases});
   }
-  let h=groups.map(g=>grpSection(g.label||tgtLabel(t.kind),g.chips)).join('');
+  let h='';
+  const fp=followerPagesSection(x);if(fp){h+=fp;groups=groups.filter(g=>!/pages whose followers/i.test(g.label||''));}
+  const es=eventsSection(x);if(es){h+=es;groups=groups.filter(g=>!/events we pull/i.test(g.label||''));}
+  h+=groups.map(g=>grpSection(g.label||tgtLabel(t.kind),g.chips)).join('');
   if(((t.roles)||[]).length)h+=`<div class="sect"><p class="eyb">Decision-makers we email</p><div class="chips">${rolesChips(x)}</div></div>`;
   if(typeof t.meta==='string'&&t.meta.trim())h+=`<div class="sect"><p class="eyb">Scope</p><p class="tgt-meta">${esc(t.meta)}</p></div>`;
   else if(Array.isArray(t.meta)&&t.meta.length)h+=`<div class="sect"><p class="eyb">Scope</p><p class="tgt-meta">${t.meta.map(m=>esc(m[0])+': '+esc(m[1])).join('  ·  ')}</p></div>`;
@@ -630,7 +670,8 @@ function panelHTML(x){
     const strip=ppl.map((p,i)=>{const u=purl(p);return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
       +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
     return `<p class="eyb">Preview</p>`
-      +`<p class="sum-lead">This goes to <b>${num(x.reachablePool||x.net)}</b> people. Tap one to read their email.</p>`
+      +(hasReach(x)?`<p class="sum-lead">This goes to <b>${num(x.reachablePool||x.net)}</b> people. Tap one to read their email.</p>`
+        :`<p class="sum-lead">This goes to the exhibitors we pull from these shows. Tap one to read their email.</p>`)
       +`<div class="sum-strip">${strip}</div>`
       +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span></div>`
       +sequenceOf(x).map((step,si)=>{
@@ -664,7 +705,8 @@ function renderSidebar(){
     return `<div class="im ${i===active?'active':''}" data-i="${i}"><p class="im-name">${esc(x.name)}</p>`
       +`<p class="im-caption">${esc(x.caption||'')}</p>`
       +kindPill(x)
-      +`<p class="im-count"><span class="im-number">${num(x.net||x.reachablePool)}</span> reachable</p>`
+      +(hasReach(x)?`<p class="im-count"><span class="im-number">${num(x.net||x.reachablePool)}</span> reachable</p>`
+        :`<p class="im-count"><span class="im-number">—</span> exhibitors, no estimate</p>`)
       +(service?`<p class="im-type">${esc(service)}</p>`:'')
       +`</div>`;}).join('');
   // "About this session" card (GTME-only extras): who it's for + the ideas ID
@@ -702,7 +744,8 @@ function renderWorkspace(){
       +`<h1 class="h1" style="margin:10px 0 0">${esc(x.name)}</h1>`
       +`<div class="sh-row">${kindPill(x)}`
       +(x.caption?`<span class="sh-cap">${esc(x.caption)}</span>`:'')
-      +`<span class="sh-reach"><b>${num(x.net||x.reachablePool||0)}</b> reachable</span></div>`
+      +(hasReach(x)?`<span class="sh-reach"><b>${num(x.net||x.reachablePool||0)}</b> reachable</span></div>`
+        :`<span class="sh-reach">exhibitors, no estimate</span></div>`)
       +((sid&&!CLIENT_MODE)?`<div class="solo-cont"><button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button></div>`:'')
       +`</div>`
     : `<h1 class="h1">${esc(x.name)}</h1>`;
