@@ -21,12 +21,19 @@ a{color:inherit;text-decoration:none}
 .client{margin:0 10px 12px;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:12px;}
 .client .lbl{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);}
 .client .name{font-size:14.5px;font-weight:600;margin-top:3px;}
-.client .sid{font-size:10.5px;color:var(--ink-3);margin-top:6px;letter-spacing:.02em;}
-.sid-copy{display:block;margin-top:5px;padding:0;border:none;background:transparent;font-family:var(--font-sans);
-  font-size:10.5px;color:var(--ink-3);text-decoration:underline;text-underline-offset:2px;cursor:pointer;text-align:left;}
-.sid-copy:hover{color:var(--ink);}
-.sid-prompt{display:block;width:100%;margin-top:6px;height:96px;font-family:'SF Mono',ui-monospace,monospace;
-  font-size:10px;color:var(--ink-2);background:var(--cream-50);border:1px solid var(--line);border-radius:8px;padding:7px;resize:none;}
+/* About-this-session rows: label + value pairs, both low-key (nothing dominates) */
+.ab-row{display:flex;align-items:center;gap:7px;margin-top:7px;}
+.ab-k{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);flex:none;}
+.ab-v{font-size:11.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ab-i{width:15px;height:15px;flex:none;border:1px solid var(--line-2);border-radius:50%;background:transparent;
+  color:var(--ink-3);font-size:9.5px;font-weight:700;font-style:italic;line-height:1;cursor:pointer;padding:0;}
+.ab-i:hover{color:var(--ink);border-color:var(--ink-3);}
+.ab-help{display:none;font-size:11px;color:var(--ink-3);line-height:1.5;margin:6px 0 0;}
+.ab-help.open{display:block;}
+.ab-continue{display:block;width:100%;margin-top:9px;font-family:var(--font-sans);font-size:11.5px;font-weight:600;
+  color:var(--ink-2);background:var(--cream-50);border:1px solid var(--line-2);border-radius:999px;padding:7px 12px;
+  cursor:pointer;transition:.12s;}
+.ab-continue:hover{border-color:var(--ink-3);color:var(--ink);}
 .sechead{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);padding:8px 12px 6px;}
 .im{display:block;position:relative;border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-bottom:8px;transition:.13s;}
 .im:hover{background:var(--cream-50);border-color:var(--line);}
@@ -647,25 +654,28 @@ function renderSidebar(){
       +`<p class="im-count"><span class="im-number">${num(x.net||x.reachablePool)}</span> reachable</p>`
       +(service?`<p class="im-type">${esc(service)}</p>`:'')
       +`</div>`;}).join('');
-  // session id + a low-key "carry on in a new chat" copy button (GTME-only)
+  // "About this session" card (GTME-only extras): who it's for + the ideas ID
+  // (with an explainer) + a button that copies the carry-on prompt for a new chat.
   const sid=SERVED_RUN_ID||RUN_ID||'';
-  const sidHtml=(sid&&!CLIENT_MODE)
-    ?`<div class="sid mono">${esc(sid)}</div><button class="sid-copy" id="sid-copy" type="button">Copy prompt to open this session in a new chat</button>`
-    :'';
-  side.innerHTML=(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div>${sidHtml}</div>`:'')
+  const aboutRows=(client?`<div class="ab-row"><span class="ab-k">Building for</span><span class="ab-v">${esc(client)}</span></div>`:'')
+    +((sid&&!CLIENT_MODE)?`<div class="ab-row"><span class="ab-k">Ideas ID</span><span class="ab-v mono">${esc(sid)}</span><button class="ab-i" id="ab-i" type="button" aria-label="What is this?">i</button></div>`
+      +`<p class="ab-help" id="ab-help">Every set of ideas gets its own ID, so this board stays exactly as you leave it and never mixes with other sessions. Use the button below to pick it up in a fresh chat.</p>`
+      +`<button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button>`:'');
+  side.innerHTML=(aboutRows?`<div class="client"><div class="lbl">About this session</div>${aboutRows}</div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
+  const abi=side.querySelector('#ab-i');
+  if(abi)abi.onclick=()=>{const h=side.querySelector('#ab-help');h.classList.toggle('open');};
   const sc=side.querySelector('#sid-copy');
-  if(sc)sc.onclick=async()=>{
-    const prompt=`Open my Navreo strategy board from a previous session and carry on with it.\n\nSession id: ${sid}\nBoard: https://navreo-signals.onrender.com/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;
-    try{await navigator.clipboard.writeText(prompt);sc.textContent='Copied — paste it into a new chat';
-      setTimeout(()=>{sc.textContent='Copy prompt to open this session in a new chat';},4000);}
-    catch(e){
-      // clipboard blocked: show the prompt in a small selectable box instead
-      let box=side.querySelector('#sid-prompt');
-      if(!box){box=document.createElement('textarea');box.id='sid-prompt';box.readOnly=true;box.className='sid-prompt';sc.after(box);}
-      box.value=prompt;box.focus();box.select();
-      sc.textContent='Select and copy the prompt below';
-    }
+  if(sc)sc.onclick=()=>{
+    const prompt=`Open my Navreo strategy board from a previous session and carry on with it.\n\nIdeas ID: ${sid}\nBoard: https://navreo-signals.onrender.com/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;
+    let ok=false;
+    try{ // execCommand path works even where the async clipboard API is blocked
+      const t=document.createElement('textarea');t.value=prompt;t.style.position='fixed';t.style.opacity='0';
+      document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();
+    }catch(e){}
+    if(!ok&&navigator.clipboard){navigator.clipboard.writeText(prompt).then(()=>{},()=>{});ok=true;}
+    sc.textContent=ok?'Prompt copied. Paste it into a new chat':'Copy blocked by the browser';
+    setTimeout(()=>{sc.textContent='Continue this session in a new chat';},4000);
   };
   side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;copyVer={};render();});
 }
