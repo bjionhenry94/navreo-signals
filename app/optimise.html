@@ -1806,13 +1806,11 @@ async function boot(){
     const row=pickPrimary(rows);
     ROW=row;
     $("app").innerHTML = render(row);
-    /* every tab hydrates from the same cockpit endpoints as the campaign
-       page; the leads hub prefetches so the tab is ready when clicked */
+    /* lazy hydration, campaign-page parity: boot loads only the pin +
+       Overview (one fast DB call + the audience split). Messaging and Leads
+       fetch on the first click of their tab — their Smartlead-proxied pulls
+       were queueing behind each other at boot and dragging first load. */
     hydrateAudience(row.campaign_id);
-    hydrateMessaging(row);
-    hydrateSequenceCopy(row);
-    hydratePlatformLeads(coOf(row));
-    hydrateDraftSources(coOf(row));
   }catch(e){ $("app").innerHTML=emptyState("Couldn't load this optimisation ("+esc(e.message||e)+")."); }
 }
 boot();
