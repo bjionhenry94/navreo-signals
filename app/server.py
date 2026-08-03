@@ -18094,24 +18094,58 @@ Reply with ONLY a JSON object, no fences, no commentary:
                  "sweep": sweep_note, "offers": offers}
 
 
+def _offer_site_from_description(desc: str, url: str = ""):
+    """Build a synthetic 'site' from a plain-English company description the user
+    typed, for when we can't read their website (JS-only storefront, no site,
+    thin page). Same shape as _offer_fetch_site so generation runs unchanged."""
+    desc = re.sub(r"\s+", " ", str(desc or "")).strip()[:4_000]
+    domain = "your business"
+    u = (url or "").strip()
+    if u:
+        if not u.startswith("http"):
+            u = "https://" + u
+        try:
+            host = u.split("//", 1)[1].split("/", 1)[0].split(":")[0]
+            d = host.removeprefix("www.")
+            if "." in d:
+                domain = d
+        except Exception:  # noqa: BLE001
+            pass
+    return {"domain": domain, "title": "", "description": "", "text": desc, "pages": []}
+
+
 def offer_generate(p: dict, ip: str):
     """Synchronous path (browser + curl). Returns (status, body).
     Optional p["seed"] = {"mechanism","name","opener"} makes this a "More like
-    this" run: homepage-only fetch (fast) and 5 offers of that one mechanism."""
+    this" run. Optional p["description"] = the user's own words about their
+    company, used when we couldn't read their website (returns can_describe=True
+    on a fetch failure so the UI can offer the describe box)."""
     refusal = _offer_rate_check(ip, "try")
     if refusal:
         return 429, {"ok": False, "message": refusal}
     seed = p.get("seed") if isinstance(p.get("seed"), dict) else None
     if seed and seed.get("mechanism") not in OFFER_MECHANISMS:
         seed = None
-    try:
-        site = _offer_fetch_site(p.get("url") or "", deep=not seed)
-    except ValueError as e:
-        return 400, {"ok": False, "message": str(e)}
+    described = str(p.get("description") or "").strip()
+    if described:
+        if len(described) < 40:
+            return 400, {"ok": False, "message":
+                         "Please tell us a little more - a sentence or two about what your company does and who it helps."}
+        site = _offer_site_from_description(described, p.get("url") or "")
+    else:
+        try:
+            site = _offer_fetch_site(p.get("url") or "", deep=not seed)
+        except ValueError as e:
+            # can_describe lets the page offer a "describe your company" box
+            # instead of dead-ending on an unreadable / missing site.
+            return 400, {"ok": False, "message": str(e), "can_describe": True}
     refusal = _offer_rate_check(ip, "gen")
     if refusal:
         return 429, {"ok": False, "message": refusal}
-    return _offer_llm(site, p.get("audience") or "", seed)
+    status, body = _offer_llm(site, p.get("audience") or "", seed)
+    if status == 200 and described:
+        body["from_description"] = True
+    return status, body
 
 
 def offer_email(p: dict, ip: str):

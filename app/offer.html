@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offer Maker - Navreo</title>
-<!-- offer-maker-v2-chord-r20-voice -->
+<!-- offer-maker-v2-chord-r21-describe -->
 <link rel="stylesheet" href="/app/navreo.css">
 <style>
   body { background: var(--bg); }
@@ -24,6 +24,18 @@
     box-shadow: 0 1px 6px rgba(0,0,0,0.06); }
   .searchbox input:focus { border-color: var(--orange); box-shadow: var(--focus); }
   .searchbox input + input { margin-top: 10px; font-size: 15px; padding: 12px 22px; box-shadow: none; }
+  .describelink { max-width: 620px; margin: 12px auto 0; font-size: 13.5px; }
+  .describelink a { color: var(--ink-3); text-decoration: underline; cursor: pointer; }
+  .describelink a:hover { color: var(--orange); }
+  .describebox { display: none; max-width: 620px; margin: 12px auto 0; text-align: left; }
+  .describebox.show { display: block; }
+  .describebox textarea { width: 100%; font: inherit; font-size: 15px; line-height: 1.5; padding: 13px 18px;
+    border: 1.5px solid var(--line-2); border-radius: 18px; outline: none; background: var(--card); resize: vertical; box-sizing: border-box; }
+  .describebox textarea:focus { border-color: var(--orange); box-shadow: var(--focus); }
+  .describebox button { font: inherit; font-size: 15px; font-weight: 600; padding: 11px 26px; margin-top: 10px;
+    background: var(--orange); color: #fff; border: 0; border-radius: 22px; cursor: pointer; }
+  .describebox button:hover { background: var(--orange-600); }
+  .describebox button:disabled { opacity: 0.55; cursor: default; }
   .searchbox button { font: inherit; font-size: 16px; font-weight: 600; padding: 13px 34px; margin-top: 16px;
     background: var(--orange); color: #fff; border: 0; border-radius: 28px; cursor: pointer; }
   .searchbox button:hover { background: var(--orange-600); }
@@ -114,6 +126,11 @@
         onkeydown="if(event.key==='Enter')generate()">
       <button id="go" onclick="generate()">Make my offers</button>
     </div>
+    <p class="describelink"><a href="#" onclick="showDescribe(true);return false;">No website, or we can't read it? Describe your company instead</a></p>
+    <div class="describebox" id="describebox">
+      <textarea id="describe" rows="4" placeholder="Tell us about your company. What do you sell, who do you help, and what makes you different? A few sentences is plenty."></textarea>
+      <button id="godesc" onclick="generateDescribe()">Make offers from this</button>
+    </div>
     <details class="how">
       <summary>What makes a good offer?</summary>
       <ol>
@@ -168,6 +185,8 @@ let DOMAIN = "";
 let AUDIENCE = "";
 let BRIEF = null;
 let PAGES = [];
+let SOURCE = {};        // {url} or {description} - what this run was built from
+let FROM_DESC = false;  // true when offers came from a typed description
 
 function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
 function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg;
@@ -224,36 +243,62 @@ async function autoWriteEmails(){
   await Promise.all(Array.from({length: 4}, () => worker()));
 }
 
+function showDescribe(focus){
+  document.getElementById("describebox").classList.add("show");
+  if(focus){ const t = document.getElementById("describe"); t.focus(); t.scrollIntoView({behavior:"smooth", block:"center"}); }
+}
+
+// Reading-your-website phases when we scrape; different wording from a description.
+const PHASES_URL = ["Reading your website...", "Reading your about, pricing and customer pages...",
+                    "Working out what you sell and who buys it...",
+                    "Writing your offers... this takes about a minute", "Nearly there, checking every offer..."];
+const PHASES_DESC = ["Reading what you told us...", "Working out who buys what you sell...",
+                     "Writing your offers... this takes about a minute", "Nearly there, checking every offer..."];
+
 async function generate(){
   const url = document.getElementById("url").value.trim();
-  const audience = document.getElementById("audience").value.trim();
+  const err = document.getElementById("error");
+  err.style.display = "none";
+  if(!url){ err.textContent = "Please paste your website address first, or describe your company below."; err.style.display = "block"; showDescribe(false); return; }
+  await doGenerate({url, audience: document.getElementById("audience").value.trim()}, PHASES_URL, "go");
+}
+
+async function generateDescribe(){
+  const description = document.getElementById("describe").value.trim();
+  const err = document.getElementById("error");
+  err.style.display = "none";
+  if(description.length < 40){ err.textContent = "Please add a little more - a sentence or two about what your company does and who it helps."; err.style.display = "block"; return; }
+  await doGenerate({description, url: document.getElementById("url").value.trim(),
+                    audience: document.getElementById("audience").value.trim()}, PHASES_DESC, "godesc");
+}
+
+// Shared generation core for both the URL path and the describe-your-company path.
+async function doGenerate(payload, phases, btnId){
   const err = document.getElementById("error"), st = document.getElementById("status");
   err.style.display = "none";
   document.getElementById("results").style.display = "none";
-  if(!url){ err.textContent = "Please paste your website address first."; err.style.display = "block"; return; }
-  const go = document.getElementById("go");
+  const go = document.getElementById(btnId);
   go.disabled = true; st.style.display = "block";
   const bar = document.getElementById("barfill"); bar.style.width = "0%";
   const stext = document.getElementById("statustext");
-  const phases = ["Reading your website...", "Reading your about, pricing and customer pages...",
-                  "Working out what you sell and who buys it...",
-                  "Writing your offers... this takes about a minute", "Nearly there, checking every offer..."];
   let ph = 0; stext.textContent = phases[0];
   const tick = setInterval(()=>{ ph = Math.min(ph+1, phases.length-1);
     stext.textContent = phases[ph];
     bar.style.width = Math.min(92, parseFloat(bar.style.width||0)+8) + "%"; }, 9000);
   bar.style.width = "8%";
   try {
-    // One synchronous request. The model runs at low reasoning effort so the
-    // whole generation finishes in ~40-60s, comfortably inside the Render proxy
-    // timeout. No job id, no polling, no server-side state that could go stale
-    // if the load balancer routes a follow-up to a different instance.
     const r = await fetch("/api/offer/generate", { method: "POST",
-      headers: {"Content-Type":"application/json"}, body: JSON.stringify({url, audience}) });
+      headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload) });
     const d = await readJson(r);
-    if(!r.ok || !d.ok){ throw new Error(d.message || GENERIC_MSG); }
+    if(!r.ok || !d.ok){
+      // Couldn't read the site: offer the describe-your-company box instead.
+      if(d.can_describe){ showDescribe(true); }
+      throw new Error(d.message || GENERIC_MSG);
+    }
     OFFERS = d.offers; DOMAIN = d.domain; AUDIENCE = d.audience || "";
     BRIEF = d.brief || null; PAGES = d.pages_read || [];
+    FROM_DESC = !!d.from_description;
+    SOURCE = payload.description ? {description: payload.description} : {url: payload.url};
     FILTER = "all";
     document.getElementById("hero").classList.add("done");
     render();
@@ -269,7 +314,8 @@ async function generate(){
 
 function whoHeader(){
   const who = AUDIENCE || (BRIEF && BRIEF.who_they_sell_to) || "";
-  const pages = PAGES.length > 1 ? `We read ${PAGES.length} pages of ${esc(DOMAIN)}.` : `We read ${esc(DOMAIN)}.`;
+  const pages = FROM_DESC ? `Built from what you told us.`
+    : (PAGES.length > 1 ? `We read ${PAGES.length} pages of ${esc(DOMAIN)}.` : `We read ${esc(DOMAIN)}.`);
   let h = `${pages} These offers are aimed at <b>${esc(who)}</b>`;
   if(BRIEF && BRIEF.what_they_do) h += `<span class="sub">${esc(BRIEF.what_they_do)}</span>`;
   return h;
@@ -324,14 +370,14 @@ function render(scroll = true){
 // "More like this": ask the server for 5 fresh offers with this offer's
 // mechanism, in its spirit, and slot them in right after this card.
 async function moreLike(i){
-  const url = document.getElementById("url").value.trim();
   const btn = document.getElementById("more-" + i);
   const o = OFFERS[i];
   btn.disabled = true; btn.textContent = "Making more like this...";
   try {
+    // Reuse whatever this run was built from (a URL or a typed description).
     const r = await fetch("/api/offer/generate", { method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({url, audience: AUDIENCE,
+      body: JSON.stringify({...SOURCE, audience: AUDIENCE,
         seed: {mechanism: o.mechanism, name: o.name, opener: o.opener}}) });
     const d = await readJson(r);
     if(!r.ok || !d.ok || !d.offers){ throw new Error(d.message || GENERIC_MSG); }
