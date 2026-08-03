@@ -21,6 +21,10 @@ a{color:inherit;text-decoration:none}
 .client{margin:0 10px 12px;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:12px;}
 .client .lbl{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);}
 .client .name{font-size:14.5px;font-weight:600;margin-top:3px;}
+.client .sid{font-size:10.5px;color:var(--ink-3);margin-top:6px;letter-spacing:.02em;}
+.sid-copy{display:block;margin-top:5px;padding:0;border:none;background:transparent;font-family:var(--font-sans);
+  font-size:10.5px;color:var(--ink-3);text-decoration:underline;text-underline-offset:2px;cursor:pointer;text-align:left;}
+.sid-copy:hover{color:var(--ink);}
 .sechead{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);padding:8px 12px 6px;}
 .im{display:block;position:relative;border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-bottom:8px;transition:.13s;}
 .im:hover{background:var(--cream-50);border-color:var(--line);}
@@ -641,8 +645,20 @@ function renderSidebar(){
       +`<p class="im-count"><span class="im-number">${num(x.net||x.reachablePool)}</span> reachable</p>`
       +(service?`<p class="im-type">${esc(service)}</p>`:'')
       +`</div>`;}).join('');
-  side.innerHTML=(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div></div>`:'')
+  // session id + a low-key "carry on in a new chat" copy button (GTME-only)
+  const sid=SERVED_RUN_ID||RUN_ID||'';
+  const sidHtml=(sid&&!CLIENT_MODE)
+    ?`<div class="sid mono">${esc(sid)}</div><button class="sid-copy" id="sid-copy" type="button">Copy prompt to open this session in a new chat</button>`
+    :'';
+  side.innerHTML=(client?`<div class="client"><div class="lbl">Building for</div><div class="name">${esc(client)}</div>${sidHtml}</div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
+  const sc=side.querySelector('#sid-copy');
+  if(sc)sc.onclick=async()=>{
+    const prompt=`Open my Navreo strategy board from a previous session and carry on with it.\n\nSession id: ${sid}\nBoard: https://navreo-signals.onrender.com/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;
+    try{await navigator.clipboard.writeText(prompt);sc.textContent='Copied — paste it into a new chat';}
+    catch(e){sc.textContent='Could not copy, select the id above';}
+    setTimeout(()=>{sc.textContent='Copy prompt to open this session in a new chat';},4000);
+  };
   side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;copyVer={};render();});
 }
 function renderWorkspace(){
