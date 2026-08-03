@@ -6113,9 +6113,12 @@
      /api/cockpit/assignments (one owner per action, reconciled server-side). */
   var ACT_ASSIGN = {};   // action_key -> { state, assigned_to }
   var ACT_ME = null;     // this viewer's login email, for "you own it" labelling
+  var ACT_NAMES = {};    // login email (lower) -> display name, from the server
   var ACT_LOADED = false;
   function actAssigneeName(email) {
     if (!email) return "";
+    var known = ACT_NAMES[String(email).toLowerCase()];
+    if (known) return known;
     var local = String(email).split("@")[0];
     var parts = local.split(/[._-]+/).filter(Boolean).map(function (w) {
       return w.charAt(0).toUpperCase() + w.slice(1);
@@ -6194,6 +6197,7 @@
           Object.keys(ACT_ASSIGN).forEach(function (k) { fresh[k] = ACT_ASSIGN[k]; });
           ACT_ASSIGN = fresh;
         }
+        if (res[0] && res[0].names) ACT_NAMES = res[0].names;
         ACT_ME = (res[1] && res[1].email) || ACT_ME;
         /* a failed or DB-degraded snapshot stays unloaded so the next call
            retries — otherwise dismissed acts resurrect until a full reload */
