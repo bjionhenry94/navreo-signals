@@ -578,11 +578,11 @@ function _mvar(v){return `<span class="mvar">${esc(v)}</span>`;}
 // Copy tab shows the TEMPLATE: highlight the merge TOKENS themselves so the GTME
 // sees what is personalised (the real values aren't known until we have a person).
 function highlightTokensHtml(t){
+  // EVERY {token} is a merge variable and gets the highlight — not just the four
+  // built-ins ({page}, {events}, {tool}, {Role}, … included; Bjion rule 2026-08-03:
+  // always highlight the variables).
   return esc(String(t||''))
-    .replace(/\{\{?first(_name)?\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
-    .replace(/\{\{?company\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
-    .replace(/\{\{?icebreaker\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
-    .replace(/\{\{?colleague\}?\}/gi,m=>`<span class="mvar">${m}</span>`)
+    .replace(/\{\{?[A-Za-z_][A-Za-z0-9_ ]*\}?\}/g,m=>`<span class="mvar">${m}</span>`)
     .replace(/%signature%/gi,m=>`<span class="mvar">${m}</span>`)
     .replace(/\n/g,'<br>');
 }
