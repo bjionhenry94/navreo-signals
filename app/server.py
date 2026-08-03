@@ -9636,6 +9636,41 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
             "total": len(booked)}
 
 
+def _reconcile_meeting_positive(versions, meetings) -> int:
+    """MEETING ⟹ POSITIVE (Bjion's standing ruling, 2026-08-04): a booked
+    meeting IS a positive outcome, so no numeric row may ever render more
+    meetings than positives. Meetings are attributed per copy-cluster and shown
+    on the cluster's representative label, while Smartlead may have credited
+    the booker's "interested" mark to a different step/variant — or nowhere,
+    when the lead booked straight to calendar. On the row that carries the
+    meeting, positives (and replies, to keep sent ≥ replies ≥ positives sane)
+    come UP to the meeting count. Positives are only ever raised to match real
+    bookers from the reply archive; meetings are never suppressed. Purged rows
+    ('—' cells) carry no numbers, so nothing to reconcile there. Returns the
+    number of rows raised (served as meetings["reconciled"] for the footnote).
+    This is also the runtime clamp: the endpoint structurally cannot serve a
+    numeric meetings>positives row while this runs at the fold."""
+    if not isinstance(meetings, dict) or not isinstance(versions, list):
+        return 0
+    by_variant = meetings.get("by_variant") or {}
+    if not by_variant:
+        return 0
+    raised = 0
+    for v in versions:
+        if not isinstance(v, dict) or v.get("inline") or v.get("label") is None:
+            continue
+        if v.get("stats_purged"):
+            continue
+        mv = by_variant.get(str(v.get("step")) + "|" + str(v.get("label"))) or 0
+        if mv > (v.get("positives") or 0):
+            v["positives"] = mv
+            v["positives_include_booked"] = True
+            if (v.get("replies") or 0) < mv:
+                v["replies"] = mv
+            raised += 1
+    return raised
+
+
 def _cockpit_messaging(cid) -> dict:
     """Per-version table from Smartlead variant-statistics (the per-variant
     sent/reply counters), with meetings + per-variant attribution served
@@ -9737,6 +9772,7 @@ def _cockpit_messaging(cid) -> dict:
         # honestly accounted for here). traceless = the rest.
         meetings["removed"] = vpaths.get("removed") or 0
         meetings["removed_versions"] = vpaths.get("removed_versions") or 0
+        meetings["reconciled"] = _reconcile_meeting_positive(versions, meetings)
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "combinations": vpaths.get("combinations") or {},
             "degraded": False,

@@ -5374,10 +5374,9 @@
     /* map every member label to its cluster's representative, and sum each
        cluster's Sent (meetings belong to the whole copy, so Sent/meeting must
        divide by the copy's total sends, not one sibling's). */
-    var repOf = {}, membersOf = {}, hasGroup = false;
+    var repOf = {}, hasGroup = false;
     Object.keys(clusters).forEach(function (sk) {
       (clusters[sk] || []).forEach(function (cl) {
-        membersOf[sk + '|' + cl.rep] = cl.labels || [cl.rep];
         if ((cl.labels || []).length > 1) hasGroup = true;
         (cl.labels || [cl.rep]).forEach(function (l) { repOf[sk + '|' + l] = cl.rep; });
       });
@@ -5409,7 +5408,6 @@
         var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
         var rep = (!v.inline && v.label != null) ? (repOf[sk + '|' + v.label] || v.label) : null;
         var isRep = rep != null && rep === v.label;
-        var siblings = rep != null ? (membersOf[sk + '|' + rep] || [v.label]).length > 1 : false;
         /* meetings render on the representative row only; siblings point to it */
         var meetCell, pmCell = '';
         if (!hasMeet) { meetCell = ''; }
@@ -5448,8 +5446,7 @@
             '">Send 100% of Email ' + esc(String(sk)) + ' to it</button>';
         return '<tr>' +
           '<td data-label="Version">' + esc(label) + stateCell +
-            (isBest ? ' <span class="vp-best">best</span>' : '') + scaleBtn +
-            (isRep && siblings ? ' <span class="ring-caption" title="' + esc((membersOf[sk + '|' + rep] || []).join(', ')) + ' are the same copy">+' + ((membersOf[sk + '|' + rep] || []).length - 1) + ' same</span>' : '') + '</td>' +
+            (isBest ? ' <span class="vp-best">best</span>' : '') + scaleBtn + '</td>' +
           /* a deleted variant's counters were PURGED by Smartlead, not zero —
              '—' with the why, never a false 'Sent 0' (audit #8) */
           (v.stats_purged
@@ -5493,6 +5490,7 @@
         (rem ? '; ' + fmtInt(rem) + ' came from an opener since removed from the sequence (its copy is gone from Smartlead, so it has no row above)' : '') +
         (traceless ? '; ' + fmtInt(traceless) + " didn't quote enough to place" : '') + '. ' +
         (hasGroup ? 'Variants with identical copy count as one version — the meetings show on the active label and the rest read “= it”. ' : '') +
+        (meetings.reconciled ? 'A booked meeting always counts as a positive on the version it is credited to, so that version’s Positives include its booked leads. ' : '') +
         "A booked call runs through an opener and a follow-up, so a version's Meetings counts every call whose journey passed through it.";
     }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
