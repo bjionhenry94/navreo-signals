@@ -818,6 +818,7 @@ function renderWorkspace(){
   if(lgc)lgc.onclick=async()=>{const t=(work.querySelector('#lg-phrase')||{}).textContent||'';
     try{await navigator.clipboard.writeText(t);lgc.textContent='Copied';setTimeout(()=>{lgc.textContent='Copy';},3000);}catch(e){lgc.textContent='Select and copy';}};
   work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{sIdx=+c.dataset.i;renderWorkspace();});
+  try{saveView();}catch(e){}
 }
 function render(){renderSidebar();renderWorkspace();}
 // every link on the board opens in a NEW TAB (Bjion rule 2026-08-03) — delegated
@@ -870,6 +871,19 @@ function followFocus(foc){
   goFocus(idx,vt);
 }
 let SERVED_RUN_ID='';
+// view-state persistence (Bjion 2026-08-04): a refresh or chat-driven update
+// puts you back on the idea + tab (+ version/person) you were on, per board.
+const VIEWKEY=()=>'strat_view:'+(SERVED_RUN_ID||RUN_ID||'legacy');
+function saveView(){try{localStorage.setItem(VIEWKEY(),JSON.stringify(
+  {ideaId:(IDEAS[active]||{}).id,tab,sIdx,copyVer}));}catch(e){}}
+function restoreView(){try{
+  const s=JSON.parse(localStorage.getItem(VIEWKEY())||'null');if(!s)return;
+  const idx=IDEAS.findIndex(i=>i.id===s.ideaId);
+  if(idx>=0)active=idx;
+  if(s.tab&&TABS.some(t=>t[0]===s.tab))tab=s.tab;
+  if(typeof s.sIdx==='number')sIdx=s.sIdx;
+  if(s.copyVer&&typeof s.copyVer==='object')copyVer=s.copyVer;
+}catch(e){}}
 async function fetchRun(){
   // never re-render over a client's half-typed edit — the poll catches up
   // on the next tick after they click away
@@ -893,6 +907,7 @@ async function fetchRun(){
     RUN_META={checks:(run&&run.checks)||{},solo:!!(run&&run.solo)};
     PEOPLE=run.people||{};COLLEAGUES=run.colleagues||{};
     if(active>=IDEAS.length)active=0;
+    if(first)restoreView();
     document.body.classList.toggle('solo', IDEAS.length===1 || RUN_META.solo===true);
     render();boot.classList.add('gone');
     if(!first){addUpdate(foc.note||'',foc.ts||j.updated||run.updated);followFocus(foc);}
