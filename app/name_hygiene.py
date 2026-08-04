@@ -63,6 +63,14 @@ TLD_RE = re.compile(r"\.(" + "|".join(EMAIL_AUTOLINK_TLDS) + r")\b\s*$", re.IGNO
 # or spaced hyphen — "Punch!—The Smart B2B Sales Agency" -> "Punch!". Leaves real
 # hyphenated names (Coca-Cola, Mercedes-Benz) untouched (bare hyphen, no spaces).
 COMPANY_TAIL_RE = re.compile(r"\s*[—–|:]\s*\S.*$|\s+-\s+\S.*$")
+# Acquired-subsidiary tails: "Anavate Partners, An Argano Company" -> "Anavate
+# Partners", "Casetext, Part of Thomson Reuters" -> "Casetext". Requires the
+# "a/an/the … company|group|brand" shape or a literal "part of", with a leading
+# separator, so a standalone brand ("The Honest Company", "Ascent Group") is
+# never touched — only a parent named AFTER the real brand.
+PARENT_CLAUSE_RE = re.compile(
+    r"[,\s]+(?:an?|the)\s+\S.*?\s+(?:compan(?:y|ies)|group|brand)\s*$"
+    r"|[,\s]+part\s+of\s+\S.*$", re.IGNORECASE)
 
 
 def clean_company_name(company: Optional[str], fallback: bool = True) -> Optional[str]:
@@ -75,6 +83,7 @@ def clean_company_name(company: Optional[str], fallback: bool = True) -> Optiona
     if URL_RE.search(s):  # full URL — flag, don't auto-clean
         return company if fallback else None
     s = COMPANY_TAIL_RE.sub("", s).strip()  # drop " — tagline" / " | descriptor" / " : subtitle"
+    s = PARENT_CLAUSE_RE.sub("", s).strip(" ,")  # drop ", An X Company" / ", Part of X"
     m = PARENTHETICAL_ACRONYM.search(s)  # "UK Power Engineers (UKPE)" -> "UKPE"
     if m:
         return m.group(1)
