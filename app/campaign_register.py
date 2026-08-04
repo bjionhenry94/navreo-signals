@@ -51,7 +51,7 @@ import server  # noqa: E402
 # refreshes. A server reconcile can never prove a live signal after the fact, so
 # every campaign it adopts is registered as a fixed_list: honest provenance, no
 # armed signal toggle, no daily re-pull. See [[sources-fixed-list-type]].
-MECHANISMS = ("hiring", "engagement", "followers", "lookalike", "fixed_list")
+MECHANISMS = ("hiring", "engagement", "followers", "lookalike", "new_exec", "news", "fixed_list")
 
 # Smartlead auto-creates a companion campaign per positive-reply category
 # ("Meeting Request", "Interested Reply", ...). They are subsequences, not

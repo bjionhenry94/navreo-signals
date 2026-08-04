@@ -4024,7 +4024,13 @@
      "we pulled from that list; plenty left; pull more from it." The pull runs
      server-side as a polled job (sweep, ListMint, audit, upload). */
   function hydrateDraftSources(c) {
-    if (!STATE.slimSourcesP) STATE.slimSourcesP = getJSON("/api/sources?slim=1").catch(function () { return null; });
+    /* 30s TTL (signals-campaign-visibility, 2026-08-04): the old once-per-page
+       memo meant a campaign registered AFTER page load rendered "No sources
+       recorded" until a hard refresh — the tab must always catch up on its own. */
+    if (!STATE.slimSourcesP || (Date.now() - (STATE.slimSourcesT || 0)) > 30000) {
+      STATE.slimSourcesT = Date.now();
+      STATE.slimSourcesP = getJSON("/api/sources?slim=1").catch(function () { return null; });
+    }
     Promise.all([STATE.slimSourcesP, getJSON("/api/pool-pulls").catch(function () { return null; })])
       .then(function (rs) {
         var all = rs[0];
@@ -4032,6 +4038,19 @@
         var mine = (Array.isArray(all) ? all : []).filter(function (s) {
           return String(s.campaign_id) === "camp-sl-" + c.id;
         });
+        /* Campaign-level signal highlight (signals-campaign-visibility,
+           2026-08-04): a campaign fed by a signal source says so in its own
+           header, not just on the source card buried in the Leads tab. */
+        var sub = document.querySelector('.campaign-page[data-cid="' + c.id + '"] .campaign-subtitle');
+        if (sub && !sub.querySelector(".subtitle-sig-chip")) {
+          var sigSrcs = mine.filter(sigMech);
+          if (sigSrcs.length) {
+            var kinds = sigSrcs.map(function (s) { return sigLabel(sigMech(s)); })
+              .filter(function (v, i, a) { return a.indexOf(v) === i; }).join(" + ");
+            sub.insertAdjacentHTML("beforeend",
+              ' <span class="sig-chip subtitle-sig-chip" title="This campaign is fed by a signal source: it can keep finding new people, it is not a one-off list.">Signal campaign &middot; ' + esc(kinds) + "</span>");
+          }
+        }
         var sec = document.querySelector('.campaign-page[data-cid="' + c.id + '"] #draft-sources-section');
         if (!sec) return;
         if (!mine.length) { maybeSourcesEmpty(); return; }
@@ -4094,8 +4113,13 @@
      the list page is the review surface; removal lives in the classic console). */
   function sigMech(s) {
     var m = String(s.mechanism || s.type || "").toLowerCase();
-    return (m === "hiring" || m === "engagement" || m === "followers" || m === "lookalike") ? m : "";
+    return (m === "hiring" || m === "engagement" || m === "followers" || m === "lookalike" ||
+            m === "new_exec" || m === "news") ? m : "";
   }
+  /* human chip labels — "new_exec" must never render raw */
+  var SIG_LABELS = { hiring: "Hiring", engagement: "Engagement", followers: "Followers",
+                     lookalike: "Lookalike", new_exec: "New exec", news: "News" };
+  function sigLabel(m) { return SIG_LABELS[m] || m; }
   /* ── Fixed lists (doc.type "fixed_list", 27 Jul 2026) ───────────────────
      A one-off pull: a finite set of people bought once on a set of filters.
      Nothing new arrives tomorrow, so it gets a neutral badge instead of the
@@ -4174,7 +4198,7 @@
     return '<div class="source-list-card sig-row" data-sig-row="' + esc(s.id) + '">' +
       '<div class="sig-row-top">' +
         '<div class="sig-main"><span class="source-list-name">' + esc(s.name || "Signal source") + '</span> ' +
-        '<span class="sig-chip">' + esc(mech) + '</span>' +
+        '<span class="sig-chip">' + esc(sigLabel(mech)) + '</span>' +
         '<div class="source-list-meta" style="white-space:normal;margin-top:3px">' + meta + "</div></div>" +
         '<label class="sig-tgl" title="On: this source keeps finding new people every day. Off: it pauses. The campaign itself keeps sending either way.">' +
           '<input type="checkbox" data-sig-live="' + esc(s.id) + '"' + (live ? " checked" : "") + '><span class="sig-knob"></span>Live</label>' +

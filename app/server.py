@@ -2756,7 +2756,7 @@ def api_leads(campaign_id: str) -> list:
 # spec to pull it again with. No spec = nothing to re-run, and every surface
 # that offers a re-pull must stay silent rather than arm a button that would
 # fire an unfiltered provider query.
-SIGNAL_MECHS = {"hiring", "engagement", "followers", "lookalike"}
+SIGNAL_MECHS = {"hiring", "engagement", "followers", "lookalike", "new_exec", "news"}
 FIXED_LIST_MECH = "fixed_list"
 
 
