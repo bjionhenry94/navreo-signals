@@ -2046,11 +2046,14 @@ def strategy_copy_edit(p: dict, gtme: str | None = None) -> dict:
     seq_m = re.match(r"^seq:(\d+):(\d+)(?::subject)?$", field)
     del_m = re.match(r"^seq:(\d+):(\d+):delete$", field)
     ice_m = re.match(r"^ice:(\d+)$", field)
+    dismiss = field == "idea:dismiss"
     if field not in _STRATEGY_CLIENT_FIELDS and not ver_m and not seq_m \
-            and not del_m and not ice_m and field != "ice:fallback":
+            and not del_m and not ice_m and field != "ice:fallback" and not dismiss:
         return {"ok": False, "message": "only the copy can be edited from this link"}
+    if dismiss and not gtme:
+        return {"ok": False, "message": "only your Navreo contact can take an idea off the board"}
     value = p.get("value")
-    if not del_m:
+    if not del_m and not dismiss:
         if not isinstance(value, str) or not value.strip() or len(value) > 4000:
             return {"ok": False, "message": "the new text must be 1-4000 characters"}
         value = value.strip()
@@ -2065,6 +2068,14 @@ def strategy_copy_edit(p: dict, gtme: str | None = None) -> dict:
     idea = next((i for i in run.get("ideas") or [] if i.get("id") == idea_id), None)
     if not idea:
         return {"ok": False, "message": "that idea is no longer on the board"}
+    if dismiss:
+        if len(run.get("ideas") or []) <= 1:
+            return {"ok": False, "message": "a board needs at least one idea, so this one stays"}
+        run["ideas"] = [i for i in run["ideas"] if i.get("id") != idea_id]
+        (run.get("people") or {}).pop(idea_id, None)
+        (run.get("colleagues") or {}).pop(idea_id, None)
+        run["edited_by"] = "gtme"
+        return strategy_run_post(dict(run, run_id=run_id, generated_by="gtme-edit"))
     if del_m:
         si, vi = int(del_m.group(1)), int(del_m.group(2))
         seq = idea.get("sequence")
@@ -19038,7 +19049,13 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json({"run": None, "updated": None, "focus": None,
                                        "error": "share link invalid or expired"}, 401)
                 rid = srid
-            return self._json(strategy_run_get(rid))
+            # one link for everyone (Bjion 2026-08-04): the page uses `viewer`
+            # to show the tool-user board to a logged-in visitor and the client
+            # permalink view to everyone else - same URL, no login prompt.
+            out = strategy_run_get(rid)
+            if isinstance(out, dict):
+                out["viewer"] = "gtme" if self._authed_email() else "client"
+            return self._json(out)
         if path == "/api/engagement-verdicts":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)

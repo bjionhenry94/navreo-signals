@@ -166,6 +166,10 @@ body.solo .wrap{margin:0 auto;}
 .ver-tab.on{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange);}
 .ver-x{display:inline-block;margin-left:7px;color:var(--ink-3);font-weight:700;opacity:.55;}
 .ver-x:hover{color:#b3261e;opacity:1;}
+.btn-dismiss{font-family:var(--font-sans);font-size:14px;font-weight:600;color:#b3261e;background:#fff;border:1.5px solid #b3261e;border-radius:999px;padding:11px 22px;cursor:pointer;transition:.12s;}
+.btn-dismiss:hover{background:#fdf3f2;}
+.ab-shareout{font-size:11.5px;color:var(--ink-3);margin:6px 0 0;line-height:1.45;word-break:break-word;}
+.ab-shareout a{color:var(--orange-600);}
 .ib-example [data-edit]:focus,.mb[data-edit]:focus{outline:2px solid var(--orange);outline-offset:2px;border-radius:4px;}
 .mail-label{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:20px 0 8px;}
 .mail-label:first-of-type,.copy-heading + .mail-label{margin-top:0;}
@@ -266,7 +270,10 @@ body.solo .wrap{margin:0 auto;}
 // #/r/<run_id> pins the board to ONE session's run; ?share=<token> is the
 // client permalink — logged-out, copy-editable, no build machinery in the DOM.
 const SHARE=new URLSearchParams(location.search).get('share')||'';
-const CLIENT_MODE=!!SHARE;
+// ONE link for everyone (Bjion 2026-08-04): the tokened URL loads for anyone,
+// no login prompt; a logged-in visitor is upgraded to the tool-user view by the
+// server's `viewer` flag on the first data fetch. Logged-out stays client view.
+let CLIENT_MODE=!!SHARE;
 function runIdFromHash(){const m=location.hash.match(/^#\/r\/([a-z0-9-]+)/);return m?m[1]:'';}
 let RUN_ID=runIdFromHash();
 window.addEventListener('hashchange',()=>{const r=runIdFromHash();if(r!==RUN_ID){RUN_ID=r;lastFP=null;fetchRun();}});
@@ -456,13 +463,6 @@ function mailFrameHl(subject,email,editKey){
 // "Share a link" on the Summary page (Bjion, 2026-08-02): GTME-only by design —
 // the Summary tab never renders in client mode. Mints this board's client
 // permalink (copy-edit-only view) and puts it on the clipboard.
-function shareBlock(){
-  if(CLIENT_MODE)return '';
-  return `<div class="share-box"><p class="share-head">Share with your client</p>`
-    +`<p class="share-sub">They get this board with just Targeting, Icebreaker and Copy. They can edit the emails; they never see Build.</p>`
-    +`<div class="actions-center"><button class="btn-ink" id="gtme-share-link">Share a link</button></div>`
-    +`<p class="share-out" id="share-out"></p></div>`;
-}
 // Final launch sign-off code (Bjion, 2026-08-03): a stable per-idea-per-run
 // code the GTME pastes into chat to authorise the build (create campaign +
 // pull the list + run the checks). Deterministic so it's the same every render.
@@ -470,26 +470,6 @@ function launchCode(x){
   const s=(SERVED_RUN_ID||RUN_ID||'')+':'+(x.id||'');
   let h=0;for(let i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))>>>0;}
   return 'LAUNCH-'+('000000'+h.toString(36).toUpperCase()).slice(-6);
-}
-async function gtmeShareLink(btn){
-  const rid=SERVED_RUN_ID||RUN_ID;
-  const out=document.querySelector('#share-out');
-  if(!rid){if(out)out.textContent='This board needs its own page first — ask in chat to republish it.';return;}
-  btn.disabled=true;btn.textContent='Making your link…';
-  try{
-    const r=await fetch('/api/strategy/share',{method:'POST',credentials:'include',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:rid})});
-    const j=await r.json();
-    btn.disabled=false;
-    if(!j.ok){btn.textContent='Share a link';if(out)out.textContent=j.message||'Could not make the link, try again.';return;}
-    const full=location.origin+j.url;
-    let copied=false;
-    try{await navigator.clipboard.writeText(full);copied=true;}catch(e){}
-    btn.textContent=copied?'Link copied':'Share a link';
-    if(out)out.innerHTML=(copied?'On your clipboard, ready to send: ':'Copy this and send it: ')
-      +`<a href="${esc(full)}" target="_blank" rel="noopener">${esc(full)}</a>`;
-    setTimeout(()=>{btn.textContent='Share a link';},5000);
-  }catch(e){btn.disabled=false;btn.textContent='Share a link';if(out)out.textContent='Could not make the link, try again.';}
 }
 // GTME reorders the icebreaker waterfall with the up/down arrows. Optimistic swap
 // locally, then persist server-side (authed endpoint; strategy isn't client-editable).
@@ -634,7 +614,8 @@ function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2
     +`<div class="opener-body"><p class="ib-name">${esc(name)}${recH}</p><p class="ib-plain">${esc(plain)}</p><p class="ib-example">"${esc(ex)}"</p></div><span class="otog">On</span></div>`;}).join('');}
 
 function panelHTML(x){
-  if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`;
+  if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`
+    +(CLIENT_MODE?'':`<div class="actions-center" style="margin-top:28px"><button class="btn-dismiss" id="dismiss-idea">Dismiss Campaign Idea</button></div>`);
   if(tab==='copy'){
     const seq=sequenceOf(x);const AZ='ABCDEFGHIJ';
     let h=`<p class="copy-heading">Your emails</p>`
@@ -690,8 +671,7 @@ function panelHTML(x){
     // the selected person's fully-resolved email below, website + LinkedIn links
     // (person's own if the run supplies them, safe search links otherwise).
     const ppl=summaryProspects(x);if(sIdx>=ppl.length)sIdx=0;
-    if(!ppl.length)return `<p class="eyb">Preview</p><div class="ph">Once this idea has its people mapped, real examples show up here.</div>`
-      +shareBlock();
+    if(!ppl.length)return `<p class="eyb">Preview</p><div class="ph">Once this idea has its people mapped, real examples show up here.</div>`;
     const pr=ppl[sIdx];
     const more=Math.max(0,(x.reachablePool||x.net||0)-ppl.length);
     // each person's own links live IN their thumbnail (Bjion, 2026-08-03):
@@ -713,8 +693,7 @@ function panelHTML(x){
         return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}</p>`
           +`<div class="mail"><div class="mh">${head}</div><div class="mb">${resolvedTextHtml(v.email,x,pr)}</div></div>`;
       }).join('')
-      +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`
-      +shareBlock();
+      +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`;
   }
   const p=x.reachablePool||x.net;
   const cks=checksFor(x);
@@ -747,11 +726,33 @@ function renderSidebar(){
   const sid=SERVED_RUN_ID||RUN_ID||'';
   const aboutRows=(client?`<div class="ab-row"><span class="ab-k">Building for</span><span class="ab-v">${esc(client)}</span></div>`:'')
     +((sid&&!CLIENT_MODE)?`<p class="ab-help" id="ab-help">This board is its own saved session. It stays exactly as you leave it, and the button below lets you pick it up in a fresh chat.</p>`
-      +`<button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button>`:'');
+      +`<button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button>`
+      // ONE share link (Bjion 2026-08-04): logged-in teammates get this full
+      // board on it, everyone else gets the client view - no login prompt.
+      +`<button class="ab-continue" id="ab-share" type="button">Share with your client</button>`
+      +`<p class="ab-shareout" id="ab-shareout"></p>`:'');
   side.innerHTML=(aboutRows?`<div class="client"><div class="lbl">About this session${(sid&&!CLIENT_MODE)?' <button class="ab-i" id="ab-i" type="button" aria-label="What is this?">i</button>':''}</div>${aboutRows}</div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
   const abi=side.querySelector('#ab-i');
   if(abi)abi.onclick=()=>{const h=side.querySelector('#ab-help');h.classList.toggle('open');};
+  const shb=side.querySelector('#ab-share');
+  if(shb)shb.onclick=async()=>{
+    const out=side.querySelector('#ab-shareout');
+    shb.disabled=true;shb.textContent='Making your link…';
+    try{
+      const r=await fetch('/api/strategy/share',{method:'POST',credentials:'include',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:sid})});
+      const j=await r.json();
+      if(!j.ok){shb.disabled=false;shb.textContent='Share with your client';if(out)out.textContent=j.message||'Could not make the link, try again.';return;}
+      const url=location.origin+j.url;
+      let ok=false;
+      try{const t=document.createElement('textarea');t.value=url;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();}catch(e){}
+      if(!ok&&navigator.clipboard){navigator.clipboard.writeText(url).then(()=>{},()=>{});ok=true;}
+      shb.disabled=false;shb.textContent=ok?'Link copied':'Share with your client';
+      if(out)out.innerHTML='One link for everyone: teammates who are signed in get this full board, your client gets their own view. <a href="'+url+'">Open it</a>';
+      setTimeout(()=>{shb.textContent='Share with your client';},5000);
+    }catch(e){shb.disabled=false;shb.textContent='Share with your client';}
+  };
   const sc=side.querySelector('#sid-copy');
   if(sc)sc.onclick=()=>{
     const prompt=`Open my Navreo strategy board from a previous session and carry on with it.\n\nIdeas ID: ${sid}\nBoard: https://navreo-signals.onrender.com/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;
@@ -788,8 +789,6 @@ function renderWorkspace(){
   if(scb)scb.onclick=()=>{const p=carryPrompt(sid);let ok=false;try{const t=document.createElement('textarea');t.value=p;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();}catch(e){}if(!ok&&navigator.clipboard){navigator.clipboard.writeText(p).then(()=>{},()=>{});ok=true;}scb.textContent=ok?'Prompt copied. Paste it into a new chat':'Copy blocked by the browser';setTimeout(()=>{scb.textContent='Continue this session in a new chat';},4000);};
   const csb=work.querySelector('#client-save-copy');
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
-  const shb=work.querySelector('#gtme-share-link');
-  if(shb)shb.onclick=()=>gtmeShareLink(shb);
   // version tabs: switch which variation shows for a sequence step, persisting
   // any edit in the visible email first so it isn't lost (both sides edit now).
   work.querySelectorAll('.ver-tab').forEach(t=>t.onclick=async()=>{
@@ -811,6 +810,18 @@ function renderWorkspace(){
     }catch(err){alert('Could not remove that version.');}
   });
   work.querySelectorAll('[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
+  const dsb=work.querySelector('#dismiss-idea');
+  if(dsb)dsb.onclick=async()=>{
+    if(!confirm('Dismiss "'+(x.name||'this idea')+'"? It comes off the board for everyone.'))return;
+    dsb.disabled=true;dsb.textContent='Dismissing…';
+    try{
+      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:'idea:dismiss',share:SHARE})});
+      const j=await r.json();
+      if(!j.ok){dsb.disabled=false;dsb.textContent='Dismiss Campaign Idea';alert(j.message||'Could not dismiss that idea.');return;}
+      IDEAS=IDEAS.filter(i=>i.id!==x.id);active=0;tab='tgt';render();
+    }catch(e){dsb.disabled=false;dsb.textContent='Dismiss Campaign Idea';}
+  };
   work.querySelectorAll('.btn-ink[data-goto]').forEach(b=>b.onclick=async()=>{
     await persistVisibleEdits(x);tab=b.dataset.goto;renderWorkspace();});
   work.querySelectorAll('.oarrow[data-ibmove]').forEach(b=>b.onclick=()=>reorderIcebreaker(x,+b.dataset.ibmove,+b.dataset.dir));
@@ -899,6 +910,7 @@ async function fetchRun(){
     }
     const j=await r.json();const run=j.run||j;const ideas=(run&&run.ideas)||[];
     SERVED_RUN_ID=j.run_id||RUN_ID||'';
+    if(CLIENT_MODE&&j.viewer==='gtme'){CLIENT_MODE=false;lastFP=lastFP&&lastFP+'|up';}
     const foc=j.focus||run.focus||{};
     const fp=JSON.stringify(ideas)+'|'+JSON.stringify(run.people||{})+'|'+(j.updated||run.updated||'')+'|'+(foc.ts||'')+'|'+(foc.note||'');
     if(fp===lastFP)return;
