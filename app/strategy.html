@@ -164,8 +164,8 @@ body.solo .wrap{margin:0 auto;}
 .ver-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
 .ver-tab:hover{border-color:var(--ink-3);}
 .ver-tab.on{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange);}
-.ver-x{display:inline-block;margin-left:7px;color:var(--ink-3);font-weight:700;opacity:.55;}
-.ver-x:hover{color:#b3261e;opacity:1;}
+.ver-x{display:inline-block;margin:-8px -8px -8px 3px;padding:8px 9px;color:var(--ink-3);font-weight:700;opacity:.55;border-radius:999px;line-height:1;}
+.ver-x:hover{color:#b3261e;opacity:1;background:rgba(179,38,30,.10);}
 .dismiss-row{margin-top:48px;text-align:left;}
 .btn-dismiss{font-family:var(--font-sans);font-size:12px;font-weight:600;color:#b3261e;background:#fff;border:1px solid rgba(179,38,30,.55);border-radius:999px;padding:6px 14px;cursor:pointer;transition:.12s;opacity:.85;}
 .btn-dismiss:hover{opacity:1;border-color:#b3261e;background:#fdf3f2;}
@@ -783,22 +783,28 @@ function renderWorkspace(){
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
   // version tabs: switch which variation shows for a sequence step, persisting
   // any edit in the visible email first so it isn't lost (both sides edit now).
-  work.querySelectorAll('.ver-tab').forEach(t=>t.onclick=async()=>{
-    await persistVisibleEdits(x);
+  // switch which variation shows — render INSTANTLY, save any edit in the background
+  // so the tab never feels like "nothing loaded" while a save is in flight (Bjion 2026-08-05).
+  work.querySelectorAll('.ver-tab').forEach(t=>t.onclick=()=>{
+    persistVisibleEdits(IDEAS[active]||x);          // fire-and-forget; grabs dirty edits synchronously
     copyVer[+t.dataset.si]=+t.dataset.vi;renderWorkspace();});
-  // the cross on a version pill removes that variant (Bjion 2026-08-04, both sides)
+  // the cross removes that variant (Bjion 2026-08-04, both sides). Always act on the
+  // CURRENT idea (IDEAS[active]) — the 5s poll can swap the idea objects out from under
+  // a captured `x`, which is why a delete used to land server-side but never show
+  // (Bjion 2026-08-05). On success we resync from the server so the view is the truth.
   work.querySelectorAll('.ver-x').forEach(b=>b.onclick=async(e)=>{
-    e.stopPropagation();
+    e.stopPropagation();e.preventDefault();
+    const cur=IDEAS[active];if(!cur)return;
     const si=+b.dataset.si,vi=+b.dataset.vi;
-    const vs=(sequenceOf(x)[si]||{}).versions||[];
-    if(vs.length<=1)return;
+    const vs=((sequenceOf(cur)[si])||{}).versions||[];
+    if(vs.length<=1){alert('An email needs at least one version, so this one stays.');return;}
     if(!confirm('Remove version '+'ABCDEFGHIJ'[vi]+'? This takes it out of the rotation.'))return;
     try{
-      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:'seq:'+si+':'+vi+':delete',share:SHARE})});
+      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
+        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:cur.id,field:'seq:'+si+':'+vi+':delete',share:SHARE})});
       const j=await r.json();
       if(!j.ok){alert(j.message||'Could not remove that version.');return;}
-      vs.splice(vi,1);copyVer[si]=0;renderWorkspace();
+      copyVer[si]=0;lastFP=null;await fetchRun();   // pull the server truth (version now gone)
     }catch(err){alert('Could not remove that version.');}
   });
   work.querySelectorAll('[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
@@ -841,7 +847,11 @@ function addUpdate(note,updated){
   const chip=document.createElement('div');
   chip.className='tchip';
   chip.innerHTML=`<span class="lt-dot"></span><span>${note?'<b>'+esc(note)+'</b>':'Updated from chat'} · ${fmtTime(updated)}</span><button class="tchip-x" aria-label="Dismiss">&#215;</button>`;
-  chip.querySelector('.tchip-x').onclick=()=>{chip.style.opacity='0';setTimeout(()=>chip.remove(),200);};
+  const killChip=()=>{clearTimeout(chip._fade);chip.style.transition='opacity .35s ease';chip.style.opacity='0';setTimeout(()=>chip.remove(),350);};
+  chip.querySelector('.tchip-x').onclick=killChip;
+  // auto-fade after 5 seconds (Bjion 2026-08-05) so the corner never stacks stale
+  // notices; a manual dismiss (above) cancels this timer.
+  chip._fade=setTimeout(killChip,5000);
   toast.prepend(chip);
   // depth fade: newest bright, older ones fade back as they're pushed down/out
   const kids=[...toast.children];
