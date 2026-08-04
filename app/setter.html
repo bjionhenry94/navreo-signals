@@ -162,7 +162,9 @@
 .lp-cat-edit select {
   flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 8px 9px; border-radius: 9px; border: 1px solid var(--line-2);
   background: var(--bg, #fff); color: var(--ink); font: 500 12.5px var(--font-sans); cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
+.lp-cat-edit select:hover { border-color: var(--ink-3); }
 .lp-cat-edit select:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
 .lp-cat-edit .btn { flex-shrink: 0; min-height: 36px; }
 /* Update's colour tracks the CONSEQUENCE, not the wording of the label:
@@ -175,6 +177,12 @@
 .lp-cat-edit .btn.caution:hover { background: #7a5700; border-color: #7a5700; }
 .lp-cat-edit .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
 .lp-cat-edit .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
+/* One-click override row (Not qualified / Not interested) - its own row
+   BELOW the dropdown+Update row so two full-width labels never get squeezed
+   into the same line as the select (that's what was clipping "Not qualified"
+   off the edge of the panel). Each button splits the row evenly. */
+.lp-cat-actions { display: flex; gap: 8px; margin-top: 8px; }
+.lp-cat-actions .btn { flex: 1 1 0; min-height: 34px; transition: background-color .15s ease, border-color .15s ease; }
 .lp-cat-hint { margin-top: 10px; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 .lp-cat-hint.lp-hint-err { color: var(--red); }
 /* Sticky lead-info header bar: one row - identity (name + replied + email) on
@@ -2898,6 +2906,10 @@ const CORE_FOUR_JS = ["Interested", "Information Request", "Meeting Request", "p
    hardcoded id; the button no-ops with an error hint if the label ever
    disappears from the workspace's master list. */
 const NQ_CATEGORY_NAME = "Not a qualified lead";
+/* One-click "Not interested" (owner ask 2026-08-04, mirrors NQ above) - files
+   the lead under Smartlead's own "Not Interested" category and clears it from
+   the queue in one click, no dropdown. */
+const NI_CATEGORY_NAME = "Not Interested";
 const CAT_NEGATIVE_RE = /(not interested|do not contact|do-not-contact|unsubscrib|opt.?out|bounce|wrong|blacklist|spam|unqualif|invalid|junk|no longer|left the company)/i;
 const CAT_HINT_DEFAULT = "Positive keeps them in the flow; anything else files it in Smartlead and drops it from the queue.";
 function leadFirstNameOr(row, fallback) {
@@ -3004,15 +3016,21 @@ function categoryControlInner(row, compact) {
   return `
       <div class="lp-label">Lead category</div>
       <div class="lp-cat-now">${catPill}</div>
-      ${editable ? `<div class="lp-cat-edit">
+      ${editable ? (() => {
+        const monitor = (row.workspace || "navreo") !== "navreo";
+        const oneClickBtn = (catName, cls, label) => curCat.toLowerCase() === catName.toLowerCase() ? "" :
+          `<button type="button" class="btn danger sm ${cls}" title="${monitor
+            ? `Files this lead as '${esc(catName)}' in the tool and clears it from the queue - monitor workspaces are never written to the client's Smartlead.`
+            : `Files this lead as '${esc(catName)}' in Smartlead and clears it from the queue - one click, no dropdown.`}">${label}</button>`;
+        const actionsHtml = oneClickBtn(NQ_CATEGORY_NAME, "lp-cat-nq", "Not qualified")
+          + oneClickBtn(NI_CATEGORY_NAME, "lp-cat-ni", "Not interested");
+        return `<div class="lp-cat-edit">
         <select class="lp-cat-sel" aria-label="Change lead category"><option value="">Loading…</option></select>
         <button type="button" class="btn primary sm lp-cat-btn" disabled>Update</button>
-        ${curCat.toLowerCase() === NQ_CATEGORY_NAME.toLowerCase() ? "" :
-          `<button type="button" class="btn danger sm lp-cat-nq" title="${(row.workspace || "navreo") !== "navreo"
-            ? `Files this lead as '${esc(NQ_CATEGORY_NAME)}' in the tool and clears it from the queue - monitor workspaces are never written to the client's Smartlead.`
-            : `Files this lead as '${esc(NQ_CATEGORY_NAME)}' in Smartlead and clears it from the queue - one click, no dropdown.`}">Not qualified</button>`}
       </div>
-      <div class="lp-cat-hint">${hint}</div>` : ""}`;
+      ${actionsHtml ? `<div class="lp-cat-actions">${actionsHtml}</div>` : ""}
+      <div class="lp-cat-hint">${hint}</div>`;
+      })() : ""}`;
 }
 /* Lead-info sidebar, top to bottom: an identity header (avatar + name +
    email), quick links (Website / LinkedIn), the editable Lead category
@@ -3188,7 +3206,7 @@ function updateCatBtn(block, row) {
 async function applyCategory(block, override) {
   if (!block) return;
   const sel = block.querySelector(".lp-cat-sel");
-  const btn = override ? block.querySelector(".lp-cat-nq") : block.querySelector(".lp-cat-btn");
+  const btn = override ? block.querySelector(override.btnSel || ".lp-cat-nq") : block.querySelector(".lp-cat-btn");
   const hint = block.querySelector(".lp-cat-hint");
   let catId, name;
   if (override) {
@@ -3314,19 +3332,26 @@ function wireCategoryControls(root, row) {
     sel.addEventListener("change", () => updateCatBtn(block, row));
     const btn = block.querySelector(".lp-cat-btn");
     if (btn) btn.addEventListener("click", () => applyCategory(block));
-    const nq = block.querySelector(".lp-cat-nq");
-    if (nq) nq.addEventListener("click", async () => {
-      // Resolve the live Smartlead id for the label at click time - never a
-      // hardcoded id (ids differ per workspace; the master list is 1h-cached).
-      const cats = await fetchCategories();
-      const hit = (cats || []).find((c) => String(c.name || "").trim().toLowerCase() === NQ_CATEGORY_NAME.toLowerCase());
-      const hint = block.querySelector(".lp-cat-hint");
-      if (!hit) {
-        if (hint) { hint.textContent = `"${NQ_CATEGORY_NAME}" isn't in this workspace's Smartlead categories - use the dropdown instead.`; hint.classList.add("lp-hint-err"); }
-        return;
-      }
-      applyCategory(block, { id: hit.id, name: hit.name });
-    });
+    wireOneClickCat(block, ".lp-cat-nq", NQ_CATEGORY_NAME);
+    wireOneClickCat(block, ".lp-cat-ni", NI_CATEGORY_NAME);
+  });
+}
+/* Wires a single one-click override button (Not qualified / Not interested):
+   resolves the live Smartlead id for `catName` at click time - never a
+   hardcoded id (ids differ per workspace; the master list is 1h-cached) -
+   then files it via applyCategory. Shared by both buttons in .lp-cat-actions. */
+function wireOneClickCat(block, sel, catName) {
+  const el = block.querySelector(sel);
+  if (!el) return;
+  el.addEventListener("click", async () => {
+    const cats = await fetchCategories();
+    const hit = (cats || []).find((c) => String(c.name || "").trim().toLowerCase() === catName.toLowerCase());
+    const hint = block.querySelector(".lp-cat-hint");
+    if (!hit) {
+      if (hint) { hint.textContent = `"${catName}" isn't in this workspace's Smartlead categories - use the dropdown instead.`; hint.classList.add("lp-hint-err"); }
+      return;
+    }
+    applyCategory(block, { id: hit.id, name: hit.name, btnSel: sel });
   });
 }
 function wireLeadPanelEvents(root, row) {
