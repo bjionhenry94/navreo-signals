@@ -120,6 +120,20 @@ def register(smartlead_campaign_id, name, client="navreo", *, mechanism="fixed_l
                 "created_at_smartlead": _now()}],
               prefer="resolution=merge-duplicates,return=minimal")
 
+    # 1b — seed the scorecard row NOW (signals-campaign-visibility, 2026-08-04).
+    # The campaigns page can only OPEN a campaign the scorecard knows (STATE.byId
+    # falls back to ghostRow, which reads the scorecard), and the scorecard sync
+    # is hourly — so without this seed a freshly registered campaign is invisible
+    # on the page for up to an hour. Zeros are honest for a new campaign; the
+    # hourly sync overwrites them with Smartlead's own numbers.
+    server.sb("POST", "campaign_scorecard?on_conflict=smartlead_campaign_id",
+              [{"smartlead_campaign_id": int(sid), "name": name, "status": status,
+                "workspace": workspace, "client": client_name or client,
+                "sent": 0, "replied": 0, "positives": 0, "bounced": 0,
+                "completed": 0, "total": len(prospects),
+                "updated_at": _now()}],
+              prefer="resolution=merge-duplicates,return=minimal")
+
     # 2 — the draft doc joining the tool's campaign to Smartlead
     icp = {"geos": geos or [], "sizes": sizes or [], "titles": dm_titles or [],
            "domains": [], "excludes": [], "keywords": "", "industries": industries or []}
