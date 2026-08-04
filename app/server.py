@@ -8317,7 +8317,13 @@ def _demo_who_replies(days):
     n = sum(v for _, v in buckets)
     return {"client": "Acme", "days": d, "n": n, "named": n,
             "buckets": buckets, "sizes": sizes, "size_named": sum(v for _, v in sizes),
-            "speed": {"n": n, "avg_mins": 42, "median_mins": 18, "under15_share": 0.46},
+            "speed": {"n": n, "avg_mins": 42, "median_mins": 18, "under15_share": 0.46,
+                      "buckets": [
+                          {"label": "under 2 h", "n": max(1, round(18 * scale)), "booked": max(1, round(7 * scale)), "rate": 39},
+                          {"label": "2–6 h", "n": max(1, round(14 * scale)), "booked": max(1, round(3 * scale)), "rate": 21},
+                          {"label": "6–12 h", "n": max(1, round(11 * scale)), "booked": max(1, round(2 * scale)), "rate": 18},
+                          {"label": "12–24 h", "n": max(1, round(9 * scale)), "booked": max(0, round(1 * scale)), "rate": 11},
+                          {"label": "over 24 h", "n": max(1, round(6 * scale)), "booked": 0, "rate": 0}]},
             "subseq": {"enrolled": round(3100 * scale), "sent": round(8600 * scale),
                        "positives": round(41 * scale), "booked": round(12 * scale)}}
 
@@ -16433,27 +16439,58 @@ def _who_replies_compute(client: str, days: int) -> dict:
     slist = [[k, size_buckets[k]] for k in _SO if k in size_buckets]
 
     # answer speed from setter_queue, same client + window
-    sq = sb_get_all("setter_queue?select=sent_at,replied_at,smartlead_campaign_id,workspace"
+    sq = sb_get_all("setter_queue?select=lead_email,sent_at,replied_at,smartlead_campaign_id,workspace"
                     "&status=in.(sent,auto_sent)&is_test=eq.false"
                     f"&sent_at=not.is.null&replied_at=not.is.null&sent_at=gte.{since}") or []
+    # Booking truth for the speed→book-rate bars: a lead's first 'Call Booked'
+    # reply in the archive — the same definition the meetings lane counts, so
+    # this chart and the meetings tile can never disagree.
+    cb_first: dict = {}
+    try:
+        for r in (sb_get_all("replies?select=email,replied_at"
+                             f"&category=eq.{urllib.parse.quote('Call Booked')}"
+                             f"&replied_at=gte.{since}&order=replied_at.asc") or []):
+            em = (r.get("email") or "").strip().lower()
+            if em and em not in cb_first:
+                cb_first[em] = str(r.get("replied_at") or "")
+    except Exception:  # noqa: BLE001
+        cb_first = {}
+
+    def _ts(v):
+        try:
+            return _dtmod.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except Exception:  # noqa: BLE001
+            return None
+
+    _SPEED_BUCKETS = [("under 2 h", 2), ("2–6 h", 6), ("6–12 h", 12), ("12–24 h", 24), ("over 24 h", None)]
+    bstats = [{"label": lb, "n": 0, "booked": 0} for lb, _hi in _SPEED_BUCKETS]
     mins = []
     for r in sq:
         if client != "All" and camp_client(r.get("smartlead_campaign_id"), r.get("workspace")) != client:
             continue
-        try:
-            st = _dtmod.datetime.fromisoformat(str(r["sent_at"]).replace("Z", "+00:00"))
-            rp = _dtmod.datetime.fromisoformat(str(r["replied_at"]).replace("Z", "+00:00"))
-            mm = (st - rp).total_seconds() / 60.0
-            if mm > 0:
-                mins.append(mm)
-        except Exception:  # noqa: BLE001
+        st, rp = _ts(r.get("sent_at")), _ts(r.get("replied_at"))
+        if not st or not rp:
             continue
+        mm = (st - rp).total_seconds() / 60.0
+        if mm <= 0:
+            continue
+        mins.append(mm)
+        hh = mm / 60.0
+        for i, (_lb, hi) in enumerate(_SPEED_BUCKETS):
+            if hi is None or hh < hi:
+                bstats[i]["n"] += 1
+                cb = _ts(cb_first.get((r.get("lead_email") or "").strip().lower()))
+                if cb and rp and cb >= rp:
+                    bstats[i]["booked"] += 1
+                break
     speed = None
     if mins:
         mins.sort()
         speed = {"n": len(mins), "avg_mins": round(sum(mins) / len(mins)),
                  "median_mins": round(mins[len(mins) // 2]),
-                 "under15_share": round(sum(1 for m in mins if m <= 15) / len(mins), 2)}
+                 "under15_share": round(sum(1 for m in mins if m <= 15) / len(mins), 2),
+                 "buckets": [dict(b, rate=(round(100.0 * b["booked"] / b["n"]) if b["n"] else None))
+                             for b in bstats]}
     # Third card: subsequence effectiveness (collated hourly, held in memory).
     # Defensive — a missing/bad snapshot yields subseq=None (card shows a
     # "gathering data" state), never disturbs the two siblings above.

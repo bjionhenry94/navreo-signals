@@ -165,6 +165,15 @@
 .ah .apill.mute{background:var(--bg-sunken);color:var(--ink-3)}
 
 .ah .brows{display:flex;flex-direction:column;gap:9px}
+.ah .wspeed{margin-top:2px}
+.ah .wspeed-head{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px}
+.ah .wspeed-bars{display:flex;align-items:flex-end;gap:10px;height:96px}
+.ah .wcol{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;height:100%}
+.ah .wcol .wv{font-size:12px;font-weight:600;color:var(--ink);line-height:1}
+.ah .wcol .wbar{width:100%;max-width:44px;border-radius:6px 6px 2px 2px;background:var(--brown-300);min-height:3px;transition:height .35s ease}
+.ah .wcol.best .wbar{background:var(--ink)}
+.ah .wcol .wl{font-size:10.5px;color:var(--ink-3);white-space:nowrap;line-height:1.2}
+.ah .wcol .wn{font-size:10px;color:var(--ink-3);line-height:1}
 .ah .brow{display:grid;grid-template-columns:118px 1fr 42px;align-items:center;gap:10px;font-size:12.5px}
 .ah .brow .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ah .brow .lbl.strong{font-weight:600;color:var(--ink)}
@@ -586,6 +595,10 @@
           <div class="card-kick">How fast we answer <span id="wait-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· interested replies · benchmark 15 min</span> <span class="stamp" id="wait-stamp"></span></div>
           <div class="bignum num" id="wait-big">–</div>
           <div class="subline" id="wait-sub">&nbsp;</div>
+          <div class="wspeed" id="wait-chart" style="display:none">
+            <div class="wspeed-head">Booked-call rate by how fast we answered</div>
+            <div class="wspeed-bars num" id="wait-bars"></div>
+          </div>
           <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
         </div>
         <div class="acard">
@@ -2063,15 +2076,41 @@ function renderWho() {
     $("wait-big").textContent = fmtMins(med);
     $("wait-big").className = "bignum num" + (med > 15 ? " warn" : "");
     $("wait-sub").textContent = "median answer time · " + pct + " in 100 answered under 15 min · " + fmtN(sp.n) + " answered";
+    renderWaitChart(sp.buckets);
     $("wait-take").textContent = med <= 15
       ? "Under the 15-minute benchmark — keep it up."
       : "Over the 15-minute benchmark — answer faster to book more.";
   } else {
     $("wait-big").textContent = "–"; $("wait-big").className = "bignum num";
     $("wait-sub").textContent = "No answered replies to time in this window."; $("wait-take").textContent = "";
+    renderWaitChart(null);
   }
   // ── third box: how effective are our automated follow-ups (subsequences) ──
   try { renderSubseq(p && p.subseq); } catch (e) { /* never break the two siblings above */ }
+}
+
+// Bars under the answer-time number: booked-call rate per answer-speed bucket,
+// fastest on the left. Bar height = book rate; the best-converting bucket is
+// inked. Hidden entirely when no one answered in the window has an outcome yet.
+function renderWaitChart(buckets) {
+  var wrap = $("wait-chart"), bars = $("wait-bars");
+  if (!wrap || !bars) return;
+  buckets = (buckets || []).filter(function (b) { return b && typeof b.n === "number"; });
+  var answered = buckets.reduce(function (a, b) { return a + b.n; }, 0);
+  if (!answered) { wrap.style.display = "none"; bars.innerHTML = ""; return; }
+  var maxRate = Math.max.apply(null, buckets.map(function (b) { return b.rate || 0; }).concat([1]));
+  var bestIdx = -1, best = -1;
+  buckets.forEach(function (b, i) { if (b.n > 0 && (b.rate || 0) > best) { best = b.rate || 0; bestIdx = i; } });
+  bars.innerHTML = buckets.map(function (b, i) {
+    var rate = b.n > 0 ? (b.rate || 0) : null;
+    var h = rate === null ? 3 : Math.max(3, Math.round(rate / maxRate * 64));
+    return '<div class="wcol' + (i === bestIdx && best > 0 ? " best" : "") + '">' +
+      '<span class="wv">' + (rate === null ? "–" : rate + "%") + "</span>" +
+      '<div class="wbar" style="height:' + h + 'px"></div>' +
+      '<span class="wl">' + escq(b.label) + "</span>" +
+      '<span class="wn">' + fmtN(b.booked || 0) + " of " + fmtN(b.n) + "</span></div>";
+  }).join("");
+  wrap.style.display = "";
 }
 
 // Third card. SENT-basis: positive-reply rate = positives/sent, book-call rate =
