@@ -166,8 +166,9 @@ body.solo .wrap{margin:0 auto;}
 .ver-tab.on{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange);}
 .ver-x{display:inline-block;margin-left:7px;color:var(--ink-3);font-weight:700;opacity:.55;}
 .ver-x:hover{color:#b3261e;opacity:1;}
-.btn-dismiss{font-family:var(--font-sans);font-size:14px;font-weight:600;color:#b3261e;background:#fff;border:1.5px solid #b3261e;border-radius:999px;padding:11px 22px;cursor:pointer;transition:.12s;}
-.btn-dismiss:hover{background:#fdf3f2;}
+.dismiss-row{margin-top:48px;text-align:left;}
+.btn-dismiss{font-family:var(--font-sans);font-size:12px;font-weight:600;color:#b3261e;background:#fff;border:1px solid rgba(179,38,30,.55);border-radius:999px;padding:6px 14px;cursor:pointer;transition:.12s;opacity:.85;}
+.btn-dismiss:hover{opacity:1;border-color:#b3261e;background:#fdf3f2;}
 .ab-shareout{font-size:11.5px;color:var(--ink-3);margin:6px 0 0;line-height:1.45;word-break:break-word;}
 .ab-shareout a{color:var(--orange-600);}
 .ib-example [data-edit]:focus,.mb[data-edit]:focus{outline:2px solid var(--orange);outline-offset:2px;border-radius:4px;}
@@ -615,7 +616,7 @@ function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2
 
 function panelHTML(x){
   if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`
-    +(CLIENT_MODE?'':`<div class="actions-center" style="margin-top:28px"><button class="btn-dismiss" id="dismiss-idea">Dismiss Campaign Idea</button></div>`);
+    +(CLIENT_MODE?'':`<div class="dismiss-row"><button class="btn-dismiss" id="dismiss-idea">Dismiss Campaign Idea</button></div>`);
   if(tab==='copy'){
     const seq=sequenceOf(x);const AZ='ABCDEFGHIJ';
     let h=`<p class="copy-heading">Your emails</p>`
