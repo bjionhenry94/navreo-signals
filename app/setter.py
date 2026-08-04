@@ -8122,6 +8122,22 @@ def _redraft_sync(payload):
         # A stored timezone was already vetted at intake; only a fresh
         # resolve below can downgrade confidence.
         tz_confident = bool(tz)
+        if not tz and classification:
+            # Some intakes stored a classification but never stamped the row's
+            # timezone, and this route only re-resolved when the classification
+            # was missing too - so every Regenerate re-read the empty field,
+            # skipped the Calendly lookup, and fell back to the availability
+            # ask while real slots existed (owner report 2026-08-04, row 1435:
+            # classification carried America/New_York at 0.9 the whole time).
+            # Resolve exactly like intake - deterministic hints first, then the
+            # stored guess - and persist below so one Regenerate heals the row.
+            body_text = clean_body(row.get("reply_body") or "")
+            domain = (row.get("company_domain") or "").lower()
+            comp_hints = _company_hints(domain)
+            hints = {"country": comp_hints.get("country"), "state": comp_hints.get("state"),
+                     "city": comp_hints.get("city"), "phone": _extract_phone(body_text),
+                     "tld": ".".join(domain.split(".")[-2:]) if domain else "", "body": body_text}
+            tz, tz_confident = resolve_timezone(hints, classification)
         fresh_classification = None
         # Adopted/agentless rows reach Regenerate with NO stored classification
         # (their intake deliberately skips the brain) - a redraft used to run
@@ -8268,8 +8284,11 @@ def _redraft_sync(payload):
             # line updates and the next Regenerate doesn't re-classify.
             patch["classification"] = fresh_classification
             patch["first_outbound"] = row.get("first_outbound") or ""
-            if tz:
-                patch["timezone"] = tz
+        if tz and not row.get("timezone"):
+            # Also covers the heal above (stored classification, empty
+            # timezone) - without this stamp the next Regenerate re-resolves
+            # from scratch every time.
+            patch["timezone"] = tz
         # Re-run the SAME lint + decision gate the live pipeline applies, so
         # the row's verdict (and the inbox pill, which reads decision_reason)
         # describes THIS draft - not the one it replaced. Owner report
