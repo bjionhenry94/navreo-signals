@@ -3745,8 +3745,37 @@ def save_sequence_ids_intact(campaign_id: int, mutate_fn, api_key: str | None = 
 
 # ── step/variant lookup + distribution utilities (shared by every action) ──
 
+def _normalise_default_split(step: dict) -> None:
+    """Smartlead serves NULL variant_distribution_percentage for variants whose
+    share was never explicitly set. Its observed behaviour (sent counters
+    across the book, 2026-08-04): null variants split the REMAINING share —
+    100 minus the explicit percentages — equally between them; when the
+    explicit shares already sum to 100 a null variant gets 0 (it is off).
+    Stamp those factual numbers in-place so the toggle UI and the guard /
+    redistribution math see real percentages (a null read as 0 made _pct_of
+    refuse to disable variants that ARE sending). Explicit numbers, including
+    an explicit 0 = switched off, are never touched."""
+    live = [v for v in (step.get("sequence_variants") or []) if not v.get("is_deleted")]
+    nulls = [v for v in live if v.get("variant_distribution_percentage") is None]
+    if not nulls:
+        return
+    explicit = 0
+    for v in live:
+        if v.get("variant_distribution_percentage") is not None:
+            try:
+                explicit += int(v.get("variant_distribution_percentage"))
+            except (TypeError, ValueError):
+                pass
+    base, rem = divmod(max(0, 100 - explicit), len(nulls))
+    for i, v in enumerate(nulls):
+        v["variant_distribution_percentage"] = base + (1 if i < rem else 0)
+
+
 def _find_step(steps: list, email_num: int):
-    return next((s for s in steps if int(s.get("seq_number") or 0) == int(email_num)), None)
+    step = next((s for s in steps if int(s.get("seq_number") or 0) == int(email_num)), None)
+    if step is not None:
+        _normalise_default_split(step)
+    return step
 
 
 def _find_variant(step: dict, variant_label: str):
@@ -9749,6 +9778,28 @@ def _cockpit_messaging(cid) -> dict:
                 _idx[_key] = _new
                 versions.append(_new)
         versions.sort(key=lambda v: (v.get("step") or 0, v.get("label") or ""))
+        # Smartlead serves NULL distributions for variants whose share was
+        # never explicitly set: they split the REMAINING share (100 − the
+        # explicit percentages) equally — 0 when the explicit shares already
+        # sum to 100. Stamp the factual split so the UI renders the on/off
+        # toggle on every variant row, not the unknown-state dot (Bjion
+        # 2026-08-04). Mirrors _normalise_default_split on the action path;
+        # explicit numbers are never touched. A step containing a row whose
+        # variant is unknown to /sequences keeps its nulls — honest degrade.
+        _live_by_step: dict = {}
+        for _row in versions:
+            if (not _row.get("inline") and _row.get("label") is not None
+                    and not _row.get("disabled")):
+                _live_by_step.setdefault(str(_row.get("step")), []).append(_row)
+        for _rows in _live_by_step.values():
+            _nulls = [r for r in _rows if r.get("split") is None]
+            if not _nulls or any(r.get("variant_id") is None for r in _nulls):
+                continue
+            _explicit = sum(int(r.get("split") or 0) for r in _rows
+                            if r.get("split") is not None)
+            _base, _rem = divmod(max(0, 100 - _explicit), len(_nulls))
+            for _i, _r in enumerate(_nulls):
+                _r["split"] = _base + (1 if _i < _rem else 0)
     except Exception:  # noqa: BLE001 — variant completeness must never break the tab
         pass
     # Meetings by step — Supabase-only on this thread (lookup_budget=0); the

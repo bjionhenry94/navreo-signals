@@ -581,7 +581,7 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
          split unknown -> honest dot, never a guessing toggle. */
       let stateCell;
       if(v.inline) stateCell='';
-      else if(v.disabled) stateCell=' <span class="vp-dot vp-dot--off" title="deleted in Smartlead"></span>';
+      else if(v.disabled) stateCell=' <button type="button" class="vaw-toggle is-locked" aria-pressed="false" aria-disabled="true" title="Deleted in Smartlead — its stats stay above, but a deleted version can\'t be switched back on"><span class="vaw-knob"></span></button>';
       else if(v.split==null||v.variant_id==null||cid==null)
         stateCell=' <span class="vp-dot vp-dot--on" title="active"></span>';
       else{
@@ -666,6 +666,7 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
     ".vaw-toggle.is-on .vaw-knob{left:14px}",
     ".vaw-toggle:focus-visible{outline:2px solid var(--nav-orange);outline-offset:2px}",
     ".vaw-toggle[data-busy]{opacity:.5;pointer-events:none}",
+    ".vaw-toggle.is-locked{opacity:.45;cursor:not-allowed}",
     ".vaw-mini{font:inherit;font-size:.72rem;font-weight:600;padding:2px 8px;margin-left:8px;border-radius:999px;border:1px solid var(--border-strong);background:transparent;color:var(--fg-muted);cursor:pointer}",
     ".vaw-mini:hover{border-color:var(--nav-orange);color:var(--nav-orange)}",
     ".vaw-overlay{position:fixed;inset:0;background:rgba(20,16,10,.55);z-index:900;display:flex;align-items:center;justify-content:center;padding:18px;font-family:var(--font-sans)}",
@@ -1744,7 +1745,7 @@ function render(r){
     </section>
     <section class="tab-panel hidden" data-tab="messaging">
       <div class="ov-card"><div class="card-title">Version performance</div>
-        <p class="card-subtitle">Every version, one row per email step &mdash; send/reply counters from Smartlead, meetings from our reply archive (positives = Smartlead's interested mark).</p>
+        <p class="card-subtitle">Every version, one row per email step &mdash; send/reply counters from Smartlead, meetings from our reply archive (positives = Smartlead's interested mark, and a booked meeting always counts).</p>
         <div id="messaging-root"><p class="lw-loading">Pulling live version stats from Smartlead&hellip;</p></div></div>
       <div class="ov-card"><div class="card-title">The sequence</div>
         <div id="sequence-root"><p class="card-subtitle">Loading&hellip;</p></div>

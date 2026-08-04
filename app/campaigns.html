@@ -3991,7 +3991,7 @@
     /* messaging */
     h.push('<div class="tab-panel" data-tab="messaging"' + (tab !== "messaging" ? " hidden" : "") + ">" +
       '<div class="ov-card"><div class="card-title">Version performance</div>' +
-      '<p class="card-subtitle">Every version, one row per email step &mdash; send/reply counters from Smartlead, meetings from our reply archive (positives = Smartlead\'s interested mark).</p>' +
+      '<p class="card-subtitle">Every version, one row per email step &mdash; send/reply counters from Smartlead, meetings from our reply archive (positives = Smartlead\'s interested mark, and a booked meeting always counts).</p>' +
       '<div id="messaging-root"><p class="lw-loading">Pulling live version stats from Smartlead&hellip;</p></div></div>' +
       '<div class="ov-card"><div class="card-title">The sequence</div><div id="sequence-root"><p class="card-subtitle">Loading&hellip;</p></div>' +
       '<p class="sample-footer">The live copy itself stays in Smartlead (the only safe place to edit it). <a class="action-link" href="' + esc(c.smartleadUrl.replace("/analytics", "/sequences")) + '" target="_blank" rel="noopener">Open the sequence in Smartlead</a></p></div></div>');
@@ -4757,6 +4757,7 @@
       ".vaw-toggle.is-on .vaw-knob{left:14px}",
       ".vaw-toggle:focus-visible{outline:2px solid var(--nav-orange);outline-offset:2px}",
       ".vaw-toggle[data-busy]{opacity:.5;pointer-events:none}",
+      ".vaw-toggle.is-locked{opacity:.45;cursor:not-allowed}",
       ".vaw-mini{font:inherit;font-size:.72rem;font-weight:600;padding:2px 8px;margin-left:8px;border-radius:999px;border:1px solid var(--border-strong);background:transparent;color:var(--fg-muted);cursor:pointer}",
       ".vaw-mini:hover{border-color:var(--nav-orange);color:var(--nav-orange)}",
       ".vaw-acts{margin-top:12px;padding-top:10px;border-top:1px dashed var(--border-strong);display:flex;flex-direction:column;gap:7px}",
@@ -5425,7 +5426,7 @@
            -> old dot, honest degradation, never a guessing toggle. */
         var stateCell;
         if (v.inline) stateCell = '';
-        else if (v.disabled) stateCell = ' <span class="vp-dot vp-dot--off" title="deleted in Smartlead"></span>';
+        else if (v.disabled) stateCell = ' <button type="button" class="vaw-toggle is-locked" aria-pressed="false" aria-disabled="true" title="Deleted in Smartlead — its stats stay above, but a deleted version can\'t be switched back on"><span class="vaw-knob"></span></button>';
         else if (v.split == null || v.variant_id == null || cid == null)
           stateCell = ' <span class="vp-dot vp-dot--' + 'on' + '" title="active"></span>';
         else {
