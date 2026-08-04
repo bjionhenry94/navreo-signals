@@ -722,15 +722,13 @@ function renderSidebar(){
         :`<p class="im-count"><span class="im-number">—</span> size not estimated</p>`)
       +(service?`<p class="im-type">${esc(service)}</p>`:'')
       +`</div>`;}).join('');
-  // "About this session" card (GTME-only extras): who it's for + the ideas ID
-  // (with an explainer) + a button that copies the carry-on prompt for a new chat.
+  // "About this session" card (GTME-only extras): who it's for + ONE button
+  // (Bjion 2026-08-04): "Share Campaign Ideas" mints the single link — signed-in
+  // teammates get this full board on it, everyone else the client view.
   const sid=SERVED_RUN_ID||RUN_ID||'';
   const aboutRows=(client?`<div class="ab-row"><span class="ab-k">Building for</span><span class="ab-v">${esc(client)}</span></div>`:'')
-    +((sid&&!CLIENT_MODE)?`<p class="ab-help" id="ab-help">This board is its own saved session. It stays exactly as you leave it, and the button below lets you pick it up in a fresh chat.</p>`
-      +`<button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button>`
-      // ONE share link (Bjion 2026-08-04): logged-in teammates get this full
-      // board on it, everyone else gets the client view - no login prompt.
-      +`<button class="ab-continue" id="ab-share" type="button">Share with your client</button>`
+    +((sid&&!CLIENT_MODE)?`<p class="ab-help" id="ab-help">This board is its own saved session and stays exactly as you leave it. The button below copies one link for everyone: teammates who are signed in get this full board, your client gets their own view.</p>`
+      +`<button class="ab-continue" id="ab-share" type="button">Share Campaign Ideas</button>`
       +`<p class="ab-shareout" id="ab-shareout"></p>`:'');
   side.innerHTML=(aboutRows?`<div class="client"><div class="lbl">About this session${(sid&&!CLIENT_MODE)?' <button class="ab-i" id="ab-i" type="button" aria-label="What is this?">i</button>':''}</div>${aboutRows}</div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
@@ -744,27 +742,15 @@ function renderSidebar(){
       const r=await fetch('/api/strategy/share',{method:'POST',credentials:'include',
         headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:sid})});
       const j=await r.json();
-      if(!j.ok){shb.disabled=false;shb.textContent='Share with your client';if(out)out.textContent=j.message||'Could not make the link, try again.';return;}
+      if(!j.ok){shb.disabled=false;shb.textContent='Share Campaign Ideas';if(out)out.textContent=j.message||'Could not make the link, try again.';return;}
       const url=location.origin+j.url;
       let ok=false;
       try{const t=document.createElement('textarea');t.value=url;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();}catch(e){}
       if(!ok&&navigator.clipboard){navigator.clipboard.writeText(url).then(()=>{},()=>{});ok=true;}
-      shb.disabled=false;shb.textContent=ok?'Link copied':'Share with your client';
+      shb.disabled=false;shb.textContent=ok?'Link copied':'Share Campaign Ideas';
       if(out)out.innerHTML='One link for everyone: teammates who are signed in get this full board, your client gets their own view. <a href="'+url+'">Open it</a>';
-      setTimeout(()=>{shb.textContent='Share with your client';},5000);
-    }catch(e){shb.disabled=false;shb.textContent='Share with your client';}
-  };
-  const sc=side.querySelector('#sid-copy');
-  if(sc)sc.onclick=()=>{
-    const prompt=`Open my Navreo strategy board from a previous session and carry on with it.\n\nIdeas ID: ${sid}\nBoard: https://navreo-signals.onrender.com/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;
-    let ok=false;
-    try{ // execCommand path works even where the async clipboard API is blocked
-      const t=document.createElement('textarea');t.value=prompt;t.style.position='fixed';t.style.opacity='0';
-      document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();
-    }catch(e){}
-    if(!ok&&navigator.clipboard){navigator.clipboard.writeText(prompt).then(()=>{},()=>{});ok=true;}
-    sc.textContent=ok?'Prompt copied. Paste it into a new chat':'Copy blocked by the browser';
-    setTimeout(()=>{sc.textContent='Continue this session in a new chat';},4000);
+      setTimeout(()=>{shb.textContent='Share Campaign Ideas';},5000);
+    }catch(e){shb.disabled=false;shb.textContent='Share Campaign Ideas';}
   };
   side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;copyVer={};render();});
 }
