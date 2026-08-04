@@ -1916,18 +1916,28 @@ def _strategy_key(run_id=None) -> str:
     return f"wizard_run:{run_id}" if run_id else "wizard_run"
 
 
-def strategy_run_get(run_id=None) -> dict:
+def strategy_run_get(run_id=None, full=False) -> dict:
     """One run's board payload. run_id=None keeps the legacy behaviour: the
-    NEWEST run of any session (bare strategy.html + old links stay alive)."""
+    NEWEST run of any session (bare strategy.html + old links stay alive).
+
+    full=True (AUTHENTICATED GTME callers ONLY, gated in the route) keeps the
+    engine-only fields — pull_spec, probe, netting, vector — so a teammate who
+    opens the shared link with the same tool access can recover the EXACT pull
+    recipe and rebuild the identical list from the run_id alone (Bjion goal
+    2026-08-04). It deliberately BYPASSES the shared page memo (never reads or
+    writes it), so the full copy carrying provider filters can never be handed
+    to a logged-out client share within the 20s memo window."""
     global _STRATEGY_RUN_MEMO
     if run_id is not None and not _strategy_run_id_ok(run_id):
         return {"run": None, "updated": None, "focus": None,
                 "error": "bad run id"}
-    with _STRATEGY_RUN_MEMO_LOCK:
-        memo = _STRATEGY_RUN_MEMO.get(run_id)
-        gen = _STRATEGY_RUN_GEN
-    if memo and memo["payload"] is not None and (time.time() - memo["ts"]) < 20:
-        return memo["payload"]
+    gen = 0
+    if not full:
+        with _STRATEGY_RUN_MEMO_LOCK:
+            memo = _STRATEGY_RUN_MEMO.get(run_id)
+            gen = _STRATEGY_RUN_GEN
+        if memo and memo["payload"] is not None and (time.time() - memo["ts"]) < 20:
+            return memo["payload"]
     if run_id:
         run_q = ("campaign_insights?scope=eq.strategy"
                  f"&insight_key=eq.{_strategy_key(run_id)}"
@@ -1943,10 +1953,13 @@ def strategy_run_get(run_id=None) -> dict:
     if not rows:
         return {"run": None, "updated": None, "focus": None}
     run = rows[0].get("payload") or {}
-    # engine-only fields (provider filters, probe provenance) never reach the page
-    for idea in run.get("ideas") or []:
-        for f in _STRATEGY_ENGINE_FIELDS:
-            idea.pop(f, None)
+    # engine-only fields (provider filters, probe provenance) never reach the
+    # page or a logged-out client share; an authenticated GTME caller asking
+    # for full=1 keeps them so the exact pull recipe travels with the link.
+    if not full:
+        for idea in run.get("ideas") or []:
+            for f in _STRATEGY_ENGINE_FIELDS:
+                idea.pop(f, None)
     # which run this actually is (bare GET may serve a keyed run)
     served_id = None
     ikey = rows[0].get("insight_key") or ""
@@ -1965,6 +1978,10 @@ def strategy_run_get(run_id=None) -> dict:
         focus["ts"] = frow[0].get("generated_at")
     out = {"run": run, "updated": rows[0].get("generated_at"), "focus": focus,
            "run_id": served_id}
+    if full:
+        # full reads bypass the memo entirely (never cache the recipe-bearing
+        # copy — a client poll must never pick it up); return uncached.
+        return out
     # store only if no bust ran while we were computing (generation fence);
     # per-key one-object swap; empty runs never memoized (same as before).
     with _STRATEGY_RUN_MEMO_LOCK:
@@ -19080,7 +19097,8 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             rid = (q.get("id") or [None])[0]
             share = (q.get("share") or [None])[0]
-            if not self._authed_email():
+            authed = bool(self._authed_email())
+            if not authed:
                 # logged-out = share-link only: the token must be valid and it
                 # pins WHICH run is served (never the newest / another run)
                 srid = verify_strategy_share(share)
@@ -19088,10 +19106,15 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json({"run": None, "updated": None, "focus": None,
                                        "error": "share link invalid or expired"}, 401)
                 rid = srid
+            # full=1 returns the engine fields (pull_spec/probe/netting) so a
+            # teammate with the same tool access can pull the EXACT list from
+            # the link (Bjion goal 2026-08-04). Honoured ONLY for an
+            # authenticated GTME caller — a client share can never set it.
+            want_full = authed and (q.get("full") or ["0"])[0] in ("1", "true", "yes")
             # one link for everyone (Bjion 2026-08-04): the page uses `viewer`
             # to show the tool-user board to a logged-in visitor and the client
             # permalink view to everyone else - same URL, no login prompt.
-            out = strategy_run_get(rid)
+            out = strategy_run_get(rid, full=want_full)
             if isinstance(out, dict):
                 out["viewer"] = "gtme" if self._authed_email() else "client"
             return self._json(out)
