@@ -334,8 +334,19 @@ def register_from_smartlead(campaign, workspace: str, sl_key: str) -> dict:
 
 
 # ── the reconcile the cron calls ────────────────────────────────────────────
-def _is_subsequence(name: str) -> bool:
-    return (name or "").strip().lower() in SUBSEQUENCE_NAMES
+def _is_subsequence(campaign: dict) -> bool:
+    """A Smartlead subsequence, not a real sourced campaign.
+
+    Smartlead sets parent_campaign_id on every subsequence, so that is the
+    authoritative test. The name check is only a fallback for a record that
+    somehow reports no parent — and it matches by PREFIX, because Smartlead
+    suffixes renamed subsequences ("Interested Reply (Sales tech adoption)"
+    is not the exact string "interested reply"; campaign 3758781, 2026-08-04).
+    """
+    if campaign.get("parent_campaign_id"):
+        return True
+    name = (campaign.get("name") or "").strip().lower()
+    return any(name.startswith(s) for s in SUBSEQUENCE_NAMES)
 
 
 def _within_window(created_at: str, cutoff: dt.datetime) -> bool:
@@ -382,7 +393,7 @@ def reconcile(window_h: int = RECONCILE_WINDOW_H, only_ids=None) -> dict:
                 if str(cid) not in only:
                     continue
             else:
-                if _is_subsequence(name):
+                if _is_subsequence(c):
                     continue
                 if not _within_window(c.get("created_at"), cutoff):
                     continue
