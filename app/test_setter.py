@@ -356,6 +356,16 @@ class FakeHTTP:
         # response, which always trips merge_correction_into_instructions's
         # own fallback-to-append path - tests that want a real merge set this.
         self.merge_fn = None
+        # conflicts_fn(body) -> {"conflicts": [...]} for the post-merge
+        # conflict sweep (schema "setter_merge_conflicts"). None -> an empty
+        # list, meaning "clean", so every pre-existing merge test keeps its
+        # exact behaviour without knowing this feature exists.
+        self.conflicts_fn = None
+        # cleanup_fn(body) -> {"instructions": "..."} for the targeted
+        # conflict-cleanup rewrite (schema "setter_instructions_cleanup").
+        # None -> empty string, which fails the merge-style validation, so the
+        # pre-cleanup text is kept and the conflicts stay reported.
+        self.cleanup_fn = None
         # proofread_fn(body) -> {"html": "..."} for proofread_draft()'s
         # OpenAI call (schema "setter_proofread"). None -> defaults to
         # echoing back the SAME html the call was given (parsed straight out
@@ -429,6 +439,12 @@ class FakeHTTP:
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_instructions_merge":
                 data = self.merge_fn(body) if self.merge_fn else {"instructions": ""}
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "setter_merge_conflicts":
+                data = self.conflicts_fn(body) if self.conflicts_fn else {"conflicts": []}
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "setter_instructions_cleanup":
+                data = self.cleanup_fn(body) if self.cleanup_fn else {"instructions": ""}
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             if schema == "setter_lesson_from_edit":
                 data = (self.lesson_fn(body) if self.lesson_fn
@@ -3443,6 +3459,124 @@ def test_merge_correction_general_rule_generalisation():
          saved4["instruction_edits"][0]["rule"] == saved4["instruction_edits"][0]["note"]
          == "this reply was in Spanish, so the whole answer must be in Spanish",
          saved4.get("instruction_edits"))
+
+
+# ── verify-before-done: post-merge conflict sweep + targeted cleanup ─────────
+# Owner brief 2026-08-04: "previous stuff is overwriting my new training,
+# there needs to be something in the middle verifying these changes before
+# they get reported as complete." Every merge/append is now followed by a
+# conflict sweep; when older passages fight the new lesson a second targeted
+# rewrite removes exactly those, and what is left is recorded honestly on the
+# instruction_edits entry (conflicts_found / conflicts_remaining) and echoed
+# by the correction route (landed_clean).
+
+def test_merge_correction_conflict_sweep_and_cleanup():
+    sb, http = fresh_setter()
+
+    # 1. Dirty merge -> sweep finds the old contradicting line, cleanup
+    # removes it, recheck comes back clean -> how "merged+cleaned",
+    # conflicts_remaining empty.
+    agent = {"id": "agent-sweep0001", "name": "Ada",
+             "instructions": "Resource: The guide - https://x.example/guide - send on request. "
+                             "CTA: say you would walk them through the strategy."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    dirty = ("Resource: The guide - https://x.example/guide - send on request. "
+             "CTA: say you would walk them through the strategy. "
+             "New rule: the CTA is always a demo offer.")
+    clean = ("Resource: The guide - https://x.example/guide - send on request. "
+             "New rule: the CTA is always a demo offer.")
+    http.merge_fn = lambda body: {"instructions": dirty}
+    sweep_calls = {"n": 0}
+    def sweep(body):
+        sweep_calls["n"] += 1
+        manual = json.loads(body["messages"][1]["content"]).get("manual") or ""
+        if "walk them through the strategy" in manual:
+            return {"conflicts": ["CTA: say you would walk them through the strategy."]}
+        return {"conflicts": []}
+    http.conflicts_fn = sweep
+    http.cleanup_fn = lambda body: {"instructions": clean}
+    ok, new_instructions, detail = setter.merge_correction_into_instructions(
+        agent, "The CTA is always a demo offer, never strategy.", source="manual")
+    check("conflict sweep: merge+cleanup reports merged+cleaned", detail == "merged+cleaned", detail)
+    check("conflict sweep: the contradicting line is gone",
+         "walk them through the strategy" not in new_instructions, new_instructions)
+    check("conflict sweep: the resource URL survives cleanup",
+         "https://x.example/guide" in new_instructions, new_instructions)
+    check("conflict sweep: sweep ran twice (initial + recheck)", sweep_calls["n"] == 2, sweep_calls)
+    saved = setter._load_agent(agent["id"])
+    e = (saved.get("instruction_edits") or [{}])[-1]
+    check("conflict sweep: edit entry records conflicts_found=1", e.get("conflicts_found") == 1, e)
+    check("conflict sweep: edit entry records conflicts_remaining empty",
+         e.get("conflicts_remaining") == [], e)
+
+    # 2. Cleanup rewrite drops a URL -> rejected, pre-cleanup text kept, the
+    # conflict stays reported so no caller can claim the lesson landed clean.
+    agent2 = {"id": "agent-sweep0002", "name": "Ada",
+              "instructions": "Resource: The guide - https://x.example/guide - send on request. "
+                              "CTA: say you would walk them through the strategy."}
+    sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+    http.merge_fn = lambda body: {"instructions": dirty}
+    http.conflicts_fn = lambda body: {"conflicts": ["CTA: say you would walk them through the strategy."]}
+    http.cleanup_fn = lambda body: {"instructions": "New rule: the CTA is always a demo offer."}  # URL gone
+    ok2, new_instructions2, detail2 = setter.merge_correction_into_instructions(
+        agent2, "The CTA is always a demo offer, never strategy.")
+    check("conflict sweep: failed cleanup keeps how=merged", detail2 == "merged", detail2)
+    check("conflict sweep: failed cleanup keeps the pre-cleanup text",
+         new_instructions2 == dirty, new_instructions2)
+    saved2 = setter._load_agent(agent2["id"])
+    e2 = (saved2.get("instruction_edits") or [{}])[-1]
+    check("conflict sweep: unresolved conflict is reported honestly",
+         e2.get("conflicts_remaining") == ["CTA: say you would walk them through the strategy."], e2)
+
+    # 3. The append fallback is swept too - the whole point, since append
+    # never removes anything on its own.
+    agent3 = {"id": "agent-sweep0003", "name": "Ada",
+              "instructions": "CTA: say you would walk them through the strategy."}
+    sb.agents[agent3["id"]] = {"id": agent3["id"], "doc": agent3}
+    http.merge_fn = None  # default {} -> append fallback
+    def sweep3(body):
+        manual = json.loads(body["messages"][1]["content"]).get("manual") or ""
+        if "walk them through the strategy" in manual:
+            return {"conflicts": ["CTA: say you would walk them through the strategy."]}
+        return {"conflicts": []}
+    http.conflicts_fn = sweep3
+    http.cleanup_fn = lambda body: {"instructions": "New rule: the CTA is always a demo offer. "
+                                                    "Training note: the CTA is always a demo offer, never strategy."}
+    ok3, new_instructions3, detail3 = setter.merge_correction_into_instructions(
+        agent3, "the CTA is always a demo offer, never strategy")
+    check("conflict sweep: append path gets cleaned too", detail3 == "appended+cleaned", detail3)
+    check("conflict sweep: append path's contradicting line removed",
+         "walk them through the strategy" not in new_instructions3, new_instructions3)
+
+    # 4. The correction route surfaces the verdict so the Teach modal / chat
+    # can report landed_clean truthfully.
+    agent4 = {"id": "agent-sweep0004", "name": "Ada",
+              "instructions": "CTA: say you would walk them through the strategy."}
+    sb.agents[agent4["id"]] = {"id": agent4["id"], "doc": agent4}
+    http.merge_fn = lambda body: {"instructions": "CTA: say you would walk them through the strategy. "
+                                                  "New rule: demo offer only."}
+    http.conflicts_fn = lambda body: {"conflicts": ["CTA: say you would walk them through the strategy."]}
+    http.cleanup_fn = lambda body: {"instructions": ""}  # cleanup unavailable -> conflict remains
+    status, resp = setter.route_agents_correction(
+        {"agent_id": agent4["id"], "text": "demo offer only", "scope": "remember", "source": "manual"})
+    check("conflict sweep: correction route answers 200", status == 200, (status, resp))
+    check("conflict sweep: route reports conflicts_found", resp.get("conflicts_found") == 1, resp)
+    check("conflict sweep: route reports landed_clean False", resp.get("landed_clean") is False, resp)
+    check("conflict sweep: route carries the conflicting quote",
+         resp.get("conflicts_remaining") == ["CTA: say you would walk them through the strategy."], resp)
+
+    # 5. Defaults (no conflicts anywhere) -> clean verdict, zero change to the
+    # classic merge behaviour.
+    agent5 = {"id": "agent-sweep0005", "name": "Ada", "instructions": "Flat $200/mo."}
+    sb.agents[agent5["id"]] = {"id": agent5["id"], "doc": agent5}
+    http.merge_fn = lambda body: {"instructions": "Flat $200/mo. Always mention the trial."}
+    http.conflicts_fn = None  # default: {"conflicts": []}
+    status5, resp5 = setter.route_agents_correction(
+        {"agent_id": agent5["id"], "text": "Always mention the trial.", "scope": "remember"})
+    check("conflict sweep: clean merge reports landed_clean True",
+         status5 == 200 and resp5.get("landed_clean") is True and resp5.get("conflicts_found") == 0,
+         resp5)
+    check("conflict sweep: clean merge keeps how=merged", resp5.get("how") == "merged", resp5)
 
 
 def test_correction_one_off_does_not_touch_memory():
@@ -9238,6 +9372,7 @@ if __name__ == "__main__":
     test_memory_digest_empty_is_byte_identical()
     test_merge_correction_into_instructions_success_and_fallbacks()
     test_merge_correction_general_rule_generalisation()
+    test_merge_correction_conflict_sweep_and_cleanup()
     test_correction_one_off_does_not_touch_memory()
     test_correction_remember_route_merges_instructions()
     test_agents_memory_delete()

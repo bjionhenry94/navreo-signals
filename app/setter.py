@@ -2509,6 +2509,54 @@ You must also produce general_rule: a single sentence that restates the correcti
 
 Output STRICT JSON: {"instructions": "...", "general_rule": "..."}"""
 
+MERGE_CONFLICTS_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"conflicts": {"type": "array", "items": {"type": "string"}}},
+    "required": ["conflicts"],
+}
+
+MERGE_CONFLICTS_SYSTEM = """You audit an AI appointment setter's instruction manual right after the owner's newest correction was added to it. Your only job is to list every passage of the manual that CONTRADICTS or undermines that correction, so those passages can be removed. A passage conflicts when following it would produce behaviour the correction forbids, or when it states an OLDER version of the same rule in different words for the same situation. Quote each conflicting passage verbatim, trimmed to the smallest span that shows the conflict, under 200 characters each. The correction itself, and passages that agree with it, are NOT conflicts. Rules about unrelated situations are NOT conflicts. When the manual is clean, return an empty list.
+
+Output STRICT JSON: {"conflicts": ["..."]}"""
+
+CLEANUP_INSTRUCTIONS_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"instructions": {"type": "string"}},
+    "required": ["instructions"],
+}
+
+CLEANUP_INSTRUCTIONS_SYSTEM = """You maintain an AI appointment setter's instruction manual. The owner's newest correction is already in the manual, but the listed older passages contradict it. Rewrite the manual so the correction is the single truth: delete or rewrite ONLY the conflicting passages so they agree with the correction, and change nothing else. Keep every existing link, price, and unrelated rule exactly as it is. Never invent a new link, price, or rule. Plain text, short paragraphs, no em dashes anywhere, use a comma or period instead. Return the FULL updated manual, not a summary.
+
+Output STRICT JSON: {"instructions": "..."}"""
+
+
+def _find_instruction_conflicts(instructions: str, correction: str):
+    """Lists manual passages that contradict the correction (verbatim quotes).
+    Returns a list (possibly empty = clean) or None when the check could not
+    run (no key, call failed) - callers must treat None as "unknown", never
+    as "clean"."""
+    try:
+        key = _KEYS.get("OPENAI_API_KEY")
+        if not key:
+            return None
+        r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                 {"Authorization": f"Bearer {key}"},
+                 {"model": OPENAI_MODEL,
+                  "messages": [{"role": "system", "content": MERGE_CONFLICTS_SYSTEM},
+                              {"role": "user", "content": json.dumps(
+                                  {"manual": instructions, "correction": correction})}],
+                  "response_format": {"type": "json_schema", "json_schema": {
+                      "name": "setter_merge_conflicts", "strict": True,
+                      "schema": MERGE_CONFLICTS_SCHEMA}}})
+        if isinstance(r, dict) and not r.get("error"):
+            data = json.loads(r["choices"][0]["message"]["content"])
+            out = data.get("conflicts")
+            if isinstance(out, list):
+                return [str(x).strip() for x in out if str(x).strip()][:8]
+    except Exception:  # noqa: BLE001 - an unavailable check is "unknown", not "clean"
+        pass
+    return None
+
 
 def merge_correction_into_instructions(agent: dict, note: str, source: str = "manual"):
     """Feature A (owner ruling 2026-07-14): a "remember" correction no longer
@@ -2595,8 +2643,55 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
         how = "appended"
         rule = note
 
+    # Verify-before-done (owner brief 2026-08-04): saving text is not the same
+    # as the lesson landing. Older passages that contradict a new correction
+    # make the drafter pick sides at random (16 CTA phrasings were live in the
+    # queue that morning), and the append fallback is the worst offender, it
+    # never removes anything. So after every merge OR append: sweep the result
+    # for passages that fight the correction, rewrite exactly those away in a
+    # second targeted pass (same never-drop-a-link / no-runaway-growth checks
+    # as the merge itself), then record honestly what is left. A correction
+    # whose conflicts_remaining is non-empty was NOT fully applied and every
+    # caller can now say so instead of reporting it complete.
+    conflicts = _find_instruction_conflicts(new_text, note)
+    remaining = list(conflicts or [])
+    if remaining:
+        cleaned = None
+        try:
+            key = _KEYS.get("OPENAI_API_KEY")
+            if key:
+                payload = {"current_instructions": new_text, "correction": note,
+                           "conflicting_passages": remaining}
+                r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                         {"Authorization": f"Bearer {key}"},
+                         {"model": OPENAI_MODEL,
+                          "messages": [{"role": "system", "content": CLEANUP_INSTRUCTIONS_SYSTEM},
+                                      {"role": "user", "content": json.dumps(payload)}],
+                          "response_format": {"type": "json_schema", "json_schema": {
+                              "name": "setter_instructions_cleanup", "strict": True,
+                              "schema": CLEANUP_INSTRUCTIONS_SCHEMA}}})
+                if isinstance(r, dict) and not r.get("error"):
+                    data = json.loads(r["choices"][0]["message"]["content"])
+                    candidate = str(data.get("instructions") or "").strip()
+                    old_urls = set(_extract_urls(new_text))
+                    max_len = max(20000, int(len(new_text) * 1.5))
+                    if candidate and old_urls.issubset(set(_extract_urls(candidate))) and len(candidate) <= max_len:
+                        cleaned = candidate
+        except Exception:  # noqa: BLE001 - a failed cleanup keeps the pre-cleanup text and reports the conflicts
+            cleaned = None
+        if cleaned is not None:
+            new_text = cleaned
+            how += "+cleaned"
+            recheck = _find_instruction_conflicts(new_text, note)
+            if recheck is not None:
+                remaining = list(recheck)
+
     edits = list(agent.get("instruction_edits") or [])
-    edits.append({"note": note, "rule": rule, "at": at, "source": source or "manual", "how": how})
+    edit_entry = {"note": note, "rule": rule, "at": at, "source": source or "manual", "how": how}
+    if conflicts is not None:
+        edit_entry["conflicts_found"] = len(conflicts)
+        edit_entry["conflicts_remaining"] = [c[:200] for c in remaining[:5]]
+    edits.append(edit_entry)
     saved = _save_agent({"id": agent_id, "name": agent.get("name"), "instructions": new_text,
                          "instruction_edits": edits})
     return True, saved.get("instructions") or new_text, how
@@ -5504,12 +5599,23 @@ def route_agents_correction(payload):
         if scope == "remember":
             _ok, _new_instructions, how = merge_correction_into_instructions(agent, text, source)
             saved = _load_agent(agent_id) or agent
-            return 200, {
+            resp = {
                 "ok": True, "agent_id": agent_id, "scope": scope, "how": how,
                 "memory_count": len(saved.get("memory") or []),
                 "feedback_log_count": len(saved.get("feedback_log") or []),
                 "instruction_edits_count": len(saved.get("instruction_edits") or []),
             }
+            # Verify-before-done: the merge's conflict sweep records whether
+            # older passages still fight this lesson. Surface that verdict so
+            # the caller (chat, the Teach modal) can tell the owner "landed
+            # clean" vs "these older lines still contradict it" instead of
+            # reporting every save as complete.
+            last_edit = (saved.get("instruction_edits") or [{}])[-1]
+            if "conflicts_found" in last_edit:
+                resp["conflicts_found"] = last_edit.get("conflicts_found")
+                resp["conflicts_remaining"] = last_edit.get("conflicts_remaining") or []
+                resp["landed_clean"] = not resp["conflicts_remaining"]
+            return 200, resp
         saved = _append_agent_feedback_log(agent_id, text, source)
         return 200, {
             "ok": True, "agent_id": agent_id, "scope": scope,
