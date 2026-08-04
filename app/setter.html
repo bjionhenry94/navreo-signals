@@ -158,9 +158,12 @@
 .lp-cat-now { margin-bottom: 11px; }
 .lp-cat-now .pill { font-size: 11.5px; padding: 4px 11px; }
 .lp-cat-now .pill.n { background: #fff; border: 1px solid var(--line-2); }
-.lp-cat-edit { display: flex; gap: 8px; align-items: center; }
+/* The dropdown+Update row wraps: when the panel is too narrow to hold both
+   side by side, Update drops onto its own line and stretches full-width
+   rather than crushing the select or spilling past the panel edge. */
+.lp-cat-edit { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .lp-cat-edit select {
-  flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 8px 9px; border-radius: 9px; border: 1px solid var(--line-2);
+  flex: 1 1 140px; min-width: 0; min-height: 36px; padding: 8px 9px; border-radius: 9px; border: 1px solid var(--line-2);
   background: var(--bg, #fff); color: var(--ink); font: 500 12.5px var(--font-sans); cursor: pointer;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
@@ -179,11 +182,24 @@
 .lp-cat-edit .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
 /* One-click override row (Not qualified / Not interested) - its own row
    BELOW the dropdown+Update row so two full-width labels never get squeezed
-   into the same line as the select (that's what was clipping "Not qualified"
-   off the edge of the panel). Each button splits the row evenly. */
-.lp-cat-actions { display: flex; gap: 8px; margin-top: 8px; }
-.lp-cat-actions .btn { flex: 1 1 0; min-height: 34px; transition: background-color .15s ease, border-color .15s ease; }
+   into the same line as the select. WRAPS: when the panel is too narrow to
+   hold both side by side they stack full-width instead of spilling past the
+   panel edge (the overflow the flat single-row version showed). flex-basis
+   sized to the wider label so the wrap trips before either clips. */
+.lp-cat-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+/* flex-basis auto = each button asks for exactly its label width, then grows
+   to share the row. Both fit side by side on a comfortable panel; the moment
+   the panel narrows or the page is zoomed and the two labels no longer fit,
+   they wrap to stacked full-width rows. white-space:nowrap keeps a label from
+   breaking mid-word - it wraps the whole button instead. */
+.lp-cat-actions .btn {
+  flex: 1 1 auto; min-height: 34px; white-space: nowrap;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.lp-cat-actions .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.lp-cat-actions .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
 .lp-cat-hint { margin-top: 10px; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+.lp-cat-hint:empty { margin-top: 0; }
 .lp-cat-hint.lp-hint-err { color: var(--red); }
 /* Sticky lead-info header bar: one row - identity (name + replied + email) on
    the left, Website / LinkedIn / Smartlead links on the right - pinned above
@@ -2911,7 +2927,6 @@ const NQ_CATEGORY_NAME = "Not a qualified lead";
    the queue in one click, no dropdown. */
 const NI_CATEGORY_NAME = "Not Interested";
 const CAT_NEGATIVE_RE = /(not interested|do not contact|do-not-contact|unsubscrib|opt.?out|bounce|wrong|blacklist|spam|unqualif|invalid|junk|no longer|left the company)/i;
-const CAT_HINT_DEFAULT = "Positive keeps them in the flow; anything else files it in Smartlead and drops it from the queue.";
 function leadFirstNameOr(row, fallback) {
   const fn = String((row && row.lead_first_name) || "").trim();
   return (fn && fn.toLowerCase() !== "there") ? fn : fallback;
@@ -3012,7 +3027,10 @@ function categoryControlInner(row, compact) {
     ? `<span class="pill a">Uncategorised</span>`
     : `<span class="pill ${categoryTone(curCat)}">${esc(curCat)}</span>`;
   const editable = !["sent", "auto_sent"].includes(row.status);
-  const hint = compact ? "" : esc(CAT_HINT_DEFAULT);
+  // Resting hint is empty (owner ask 2026-08-04: "delete the text underneath
+  // the buttons"). The element stays so live status/consequence/error lines
+  // still have a home; it just carries no standing explanatory paragraph.
+  const hint = "";
   return `
       <div class="lp-label">Lead category</div>
       <div class="lp-cat-now">${catPill}</div>
@@ -3190,8 +3208,9 @@ function updateCatBtn(block, row) {
   const hint = block.querySelector(".lp-cat-hint");
   if (hint) {
     hint.classList.remove("lp-hint-err");
-    const compact = block.classList.contains("lp-cat-compact");
-    if (!enable) { hint.textContent = compact ? "" : CAT_HINT_DEFAULT; return; }
+    // At rest the hint is blank (owner ask 2026-08-04) - no standing paragraph
+    // under the buttons; a consequence line appears only once a change stages.
+    if (!enable) { hint.textContent = ""; return; }
     const nm = leadFirstNameOr(r, "this lead");
     hint.textContent = positive
       ? `Keeps ${nm} in the flow.`
