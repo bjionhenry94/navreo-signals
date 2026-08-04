@@ -752,7 +752,12 @@ function renderSidebar(){
       setTimeout(()=>{shb.textContent='Share Campaign Ideas';},5000);
     }catch(e){shb.disabled=false;shb.textContent='Share Campaign Ideas';}
   };
-  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;tab='tgt';sIdx=0;copyVer={};render();});
+  // Switching campaign ideas keeps the CURRENT tab (Bjion 2026-08-05): if you're
+  // reading Copy on one idea, clicking another idea shows that idea's Copy, not a
+  // reset to Targeting. Every idea has the same tab set (TABS=TABS_ALL), so the
+  // active tab is always valid on the next idea. Sub-state (version/sub-index) still
+  // resets since it's per-idea.
+  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;sIdx=0;copyVer={};render();});
 }
 function renderWorkspace(){
   const x=IDEAS[active];
