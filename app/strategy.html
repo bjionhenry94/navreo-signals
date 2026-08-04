@@ -678,9 +678,15 @@ function panelHTML(x){
     // each person's own links live IN their thumbnail (Bjion, 2026-08-03):
     // their real website/LinkedIn if the run supplies them, safe search links
     // otherwise. stopPropagation so opening a link doesn't also switch cards.
-    const purl=p=>({
-      w:p.website||('https://www.google.com/search?q='+encodeURIComponent(p.company||p.first||'')),
-      l:p.linkedin||('https://www.linkedin.com/search/results/all/?keywords='+encodeURIComponent(p.company||p.first||''))});
+    const purl=p=>{
+      // Direct links (Bjion 2026-08-05): straight to the prospect's website and
+      // their LinkedIn profile. Website falls back to the company domain (direct),
+      // never a search page; LinkedIn uses the person's real profile url.
+      const dom=(p.domain||'').replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+      return {
+        w:p.website||(dom?'https://'+dom:'https://www.google.com/search?q='+encodeURIComponent(p.company||p.first||'')),
+        l:p.linkedin||('https://www.linkedin.com/search/results/all/?keywords='+encodeURIComponent(p.company||p.first||''))};
+    };
     const strip=ppl.map((p,i)=>{const u=purl(p);return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
       +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
     return `<p class="eyb">Preview</p>`
