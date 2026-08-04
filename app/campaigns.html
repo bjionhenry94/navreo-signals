@@ -985,6 +985,14 @@
     70% { box-shadow: 0 0 0 6px rgba(46, 125, 91, 0); }
     100% { box-shadow: 0 0 0 0 rgba(46, 125, 91, 0); }
   }
+  /* inactive signal: same pulse, grey — "it's a signal, just switched off" */
+  .row-signal--off { color: var(--fg-subtle); }
+  .sig-dot--off { background: var(--fg-subtle); animation: sigpulseOff 1.8s ease-out infinite; }
+  @keyframes sigpulseOff {
+    0% { box-shadow: 0 0 0 0 rgba(140, 140, 140, 0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(140, 140, 140, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(140, 140, 140, 0); }
+  }
 
   .stat { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .stat-num {
@@ -3375,14 +3383,24 @@
      whole list, rows repaint in place when it lands. */
   function rowSignalBit(c) {
     var s = STATE.signalsByCamp && STATE.signalsByCamp[String(c.id)];
-    if (!s || !s.live) return "";
+    if (!s) return "";
     /* one line, never wraps (owner ruling): "LIVE SIGNALS · +N this week";
        source count + pull freshness live in the tooltip */
-    var line = "LIVE SIGNALS · +" + fmtInt(s.week || 0) + " this week";
-    var tip = s.live + " live signal source" + (s.live === 1 ? "" : "s") +
-      (s.last_pull ? " · last pulled " + sigAgo(s.last_pull) : "") +
-      " · " + fmtInt(s.week || 0) + " people found in the last 7 days";
-    return '<span class="row-signal" title="' + esc(tip) + '"><i class="sig-dot"></i>' + esc(line) + "</span>";
+    if (s.live) {
+      var line = "LIVE SIGNALS · +" + fmtInt(s.week || 0) + " this week";
+      var tip = s.live + " live signal source" + (s.live === 1 ? "" : "s") +
+        (s.last_pull ? " · last pulled " + sigAgo(s.last_pull) : "") +
+        " · " + fmtInt(s.week || 0) + " people found in the last 7 days";
+      return '<span class="row-signal" title="' + esc(tip) + '"><i class="sig-dot"></i>' + esc(line) + "</span>";
+    }
+    /* signal exists but is turned off — a grey (still-pulsing) marker so the row
+       tells the truth: this IS a signal campaign, it just isn't pulling right now */
+    if (s.inactive) {
+      var tipOff = s.inactive + " signal source" + (s.inactive === 1 ? "" : "s") +
+        " turned off · no new people are being pulled until you switch it back on";
+      return '<span class="row-signal row-signal--off" title="' + esc(tipOff) + '"><i class="sig-dot sig-dot--off"></i>INACTIVE SIGNAL</span>';
+    }
+    return "";
   }
   function loadSignalsByCamp() {
     if (STATE.signalsByCampP) return;

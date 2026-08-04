@@ -2883,9 +2883,11 @@ def _compute_signals_daily() -> dict:
         cid = str(d.get("campaign_id") or "")
         if not cid.startswith("camp-sl-"):
             continue
-        c = campaigns.setdefault(cid[8:], {"live": 0, "week": 0, "last_pull": None})
+        c = campaigns.setdefault(cid[8:], {"live": 0, "inactive": 0, "week": 0, "last_pull": None})
         if d.get("active") is not False:
             c["live"] += 1
+        else:
+            c["inactive"] += 1  # signal exists but turned off — the list row shows a grey "INACTIVE SIGNAL"
         lp = d.get("last_pull")
         if lp and (not c["last_pull"] or str(lp) > str(c["last_pull"])):
             c["last_pull"] = lp
