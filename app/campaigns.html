@@ -3921,7 +3921,15 @@
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
       '<a href="#/c/' + esc(c.id) + '/messaging" class="campaign-tab' + (tab === "messaging" ? " is-active" : "") + '" data-tab="messaging">Messaging</a>' +
-      '<a href="#/c/' + esc(c.id) + '/leads" class="campaign-tab' + (tab === "leads" ? " is-active" : "") + '" data-tab="leads">Leads' + (st.leads != null ? ' <span class="tab-count tnum">(' + fmtInt(st.leads) + ")</span>" : "") + "</a></nav>");
+      '<a href="#/c/' + esc(c.id) + '/leads" class="campaign-tab' + (tab === "leads" ? " is-active" : "") + '" data-tab="leads">Leads' + (function () {
+        /* The badge must agree with the Leads table. The table pulls the LIVE
+           Smartlead audience; the scorecard's st.leads lags (0 on a freshly
+           uploaded campaign), so prefer the live audience count when we already
+           have it cached, and hydratePlatformLeads updates it once it loads. */
+        var pl = STATE.platformLeads[c.id];
+        var n = (pl && pl.total != null) ? pl.total : st.leads;
+        return n != null ? ' <span class="tab-count tnum">(' + fmtInt(n) + ")</span>" : "";
+      })() + "</a></nav>");
     h.push('<div class="campaign-page-body">');
 
     /* overview */
@@ -5895,6 +5903,16 @@
               start: 1, per: CLG_CAP, visible: vis, selected: {}, lookups: {}, lookT: null,
               mode: null, cohortRows: null, cohortTotal: null, cohortLoading: false };
       clgRender();
+      /* reconcile the Leads tab badge with the live audience count — same
+         source as the table, so the two can never disagree (was "Leads (0)"
+         over a full table on directly-uploaded campaigns). */
+      var tabEl = document.querySelector('.campaign-page[data-cid="' + id + '"] .campaign-tab[data-tab="leads"]');
+      if (tabEl) {
+        var n = (pl && pl.total != null) ? pl.total : leads.length;
+        var badge = tabEl.querySelector(".tab-count");
+        if (!badge) { tabEl.appendChild(document.createTextNode(" ")); badge = document.createElement("span"); badge.className = "tab-count tnum"; tabEl.appendChild(badge); }
+        badge.textContent = "(" + fmtInt(n) + ")";
+      }
     };
     var dl = document.getElementById("clg-download");
     if (dl) {
