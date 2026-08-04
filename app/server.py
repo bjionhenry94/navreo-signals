@@ -2773,7 +2773,13 @@ def api_leads(campaign_id: str) -> list:
 # spec to pull it again with. No spec = nothing to re-run, and every surface
 # that offers a re-pull must stay silent rather than arm a button that would
 # fire an unfiltered provider query.
-SIGNAL_MECHS = {"hiring", "engagement", "followers", "lookalike", "new_exec", "news"}
+# A SIGNAL keeps finding new people over time (it refreshes). Bjion taxonomy
+# 2026-08-04: the three live signals are hiring / new_exec / engagement.
+# followers + tech-stack are FIXED LISTS (one-off CSV, mechanism "fixed_list"),
+# news is DROPPED, and lookalike is a one-time TAM pull — none of those are
+# "signals found", so they're excluded from is_signal_source / the signals-daily
+# analytics widget / the campaign signal chip.
+SIGNAL_MECHS = {"hiring", "engagement", "new_exec"}
 FIXED_LIST_MECH = "fixed_list"
 
 

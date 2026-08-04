@@ -4138,9 +4138,11 @@
      surface. Approve/reject and Remove stay OUT of the cockpit (user ruling:
      the list page is the review surface; removal lives in the classic console). */
   function sigMech(s) {
+    // Signals (live, refresh over time) = hiring / new_exec / engagement only
+    // (Bjion taxonomy 2026-08-04). followers + tech-stack are fixed lists, news
+    // is dropped, lookalike is a one-off TAM pull — none carry the signal chip.
     var m = String(s.mechanism || s.type || "").toLowerCase();
-    return (m === "hiring" || m === "engagement" || m === "followers" || m === "lookalike" ||
-            m === "new_exec" || m === "news") ? m : "";
+    return (m === "hiring" || m === "engagement" || m === "new_exec") ? m : "";
   }
   /* human chip labels — "new_exec" must never render raw */
   var SIG_LABELS = { hiring: "Hiring", engagement: "Engagement", followers: "Followers",
