@@ -804,7 +804,15 @@ function renderWorkspace(){
         body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:cur.id,field:'seq:'+si+':'+vi+':delete',share:SHARE})});
       const j=await r.json();
       if(!j.ok){alert(j.message||'Could not remove that version.');return;}
-      copyVer[si]=0;lastFP=null;await fetchRun();   // pull the server truth (version now gone)
+      // reflect it now: RE-READ the current idea (the 5s poll can swap the IDEAS
+      // array during the await, which is exactly why the old code's captured `x`
+      // splice did nothing) and splice its live versions; if the idea moved, resync.
+      const nowIdea=IDEAS[active];
+      if(nowIdea&&nowIdea.id===cur.id){
+        const vs2=((sequenceOf(nowIdea)[si])||{}).versions;
+        if(vs2&&vi<vs2.length)vs2.splice(vi,1);
+        copyVer[si]=0;renderWorkspace();
+      }else{lastFP=null;fetchRun();}
     }catch(err){alert('Could not remove that version.');}
   });
   work.querySelectorAll('[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
