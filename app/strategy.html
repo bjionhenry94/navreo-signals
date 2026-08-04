@@ -164,6 +164,9 @@ body.solo .wrap{margin:0 auto;}
 .ver-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
 .ver-tab:hover{border-color:var(--ink-3);}
 .ver-tab.on{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange);}
+.ver-x{display:inline-block;margin-left:7px;color:var(--ink-3);font-weight:700;opacity:.55;}
+.ver-x:hover{color:#b3261e;opacity:1;}
+.ib-example [data-edit]:focus,.mb[data-edit]:focus{outline:2px solid var(--orange);outline-offset:2px;border-radius:4px;}
 .mail-label{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:20px 0 8px;}
 .mail-label:first-of-type,.copy-heading + .mail-label{margin-top:0;}
 .mail{max-width:640px;}
@@ -445,7 +448,9 @@ function sequenceOf(x){
 }
 function primaryVersion(x){return (((sequenceOf(x)[0]||{}).versions||[])[0])||{};}
 function mailFrameHl(subject,email,editKey){
-  const ed=(CLIENT_MODE&&editKey)?` contenteditable="true" data-edit="${editKey}" spellcheck="true"`:'';
+  // editable on BOTH sides (Bjion 2026-08-04): the tool user edits and saves
+  // the same way the shared client does.
+  const ed=editKey?` contenteditable="true" data-edit="${editKey}" spellcheck="true"`:'';
   const head=subject?`Subject: ${highlightTokensHtml(subject)}`:'Sent a few days later, same thread';
   return `<div class="mail"><div class="mh">${head}</div><div class="mb"${ed}>${highlightTokensHtml(email)}</div></div>`;}
 // "Share a link" on the Summary page (Bjion, 2026-08-02): GTME-only by design —
@@ -498,7 +503,7 @@ async function reorderIcebreaker(x,i,dir){
     body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,from:i,to:j})});}catch(e){}
 }
 async function persistVisibleEdits(x){
-  const eds=[...document.querySelectorAll('.mb[data-edit]')].filter(el=>el.dataset.dirty==='1'&&el.innerText.trim());
+  const eds=[...document.querySelectorAll('[data-edit]')].filter(el=>el.dataset.dirty==='1'&&el.innerText.trim());
   for(const el of eds){
     try{await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:el.dataset.edit,value:el.innerText.trim(),share:SHARE})});
@@ -506,7 +511,7 @@ async function persistVisibleEdits(x){
   }
 }
 async function clientSaveCopy(x,btn){
-  const eds=[...document.querySelectorAll('.mb[data-edit]')].filter(el=>el.innerText.trim());
+  const eds=[...document.querySelectorAll('[data-edit]')].filter(el=>el.innerText.trim());
   if(!eds.length){btn.textContent='Nothing to save';return;}
   btn.disabled=true;btn.textContent='Saving…';
   try{
@@ -638,7 +643,8 @@ function panelHTML(x){
       const vs=step.versions||[];const sel=Math.min(copyVer[si]||0,Math.max(0,vs.length-1));
       h+=`<p class="mail-label">${esc(step.name||('Email '+(si+1)))}</p>`;
       if(vs.length>1){
-        h+=`<div class="ver-tabs">`+vs.map((v,vi)=>`<button class="ver-tab${vi===sel?' on':''}" data-si="${si}" data-vi="${vi}">Version ${AZ[vi]}</button>`).join('')+`</div>`;
+        // the cross removes a variant — both sides (Bjion 2026-08-04)
+        h+=`<div class="ver-tabs">`+vs.map((v,vi)=>`<button class="ver-tab${vi===sel?' on':''}" data-si="${si}" data-vi="${vi}">Version ${AZ[vi]}<span class="ver-x" data-si="${si}" data-vi="${vi}" title="Remove this version">&#215;</span></button>`).join('')+`</div>`;
       }
       const v=vs[sel]||{};
       h+=mailFrameHl(v.subject||'',v.email||'','seq:'+si+':'+sel);
@@ -646,7 +652,8 @@ function panelHTML(x){
     h+=(CLIENT_MODE
         ?`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save my edits</button></div>`
          +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Saving shares it with your team.</p>`
-        :`<div class="actions-center"><button class="btn-ink">Next: see the preview</button></div>`);
+        :`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save edits</button><button class="btn-ink" data-goto="build">Next: see the preview</button></div>`
+         +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it, then save.</p>`);
     return h;
   }
   if(tab==='first'){
@@ -663,16 +670,16 @@ function panelHTML(x){
         +`<div class="opener-body"><p class="ib-name">${esc(a.name)}${a.recommended?' <span class="ib-rec">Recommended</span>':''}</p>`
         +(a.note?`<p class="ib-plain">${esc(a.note)}</p>`:'')
         +trigs
-        +`<p class="ib-example">"${highlightTokensHtml(a.example||'')}"</p></div><span></span></div>`;}).join('');
+        +`<p class="ib-example">"<span contenteditable="true" spellcheck="true" data-edit="ice:${i}">${highlightTokensHtml(a.example||'')}</span>"</p></div><span></span></div>`;}).join('');
       return `<p class="copy-heading">The opener</p>`
         +`<p class="ib-kind"><span class="kpill kpill-list">${esc(kindLabel)}</span></p>`
         +(ib.intro?`<p class="copy-sub">${esc(ib.intro)}</p>`:'')
         +`<div class="opener-list">${rows}</div>`
         +(ib.fallback?`<p class="mail-label" style="margin-top:20px">Always a fallback</p>`
           +`<div class="opener-list"><div class="opener-row"><div class="opener-order"><span class="opos">&#8595;</span></div>`
-          +`<div class="opener-body"><p class="ib-example">"${highlightTokensHtml(ib.fallback)}"</p></div><span></span></div></div>`:'')
-        +`<p class="hooknote" style="margin-top:16px">We try these in order for each person and always land on the fallback, so no one ever gets a blank opener.</p>`
-        +`<div class="actions-center"><button class="btn-ink">Next: your emails</button></div>`;
+          +`<div class="opener-body"><p class="ib-example">"<span contenteditable="true" spellcheck="true" data-edit="ice:fallback">${highlightTokensHtml(ib.fallback)}</span>"</p></div><span></span></div></div>`:'')
+        +`<p class="hooknote" style="margin-top:16px">We try these in order for each person and always land on the fallback, so no one ever gets a blank opener. Click into a line to edit it, then save.</p>`
+        +`<div class="actions-center"><button class="btn-ink" id="client-save-copy">${CLIENT_MODE?'Save my edits':'Save edits'}</button><button class="btn-ink" data-goto="copy">Next: your emails</button></div>`;
     }
     return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
       +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
@@ -783,12 +790,29 @@ function renderWorkspace(){
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
   const shb=work.querySelector('#gtme-share-link');
   if(shb)shb.onclick=()=>gtmeShareLink(shb);
-  // version tabs: switch which variation shows for a sequence step. In client
-  // mode, persist any edit in the visible email before switching so it isn't lost.
+  // version tabs: switch which variation shows for a sequence step, persisting
+  // any edit in the visible email first so it isn't lost (both sides edit now).
   work.querySelectorAll('.ver-tab').forEach(t=>t.onclick=async()=>{
-    if(CLIENT_MODE)await persistVisibleEdits(x);
+    await persistVisibleEdits(x);
     copyVer[+t.dataset.si]=+t.dataset.vi;renderWorkspace();});
-  if(CLIENT_MODE)work.querySelectorAll('.mb[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
+  // the cross on a version pill removes that variant (Bjion 2026-08-04, both sides)
+  work.querySelectorAll('.ver-x').forEach(b=>b.onclick=async(e)=>{
+    e.stopPropagation();
+    const si=+b.dataset.si,vi=+b.dataset.vi;
+    const vs=(sequenceOf(x)[si]||{}).versions||[];
+    if(vs.length<=1)return;
+    if(!confirm('Remove version '+'ABCDEFGHIJ'[vi]+'? This takes it out of the rotation.'))return;
+    try{
+      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:'seq:'+si+':'+vi+':delete',share:SHARE})});
+      const j=await r.json();
+      if(!j.ok){alert(j.message||'Could not remove that version.');return;}
+      vs.splice(vi,1);copyVer[si]=0;renderWorkspace();
+    }catch(err){alert('Could not remove that version.');}
+  });
+  work.querySelectorAll('[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
+  work.querySelectorAll('.btn-ink[data-goto]').forEach(b=>b.onclick=async()=>{
+    await persistVisibleEdits(x);tab=b.dataset.goto;renderWorkspace();});
   work.querySelectorAll('.oarrow[data-ibmove]').forEach(b=>b.onclick=()=>reorderIcebreaker(x,+b.dataset.ibmove,+b.dataset.dir));
   const lgc=work.querySelector('#lg-copy');
   if(lgc)lgc.onclick=async()=>{const t=(work.querySelector('#lg-phrase')||{}).textContent||'';

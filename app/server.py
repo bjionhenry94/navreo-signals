@@ -2021,29 +2021,39 @@ _STRATEGY_CLIENT_FIELDS = {"pain", "moment", "videoAngle", "offer", "email", "ca
                            "followup", "subject"}
 
 
-def strategy_copy_edit(p: dict) -> dict:
-    """A shared client's copy edit: token-verified, copy-fields-only, written
-    as a superseding run row so the GTME's open board reflects it on its next
-    poll. Stamps edited_by so provenance survives in the payload."""
+def strategy_copy_edit(p: dict, gtme: str | None = None) -> dict:
+    """A copy edit on the board: from a client share link (token-verified) OR
+    from the logged-in tool-user side (gtme = session email; Bjion 2026-08-04,
+    both sides edit the same way). Copy-fields-only, written as a superseding
+    run row so every open board reflects it on its next poll. Stamps edited_by
+    so provenance survives in the payload."""
     if not isinstance(p, dict):
         return {"ok": False, "message": "invalid body"}
     run_id = verify_strategy_share(p.get("share"))
     if not run_id:
-        return {"ok": False, "message": "This link has expired. Ask your contact for a fresh one."}
+        if gtme and _strategy_run_id_ok(p.get("run_id")):
+            run_id = p["run_id"]
+        else:
+            return {"ok": False, "message": "This link has expired. Ask your contact for a fresh one."}
     if p.get("run_id") and p["run_id"] != run_id:
         return {"ok": False, "message": "link does not match this board"}
     # allowed fields: the base copy fields, a flat version body "version:<i>",
-    # OR a sequenced variation "seq:<step>:<ver>" (+ optional ":subject") — each
-    # copy variant the client can edit, grouped by email in the sequence.
+    # a sequenced variation "seq:<step>:<ver>" (+ optional ":subject"), a
+    # variant DELETE "seq:<step>:<ver>:delete" (cross on the version pill,
+    # Bjion 2026-08-04), or an icebreaker line "ice:<angle>" / "ice:fallback".
     field = p.get("field") or ""
     ver_m = re.match(r"^version:(\d+)(?::subject)?$", field)
     seq_m = re.match(r"^seq:(\d+):(\d+)(?::subject)?$", field)
-    if field not in _STRATEGY_CLIENT_FIELDS and not ver_m and not seq_m:
+    del_m = re.match(r"^seq:(\d+):(\d+):delete$", field)
+    ice_m = re.match(r"^ice:(\d+)$", field)
+    if field not in _STRATEGY_CLIENT_FIELDS and not ver_m and not seq_m \
+            and not del_m and not ice_m and field != "ice:fallback":
         return {"ok": False, "message": "only the copy can be edited from this link"}
     value = p.get("value")
-    if not isinstance(value, str) or not value.strip() or len(value) > 4000:
-        return {"ok": False, "message": "the new text must be 1-4000 characters"}
-    value = value.strip()
+    if not del_m:
+        if not isinstance(value, str) or not value.strip() or len(value) > 4000:
+            return {"ok": False, "message": "the new text must be 1-4000 characters"}
+        value = value.strip()
     idea_id = p.get("ideaId")
     key = _strategy_key(run_id)
     rows = sb("GET", "campaign_insights?scope=eq.strategy"
@@ -2055,7 +2065,33 @@ def strategy_copy_edit(p: dict) -> dict:
     idea = next((i for i in run.get("ideas") or [] if i.get("id") == idea_id), None)
     if not idea:
         return {"ok": False, "message": "that idea is no longer on the board"}
-    if seq_m:
+    if del_m:
+        si, vi = int(del_m.group(1)), int(del_m.group(2))
+        seq = idea.get("sequence")
+        if not isinstance(seq, list) or si < 0 or si >= len(seq):
+            return {"ok": False, "message": "that email is no longer on the board"}
+        versions = (seq[si] or {}).get("versions")
+        if not isinstance(versions, list) or vi < 0 or vi >= len(versions):
+            return {"ok": False, "message": "that version is no longer on the board"}
+        if len(versions) <= 1:
+            return {"ok": False, "message": "an email needs at least one version, so this one stays"}
+        versions.pop(vi)
+        if si == 0:  # primary mirrors the first remaining version
+            idea["email"] = versions[0].get("email", idea.get("email"))
+            idea["subject"] = versions[0].get("subject", idea.get("subject"))
+    elif ice_m or field == "ice:fallback":
+        ib = idea.get("icebreaker")
+        if not isinstance(ib, dict):
+            return {"ok": False, "message": "this idea has no opener to edit"}
+        if field == "ice:fallback":
+            ib["fallback"] = value
+        else:
+            angles = ib.get("angles")
+            ai = int(ice_m.group(1))
+            if not isinstance(angles, list) or ai < 0 or ai >= len(angles):
+                return {"ok": False, "message": "that opener is no longer on the board"}
+            angles[ai]["example"] = value
+    elif seq_m:
         si, vi = int(seq_m.group(1)), int(seq_m.group(2))
         seq = idea.get("sequence")
         if not isinstance(seq, list) or si < 0 or si >= len(seq):
@@ -2086,10 +2122,13 @@ def strategy_copy_edit(p: dict) -> dict:
                 idea["email"] = value
     else:
         idea[field] = value
-    idea.setdefault("clientEdits", []).append(
-        {"field": field, "at": _dtmod.datetime.utcnow().isoformat() + "Z"})
-    run["edited_by"] = "client"
-    out = strategy_run_post(dict(run, run_id=run_id, generated_by="client-share"))
+    stamp = {"field": field, "at": _dtmod.datetime.utcnow().isoformat() + "Z"}
+    if gtme:
+        stamp["by"] = "gtme"
+    idea.setdefault("clientEdits", []).append(stamp)
+    run["edited_by"] = "gtme" if gtme else "client"
+    out = strategy_run_post(dict(run, run_id=run_id,
+                                 generated_by="gtme-edit" if gtme else "client-share"))
     if not out.get("ok"):
         return out
     # tell the open board this was a copy change, so its toast says "Copy updated"
@@ -19583,11 +19622,12 @@ class Handler(SimpleHTTPRequestHandler):
                 p = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
-            out = strategy_copy_edit(p)
+            gtme_email = _session_email(self.headers.get("Cookie"))
+            out = strategy_copy_edit(p, gtme=gtme_email)
             log_activity(path, {"ok": out.get("ok"), "field": p.get("field"),
                                 "ideaId": p.get("ideaId")},
-                         action="client-copy-edit", entity="strategy",
-                         entity_id=str(p.get("run_id") or ""))
+                         action="gtme-copy-edit" if gtme_email else "client-copy-edit",
+                         entity="strategy", entity_id=str(p.get("run_id") or ""))
             return self._json(out, 200 if out.get("ok") else 400)
         if path == "/api/strategy/share":
             # GTME-only (behind the gate above): mint the client permalink
