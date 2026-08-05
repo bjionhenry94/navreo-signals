@@ -4625,6 +4625,17 @@ def run_ever_positive_alerts() -> dict:
 CP_LOOKBACK_HOURS = 72        # scan window; the marker (not the window) stops re-alerts
 CP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, loudly
 
+# Per-workspace Slack channel override. A mapped workspace routes its alert to
+# its OWN channel; unmapped → the hook's default (#interested-replies). The
+# EVER_POSITIVE_HOOK scenario (9558449) posts to {{ifempty(1.channel; default)}},
+# so a client with a dedicated channel lands there and everything else stays
+# internal. Grout → #grouts-navreo (Bjion 2026-08-05). asteri/krg already get a
+# card in their own channel via their Make routers, so they stay on the internal
+# default here (a non-duplicate safety net), not mapped.
+CLIENT_ALERT_CHANNELS = {
+    "grout": "C0BEGAKS8TX",   # #grouts-navreo
+}
+
 
 def _cp_smartlead_link(campaign_id, email: str) -> str:
     """Master-inbox deep link resolved with the OWNING client's key
@@ -4709,10 +4720,13 @@ def run_client_positive_alerts() -> dict:
             cname = names.get(str(cid or "")) or (f"campaign {cid}" if cid else "unknown campaign")
             link = _cp_smartlead_link(cid, email)
             text = _cp_compose(row, cname, link)
+            payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
+            chan = CLIENT_ALERT_CHANNELS.get(ws)
+            if chan:
+                payload["channel"] = chan   # else the hook defaults to #interested-replies
             posted = False
             try:
-                _HTTP("POST", EVER_POSITIVE_HOOK, {},
-                      {"event_type": "EVER_POSITIVE_ALERT", "text": text})
+                _HTTP("POST", EVER_POSITIVE_HOOK, {}, payload)
                 posted = True
             except ValueError:
                 posted = True   # Make answers a non-JSON 2xx ("Accepted") = success

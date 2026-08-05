@@ -151,6 +151,8 @@ def test_client_positive_alerts_once():
           http.posts and http.posts[0][0] == setter.EVER_POSITIVE_HOOK)
     body = (http.posts[0][1] or {}) if http.posts else {}
     check("1c payload is EVER_POSITIVE_ALERT", body.get("event_type") == "EVER_POSITIVE_ALERT")
+    check("1c2 grout routes to #grouts-navreo (C0BEGAKS8TX)",
+          body.get("channel") == "C0BEGAKS8TX", str(body))
     txt = body.get("text") or ""
     check("1d text names the workspace", "grout" in txt)
     check("1e text names the category", "Information Request" in txt)
@@ -171,6 +173,19 @@ def test_navreo_positive_not_touched():
     check("2a navreo positive posts nothing here", len(http.posts) == 0, str(res))
     check("2b navreo row left unstamped for the categoriser",
           not sb._row(1).get("notify_alerted_at"))
+
+
+def test_unmapped_client_uses_default_channel():
+    # asteri has no CLIENT_ALERT_CHANNELS entry -> no channel key -> the hook
+    # falls back to #interested-replies (internal, non-duplicate of its router card).
+    asteri = dict(GROUT_POS, id=5, workspace="asteri", email="lead@asteri.com")
+    sb = FakeSB([asteri])
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    body = (http.posts[0][1] or {}) if http.posts else {}
+    check("4a unmapped client still alerts", res.get("alerted") == 1)
+    check("4b unmapped client sends NO channel (hook default)", "channel" not in body, str(body))
 
 
 def test_opan_test_positive_not_touched():
@@ -253,6 +268,7 @@ def test_no_supabase_skips():
 if __name__ == "__main__":
     test_client_positive_alerts_once()
     test_navreo_positive_not_touched()
+    test_unmapped_client_uses_default_channel()
     test_opan_test_positive_not_touched()
     test_client_negative_stays_silent()
     test_marker_holds_across_runs()
