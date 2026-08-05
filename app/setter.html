@@ -4552,9 +4552,22 @@ async function runSendJob(payload, onTick, opts) {
   // went out. Re-read up to 3 times over ~6s before deciding; if the row
   // stays ambiguous with no recorded error, say so honestly instead of
   // claiming failure.
+  // Restart-race patience (owner report 2026-08-05: "keeps erroring" while the
+  // reply had in fact gone out). A START that 502'd (res.error set) means the
+  // instance was RESTARTING when the click landed — a deploy or an OOM bounce.
+  // The send worker then starts LATE: on a cold box the row can read
+  // needs_review for 20-30s before the send's own claim flips it to 'sending'
+  // and then 'sent'. The old 5×2s (~8s) window gave up first and reported
+  // "server hiccuped" over a send that landed moments later, panic-driving
+  // re-clicks. Double-send is independently guarded (durable claim + recency
+  // block), so extra patience here is FREE — it can never mint a second send,
+  // it only lets us report the truth. A genuinely failed send records
+  // row.error and still breaks out early. Only the restart path waits longer.
+  const maxReads = res.error ? 16 : 5;   // ~30s on a restart, ~8s otherwise
   let row = null, rowReadOk = false;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < maxReads; i++) {
     if (i) await sleep(2000);
+    if (onTick) onTick(Math.round((Date.now() - started) / 1000));
     const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`, { _retries: 1 });
     rowReadOk = rowReadOk || rowRes.ok;
     row = (rowRes.ok && rowRes.data && rowRes.data.row) || row;
