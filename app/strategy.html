@@ -159,6 +159,11 @@ body.solo .wrap{margin:0 auto;}
 .sum-meta a{font-size:12.5px;font-weight:600;color:var(--orange-600);text-decoration:none;}
 .sum-meta a:hover{text-decoration:underline;}
 .sum-note{font-size:13px;color:var(--ink-3);margin-top:12px;max-width:640px;}
+.mail-editrow{display:flex;align-items:center;gap:10px;margin:8px 0 2px;}
+.mail-editbtn{border:1px solid var(--line,#ddd);background:transparent;border-radius:8px;padding:5px 12px;font-size:12.5px;color:var(--ink-3);cursor:pointer;}
+.mail-editbtn:hover{color:var(--ink-1);border-color:var(--ink-3);}
+.mail-hint{font-size:12px;color:var(--ink-3);}
+.mb-edit{outline:2px solid var(--orange-100);border-radius:8px;white-space:pre-wrap;min-height:120px;}
 .copy-sub{font-size:13.5px;color:var(--ink-2);margin:-8px 0 4px;line-height:1.5;max-width:600px;}
 .ver-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px;}
 .ver-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
@@ -330,6 +335,7 @@ function checksFor(x){return CHECKS.map(c=>[c[0],c[1],!!c[2](x)]);}
 let RUN_META={};
 let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
 let copyVer={}; // Copy tab: active version index per sequence step (reset per idea)
+let sumEdit=null; // Preview tab: {si,vi} while an email is being edited inline (Bjion 2026-08-05)
 let SIG=null;   // run.signature {name, role, company, domain} — resolves %signature%
 // House signature format (Bjion rule 2026-08-03): name / role / company / website line.
 function sigHtml(){
@@ -597,8 +603,8 @@ function resolvedTextHtml(text,x,p){
   return 'Hey '+_mvar(p.first||'there')+',<br><br>'+parts.join('<br><br>')+'<br><br>Worth a quick chat?<br><br>Bjion<br>Navreo';
 }
 function resolvedEmailHtml(x,p){return resolvedTextHtml(primaryVersion(x).email||x.email,x,p);}
-function resolvedSubjectHtml(x,p){
-  const s=String(primaryVersion(x).subject||x.subject||x.caption||'');
+function resolvedSubjectHtml(x,p,v){
+  const s=String((v&&v.subject)||primaryVersion(x).subject||x.subject||x.caption||'');
   const cap=s.charAt(0).toUpperCase()+s.slice(1);
   return esc(cap)
     .replace(/\{\{?first(_name)?\}?\}/gi,_mvar(p.first||''))
@@ -689,18 +695,35 @@ function panelHTML(x){
     };
     const strip=ppl.map((p,i)=>{const u=purl(p);return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
       +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
+    const v1n=(((sequenceOf(x)[0]||{}).versions)||[]).length; // email-1 version count (preview rotation)
     return `<p class="eyb">Preview</p>`
       +(hasReach(x)?`<p class="sum-lead">This goes to ${isEstimated(x)?'about ':''}<b>${num(x.reachablePool||x.net)}</b> people${isEstimated(x)?' (our estimate)':''}. Tap one to read their email.</p>`
         :`<p class="sum-lead">Tap one to read their email.</p>`)
       +`<div class="sum-strip">${strip}</div>`
       +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span></div>`
       +sequenceOf(x).map((step,si)=>{
-        const v=(step.versions||[])[0]||{};
-        const head=si===0?`Subject: <span class="ms">${resolvedSubjectHtml(x,pr)}</span>`:'Sent a few days later, same thread';
-        return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}</p>`
-          +`<div class="mail"><div class="mh">${head}</div><div class="mb">${resolvedTextHtml(v.email,x,pr)}</div></div>`;
+        // Preview diversity (Bjion 2026-08-05): each preview person shows a DIFFERENT
+        // version (person i → version i mod N), so tapping through the strip shows the
+        // real rotation, never version A five times over.
+        const vs=step.versions||[];
+        const vi=vs.length?(sIdx%vs.length):0;
+        const v=vs[vi]||{};
+        const vtag=vs.length>1?` · Version ${'ABCDEFGHIJ'[vi]}`:'';
+        const head=si===0?`Subject: <span class="ms">${resolvedSubjectHtml(x,pr,v)}</span>`:'Sent a few days later, same thread';
+        // Edit in the Preview (Bjion 2026-08-05): the button flips the resolved view to
+        // the raw template (tokens visible) and saves through the same copy-edit door
+        // the Copy tab uses — one field, one version, nothing else touched.
+        const editing=sumEdit&&sumEdit.si===si;
+        const body=editing
+          ?`<div class="mb mb-edit" contenteditable="true" spellcheck="true" data-edit="seq:${si}:${vi}">${highlightTokensHtml(v.email||'')}</div>`
+          :`<div class="mb">${resolvedTextHtml(v.email,x,pr)}</div>`;
+        const row=editing
+          ?`<div class="mail-editrow"><button class="btn-ink mail-save" data-si="${si}" data-vi="${vi}">Save</button><button class="btn-ink mail-cancel">Cancel</button><span class="mail-hint">Anything in {curly brackets} fills in per person.</span></div>`
+          :`<div class="mail-editrow"><button class="mail-editbtn" data-si="${si}" data-vi="${vi}">&#9998; Edit this email</button></div>`;
+        return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}${vtag}</p>`
+          +`<div class="mail"><div class="mh">${head}</div>${body}</div>`+row;
       }).join('')
-      +`<p class="sum-note">${esc(pr.first)} gets this version — their name, their company, their opener. Nothing generic.</p>`;
+      +`<p class="sum-note">${esc(pr.first)} gets ${v1n>1?('Version '+'ABCDEFGHIJ'[sIdx%v1n]):'this version'} — their name, their company, their opener. Nothing generic.${v1n>1?' Tap another person to see another version.':''}</p>`;
   }
   const p=x.reachablePool||x.net;
   const cks=checksFor(x);
@@ -840,7 +863,36 @@ function renderWorkspace(){
   const lgc=work.querySelector('#lg-copy');
   if(lgc)lgc.onclick=async()=>{const t=(work.querySelector('#lg-phrase')||{}).textContent||'';
     try{await navigator.clipboard.writeText(t);lgc.textContent='Copied';setTimeout(()=>{lgc.textContent='Copy';},3000);}catch(e){lgc.textContent='Select and copy';}};
-  work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{sIdx=+c.dataset.i;renderWorkspace();});
+  work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{persistVisibleEdits(IDEAS[active]||x);sumEdit=null;sIdx=+c.dataset.i;renderWorkspace();});
+  // Preview inline edit (Bjion 2026-08-05): edit the version being previewed, right
+  // on the Preview tab. Saves via /api/strategy/copy-edit with the Copy tab's exact
+  // field grammar (seq:<step>:<version>) — one field changes, nothing else.
+  work.querySelectorAll('.mail-editbtn').forEach(b=>b.onclick=()=>{sumEdit={si:+b.dataset.si,vi:+b.dataset.vi};renderWorkspace();});
+  work.querySelectorAll('.mail-cancel').forEach(b=>b.onclick=()=>{sumEdit=null;renderWorkspace();});
+  work.querySelectorAll('.mail-save').forEach(b=>b.onclick=async()=>{
+    const cur=IDEAS[active];if(!cur){sumEdit=null;renderWorkspace();return;}
+    const si=+b.dataset.si,vi=+b.dataset.vi;
+    const el=work.querySelector('.mb-edit[data-edit]');
+    const val=el?el.innerText.trim():'';
+    if(!val){alert('The email is empty — write something or cancel.');return;}
+    b.disabled=true;b.textContent='Saving…';
+    try{
+      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
+        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:cur.id,field:'seq:'+si+':'+vi,value:val,share:SHARE})});
+      const j=await r.json();
+      if(!j.ok){b.disabled=false;b.textContent='Save';alert(j.message||'Could not save.');return;}
+      // reflect locally on the CURRENT idea (poll can swap objects mid-await — same
+      // lesson as the version delete, Bjion 2026-08-05); if the idea moved, resync.
+      const nowIdea=IDEAS[active];
+      if(nowIdea&&nowIdea.id===cur.id){
+        const vs2=((sequenceOf(nowIdea)[si])||{}).versions||[];
+        if(vs2[vi])vs2[vi].email=val;
+        if(si===0&&vi===0)nowIdea.email=val; // server mirrors the primary the same way
+        if(el)el.dataset.dirty='';
+        sumEdit=null;renderWorkspace();
+      }else{sumEdit=null;lastFP=null;fetchRun();}
+    }catch(e){b.disabled=false;b.textContent='Save';alert('Could not save.');}
+  });
   try{saveView();}catch(e){}
 }
 function render(){renderSidebar();renderWorkspace();}
