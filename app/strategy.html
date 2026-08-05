@@ -621,7 +621,7 @@ function openerRows(){return ICEB.map((o,i)=>{const name=o[0],rec=o[1],plain=o[2
     +`<div class="opener-body"><p class="ib-name">${esc(name)}${recH}</p><p class="ib-plain">${esc(plain)}</p><p class="ib-example">"${esc(ex)}"</p></div><span class="otog">On</span></div>`;}).join('');}
 
 function panelHTML(x){
-  if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||''))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`
+  if(tab==='tgt') return `<div class="desc">${esc(cap120(x.who||'',260))}</div><div class="tgt-hero">${tgtType(x)}${numBig(x)}</div>${targetingSections(x)}`
     +(CLIENT_MODE?'':`<div class="dismiss-row"><button class="btn-dismiss" id="dismiss-idea">Dismiss Campaign Idea</button></div>`);
   if(tab==='copy'){
     const seq=sequenceOf(x);const AZ='ABCDEFGHIJ';
