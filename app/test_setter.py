@@ -935,6 +935,46 @@ def test_lint_draft_calendly_fallback_booking_link():
     check("lint: fallback ctx but non-scheduling ask doesn't require the booking hyperlink", ok, reason)
 
 
+def test_calendly_availability_non_calendly_link_is_not_configured():
+    """Owner report 2026-08-05: every Amplifyy draft (SavvyCal booking link)
+    and Arnic (no link) carried a stamped "Couldn't find this agent's Calendly
+    event type" error. get_calendly_availability must short-circuit to
+    not_configured — with an EMPTY error string, so nothing lands on the row —
+    for any booking link that isn't a calendly.com URL (or is missing), and it
+    must do so WITHOUT making a Calendly HTTP call (the token can't resolve a
+    foreign/empty slug anyway). A real calendly.com link still runs the lookup."""
+    settings = {"calendly_token": "tok_xxx"}
+    # 1) SavvyCal link — different provider, must be not_configured, no error
+    status, avail, err = setter.get_calendly_availability(
+        {"calendly_event_url": "https://savvycal.com/kevindormer/chat?d=15"},
+        dict(settings), "2026-08-05T10:00:00Z")
+    check("calendly: a SavvyCal booking link -> not_configured, no error",
+          status == "not_configured" and avail == [] and err == "",
+          f"{status!r} / {err!r}")
+    # 2) No booking link at all (empty slug) — same clean skip
+    status, avail, err = setter.get_calendly_availability(
+        {"calendly_event_url": ""}, dict(settings), "2026-08-05T10:00:00Z")
+    check("calendly: no booking link -> not_configured, no error",
+          status == "not_configured" and err == "", f"{status!r} / {err!r}")
+    # 3) A real calendly.com link is NOT short-circuited — it proceeds into the
+    #    lookup. Stub _HTTP (no network) and assert the guard let it through by
+    #    proving _HTTP was actually called (the not_configured skip returns
+    #    before any HTTP).
+    calls = []
+    orig_http = setter._HTTP
+    setter._HTTP = lambda *a, **k: (calls.append(a[1] if len(a) > 1 else a), {})[1]
+    try:
+        setter._CAL_AVAIL_CACHE.clear()
+        setter.get_calendly_availability(
+            {"calendly_event_url": "https://calendly.com/navreo/book-a-call-with-us-clone"},
+            {"calendly_token": "tok_xxx"}, "2026-08-05T10:00:00Z")
+    finally:
+        setter._HTTP = orig_http
+        setter._CAL_AVAIL_CACHE.clear()
+    check("calendly: a real calendly.com link is NOT skipped (the lookup runs)",
+          len(calls) >= 1, f"_HTTP calls={len(calls)}")
+
+
 def test_lint_draft_calendly_fallback_instructions_link():
     """Feature C / owner ruling 2026-07-14: the fallback ladder's step ONE
     lets a draft propose a meeting using a scheduling/calendar link the
@@ -9310,6 +9350,7 @@ if __name__ == "__main__":
     test_lint_draft()
     test_lint_draft_url_discipline()
     test_lint_draft_calendly_fallback_booking_link()
+    test_calendly_availability_non_calendly_link_is_not_configured()
     test_lint_draft_calendly_fallback_instructions_link()
     test_lint_draft_slot_status_ok_unchanged_by_fallback_rules()
     test_decide_matrix()

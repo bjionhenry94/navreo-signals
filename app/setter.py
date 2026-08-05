@@ -2046,6 +2046,19 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
     token = settings.get("calendly_token")
     if not token:
         return "not_configured", [], ""
+    # Booking link must actually BE a Calendly link (owner report 2026-08-05:
+    # every Amplifyy draft carried "Couldn't find this agent's Calendly event
+    # type", and Arnic — no link — the same). The Calendly event-type lookup
+    # can only resolve calendly.com slugs against THIS token's account; an
+    # empty link (slug "") or a different provider (a client's SavvyCal) can
+    # never match, so the lookup below returned that error and it got stamped
+    # onto the row (see the `serr -> row["error"]` sites). That's not an error
+    # state — it's just no Calendly availability to inline. Return
+    # not_configured so the draft falls through its no-live-slots ladder and
+    # still carries the raw booking link, with nothing scary on the row.
+    event_url = (agent.get("calendly_event_url") or "").strip().lower()
+    if not event_url or "calendly.com" not in event_url:
+        return "not_configured", [], ""
     cache_key = (token[-16:], agent.get("calendly_event_url") or "")
     hit = _CAL_AVAIL_CACHE.get(cache_key)
     if hit and hit[0] > _time.time():
