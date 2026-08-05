@@ -165,8 +165,10 @@ body.solo .wrap{margin:0 auto;}
 .mail-hint{font-size:12px;color:var(--ink-3);}
 .mb-edit{outline:2px solid var(--orange-100);border-radius:8px;white-space:pre-wrap;min-height:120px;}
 .ver-x.armed{color:var(--orange-600,#c94f00);font-weight:800;}
-#nv-toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,8px);background:var(--ink-1,#141414);color:#fff;padding:10px 16px;border-radius:10px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:80;max-width:80vw;}
-#nv-toast.on{opacity:.96;transform:translate(-50%,0);}
+#nv-toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,8px);display:flex;align-items:center;background:var(--ink-1,#141414);color:#fff;padding:10px 16px;border-radius:10px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:80;max-width:80vw;}
+#nv-toast.on{opacity:.96;transform:translate(-50%,0);pointer-events:auto;}
+.nv-undo{margin-left:14px;background:transparent;border:none;color:#fff;font-weight:800;text-decoration:underline;cursor:pointer;font-size:13px;padding:0;flex:none;}
+.sum-cver{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--orange-600,#c94f00);background:var(--orange-100,#ffe9dd);border-radius:999px;padding:2px 9px;margin-bottom:8px;}
 .copy-sub{font-size:13.5px;color:var(--ink-2);margin:-8px 0 4px;line-height:1.5;max-width:600px;}
 .ver-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px;}
 .ver-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
@@ -339,6 +341,7 @@ let RUN_META={};
 let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
 let copyVer={}; // Copy tab: active version index per sequence step (reset per idea)
 let sumEdit=null; // Preview tab: {si,vi} while an email is being edited inline (Bjion 2026-08-05)
+let pendingDel=null; // {id,si,vi,ver,timer} while a version delete waits out its Undo window (Bjion 2026-08-05)
 let SIG=null;   // run.signature {name, role, company, domain} — resolves %signature%
 // House signature format (Bjion rule 2026-08-03): name / role / company / website line.
 function sigHtml(){
@@ -501,6 +504,29 @@ function nvToast(msg){
   if(!t){t=document.createElement('div');t.id='nv-toast';document.body.appendChild(t);}
   t.textContent=msg;t.classList.add('on');
   clearTimeout(_toastT);_toastT=setTimeout(()=>t.classList.remove('on'),2600);
+}
+// Toast with an inline Undo action (Bjion 2026-08-05): powers the instant version
+// delete — the removal shows immediately, Undo reverses it before the server ever hears.
+function showUndoToast(msg,onUndo){
+  let t=document.getElementById('nv-toast');
+  if(!t){t=document.createElement('div');t.id='nv-toast';document.body.appendChild(t);}
+  t.textContent='';
+  const s=document.createElement('span');s.textContent=msg;
+  const u=document.createElement('button');u.className='nv-undo';u.textContent='Undo';
+  u.onclick=()=>{t.classList.remove('on');onUndo();};
+  t.appendChild(s);t.appendChild(u);t.classList.add('on');
+  clearTimeout(_toastT);_toastT=setTimeout(()=>t.classList.remove('on'),4000);
+}
+// The version delete is optimistic: removed from the UI on click, POSTed only after the
+// Undo window closes. Committing sends the delete; the 5s poll is paused while a delete
+// is pending (fetchRun early-returns on pendingDel) so it can't re-add the row mid-window.
+function commitPendingDel(){
+  if(!pendingDel)return;
+  const pd=pendingDel;pendingDel=null;clearTimeout(pd.timer);
+  fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
+    body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:pd.id,field:'seq:'+pd.si+':'+pd.vi+':delete',share:SHARE})})
+    .then(r=>r.json()).then(j=>{if(!j.ok){nvToast(j.message||'Could not remove that version.');lastFP=null;fetchRun();}})
+    .catch(()=>{nvToast('Could not remove that version.');lastFP=null;fetchRun();});
 }
 async function persistVisibleEdits(x){
   const eds=[...document.querySelectorAll('[data-edit]')].filter(el=>el.dataset.dirty==='1'&&el.innerText.trim());
@@ -706,12 +732,14 @@ function panelHTML(x){
         w:p.website||(dom?'https://'+dom:'https://www.google.com/search?q='+encodeURIComponent(p.company||p.first||'')),
         l:p.linkedin||('https://www.linkedin.com/search/results/all/?keywords='+encodeURIComponent(p.company||p.first||''))};
     };
-    const strip=ppl.map((p,i)=>{const u=purl(p);return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}"><div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
-      +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
     const v1n=(((sequenceOf(x)[0]||{}).versions)||[]).length; // email-1 version count (preview rotation)
+    // Each person card shows WHICH version they'll get (Bjion 2026-08-05), so the A/B/C/D
+    // spread is visible at a glance without tapping through — "more diversity being shown".
+    const strip=ppl.map((p,i)=>{const u=purl(p);const vlet=v1n>1?'ABCDEFGHIJ'[i%v1n]:'';return `<div class="sum-card ${i===sIdx?'on':''}" data-i="${i}">${vlet?`<span class="sum-cver">Version ${vlet}</span>`:''}<div class="sum-cbody"><div class="sum-cnm">${esc(p.first)}</div><div class="sum-ccm">${esc(p.company||'')}</div><div class="sum-clinks"><a href="${esc(u.w)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Website ↗</a><a href="${esc(u.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LinkedIn ↗</a></div></div></div>`;}).join('')
+      +(more?`<div class="sum-more">+ ${num(more)} more like them</div>`:'');
     return `<p class="eyb">Preview</p>`
-      +(hasReach(x)?`<p class="sum-lead">This goes to ${isEstimated(x)?'about ':''}<b>${num(x.reachablePool||x.net)}</b> people${isEstimated(x)?' (our estimate)':''}. Tap one to read their email.</p>`
-        :`<p class="sum-lead">Tap one to read their email.</p>`)
+      +(hasReach(x)?`<p class="sum-lead">This goes to ${isEstimated(x)?'about ':''}<b>${num(x.reachablePool||x.net)}</b> people${isEstimated(x)?' (our estimate)':''}. ${v1n>1?'Each gets a different version — tap to read theirs.':'Tap one to read their email.'}</p>`
+        :`<p class="sum-lead">${v1n>1?'Each gets a different version — tap to read theirs.':'Tap one to read their email.'}</p>`)
       +`<div class="sum-strip">${strip}</div>`
       +`<div class="sum-meta"><span class="mt">${esc(pr.first)}${pr.title?' — '+esc(pr.title):''}${pr.company?', '+esc(pr.company):''}</span></div>`
       +sequenceOf(x).map((step,si)=>{
@@ -834,37 +862,31 @@ function renderWorkspace(){
   // CURRENT idea (IDEAS[active]) — the 5s poll can swap the idea objects out from under
   // a captured `x`, which is why a delete used to land server-side but never show
   // (Bjion 2026-08-05). On success we resync from the server so the view is the truth.
-  work.querySelectorAll('.ver-x').forEach(b=>b.onclick=async(e)=>{
+  work.querySelectorAll('.ver-x').forEach(b=>b.onclick=(e)=>{
     e.stopPropagation();e.preventDefault();
     const cur=IDEAS[active];if(!cur)return;
     const si=+b.dataset.si,vi=+b.dataset.vi;
     const vs=((sequenceOf(cur)[si])||{}).versions||[];
     if(vs.length<=1){nvToast('An email needs at least one version, so this one stays.');return;}
-    // Two-tap confirm, no native dialog (Bjion 2026-08-05): confirm() is silently
-    // suppressed in embedded panes, which made this delete a no-op exactly where
-    // the board opens. First tap arms the cross, a second tap within 3s removes.
-    if(b.dataset.armed!=='1'){
-      b.dataset.armed='1';b.classList.add('armed');b.textContent='sure?';
-      nvToast('Tap again to remove version '+'ABCDEFGHIJ'[vi]+' from the rotation.');
-      setTimeout(()=>{b.dataset.armed='';b.classList.remove('armed');b.innerHTML='&#215;';},3000);
-      return;
-    }
-    try{
-      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
-        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:cur.id,field:'seq:'+si+':'+vi+':delete',share:SHARE})});
-      const j=await r.json();
-      if(!j.ok){nvToast(j.message||'Could not remove that version.');return;}
-      // reflect it now: RE-READ the current idea (the 5s poll can swap the IDEAS
-      // array during the await, which is exactly why the old code's captured `x`
-      // splice did nothing) and splice its live versions; if the idea moved, resync.
-      const nowIdea=IDEAS[active];
-      if(nowIdea&&nowIdea.id===cur.id){
-        const vs2=((sequenceOf(nowIdea)[si])||{}).versions;
-        if(vs2&&vi<vs2.length)vs2.splice(vi,1);
-        copyVer[si]=0;renderWorkspace();
-      }else{lastFP=null;fetchRun();}
-      nvToast('Version removed from the rotation.');
-    }catch(err){nvToast('Could not remove that version.');}
+    // Optimistic single-click delete (Bjion 2026-08-05): the two-tap felt laggy — the
+    // first click seemed to do nothing, so you'd click again. Now ONE click removes the
+    // version instantly and offers Undo; the server delete waits out the Undo window
+    // (commitPendingDel), so Undo needs no server round-trip and the poll is paused
+    // while it's pending. No native confirm() (those are silently dead in the pane).
+    if(pendingDel)commitPendingDel();          // flush any earlier pending delete first
+    const ver=vs.splice(vi,1)[0];              // remove now — vanishes on this one click
+    copyVer[si]=Math.min(copyVer[si]||0,Math.max(0,vs.length-1));
+    pendingDel={id:cur.id,si,vi,ver};
+    renderWorkspace();
+    showUndoToast('Version '+'ABCDEFGHIJ'[vi]+' removed',()=>{
+      if(!pendingDel)return;                   // already committed — too late to undo
+      const pd=pendingDel;pendingDel=null;clearTimeout(pd.timer);
+      const tgt=(IDEAS[active]&&IDEAS[active].id===pd.id)?IDEAS[active]:cur;
+      const vs2=((sequenceOf(tgt)[pd.si])||{}).versions;
+      if(vs2)vs2.splice(Math.min(pd.vi,vs2.length),0,pd.ver);
+      renderWorkspace();nvToast('Kept it.');
+    });
+    pendingDel.timer=setTimeout(commitPendingDel,4200);
   });
   work.querySelectorAll('[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
   const dsb=work.querySelector('#dismiss-idea');
@@ -994,6 +1016,9 @@ async function fetchRun(){
   // never re-render over a client's half-typed edit — the poll catches up
   // on the next tick after they click away
   if(CLIENT_MODE&&document.activeElement&&document.activeElement.dataset&&document.activeElement.dataset.edit)return;
+  // a version delete is mid-Undo-window: the server still has the row, so a poll now
+  // would re-add what we just optimistically removed. Hold until commit/undo clears it.
+  if(pendingDel)return;
   try{
     const q=new URLSearchParams();
     if(RUN_ID)q.set('id',RUN_ID);
