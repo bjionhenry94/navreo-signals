@@ -327,6 +327,29 @@ POSITIVE_CATEGORIES = {
     "[Manual] Send resource", "Call Booked",
 }
 
+# Client MONITOR rows are review-only, so the Setter should only surface the
+# ones a human must actually act on: positives (reply / booking) and replies
+# still uncategorised (need triage - could be a positive the categoriser
+# hasn't labelled yet). Clear non-positives - Out Of Office, Not Interested,
+# Wrong Person, Do Not Contact, bounces, Uncategorizable - need no reply and
+# are kept OUT of the queue entirely (Bjion 2026-08-04, once client
+# federation was confirmed live; before that the monitor gate was
+# deliberately open to prove intake worked at all). Exact-match, never
+# substring: "Not Interested" must not be caught by "Interested".
+_MONITOR_SURFACE_POSITIVE = {c.lower() for c in POSITIVE_CATEGORIES} | {
+    "call booked", "positive-re-reply",
+    "interested reply [manual]", "meeting request [manual]",
+}
+
+
+def _monitor_should_surface(category) -> bool:
+    """True iff a client monitor reply is worth a human's attention: a
+    positive, or still uncategorised. Everything else (clear non-positive)
+    is skipped so it never clutters Needs review."""
+    if _is_uncategorised_value(category):
+        return True
+    return str(category).strip().lower() in _MONITOR_SURFACE_POSITIVE
+
 # Deterministic red-flag lexicon (case-insensitive substring match on the
 # reply body with quoted history stripped). Any hit is a hard veto - never
 # auto, regardless of what the classifier says.
@@ -4892,11 +4915,12 @@ def _poll_monitor_workspaces(since: str, summary: dict) -> None:
     the navreo sweep above pulls navreo only. This walks each enabled client
     workspace and intakes its recent replies as review-only rows.
 
-    Two deliberate departures from the navreo sweep, both from the brief's
-    "temporarily allow ANY responses from ANY workspace in":
-      • ANY category — no CORE_FOUR gate (the only client replies that exist
-        today are krg's Out-Of-Office ones; gating to positives would prove
-        nothing). Monitor rows are review-only, so a non-core reply is safe.
+    Two deliberate departures from the navreo sweep:
+      • POSITIVES + UNCATEGORISED only — `_monitor_should_surface` gates
+        intake so clear non-positives (Out Of Office, Not Interested, Wrong
+        Person, Do Not Contact, bounces) never reach Needs review (Bjion
+        2026-08-04, once federation was confirmed live). The gate was
+        deliberately open before that, to prove client intake worked at all.
       • ALWAYS agentless — never look up / run an agent, so nothing is ever
         drafted, classified or auto-sent for a client. Pure surface-for-review.
     Rows land is_test=False (so they RENDER and hydrate; is_test rows are
@@ -4933,6 +4957,12 @@ def _poll_monitor_workspaces(since: str, summary: dict) -> None:
             email = (r.get("email") or "").strip().lower()
             mid = str(r.get("smartlead_message_id") or r.get("id") or "")
             if not cid or not email or not mid:
+                continue
+            # Only surface positives + still-uncategorised; skip clear
+            # non-positives so they never land in Needs review. Skipped rows
+            # don't count against the 15-per-tick blast radius.
+            if not _monitor_should_surface(r.get("category")):
+                summary["skipped_nonpositive"] = summary.get("skipped_nonpositive", 0) + 1
                 continue
             reply = {
                 "workspace": ws, "campaign_id": cid, "email": email,

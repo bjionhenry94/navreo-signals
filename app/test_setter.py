@@ -9283,6 +9283,26 @@ def test_stranded_sending_claim_reaped_to_needs_review():
          by_id[809].get("status") == "sending", by_id[809])
 
 
+def test_monitor_surface_gate_positives_and_uncategorised_only():
+    """Client monitor intake surfaces positives + still-uncategorised only;
+    clear non-positives (OOO, Not Interested, Wrong Person, Do Not Contact,
+    bounces) are kept out of Needs review (Bjion 2026-08-04)."""
+    surface = setter._monitor_should_surface
+    # positives + still-uncategorised (None / "" / the legacy "Uncategorizable
+    # by Ai" marker) all surface for a human.
+    for keep in ("Interested", "Meeting Request", "Information Request",
+                 "Call Booked", "[Manual] Send resource", "positive-re-reply",
+                 "Interested Reply [Manual]", None, "", "Uncategorizable by Ai"):
+        check(f"monitor gate surfaces {keep!r}", surface(keep) is True, keep)
+    # clear non-positives are skipped.
+    for drop in ("Out Of Office", "Not Interested", "Wrong Person",
+                 "Do Not Contact", "Sender Originated Bounce"):
+        check(f"monitor gate skips {drop!r}", surface(drop) is False, drop)
+    # the substring trap: "Not Interested" must not be caught by "Interested"
+    check("monitor gate: 'Not Interested' is NOT treated as positive",
+          surface("Not Interested") is False, "substring guard")
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
@@ -9558,6 +9578,7 @@ if __name__ == "__main__":
     test_recent_send_block_ignores_test_rows()
     test_agent_adoption_busts_the_read_caches()
     test_redraft_async_job_returns_immediately_and_reports_its_result()
+    test_monitor_surface_gate_positives_and_uncategorised_only()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
