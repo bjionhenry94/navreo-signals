@@ -164,6 +164,9 @@ body.solo .wrap{margin:0 auto;}
 .mail-editbtn:hover{color:var(--ink-1);border-color:var(--ink-3);}
 .mail-hint{font-size:12px;color:var(--ink-3);}
 .mb-edit{outline:2px solid var(--orange-100);border-radius:8px;white-space:pre-wrap;min-height:120px;}
+.ver-x.armed{color:var(--orange-600,#c94f00);font-weight:800;}
+#nv-toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,8px);background:var(--ink-1,#141414);color:#fff;padding:10px 16px;border-radius:10px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:80;max-width:80vw;}
+#nv-toast.on{opacity:.96;transform:translate(-50%,0);}
 .copy-sub{font-size:13.5px;color:var(--ink-2);margin:-8px 0 4px;line-height:1.5;max-width:600px;}
 .ver-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px;}
 .ver-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
@@ -488,6 +491,16 @@ async function reorderIcebreaker(x,i,dir){
   try{await fetch('/api/strategy/reorder-icebreaker',{method:'POST',credentials:'include',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,from:i,to:j})});}catch(e){}
+}
+// Tiny auto-fading toast (Bjion 2026-08-05): native confirm()/alert() are silently
+// suppressed in embedded panes (incl. the Claude Browser this board always opens in),
+// so nothing user-facing may depend on them. Toast + two-tap confirms instead.
+let _toastT=null;
+function toast(msg){
+  let t=document.getElementById('nv-toast');
+  if(!t){t=document.createElement('div');t.id='nv-toast';document.body.appendChild(t);}
+  t.textContent=msg;t.classList.add('on');
+  clearTimeout(_toastT);_toastT=setTimeout(()=>t.classList.remove('on'),2600);
 }
 async function persistVisibleEdits(x){
   const eds=[...document.querySelectorAll('[data-edit]')].filter(el=>el.dataset.dirty==='1'&&el.innerText.trim());
@@ -826,13 +839,21 @@ function renderWorkspace(){
     const cur=IDEAS[active];if(!cur)return;
     const si=+b.dataset.si,vi=+b.dataset.vi;
     const vs=((sequenceOf(cur)[si])||{}).versions||[];
-    if(vs.length<=1){alert('An email needs at least one version, so this one stays.');return;}
-    if(!confirm('Remove version '+'ABCDEFGHIJ'[vi]+'? This takes it out of the rotation.'))return;
+    if(vs.length<=1){toast('An email needs at least one version, so this one stays.');return;}
+    // Two-tap confirm, no native dialog (Bjion 2026-08-05): confirm() is silently
+    // suppressed in embedded panes, which made this delete a no-op exactly where
+    // the board opens. First tap arms the cross, a second tap within 3s removes.
+    if(b.dataset.armed!=='1'){
+      b.dataset.armed='1';b.classList.add('armed');b.textContent='sure?';
+      toast('Tap again to remove version '+'ABCDEFGHIJ'[vi]+' from the rotation.');
+      setTimeout(()=>{b.dataset.armed='';b.classList.remove('armed');b.innerHTML='&#215;';},3000);
+      return;
+    }
     try{
       const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
         body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:cur.id,field:'seq:'+si+':'+vi+':delete',share:SHARE})});
       const j=await r.json();
-      if(!j.ok){alert(j.message||'Could not remove that version.');return;}
+      if(!j.ok){toast(j.message||'Could not remove that version.');return;}
       // reflect it now: RE-READ the current idea (the 5s poll can swap the IDEAS
       // array during the await, which is exactly why the old code's captured `x`
       // splice did nothing) and splice its live versions; if the idea moved, resync.
@@ -842,18 +863,24 @@ function renderWorkspace(){
         if(vs2&&vi<vs2.length)vs2.splice(vi,1);
         copyVer[si]=0;renderWorkspace();
       }else{lastFP=null;fetchRun();}
-    }catch(err){alert('Could not remove that version.');}
+      toast('Version removed from the rotation.');
+    }catch(err){toast('Could not remove that version.');}
   });
   work.querySelectorAll('[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
   const dsb=work.querySelector('#dismiss-idea');
   if(dsb)dsb.onclick=async()=>{
-    if(!confirm('Dismiss "'+(x.name||'this idea')+'"? It comes off the board for everyone.'))return;
+    // same two-tap pattern as the version cross: no native confirm (suppressed in panes)
+    if(dsb.dataset.armed!=='1'){
+      dsb.dataset.armed='1';dsb.textContent='Tap again to dismiss, it comes off the board for everyone';
+      setTimeout(()=>{dsb.dataset.armed='';dsb.textContent='Dismiss Campaign Idea';},3500);
+      return;
+    }
     dsb.disabled=true;dsb.textContent='Dismissing…';
     try{
       const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:'idea:dismiss',share:SHARE})});
       const j=await r.json();
-      if(!j.ok){dsb.disabled=false;dsb.textContent='Dismiss Campaign Idea';alert(j.message||'Could not dismiss that idea.');return;}
+      if(!j.ok){dsb.disabled=false;dsb.textContent='Dismiss Campaign Idea';toast(j.message||'Could not dismiss that idea.');return;}
       IDEAS=IDEAS.filter(i=>i.id!==x.id);active=0;tab='tgt';render();
     }catch(e){dsb.disabled=false;dsb.textContent='Dismiss Campaign Idea';}
   };
@@ -874,13 +901,13 @@ function renderWorkspace(){
     const si=+b.dataset.si,vi=+b.dataset.vi;
     const el=work.querySelector('.mb-edit[data-edit]');
     const val=el?el.innerText.trim():'';
-    if(!val){alert('The email is empty — write something or cancel.');return;}
+    if(!val){toast('The email is empty, write something or cancel.');return;}
     b.disabled=true;b.textContent='Saving…';
     try{
       const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
         body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:cur.id,field:'seq:'+si+':'+vi,value:val,share:SHARE})});
       const j=await r.json();
-      if(!j.ok){b.disabled=false;b.textContent='Save';alert(j.message||'Could not save.');return;}
+      if(!j.ok){b.disabled=false;b.textContent='Save';toast(j.message||'Could not save.');return;}
       // reflect locally on the CURRENT idea (poll can swap objects mid-await — same
       // lesson as the version delete, Bjion 2026-08-05); if the idea moved, resync.
       const nowIdea=IDEAS[active];
@@ -891,7 +918,7 @@ function renderWorkspace(){
         if(el)el.dataset.dirty='';
         sumEdit=null;renderWorkspace();
       }else{sumEdit=null;lastFP=null;fetchRun();}
-    }catch(e){b.disabled=false;b.textContent='Save';alert('Could not save.');}
+    }catch(e){b.disabled=false;b.textContent='Save';toast('Could not save.');}
   });
   try{saveView();}catch(e){}
 }
