@@ -4601,6 +4601,136 @@ def run_ever_positive_alerts() -> dict:
         return summary
 
 
+# ── Client-workspace positive alert (in-tool internal backstop) ────────────
+# navreo positives are announced the moment they're categorised — the Make
+# categoriser (9251436) routeA posts to #interested-replies and the
+# positive-card path fires. CLIENT workspaces (grout, asteri, krg, …) have NO
+# such internal ping: their Make chains at most post a card to the *client's*
+# own shared Slack channel (grout has not even that), so a NEW positive on a
+# client campaign archives to the setter and alerts nobody at Navreo. Proven
+# 2026-08-05 by grout / sagar@eazybe.com ("how much do u charge?",
+# Information Request): the reply was in `replies` with notify_* null and no
+# notification had fired anywhere.
+#
+# This sweep is the missing backstop: every NEW positive-category reply on a
+# NON-navreo workspace produces exactly one internal #interested-replies alert
+# (via EVER_POSITIVE_HOOK, the same relay run_ever_positive_alerts uses) and is
+# stamped with the SAME notify marker. The two sweeps read DISJOINT workspace
+# sets — ever-positive: `workspace in EP_WORKSPACES`; this: `workspace not in
+# EP_WORKSPACES` — so a row is only ever claimed by one of them and can never
+# double-fire. Positives only, so it never touches the deliberately
+# scoped-out once-positive→negative client class. Rides the reply-sync tick.
+# Fail-closed and retryable (marker stamped only after the hook accepts);
+# never raises.
+CP_LOOKBACK_HOURS = 72        # scan window; the marker (not the window) stops re-alerts
+CP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, loudly
+
+
+def _cp_smartlead_link(campaign_id, email: str) -> str:
+    """Master-inbox deep link resolved with the OWNING client's key
+    (campaign_id → workspace key, unlike _ep_smartlead_link which uses the
+    navreo key). Decoration only; never raises."""
+    try:
+        data = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id) or {}
+        for lc in data.get("lead_campaign_data") or []:
+            if str(lc.get("campaign_id")) == str(campaign_id) and \
+                    lc.get("campaign_lead_map_id"):
+                return ("https://app.smartlead.ai/app/master-inbox?action=INBOX"
+                        f"&leadMap={lc['campaign_lead_map_id']}")
+    except Exception:  # noqa: BLE001 — the link is decoration, never load-bearing
+        pass
+    return ""
+
+
+def _cp_compose(row: dict, cname: str, link: str) -> str:
+    ws = row.get("workspace") or "client"
+    cat = row.get("category") or "positive"
+    snippet = clean_body(row.get("reply_body") or "")[:400]
+    lines = [
+        f"🎯 New positive reply — {ws} · {cat}",
+        "---------------------------",
+        f"Lead: {row.get('email')}",
+        f"Campaign: {cname}",
+        f"Workspace: {ws} (client)",
+        f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
+    ]
+    if link:
+        lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
+    lines += ["", "Reply:", snippet or "(no body archived)"]
+    return "\n".join(lines)
+
+
+def run_client_positive_alerts() -> dict:
+    """Internal notification guarantee for a NEW positive reply on a client
+    (non-navreo) workspace — the backstop navreo has and clients lacked (see
+    the section comment above). Rides every reply-sync tick. Never raises."""
+    summary = {"ok": True, "skipped": False, "checked": 0, "alerted": 0,
+               "failed_posts": 0, "capped": False, "errors": 0}
+    if not _SB:
+        summary["skipped"] = True
+        return summary
+    try:
+        now = _dt.datetime.now(_dt.timezone.utc)
+        since = (now - _dt.timedelta(hours=CP_LOOKBACK_HOURS)).isoformat()
+        cats = ",".join(quote(c, safe="") for c in POSITIVE_CATEGORY_NAMES)
+        rows = _SB("GET", f"replies?workspace=not.in.({','.join(EP_WORKSPACES)})"
+                          f"&category=in.({cats})"
+                          f"&notify_alerted_at=is.null"
+                          f"&replied_at=gte.{quote(since, safe='')}"
+                          f"&select=id,workspace,smartlead_campaign_id,email,"
+                          f"replied_at,category,reply_body"
+                          f"&order=replied_at.asc&limit=200")
+        if not isinstance(rows, list):
+            summary["ok"] = False
+            summary["errors"] += 1
+            summary["error"] = "replies read returned non-list"
+            return summary
+        summary["checked"] = len(rows)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            rid = row.get("id")
+            ws = row.get("workspace")
+            email = (row.get("email") or "").strip()
+            cat = row.get("category")
+            rt = row.get("replied_at") or ""
+            # The query already filters to positives + non-navreo, but re-guard
+            # here so a hand-driven call can never widen the funnel.
+            if not rid or not ws or not email or not rt \
+                    or cat not in POSITIVE_CATEGORY_NAMES \
+                    or ws in EP_WORKSPACES:
+                continue
+            if summary["alerted"] >= CP_POST_CAP:
+                summary["capped"] = True
+                summary["ok"] = False        # leftovers retry next tick, loudly
+                continue
+            cid = row.get("smartlead_campaign_id")
+            names = _ep_campaign_names(ws, [cid])
+            cname = names.get(str(cid or "")) or (f"campaign {cid}" if cid else "unknown campaign")
+            link = _cp_smartlead_link(cid, email)
+            text = _cp_compose(row, cname, link)
+            posted = False
+            try:
+                _HTTP("POST", EVER_POSITIVE_HOOK, {},
+                      {"event_type": "EVER_POSITIVE_ALERT", "text": text})
+                posted = True
+            except ValueError:
+                posted = True   # Make answers a non-JSON 2xx ("Accepted") = success
+            except Exception:   # noqa: BLE001 — hook down: retry next tick
+                summary["failed_posts"] += 1
+                summary["ok"] = False
+            if posted:
+                # stamp ONLY after the hook accepted — fail-closed, retryable
+                _ep_stamp(rid, "client-positive-alerted")
+                summary["alerted"] += 1
+        return summary
+    except Exception as e:  # noqa: BLE001 — record, never crash the cron thread
+        summary["ok"] = False
+        summary["errors"] += 1
+        summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return summary
+
+
 def _convert_uncat_row(row: dict, category: str, source: str, settings: dict = None) -> dict:
     """An uncategorised queue row just got a real CORE_FOUR category (the
     recategorise dropdown, or the categoriser filling it in late): re-run the

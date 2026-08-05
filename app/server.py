@@ -14565,6 +14565,20 @@ def _reply_sync_bg():
                 "action": ("ever_positive_done" if res3.get("ok")
                            else "ever_positive_failed"),
                 "entity": "replies", "payload": res3})
+        # Client-workspace positive backstop: a NEW positive on a non-navreo
+        # workspace has no internal ping — navreo positives are announced by the
+        # Make categoriser (routeA → #interested-replies) + the positive-card
+        # path, but clients get at most a card in their OWN shared channel (grout
+        # not even that). This fires one internal #interested-replies alert per
+        # new client positive so nothing archives to the setter silently again
+        # (the grout/sagar@eazybe.com miss, 2026-08-05). Rides the same tick.
+        res4 = setter.run_client_positive_alerts()
+        if not res4.get("skipped") and (res4.get("checked") or not res4.get("ok")):
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+                "action": ("client_positive_done" if res4.get("ok")
+                           else "client_positive_failed"),
+                "entity": "replies", "payload": res4})
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[reply-sync] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",
